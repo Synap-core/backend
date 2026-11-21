@@ -3315,9 +3315,8 @@ export const tools = {
             },
             quote: {
               type: "string",
-              maxLength: ASK_LIMITS.answerTextMaxChars,
-              description:
-                "The person's own words, verbatim, as they typed them. Required with 'answered'.",
+              maxLength: ASK_LIMITS.relayQuoteMaxChars,
+              description: `The person's own words, verbatim. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} chars: kept as a document (\`quoteDocumentId\`).`,
             },
             text: {
               type: "string",
@@ -3991,7 +3990,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Check here BEFORE improvising one. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes). Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4007,16 +4006,21 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 25).",
+              description:
+                "Page size (1–100, default 25). With playbookId: stages per page (6).",
             },
             cursor: {
               type: "string",
               description: "nextCursor of the prior reply",
             },
+            offset: {
+              type: "number",
+              description: "With playbookId: first stage (nextOffset).",
+            },
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (its whole definition and its `process`), instead of listing.",
+                "Read ONE playbook whole (with `process` and `stagesRevision`).",
             },
             detail: {
               type: "string",
@@ -4153,7 +4157,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4173,6 +4177,17 @@ export const tools = {
               description: "What this playbook is for.",
             },
             stages: PLAYBOOK_STAGES_PROPERTY,
+            stageEdits: {
+              type: "array",
+              description:
+                "Edit stages by key, in order: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears) | {op:'remove', key}.",
+              items: { type: "object" },
+            },
+            stagesRevision: {
+              type: "string",
+              description:
+                "Needed with `stages`: from an unpaged read; else use stageEdits.",
+            },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
@@ -4182,8 +4197,7 @@ export const tools = {
             triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             subjectProfileSlug: {
               type: "string",
-              description:
-                "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused.",
+              description: "The kind or role it runs ON (must resolve).",
             },
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
@@ -4199,7 +4213,7 @@ export const tools = {
               type: "string",
               enum: ["session", "project"],
               description:
-                "What the playbook instantiates. 'session': a template for ONE bounded focus session. 'project': LEGACY — a staged method a track runs.",
+                "'session': one focus session. 'project': LEGACY, a staged method a track runs.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -4209,7 +4223,7 @@ export const tools = {
             reasoning: {
               type: "string",
               description:
-                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+                "Why, in the person's words: shown to the reviewer. One line.",
             },
             sessionId: {
               type: "string",
@@ -4560,7 +4574,7 @@ export const tools = {
             documents: {
               type: "array",
               description:
-                "PLAN: documents to create (markdown). Attach one as an entity's body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
               items: {
                 type: "object",
                 properties: {

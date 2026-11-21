@@ -65,6 +65,12 @@ export const ASK_LIMITS = {
   /** A follow-up offers 2 to this many options. */
   followUpOptionsMax: 4,
   answerTextMaxChars: 2000,
+  /**
+   * A relayed quote, whole. Over `answerTextMaxChars` it is kept as a
+   * document (`quoteDocumentId`) and the answer holds its start (ticket
+   * 2771d2bc: a spoken review of ~4,000 characters).
+   */
+  relayQuoteMaxChars: 50_000,
   /** JSON-serialized form values, in UTF-8 bytes. */
   formValuesMaxBytes: 8 * 1024,
   formFieldsMax: 20,
@@ -1030,6 +1036,11 @@ export const AnswerProvenanceSchema = z.object({
   relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
   /** The person's own words, verbatim — never the agent's paraphrase. */
   quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  /**
+   * The document holding `quote` whole, when the words were longer than
+   * `answerTextMaxChars`: `quote` is then their start.
+   */
+  quoteDocumentId: z.string().uuid().optional(),
   /** ISO, server clock: the person confirmed a relayed answer. */
   confirmedAt: z.string().optional(),
 });
@@ -1080,6 +1091,8 @@ export const PendingRelayedAnswerSchema = z.object({
   relayedBy: z.string().min(1),
   relaySurface: z.string().min(1).max(RELAY_SURFACE_MAX_CHARS).optional(),
   quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  /** See `AnswerProvenanceSchema.quoteDocumentId`. */
+  quoteDocumentId: z.string().uuid().optional(),
   /** ISO, server clock. */
   relayedAt: z.string(),
 });
