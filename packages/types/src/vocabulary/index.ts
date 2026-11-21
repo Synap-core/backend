@@ -1910,14 +1910,10 @@ const STATUS_LABEL_ROWS = {
   public: "Public",
   // AI AVAILABILITY (`AiAvailabilityKind`, `@synap-core/types/ai-availability`)
   // — the short state chip. Headlines and CTAs live in that module's copy deck.
-  // `suspended` says what the payer does, as the deck's title does: humanized,
-  // "Suspended" named no cause. `account_inactive` is the `not_entitled` chip
-  // when AI was switched off rather than left out of the plan.
   credits_low: "Low credits",
   credits_empty: "Out of credits",
   not_entitled: "No AI plan",
-  account_inactive: "AI turned off",
-  suspended: "Payment needed",
+  suspended: "Suspended",
   budget_paused: "Paused",
   provider_issue: "AI issue",
   service_down: "AI offline",

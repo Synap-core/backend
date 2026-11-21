@@ -206,18 +206,10 @@ export async function enterGatedStages(input: {
       const then = res.onFail
         ? ` The session went back to stage "${res.onFail.toStage}".`
         : " The session waits until the check passes.";
-      // A check whose AI judge could not run did not FAIL: it holds, and its
-      // reason says why and how the owner moves it on. Calling it "did not
-      // pass" told the agent the work was judged wanting when nothing was
-      // judged at all.
-      const verdict =
-        res.check.notJudged && res.check.reason
-          ? `whose check holds: ${res.check.reason}`
-          : `whose check did not pass (${res.check.failing.join(", ")}).`;
       held ??= {
         kind: "held",
         sessionId: session.id,
-        reason: `Moving ${input.property} to "${input.to}" enters stage "${name}", ${verdict} The status was not moved.${then}`,
+        reason: `Moving ${input.property} to "${input.to}" enters stage "${name}", whose check did not pass (${res.check.failing.join(", ")}). The status was not moved.${then}`,
       };
     }
   }

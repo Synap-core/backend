@@ -206,18 +206,7 @@ export interface AdvanceSessionStageResult {
    * A `check` gate's outcome: whether the left stage's required criteria pass,
    * and which do not. Present only when the stage entered is check-gated.
    */
-  check?: {
-    passed: boolean;
-    failing: string[];
-    /**
-     * Held only because the AI judge could not run (`CheckMeasure.notJudged`):
-     * nothing failed. `reason` then says why in words and how the owner moves
-     * it on, so a door that reports the hold does not call it a failed check.
-     */
-    notJudged?: true;
-    /** Why the check held, in words, when the gate said (`CheckGateResult.reason`). */
-    reason?: string;
-  };
+  check?: { passed: boolean; failing: string[] };
   /**
    * The forward half of stage ↔ subject status: what happened to the entered
    * stage's `subjectStatus` (written / proposed / skipped + why / failed).
@@ -496,12 +485,7 @@ export async function advanceSessionStage(
       changed: true,
       gated: true,
       paused: gate.paused,
-      check: {
-        passed: gate.passed,
-        failing: gate.failing,
-        ...(gate.notJudged ? { notJudged: true as const } : {}),
-        ...(gate.reason ? { reason: gate.reason } : {}),
-      },
+      check: { passed: gate.passed, failing: gate.failing },
       ...slots,
     };
     if (!gate.paused) {
