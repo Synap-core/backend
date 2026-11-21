@@ -104,6 +104,24 @@ export const MARKETPLACE_KIND_ALIASES: Readonly<
   workflow: "automation",
 };
 
+/**
+ * A kind as a caller may name it: the pod's token, or the Control Plane's
+ * category name for it (`workflow` → `automation`). Every door that takes a
+ * kind wraps the kinds it accepts here, so the two vocabularies never split
+ * again.
+ */
+export function withMarketplaceKindAliases<T extends z.ZodType>(kinds: T) {
+  return z.preprocess(
+    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
+    kinds
+  );
+}
+
+/** A catalog kind, its Control Plane names accepted. */
+export const marketplacePackageKindSchema = withMarketplaceKindAliases(
+  z.enum(MARKETPLACE_PACKAGE_KINDS)
+);
+
 /** An https URL — never `http:`, `javascript:` or `data:`; it may be shown as a link. */
 export const httpsUrlSchema = z
   .string()
@@ -135,10 +153,7 @@ const ed25519KeySchema = z
 /** The fields every listing carries, whoever serves the index. */
 const indexPackageShape = {
   slug: z.string(),
-  kind: z.preprocess(
-    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
-    z.enum(MARKETPLACE_PACKAGE_KINDS)
-  ),
+  kind: marketplacePackageKindSchema,
   version: z.string().min(1).max(100),
   displayName: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),

@@ -395,6 +395,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Files a proposal to mint a space's inbound source and set its URL and secret on a host. It authorizes no account (connect_account would be a false claim) and runs no outside job itself: the person's approval does, so an intent would route an agent to a door that only asks.",
   "capability.rotate_key":
     "Replaces the value of a key an installed capability already uses, from a secret the person handed over. No new account is authorized, so connect_account would be a false claim.",
+  "http.allow_host":
+    "Adds a host to the pod's own allow-list for http.get_json (pod config; an agent's run is always a proposal). It reaches nothing outside the pod and fetches no record, so no member of the vocabulary describes it.",
   // ── governance calibration: pod-internal, no external world ───────────
   "governance.recommend_tighten":
     "Scans rejected proposals in the pod and files an internal calibration proposal.",
