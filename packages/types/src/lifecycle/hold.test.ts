@@ -13,6 +13,7 @@ import {
   holdWaitSlotMatches,
   holdWokenBy,
   parseHoldDevRef,
+  HOLD_AI_MOVES,
   parseHoldWaitRef,
   resolveOccurredAt,
   type RecordedHold,
@@ -319,7 +320,7 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
       given: { on: "external", until },
     });
 
-  it("parses the three forms, and nothing else", () => {
+  it("parses the four forms, and nothing else", () => {
     expect(parseHoldDevRef("pr:Synap-core/backend#47")).toEqual({
       kind: "pr",
       repo: "Synap-core/backend",
@@ -333,7 +334,11 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
       kind: "job",
       name: "dev-feed-h",
     });
+    expect(parseHoldDevRef("ai:available")).toEqual({ kind: "ai" });
     for (const bad of [
+      "ai:",
+      "ai:credits_empty",
+      "ai:Available",
       "pr:backend#47",
       "pr:Synap-core/backend",
       "pr:Synap-core/backend#0",
@@ -353,6 +358,8 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     });
     const m = pauseOn({ moves: "main:Synap-core/Backend" });
     expect(m.ok && m.hold?.until).toEqual({ moves: "main:synap-core/backend" });
+    const a = pauseOn({ moves: HOLD_AI_MOVES });
+    expect(a.ok && a.hold?.until).toEqual({ moves: "ai:available" });
     // An open-ended wait still gets its review date.
     expect(d.ok && d.hold?.reviewBy).toBe(
       new Date(NOW.getTime() + 14 * DAY).toISOString()
@@ -371,6 +378,10 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     expect(
       pauseOn({ moves: "pr:Synap-core/backend#47", to: "done" })
     ).toMatchObject({
+      ok: false,
+      code: "HOLD_INVALID",
+    });
+    expect(pauseOn({ moves: HOLD_AI_MOVES, to: "ok" })).toMatchObject({
       ok: false,
       code: "HOLD_INVALID",
     });

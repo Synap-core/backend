@@ -237,6 +237,9 @@ describe("goal marks", () => {
     expect(line("job:kit-h", "failed")).toBe(
       "for 2h · resumes when the tests fail"
     );
+    expect(line("ai:available")).toBe(
+      "for 2h · resumes when AI is available again"
+    );
   });
 
   it('silence starts at one hour and says "Silent", never "stale"', () => {

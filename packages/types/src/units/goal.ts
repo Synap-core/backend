@@ -31,6 +31,7 @@ import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
+import type { AiAvailabilityKind } from "../ai-availability/index.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
 import type {
   ThingBlockerBlocks,
@@ -879,6 +880,12 @@ export type WaitingOnSource = (
       on: HoldOn;
       /** The dev fact its `until.moves` names (`parseHoldDevRef`), if any. */
       devRef?: HoldDevRef["kind"] | null;
+      /**
+       * An `ai:` hold: the pod's AI availability now (its owner's view), which
+       * says whose move it is (`WAIT_KIND_FROM.ai`). Absent or `ok` = unknown
+       * to the pod: the AI service holds it.
+       */
+      aiKind?: AiAvailabilityKind | null;
     }
   | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
   | { kind: "child_session" }
@@ -960,6 +967,15 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         ? WAIT_KIND_FROM.source.work_unit_green
         : WAIT_KIND_FROM.source.work_unit_checks;
     case "hold":
+      if (
+        source.devRef === "ai" &&
+        source.aiKind &&
+        Object.hasOwn(WAIT_KIND_FROM.ai, source.aiKind)
+      ) {
+        return WAIT_KIND_FROM.ai[
+          source.aiKind as keyof typeof WAIT_KIND_FROM.ai
+        ];
+      }
       if (source.devRef && Object.hasOwn(WAIT_KIND_FROM.dev, source.devRef)) {
         return WAIT_KIND_FROM.dev[source.devRef];
       }
