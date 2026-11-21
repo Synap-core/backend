@@ -4,7 +4,8 @@
  * the actor:
  *   - the actor is copied FIRST, then the owner moves to the approved create
  *     proposal's subject, else the one person the agent's keys act for, else
- *     the person who created the agent; a humanless agent keeps its rows;
+ *     the person who created the agent, else the pod owner (an agent nobody
+ *     is recorded as installing);
  *   - a moved workspace keeps its agent as an admin member and gives its
  *     person the owner membership;
  *   - the pod's connector credentials, read under the oldest workspace's
@@ -101,6 +102,13 @@ beforeAll(async () => {
       "owner_id" text NOT NULL,
       "created_at" timestamptz NOT NULL DEFAULT now()
     );
+    CREATE TABLE "pod_members" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "pod_role" text NOT NULL,
+      "created_at" timestamptz NOT NULL DEFAULT now(),
+      "removed_at" timestamptz
+    );
     CREATE TABLE "secrets" (
       "id" text PRIMARY KEY,
       "user_id" text NOT NULL,
@@ -128,6 +136,11 @@ beforeAll(async () => {
       ('${POD_AGENT}', 'agent', '${ADMIN}'),
       ('${ORPHAN}', 'agent', NULL),
       ('${FOR_OTHER}', 'agent', '${ADMIN}');
+    -- The pod owner (an earlier owner left the pod: not them).
+    INSERT INTO pod_members (id, user_id, pod_role, created_at, removed_at) VALUES
+      ('pm-gone', '${OTHER_PERSON}', 'owner', '2025-01-01', '2025-06-01'),
+      ('pm-owner', '${ADMIN}', 'owner', '2025-02-01', NULL),
+      ('pm-member', '${PERSON}', 'member', '2025-01-15', NULL);
     INSERT INTO api_keys (id, user_id, linked_user_id) VALUES
       ('k1', '${FOR_OTHER}', '${OTHER_PERSON}');
     INSERT INTO tools (id, created_by) VALUES
@@ -183,8 +196,8 @@ describe("migration 0445 — the person owns it, the agent is the actor", () => 
       { id: C_LINKED, created_by: OTHER_PERSON, agent_user_id: FOR_OTHER },
     ]);
     expect(s.skills).toEqual([
-      // Nobody stands behind it: it stays the agent's.
-      { id: S_ORPHAN, user_id: ORPHAN, agent_user_id: ORPHAN },
+      // Nobody is recorded as installing it: the pod owner.
+      { id: S_ORPHAN, user_id: ADMIN, agent_user_id: ORPHAN },
       { id: S_AGENT, user_id: PERSON, agent_user_id: AGENT },
     ]);
   });
@@ -211,14 +224,15 @@ describe("migration 0445 — the person owns it, the agent is the actor", () => 
     expect(s.workspaces).toEqual([
       { id: W_AGENT, owner_id: PERSON },
       { id: W_POD, owner_id: ADMIN },
-      { id: W_ORPHAN, owner_id: ORPHAN },
+      { id: W_ORPHAN, owner_id: ADMIN },
     ]);
     expect(s.members).toEqual([
       { workspace_id: W_AGENT, user_id: AGENT, role: "admin" },
       { workspace_id: W_AGENT, user_id: PERSON, role: "owner" },
       { workspace_id: W_POD, user_id: ADMIN, role: "owner" },
       { workspace_id: W_POD, user_id: POD_AGENT, role: "admin" },
-      { workspace_id: W_ORPHAN, user_id: ORPHAN, role: "owner" },
+      { workspace_id: W_ORPHAN, user_id: ADMIN, role: "owner" },
+      { workspace_id: W_ORPHAN, user_id: ORPHAN, role: "admin" },
     ]);
   });
 
@@ -233,7 +247,7 @@ describe("migration 0445 — the person owns it, the agent is the actor", () => 
       { id: "sec-pod-nango", user_id: POD_AGENT },
     ]);
     expect(s.accounts).toEqual([
-      { id: "acc-orphan", workspace_id: null },
+      { id: "acc-orphan", workspace_id: W_ORPHAN },
       { id: "acc-pinned", workspace_id: W_POD },
       { id: "acc-unpinned", workspace_id: W_AGENT },
     ]);

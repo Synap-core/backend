@@ -56,7 +56,7 @@ beforeAll(async () => {
      values ($1, $2, 'code', 'user', $3, $4, 'active', true)`,
     [randomUUID(), VERB, PERSON, AGENT]
   );
-  // An agent nobody installed keeps its own row (0445 finds no person).
+  // A row another user still owns (an agent's, on a pod with no owner).
   await h.client!.query(
     `insert into skills (id, name, kind, scope, user_id, agent_user_id, status, approved)
      values ($1, $2, 'code', 'user', $3, $3, 'active', true)`,

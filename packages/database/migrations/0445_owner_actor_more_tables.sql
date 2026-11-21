@@ -12,9 +12,13 @@
 --         (`proposals.subject_user_id`, matched on `target_id` = the row id);
 --      b. the one person the agent's keys act for (`api_keys.linked_user_id`,
 --         exactly one distinct person);
---      c. the person who created the agent (`users.created_by_user_id`).
---    Only a human users row qualifies at each rung. A row whose agent stands
---    for no person keeps the agent as owner.
+--      c. the person who created the agent (`users.created_by_user_id`, the
+--         pod admin who installed a pod-wide agent);
+--      d. an agent nobody is recorded as installing (no creator): the pod
+--         owner (`pod_members.pod_role = 'owner'`, the oldest live one). No
+--         event records who installed an agent, so this is the last resort.
+--    Only a human users row qualifies at each rung. A row keeps its agent
+--    owner only on a pod with no live human owner.
 -- 3. A workspace that moves keeps its agent as an `admin` member (it had
 --    access through ownership; an agent never holds `owner`) and gives its
 --    person the `owner` membership.
@@ -26,7 +30,8 @@
 --    owner's first workspace).
 --
 -- Idempotent: the actor is filled only when empty, and a row moves only while
--- an agent still owns it. Count what is left after the migration with:
+-- an agent still owns it. Count what is left after the migration (0 expected)
+-- with:
 --   SELECT 'tools', count(*) FROM tools t JOIN users u ON u.id = t.created_by WHERE u.user_type = 'agent'
 --   UNION ALL SELECT 'capabilities', count(*) FROM capabilities c JOIN users u ON u.id = c.created_by WHERE u.user_type = 'agent'
 --   UNION ALL SELECT 'skills', count(*) FROM skills s JOIN users u ON u.id = s.user_id WHERE u.user_type = 'agent'
@@ -83,7 +88,13 @@ RETURNS text LANGUAGE sql STABLE AS $fn$
     (SELECT c."id"
        FROM "users" AS ag
        JOIN "users" AS c ON c."id" = ag."created_by_user_id" AND c."user_type" <> 'agent'
-      WHERE ag."id" = $1)
+      WHERE ag."id" = $1),
+    (SELECT pm."user_id"
+       FROM "pod_members" AS pm
+       JOIN "users" AS po ON po."id" = pm."user_id" AND po."user_type" <> 'agent'
+      WHERE pm."pod_role" = 'owner' AND pm."removed_at" IS NULL
+      ORDER BY pm."created_at" ASC
+      LIMIT 1)
   )
 $fn$;
 
