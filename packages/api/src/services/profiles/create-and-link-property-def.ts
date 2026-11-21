@@ -17,7 +17,12 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { getDb, ProfileResolutionService } from "@synap/database";
+import {
+  getDb,
+  ProfileResolutionService,
+  PropertyDefRepository,
+  type PropertyValueType,
+} from "@synap/database";
 import type { Context } from "../../types/context.js";
 import {
   assertProfileSchemaWrite,
@@ -81,6 +86,18 @@ export interface CreateAndLinkPropertyDefResult {
   existing: boolean;
   /** Declared def fields that differ from the stored row. Empty unless `existing`. */
   ignored: IgnoredDeclaration[];
+  /**
+   * Set when the slug matched a pod-wide (global) field. `reused`: the
+   * declaration agreed with it, so the profile now links that shared field.
+   * `shadowed`: its type or allowed values differed, so the profile got its
+   * OWN field under the slug and the shared one was left alone.
+   */
+  globalField?: {
+    outcome: "reused" | "shadowed";
+    id: string;
+    /** `shadowed` only: what differed (declared vs the shared field). */
+    conflicts?: IgnoredDeclaration[];
+  };
 }
 
 /** Order-insensitive structural compare, so `{a,b}` and `{b,a}` are the same. */
@@ -196,11 +213,51 @@ export async function createAndLinkPropertyDef(
     profileId: input.profileId,
     overlay,
   });
-  const { propertyDef } = createResult;
+  let propertyDef = createResult.propertyDef as Record<string, unknown> & {
+    id: string;
+  };
   // `property-defs.create` returns `existing: true` on a slug hit and writes
   // NOTHING. That fact used to die here — every caller then reported the call
   // as "applied" with the caller's declaration nowhere in the stored row.
-  const existing = (createResult as { existing?: boolean }).existing === true;
+  let existing = (createResult as { existing?: boolean }).existing === true;
+
+  // A profile-base lookup falls back to the GLOBAL def of that slug
+  // (`PropertyDefRepository.getBySlug`). Linking it is right only when the
+  // declaration agrees with it. A kind declaring `stage` with its own values
+  // was silently bound to the global deal-stage field instead, and its values
+  // were lost (control-plane report 0b5ca266). When the type or the allowed
+  // values differ, the kind gets its OWN field under the slug (profile base,
+  // scoping model of migration 0065); the global field and every kind that
+  // links it are left as they are.
+  let globalField: CreateAndLinkPropertyDefResult["globalField"];
+  if (existing && input.profileId && propertyDef.profileId === null) {
+    const conflicts = diffIgnoredDeclarations(
+      { valueType: input.valueType, constraints: input.constraints },
+      propertyDef
+    );
+    if (conflicts.length === 0) {
+      globalField = { outcome: "reused", id: propertyDef.id };
+    } else if (!(await profileAlreadyHasSlug(db, input))) {
+      // The gates for this exact scope (the profile's schema owner, the
+      // key's grant on a pod-wide def) already ran in `property-defs.create`
+      // before its lookup; this writes the def that call would have written
+      // had no global field matched.
+      const own = await new PropertyDefRepository(db).create({
+        slug: input.slug,
+        valueType: input.valueType as PropertyValueType,
+        constraints: input.constraints,
+        uiHints: input.uiHints,
+        profileId: input.profileId,
+        workspaceId: null,
+      });
+      globalField = { outcome: "shadowed", id: propertyDef.id, conflicts };
+      propertyDef = own as unknown as typeof propertyDef;
+      existing = false;
+    }
+    // Else the profile (or a parent) already carries this slug: a second def
+    // under it would be hidden by the first. Left as before: `unchanged`,
+    // with what was ignored.
+  }
   const ignored = existing
     ? diffIgnoredDeclarations(input, propertyDef as Record<string, unknown>)
     : [];
@@ -220,11 +277,28 @@ export async function createAndLinkPropertyDef(
   }
 
   return {
-    propertyDef: propertyDef as Record<string, unknown> & { id: string },
+    propertyDef,
     link,
     existing,
     ignored,
+    ...(globalField ? { globalField } : {}),
   };
+}
+
+/**
+ * Does the profile already see a field under this slug (its own, a parent's,
+ * or one it links)? `getEffectiveProperties` keeps the FIRST def per slug from
+ * the root down, so a second def under a slug already there would never show.
+ */
+async function profileAlreadyHasSlug(
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: Pick<CreateAndLinkPropertyDefInput, "profileId" | "slug">
+): Promise<boolean> {
+  if (!input.profileId) return false;
+  const effective = await new ProfileResolutionService(
+    db
+  ).getEffectiveProperties(input.profileId);
+  return effective.some((p) => p.slug === input.slug);
 }
 
 /**
