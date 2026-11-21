@@ -58,6 +58,7 @@ import {
 import {
   clearsDoNotContact,
   isDoNotContactSetWrite,
+  replacesDoNotContactEvidence,
 } from "../../services/channels/do-not-contact-fields.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
@@ -566,8 +567,12 @@ export const mutateProcs = {
       // person's own token through it included) or an agent CLEARING the flag,
       // or removing its reason or date, files a proposal the person approves
       // in their pod. Signed in, or replaying their approval, they apply it.
-      const appOrAgentClearsDoNotContact =
-        clearsDoNotContact(input) &&
+      // Replacing the reason or date of an opt-out in force is the same: the
+      // app may ask, the person approves (finding 6d7af9b9). Setting them the
+      // first time stays direct.
+      const appOrAgentChangesOptOut =
+        (clearsDoNotContact(input) ||
+          replacesDoNotContactEvidence(existing.properties, input)) &&
         (isAiWriteRequest(input) || getRequestGrant() !== undefined);
       const forcePropose =
         promotesToGlobal ||
@@ -575,7 +580,7 @@ export const mutateProcs = {
         aiAttachesBody ||
         aiHomesRecord ||
         (reachPatch && reachSpace !== null) ||
-        appOrAgentClearsDoNotContact ||
+        appOrAgentChangesOptOut ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must
