@@ -653,6 +653,59 @@ export const readHandlers: McpHandlerMap = {
     );
   },
   /**
+   * THE homes reads — the twin of Hub `GET /lifecycle/home` and
+   * `GET /lifecycle/moving`: all call tRPC `lifecycle.home` / `.moving`
+   * (`readHome` / `readMoving`), which narrow a key bounded by a grant
+   * themselves (`homesGrantOf`). Home is every space, so a key bound to one
+   * space is refused it, as on Hub; Moving reads the confined space.
+   */
+  synap_get_home: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const view = args.view ?? "home";
+    if (view !== "home" && view !== "moving")
+      return ok({
+        error: `view must be 'home' or 'moving', not ${String(view)}.`,
+      });
+    const projectId =
+      typeof args.projectId === "string" && args.projectId
+        ? args.projectId
+        : "";
+    if (projectId && !isUuid(projectId))
+      return ok({ error: `projectId is not a valid id: ${projectId}` });
+    if (view === "home" && ctx.keyWorkspaceId)
+      return toolError(
+        `This key is confined to workspace ${ctx.keyWorkspaceId}; the home reads every space. Use view 'moving'.`
+      );
+    const callerCtx = await createHubProtocolCallerContext(
+      userId,
+      apiKeyScopes,
+      undefined,
+      undefined,
+      undefined,
+      agentUserId
+    );
+    const { lifecycleRouter } = await import("../../lifecycle.js");
+    const caller = lifecycleRouter.createCaller(
+      callerCtx as Parameters<typeof lifecycleRouter.createCaller>[0]
+    );
+    if (view === "home")
+      return ok(await caller.home(projectId ? { projectId } : {}));
+    const limit =
+      typeof args.limit === "number" && Number.isFinite(args.limit)
+        ? Math.min(100, Math.max(1, Math.floor(args.limit)))
+        : 30;
+    return ok(
+      await caller.moving({
+        ...(projectId ? { projectId } : {}),
+        ...(ctx.confinedWorkspaceId
+          ? { workspaceId: ctx.confinedWorkspaceId }
+          : {}),
+        limit,
+      })
+    );
+  },
+  /**
    * THE board read — the twin of Hub `GET /whiteboards/:viewId/scene`: both
    * call `readBoardScene`. A failed read is a tool error naming its `reason`,
    * never an empty board. Shape and arrow text is what anyone on the board
