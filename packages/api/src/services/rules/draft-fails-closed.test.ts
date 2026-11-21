@@ -51,7 +51,8 @@ vi.mock("@synap/database", async (importOriginal) => {
       // Awaited: no rows. `.limit`: the owner read finds no user.
       select: () => ({
         from: () => ({
-          where: () => Object.assign(Promise.resolve([]), { limit: async () => [] }),
+          where: () =>
+            Object.assign(Promise.resolve([]), { limit: async () => [] }),
         }),
       }),
       insert: () => ({

@@ -44,19 +44,14 @@ const W_POD = "99999999-9999-4999-8999-999999999992";
 const W_ORPHAN = "99999999-9999-4999-8999-999999999993";
 
 let pg: PGlite;
-const q = async <T>(sql: string): Promise<T[]> =>
-  (await pg.query<T>(sql)).rows;
+const q = async <T>(sql: string): Promise<T[]> => (await pg.query<T>(sql)).rows;
 
 const snapshot = async () => ({
-  tools: await q(
-    `SELECT id, created_by, agent_user_id FROM tools ORDER BY id`
-  ),
+  tools: await q(`SELECT id, created_by, agent_user_id FROM tools ORDER BY id`),
   capabilities: await q(
     `SELECT id, created_by, agent_user_id FROM capabilities ORDER BY id`
   ),
-  skills: await q(
-    `SELECT id, user_id, agent_user_id FROM skills ORDER BY id`
-  ),
+  skills: await q(`SELECT id, user_id, agent_user_id FROM skills ORDER BY id`),
   artifacts: await q(
     `SELECT id, user_id, actor_id, origin_kind FROM artifacts ORDER BY id`
   ),

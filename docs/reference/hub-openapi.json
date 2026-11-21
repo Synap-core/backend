@@ -8825,8 +8825,8 @@
     "/workspaces/provision-agent": {
       "post": {
         "tags": ["Workspaces"],
-        "summary": "Provision an agent-owned workspace (idempotent)",
-        "description": "Idempotently provisions a workspace owned by an agent user. Sets wide autoApproveFor so the agent can write freely within it. The calling user is added as admin so they can see the agent's work. Requires hub-protocol.write scope.",
+        "summary": "Provision an agent's workspace (idempotent)",
+        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent is its admin member. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {

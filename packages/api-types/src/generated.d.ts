@@ -8225,6 +8225,26 @@ export type ToolVerbCatalogEntry = {
 };
 declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "tools";
+		}, {}, {}>;
 		approved: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgBoolean";
@@ -9080,6 +9100,26 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 export type Playbook = typeof playbooks.$inferSelect;
 declare const capabilities: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "capabilities";
+		}, {}, {}>;
 		approved: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgBoolean";
@@ -33834,6 +33874,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				meta: object;
 				output: {
+					agentUserId: string | null;
 					approved: boolean;
 					createdAt: Date;
 					createdBy: string;
@@ -58832,6 +58873,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				skill: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -58869,6 +58911,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 				tools: {
+					agentUserId: string | null;
 					approved: boolean;
 					authBinding: ToolAuthBinding;
 					capabilities: ToolVerbCatalogEntry[];
@@ -59076,6 +59119,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				skill: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -61035,6 +61079,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -61081,6 +61126,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				approved: boolean;
 				authBinding: ToolAuthBinding;
 				capabilities: ToolVerbCatalogEntry[];
@@ -61169,6 +61215,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				tool: {
+					agentUserId: string | null;
 					approved: boolean;
 					authBinding: ToolAuthBinding;
 					capabilities: ToolVerbCatalogEntry[];

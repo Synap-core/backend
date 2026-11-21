@@ -284,7 +284,9 @@ describe("tripwire: a person owns what an agent makes", () => {
     expect(writesAgentAsOwner(goodSkill)).toBe(false);
     // A parameter object is not an owner column.
     expect(
-      writesAgentAsOwner("promote({\n  userId: input.agentUserId ?? ctx.userId,\n});")
+      writesAgentAsOwner(
+        "promote({\n  userId: input.agentUserId ?? ctx.userId,\n});"
+      )
     ).toBe(false);
     const blockOf = (src: string) =>
       actorInserts([{ rel: "x.ts", src }], laterTables)[0]!.block;
@@ -293,7 +295,9 @@ describe("tripwire: a person owns what an agent makes", () => {
     // A system insert names no agent.
     expect(
       namesAgentWithoutOwnerStamp(
-        blockOf(`await db.insert(skills).values({\n  userId: ownerUserId,\n  approved: true,\n});`)
+        blockOf(
+          `await db.insert(skills).values({\n  userId: ownerUserId,\n  approved: true,\n});`
+        )
       )
     ).toBe(false);
   });
