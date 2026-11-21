@@ -473,6 +473,7 @@ export function CapabilityObject({
             <ExceptionList
               rows={approvals?.actions[v.verbId]?.exceptions ?? []}
               titleOf={titleOf}
+              detailOf={() => verbDisplayName(v)}
               whereOf={whereOf}
               readOnly={!viewerIsPodAdmin}
               onTakeBack={takeBack.ask}
@@ -660,6 +661,7 @@ export function CapabilityObject({
                   <ExceptionList
                     rows={approvals?.tool.exceptions ?? []}
                     titleOf={titleOf}
+                    detailOf={() => null}
                     whereOf={whereOf}
                     readOnly={!viewerIsPodAdmin}
                     onTakeBack={takeBack.ask}

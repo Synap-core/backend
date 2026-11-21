@@ -57,7 +57,10 @@ describe("actionModeChoices — an action whose tool has its own row", () => {
       "ask",
       "never",
     ]);
-    expect(choices[0]?.label).toBe("As the whole tool: Runs on its own");
+    expect(choices[0]?.label).toBe("Same as the tool");
+    expect(choices[0]?.line).toBe(
+      "It follows the whole tool: runs on its own."
+    );
   });
 
   it("no tool row: no 'as the tool' choice", () => {

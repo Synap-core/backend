@@ -9,6 +9,8 @@
  */
 
 import { Button, Select, SelectItem } from "@heroui/react";
+import Link from "next/link";
+import { agentHref } from "../../../../lib/console-nav";
 import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
 import type { GovernanceRuleRow } from "../../../../lib/governance-rules/rule-view-model";
 import type {
@@ -113,12 +115,15 @@ export function EveryoneControl({
 export function ExceptionList({
   rows,
   titleOf,
+  detailOf,
   whereOf,
   readOnly,
   onTakeBack,
 }: {
   rows: readonly GovernanceRuleRow[];
   titleOf: (row: GovernanceRuleRow) => string;
+  /** The action a row names, when narrower than the whole tool; else null. */
+  detailOf: (row: GovernanceRuleRow) => string | null;
   whereOf: (row: GovernanceRuleRow) => string;
   readOnly: boolean;
   onTakeBack: (row: GovernanceRuleRow) => void;
@@ -135,10 +140,28 @@ export function ExceptionList({
           <ApprovalLine
             key={row.id}
             row={row}
+            // On a tool's page the tool is known: the line is titled by WHO.
+            byWho
             title={titleOf(row)}
+            detail={detailOf(row)}
             where={whereOf(row)}
             readOnly={readOnly}
             onTakeBack={() => onTakeBack(row)}
+            doors={
+              row.agentUserId && !readOnly ? (
+                <Button
+                  as={Link}
+                  href={agentHref(row.agentUserId)}
+                  data-approval-agent=""
+                  size="sm"
+                  variant="light"
+                  radius="md"
+                  className="min-h-9"
+                >
+                  {t("tool.approvals.agentDoor")}
+                </Button>
+              ) : undefined
+            }
           />
         ))}
       </div>
