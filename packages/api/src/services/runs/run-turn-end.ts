@@ -706,6 +706,7 @@ type RunRow = Pick<
   | "completedAt"
   | "sessionId"
   | "workspaceId"
+  | "startedAt"
 > & {
   /** The run's playbook: the continuation resolves its declared tools. */
   playbookId?: string;
@@ -753,7 +754,7 @@ async function endUnattendedRun(p: {
         `its turns ended ${p.stops} times before it reached its last stage, ` +
         `and it continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
         "An automation started it, so nobody was asked to keep it going."
-      : `Stopped at its ${stopLimitWords(p.cause.reason)}: the run stopped before it was finished ${p.stops} times ` +
+      : `Stopped at its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}: the run stopped before it was finished ${p.stops} times ` +
         `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
         "An automation started it, so nobody was asked to keep it going.";
   const ended = await applyRunCapture({
