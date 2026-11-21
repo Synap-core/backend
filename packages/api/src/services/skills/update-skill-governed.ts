@@ -46,6 +46,8 @@ export interface SkillUpdatePatch {
   /** `"rule"` = a guideline pushed into every piece of work in its scope
    *  (instruction skills only); any other value is a free-form tag. */
   category?: string;
+  /** The agent types the skill reaches; null = every agent. */
+  agentTypes?: string[] | null;
   /** WHY this edit — shown to the reviewer when an agent's edit is proposed. */
   reasoning?: string;
 }

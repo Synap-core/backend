@@ -310,3 +310,45 @@ describe("synap_update_skill — category", () => {
     expect(notRule.warnings).toBeUndefined();
   });
 });
+
+// Finding 4629b398: an agent scopes an existing skill to agent types through
+// the SAME gate (the IS loader leaves a scoped row out of other agents' turns).
+describe("synap_update_skill — agentTypes", () => {
+  it("files the scope through the gate, with the rule category in one change", async () => {
+    h.perm = { proposalId: "prop-scope" };
+    const r = await call(
+      {
+        slug: "biz/house-style",
+        category: "rule",
+        agentTypes: ["code", "code "],
+      },
+      AGENT
+    );
+
+    expect(JSON.parse(r.text)).toMatchObject({ status: "proposed" });
+    expect(h.permCalls).toHaveLength(1);
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "skill",
+      action: "update",
+      data: { id: SKILL_ID, category: "rule", agentTypes: ["code"] },
+    });
+    expect(h.sets).toHaveLength(0);
+  });
+
+  it("a granted change writes the scope; null writes every agent", async () => {
+    await call({ id: SKILL_ID, agentTypes: ["code"] }, AGENT);
+    expect(h.sets[0]).toMatchObject({ agentTypes: ["code"] });
+
+    await call({ id: SKILL_ID, agentTypes: null }, AGENT);
+    expect(h.sets[1]).toMatchObject({ agentTypes: null });
+  });
+
+  it("refuses a scope that is not a list of names, before the gate", async () => {
+    for (const bad of ["code", [""], [1], {}]) {
+      const r = await call({ id: SKILL_ID, agentTypes: bad }, AGENT);
+      expect(r.isError).toBe(true);
+      expect(r.text).toContain("agentTypes");
+    }
+    expect(h.permCalls).toHaveLength(0);
+  });
+});
