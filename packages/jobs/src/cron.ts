@@ -136,6 +136,10 @@ import {
   FIREFLIES_BACKFILL_CRON,
 } from "./workers/fireflies-worker.js";
 import {
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
+  DEGRADED_CAPTURE_SWEEP_CRON,
+} from "./workers/degraded-capture-sweep.js";
+import {
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_CRON,
   LINKEDIN_REACH_SWEEP_QUEUE,
@@ -556,6 +560,17 @@ export async function registerCronSchedules(): Promise<void> {
   await scheduleSafe(boss, "cal-backfill-cron", "*/30 * * * *", {});
   logger.info("Registered cron: cal-backfill-cron (every 30min)");
 
+  // Degraded-capture sweep (every 30min) — text captures saved raw while the
+  // AI was unavailable or over quota are structured once it answers again,
+  // capped per run and per day. No-ops when there is nothing degraded.
+  await scheduleSafe(
+    boss,
+    DEGRADED_CAPTURE_SWEEP_QUEUE,
+    DEGRADED_CAPTURE_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: degraded-capture-sweep (every 30min)");
+
   // Fireflies backfill (every 30min) — re-ingests any completed transcript whose
   // completion webhook was missed (safety net for the inbound webhook). No-ops
   // unless the fireflies tool has fireflies.backfill.enabled.
@@ -684,8 +699,9 @@ export async function registerCronSchedules(): Promise<void> {
   await sendSafe(boss, CP_PROJECT_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-project-sync");
 
-  // CP plan sync — pull this pod's tier and trial from its Control Plane every
-  // 15 minutes, AND once now so a freshly registered pod enforces its plan
+  // CP sync — pull this pod's tier and trial, and its AI availability, from
+  // its Control Plane every 15 minutes (the AI one every 3 while a hold waits
+  // on AI), AND both once now so a freshly registered pod enforces its plan
   // without waiting. No-ops when the pod has no CP link (self-hosted).
   await scheduleSafe(
     boss,
@@ -693,8 +709,8 @@ export async function registerCronSchedules(): Promise<void> {
     CP_ENTITLEMENT_SYNC_CRON,
     {}
   );
-  logger.info("Registered cron: cp-entitlement-sync (every 15min)");
-  await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, {});
+  logger.info("Registered cron: cp-entitlement-sync (a tick every 3min)");
+  await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, { force: true });
   logger.info("Enqueued startup run: cp-entitlement-sync");
 
   // Onboarding milestones (plan §5, A9): send the start's milestone ids and

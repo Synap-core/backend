@@ -431,14 +431,16 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
 
 describe("the generic tools doors refuse form rows", () => {
   it("tools.update / delete / setApproved / setAuthBinding refuse; tools.create refuses metadata.form", async () => {
-    for (const p of [
-      tools(A).update({ id: formId, metadata: { form: { hijacked: true } } }),
-      tools(A).update({ id: formId, name: "renamed" }),
-      tools(A).delete({ id: formId }),
-      tools(A).setApproved({ id: formId, approved: true }),
-      tools(A).setAuthBinding({ id: formId, authBinding: "per_user" }),
+    // One call at a time: a rejection created before its turn is unhandled.
+    for (const call of [
+      () =>
+        tools(A).update({ id: formId, metadata: { form: { hijacked: true } } }),
+      () => tools(A).update({ id: formId, name: "renamed" }),
+      () => tools(A).delete({ id: formId }),
+      () => tools(A).setApproved({ id: formId, approved: true }),
+      () => tools(A).setAuthBinding({ id: formId, authBinding: "per_user" }),
     ]) {
-      expect((await errOf(p))?.code).toBe("FORBIDDEN");
+      expect((await errOf(call()))?.code).toBe("FORBIDDEN");
     }
     expect(
       (

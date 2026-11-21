@@ -182,8 +182,36 @@ import {
   FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE,
 } from "./lifecycle-events.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { shortenTitle } from "@synap-core/types/titles";
+import { clip } from "../../utils/section-excerpt.js";
+import { materializeApprovedDocument } from "../proposals/materialize-approved-document.js";
 
 const logger = createLogger({ module: "session-answer" });
+
+/**
+ * The person's words, WHOLE, as a document of theirs in the session's space
+ * (ticket 2771d2bc). Part of the relay's own write, not a separate agent
+ * write: the words are the person's answer, and the relay door's stakes rule
+ * (a commitment waits for their tap) is what governs it.
+ */
+async function storeWholeQuote(p: {
+  userId: string;
+  workspaceId: string | null;
+  /** The slot or question it answers, for the title. */
+  about: string | null;
+  words: string;
+}): Promise<string> {
+  const { id } = await materializeApprovedDocument({
+    documentId: randomUUID(),
+    title: shortenTitle(`In their words: ${p.about ?? "an answer"}`),
+    type: "markdown",
+    content: p.words,
+    userId: p.userId,
+    workspaceId: p.workspaceId,
+    sourceProposalId: null,
+  });
+  return id;
+}
 
 // ── Questions ────────────────────────────────────────────────────────────────
 
@@ -1181,6 +1209,9 @@ export async function answerSessionSlot(p: {
             ? { relaySurface: pending.relaySurface }
             : {}),
           ...(pending.quote ? { quote: pending.quote } : {}),
+          ...(pending.quoteDocumentId
+            ? { quoteDocumentId: pending.quoteDocumentId }
+            : {}),
           confirmedAt: confirmedAt.toISOString(),
         }
       : undefined;
@@ -1867,8 +1898,9 @@ export const RelaySessionAnswerInputSchema = z.object({
   // The EXACT question: a room question's message id, and/or a slot label.
   messageId: z.string().uuid().optional(),
   slotLabel: z.string().min(1).max(500).optional(),
-  // The person's words, verbatim — required for `answered`.
-  quote: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
+  // The person's words, verbatim — required for `answered`. Over the answer
+  // cap they are kept whole as a document (`relaySessionAnswer`).
+  quote: z.string().max(ASK_LIMITS.relayQuoteMaxChars).optional(),
   // The answer as filed, when it is not the quote itself (a note beside a pick).
   text: z.string().max(ASK_LIMITS.answerTextMaxChars).optional(),
   value: AskAnswerValueSchema.optional(),
@@ -2212,6 +2244,7 @@ export async function relaySessionAnswer(p: {
       channelId: true,
       expectedOutputs: true,
       agentIds: true,
+      workspaceId: true,
     },
   });
   if (!session) return { status: "not_found" };
@@ -2281,9 +2314,15 @@ export async function relaySessionAnswer(p: {
     };
   }
 
-  // 4. ANSWERED — the person's words first.
-  const quote = p.quote?.trim().slice(0, ASK_LIMITS.answerTextMaxChars);
-  if (!quote) return { status: "quote_required" };
+  // 4. ANSWERED — the person's words first, WHOLE (ticket 2771d2bc): words
+  // longer than the answer cap are kept as a document named on the answer
+  // (`quoteDocumentId`), and the answer holds their start.
+  const words = p.quote?.trim();
+  if (!words) return { status: "quote_required" };
+  const long = words.length > ASK_LIMITS.answerTextMaxChars;
+  const quote = long
+    ? clip(words, ASK_LIMITS.answerTextMaxChars, "head")
+    : words;
   // Capped like the wire schema caps it: the stamp rides on the slot, and the
   // slot is echoed whole by every later `expectedOutputs` write, which parses
   // it at that bound.
@@ -2294,12 +2333,23 @@ export async function relaySessionAnswer(p: {
     ...(surface ? { relaySurface: surface } : {}),
     quote,
   };
+  // Written once the answer is known to land, just before it is stamped.
+  const keepWholeWords = async () => {
+    if (!long) return;
+    provenance.quoteDocumentId = await storeWholeQuote({
+      userId: p.userId,
+      workspaceId: session.workspaceId ?? null,
+      about: slot?.label ?? question?.content ?? null,
+      words,
+    });
+  };
 
   if (!slot) {
     // A slotless room question: words only, no ask to read a pick against.
     const resolved = resolveAnswer(null, p.value, p.text?.trim() || quote);
     if ("refused" in resolved) return resolved.refused;
     const text = resolved.text.trim().slice(0, SLOT_ANSWER_TEXT_MAX);
+    await keepWholeWords();
     const answer = {
       // No message carries a relay: the stamp names the question it answers.
       messageId: question!.id,
@@ -2336,6 +2386,7 @@ export async function relaySessionAnswer(p: {
     };
   }
   const seenAsk = askFingerprint(ask);
+  await keepWholeWords();
 
   if (relayStakes({ slot, question, facts }) === "commitment") {
     const pendingRelay: SlotPendingRelay = {
@@ -2344,6 +2395,9 @@ export async function relaySessionAnswer(p: {
       relayedBy: p.agentUserId,
       ...(surface ? { relaySurface: surface } : {}),
       quote,
+      ...(provenance.quoteDocumentId
+        ? { quoteDocumentId: provenance.quoteDocumentId }
+        : {}),
       relayedAt: now.toISOString(),
     };
     // Under the lock, on the SAME ask the words were read against — a re-ask

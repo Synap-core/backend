@@ -265,6 +265,7 @@ export type AnyTransitionPayload =
 
 export {
   HOLD_DEV_MOVES_HELP,
+  HOLD_AI_MOVES,
   HOLD_DEV_TO,
   HOLD_ON,
   HOLD_REQUIRED_MESSAGE,

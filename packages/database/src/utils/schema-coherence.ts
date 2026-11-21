@@ -1226,7 +1226,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
-  // The actor column (0442): every automation and playbook read names it.
+  // The actor column (0442, 0445): every read of these tables names it.
   {
     table: "automations",
     column: "agent_user_id",
@@ -1236,6 +1236,21 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "agent_user_id",
     addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "tools",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "capabilities",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "skills",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
   },
   // apps.approved_access — the approval in its v2 form (0434, app permissions
   // W2). Missing means every app read and approval write would 42703.

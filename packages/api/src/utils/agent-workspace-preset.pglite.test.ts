@@ -47,7 +47,7 @@ async function settingsOf(id: string) {
 }
 
 describe("applyAgentWorkspacePreset", () => {
-  it("keeps exposurePolicy and controlPlane, sets the three preset keys", async () => {
+  it("keeps exposurePolicy, controlPlane and the person's governanceMode, sets the preset keys", async () => {
     const id = randomUUID();
     await client.query(
       `insert into workspaces (id, name, owner_id, settings) values ($1,'Agent WS',$2,$3::jsonb)`,
@@ -57,7 +57,7 @@ describe("applyAgentWorkspacePreset", () => {
         JSON.stringify({
           exposurePolicy: POLICY,
           controlPlane: { podId: "p1" },
-          governanceMode: "strict",
+          governanceMode: "agent-owned",
         }),
       ]
     );
@@ -71,7 +71,7 @@ describe("applyAgentWorkspacePreset", () => {
       controlPlane: { podId: "p1" },
       workspaceType: "agent",
       linkedAgentId: "agent-1",
-      governanceMode: "standard",
+      governanceMode: "agent-owned",
     });
     const [row] = (
       await client.query<{ workspace_type: string }>(
@@ -92,7 +92,6 @@ describe("applyAgentWorkspacePreset", () => {
     expect(await settingsOf(id)).toEqual({
       workspaceType: "agent",
       linkedAgentId: "agent-2",
-      governanceMode: "standard",
     });
   });
 });

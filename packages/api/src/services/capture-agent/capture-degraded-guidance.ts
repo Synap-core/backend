@@ -117,6 +117,19 @@ export function classifyDegradedReason(
   return "unknown";
 }
 
+/**
+ * The degraded reasons that mean the AI did not ANSWER (unreachable, refused
+ * the pod's credentials, out of budget or quota), as opposed to an input it
+ * could not read or a configuration the pod lacks: a capture saved raw for one
+ * of these is re-structured once the AI answers again
+ * (`services/captures/restructure-degraded-captures.ts`).
+ */
+export const AI_UNAVAILABLE_DEGRADED_REASONS: readonly string[] = [
+  ...TRANSIENT_REASONS,
+  ...BUDGET_REASONS,
+  "is_auth_error",
+];
+
 /** `true` only when retrying the identical call could plausibly succeed. */
 export function isDegradedReasonRetryable(
   reason: string | undefined | null

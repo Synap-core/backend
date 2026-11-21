@@ -9,6 +9,9 @@
 
 export const STAGE_OF_METADATA_KEY = "stageOf" as const;
 
+/** What a child run that closed not done is called in a step's messages. */
+export const CLOSED_WITH_WORK_OPEN = "closed with required work open";
+
 export interface StageOf {
   /** The parent run's session. */
   sessionId: string;

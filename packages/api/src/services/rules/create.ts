@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { db, skills } from "@synap/database";
+import { db, ownerAndActor, skills } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import {
@@ -522,11 +522,17 @@ export async function createRuleGoverned(
 
   let row: { id: string } | undefined;
   try {
+    const owner = await ownerAndActor(
+      db,
+      input.userId,
+      input.agentUserId ?? input.behaviourAuthorAgentUserId
+    );
     [row] = await db
       .insert(skills)
       .values({
         id: ruleId,
-        userId: input.userId,
+        userId: owner.ownerId,
+        agentUserId: owner.agentUserId,
         workspaceId: input.scope.kind === "workspace" ? workspaceId : null,
         kind: "instruction",
         scope: input.scope.kind,

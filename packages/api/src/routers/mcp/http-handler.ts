@@ -56,6 +56,8 @@ import {
   UNCOUNTED_KEY_TYPES,
 } from "../../middleware/hub-request-guard.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
+import { readAiAvailabilityFor } from "../../services/ai-availability/read.js";
+import { aiAvailabilityAgentLine } from "../../services/ai-availability/for-agents.js";
 import { resolveUiRendererFromDb } from "./ui-tools.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { resolveIssuer } from "../oauth/config.js";
@@ -186,14 +188,20 @@ export async function buildGrounding(
       .from(projects)
       .where(eq(projects.userId, userId));
     const projNames = projRows.map((p) => p.name).filter(Boolean);
+    // AI not available leads (one line, only then): an agent that knows it
+    // points the person at it instead of retrying. Best-effort like the rest.
+    const aiLine = await readAiAvailabilityFor(userId)
+      .then((view) => aiAvailabilityAgentLine(view))
+      .catch(() => "");
     const projPart =
-      projNames.length === 0
+      (aiLine ? `${aiLine} ` : "") +
+      (projNames.length === 0
         ? ""
         : projNames.length <= 6
           ? `Projects (commitments): ${projNames.join(", ")}. `
-          : `${projNames.length} projects (commitments). `;
+          : `${projNames.length} projects (commitments). `);
     if (wsIds.length === 0) {
-      if (projNames.length === 0) return undefined;
+      if (!projPart) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
     const wsRows = await db
@@ -202,7 +210,7 @@ export async function buildGrounding(
       .where(inArray(workspaces.id, wsIds));
     const named = wsRows.filter((w) => Boolean(w.name));
     if (named.length === 0) {
-      if (projNames.length === 0) return undefined;
+      if (!projPart) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
 

@@ -54,6 +54,31 @@ export const INTAKE_SOURCE_METADATA_KEY = INTAKE_SOURCE_KEY;
 
 export type IntakeSourceKind = "text" | "url" | "file" | "import_item";
 
+/**
+ * Why structuring did not run on a source, and who captured it: the sweep
+ * re-structures a source saved without AI as the same actor, so the result
+ * goes through the governance the first capture would have taken.
+ */
+export interface IntakeDegradedMarker {
+  reason: string;
+  /** The failure class the pod read (`utils/ai-failure.ts`), when it read one. */
+  failureClass?: string;
+  /** The agent that captured it; null for a person. Absent on older rows. */
+  agentUserId?: string | null;
+}
+
+/** See {@link IntakeSourceMetadata.restructureSweep}. */
+export interface RestructureSweepRecord {
+  /** Attempts that failed for a reason other than AI being unavailable. */
+  failures: number;
+  lastAttemptAt: string;
+  lastOutcome: string;
+  lastReason?: string;
+  /** The UTC day of `dayAttempts` (YYYY-MM-DD): the sweep's daily cap reads it. */
+  day: string;
+  dayAttempts: number;
+}
+
 export interface IntakeSourceMetadata {
   version: 1;
   kind: IntakeSourceKind;
@@ -76,8 +101,14 @@ export interface IntakeSourceMetadata {
    * before sending (a re-encode is not byte-stable). Second ledger key.
    */
   sourceSha256?: string;
-  degraded?: { reason: string; at: string };
+  degraded?: IntakeDegradedMarker & { at: string };
   restructuredAt?: string;
+  /**
+   * The degraded-capture sweep's record of its attempts on this source
+   * (`services/captures/restructure-degraded-captures.ts`). Kept after a
+   * re-structure clears `degraded`, as its provenance.
+   */
+  restructureSweep?: RestructureSweepRecord;
   /**
    * The caller asked for text only (`keepRaw: false`) but nothing could be
    * read from the file, so its ORIGINAL bytes were kept anyway — raw is never
@@ -132,7 +163,7 @@ export interface StageIntakeSourceInput {
     retainedUntilStructured?: boolean;
   };
   /** Structuring did not run — the source is kept for re-structure. */
-  degraded?: { reason: string };
+  degraded?: IntakeDegradedMarker;
   /** The plan structured from this source — appended to `planKeys`. */
   planKey?: string;
   /** See {@link IntakeSourceMetadata.sourceMessageId}. */
@@ -338,7 +369,18 @@ export async function stageIntakeSource(
       ? { sourceSha256: input.file.sourceSha256.toLowerCase() }
       : {}),
     ...(input.degraded
-      ? { degraded: { reason: input.degraded.reason, at: now } }
+      ? {
+          degraded: {
+            reason: input.degraded.reason,
+            ...(input.degraded.failureClass
+              ? { failureClass: input.degraded.failureClass }
+              : {}),
+            ...(input.degraded.agentUserId !== undefined
+              ? { agentUserId: input.degraded.agentUserId }
+              : {}),
+            at: now,
+          },
+        }
       : {}),
     ...(input.file?.retainedUntilStructured
       ? { retainedUntilStructured: true as const }

@@ -506,6 +506,10 @@ import {
   type WorkSessionResolution,
 } from "../../../services/focus-sessions/resolve-work-session.js";
 import { resolveRoomSession } from "../../../services/messaging/room-session.js";
+import {
+  attachConversationToNamedSession,
+  SESSION_ACTED_ON_TOOLS,
+} from "../../../services/focus-sessions/session-client-binding.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -654,6 +658,12 @@ export interface SessionAttributionReport {
     sessionId: string;
     reason: "not-owned" | "ownership-check-failed";
   };
+  /**
+   * `explicit` only: this conversation had no session of its own and named
+   * this one, so it is now attached to it: its later unaddressed writes are
+   * filed there (`attachConversationToNamedSession`, founder's answer 6).
+   */
+  attached?: true;
 }
 
 export interface SessionResolution {
@@ -687,6 +697,10 @@ export async function resolveSessionHandle(
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
+  // Named as the caller's OWN session (attach on naming): a `sessionId` the
+  // write is filed under, or a coordination post's `fromSessionId`. Never a
+  // session the tool acts on, nor a room the caller posts into.
+  let namedAsOwn = !!explicit && !SESSION_ACTED_ON_TOOLS.has(toolName);
   // A COORDINATION POST (`intent` / `toSessionId`) is written FROM the
   // caller's session INTO another session's room: the room names the TARGET,
   // so it must never become this call's session — that filed "A wrote to B"
@@ -702,6 +716,7 @@ export async function resolveSessionHandle(
     args.fromSessionId.trim() !== ""
   ) {
     explicit = args.fromSessionId;
+    namedAsOwn = true;
   }
   // A post into a session's OWN room names that session: the channel identifies
   // it as surely as a `sessionId` would. Without this, a post to the room the
@@ -717,15 +732,28 @@ export async function resolveSessionHandle(
     const room = await resolveRoomSession(args.channelId);
     if (room && room.userId === userId) explicit = room.id;
   }
+  const clientKey = requestClientKey(agentUserId);
   const r = await resolveWorkSession({
     userId,
     explicitSessionId: explicit,
-    clientKey: requestClientKey(agentUserId),
+    clientKey,
   });
   if (r.source === "explicit" && r.sessionId) {
+    const attached =
+      namedAsOwn &&
+      (await attachConversationToNamedSession({
+        userId,
+        clientKey,
+        sessionId: r.sessionId,
+      }));
     return {
       session: { sessionId: r.sessionId, attribution: "explicit" },
-      attribution: { session: "explicit", ambiguous: false, openCount: null },
+      attribution: {
+        session: "explicit",
+        ambiguous: false,
+        openCount: null,
+        ...(attached ? { attached: true as const } : {}),
+      },
     };
   }
   if ((r.source === "client" || r.source === "unclaimed") && r.sessionId) {
@@ -965,6 +993,13 @@ export const AUTOMATIONS_PAGE_DEFAULT = 25;
 export const PLAYBOOKS_PAGE_DEFAULT = 25;
 export const WIDGETS_PAGE_DEFAULT = 15;
 export const CAPABILITIES_PAGE_DEFAULT = 20;
+/**
+ * One playbook's stages, paged (`synap_list_playbooks {playbookId, limit,
+ * offset}`): a stage measured ~1,800 chars on the founder's pod (14 stages,
+ * 25 KB), so a default page of 6 fits the cap.
+ */
+export const PLAYBOOK_STAGES_PAGE_DEFAULT = 6;
+export const PLAYBOOK_STAGES_PAGE_MAX = 100;
 
 export const REASONING_MAX_CHARS = 2000;
 
