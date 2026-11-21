@@ -141,6 +141,8 @@ import {
   governanceCeilings,
   profiles,
   spaceAccess,
+  podMembers,
+  projectMembers,
   lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
@@ -184,6 +186,9 @@ beforeAll(async () => {
     governanceCeilings,
     profiles,
     spaceAccess,
+    // The kind floor reads the person's spaces (pod-visible ones too).
+    podMembers,
+    projectMembers,
   ])
     await h.client!.exec(ddlFor(t as PgTable));
   // The gate refuses an entity create whose kind does not resolve.

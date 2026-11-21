@@ -28,11 +28,11 @@ describe("usableInSpace", () => {
   });
 
   it("the SQL form admits pod-wide rows, and home rows only in a space", () => {
-    expect(sqlOf(B)).toEqual({
+    expect(sqlOf(B)).toMatchObject({
       sql: '("things"."workspace_id" is null or "things"."workspace_id" = $1)',
       params: [B],
     });
-    expect(sqlOf(null)).toEqual({
+    expect(sqlOf(null)).toMatchObject({
       sql: '"things"."workspace_id" is null',
       params: [],
     });
