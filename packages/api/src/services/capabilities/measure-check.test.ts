@@ -136,7 +136,12 @@ describe("measure.check — the read", () => {
     );
     expect(out).toEqual({
       passed: true,
-      detail: { value: 12, threshold: 10, comparator: "gte", op: "entities.list" },
+      detail: {
+        value: 12,
+        threshold: 10,
+        comparator: "gte",
+        op: "entities.list",
+      },
     });
     expect(h.calls).toHaveLength(1);
     const [call] = h.calls;
@@ -223,7 +228,11 @@ describe("measure.check — the read", () => {
     h.answers["signals.count"] = {};
     await expect(
       runMeasureCheck(
-        { op: "attention.count", params: { profileSlug: "deal" }, threshold: 0 },
+        {
+          op: "attention.count",
+          params: { profileSlug: "deal" },
+          threshold: 0,
+        },
         { userId: OWNER, workspaceId: null }
       )
     ).rejects.toThrow(/without a count/);

@@ -178,7 +178,9 @@ export function pendingCriteria(
  * Pure: a capability run's outcome as a verdict. Only an explicit boolean
  * `passed` on a completed run is a verdict; everything else is unmeasured.
  */
-export function capabilityVerdict(result: Awaited<ReturnType<typeof executeCapability>>): {
+export function capabilityVerdict(
+  result: Awaited<ReturnType<typeof executeCapability>>
+): {
   verdict: EvaluationVerdict;
   rationale: string;
   /** A structured `detail` (a measure's value and bar), kept as the grade's evidence. */
