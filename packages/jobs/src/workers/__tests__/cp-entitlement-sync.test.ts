@@ -119,7 +119,16 @@ const AI = {
     canTopUp: true,
     action: "top_up",
     actionUrl: "https://synap.live/account/credits",
-    packs: [{ id: "p", name: "10M", tokens: 1, priceCents: 1, currency: "EUR", priced: true }],
+    packs: [
+      {
+        id: "p",
+        name: "10M",
+        tokens: 1,
+        priceCents: 1,
+        currency: "EUR",
+        priced: true,
+      },
+    ],
   },
 };
 const answer = (status: number, body: unknown) => ({
@@ -130,7 +139,8 @@ const answer = (status: number, body: unknown) => ({
 /** The CP's two doors; each test sets what they answer. */
 let doors: { plan: () => unknown; ai: () => unknown };
 const NOW = new Date("2026-11-21T10:00:00.000Z");
-const ago = (min: number) => new Date(NOW.getTime() - min * 60_000).toISOString();
+const ago = (min: number) =>
+  new Date(NOW.getTime() - min * 60_000).toISOString();
 
 beforeEach(() => {
   h.link = {

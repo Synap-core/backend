@@ -139,7 +139,11 @@ describe("the one map table → waitKind", () => {
       "not_entitled",
     ] as const)
       expect(ai(k), k).toBe("payment");
-    for (const k of ["budget_paused", "provider_issue", "service_down"] as const)
+    for (const k of [
+      "budget_paused",
+      "provider_issue",
+      "service_down",
+    ] as const)
       expect(ai(k), k).toBe("vendor");
     // The pod knows no state (no pull yet, a CP without the door) or AI reads
     // available while the hold waits: the AI service holds it.

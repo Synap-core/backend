@@ -85,7 +85,7 @@ export const HOLD_REQUIRED_MESSAGE =
  * another member's recorded `dev.pr_merged` must not resume it.
  */
 export const HOLD_DEV_MOVES_HELP =
-  "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict); 'ai:available' when this pod's AI is available again (credits back, AI switched on: the person acts, never you)";
+  "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict); 'ai:available' when this pod's AI is back (the person acts, never you)";
 
 /**
  * The wait forms of `until.moves` (plan 07f8a997 "Agents wait on anything",

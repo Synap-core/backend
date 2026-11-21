@@ -216,7 +216,8 @@ async function getFromCp(
   path: string,
   what: string
 ): Promise<
-  { ok: true; body: unknown } | { ok: false; failed: FailedOutcome; message: string }
+  | { ok: true; body: unknown }
+  | { ok: false; failed: FailedOutcome; message: string }
 > {
   const url = `${caller.cpUrl}${path}?podId=${encodeURIComponent(caller.podId)}`;
   let res: Response;
@@ -335,10 +336,7 @@ async function pullAiAvailability(
   return { outcome: "ok", availability: change.current };
 }
 
-const isDue = (
-  sync: ControlPlaneEntitlementSync | null,
-  now: Date
-): boolean =>
+const isDue = (sync: ControlPlaneEntitlementSync | null, now: Date): boolean =>
   !sync ||
   !(now.getTime() - Date.parse(sync.lastAttemptAt) < PULL_DUE_AFTER_MS);
 

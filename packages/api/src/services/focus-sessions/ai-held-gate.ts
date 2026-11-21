@@ -19,19 +19,10 @@
  *     (`returnToOnFailStage`). A judge that failed for another reason keeps
  *     holding for the owner's grade (founder decision 8, 20 Nov 2026).
  */
-import {
-  and,
-  db,
-  eq,
-  focusSessions,
-  setSessionStatus,
-} from "@synap/database";
+import { and, db, eq, focusSessions, setSessionStatus } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
-import {
-  checkGatePause,
-  sessionGateSubject,
-} from "../playbooks/stage-gate.js";
+import { checkGatePause, sessionGateSubject } from "../playbooks/stage-gate.js";
 import { returnToOnFailStage } from "./advance-stage.js";
 import {
   heldByCheckGate,
@@ -62,7 +53,10 @@ export async function regradeAiHeldGate(params: {
   ) {
     return "not_gate";
   }
-  const { stageKey, fromStage } = gate as { stageKey: string; fromStage: string };
+  const { stageKey, fromStage } = gate as {
+    stageKey: string;
+    fromStage: string;
+  };
   const subject = sessionGateSubject({
     sessionId: session.id,
     userId: params.userId,

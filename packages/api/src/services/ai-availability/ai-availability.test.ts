@@ -74,9 +74,9 @@ describe("the view (aiAvailabilityViewOf)", () => {
       expect(v.role).toBe("member");
     }
     // Nothing to do is nothing to ask.
-    expect(aiAvailabilityViewOf(stored("ok"), "member").availability).toMatchObject(
-      { kind: "ok", action: "none" }
-    );
+    expect(
+      aiAvailabilityViewOf(stored("ok"), "member").availability
+    ).toMatchObject({ kind: "ok", action: "none" });
   });
 
   it("unknown (never answered, or a CP without the door) is null, never ok", () => {
@@ -110,9 +110,15 @@ describe("for agents", () => {
   });
 
   it("says nothing when AI is available or the pod does not know", () => {
-    expect(aiAvailabilityAgentLine(aiAvailabilityViewOf(stored("ok"), "payer"))).toBe("");
-    expect(aiAvailabilityAgentLine(aiAvailabilityViewOf(undefined, "payer"))).toBe("");
-    expect(aiAvailabilityForAgents(aiAvailabilityViewOf(undefined, "payer"))).toEqual({
+    expect(
+      aiAvailabilityAgentLine(aiAvailabilityViewOf(stored("ok"), "payer"))
+    ).toBe("");
+    expect(
+      aiAvailabilityAgentLine(aiAvailabilityViewOf(undefined, "payer"))
+    ).toBe("");
+    expect(
+      aiAvailabilityForAgents(aiAvailabilityViewOf(undefined, "payer"))
+    ).toEqual({
       kind: null,
     });
   });
@@ -148,7 +154,11 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
       change(stored("ok"), stored("empty")),
       d.deps as never
     );
-    expect(out).toEqual({ action: "notified", type: "ai.unavailable", sent: 2 });
+    expect(out).toEqual({
+      action: "notified",
+      type: "ai.unavailable",
+      sent: 2,
+    });
     expect(d.created.map((c) => c.userId)).toEqual(["owner", "admin"]);
     expect(d.created[0]).toMatchObject({
       type: "ai.unavailable",
@@ -166,12 +176,18 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
     );
     // The same mark again: nothing new.
     await notifyAiAvailabilityChange(
-      change(stored("low", { threshold: 20 }), stored("low", { threshold: 20 })),
+      change(
+        stored("low", { threshold: 20 }),
+        stored("low", { threshold: 20 })
+      ),
       d.deps as never
     );
     // A new mark: a new notice.
     await notifyAiAvailabilityChange(
-      change(stored("low", { threshold: 20 }), stored("low", { threshold: 10 })),
+      change(
+        stored("low", { threshold: 20 }),
+        stored("low", { threshold: 10 })
+      ),
       d.deps as never
     );
     expect(d.created.filter((c) => c.userId === "owner")).toMatchObject([
@@ -194,7 +210,10 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
   it("a billing read the CP could not make tells nobody and clears nothing", async () => {
     const d = deps();
     const out = await notifyAiAvailabilityChange(
-      change(stored("empty"), { ...stored("ok"), billing: { readFailed: true } }),
+      change(stored("empty"), {
+        ...stored("ok"),
+        billing: { readFailed: true },
+      }),
       d.deps as never
     );
     expect(out).toEqual({ action: "none" });
@@ -203,7 +222,10 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
 
   it("the first answer ever is news when AI is not available", async () => {
     const d = deps();
-    await notifyAiAvailabilityChange(change(undefined, stored("suspended")), d.deps as never);
+    await notifyAiAvailabilityChange(
+      change(undefined, stored("suspended")),
+      d.deps as never
+    );
     expect(d.created[0]).toMatchObject({
       type: "ai.unavailable",
       data: { title: "Payment needed" },

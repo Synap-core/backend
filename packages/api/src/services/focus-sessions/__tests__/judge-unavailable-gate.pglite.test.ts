@@ -323,7 +323,6 @@ describe("a check gate whose judge ran and said fail", () => {
   });
 });
 
-
 /** The session's current hold, as the transition log records it. */
 const holdOf = async (sessionId: string) =>
   (

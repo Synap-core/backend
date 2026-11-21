@@ -216,9 +216,14 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
     resetsAt: "2026-12-01T00:00:00.000Z",
     viewerRole: "pod_owner" as const,
     canTopUp: true,
-    action: state === "empty" || state === "low" ? ("top_up" as const) : ("none" as const),
+    action:
+      state === "empty" || state === "low"
+        ? ("top_up" as const)
+        : ("none" as const),
     actionUrl:
-      state === "empty" || state === "low" ? "https://cp.example/credits" : null,
+      state === "empty" || state === "low"
+        ? "https://cp.example/credits"
+        : null,
   });
   const T = (min: number) =>
     new Date(Date.parse("2026-11-21T10:00:00.000Z") + min * 60_000);
@@ -238,14 +243,14 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
   it("stamps availableSince when AI comes back, keeps it while available, clears it when not", async () => {
     // The first answer: available, so it became available now.
     expect((await pull("ok", 0)).becameAvailable).toBe(true);
-    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
-      T(0).toISOString()
-    );
+    expect(
+      (await link.readPodAiAvailability()).availability?.availableSince
+    ).toBe(T(0).toISOString());
     // Still available (unmetered is available): the stamp stays.
     expect((await pull("unmetered", 15)).becameAvailable).toBe(false);
-    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
-      T(0).toISOString()
-    );
+    expect(
+      (await link.readPodAiAvailability()).availability?.availableSince
+    ).toBe(T(0).toISOString());
     // Low credits still run AI, so it is not a loss of availability.
     expect((await pull("low", 30)).becameAvailable).toBe(false);
     // Out of credits: no stamp.
@@ -268,9 +273,9 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
       "unreachable",
       "The Control Plane could not be reached."
     );
-    expect((await link.readPodAiAvailability()).availability?.billing).toMatchObject(
-      { state: "empty" }
-    );
+    expect(
+      (await link.readPodAiAvailability()).availability?.billing
+    ).toMatchObject({ state: "empty" });
     await link.recordPodAiAvailabilityFailure(
       "unsupported",
       "The Control Plane does not serve this pod's AI availability (HTTP 404)."
@@ -292,9 +297,9 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
     expect(failed.current.availableSince).toBe(T(0).toISOString());
     // Readable again and still available: no news, the old stamp stands.
     expect((await pull("ok", 30)).becameAvailable).toBe(false);
-    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
-      T(0).toISOString()
-    );
+    expect(
+      (await link.readPodAiAvailability()).availability?.availableSince
+    ).toBe(T(0).toISOString());
   });
 });
 

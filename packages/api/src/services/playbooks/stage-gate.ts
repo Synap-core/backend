@@ -45,7 +45,10 @@ import {
 import { createLogger } from "@synap-core/core";
 import { HOLD_AI_MOVES, type Hold } from "@synap-core/types/lifecycle";
 import { resolveAiFailureState } from "@synap-core/types/ai-availability";
-import { describeAiFailure, type AiFailureClass } from "../../utils/ai-failure.js";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   readCriteria,
