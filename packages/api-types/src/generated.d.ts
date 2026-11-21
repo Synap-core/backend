@@ -3498,6 +3498,73 @@ export interface ProjectRootHealth {
 	/** Pillars with no live primary goal. */
 	pillarsEmpty: number;
 }
+declare const PROCESS_HEALTH_STATES: readonly [
+	"config-error",
+	"unresolved-failure",
+	"blocked-by-policy",
+	"waiting-on-you",
+	"running",
+	"draft",
+	"paused",
+	"healthy",
+	"never-run",
+	"unknown"
+];
+export type ProcessHealthState = (typeof PROCESS_HEALTH_STATES)[number];
+declare const PROCESS_HEALTH_REASONS: readonly [
+	"config_invalid",
+	"running",
+	"running_after_failure",
+	"waiting_on_you",
+	"blocked_by_policy",
+	"latest_failed",
+	"draft",
+	"paused",
+	"archived",
+	"healthy",
+	"latest_unresolved",
+	"never_run",
+	"not_enough_activity"
+];
+export type ProcessHealthReason = (typeof PROCESS_HEALTH_REASONS)[number];
+export interface ProcessHealth {
+	state: ProcessHealthState;
+	/** Why: the code a surface resolves to words (see PROCESS_HEALTH_REASONS). */
+	reason: ProcessHealthReason;
+	/**
+	 * `latest_unresolved` only: the latest run's status the reason names (a
+	 * token; the vocabulary resolves it). Absent otherwise.
+	 */
+	latestStatus?: string | null;
+	/** Run that explains the state, when the state is activity-derived. */
+	runId: string | null;
+	/**
+	 * `waiting-on-you` only: the focus session the waiting run drives — where
+	 * the owed slot lives, so the row's door opens it. Null when the pod did not
+	 * say (an automation run with no session, or a pod older than the field).
+	 */
+	sessionId?: string | null;
+}
+declare const OBJECT_NEXT_ACTIONS: readonly [
+	"turn_on",
+	"enable",
+	"see_failure",
+	"review",
+	"answer",
+	"open"
+];
+export type ObjectNextAction = (typeof OBJECT_NEXT_ACTIONS)[number];
+export interface ObjectNext {
+	action: ObjectNextAction;
+	/** Why: the process health reason, `skills_off`, or the next move's kind. */
+	reason: string;
+	/** Only a person can take it: it is theirs to do, a needs-you card. */
+	personOnly: boolean;
+	/** Where it is taken when not on the object: the session that owes it. */
+	sessionId?: string;
+	/** A thing's or a session's next move, in the status read's words. */
+	label?: string;
+}
 /**
  * The kind of object on one end of a relation edge.
  *
@@ -10507,6 +10574,12 @@ export interface RequiredLinkCheck {
 	status: RequiredLinkCheckStatus;
 	missing: MissingRequiredLink[];
 }
+declare const PROPOSAL_LANDED_ROLES: readonly [
+	"created",
+	"updated",
+	"linked"
+];
+export type ProposalLandedRole = (typeof PROPOSAL_LANDED_ROLES)[number];
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
 	"ai",
@@ -11598,6 +11671,35 @@ export interface ProposalMaterializedRecord {
 	/** Document ids CREATED by approval (revert → delete each). */
 	documentIds?: string[];
 	/**
+	 * Config rows CREATED by the run: skills, automations, rules (`skills`
+	 * rows), DRAFT playbooks, views, and cells (`widget_definitions`; a cell the
+	 * door updated instead was never the run's and is not listed).
+	 */
+	skillIds?: string[];
+	automationIds?: string[];
+	ruleIds?: string[];
+	playbookIds?: string[];
+	viewIds?: string[];
+	cellIds?: string[];
+	/** Connected plan: focus sessions and projects created by the run. */
+	sessionIds?: string[];
+	projectIds?: string[];
+	/** Entities a merge into a PRE-EXISTING entity changed. */
+	propertyDiffs?: Array<{
+		entityId: string;
+	}>;
+	/** Config rows an `update_*` op changed (`kind`: skill, automation, playbook, view, focus_session…). */
+	rowPatches?: Array<{
+		id: string;
+		kind: string;
+	}>;
+	/** The same rows keyed by the op that produced them; `linked` = an existing entity the op linked. */
+	byOp?: Record<string, {
+		entityId?: string;
+		linked?: boolean;
+		op: string;
+	}>;
+	/**
 	 * Entity-merge materialization (pod hygiene). Stamped by the entity.merge
 	 * approve executor so revert can full-unmerge: reverse signals/relations/
 	 * links, restore facets, restore winner projection, undelete the loser.
@@ -12228,53 +12330,6 @@ declare const PRE_APPROVAL_HELD_REASONS: readonly [
 export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
 /** Why a playbook cannot be pre-approved for agents, whatever its rules. */
 export type PreApprovalIneligibleReason = Exclude<PreApprovalHeldReason, "version_changed">;
-declare const PROCESS_HEALTH_STATES: readonly [
-	"config-error",
-	"unresolved-failure",
-	"blocked-by-policy",
-	"waiting-on-you",
-	"running",
-	"draft",
-	"paused",
-	"healthy",
-	"never-run",
-	"unknown"
-];
-export type ProcessHealthState = (typeof PROCESS_HEALTH_STATES)[number];
-declare const PROCESS_HEALTH_REASONS: readonly [
-	"config_invalid",
-	"running",
-	"running_after_failure",
-	"waiting_on_you",
-	"blocked_by_policy",
-	"latest_failed",
-	"draft",
-	"paused",
-	"archived",
-	"healthy",
-	"latest_unresolved",
-	"never_run",
-	"not_enough_activity"
-];
-export type ProcessHealthReason = (typeof PROCESS_HEALTH_REASONS)[number];
-export interface ProcessHealth {
-	state: ProcessHealthState;
-	/** Why: the code a surface resolves to words (see PROCESS_HEALTH_REASONS). */
-	reason: ProcessHealthReason;
-	/**
-	 * `latest_unresolved` only: the latest run's status the reason names (a
-	 * token; the vocabulary resolves it). Absent otherwise.
-	 */
-	latestStatus?: string | null;
-	/** Run that explains the state, when the state is activity-derived. */
-	runId: string | null;
-	/**
-	 * `waiting-on-you` only: the focus session the waiting run drives — where
-	 * the owed slot lives, so the row's door opens it. Null when the pod did not
-	 * say (an automation run with no session, or a pod older than the field).
-	 */
-	sessionId?: string | null;
-}
 declare const PROCESS_STEP_RUNNER_KINDS: readonly [
 	"ai",
 	"person",
@@ -17617,7 +17672,9 @@ export interface ProposalSetup {
  *
  * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
  * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
- * `document`, `channel`), so a host opens each through its one route table.
+ * `document`, `channel`, `view`), so a host opens each through its one route
+ * table. A caller that already knows its refs (what a proposal landed) passes
+ * them as `refs` instead of a payload.
  */
 export interface ProposalObjectRef {
 	id: string;
@@ -17625,6 +17682,12 @@ export interface ProposalObjectRef {
 	kind: string;
 	/** The object's own name; `null` when it has none (an untitled entity). */
 	name: string | null;
+}
+/** One landed object as a row carries it. */
+export interface ProposalLandedObject extends ProposalObjectRef {
+	role: ProposalLandedRole;
+	/** Its next step; null = it needs nothing; absent = not read. */
+	next?: ObjectNext | null;
 }
 export interface ProposalStatusOption {
 	key: string;
@@ -18064,6 +18127,12 @@ export interface ProposalExecutorResult {
 	success: boolean;
 	alreadyApproved?: boolean;
 	primaryId?: string;
+	/**
+	 * The object kind `primaryId` names when it is not the proposal's target
+	 * kind (a run's session); null when it names no object a person opens (a
+	 * key, a run). Absent: the target's kind. Read by the landed stamp.
+	 */
+	primaryKind?: string | null;
 	created?: number;
 	linked?: number;
 	/**
@@ -18355,27 +18424,12 @@ export interface DocumentEditSkip {
 }
 /**
  * The complete created-rows record. Extends the shared
- * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
- * api writes and reads today.
+ * `ProposalMaterializedRecord` (`@synap-core/types`, which carries every id
+ * list a reader needs) with the fields only the api writes and reads.
  */
 export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	/** Facets attached by the run (revert re-checks each row's lineage). */
 	facetIds?: string[];
-	/** Rule Loop config rows created by the run. */
-	skillIds?: string[];
-	automationIds?: string[];
-	/** Rules are `skills` rows (`kind: "rule"`). */
-	ruleIds?: string[];
-	/** DRAFT playbooks created by `create_playbook` ops (revert archives them). */
-	playbookIds?: string[];
-	/** Lists created by `create_view` ops (revert deletes them while untouched). */
-	viewIds?: string[];
-	/**
-	 * Cells a `create_cell` op CREATED (`widget_definitions` ids). Revert deletes
-	 * one while it is untouched and nothing else shows it. A cell the door
-	 * updated instead was never this run's, and is not listed.
-	 */
-	cellIds?: string[];
 	/** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
 	rendererBindingIds?: string[];
 	/**
@@ -18386,9 +18440,7 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	entityDocumentIds?: string[];
 	/** What merges overwrote on PRE-EXISTING entities, with prior values. */
 	propertyDiffs?: EntityPropertyDiff[];
-	/** Connected plan: focus sessions, projects and session edges created by the run. */
-	sessionIds?: string[];
-	projectIds?: string[];
+	/** Connected plan: session edges created by the run. */
 	linkIds?: string[];
 	/** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
 	projectSubjectIds?: Record<string, string>;
@@ -55870,6 +55922,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				joined?: boolean;
 				linked?: number;
 				primaryId?: string;
+				primaryKind?: string | null;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -56018,6 +56071,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				governanceRule?: ProposalGovernanceRule;
 				governanceRuleId?: string;
 				id: string;
+				landed?: ProposalLandedObject[];
 				lifetimeHours: number | null;
 				nodeId: string | null;
 				objectRefs?: Record<string, ProposalObjectRef>;
@@ -56171,6 +56225,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRule?: ProposalGovernanceRule;
 					governanceRuleId?: string;
 					id: string;
+					landed?: ProposalLandedObject[];
 					lifetimeHours: number | null;
 					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;
@@ -56263,6 +56318,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					governanceRule?: ProposalGovernanceRule;
 					governanceRuleId?: string;
 					id: string;
+					landed?: ProposalLandedObject[];
 					lifetimeHours: number | null;
 					needsYouClass?: "changes_to_review" | "needs_you" | "review_later" | "working" | undefined;
 					nodeId: string | null;

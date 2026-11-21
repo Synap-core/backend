@@ -131,7 +131,8 @@ describe("stampLanded — what an approval made, written once", () => {
        values ($1, $2, 'automation', $3, 'create', 'pending', $4, $4, $5::jsonb)`,
       [proposalId, WS, automationId, PERSON, JSON.stringify(data)]
     );
-    const result = await proposalExecRegistry.resolve("automation/create")!
+    const result = await proposalExecRegistry
+      .resolve("automation/create")!
       .execute({
         proposal: {
           id: proposalId,
@@ -156,17 +157,22 @@ describe("stampLanded — what an approval made, written once", () => {
           emitProposalReviewed: () => undefined,
         },
       } as never);
-    expect(result.primaryId).toBeTruthy();
+    // The executor writes the automation under the proposal's target id.
+    const { rows } = await q<{ id: string }>(
+      `select id from automations where id = $1`,
+      [automationId]
+    );
+    expect(rows).toHaveLength(1);
 
     await stampLanded(proposalId, result);
     expect(await landedOf(proposalId)).toEqual([
-      { kind: "automation", id: result.primaryId, role: "created" },
+      { kind: "automation", id: automationId, role: "created" },
     ]);
 
     // Once: a later stamp (a re-approve joining it) changes nothing.
     await stampLanded(proposalId, { primaryId: randomUUID() });
     expect(await landedOf(proposalId)).toEqual([
-      { kind: "automation", id: result.primaryId, role: "created" },
+      { kind: "automation", id: automationId, role: "created" },
     ]);
   });
 
@@ -196,7 +202,12 @@ describe("stampLanded — what an approval made, written once", () => {
     await stampLanded(key, {
       primaryId: randomUUID(),
       primaryKind: null,
-      effect: { applied: "verified", rows: 1, ids: [randomUUID()], subject: "api_keys" },
+      effect: {
+        applied: "verified",
+        rows: 1,
+        ids: [randomUUID()],
+        subject: "api_keys",
+      },
     });
     // The key and the grant are not objects; the agent it connected is.
     expect(await landedOf(key)).toEqual([
@@ -213,7 +224,12 @@ describe("stampLanded — what an approval made, written once", () => {
       data: {},
     });
     await stampLanded(id, {
-      effect: { applied: "verified", rows: 1, ids: [moved], subject: "entities" },
+      effect: {
+        applied: "verified",
+        rows: 1,
+        ids: [moved],
+        subject: "entities",
+      },
     });
     expect(await landedOf(id)).toEqual([
       { kind: "entity", id: moved, role: "updated" },
