@@ -1655,6 +1655,24 @@ export const buildHandlers: McpHandlerMap = {
       }
       patch.category = category;
     }
+    // Which agent types the skill reaches: a list of non-empty names, or null
+    // for every agent (the column's meaning). The IS loader reads it.
+    if (args.agentTypes !== undefined) {
+      const types = args.agentTypes;
+      if (
+        types !== null &&
+        (!Array.isArray(types) ||
+          !types.every((t) => typeof t === "string" && t.trim() !== ""))
+      ) {
+        return toolError(
+          `Tool '${toolName}': agentTypes must be a list of agent type names (e.g. ['code']), or null for every agent.`
+        );
+      }
+      patch.agentTypes =
+        types === null
+          ? null
+          : [...new Set((types as string[]).map((t) => t.trim()))];
+    }
     if (args.parameters !== undefined) {
       if (
         !args.parameters ||
@@ -1686,7 +1704,7 @@ export const buildHandlers: McpHandlerMap = {
     }
     if (Object.keys(patch).length === 0) {
       return toolError(
-        `Tool '${toolName}': nothing to change — pass body, description, name, category, code, parameters, timeoutSeconds and/or requiredTools.`
+        `Tool '${toolName}': nothing to change — pass body, description, name, category, agentTypes, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
     // After the empty-patch check: a reason alone is not a change.
