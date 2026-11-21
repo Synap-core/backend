@@ -313,9 +313,13 @@ export interface HubRestClientConfig {
   /** Hub Protocol API key (Bearer token) */
   apiKey: string;
   /**
-   * Default workspace ID for a call that names none. `createEntity` is the
-   * exception: it never uses this default, so a new entity lands in a
-   * workspace only when you pass `workspaceId` to it.
+   * Default workspace ID for a call that names none: reads, and every write
+   * that places content (`createEntity`, `submitCaptureGraph`,
+   * `executeCapability`, relations, facets, threads, views, documents...), so
+   * what you create shows in your next list scoped to it. Definitions keep
+   * their own home when you name none: `createProject`, `createSkill` and
+   * `defineCell` stay pod-wide, `runPlaybook` runs in the playbook's own
+   * workspace. For a pod-wide entity, use a client with no default.
    */
   workspaceId?: string;
   /** Optional request timeout in ms (default: 30000). Fallback when read/write timeouts are unset. */
@@ -719,20 +723,20 @@ export class HubRestClient {
   }
 
   /**
-   * Create an entity. It is placed only in the `workspaceId` you pass here,
-   * never in the client's default workspace: without one it lands where its
-   * kind's scope puts it (a pod-wide kind pod-wide), so a list scoped to the
-   * default workspace may not show it.
+   * Create an entity in the `workspaceId` you pass, else in the client's
+   * default workspace, so a list scoped to that default shows it. With
+   * neither, it lands where its kind's scope puts it (a pod-wide kind
+   * pod-wide).
    */
   async createEntity(input: CreateEntityInput): Promise<HubGovernanceResult> {
     const { content, url, status, priority, dueDate, properties, ...rest } =
       input;
+    const workspaceId = rest.workspaceId ?? this.workspaceId;
     return this.request<HubGovernanceResult>("POST", "/api/hub/entities", {
       ...rest,
-      // Entity placement is a write decision, never an ambient client default.
-      // Omitted means pod/base behavior; an explicit workspace opts into its
-      // overlay/membership lens. This deliberately differs from read helpers.
-      ...(rest.workspaceId ? { workspaceId: rest.workspaceId } : {}),
+      // Like every content write, the client default fills an unnamed
+      // workspace (founder, 21 Nov 2026, finding f4afb522).
+      ...(workspaceId ? { workspaceId } : {}),
       ...(content !== undefined ? { content } : {}),
       properties: {
         ...properties,
@@ -1877,13 +1881,14 @@ export class HubRestClient {
   async executeCapability(
     input: ExecuteCapabilityInput
   ): Promise<ExecuteCapabilityResult> {
+    const workspaceId = input.workspaceId ?? this.workspaceId;
     return this.request<ExecuteCapabilityResult>(
       "POST",
       "/api/hub/capabilities/execute",
       {
         ...input,
-        // Graph proposals follow the same explicit-scope rule as direct writes.
-        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+        // Same rule as createEntity: the client default fills an unnamed one.
+        ...(workspaceId ? { workspaceId } : {}),
       }
     );
   }
@@ -2095,13 +2100,16 @@ export class HubRestClient {
       links,
       ...body
     } = input;
+    const resolvedWorkspaceId =
+      workspaceId === undefined ? this.workspaceId : workspaceId;
     return this.request<SubmitCaptureGraphResult>(
       "POST",
       "/api/hub/capture/graph",
       {
         ...body,
-        // Proposal audience and schema overlays are explicit write choices.
-        ...(workspaceId ? { workspaceId } : {}),
+        // Same rule as createEntity: the client default fills an unnamed
+        // workspace; an explicit null keeps the graph pod-wide.
+        ...(resolvedWorkspaceId ? { workspaceId: resolvedWorkspaceId } : {}),
         relations: relations ?? [],
         bindings: bindings ?? [],
         // CONNECTED PLAN steps — only included when provided, so existing

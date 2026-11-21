@@ -63,6 +63,7 @@
 
 import {
   db,
+  claimRunAsAgent,
   focusSessions,
   sessionRunners,
   users,
@@ -229,6 +230,17 @@ export async function stampSessionRunner(p: {
     // The row may have moved (a revived `ended`): the next report is news.
     if (written.length > 0) {
       lastReported.delete(`${clientKey}\u0000${proc?.key ?? ""}`);
+    }
+    // An agent waiting on the session's answers is working it: its claim on
+    // the run handed to it.
+    if (agentUserId) {
+      await claimRunAsAgent(db, p.sessionId, agentUserId).catch(
+        (err: unknown) =>
+          logger.warn(
+            { err, sessionId: p.sessionId },
+            "session runner: the run's claim was not written"
+          )
+      );
     }
     return written.length > 0;
   } catch (err) {

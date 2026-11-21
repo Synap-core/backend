@@ -354,9 +354,10 @@ describe("automation/create approval preserves governed provenance", () => {
     expect(AUTOMATION_CREATE_BLOCK).toContain(
       "materializeAutomationForPrincipal"
     );
-    expect(AUTOMATION_CREATE_BLOCK).toContain(
-      "agentUserId: automationAuthorId"
+    expect(AUTOMATION_CREATE_BLOCK).toMatch(
+      /ownerOfProposal\(\s*db,\s*proposal,\s*userId\s*\)/
     );
+    expect(AUTOMATION_CREATE_BLOCK).toContain("agentUserId: owner.agentUserId");
     expect(AUTOMATION_CREATE_BLOCK).toContain("stableId: proposal.targetId");
     // The status is the door's decision (an approval activates): the
     // executor passes who approved, never a default of its own.

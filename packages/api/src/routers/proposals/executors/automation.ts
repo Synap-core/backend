@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  ownerOfProposal,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
@@ -46,23 +52,13 @@ export function registerAutomationExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      const automationAuthorId =
-        proposal.agentUserId ?? proposal.createdBy ?? undefined;
-      if (!automationAuthorId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Automation proposal is missing its author identity",
-        });
-      }
-
+      const owner = await ownerOfProposal(db, proposal, userId);
       const { materializeAutomationForPrincipal } =
         await import("../../automations.js");
       await materializeAutomationForPrincipal({
         database: db,
-        // Owned by the person it was filed for, never the approver. Pre-0248
-        // proposals have no subject: the agent resolves to its person.
-        createdBy: proposal.subjectUserId ?? automationAuthorId,
-        agentUserId: automationAuthorId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         personApproved: await personIsApproving(ctx, userId),
         stableId: proposal.targetId,
         definition: {

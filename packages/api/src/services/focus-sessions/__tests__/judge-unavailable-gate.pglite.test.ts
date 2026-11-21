@@ -18,6 +18,17 @@
  *    that never sent back fails this);
  *  - the owner grades the held criterion: the gate resumes.
  *
+ * And when AI comes back by itself (W3): the hold of an AVAILABILITY failure
+ * also waits on `ai:available`; the pod's pull recording AI available again
+ * and the REAL hold-resume worker (its devFact wake and its hourly sweep,
+ * with the REAL regrader in its slot) grade the gate again:
+ *  - the judge now passes: the run moves on by itself;
+ *  - AI is still refused: it stays held, the same hold;
+ *  - the judge now says fail: the check's own hold, and back to `onFail`;
+ *  - AI available BEFORE the pause began is no news: nothing runs;
+ *  - a judge failure that is not about availability (a 5xx) holds for the
+ *    owner's grade only, with no wait on AI.
+ *
  * Stubbed, and why: the IS service lookup (`resolveIntelligenceService`) and
  * the produced-work read (`loadProducedMaterial`, its own suite in
  * `judge-material.test.ts`), the subject-status writers (the session has no
@@ -108,6 +119,12 @@ vi.mock("@synap/intelligence-client", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import { advanceSessionStage } from "../advance-stage.js";
 import { gradeCriterionAsOwner } from "../evaluations/evaluate.js";
+import { regradeAiHeldGate } from "../ai-held-gate.js";
+import { listHolds, recordPodAiAvailability } from "@synap/database";
+import {
+  handleHoldResume,
+  registerAiHeldGateRegrader,
+} from "@synap/jobs/workers/hold-resume.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -303,5 +320,126 @@ describe("a check gate whose judge ran and said fail", () => {
       status: "active",
       current_stage: "work",
     });
+  });
+});
+
+/** The session's current hold, as the transition log records it. */
+const holdOf = async (sessionId: string) =>
+  (
+    await listHolds((await h.init()) as Parameters<typeof listHolds>[0], {
+      subjects: [{ subjectType: "focus_session", subjectId: sessionId }],
+    })
+  )[0]?.hold;
+
+/** The pod's pull records an answer from the CP at `at`. */
+const pulled = (state: "ok" | "empty", at: Date) =>
+  recordPodAiAvailability(
+    {
+      billing: {
+        readFailed: false,
+        state,
+        threshold: null,
+        dismissKey: null,
+        resetsAt: null,
+        viewerRole: "pod_owner",
+        canTopUp: true,
+        action: state === "ok" ? "none" : "top_up",
+        actionUrl: state === "ok" ? null : "https://cp.example/credits",
+      },
+      checkedAt: at.toISOString(),
+    },
+    at
+  );
+
+/** A UPSTREAM fault, not an availability state. */
+const UPSTREAM_502 = () =>
+  new Response(JSON.stringify({ error: "Bad gateway" }), { status: 502 });
+
+describe("a check gate held because AI was not available grades again when AI is back", () => {
+  beforeAll(() => {
+    registerAiHeldGateRegrader((held) => regradeAiHeldGate(held));
+  });
+  beforeEach(async () => {
+    await q(`delete from pod_settings`);
+    // AI was out before the pause: the pull's memory says not available.
+    await pulled("empty", new Date(Date.now() - 60_000));
+  });
+
+  /** Credits empty at the advance: held on the check AND on AI. */
+  async function heldOnAi(): Promise<string> {
+    h.judge = QUOTA_429;
+    const sessionId = await sessionAtWork();
+    await advanceToReview(sessionId);
+    return sessionId;
+  }
+
+  it("holds on ai:available with the payer's wait, and a pass after AI is back moves on by itself", async () => {
+    const sessionId = await heldOnAi();
+    expect(await holdOf(sessionId)).toMatchObject({
+      on: "external",
+      ref: "check:review",
+      until: { moves: "ai:available" },
+    });
+
+    // The credits came back: the pull sees it, the wake runs the worker.
+    h.judge = VERDICT("pass");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "review",
+    });
+    expect(await holdOf(sessionId)).toBeUndefined();
+  });
+
+  it("the hourly sweep re-checks it too", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("pass");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({});
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("AI still refused when it is graded again: it stays held, the same hold", async () => {
+    const sessionId = await heldOnAi();
+    const before = await holdOf(sessionId);
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    expect(await holdOf(sessionId)).toEqual(before);
+  });
+
+  it("the judge says fail once AI is back: the check's own hold, then back to onFail", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("fail");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "work",
+    });
+  });
+
+  it("AI available before the pause began is no news: nothing is graded", async () => {
+    await pulled("ok", new Date(Date.now() - 30_000));
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("pass");
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+  });
+
+  it("a judge failure that is not about availability holds for the owner's grade, with no wait on AI", async () => {
+    h.judge = UPSTREAM_502;
+    const sessionId = await sessionAtWork();
+    const res = await advanceToReview(sessionId);
+    expect(res).toMatchObject({ gated: true, paused: true });
+    expect(res.onFail).toBeUndefined();
+    const hold = await holdOf(sessionId);
+    expect(hold).toMatchObject({ on: "thing", ref: "check:review" });
+    expect(hold?.until ?? null).toBeNull();
   });
 });

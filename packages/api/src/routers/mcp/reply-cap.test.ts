@@ -212,6 +212,18 @@ describe("capReply", () => {
     expect(capReply("synap_get_session", err)).toBe(err);
   });
 
+  it("a cut reply loses its whole-read marks; one within budget keeps them (ticket 8493079e)", () => {
+    const big = rowsReply(60, { stagesRevision: "abc123" });
+    const cut = JSON.parse(text(capReply("synap_list_playbooks", reply(big))));
+    expect(cut.fit.omitted).toHaveProperty("items");
+    expect(cut).not.toHaveProperty("stagesRevision");
+    const small = rowsReply(2, { stagesRevision: "abc123" });
+    expect(
+      JSON.parse(text(capReply("synap_list_playbooks", reply(small))))
+        .stagesRevision
+    ).toBe("abc123");
+  });
+
   it("opts out ONLY the documented body-returning tools", () => {
     expect([...REPLY_CAP_EXEMPT]).toEqual(["synap_load_skill"]);
     const big = reply("s".repeat(REPLY_CAP_CHARS * 2));

@@ -150,6 +150,22 @@ describe("trackStepEvidenceSessionId", () => {
     expect(trackStepEvidenceSessionId(rows, "decide")).toBe("open-new");
     expect(trackStepEvidenceSessionId(rows.slice(0, 3), "decide")).toBeNull();
   });
+
+  it("a session closed not done is never evidence", () => {
+    const rows = [
+      {
+        ...row(
+          "not-done",
+          "closed",
+          "decide",
+          "2026-10-09T00:00:00Z",
+          "2026-10-09T00:00:00Z"
+        ),
+        closedAs: "not_done" as const,
+      },
+    ];
+    expect(trackStepEvidenceSessionId(rows, "decide")).toBeNull();
+  });
 });
 
 describe("trackStepCard", () => {

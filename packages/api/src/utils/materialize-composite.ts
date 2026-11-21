@@ -769,6 +769,14 @@ export interface PlanCallers {
        * plan door exists to remove.
        */
       criteria: Array<Record<string, unknown>>;
+      /**
+       * The step's parent when it already exists at this point: an existing
+       * session (`parentSessionId`) or one this plan created earlier (P1 runs
+       * parents first). Passed AT create, like a direct `start_session`, so the
+       * child is born with what the door derives from its parent (project,
+       * goal, space). P2 still writes the `spawned_from` edge, idempotently.
+       */
+      parentSessionId?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
   };
@@ -1909,6 +1917,15 @@ export async function materializeCompositeGraph(
         const op = operations[i];
         if (op.op !== "create_session") continue;
         currentOpIndex = i;
+        // The parent, when it exists already: an existing id, or an in-plan
+        // session created earlier in this pass (looked up among the sessions
+        // only, so a ref naming another kind never reaches the door). A parent
+        // not created yet falls back to the P2 edge alone.
+        const inPlanParent = op.parentRef
+          ? sessionResults.find((s) => s.ref === op.parentRef)
+          : undefined;
+        const parentSessionId =
+          op.parentSessionId ?? inPlanParent?.sessionId ?? null;
         const session = await planCallers.sessionCaller.create({
           title: op.title ?? null,
           goal: op.goal,
@@ -1924,6 +1941,7 @@ export async function materializeCompositeGraph(
               : null),
           expectedOutputs: op.expectedOutputs ?? [],
           criteria: op.criteria ?? [],
+          parentSessionId,
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({

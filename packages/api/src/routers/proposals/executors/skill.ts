@@ -3,6 +3,7 @@ import {
   db,
   proposals,
   eq,
+  ownerOfProposal,
   skills,
   tools,
   transitionProposal,
@@ -28,10 +29,10 @@ export function registerSkillExecutors(): void {
   // ── skill / create ───────────────────────────────────────────────────────────
   // (object-proposal manifest W1) A gated skill create (agent-authored, or a
   // member whose role lacks `create`) lands here on approval. Materializes via
-  // the SAME insertSkillGoverned door the direct paths use — re-run as the
-  // APPROVER (no agentUserId ⇒ the re-entrant gate auto-grants for the operator
-  // authority), so audit / side-effects / born-approved rules match the direct
-  // create exactly. The propose gate widened `data` to the full insert shape, so
+  // the SAME insertSkillGoverned door the direct paths use — the gate re-run as
+  // the APPROVER (no agentUserId ⇒ the re-entrant gate auto-grants for the
+  // operator authority), so audit / side-effects / born-approved rules match
+  // the direct create exactly; the row is owned by the person it was filed for. The propose gate widened `data` to the full insert shape, so
   // kind/code/body/scope/providerSpec/… all flow through here.
   //
   // The skill lands under the id the proposal pre-minted (`data.id`, the id
@@ -70,12 +71,13 @@ export function registerSkillExecutors(): void {
       const { requiredToolIds, requiredToolNames, ...skillValues } = innerData;
       const result = await insertSkillGoverned({
         ...(skillValues as Record<string, unknown>),
-        // Own the skill as the APPROVER (mirrors project/view) — no agentUserId
-        // so the re-entrant gate auto-grants for the operator authority. `id` in
+        // Run the gate as the APPROVER — no agentUserId so the re-entrant gate
+        // auto-grants for the operator authority. `id` in
         // innerData is stripped by insertSkillGoverned; `adoptId` is the one
         // way it lands under the proposal's id.
         userId,
         agentUserId: undefined,
+        owner: await ownerOfProposal(db, proposal, userId),
         ...(typeof innerData.id === "string" ? { adoptId: innerData.id } : {}),
         auditSource: "proposal_approval",
       } as unknown as InsertSkillGovernedInput);

@@ -500,6 +500,11 @@ export {
 } from "./services/lifecycle/session-status.js";
 export {
   RUN_PAUSE_DEFAULT_HOLD,
+  claimRun,
+  claimRunAsAgent,
+  claimedHolderSql,
+  runHolder,
+  starterHolder,
   setRunStatus,
   type RunColumnsPatch,
   type SetRunStatusInput,

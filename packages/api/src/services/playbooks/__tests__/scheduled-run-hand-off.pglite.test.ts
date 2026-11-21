@@ -273,7 +273,7 @@ describe("a scheduled playbook run handed to an agent", () => {
 
   it("the session is the person's, the agent is on its roster, and the agent's orient lists it", async () => {
     const out = await fireSlot({ handToAgentId: AGENT });
-    expect(out.status).toBe("running");
+    expect(out.status).toBe("queued");
     const rows = await sessions();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ user_id: USER, agent_ids: [AGENT] });
@@ -293,7 +293,7 @@ describe("a scheduled playbook run handed to an agent", () => {
       `select executor, status from playbook_runs`
     );
     expect(run.rows).toEqual([
-      { executor: "external-agent", status: "running" },
+      { executor: "external-agent", status: "queued" },
     ]);
   });
 

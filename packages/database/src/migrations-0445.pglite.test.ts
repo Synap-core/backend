@@ -1,0 +1,308 @@
+/**
+ * REAL-POSTGRES (PGlite) test for migration 0445 — a person owns the tools,
+ * capabilities, skills, artifacts and workspaces an agent made; the agent is
+ * the actor:
+ *   - the actor is copied FIRST, then the owner moves to the approved create
+ *     proposal's subject, else the one person the agent's keys act for, else
+ *     the person who created the agent, else the pod owner (an agent nobody
+ *     is recorded as installing);
+ *   - a moved workspace keeps its agent as an admin member and gives its
+ *     person the owner membership;
+ *   - the pod's connector credentials, read under the oldest workspace's
+ *     owner, follow that owner; an agent's unpinned messaging account stays
+ *     homed in the workspace it was homed in;
+ *   - a person's own rows are untouched; a second run changes nothing;
+ *   - the baseline carries the columns; the boot coherence list names them.
+ */
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
+import { PGlite } from "@electric-sql/pglite";
+import { REQUIRED_COLUMNS } from "./utils/schema-coherence.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const read = (f: string) =>
+  readFileSync(resolve(HERE, "../migrations", f), "utf8");
+const M0445 = read("0445_owner_actor_more_tables.sql");
+const BASELINE = read("0000_baseline_schema.sql");
+
+const PERSON = "person-1";
+const OTHER_PERSON = "person-2";
+const ADMIN = "admin-1";
+const AGENT = "agent-1"; // created by PERSON
+const POD_AGENT = "agent-pod"; // created by ADMIN
+const ORPHAN = "agent-orphan"; // nobody created it
+const FOR_OTHER = "agent-for-other"; // created by ADMIN, its key acts for OTHER_PERSON
+
+const T_SUBJECT = "11111111-1111-4111-8111-111111111111";
+const T_HUMAN = "22222222-2222-4222-8222-222222222222";
+const C_CREATOR = "33333333-3333-4333-8333-333333333333";
+const C_LINKED = "44444444-4444-4444-8444-444444444444";
+const S_ORPHAN = "55555555-5555-4555-8555-555555555555";
+const S_AGENT = "66666666-6666-4666-8666-666666666666";
+const A_AGENT = "77777777-7777-4777-8777-777777777777";
+const A_ACTOR_KEPT = "88888888-8888-4888-8888-888888888888";
+const AU_ORPHAN = "aaaaaaaa-0000-4000-8000-000000000001";
+const AU_PERSON = "aaaaaaaa-0000-4000-8000-000000000002";
+const PB_ORPHAN = "bbbbbbbb-0000-4000-8000-000000000001";
+const W_AGENT = "99999999-9999-4999-8999-999999999991";
+const W_POD = "99999999-9999-4999-8999-999999999992";
+const W_ORPHAN = "99999999-9999-4999-8999-999999999993";
+
+let pg: PGlite;
+const q = async <T>(sql: string): Promise<T[]> => (await pg.query<T>(sql)).rows;
+
+const snapshot = async () => ({
+  tools: await q(`SELECT id, created_by, agent_user_id FROM tools ORDER BY id`),
+  capabilities: await q(
+    `SELECT id, created_by, agent_user_id FROM capabilities ORDER BY id`
+  ),
+  skills: await q(`SELECT id, user_id, agent_user_id FROM skills ORDER BY id`),
+  artifacts: await q(
+    `SELECT id, user_id, actor_id, origin_kind FROM artifacts ORDER BY id`
+  ),
+  workspaces: await q(`SELECT id, owner_id FROM workspaces ORDER BY id`),
+  members: await q(
+    `SELECT workspace_id, user_id, role FROM workspace_members ORDER BY workspace_id, user_id`
+  ),
+  secrets: await q(`SELECT id, user_id FROM secrets ORDER BY id`),
+  automations: await q(
+    `SELECT id, created_by, agent_user_id FROM automations ORDER BY id`
+  ),
+  playbooks: await q(
+    `SELECT id, created_by, agent_user_id FROM playbooks ORDER BY id`
+  ),
+  accounts: await q(
+    `SELECT id, workspace_id FROM messaging_accounts ORDER BY id`
+  ),
+});
+
+beforeAll(async () => {
+  pg = new PGlite();
+  // The tables as they stood before 0445 (only the columns it reads).
+  await pg.exec(`
+    CREATE TABLE "users" (
+      "id" text PRIMARY KEY,
+      "user_type" text NOT NULL DEFAULT 'human',
+      "created_by_user_id" text
+    );
+    CREATE TABLE "api_keys" ("id" text PRIMARY KEY, "user_id" text NOT NULL, "linked_user_id" text);
+    CREATE TABLE "proposals" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "target_type" text NOT NULL,
+      "target_id" text NOT NULL,
+      "proposal_type" text NOT NULL,
+      "status" text NOT NULL,
+      "subject_user_id" text,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE "tools" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL);
+    -- As 0442/0443 left them: an orphan agent's rows still owned by it.
+    CREATE TABLE "automations" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL, "agent_user_id" text);
+    CREATE TABLE "playbooks" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL, "agent_user_id" text);
+    CREATE TABLE "capabilities" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL);
+    CREATE TABLE "skills" ("id" uuid PRIMARY KEY, "user_id" text NOT NULL);
+    CREATE TABLE "artifacts" (
+      "id" uuid PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "origin_kind" text NOT NULL DEFAULT 'user',
+      "actor_id" text
+    );
+    CREATE TABLE "workspaces" (
+      "id" uuid PRIMARY KEY,
+      "owner_id" text NOT NULL,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE "pod_members" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "pod_role" text NOT NULL,
+      "created_at" timestamptz NOT NULL DEFAULT now(),
+      "removed_at" timestamptz
+    );
+    CREATE TABLE "secrets" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "service_id" text,
+      "deleted_at" timestamptz
+    );
+    CREATE TABLE "messaging_accounts" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "workspace_id" text
+    );
+    CREATE TABLE "workspace_members" (
+      "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      "workspace_id" uuid,
+      "user_id" text NOT NULL,
+      "role" text NOT NULL
+    );
+    CREATE UNIQUE INDEX "workspace_members_workspace_user_unique"
+      ON "workspace_members" ("workspace_id", "user_id");
+    INSERT INTO users (id, user_type, created_by_user_id) VALUES
+      ('${PERSON}', 'human', NULL),
+      ('${OTHER_PERSON}', 'human', NULL),
+      ('${ADMIN}', 'human', NULL),
+      ('${AGENT}', 'agent', '${PERSON}'),
+      ('${POD_AGENT}', 'agent', '${ADMIN}'),
+      ('${ORPHAN}', 'agent', NULL),
+      ('${FOR_OTHER}', 'agent', '${ADMIN}');
+    -- The pod owner (an earlier owner left the pod: not them).
+    INSERT INTO pod_members (id, user_id, pod_role, created_at, removed_at) VALUES
+      ('pm-gone', '${OTHER_PERSON}', 'owner', '2025-01-01', '2025-06-01'),
+      ('pm-owner', '${ADMIN}', 'owner', '2025-02-01', NULL),
+      ('pm-member', '${PERSON}', 'member', '2025-01-15', NULL);
+    INSERT INTO api_keys (id, user_id, linked_user_id) VALUES
+      ('k1', '${FOR_OTHER}', '${OTHER_PERSON}');
+    INSERT INTO tools (id, created_by) VALUES
+      ('${T_SUBJECT}', '${AGENT}'),
+      ('${T_HUMAN}', '${PERSON}');
+    -- Filed by AGENT for OTHER_PERSON: the subject wins over the creator.
+    INSERT INTO proposals (target_type, target_id, proposal_type, status, subject_user_id)
+      VALUES ('tool', '${T_SUBJECT}', 'create', 'approved', '${OTHER_PERSON}');
+    INSERT INTO capabilities (id, created_by) VALUES
+      ('${C_CREATOR}', '${AGENT}'),
+      ('${C_LINKED}', '${FOR_OTHER}');
+    INSERT INTO automations (id, created_by, agent_user_id) VALUES
+      ('${AU_ORPHAN}', '${ORPHAN}', '${ORPHAN}'),
+      ('${AU_PERSON}', '${PERSON}', '${AGENT}');
+    INSERT INTO playbooks (id, created_by, agent_user_id) VALUES
+      ('${PB_ORPHAN}', '${ORPHAN}', '${ORPHAN}');
+    INSERT INTO skills (id, user_id) VALUES
+      ('${S_ORPHAN}', '${ORPHAN}'),
+      ('${S_AGENT}', '${AGENT}');
+    INSERT INTO artifacts (id, user_id, origin_kind, actor_id) VALUES
+      ('${A_AGENT}', '${AGENT}', 'user', NULL),
+      ('${A_ACTOR_KEPT}', '${POD_AGENT}', 'agent', '${AGENT}');
+    -- W_AGENT is the pod's oldest: the connector credentials live under its owner.
+    INSERT INTO workspaces (id, owner_id, created_at) VALUES
+      ('${W_AGENT}', '${AGENT}', '2026-01-01'),
+      ('${W_POD}', '${POD_AGENT}', '2026-02-01'),
+      ('${W_ORPHAN}', '${ORPHAN}', '2026-03-01');
+    INSERT INTO secrets (id, user_id, service_id) VALUES
+      ('sec-nango', '${AGENT}', 'nango-connector'),
+      ('sec-mail', '${AGENT}', 'stalwart-connector'),
+      ('sec-own', '${AGENT}', 'github'),
+      ('sec-pod-nango', '${POD_AGENT}', 'nango-connector');
+    INSERT INTO messaging_accounts (id, user_id, workspace_id) VALUES
+      ('acc-unpinned', '${AGENT}', NULL),
+      ('acc-pinned', '${AGENT}', '${W_POD}'),
+      ('acc-orphan', '${ORPHAN}', NULL);
+    INSERT INTO workspace_members (workspace_id, user_id, role) VALUES
+      ('${W_AGENT}', '${AGENT}', 'owner'),
+      ('${W_AGENT}', '${PERSON}', 'admin'),
+      ('${W_ORPHAN}', '${ORPHAN}', 'owner');
+  `);
+  await pg.exec(M0445);
+}, 60_000);
+afterAll(async () => {
+  await pg.close();
+});
+
+describe("migration 0445 — the person owns it, the agent is the actor", () => {
+  it("moves tools, capabilities and skills to their person and keeps the agent as actor", async () => {
+    const s = await snapshot();
+    expect(s.tools).toEqual([
+      { id: T_SUBJECT, created_by: OTHER_PERSON, agent_user_id: AGENT },
+      { id: T_HUMAN, created_by: PERSON, agent_user_id: null },
+    ]);
+    expect(s.capabilities).toEqual([
+      { id: C_CREATOR, created_by: PERSON, agent_user_id: AGENT },
+      // The one person its key acts for, before its creator.
+      { id: C_LINKED, created_by: OTHER_PERSON, agent_user_id: FOR_OTHER },
+    ]);
+    expect(s.skills).toEqual([
+      // Nobody is recorded as installing it: the pod owner.
+      { id: S_ORPHAN, user_id: ADMIN, agent_user_id: ORPHAN },
+      { id: S_AGENT, user_id: PERSON, agent_user_id: AGENT },
+    ]);
+  });
+
+  it("moves the automations and playbooks 0443 left on an agent nobody installed to the pod owner", async () => {
+    const s = await snapshot();
+    expect(s.automations).toEqual([
+      { id: AU_ORPHAN, created_by: ADMIN, agent_user_id: ORPHAN },
+      // Already a person's: untouched.
+      { id: AU_PERSON, created_by: PERSON, agent_user_id: AGENT },
+    ]);
+    expect(s.playbooks).toEqual([
+      { id: PB_ORPHAN, created_by: ADMIN, agent_user_id: ORPHAN },
+    ]);
+  });
+
+  it("moves artifacts and records the agent as their actor, keeping a recorded one", async () => {
+    expect((await snapshot()).artifacts).toEqual([
+      {
+        id: A_AGENT,
+        user_id: PERSON,
+        actor_id: AGENT,
+        origin_kind: "agent",
+      },
+      {
+        id: A_ACTOR_KEPT,
+        user_id: ADMIN,
+        actor_id: AGENT,
+        origin_kind: "agent",
+      },
+    ]);
+  });
+
+  it("moves a workspace to its person; the agent stays an admin member, never owner", async () => {
+    const s = await snapshot();
+    expect(s.workspaces).toEqual([
+      { id: W_AGENT, owner_id: PERSON },
+      { id: W_POD, owner_id: ADMIN },
+      { id: W_ORPHAN, owner_id: ADMIN },
+    ]);
+    expect(s.members).toEqual([
+      { workspace_id: W_AGENT, user_id: AGENT, role: "admin" },
+      { workspace_id: W_AGENT, user_id: PERSON, role: "owner" },
+      { workspace_id: W_POD, user_id: ADMIN, role: "owner" },
+      { workspace_id: W_POD, user_id: POD_AGENT, role: "admin" },
+      { workspace_id: W_ORPHAN, user_id: ADMIN, role: "owner" },
+      { workspace_id: W_ORPHAN, user_id: ORPHAN, role: "admin" },
+    ]);
+  });
+
+  it("moves the pod's connector credentials with the oldest workspace's owner, and keeps an agent's account homed", async () => {
+    const s = await snapshot();
+    expect(s.secrets).toEqual([
+      { id: "sec-mail", user_id: PERSON },
+      { id: "sec-nango", user_id: PERSON },
+      // The agent's own credential stays the agent's.
+      { id: "sec-own", user_id: AGENT },
+      // Not the oldest workspace's owner: never read as the pod's.
+      { id: "sec-pod-nango", user_id: POD_AGENT },
+    ]);
+    expect(s.accounts).toEqual([
+      { id: "acc-orphan", workspace_id: W_ORPHAN },
+      { id: "acc-pinned", workspace_id: W_POD },
+      { id: "acc-unpinned", workspace_id: W_AGENT },
+    ]);
+  });
+
+  it("is idempotent and leaves no helper behind", async () => {
+    const before = await snapshot();
+    await pg.exec(M0445);
+    expect(await snapshot()).toEqual(before);
+    expect(
+      await q(
+        `SELECT proname FROM pg_proc WHERE proname = '_0445_person_of_agent_row'`
+      )
+    ).toEqual([]);
+  });
+
+  it("the baseline carries the columns and the boot check names them", () => {
+    for (const table of ["tools", "capabilities", "skills"]) {
+      expect(BASELINE).toMatch(
+        new RegExp(
+          `CREATE TABLE IF NOT EXISTS "${table}" \\([\\s\\S]*?"agent_user_id"\\s+text\\s+REFERENCES "users"\\("id"\\) ON DELETE SET NULL`
+        )
+      );
+      expect(REQUIRED_COLUMNS).toContainEqual(
+        expect.objectContaining({ table, column: "agent_user_id" })
+      );
+    }
+  });
+});

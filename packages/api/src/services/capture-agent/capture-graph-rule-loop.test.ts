@@ -31,6 +31,8 @@ const { resolveProfile, validateEntityCreateForProposal } = vi.hoisted(() => ({
     valid: true,
     errors: [] as string[],
     unmodeled: [] as Array<{ key: string; didYouMean?: string }>,
+    modeled: [],
+    moved: [],
   })),
 }));
 

@@ -55,7 +55,13 @@ vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     select: () => ({
-      from: () => ({ where: async () => h.visibleTools }),
+      from: () => ({
+        // Awaited: the visible tools. `.limit`: the owner read finds no user.
+        where: () =>
+          Object.assign(Promise.resolve(h.visibleTools), {
+            limit: async () => [],
+          }),
+      }),
     }),
     insert: () => ({
       values: (v: Record<string, unknown>) => ({
@@ -132,5 +138,17 @@ describe("skills.create: requiredToolIds", () => {
   it("a create naming no tools carries no key", async () => {
     await member().create({ name: "x", code: "return 1;" });
     expect(h.gated[0]).not.toHaveProperty("requiredToolIds");
+  });
+});
+
+describe("skills.create: metadata on the proposed path", () => {
+  it("rides the gate's stored data, so an approved read-only verb lands read-only", async () => {
+    await member().create({
+      name: "lookup_company",
+      kind: "declarative",
+      providerSpec: { tool: "apify_api", method: "POST", path: "/run" },
+      metadata: { readOnly: true },
+    });
+    expect(h.gated[0]).toMatchObject({ metadata: { readOnly: true } });
   });
 });

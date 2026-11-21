@@ -798,7 +798,7 @@ const captureHandler: McpToolHandler = async (
           ? {
               unmodeledProperties: checked.unmodeledProperties,
               unmodeledHint:
-                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given, or to a key from `modeledFields`.",
+                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given, or to a key from `modeledFields`. A `movedTo` key is already stored under that field.",
             }
           : {}),
         // What each kind in the graph DOES model (key, type, options, limits,

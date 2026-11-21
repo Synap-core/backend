@@ -17,6 +17,9 @@ const h = vi.hoisted(() => ({
   },
   emitted: [] as Array<Record<string, unknown>>,
   followUps: [] as Array<Record<string, unknown>>,
+  /** When the pod's pull last saw AI become available (`aiHoldMet`). */
+  availableSince: null as string | null,
+  regraded: [] as Array<{ sessionId: string; userId: string }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -29,6 +32,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: drizzle(client, { schema }),
+    // The pod's AI availability, as its pull recorded it.
+    readPodAiAvailability: async () => ({
+      availability: h.availableSince
+        ? { availableSince: h.availableSince }
+        : undefined,
+      sync: null,
+    }),
     // The goal's receipt (`track.update.completed`) needs no log here.
     EventRepository: class {
       async append() {
@@ -65,6 +75,7 @@ import {
   HOLD_RESUME_QUEUE,
   handleHoldResume,
   holdResumeReactor,
+  registerAiHeldGateRegrader,
   registerHoldResumeFollowUp,
 } from "./hold-resume.js";
 
@@ -450,6 +461,56 @@ describe("a dev fact (until.moves = pr: / main: / job:)", () => {
 
 // Plan 07f8a997 "Agents wait on anything", W1 part C: an agent asks, pauses
 // with `until: answer:<session>/<slot>` or `proposal:<id>`, and sleeps.
+describe("AI available again (until.moves = ai:available)", () => {
+  async function pausedOnAi(ref?: string): Promise<string> {
+    const id = await session();
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: {
+        on: "external",
+        ...(ref ? { ref } : {}),
+        until: { moves: "ai:available" },
+      },
+    });
+    return id;
+  }
+
+  it("resumes a pause on AI once AI came back AFTER it began, never on an older recovery", async () => {
+    h.availableSince = new Date(Date.now() - 60_000).toISOString();
+    const waiter = await pausedOnAi();
+    expect((await handleHoldResume({ devFact: "ai:available" })).resumed).toBe(
+      0
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("paused");
+
+    h.availableSince = new Date(Date.now() + 1_000).toISOString();
+    expect((await handleHoldResume({ devFact: "ai:available" })).resumed).toBe(
+      1
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect(await lastOwed(waiter)).toMatchObject({
+      actorKind: "system",
+      reason: "What it waited on (ai:available) is in.",
+    });
+  });
+
+  it("a check gate held on AI is graded again through the api's slot, never un-paused here", async () => {
+    registerAiHeldGateRegrader(async (held) => {
+      h.regraded.push(held);
+      return "held";
+    });
+    const gated = await pausedOnAi("check:review");
+    h.availableSince = new Date(Date.now() + 1_000).toISOString();
+    // The hourly sweep finds it too, as a dev hold.
+    await handleHoldResume({});
+    expect(h.regraded).toContainEqual({ sessionId: gated, userId: "u1" });
+    expect(await statusOf("focus_sessions", gated)).toBe("paused");
+  });
+});
+
 describe("a wait on the person (until.moves = answer: / proposal:)", () => {
   const SLOT = {
     key: "host",

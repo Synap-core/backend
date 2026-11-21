@@ -30,8 +30,10 @@ void _same;
 
 describe("external agent mirror", () => {
   it("the cancellable run statuses are the pod's live run statuses", () => {
-    // Live = started and not ended; `proposed` has not started.
+    // Live = born and not ended; `proposed` waits for its approved start.
     expect([...LIVE_RUN_STATUSES].sort()).toEqual([
+      "blocked",
+      "queued",
       "running",
       "stale",
       "waiting_on_you",

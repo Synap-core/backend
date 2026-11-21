@@ -53,6 +53,11 @@ vi.mock("@synap/database", () => ({
     archived.push({ table: "automations", status: input.to });
     return [];
   },
+  ownerAndActor: async (
+    _db: unknown,
+    ownerId: string,
+    agentUserId?: string | null
+  ) => ({ ownerId, agentUserId: agentUserId ?? null }),
 }));
 
 vi.mock("../../utils/permission-check.js", () => ({
@@ -282,6 +287,8 @@ describe("a rule that carries a sentence compiles or is refused", () => {
       agentUserId: "agent-1",
       personApproved: true,
     });
+    // …and so is the rule row's.
+    expect(inserted.at(-1)).toMatchObject({ agentUserId: "agent-1" });
   });
 
   it("a HUMAN's own rule names no agent", async () => {

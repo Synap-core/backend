@@ -557,7 +557,7 @@ beforeAll(async () => {
     create table focus_sessions (id uuid primary key, status text, expected_outputs jsonb, channel_id uuid, started_at timestamptz, updated_at timestamptz);
     create table messages (id uuid primary key, channel_id uuid, author_type text, timestamp timestamptz, metadata jsonb);
     create table chat_turns (id uuid primary key, channel_id uuid, status text, updated_at timestamptz);
-    create table proposals (id uuid primary key, session_id uuid, agent_user_id text, created_at timestamptz, status text, proposal_type text);
+    create table proposals (id uuid primary key, session_id uuid, agent_user_id text, created_at timestamptz, status text, proposal_type text, target_type text);
     create table events (id uuid primary key, session_id uuid, agent_user_id text, timestamp timestamptz, type text);
   `);
 }, 60_000);
