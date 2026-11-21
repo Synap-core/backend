@@ -64,7 +64,11 @@ import {
   FOCUS_SESSION_CLOSE_ACTION,
   FOCUS_SESSION_SUBJECT_TYPE,
 } from "../focus-sessions/close-event.js";
-import { readStageOf, type StageOf } from "./stage-of.js";
+import {
+  CLOSED_WITH_WORK_OPEN,
+  readStageOf,
+  type StageOf,
+} from "./stage-of.js";
 
 const logger = createLogger({ module: "playbooks/stage-child" });
 
@@ -512,10 +516,16 @@ async function settleStageChildUnsafe(
   if (ended !== "closed" && ended !== "cancelled" && ended !== "failed") {
     return { status: "not_a_step" };
   }
-  const [{ closedNotDone } = { closedNotDone: false }] = await db
-    .select({ closedNotDone: closedNotDoneRecordedSql() })
-    .from(focusSessions)
-    .where(eq(focusSessions.id, child.id));
+  // Only a close can be a close-anyway: cancelled and failed are not done regardless.
+  const closedNotDone =
+    ended === "closed"
+      ? ((
+          await db
+            .select({ closedNotDone: closedNotDoneRecordedSql() })
+            .from(focusSessions)
+            .where(eq(focusSessions.id, child.id))
+        )[0]?.closedNotDone ?? false)
+      : false;
   const closedAs = sessionClosedAs(ended, closedNotDone);
   const parent = await db.query.focusSessions.findFirst({
     columns: {
@@ -553,7 +563,7 @@ async function settleStageChildUnsafe(
   const delivered = closedAs === "done";
   const endedText =
     ended === "closed"
-      ? `closed with required work open (child session ${child.id})`
+      ? `${CLOSED_WITH_WORK_OPEN} (child session ${child.id})`
       : ended;
   const [claimed] = await db
     .update(sessionStageRuns)

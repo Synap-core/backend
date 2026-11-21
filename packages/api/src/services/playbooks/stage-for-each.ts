@@ -75,7 +75,7 @@ import {
   tellRunAgent,
   type SettleStageChildResult,
 } from "./stage-child.js";
-import type { StageOf } from "./stage-of.js";
+import { CLOSED_WITH_WORK_OPEN, type StageOf } from "./stage-of.js";
 
 const logger = createLogger({ module: "playbooks/stage-for-each" });
 
@@ -702,7 +702,7 @@ export async function settleFanOutChild(p: {
         status,
         sessionId: child.id,
         ...(p.ended === "closed" && status === "failed"
-          ? { error: "closed with required work open" }
+          ? { error: CLOSED_WITH_WORK_OPEN }
           : {}),
       });
     });
@@ -805,8 +805,9 @@ async function joinLines(fanOut: StageFanOut): Promise<string[]> {
 }
 
 /**
- * Every batch ended: the step is done (once: compare and set on the row),
- * the parent resumes, moves into the next step when it may, and its agent is
+ * Every batch ended: the step is done, failed or (every part cancelled)
+ * cancelled (once: compare and set on the row). Unless cancelled the parent
+ * resumes and, when done, moves into the next step when it may; its agent is
  * told what each child delivered and which failed. Null while a batch still
  * waits or runs, or when another settle already finished it.
  */
@@ -816,7 +817,9 @@ async function finishIfAllEnded(
   const [row] = await db
     .update(sessionStageRuns)
     .set({
-      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' ELSE 'done' END`,
+      // The ONE decision: failed if any part failed or closed not done; done
+      // if some part delivered; cancelled when every part was cancelled.
+      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'done') THEN 'done' ELSE 'cancelled' END`,
       endedAt: new Date(),
     })
     .where(
@@ -832,6 +835,7 @@ async function finishIfAllEnded(
       stageKey: sessionStageRuns.stageKey,
       fanOut: sessionStageRuns.fanOut,
       playbookRunId: sessionStageRuns.playbookRunId,
+      status: sessionStageRuns.status,
     });
   if (!row?.fanOut) return null;
   const fanOut = row.fanOut;
@@ -892,14 +896,18 @@ async function finishIfAllEnded(
   const next = index >= 0 ? stages[index + 1] : undefined;
   const nextGated = next ? resolveStageGate(next) !== undefined : false;
 
-  await resumeParent(
-    parent.id,
-    parent.userId,
-    `Step ${stageName}'s runs have all ended.`
-  );
+  // Every part cancelled is a drop by a person: the run waits for them, as it
+  // does for a cancelled single child.
+  if (row.status !== "cancelled") {
+    await resumeParent(
+      parent.id,
+      parent.userId,
+      `Step ${stageName}'s runs have all ended.`
+    );
+  }
   let toStage: string | undefined;
   if (
-    failed.length === 0 &&
+    row.status === "done" &&
     next &&
     !nextGated &&
     owed.length === 0 &&
@@ -923,21 +931,25 @@ async function finishIfAllEnded(
       ? ` ${skipped.map((n) => `part ${n}`).join(", ")} skipped (cancelled).`
       : "";
   const head =
-    failed.length > 0
-      ? `Step ${stageName} failed: ${done} of ${countedNoun(counted, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (closed with required work open, or failed).${skippedNote}`
-      : `Step ${stageName} is done: all ${countedNoun(counted, "run")} delivered.${skippedNote}`;
+    row.status === "cancelled"
+      ? `Step ${stageName} did not run: every part was cancelled.`
+      : failed.length > 0
+        ? `Step ${stageName} failed: ${done} of ${countedNoun(counted, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (${CLOSED_WITH_WORK_OPEN}, or failed).${skippedNote}`
+        : `Step ${stageName} is done: all ${countedNoun(counted, "run")} delivered.${skippedNote}`;
   const then =
-    failed.length > 0
-      ? "The run stays on this step: run the failed parts again, or move on when it is right to."
-      : toStage
-        ? `The run moved on to step ${nameOf(next!)}.`
-        : !next
-          ? "It was the last step: close the run when it is done."
-          : owed.length > 0
-            ? `Make ${owed.join(", ")} from their results, then move on.`
-            : nextGated
-              ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
-              : "The run moved meanwhile: pick up from where it is.";
+    row.status === "cancelled"
+      ? "The run waits: run the step again, or drop the wait and move on."
+      : failed.length > 0
+        ? "The run stays on this step: run the failed parts again, or move on when it is right to."
+        : toStage
+          ? `The run moved on to step ${nameOf(next!)}.`
+          : !next
+            ? "It was the last step: close the run when it is done."
+            : owed.length > 0
+              ? `Make ${owed.join(", ")} from their results, then move on.`
+              : nextGated
+                ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
+                : "The run moved meanwhile: pick up from where it is.";
   await tellRunAgent(
     parent,
     runAgent,

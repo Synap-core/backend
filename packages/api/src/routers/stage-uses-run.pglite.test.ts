@@ -24,6 +24,7 @@
  *     step's `onFail`, the run goes back there and stops waiting;
  *   - a replayed close settles nothing twice.
  */
+import { closedNotDoneReport } from "../__tests__/closed-not-done-report.js";
 import {
   describe,
   it,
@@ -259,17 +260,7 @@ async function endChild(
       childId,
       status,
       JSON.stringify(outputs),
-      JSON.stringify(
-        closedNotDone
-          ? {
-              closedNotDone: {
-                reason: "Ran out of time",
-                criteria: [],
-                outcomes: [],
-              },
-            }
-          : null
-      ),
+      JSON.stringify(closedNotDone ? closedNotDoneReport() : null),
     ]
   );
 }
