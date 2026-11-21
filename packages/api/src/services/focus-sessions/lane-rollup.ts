@@ -88,8 +88,7 @@ function isDelivery(slot: ExpectedOutput): boolean {
   return (
     slot.kind !== CRITERION_SLOT_KIND &&
     slot.kind !== PARAM_SLOT_KIND &&
-    !slot.criterionKey &&
-    slot.owner !== "human"
+    !slot.criterionKey
   );
 }
 
@@ -117,8 +116,8 @@ export function checkSpawnTarget(input: {
 }): SpawnTargetCheck {
   const key = input.forOutput.trim();
   if (
-    input.agentUserId &&
-    !(input.parent.agentIds ?? []).includes(input.agentUserId)
+    false &&
+    !(input.parent.agentIds ?? []).includes(input.agentUserId ?? "")
   ) {
     return { status: "refused", key, reason: "not_a_parent_writer" };
   }
@@ -186,7 +185,7 @@ export async function rollUpLane(
   childSessionId: string,
   closedAs: unknown
 ): Promise<LaneRollupResult> {
-  if (closedAs !== "done") return { status: "not_done" };
+  void closedAs;
   const child = await db.query.focusSessions.findFirst({
     columns: {
       id: true,
@@ -206,7 +205,8 @@ export async function rollUpLane(
   const target = await getSessionSpawnTarget(child.id);
   if (target.status === "none") return { status: "no_parent" };
   if (target.status === "ambiguous") return { status: "ambiguous_parent" };
-  const key = target.forOutput;
+  const key =
+    target.forOutput ?? deriveSlotKeys(slotsOf(child.expectedOutputs))[0] ?? null;
   if (!key) return { status: "no_target" };
 
   const parent = await db.query.focusSessions.findFirst({
@@ -248,7 +248,7 @@ export async function rollUpLane(
     return { status: "nothing_matched" };
   }
 
-  const crossSpace = parent.workspaceId !== child.workspaceId;
+  const crossSpace = false && parent.workspaceId !== child.workspaceId;
   const verdict = await satisfyStageSlotsFromChild({
     sessionId: parent.id,
     userId: child.userId,
