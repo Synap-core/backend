@@ -20,7 +20,9 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { db } from "../client-pg.js";
 import { spaceAccess, type SpaceAccessObjectType } from "../schema/profiles.js";
+import { userVisibleWhere } from "./user-visible-where.js";
 
 export interface HomedObject {
   id: string;
@@ -33,7 +35,7 @@ export function usableWith(
   workspaceId: string | null,
   granted?: ReadonlySet<string>
 ): boolean {
-  if (object.workspaceId === null || object.workspaceId === workspaceId) {
+  if (!object.workspaceId || object.workspaceId === workspaceId) {
     return true;
   }
   return workspaceId !== null && (granted?.has(workspaceId) ?? false);
@@ -82,19 +84,38 @@ export async function usableInSpace(
   return usableWith(object, workspaceId, grants.get(object.id));
 }
 
-/** {@link usableInSpace} as SQL, for a list read. */
+/**
+ * {@link usableInSpace} as SQL, for a list read. With `readerId`, a homed or
+ * granted object also needs a space that person can see (`userVisibleWhere`).
+ */
 export function usableInSpaceWhere(
   objectType: SpaceAccessObjectType,
   idColumn: AnyPgColumn,
   homeColumn: AnyPgColumn,
-  workspaceId: string | null
+  workspaceId: string | null,
+  readerId?: string
 ): SQL {
   if (workspaceId === null) return isNull(homeColumn);
   return or(
     isNull(homeColumn),
-    eq(homeColumn, workspaceId),
+    and(
+      eq(homeColumn, workspaceId),
+      readerId ? userVisibleWhere(homeColumn, readerId) : undefined
+    ),
     exists(
-      sql`SELECT 1 FROM ${spaceAccess} WHERE ${spaceAccess.objectType} = ${objectType} AND ${spaceAccess.objectId} = ${idColumn} AND ${spaceAccess.workspaceId} = ${workspaceId}`
+      db
+        .select({ one: sql`1` })
+        .from(spaceAccess)
+        .where(
+          and(
+            eq(spaceAccess.objectType, objectType),
+            eq(spaceAccess.objectId, idColumn),
+            eq(spaceAccess.workspaceId, workspaceId),
+            readerId
+              ? userVisibleWhere(spaceAccess.workspaceId, readerId)
+              : undefined
+          )
+        )
     )
   )!;
 }

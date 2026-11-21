@@ -92,22 +92,16 @@ describe("signalsFromExplicit", () => {
 
 describe("resolveRolePayload", () => {
   /**
-   * Minimal db stub for `ProfileRepository.getBySlugForWorkspace`:
-   * select → from → leftJoin → where resolves to `{ p, accessWorkspaceId }`
-   * rows. The repository's priority sort runs for real on whatever we return.
+   * Minimal db stub for `ProfileRepository.getBySlugForWorkspace`: the
+   * relational `findMany` returns the rows. The repository's priority sort
+   * runs for real on whatever we return.
    */
   const dbReturning = (rows: Array<Record<string, unknown>>) =>
     ({
-      select: () => ({
-        from: () => ({
-          leftJoin: () => ({
-            where: async () =>
-              rows.map((p) => ({ p, accessWorkspaceId: null })),
-          }),
-        }),
-      }),
       query: {
         profiles: {
+          // The lensed slug read (`getBySlugForWorkspace`): the kind floor's rows.
+          findMany: async () => rows,
           findFirst: async () => {
             throw new Error(
               "resolveRolePayload must not resolve by slug alone"

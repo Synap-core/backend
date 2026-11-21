@@ -1429,27 +1429,17 @@ export async function handleAutomationTriggerMatch(job: {
   // that fired before still fires; the floor adds the other spaces that react
   // to the role (Operations' « Onboard a client »). Each match runs in its own
   // space (`fireAutomation`), so no space's rule reads another space.
-  //
-  // The floor is the PERSON's (an agent acting for P reads P's spaces): a
-  // pod-wide record has no space, so the rules of every space its person can
-  // see answer to its moves, whoever made them. An agent's own memberships
-  // are not that set (an activator compiled into the playbook's space stayed
-  // silent when an agent moved the record).
   const podWideSubject = job.data.podWideSubject === true;
-  const floorPerson =
-    workspaceId != null && !podWideSubject
-      ? null
-      : ((await personsOfOwners(db, [userId])).get(userId) ?? userId);
   const workspaceMatch =
-    floorPerson === null
-      ? or(eq(automations.workspaceId, workspaceId!), podWideMatch)
+    workspaceId != null && !podWideSubject
+      ? or(eq(automations.workspaceId, workspaceId), podWideMatch)
       : or(
           inArray(
             automations.workspaceId,
             Array.from(
               new Set([
                 ...(workspaceId != null ? [workspaceId] : []),
-                ...(await getAccessibleWorkspaceFloor(floorPerson)),
+                ...(await getAccessibleWorkspaceFloor(userId)),
               ])
             )
           ),

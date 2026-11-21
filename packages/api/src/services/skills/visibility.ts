@@ -33,16 +33,14 @@
  */
 import {
   and,
-  db,
   eq,
-  exists,
   inArray,
   isNotNull,
   or,
   usableInSpaceWhere,
   type SQL,
 } from "@synap/database";
-import { skills, workspaces } from "@synap/database/schema";
+import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
 
@@ -90,18 +88,8 @@ export function visibleSkillsWhere(
             "skill",
             skills.id,
             skills.workspaceId,
-            workspaceId
-          ),
-          exists(
-            db
-              .select({ id: workspaces.id })
-              .from(workspaces)
-              .where(
-                and(
-                  eq(workspaces.id, workspaceId),
-                  userVisibleWhere(workspaces.id, userId)
-                )
-              )
+            workspaceId,
+            userId
           )
         )
       : undefined;

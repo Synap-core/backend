@@ -11,7 +11,6 @@ import {
   sql,
   sql as drizzleSql,
   inArray,
-  exists,
   type SQL,
 } from "drizzle-orm";
 import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
@@ -230,14 +229,13 @@ export function kindVisibleWhere(lens: {
         podVisibleWorkspaceIdsQuery(userId)
       )
     : undefined;
+  // Plain names: a relational query re-aliases every column of the outer table.
   const grantedIn = (spaces: string | NonNullable<typeof seen>) =>
-    exists(
-      sql`SELECT 1 FROM ${spaceAccess} WHERE ${spaceAccess.objectType} = 'profile' AND ${spaceAccess.objectId} = ${profiles.id} AND ${
-        typeof spaces === "string"
-          ? sql`${spaceAccess.workspaceId} = ${spaces}`
-          : sql`${spaceAccess.workspaceId} IN (${spaces})`
-      }`
-    );
+    sql`exists (select 1 from space_access sa where sa.object_type = 'profile' and sa.object_id = ${profiles.id} and ${
+      typeof spaces === "string"
+        ? sql`sa.workspace_id = ${spaces}`
+        : sql`sa.workspace_id in (${spaces})`
+    })`;
   const homed = inArray(profiles.scope, [
     ProfileScope.WORKSPACE,
     ProfileScope.SHARED,
@@ -678,7 +676,7 @@ export class ProfileRepository {
       selectionConditions.push(inArray(profiles.slug, filters.slugs));
 
     const rows = await this.db
-      .select({ p: profiles })
+      .selectDistinctOn([profiles.id], { p: profiles })
       .from(profiles)
       .where(and(...selectionConditions))
       .orderBy(profiles.id, profiles.displayName);

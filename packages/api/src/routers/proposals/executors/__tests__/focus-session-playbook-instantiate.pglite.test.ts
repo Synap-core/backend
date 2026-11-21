@@ -75,6 +75,7 @@ import {
   playbooks,
   entities,
   lifecycleTransitionOutbox,
+  spaceAccess,
 } from "@synap/database";
 import { registerFocusSessionExecutors } from "../focus-session.js";
 import { proposalExecRegistry } from "../../execution-registry.js";
@@ -166,6 +167,7 @@ beforeAll(async () => {
     proposals,
     playbooks,
     entities,
+    spaceAccess,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
