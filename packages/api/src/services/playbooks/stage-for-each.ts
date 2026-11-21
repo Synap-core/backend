@@ -817,9 +817,10 @@ async function finishIfAllEnded(
   const [row] = await db
     .update(sessionStageRuns)
     .set({
-      // The ONE decision: failed if any part failed or closed not done; done
-      // if some part delivered; cancelled when every part was cancelled.
-      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'done') THEN 'done' ELSE 'cancelled' END`,
+      // The ONE decision: failed if any part failed or closed not done;
+      // cancelled when parts exist and every one was cancelled; else done (an
+      // empty set is done).
+      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'cancelled') AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'done') THEN 'cancelled' ELSE 'done' END`,
       endedAt: new Date(),
     })
     .where(
