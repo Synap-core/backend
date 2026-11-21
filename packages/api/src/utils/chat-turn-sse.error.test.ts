@@ -134,7 +134,7 @@ describe("terminal error frame — carries the classification, not a constant", 
     );
 
     expect(frame.message).toBe(failure.message);
-    expect(frame.message).toContain("out of credit");
+    expect(frame.message).toContain("AI provider is having trouble");
   });
 
   it("stays a well-formed frame (seq/turnId/eventId) so the journal can persist it", () => {

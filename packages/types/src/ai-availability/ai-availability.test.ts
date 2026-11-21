@@ -7,6 +7,7 @@ import {
   aiAvailabilityCopy,
   resolveAiAvailability,
   resolveAiFailureState,
+  resolveAiRefusal,
   resolveAiViewerRole,
   type AiBillingInput,
 } from "./index.js";
@@ -354,5 +355,147 @@ describe("the lens banner: warning sits between error and info", () => {
     const banner = lensStatusBanner([storage, low!]);
     expect(banner?.tone).toBe("warning");
     expect(banner?.action).toEqual({ kind: "top_up", label: "Top up" });
+  });
+});
+
+/**
+ * The deck's wording (plan §3.6). Each row rules out a sentence that shipped:
+ * "Suspended" (no cause), "our pod" for a pod with no name, "Synap" and
+ * "operator" in front of a member, "Your plan has no AI" for an account
+ * whose AI was switched off, a reset worded as a billing period.
+ */
+describe("the copy deck's words", () => {
+  const every = (): Array<ReturnType<typeof aiAvailabilityCopy>> =>
+    AI_AVAILABILITY_KINDS.flatMap((kind) =>
+      (["none", "top_up", "upgrade", "fix_payment", "ask_admin"] as const).map(
+        (action) =>
+          aiAvailabilityCopy({ kind, action }, { resetsLabel: "Dec 1" })
+      )
+    );
+
+  it("suspended reads 'Payment needed' in the title AND the chip", () => {
+    const copy = aiAvailabilityCopy(
+      resolveAiAvailability({ failureCode: "access_suspended", role: "payer" })
+    );
+    expect(copy).toMatchObject({
+      label: "Payment needed",
+      title: "Payment needed",
+      cta: "Fix payment",
+    });
+  });
+
+  it("an account switched off reads 'AI is turned off', not a missing plan", () => {
+    const off = resolveAiAvailability({
+      failureCode: "account_inactive",
+      role: "member",
+    });
+    expect(off.kind).toBe("not_entitled");
+    expect(off.switchedOff).toBe(true);
+    expect(aiAvailabilityCopy(off)).toMatchObject({
+      label: "AI turned off",
+      title: "AI is turned off",
+    });
+    expect(aiAvailabilityCopy(off)?.detail).toMatch(
+      /Ask the pod's owner to turn AI back on\.$/
+    );
+    // The plan itself has no AI: the other sentence.
+    const plan = resolveAiAvailability({ failureCode: "not_entitled" });
+    expect(plan).not.toHaveProperty("switchedOff");
+    expect(aiAvailabilityCopy(plan)?.title).toBe("Your plan has no AI");
+  });
+
+  it("the CP's not_entitled outranks the wire's account_inactive (the CP owns the plan)", () => {
+    const a = resolveAiAvailability({
+      failureCode: "account_inactive",
+      billing: billing({ state: "not_entitled", action: "upgrade" }),
+    });
+    expect(a).not.toHaveProperty("switchedOff");
+    expect(aiAvailabilityCopy(a)?.title).toBe("Your plan has no AI");
+  });
+
+  it("the member's ask names 'this pod' when the pod has no name", () => {
+    const a = resolveAiAvailability({
+      failureCode: "credits_empty",
+      role: "member",
+    });
+    expect(aiAvailabilityCopy(a)?.askAdminMessage).toBe(
+      "Our AI credits are out — could you top up this pod?"
+    );
+  });
+
+  it("a member's line says captures still save and who acts", () => {
+    for (const failureCode of [
+      "credits_empty",
+      "not_entitled",
+      "access_suspended",
+    ]) {
+      const detail = aiAvailabilityCopy(
+        resolveAiAvailability({ failureCode, role: "member" })
+      )?.detail;
+      expect(detail).toMatch(/Captures still save\./);
+      expect(detail).toMatch(/Ask the pod's owner to /);
+    }
+  });
+
+  it("no line names Synap, an operator or a billing period; a reset is 'resets on <date>'", () => {
+    const lines = every().flatMap((c) =>
+      c ? [c.label, c.title, c.composerHint, c.askAdminMessage, c.detail] : []
+    );
+    expect(lines.length).toBeGreaterThan(30);
+    for (const line of lines) {
+      if (line === null) continue;
+      expect(line).not.toMatch(
+        /synap|operator|billing|period|next month|this month/i
+      );
+    }
+    const paused = aiAvailabilityCopy(
+      { kind: "budget_paused", action: "none" },
+      { resetsLabel: "Dec 1" }
+    );
+    expect(paused?.title).toBe("AI paused · resets on Dec 1");
+    expect(paused?.detail).toMatch(/It resets on Dec 1\.$/);
+  });
+
+  it("the detail closes with the action in words, and with none when there is none", () => {
+    expect(
+      aiAvailabilityCopy({ kind: "credits_empty", action: "top_up" })?.detail
+    ).toBe(
+      "This pod is out of AI credits, so chat and agents are paused. Captures still save. Top up credits to continue."
+    );
+    expect(
+      aiAvailabilityCopy({ kind: "credits_empty", action: "none" })?.detail
+    ).toBe(
+      "This pod is out of AI credits, so chat and agents are paused. Captures still save."
+    );
+  });
+});
+
+describe("resolveAiRefusal: one refusal, no billing read", () => {
+  it("never invents an action: none stated is none", () => {
+    expect(resolveAiRefusal("credits_empty")).toEqual({
+      kind: "credits_empty",
+      actor: "payer",
+      action: "none",
+    });
+    expect(resolveAiRefusal("credits_empty", "ask_admin")?.action).toBe(
+      "ask_admin"
+    );
+  });
+
+  it("an operator state drops whatever action the wire stated", () => {
+    expect(resolveAiRefusal("llm_budget_exceeded", "top_up")).toEqual({
+      kind: "budget_paused",
+      actor: "operator",
+      action: "none",
+    });
+  });
+
+  it("a transient or unknown code is no availability state", () => {
+    expect(resolveAiRefusal("rate_limited")).toBeNull();
+    expect(resolveAiRefusal("moon_phase")).toBeNull();
+  });
+
+  it("account_inactive is the switched-off not_entitled", () => {
+    expect(resolveAiRefusal("account_inactive")?.switchedOff).toBe(true);
   });
 });

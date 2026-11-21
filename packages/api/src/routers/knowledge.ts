@@ -221,6 +221,12 @@ export const knowledgeRouter = router({
          */
         failureClass: synthesis.failureClass,
         /**
+         * Present only when synthesis failed and runbooks matched: the
+         * opening of each (at most 3, 600 chars), so the guidance survives
+         * the AI answer layer being down. Same field on every door.
+         */
+        excerpts: synthesis.excerpts,
+        /**
          * Present only when source items were dropped to fit the model budget
          * (`{ omitted, total }`). An answer synthesized from a truncated source
          * set, rendered as if it were complete, is the same dishonesty as

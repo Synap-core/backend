@@ -50,6 +50,10 @@ import type {
   IsFailureActor,
   IsFailureEnvelope,
 } from "@synap-core/types";
+import {
+  aiAvailabilityCopy,
+  resolveAiRefusal,
+} from "@synap-core/types/ai-availability";
 
 export type AiFailureClass =
   | "quota"
@@ -193,8 +197,9 @@ function extractCode(error: unknown): string {
  * string-matched onto whichever class looks closest.
  *
  * Note `insufficient_credit` and `quota_exhausted` are DIFFERENT things — one
- * is an empty wallet, the other a spent allowance — and our copy tells the
- * operator to do different things about them, so they do not share a class.
+ * is an empty wallet, the other a spent allowance — and they prove different
+ * availability states (a provider issue, a paused budget), so they do not
+ * share a class.
  * `cancelled` is not a fault at all; it is here because the IS can emit it.
  */
 const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
@@ -312,83 +317,68 @@ export function classifyAiFailure(error: unknown): AiFailureClass {
   return "unknown";
 }
 
+/**
+ * Per class: the wire code, the retry verdict, whether an operator must act
+ * and, for a class about the REQUEST only, its sentence.
+ *
+ * A class whose code proves an AI availability state (`resolveAiFailureState`
+ * in `@synap-core/types/ai-availability`: credits, plan, payment, a paused
+ * budget, a provider or service state) carries NO sentence here: its words
+ * come from the one copy deck (`aiAvailabilityCopy`), the same words every
+ * surface shows for that state. That is what keeps billing policy ("next
+ * month", "raise the budget", "an operator has to top up") out of the pod: the
+ * deck states only facts that arrive as data. The guard test derives that
+ * split from the classification, so a class cannot keep a sentence of its own
+ * once its code maps to a state.
+ */
 const COPY: Record<
   AiFailureClass,
   {
     code: AiFailureCode;
     retryable: boolean;
     needsOperator: boolean;
-    message: string;
+    message?: string;
   }
 > = {
-  quota: {
-    code: "provider_no_credit",
-    retryable: false,
-    needsOperator: true,
-    message:
-      "The AI provider refused the request because the account is out of credit (HTTP 402). Retrying will not help — an operator has to top up the AI provider account first.",
-  },
+  quota: { code: "provider_no_credit", retryable: false, needsOperator: true },
   plan_quota: {
     code: "quota_exhausted",
     retryable: false,
     needsOperator: true,
-    message:
-      "The AI provider says this account's quota is used up. Retrying will not help — an operator has to raise the quota or wait for it to reset.",
   },
-  // No operator fix exists for the next two, so `needsOperator: false`; the
-  // same request cannot succeed until the account changes, so not retryable.
-  // The IS quota resets with the CALENDAR month (its billing periods), and a
-  // plan change does not touch the balance before then: the copy offers no
-  // upgrade it cannot honour.
+  // The account's own refusals: no operator fix exists, and the same request
+  // cannot succeed until the account changes.
   account_quota: {
     code: "account_quota_exceeded",
     retryable: false,
     needsOperator: false,
-    message:
-      "This account has used up its monthly AI quota. Retrying will not help \u2014 it resets at the start of next month.",
   },
   not_entitled: {
     code: "not_entitled",
     retryable: false,
     needsOperator: false,
-    message:
-      "This account's plan does not include AI features right now (the subscription may have lapsed). Retrying will not help.",
   },
-  // The two account-gate states. Short and mark-first: like `not_entitled`,
-  // the ACTION sentence (who does what) is appended from the IS's `action`,
-  // see PAYER_ADVICE.
   credits_empty: {
     code: "credits_empty",
     retryable: false,
     needsOperator: false,
-    message:
-      "This pod is out of AI credits, so chat and agents are paused. Captures still save.",
   },
   access_suspended: {
     code: "access_suspended",
     retryable: false,
     needsOperator: false,
-    message:
-      "AI is paused because the subscription payment failed. Captures still save.",
   },
   // The account itself is switched off — not a credentials fault (the 403
-  // used to read "an operator has to fix the AI service credentials"). The
-  // account holder re-enables it; no pod operator fix exists.
+  // used to read "an operator has to fix the AI service credentials").
   account_inactive: {
     code: "account_inactive",
     retryable: false,
     needsOperator: false,
-    message:
-      "AI access is turned off for this account. Retrying will not help \u2014 the account owner has to re-enable AI access first.",
   },
-  // Shared capacity, not this account's plan and not the provider's quota:
-  // an operator raises the budget, or it frees at the start of next month.
   budget: {
     code: "llm_budget_exceeded",
     retryable: false,
     needsOperator: true,
-    message:
-      "The shared AI capacity for this month is used up. Retrying will not help \u2014 an operator has to raise the AI budget, or it frees up at the start of next month.",
   },
   // Neither of the next two is an operator problem: the OPERATOR cannot make a
   // prompt shorter or make a safety filter accept it. `needsOperator: false`
@@ -414,13 +404,7 @@ const COPY: Record<
     needsOperator: false,
     message: "The request was cancelled before the AI service finished.",
   },
-  auth: {
-    code: "provider_auth",
-    retryable: false,
-    needsOperator: true,
-    message:
-      "The AI provider rejected our credentials. Retrying will not help — an operator has to fix the AI service credentials first.",
-  },
+  auth: { code: "provider_auth", retryable: false, needsOperator: true },
   rate_limit: {
     code: "rate_limited",
     retryable: true,
@@ -434,13 +418,8 @@ const COPY: Record<
     message:
       "The AI service did not answer before the request deadline, so the turn was cut off.",
   },
-  circuit: {
-    code: "circuit_open",
-    retryable: true,
-    needsOperator: false,
-    message:
-      "Recent calls to the AI service failed, so this pod stopped calling it for a moment. The underlying failure is in the pod logs.",
-  },
+  // The breaker opened on repeated failures: the deck's `service_down`.
+  circuit: { code: "circuit_open", retryable: true, needsOperator: false },
   // The account service (Control Plane) could not be reached, so the IS could
   // not tell whether AI is included: no operator or payer acts, a retry may pass.
   entitlement_unavailable: {
@@ -511,29 +490,6 @@ const ACTIONS: ReadonlySet<string> = new Set<IsFailureAction>([
   "none",
 ]);
 
-/**
- * The one sentence that tells THIS caller what to do, for the account-gate
- * classes whose base copy deliberately stops before the action. Keyed by the
- * IS's `action`, which the IS resolved for the caller (payer vs member).
- */
-const PAYER_ADVICE: Partial<Record<IsFailureAction, string>> = {
-  top_up: " Top up credits to continue.",
-  upgrade: " Upgrade or renew the plan to continue.",
-  fix_payment: " Update the payment method to continue.",
-  ask_admin: " Ask a billing admin of this account to fix it.",
-};
-
-/**
- * The account-gate classes whose action sentence comes from PAYER_ADVICE, and
- * what each says when the IS stated no action (an older IS, or the legacy
- * middleware refusal): the truth without a CTA nobody vouched for.
- */
-const ADVICE_DEFAULT: Partial<Record<AiFailureClass, string>> = {
-  credits_empty: " Retrying will not help.",
-  access_suspended: " Retrying will not help.",
-  not_entitled: " Renew or change the plan to use them.",
-};
-
 function actorAndAction(
   failureClass: AiFailureClass,
   needsOperator: boolean,
@@ -549,21 +505,46 @@ function actorAndAction(
 }
 
 /**
+ * The cause sentence: the deck's words for a class that proves an
+ * availability state (closed by the action stated for this caller), else the
+ * class's own request-shaped sentence.
+ */
+function causeOf(
+  failureClass: AiFailureClass,
+  action: IsFailureAction | undefined
+): string {
+  const copy = COPY[failureClass];
+  const refusal = resolveAiRefusal(copy.code, action);
+  const deck = refusal ? aiAvailabilityCopy(refusal) : null;
+  // Every class has words one way or the other: the guard test derives the
+  // split from the classification and fails on a class with neither.
+  return deck ? deck.detail : (copy.message ?? "");
+}
+
+/**
  * Turn a failure — or an already-known class — into user-facing text.
  *
  * `reference` must be an id that ALREADY exists in the caller's scope (a
  * clientRequestId, a turn requestId). This module never mints one.
+ *
+ * `envelope` is the IS failure envelope when the caller kept it apart from
+ * the error (a synthesis result carries its class and its envelope side by
+ * side): it is read exactly as an envelope attached to `failure` would be, so
+ * the payer action the IS stated for this caller reaches the words.
  */
 export function describeAiFailure(
   failure: unknown,
-  options: { reference?: string | null } = {}
+  options: {
+    reference?: string | null;
+    envelope?: IsFailureEnvelope | null;
+  } = {}
 ): AiFailureDescription {
   const failureClass =
     typeof failure === "string" && failure in COPY
       ? (failure as AiFailureClass)
       : classifyAiFailure(failure);
   const copy = COPY[failureClass];
-  const envelope = extractFailureEnvelope(failure);
+  const envelope = options.envelope ?? extractFailureEnvelope(failure);
 
   // TRUST the IS's `retryable` when it sent one — it sees things we cannot
   // (their finding: a 429 whose body says "insufficient balance" is NOT a
@@ -585,14 +566,16 @@ export function describeAiFailure(
     : "";
   // Advice is DERIVED from `retryable`, never baked into the cause sentence —
   // so when the IS overrides a normally-retryable class to non-retryable, the
-  // words stop inviting a retry too. The non-retryable classes carry their own
-  // "retrying will not help" in the cause; this only speaks when the verdict
-  // came from the envelope rather than the class.
+  // words stop inviting a retry too. A request-shaped class that is not
+  // retryable says so in its own sentence; the deck's words never do (they
+  // describe a state, not a request), so a state class says it here.
   const advice = retryable
     ? retryAfter || " Sending again may work."
-    : copy.retryable
-      ? " The AI service reports that retrying will not help."
-      : "";
+    : copy.message === undefined
+      ? " Retrying will not help."
+      : copy.retryable
+        ? " The AI service reports that retrying will not help."
+        : "";
 
   // The concrete reason, when the caller vetted one. Placed BEFORE the advice
   // and reference so the sentence reads cause-then-consequence, and only for
@@ -607,22 +590,15 @@ export function describeAiFailure(
   const { actor, action } = actorAndAction(
     failureClass,
     copy.needsOperator,
-    envelope
+    envelope ?? undefined
   );
-  // No stated action ⇒ no invented one: the base copy already says what is
-  // wrong, and the generic "retrying will not help" stands in for the CTA.
-  const adviceDefault = ADVICE_DEFAULT[failureClass];
-  const payerAdvice =
-    adviceDefault === undefined
-      ? ""
-      : ((action && PAYER_ADVICE[action]) ?? adviceDefault);
 
   return {
     class: failureClass,
     code: copy.code,
     retryable,
     needsOperator: copy.needsOperator,
-    message: `${copy.message}${payerAdvice}${because}${advice}${reference}`,
+    message: `${causeOf(failureClass, action)}${because}${advice}${reference}`,
     ...(actor ? { actor } : {}),
     ...(action ? { action } : {}),
   };

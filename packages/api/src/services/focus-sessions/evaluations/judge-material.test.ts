@@ -394,7 +394,7 @@ describe("judge rung — a judge that could not run says why in words", () => {
       failureClass: "account_quota",
     });
     expect(result?.reason).toMatch(
-      /^The AI judge could not run: This account has used up its monthly AI quota\./
+      /^The AI judge could not run: This pod is out of AI credits\./
     );
     expect(result?.reason).not.toContain("HTTP 429");
     expect(result?.reason).not.toContain("Token quota exceeded");
