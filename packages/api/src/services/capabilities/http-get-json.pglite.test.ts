@@ -120,7 +120,6 @@ import {
   allowHost,
   httpGetJson,
   listAllowedHosts,
-  MAX_RESPONSE_BYTES,
   type HttpGetJsonDeps,
 } from "./http-get-json.js";
 
@@ -191,6 +190,12 @@ const deps: HttpGetJsonDeps = {
     httpsOnly: false,
   },
 };
+/**
+ * Past the 2 MB cap the founder's default names, as a literal: read off the
+ * module's own constant, a raised cap would raise the test's body with it and
+ * the test could never go red (seen in this file's negative control).
+ */
+const OVERSIZE_BYTES = 2 * 1024 * 1024;
 const at = (host: string, path: string) => `http://${host}:${port}${path}`;
 
 beforeAll(async () => {
@@ -218,7 +223,7 @@ beforeAll(async () => {
       const chunk = Buffer.alloc(64 * 1024, 0x20);
       let sent = 0;
       const write = () => {
-        while (sent <= MAX_RESPONSE_BYTES) {
+        while (sent <= OVERSIZE_BYTES) {
           sent += chunk.length;
           if (!res.write(chunk)) return res.once("drain", write);
         }
