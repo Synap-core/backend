@@ -13,7 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *     refused, an older CP (404 = unknown, once per pull), another pod;
  *   - a pod with no CP / no link writes nothing;
  *   - a tick pulls what is due: each every 15 min, the AI one on every tick
- *     while a hold waits on AI.
+ *     while a hold waits on AI, and wakes those holds while AI is available;
+ *     a failing CP is asked less often; a tick waits its pod's jitter first.
  * The writers have their own suite (database control-plane-link.pglite.test.ts).
  */
 
@@ -25,10 +26,21 @@ const h = vi.hoisted(() => ({
   aiRecorded: [] as unknown[],
   aiFailures: [] as Array<[string, string]>,
   becameAvailable: false,
-  planSync: null as null | { lastAttemptAt: string },
-  aiSync: null as null | { lastAttemptAt: string; outcome?: string },
+  planSync: null as null | {
+    lastAttemptAt: string;
+    outcome: string;
+    failures?: number;
+  },
+  aiSync: null as null | {
+    lastAttemptAt: string;
+    outcome: string;
+    failures?: number;
+  },
+  aiStored: undefined as unknown,
+  availableAfterPull: null as string | null,
   aiHolds: [] as unknown[],
-  sent: [] as Array<[string, unknown]>,
+  woken: [] as number[],
+  slept: [] as number[],
   notified: [] as unknown[],
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -55,7 +67,7 @@ vi.mock("@synap/database", () => ({
   },
   readControlPlaneEntitlementSync: async () => h.planSync,
   readPodAiAvailability: async () => ({
-    availability: undefined,
+    availability: h.aiStored,
     sync: h.aiSync,
   }),
   listHolds: async () => h.aiHolds,
@@ -63,23 +75,20 @@ vi.mock("@synap/database", () => ({
     h.aiRecorded.push(answer);
     return {
       previous: undefined,
-      current: { ...answer, availableSince: null },
+      current: { ...answer, availableSince: h.availableAfterPull },
       becameAvailable: h.becameAvailable,
+      stale: false,
     };
   },
   recordPodAiAvailabilityFailure: async (outcome: string, message: string) => {
     h.aiFailures.push([outcome, message]);
   },
 }));
-vi.mock("@synap/events", () => ({
-  getBoss: () => ({
-    send: async (queue: string, data: unknown) => {
-      h.sent.push([queue, data]);
-      return "job";
-    },
-  }),
+vi.mock("../hold-resume.js", () => ({
+  wakeAiHolds: async (afterSeconds = 0) => {
+    h.woken.push(afterSeconds);
+  },
 }));
-vi.mock("../hold-resume.js", () => ({ HOLD_RESUME_QUEUE: "hold-resume" }));
 vi.mock("@synap-core/core", () => ({ createLogger: () => h.logger }));
 
 const fetchMock = vi.fn();
@@ -87,7 +96,9 @@ const fetchMock = vi.fn();
 import {
   CP_ENTITLEMENT_SYNC_CRON,
   CP_ENTITLEMENT_SYNC_QUEUE,
+  dueAfterMs,
   handleCpEntitlementSync,
+  pullJitterMs,
   pullAiAvailabilityNow,
   registerAiAvailabilityNotifier,
 } from "../cp-entitlement-sync.js";
@@ -158,8 +169,11 @@ beforeEach(() => {
   h.becameAvailable = false;
   h.planSync = null;
   h.aiSync = null;
+  h.aiStored = undefined;
+  h.availableAfterPull = null;
   h.aiHolds = [];
-  h.sent = [];
+  h.woken = [];
+  h.slept = [];
   h.notified = [];
   registerAiAvailabilityNotifier(async (change) => {
     h.notified.push(change);
@@ -177,6 +191,16 @@ beforeEach(() => {
 });
 
 const urls = () => fetchMock.mock.calls.map((c) => c[0] as string);
+/** A cron tick at NOW; its jitter wait is recorded, never slept. */
+const tick = () =>
+  handleCpEntitlementSync({}, NOW, async (ms) => {
+    h.slept.push(ms);
+  });
+const ok = (min: number) => ({
+  lastAttemptAt: ago(min),
+  outcome: "ok" as const,
+  message: null,
+});
 
 describe("handleCpEntitlementSync — the plan", () => {
   it("pulls with purpose 'entitlement' for its own pod id and records the CP's answer", async () => {
@@ -277,7 +301,7 @@ describe("handleCpEntitlementSync — the AI availability", () => {
     ]);
     // Told of the pull; AI did not come back, so no hold is woken.
     expect(h.notified).toHaveLength(1);
-    expect(h.sent).toEqual([]);
+    expect(h.woken).toEqual([]);
   });
 
   it("a CP from before `actionUrl` answers too; a link that is not https is refused", async () => {
@@ -310,7 +334,7 @@ describe("handleCpEntitlementSync — the AI availability", () => {
   it("AI coming back wakes the holds that wait on it", async () => {
     h.becameAvailable = true;
     await handleCpEntitlementSync({ force: true });
-    expect(h.sent).toEqual([["hold-resume", { devFact: "ai:available" }]]);
+    expect(h.woken).toEqual([0]);
   });
 
   it("a CP without the door is recorded as unsupported, the plan still pulls", async () => {
@@ -345,43 +369,136 @@ describe("handleCpEntitlementSync — the AI availability", () => {
 
 describe("handleCpEntitlementSync — what a tick pulls", () => {
   it("each fact once its last attempt is 15 minutes old", async () => {
-    h.planSync = { lastAttemptAt: ago(15) };
-    h.aiSync = { lastAttemptAt: ago(3) };
-    await handleCpEntitlementSync({}, NOW);
+    h.planSync = ok(15);
+    h.aiSync = ok(3);
+    await tick();
     expect(urls()).toEqual([`${CP}/internal/plan?podId=pod_lab`]);
 
     fetchMock.mockClear();
-    h.planSync = { lastAttemptAt: ago(3) };
-    h.aiSync = { lastAttemptAt: ago(15) };
-    await handleCpEntitlementSync({}, NOW);
+    h.planSync = ok(3);
+    h.aiSync = ok(15);
+    await tick();
     expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
   });
 
   it("nothing due: no call at all", async () => {
-    h.planSync = { lastAttemptAt: ago(3) };
-    h.aiSync = { lastAttemptAt: ago(3) };
-    await handleCpEntitlementSync({}, NOW);
+    h.planSync = ok(3);
+    h.aiSync = ok(3);
+    await tick();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("the AI availability on every tick while a hold waits on AI", async () => {
-    h.planSync = { lastAttemptAt: ago(3) };
-    h.aiSync = { lastAttemptAt: ago(3) };
+    h.planSync = ok(3);
+    h.aiSync = ok(3);
     h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
-    await handleCpEntitlementSync({}, NOW);
+    await tick();
     expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
   });
 
   it("a CP without the door is not asked every tick, even while a hold waits on AI", async () => {
-    h.planSync = { lastAttemptAt: ago(3) };
+    h.planSync = ok(3);
     h.aiSync = { lastAttemptAt: ago(3), outcome: "unsupported" };
     h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
-    await handleCpEntitlementSync({}, NOW);
+    await tick();
     expect(fetchMock).not.toHaveBeenCalled();
 
     h.aiSync = { lastAttemptAt: ago(15), outcome: "unsupported" };
-    await handleCpEntitlementSync({}, NOW);
+    await tick();
     expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
+  });
+
+  it("a tick that reads AI available wakes the AI holds again (met while true)", async () => {
+    h.planSync = ok(3);
+    h.aiSync = ok(3);
+    h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
+    // Available before this tick, still available: woken again.
+    h.availableAfterPull = ago(30);
+    await tick();
+    expect(h.woken).toEqual([0]);
+
+    // The pull itself saw AI come back: woken once, not twice.
+    h.woken = [];
+    h.becameAvailable = true;
+    h.availableAfterPull = NOW.toISOString();
+    await tick();
+    expect(h.woken).toEqual([0]);
+
+    // Not available: no wake.
+    h.woken = [];
+    h.becameAvailable = false;
+    h.availableAfterPull = null;
+    await tick();
+    expect(h.woken).toEqual([]);
+
+    // No hold waits on AI: no wake, whatever the pull says.
+    h.aiHolds = [];
+    h.availableAfterPull = ago(30);
+    h.aiSync = ok(15);
+    await tick();
+    expect(h.woken).toEqual([]);
+  });
+
+  it("a tick with nothing to pull still wakes the AI holds while the stored answer reads available", async () => {
+    h.planSync = ok(3);
+    h.aiSync = { lastAttemptAt: ago(3), outcome: "refused", failures: 1 };
+    h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
+    h.aiStored = { availableSince: ago(30), checkedAt: ago(4) };
+    await tick();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(h.woken).toEqual([0]);
+  });
+
+  it("a refusing or failing CP is asked less and less often, even while a hold waits on AI", async () => {
+    expect(dueAfterMs(null)).toBe(14 * 60_000);
+    expect(dueAfterMs(ok(0))).toBe(14 * 60_000);
+    expect(
+      dueAfterMs({
+        lastAttemptAt: ago(0),
+        outcome: "unsupported",
+        message: "404",
+        failures: 5,
+      })
+    ).toBe(14 * 60_000);
+    const failing = (failures: number) =>
+      dueAfterMs({
+        lastAttemptAt: ago(0),
+        outcome: "unreachable",
+        message: "502",
+        failures,
+      });
+    expect([1, 2, 3, 4, 5, 9].map(failing)).toEqual(
+      [1, 2, 4, 8, 16, 16].map((n) => n * 14 * 60_000)
+    );
+
+    h.planSync = ok(3);
+    h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
+    h.aiSync = { lastAttemptAt: ago(45), outcome: "refused", failures: 3 };
+    await tick();
+    expect(fetchMock).not.toHaveBeenCalled();
+    h.aiSync = { lastAttemptAt: ago(57), outcome: "refused", failures: 3 };
+    await tick();
+    expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
+  });
+
+  it("a tick waits its pod's jitter before calling; the startup run does not", async () => {
+    const j = pullJitterMs("pod_lab");
+    expect(j).toBeGreaterThanOrEqual(0);
+    expect(j).toBeLessThan(60_000);
+    expect(pullJitterMs("pod_lab")).toBe(j);
+    expect(
+      new Set(["pod_a", "pod_b", "pod_c", "pod_d"].map(pullJitterMs)).size
+    ).toBeGreaterThan(1);
+
+    h.planSync = ok(15);
+    h.aiSync = ok(3);
+    await tick();
+    expect(h.slept).toEqual([j]);
+
+    h.slept = [];
+    h.planSync = ok(3);
+    await tick();
+    expect(h.slept).toEqual([]);
   });
 
   it("stays on its queue name and a 3-minute tick", () => {

@@ -355,6 +355,19 @@ const pulled = (state: "ok" | "empty", at: Date) =>
 const UPSTREAM_502 = () =>
   new Response(JSON.stringify({ error: "Bad gateway" }), { status: 502 });
 
+/** The AI service's own spend guard: an operator state the pull cannot see. */
+const BUDGET_503 = () =>
+  new Response(
+    JSON.stringify({
+      error: "Budget exceeded",
+      failure: { code: "llm_budget_exceeded", retryable: false },
+    }),
+    { status: 503 }
+  );
+
+/** A sweep this long after now: past any retry date the gate wrote. */
+const later = (ms: number) => new Date(Date.now() + ms);
+
 describe("a check gate held because AI was not available grades again when AI is back", () => {
   beforeAll(() => {
     registerAiHeldGateRegrader((held) => regradeAiHeldGate(held));
@@ -424,7 +437,7 @@ describe("a check gate held because AI was not available grades again when AI is
     });
   });
 
-  it("AI available before the pause began is no news: nothing is graded", async () => {
+  it("an answer computed before the pause says nothing about it: nothing is graded", async () => {
     await pulled("ok", new Date(Date.now() - 30_000));
     const sessionId = await heldOnAi();
     h.judge = VERDICT("pass");
@@ -432,7 +445,20 @@ describe("a check gate held because AI was not available grades again when AI is
     expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
   });
 
-  it("a judge failure that is not about availability holds for the owner's grade, with no wait on AI", async () => {
+  it("AI back by the pull before the regrade could pass is still met on a later wake (met while true)", async () => {
+    const sessionId = await heldOnAi();
+    // The pull saw AI come back, but the AI service still refused (its
+    // entitlement cache): held.
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+    // A later wake (a tick, or the delayed re-wake), no new transition: met.
+    h.judge = VERDICT("pass");
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("a judge failure that is not about availability holds for the owner's grade, with a dated retry", async () => {
     h.judge = UPSTREAM_502;
     const sessionId = await sessionAtWork();
     const res = await advanceToReview(sessionId);
@@ -440,6 +466,45 @@ describe("a check gate held because AI was not available grades again when AI is
     expect(res.onFail).toBeUndefined();
     const hold = await holdOf(sessionId);
     expect(hold).toMatchObject({ on: "thing", ref: "check:review" });
-    expect(hold?.until ?? null).toBeNull();
+    const until = hold?.until as { date?: string } | undefined;
+    expect(Date.parse(until?.date ?? "")).toBeGreaterThan(Date.now());
+
+    // The date comes and the judge still fails: the same hold, still held.
+    await handleHoldResume({}, later(2 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+    expect(await holdOf(sessionId)).toEqual(hold);
+
+    // A later sweep, the judge runs and passes: the run moves on.
+    h.judge = VERDICT("pass");
+    await handleHoldResume({}, later(3 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "review",
+    });
+  });
+
+  it("the AI service's own state (budget, provider, service) retries on a date, never on ai:available", async () => {
+    h.judge = BUDGET_503;
+    const sessionId = await sessionAtWork();
+    await advanceToReview(sessionId);
+    const hold = await holdOf(sessionId);
+    expect(hold).toMatchObject({ on: "external", ref: "check:review" });
+    expect(hold?.until).toHaveProperty("date");
+
+    h.judge = VERDICT("pass");
+    await handleHoldResume({}, later(2 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("a payer hold whose judge now fails for the AI service's own reason is re-held on a date", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = BUDGET_503;
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    expect((await holdOf(sessionId))?.until).toHaveProperty("date");
   });
 });

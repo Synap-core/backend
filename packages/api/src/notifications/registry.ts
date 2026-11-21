@@ -1498,6 +1498,24 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "status",
   },
   {
+    // AI AVAILABILITY (founder decision 4): the payment failed and the plan
+    // is in its grace period. AI still runs, the payer must fix the payment
+    // before it stops. To the payers, once per period while unread; dismissed
+    // when the state changes. The status banner, like low credits; words from
+    // the ONE deck (`aiAvailabilityCopy`).
+    type: "ai.payment_due",
+    category: "system",
+    label: "Payment needed for AI",
+    icon: "gauge",
+    priority: "normal",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
+    needsYou: "status",
+  },
+  {
     // AI AVAILABILITY (W3 C5): AI stopped on this pod for a reason only a
     // payer can change (out of credits, payment needed, no AI on the plan).
     // To the payers, once per (kind, mark, reset) while unread, pushed;

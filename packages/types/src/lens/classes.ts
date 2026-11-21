@@ -126,6 +126,8 @@ export const STATUS_BANNER_NOTIFICATION_TYPES: ReadonlySet<string> = new Set([
   "pod.resource_warning",
   // Credits crossed a low mark (W3 C5): AI still runs, a heads-up to payers.
   "ai.credits_low",
+  // A payment failed, AI runs in its grace period (founder decision 4).
+  "ai.payment_due",
   // NOT `system.intelligence_degraded` (P4, 2026-10-06): that is an operator
   // notice now (registry role `informational`, owner + Discord only). What a
   // user sees about AI is `@synap-core/types/ai-availability`'s banner.

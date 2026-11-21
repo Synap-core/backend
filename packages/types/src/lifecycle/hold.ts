@@ -165,11 +165,12 @@ const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
  *  - `job:<name>`: the devbox job ended — its `ci.finished` (workflow
  *    `devbox <name>`) after the pause began; with `to: "passed" | "failed"`
  *    only that verdict.
- *  - `ai:available`: this pod's AI became available again AFTER the pause
- *    began — the pod's pull of its AI availability from the Control Plane
- *    observed it come back (`aiAvailableSince`). The one spelling: AI has
- *    no name and no verdict. A check gate whose AI judge could not run
- *    writes it; its resume re-grades the gate, never only un-pauses it.
+ *  - `ai:available`: this pod's AI is available — the pod's latest pull of
+ *    its AI availability from the Control Plane reads it available, checked
+ *    after the pause began (`aiHoldMet`). The one spelling: AI has
+ *    no name and no verdict. A check gate whose AI judge could not run for a
+ *    payer state writes it; its resume re-grades the gate, never only
+ *    un-pauses it.
  * Whether the fact is in is decided by `holdDevRefMet` (pr / main / job,
  * over dev events) and `aiHoldMet` (ai, over the pod's availability), both
  * in `events/dev-hold.ts`.

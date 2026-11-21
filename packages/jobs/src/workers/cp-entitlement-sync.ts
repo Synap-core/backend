@@ -27,8 +27,13 @@
  *
  * Cadence: a tick every 3 minutes + once on startup. Each fact is pulled when
  * its last attempt is 15 minutes old; the AI availability on every tick while
- * a hold waits on it, so held work resumes within minutes of a top-up (the
- * apps also re-check at once, `aiAvailability.recheck`). Pull, never push:
+ * a hold waits on it, and each such tick that reads AI available wakes those
+ * holds, so held work resumes within minutes of a top-up (the apps also
+ * re-check at once, `aiAvailability.recheck`). A tick waits a few seconds
+ * keyed on the pod id first (`pullJitterMs`), so a fleet's pods do not all
+ * call the CP on the same second, and a CP that refuses or fails is asked
+ * less and less often (`dueAfterMs`: 15, 30, 60, 120, then 240 minutes).
+ * Pull, never push:
  * the CP stopped sending tier data to pods (its `pushTierToPods` is a logged
  * no-op), and a pull heals a missed webhook or an expired trial on its own.
  *
@@ -53,11 +58,9 @@ import {
   type PodAiAvailability,
   type PodAiAvailabilityChange,
 } from "@synap/database";
-import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
-import { HOLD_AI_MOVES } from "@synap-core/types/lifecycle";
-import { HOLD_RESUME_QUEUE, type HoldResumeJobData } from "./hold-resume.js";
+import { wakeAiHolds } from "./hold-resume.js";
 
 const logger = createLogger({ module: "cp-entitlement-sync" });
 
@@ -69,6 +72,10 @@ export const CP_ENTITLEMENT_SYNC_CRON = "*/3 * * * *";
  * the jitter of the 3-minute tick (a pull 14:58 after the last is not early).
  */
 const PULL_DUE_AFTER_MS = 14 * 60_000;
+/** The longest backoff of a failing CP: 16 × 15 minutes, four hours. */
+const MAX_BACKOFF_DOUBLINGS = 4;
+/** A tick's spread: a pod waits up to this long, keyed on its id. */
+const PULL_JITTER_MAX_MS = 60_000;
 
 /** The job's data: `force` pulls both now (the startup run). */
 export interface CpEntitlementSyncJobData {
@@ -280,9 +287,21 @@ async function pullPlan(caller: CpCaller): Promise<void> {
   logger.info({ tier, status, lab }, "Pulled this pod's plan from the CP");
 }
 
+async function notifyChange(change: PodAiAvailabilityChange): Promise<void> {
+  if (!aiAvailabilityNotifier) {
+    logger.warn(
+      "AI availability notifier not registered — apps/api must call registerAiAvailabilityNotifier() at boot"
+    );
+    return;
+  }
+  await aiAvailabilityNotifier(change).catch((err) =>
+    logger.warn({ err }, "AI availability notice failed — the pull stands")
+  );
+}
+
 /** The outcome of one AI availability pull, for the re-check door. */
 export type AiAvailabilityPull =
-  | { outcome: "ok"; availability: PodAiAvailability }
+  | { outcome: "ok"; availability: PodAiAvailability; woke: boolean }
   | { outcome: FailedOutcome | "not_linked"; message: string };
 
 async function pullAiAvailability(
@@ -320,63 +339,112 @@ async function pullAiAvailability(
   );
   if (change.becameAvailable) {
     // The holds that wait on AI are checked now, not at the hourly sweep.
-    await getBoss().send(HOLD_RESUME_QUEUE, {
-      devFact: HOLD_AI_MOVES,
-    } satisfies HoldResumeJobData);
+    await wakeAiHolds();
   }
-  if (aiAvailabilityNotifier) {
-    await aiAvailabilityNotifier(change).catch((err) =>
-      logger.warn({ err }, "AI availability notice failed — the pull stands")
-    );
-  } else {
-    logger.warn(
-      "AI availability notifier not registered — apps/api must call registerAiAvailabilityNotifier() at boot"
-    );
+  // An answer older than the one stored (two pulls raced) changed nothing.
+  if (!change.stale) await notifyChange(change);
+  return {
+    outcome: "ok",
+    availability: change.current,
+    woke: change.becameAvailable,
+  };
+}
+
+/**
+ * How old the last attempt must be before the next pull: 15 minutes, doubled
+ * for each refused, failed or unreadable attempt in a row (up to four hours).
+ * A CP without the door (404) keeps the plain pace.
+ */
+export function dueAfterMs(sync: ControlPlaneEntitlementSync | null): number {
+  if (!sync || sync.outcome === "ok" || sync.outcome === "unsupported") {
+    return PULL_DUE_AFTER_MS;
   }
-  return { outcome: "ok", availability: change.current };
+  const doublings = Math.min((sync.failures ?? 1) - 1, MAX_BACKOFF_DOUBLINGS);
+  return PULL_DUE_AFTER_MS * 2 ** Math.max(doublings, 0);
 }
 
 const isDue = (sync: ControlPlaneEntitlementSync | null, now: Date): boolean =>
-  !sync ||
-  !(now.getTime() - Date.parse(sync.lastAttemptAt) < PULL_DUE_AFTER_MS);
+  !sync || !(now.getTime() - Date.parse(sync.lastAttemptAt) < dueAfterMs(sync));
 
-/** Called by the cron tick (no data) and the startup enqueue (`force`). */
+/**
+ * A tick's wait before it calls the CP, the same for a pod every tick and
+ * spread over a minute across pods (FNV-1a of the pod id).
+ */
+export function pullJitterMs(podId: string): number {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < podId.length; i++) {
+    hash ^= podId.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash % PULL_JITTER_MAX_MS;
+}
+
+const sleepMs = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Called by the cron tick (no data) and the startup enqueue (`force`).
+ * `sleep` is the tick's jitter wait (a test passes its own).
+ */
 export async function handleCpEntitlementSync(
   data: CpEntitlementSyncJobData = {},
-  now: Date = new Date()
+  now: Date = new Date(),
+  sleep: (ms: number) => Promise<void> = sleepMs
 ): Promise<void> {
+  const [planSync, aiRead, aiHolds] = await Promise.all([
+    readControlPlaneEntitlementSync(),
+    readPodAiAvailability(),
+    listHolds(
+      db,
+      { awaiting: { subjectType: "ai", subjectId: "available" } },
+      now
+    ),
+  ]);
   let plan = true;
   let ai = true;
   if (!data.force) {
-    const [planSync, aiRead, aiHolds] = await Promise.all([
-      readControlPlaneEntitlementSync(),
-      readPodAiAvailability(),
-      listHolds(
-        db,
-        { awaiting: { subjectType: "ai", subjectId: "available" } },
-        now
-      ),
-    ]);
     plan = isDue(planSync, now);
-    // A CP that has no availability door (404) is asked again at the plan's
-    // pace, never every tick: a hold cannot make an older CP answer.
+    // While a hold waits on AI, every tick asks, unless the CP has no door
+    // (404) or is failing: a hold cannot make it answer, so it keeps its pace.
     ai =
-      (aiHolds.length > 0 && aiRead.sync?.outcome !== "unsupported") ||
+      (aiHolds.length > 0 &&
+        (aiRead.sync === null || aiRead.sync.outcome === "ok")) ||
       isDue(aiRead.sync, now);
   }
-  if (!plan && !ai) return;
-
-  const caller = await resolveCaller();
-  if (!caller) return;
-  if ("failed" in caller) {
-    if (plan)
-      await recordControlPlaneEntitlementFailure(caller.failed, caller.message);
-    if (ai)
-      await recordPodAiAvailabilityFailure(caller.failed, caller.message, now);
-    return;
+  let latest = aiRead.availability;
+  let woke = false;
+  if (plan || ai) {
+    const caller = await resolveCaller();
+    if (!caller) return;
+    if ("failed" in caller) {
+      if (plan)
+        await recordControlPlaneEntitlementFailure(
+          caller.failed,
+          caller.message
+        );
+      if (ai)
+        await recordPodAiAvailabilityFailure(
+          caller.failed,
+          caller.message,
+          now
+        );
+      return;
+    }
+    if (!data.force) await sleep(pullJitterMs(caller.podId));
+    if (plan) await pullPlan(caller);
+    if (ai) {
+      const pulled = await pullAiAvailability(caller, now);
+      if (pulled.outcome === "ok") {
+        latest = pulled.availability;
+        woke = pulled.woke;
+      }
+    }
   }
-  if (plan) await pullPlan(caller);
-  if (ai) await pullAiAvailability(caller, now);
+  // Met while true (`aiHoldMet`): a hold whose wake came before its judge
+  // could run is woken again on every tick that reads AI available.
+  if (aiHolds.length > 0 && latest?.availableSince && !woke) {
+    await wakeAiHolds();
+  }
 }
 
 /**

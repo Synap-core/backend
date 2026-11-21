@@ -251,8 +251,11 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
     expect(
       (await link.readPodAiAvailability()).availability?.availableSince
     ).toBe(T(0).toISOString());
-    // Low credits still run AI, so it is not a loss of availability.
-    expect((await pull("low", 30)).becameAvailable).toBe(false);
+    // Low credits still run AI (the composer is not blocked), so it is not a
+    // loss of availability: the stamp stays.
+    const low = await pull("low", 30);
+    expect(low.becameAvailable).toBe(false);
+    expect(low.current.availableSince).toBe(T(0).toISOString());
     // Out of credits: no stamp.
     const empty = await pull("empty", 45);
     expect(empty.becameAvailable).toBe(false);
@@ -264,6 +267,48 @@ describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
     expect(back.current.availableSince).toBe(T(60).toISOString());
     expect((await link.readPodAiAvailability()).sync).toMatchObject({
       outcome: "ok",
+    });
+  });
+
+  it("out of credits to low credits is AI coming back", async () => {
+    await pull("empty", 0);
+    const back = await pull("low", 15);
+    expect(back.becameAvailable).toBe(true);
+    expect(back.current.availableSince).toBe(T(15).toISOString());
+  });
+
+  it("an answer computed before the stored one never replaces it (two pulls raced)", async () => {
+    await pull("empty", 30);
+    // A slower pull whose CP answer is older, saying AI is available.
+    const late = await link.recordPodAiAvailability(
+      { billing: billing("ok"), checkedAt: T(20).toISOString() },
+      T(31)
+    );
+    expect(late.stale).toBe(true);
+    expect(late.becameAvailable).toBe(false);
+    const read = await link.readPodAiAvailability();
+    expect(read.availability?.billing).toMatchObject({ state: "empty" });
+    expect(read.availability?.checkedAt).toBe(T(30).toISOString());
+    // The same instant again is not older: it is written.
+    expect((await pull("ok", 30)).stale).toBe(false);
+  });
+
+  it("counts failed attempts in a row; an ok attempt resets them", async () => {
+    await link.recordPodAiAvailabilityFailure("refused", "no", T(0));
+    await link.recordPodAiAvailabilityFailure("unreachable", "no", T(3));
+    expect((await link.readPodAiAvailability()).sync).toMatchObject({
+      outcome: "unreachable",
+      failures: 2,
+    });
+    await pull("ok", 6);
+    await link.recordPodAiAvailabilityFailure("refused", "no", T(9));
+    expect((await link.readPodAiAvailability()).sync).toMatchObject({
+      failures: 1,
+    });
+    await link.recordControlPlaneEntitlementFailure("refused", "no", T(0));
+    await link.recordControlPlaneEntitlementFailure("refused", "no", T(3));
+    expect(await link.readControlPlaneEntitlementSync()).toMatchObject({
+      failures: 2,
     });
   });
 
