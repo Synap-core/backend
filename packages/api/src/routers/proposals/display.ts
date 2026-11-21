@@ -1534,17 +1534,10 @@ export async function enrichProposalsForDisplay(
   );
 
   // LANDED — what an applied row's approval made, each with its next step.
-  const landedByRow = await resolveLandedObjects(
-    rows.map((row) => ({
-      status: row.status,
-      proposalType: row.proposalType,
-      targetType: row.targetType,
-      targetId: row.targetId,
-      data: row.data,
-      workspaceId: row.workspaceId ?? null,
-    })),
-    { userId, roster: opts.roster ?? false }
-  );
+  const landedByRow = await resolveLandedObjects(rows, {
+    userId,
+    roster: opts.roster ?? false,
+  });
 
   // STATUS MOVES — a lifecycle move named by the kind's own options, for a
   // subject the viewer may read under the row's lens (same lens as

@@ -1,35 +1,35 @@
 /**
- * `landed` on a proposal row: the objects its approval landed
- * (`proposalLanded`, `@synap-core/types/proposals/landed`), each resolved
- * through `objectRefs` (viewer-floored: an object the viewer may not read is
- * left out) with its next step (`objectNextOf`, `@synap-core/types/units`).
+ * `landed` on a proposal row: what its approval landed (`proposalLanded`),
+ * resolved through `objectRefs` (an object the viewer may not read is left
+ * out), each with its next step (`objectNextOf`) from reads the pod already
+ * makes: a process's health (`processHealthOf` over the run ledger), a
+ * playbook's skills that are not enabled (`findUnenabledPlaybookSkills`), a
+ * thing's or a session's next move (`readStatusOf`). Per page, at most
+ * `STATUS_OF_MAX` statuses and playbook skill checks are read.
  *
- * `next` reads only what the pod already reads elsewhere: a process's status
- * and run ledger (`listRunTracks`, the proposal track's own read), a
- * playbook's skills that are not enabled (`findUnenabledPlaybookSkills`, the
- * run doors' detection), a thing's or a session's next move (`readStatusOf`,
- * at most `STATUS_OF_MAX` per page). `next` absent = not read (past the cap,
- * a kind with nothing to read, or the read failed); null = nothing needed.
+ * `next` absent = not read (past a cap, a kind with nothing to read, or a read
+ * that failed: the object is still a door, only its hint is missing); null =
+ * it needs nothing.
  */
 
 import { and, automations, db, inArray, playbooks } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   proposalLanded,
-  type ProposalLandedKind,
   type ProposalLandedRole,
   type ProposalLandedRow,
 } from "@synap-core/types/proposals/landed";
-import { deriveProcessHealth } from "@synap-core/types/processes";
 import { objectNextOf, type ObjectNext } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { listRunTracks } from "../runs/index.js";
+import { listRecentRunsByFlows } from "../runs/recent-by-flows.js";
+import { processHealthOf } from "../playbooks/process-read.js";
 import { findUnenabledPlaybookSkills } from "../playbooks/playbook-skill-preflight.js";
 import { readStatusOf, STATUS_OF_MAX } from "../status/status-read.js";
 import {
   resolveObjectRefs,
-  type CollectedIdRef,
   type ProposalObjectRef,
+  type RefTable,
 } from "../../routers/proposals/object-refs.js";
 
 const logger = createLogger({ module: "proposal-landed-read" });
@@ -41,40 +41,22 @@ export interface ProposalLandedObject extends ProposalObjectRef {
   next?: ObjectNext | null;
 }
 
-/** The `objectRefs` table each landed kind resolves through; absent = not resolved here. */
-const TABLE_OF: Partial<Record<ProposalLandedKind, CollectedIdRef["table"]>> = {
-  entity: "entity",
-  document: "document",
-  session: "session",
-  project: "project",
-  workspace: "workspace",
-  automation: "automation",
-  playbook: "playbook",
-  skill: "skill",
-  view: "view",
-  track: "track",
-  agent: "agent",
-  tool: "tool",
-  channel: "channel",
-};
-
-type LandedRowInput = ProposalLandedRow & { workspaceId: string | null };
-
 /** `landed` for each row (undefined when it landed nothing the viewer may read). */
 export async function resolveLandedObjects(
-  rows: readonly LandedRowInput[],
+  rows: ReadonlyArray<ProposalLandedRow & { workspaceId: string | null }>,
   viewer: { userId: string; roster: boolean }
 ): Promise<Array<ProposalLandedObject[] | undefined>> {
   const landedByRow = rows.map((row) => proposalLanded(row));
-  if (landedByRow.every((l) => l.length === 0))
+  if (landedByRow.every((l) => l.length === 0)) {
     return rows.map(() => undefined);
-
+  }
   const resolved = await resolveObjectRefs(
     rows.map((row, idx) => ({
       workspaceId: row.workspaceId,
-      refs: landedByRow[idx]!.flatMap((ref, i) => {
-        const table = TABLE_OF[ref.kind];
-        return table ? [{ path: String(i), id: ref.id, table }] : [];
+      // Every landed kind is an objectRefs table (a compile error otherwise).
+      refs: landedByRow[idx]!.map((ref, i) => {
+        const table: RefTable = ref.kind;
+        return { path: String(i), id: ref.id, table };
       }),
     })),
     viewer
@@ -82,43 +64,42 @@ export async function resolveLandedObjects(
   const objectsByRow = landedByRow.map((landed, idx) =>
     landed.flatMap((ref, i): ProposalLandedObject[] => {
       const hit = resolved[idx]?.[String(i)];
-      return hit ? [{ ...hit, kind: ref.kind, role: ref.role }] : [];
+      return hit ? [{ ...hit, role: ref.role }] : [];
     })
   );
-
-  const nextById = await readNext(objectsByRow.flat(), viewer.userId);
+  const nextByKey = await readNext(objectsByRow.flat(), viewer.userId);
   return objectsByRow.map((objects) =>
     objects.length === 0
       ? undefined
       : objects.map((o) => {
           const key = `${o.kind}:${o.id}`;
-          return nextById.has(key) ? { ...o, next: nextById.get(key)! } : o;
+          return nextByKey.has(key) ? { ...o, next: nextByKey.get(key)! } : o;
         })
   );
 }
 
-/** Each resolved object's next step, keyed `kind:id`; a missing key was not read. */
+/** Each object's next step, keyed `kind:id`; a missing key was not read. */
 async function readNext(
   objects: readonly ProposalLandedObject[],
   userId: string
 ): Promise<Map<string, ObjectNext | null>> {
   const out = new Map<string, ObjectNext | null>();
-  const idsOf = (kind: string) => [
-    ...new Set(objects.filter((o) => o.kind === kind).map((o) => o.id)),
+  const idsOf = (...kinds: string[]) => [
+    ...new Set(objects.filter((o) => kinds.includes(o.kind)).map((o) => o.id)),
   ];
-  const automationIds = idsOf("automation");
-  const playbookIds = idsOf("playbook");
-  const statusIds = [
-    ...new Set(
-      objects
-        .filter((o) => o.kind === "entity" || o.kind === "session")
-        .map((o) => o.id)
-    ),
-  ].slice(0, STATUS_OF_MAX);
-
   await Promise.all([
-    readProcessNext(automationIds, playbookIds, userId, out),
-    readStatusNext(statusIds, objects, userId, out),
+    readProcessNext(
+      idsOf("automation"),
+      idsOf("playbook").slice(0, STATUS_OF_MAX),
+      userId,
+      out
+    ),
+    readStatusNext(
+      idsOf("entity", "session").slice(0, STATUS_OF_MAX),
+      objects,
+      userId,
+      out
+    ),
   ]);
   return out;
 }
@@ -132,7 +113,7 @@ async function readProcessNext(
   if (automationIds.length + playbookIds.length === 0) return;
   const access = scopedDb(AccessContext.operator({ userId }));
   try {
-    const [automationRows, playbookRows, tracks] = await Promise.all([
+    const [automationRows, playbookRows, tracks, recent] = await Promise.all([
       automationIds.length > 0
         ? db
             .select({ id: automations.id, status: automations.status })
@@ -161,20 +142,34 @@ async function readProcessNext(
             )
         : Promise.resolve([]),
       listRunTracks({ userId, automationIds, playbookIds }),
+      listRecentRunsByFlows({
+        userId,
+        flows: [
+          ...automationIds.map((flowId) => ({
+            flowType: "automation" as const,
+            flowId,
+          })),
+          ...playbookIds.map((flowId) => ({
+            flowType: "playbook" as const,
+            flowId,
+          })),
+        ],
+        perFlowLimit: 5,
+      }),
     ]);
     const healthOf = (
       flowType: "automation" | "playbook",
       id: string,
       status: string
-    ) => {
-      const group = tracks.get(`${flowType}:${id}`) ?? null;
-      return deriveProcessHealth({
-        definitionStatus: status,
-        runGroup: group,
-        recentRuns: [],
-        exactRunCount: group ? group.runCount : 0,
+    ) =>
+      processHealthOf({
+        status,
+        group: tracks.get(`${flowType}:${id}`) ?? null,
+        recent:
+          recent.find((h) => h.flowType === flowType && h.flowId === id)
+            ?.runs ?? [],
+        groupRead: true,
       });
-    };
     for (const a of automationRows) {
       out.set(
         `automation:${a.id}`,
@@ -214,12 +209,10 @@ async function readStatusNext(
 ): Promise<void> {
   if (ids.length === 0) return;
   try {
-    const answers = await readStatusOf(userId, ids);
     const kindOf = new Map(objects.map((o) => [o.id, o.kind]));
-    for (const answer of answers) {
-      if (answer.type === "unknown") continue;
+    for (const answer of await readStatusOf(userId, ids)) {
       const kind = kindOf.get(answer.id);
-      if (!kind) continue;
+      if (answer.type === "unknown" || !kind) continue;
       const nextMove = "nextMove" in answer ? answer.nextMove : undefined;
       out.set(
         `${kind}:${answer.id}`,

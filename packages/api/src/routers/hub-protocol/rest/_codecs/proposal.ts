@@ -6,6 +6,7 @@
  * effect via the event chain.
  */
 
+import { readMaterializedOps } from "@synap-core/types/proposals/landed";
 import { z } from "@hono/zod-openapi";
 import {
   PROPOSAL_CLASSES,
@@ -426,18 +427,6 @@ export type ProposalBasic = z.infer<typeof ProposalBasicSchema>;
 /** Upper bound on `materializedIds` entries on a BASIC row — a list stays bounded. */
 export const PROPOSAL_MATERIALIZED_IDS_MAX = 200;
 
-const BY_OP_ID_KEYS = [
-  "entityId",
-  "sessionId",
-  "projectId",
-  "documentId",
-  "relationId",
-  "linkId",
-  "skillId",
-  "automationId",
-  "ruleId",
-] as const;
-
 /**
  * ref → the REAL id each op of an applied composite produced, lifted from the
  * record the materializer stamps (`data.materialized.byOp`). This is how an
@@ -448,25 +437,22 @@ const BY_OP_ID_KEYS = [
 export function materializedIdsOf(
   data: Record<string, unknown>
 ): ProposalBasic["materializedIds"] | undefined {
-  const byOp = (data.materialized as { byOp?: unknown } | undefined)?.byOp;
-  if (!byOp || typeof byOp !== "object") return undefined;
-  const out: NonNullable<ProposalBasic["materializedIds"]> = {};
-  let count = 0;
-  for (const [ref, entry] of Object.entries(byOp as Record<string, unknown>)) {
-    if (count >= PROPOSAL_MATERIALIZED_IDS_MAX) break;
-    if (!entry || typeof entry !== "object") continue;
-    const e = entry as Record<string, unknown>;
-    const idKey = BY_OP_ID_KEYS.find((k) => typeof e[k] === "string");
-    if (!idKey || typeof e.op !== "string") continue;
-    out[ref] = {
-      op: e.op,
-      id: e[idKey] as string,
-      ...(e.linked === true || e.preExisting === true ? { linked: true } : {}),
-      ...(typeof e.revertedAt === "string" ? { revertedAt: e.revertedAt } : {}),
-    };
-    count++;
-  }
-  return count > 0 ? out : undefined;
+  const ops = readMaterializedOps(data.materialized).slice(
+    0,
+    PROPOSAL_MATERIALIZED_IDS_MAX
+  );
+  if (ops.length === 0) return undefined;
+  return Object.fromEntries(
+    ops.map((o) => [
+      o.ref,
+      {
+        op: o.op,
+        id: o.id,
+        ...(o.linked ? { linked: true } : {}),
+        ...(o.revertedAt ? { revertedAt: o.revertedAt } : {}),
+      },
+    ])
+  );
 }
 
 /**

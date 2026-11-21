@@ -1,13 +1,10 @@
 /**
- * THE NEXT STEP of an object: what it still needs from the person ("Turn on"
- * a draft automation, "Answer" what its session owes), projected from reads
- * the pod already makes. It reads, never stores: a process's health
- * (`deriveProcessHealth`), a thing's or a session's next move (the status
- * read's `nextMove`), and the skills a playbook uses that are not enabled.
- *
- * The wire carries an action TOKEN (`resolveActionLabel(action, "imperative")`
- * names the button) and a reason CODE, never words; a thing's or a session's
- * next move keeps its own `label`, as the status read gives it.
+ * THE NEXT STEP of an object ("Turn on" a draft automation, "Answer" what its
+ * session owes), projected from facts the pod already reads; it stores
+ * nothing. An action TOKEN (`resolveActionLabel(action, "imperative")` names
+ * the button) and a reason CODE, never words; a thing's or a session's next
+ * move keeps the status read's own `label`. Whether it is a needs-you item is
+ * the needs-you rule's call (`units/needs-you.ts`), not this one's.
  *
  * Pure.
  */
@@ -30,8 +27,6 @@ export interface ObjectNext {
   action: ObjectNextAction;
   /** Why: the process health reason, `skills_off`, or the next move's kind. */
   reason: string;
-  /** Only a person can take it: it is theirs to do, a needs-you card. */
-  personOnly: boolean;
   /** Where it is taken when not on the object: the session that owes it. */
   sessionId?: string;
   /** A thing's or a session's next move, in the status read's words. */
@@ -48,29 +43,20 @@ export interface ObjectNextFacts {
   nextMove?: StatusOfWorkNextMove;
 }
 
-/** Next moves that only the person reading can take. */
-const PERSON_MOVES: ReadonlySet<string> = new Set([
-  "owed_slot",
-  "pending_proposal",
-  "ready_to_close",
-  "judge_review",
-]);
-
 function fromHealth(health: ProcessHealth): ObjectNext | null {
   switch (health.state) {
     case "draft":
-      return { action: "turn_on", reason: health.reason, personOnly: true };
+      return { action: "turn_on", reason: health.reason };
     case "config-error":
-      return { action: "open", reason: health.reason, personOnly: true };
+      return { action: "open", reason: health.reason };
     case "unresolved-failure":
-      return { action: "see_failure", reason: health.reason, personOnly: true };
+      return { action: "see_failure", reason: health.reason };
     case "blocked-by-policy":
-      return { action: "review", reason: health.reason, personOnly: true };
+      return { action: "review", reason: health.reason };
     case "waiting-on-you":
       return {
         action: "answer",
         reason: health.reason,
-        personOnly: true,
         ...(health.sessionId ? { sessionId: health.sessionId } : {}),
       };
     case "running":
@@ -88,7 +74,6 @@ function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
     return {
       action: "open",
       reason: move.kind,
-      personOnly: false,
       label: move.label,
     };
   }
@@ -102,7 +87,6 @@ function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
   return {
     action,
     reason: move.kind,
-    personOnly: PERSON_MOVES.has(move.kind),
     label: move.label,
     ...session,
   };
@@ -126,7 +110,7 @@ export function objectNextOf(
       health?.state !== "draft" &&
       health?.state !== "config-error"
     ) {
-      return { action: "enable", reason: "skills_off", personOnly: true };
+      return { action: "enable", reason: "skills_off" };
     }
     return health ? fromHealth(health) : null;
   }

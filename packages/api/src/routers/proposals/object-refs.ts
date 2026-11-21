@@ -69,7 +69,7 @@ export interface ProposalObjectRef {
 }
 
 /** The tables a ref can resolve through. */
-type RefTable =
+export type RefTable =
   | "entity"
   | "session"
   | "project"
