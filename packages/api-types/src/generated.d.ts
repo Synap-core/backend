@@ -2798,6 +2798,22 @@ export interface DeliverableCounts {
 	/** Still owed, and the person's (`deliverableOwedBy === "you"`). */
 	owedByYou: number;
 }
+declare const RUN_HOLDER_KINDS: readonly [
+	"synap_ai",
+	"agent",
+	"person",
+	"machine",
+	"none"
+];
+export type RunHolderKind = (typeof RUN_HOLDER_KINDS)[number];
+export interface RunHolder {
+	kind: RunHolderKind;
+	id: string | null;
+	/** When the holder was named; the claim window counts from here. */
+	assignedAt: string;
+	/** When it claimed the work (ISO); null while unclaimed. */
+	claimedAt: string | null;
+}
 /**
  * One produced item (`SessionOutput` from the pod's three-ledger join).
  * `expected` is the slot the join matched it to, if any — key and/or label.
@@ -16944,6 +16960,7 @@ export interface RunCostRecord {
  */
 export type FlowType = "agent_write" | "automation" | "capability" | "capture" | "chat" | "playbook" | "session";
 declare const RUN_STATUSES: readonly [
+	"queued",
 	"running",
 	"completed",
 	"failed",
@@ -16952,7 +16969,8 @@ declare const RUN_STATUSES: readonly [
 	"skipped",
 	"blocked_by_policy",
 	"waiting_on_you",
-	"paused"
+	"paused",
+	"blocked"
 ];
 export type RunStatus = (typeof RUN_STATUSES)[number];
 /** One run, ledger-agnostic. */
@@ -50540,6 +50558,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				completedAt: Date | null;
 				createdBy: string;
 				definitionSnapshot: unknown;
@@ -50547,6 +50566,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				executor: PlaybookRunExecutorRef;
 				externalAgent: PlaybookRunExternalAgent | null;
 				generation: PlaybookRunGeneration | null;
+				holder: RunHolder | null;
 				id: string;
 				input: unknown;
 				playbookId: string;
@@ -50554,8 +50574,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				runOn: RunOn | null;
 				sessionId: string | null;
 				startedAt: Date;
-				status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
-				stopReason: "budget" | "stages_left" | null;
+				status: "blocked" | "cancelled" | "completed" | "failed" | "proposed" | "queued" | "running" | "stale" | "waiting_on_you";
+				stopReason: "budget" | "no_effect" | "stages_left" | null;
 				summary: string | null;
 				workspaceId: string | null;
 			}[];
@@ -51960,6 +51980,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				proposalId: string | null;
 				reason: AlreadyRunningReason;
 				run: {
+					agentUserId: string | null;
 					completedAt: Date | null;
 					createdBy: string;
 					definitionSnapshot: unknown;
@@ -51967,6 +51988,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookRunExecutorRef;
 					externalAgent: PlaybookRunExternalAgent | null;
 					generation: PlaybookRunGeneration | null;
+					holder: RunHolder | null;
 					id: string;
 					input: unknown;
 					playbookId: string;
@@ -51974,8 +51996,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
-					stopReason: "budget" | "stages_left" | null;
+					status: "blocked" | "cancelled" | "completed" | "failed" | "proposed" | "queued" | "running" | "stale" | "waiting_on_you";
+					stopReason: "budget" | "no_effect" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -52008,6 +52030,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string | null;
 				run: {
+					agentUserId: string | null;
 					completedAt: Date | null;
 					createdBy: string;
 					definitionSnapshot: unknown;
@@ -52015,6 +52038,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookRunExecutorRef;
 					externalAgent: PlaybookRunExternalAgent | null;
 					generation: PlaybookRunGeneration | null;
+					holder: RunHolder | null;
 					id: string;
 					input: unknown;
 					playbookId: string;
@@ -52022,8 +52046,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
-					stopReason: "budget" | "stages_left" | null;
+					status: "blocked" | "cancelled" | "completed" | "failed" | "proposed" | "queued" | "running" | "stale" | "waiting_on_you";
+					stopReason: "budget" | "no_effect" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -52107,6 +52131,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				proposalId: string | null;
 				run: {
+					agentUserId: string | null;
 					completedAt: Date | null;
 					createdBy: string;
 					definitionSnapshot: unknown;
@@ -52114,6 +52139,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					executor: PlaybookRunExecutorRef;
 					externalAgent: PlaybookRunExternalAgent | null;
 					generation: PlaybookRunGeneration | null;
+					holder: RunHolder | null;
 					id: string;
 					input: unknown;
 					playbookId: string;
@@ -52121,8 +52147,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					runOn: RunOn | null;
 					sessionId: string | null;
 					startedAt: Date;
-					status: "cancelled" | "completed" | "failed" | "proposed" | "running" | "stale" | "waiting_on_you";
-					stopReason: "budget" | "stages_left" | null;
+					status: "blocked" | "cancelled" | "completed" | "failed" | "proposed" | "queued" | "running" | "stale" | "waiting_on_you";
+					stopReason: "budget" | "no_effect" | "stages_left" | null;
 					summary: string | null;
 					workspaceId: string | null;
 				} | null;
@@ -57416,7 +57442,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					subjectEntityId?: string | undefined;
 					workspaceId?: string | undefined;
 				} | undefined;
-				status?: "blocked_by_policy" | "cancelled" | "completed" | "failed" | "paused" | "proposed" | "running" | "skipped" | "waiting_on_you" | undefined;
+				status?: "blocked" | "blocked_by_policy" | "cancelled" | "completed" | "failed" | "paused" | "proposed" | "queued" | "running" | "skipped" | "waiting_on_you" | undefined;
 			};
 			meta: object;
 			output: RunsPage;
