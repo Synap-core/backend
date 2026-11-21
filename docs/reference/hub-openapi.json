@@ -148,6 +148,72 @@
         },
         "required": ["error"]
       },
+      "OwnGrant": {
+        "type": "object",
+        "properties": {
+          "holder": {
+            "type": "string",
+            "enum": ["app", "key"],
+            "description": "`app`: an app's token (its grant names the app); `key`: any other key."
+          },
+          "clientId": {
+            "type": ["string", "null"],
+            "description": "The app the credential acts as, or null."
+          },
+          "isFullAccess": {
+            "type": "boolean",
+            "description": "True only for unrestricted full access (`*`, no limit)."
+          },
+          "summary": {
+            "type": "string",
+            "description": "The limit in words, as `/auth/status` prints it."
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "permissions": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                },
+                "place": {
+                  "type": "string",
+                  "enum": ["pod", "spaces", "anywhere"],
+                  "description": "`pod`: reads everywhere in the pod (an app's pod-wide reads); `spaces`: only in `spaces` (none = nowhere); `anywhere`: not limited to spaces."
+                },
+                "spaces": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": { "type": "string" },
+                      "name": { "type": ["string", "null"] }
+                    },
+                    "required": ["id", "name"]
+                  }
+                },
+                "projectIds": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                },
+                "entityIds": {
+                  "type": ["array", "null"],
+                  "items": { "type": "string" }
+                }
+              },
+              "required": [
+                "permissions",
+                "place",
+                "spaces",
+                "projectIds",
+                "entityIds"
+              ]
+            }
+          }
+        },
+        "required": ["holder", "clientId", "isFullAccess", "summary", "parts"]
+      },
       "KeyHolderState": {
         "type": "object",
         "properties": {
@@ -1797,6 +1863,10 @@
           "expectedLabel": {
             "type": "string",
             "description": "The declared session-output slot this entity fulfils, exactly as declared on the session's expected outputs. Left unset when the create doesn't fulfil a specific declared slot."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         },
         "required": ["title"]
@@ -1979,6 +2049,10 @@
             "type": ["string", "null"],
             "format": "uuid",
             "description": "File a POD-WIDE record for a space (its home): that space's members, and a key limited to it, then read it. Refused (400) on a record that lives in a space (move it instead); refused (403) unless you can write in that space, and under your key's grant. null clears it. An agent's home is always a proposal."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         }
       },
@@ -3309,6 +3383,11 @@
             "minLength": 1,
             "description": "A stable key correlating retries of THIS logical run, so an external-send verb is at-most-once. Omitted → a content hash is derived."
           },
+          "reasoning": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Why, shown to the reviewer."
+          },
           "channelId": {
             "type": "string",
             "description": "Instruction-provenance: the acting channel of this agent turn. A run triggered from an untrusted-origin channel force-proposes instead of auto-running."
@@ -3320,6 +3399,10 @@
           "sessionId": {
             "type": "string",
             "description": "The focus session this run belongs to. Persisted as the proposals.session_id column so a reviewer sees which operation the action was part of."
+          },
+          "supersedes": {
+            "type": "string",
+            "description": "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
           }
         }
       },
@@ -3740,7 +3823,7 @@
             ]
           }
         },
-        "required": ["intent", "lens", "scoring", "coverage"]
+        "required": ["intent", "lens", "coverage"]
       },
       "FoundObject": {
         "type": "object",
@@ -4971,120 +5054,6 @@
           "access",
           "scene"
         ]
-      },
-      "BoardPlacementResult": {
-        "type": "object",
-        "properties": {
-          "viewId": { "type": "string" },
-          "documentId": { "type": "string" },
-          "workspaceId": { "type": ["string", "null"] },
-          "created": {
-            "type": "object",
-            "properties": {
-              "status": { "type": "string", "enum": ["applied", "proposed"] },
-              "shapeIds": { "type": "array", "items": { "type": "string" } },
-              "target": { "type": "string", "enum": ["live", "stored"] },
-              "pending": { "type": "boolean" },
-              "proposalId": { "type": "string" },
-              "reviewUrl": { "type": "string" }
-            },
-            "required": ["status", "shapeIds"]
-          },
-          "updated": {
-            "type": "object",
-            "properties": {
-              "status": { "type": "string", "enum": ["applied", "proposed"] },
-              "shapeIds": { "type": "array", "items": { "type": "string" } },
-              "target": { "type": "string", "enum": ["live", "stored"] },
-              "pending": { "type": "boolean" },
-              "proposalId": { "type": "string" },
-              "reviewUrl": { "type": "string" }
-            },
-            "required": ["status", "shapeIds"]
-          },
-          "removed": {
-            "type": "object",
-            "properties": {
-              "status": { "type": "string", "enum": ["applied", "proposed"] },
-              "shapeIds": { "type": "array", "items": { "type": "string" } },
-              "target": { "type": "string", "enum": ["live", "stored"] },
-              "pending": { "type": "boolean" },
-              "proposalId": { "type": "string" },
-              "reviewUrl": { "type": "string" }
-            },
-            "required": ["status", "shapeIds"]
-          }
-        },
-        "required": ["viewId", "documentId", "workspaceId"]
-      },
-      "BoardPlacementRequest": {
-        "type": "object",
-        "properties": {
-          "resources": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "enum": [
-                    "entity",
-                    "view",
-                    "cellInstance",
-                    "cellDefinition",
-                    "html",
-                    "artboard-deck",
-                    "automation",
-                    "url"
-                  ]
-                }
-              },
-              "required": ["kind"],
-              "additionalProperties": {},
-              "description": "One thing to place (`BoardResourceRef`): entity {entityId, title?}, view {viewId}, cellInstance {cellInstanceId}, cellDefinition {cellKey, props?}, html {name, html}, artboard-deck {preset, title?, slides:[{html, title?}]}, automation {automationId, mode}, url {url, title?}."
-            },
-            "maxItems": 50
-          },
-          "options": {
-            "type": "object",
-            "properties": {
-              "x": { "type": "number" },
-              "y": { "type": "number" },
-              "w": { "type": "number" },
-              "h": { "type": "number" },
-              "frameId": { "type": "string" },
-              "layout": {
-                "type": "string",
-                "enum": ["stack", "grid", "flow", "freeform"]
-              }
-            }
-          },
-          "update": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "shapeId": { "type": "string" },
-                "x": { "type": "number" },
-                "y": { "type": "number" },
-                "w": { "type": "number" },
-                "h": { "type": "number" },
-                "props": { "type": "object", "additionalProperties": {} }
-              },
-              "required": ["shapeId"]
-            },
-            "maxItems": 50
-          },
-          "remove": {
-            "type": "array",
-            "items": { "type": "string" },
-            "maxItems": 50
-          },
-          "idempotencyKey": { "type": "string" },
-          "workspaceId": { "type": "string" },
-          "reasoning": { "type": "string" },
-          "sourceMessageId": { "type": "string" }
-        }
       },
       "McpServer": {
         "type": "object",
@@ -6979,6 +6948,99 @@
           "revokedAt"
         ]
       },
+      "DesignCatalog": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "detail": { "type": "string", "enum": ["summary", "full"] },
+          "components": { "type": "object", "additionalProperties": {} },
+          "layout": { "type": "object", "additionalProperties": {} },
+          "unknown": { "type": "array", "items": { "type": "string" } },
+          "grid": { "type": "object", "additionalProperties": {} },
+          "frames": {},
+          "generatedAt": { "type": "string" },
+          "appId": { "type": "string" },
+          "kit": {
+            "type": "object",
+            "properties": {
+              "kitId": { "type": "string" },
+              "hash": { "type": "string" },
+              "react": { "type": "string" },
+              "files": { "type": "object", "additionalProperties": {} },
+              "canvas": {}
+            },
+            "required": ["kitId", "hash", "react", "files"]
+          }
+        },
+        "required": ["kitId", "hash", "detail", "components", "layout", "grid"]
+      },
+      "DesignKitFile": {
+        "type": "object",
+        "properties": {
+          "kitId": { "type": "string" },
+          "hash": { "type": "string" },
+          "part": { "type": "string", "enum": ["js", "css"] },
+          "sha256": { "type": "string" },
+          "bytes": { "type": "integer" },
+          "content": { "type": "string" }
+        },
+        "required": ["kitId", "hash", "part", "sha256", "bytes", "content"]
+      },
+      "ApplyDesignReply": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "applied",
+              "created",
+              "revised",
+              "proposed",
+              "refused",
+              "conflict"
+            ]
+          }
+        },
+        "required": ["status"],
+        "additionalProperties": {}
+      },
+      "ApplyDesignRequest": {
+        "type": "object",
+        "properties": {
+          "designId": { "type": "string", "format": "uuid" },
+          "baseUpdatedAt": { "type": "string", "minLength": 1 },
+          "ops": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": {} },
+            "minItems": 1,
+            "maxItems": 200
+          },
+          "acceptDrops": { "type": "boolean" }
+        },
+        "required": ["ops"],
+        "additionalProperties": false
+      },
+      "DesignRead": {
+        "type": "object",
+        "properties": {
+          "design": { "type": "object", "additionalProperties": {} },
+          "board": {},
+          "frames": { "type": "array", "items": {} },
+          "migrated": { "type": "boolean" },
+          "dropped": { "type": "array", "items": {} },
+          "droppedText": { "type": "array", "items": { "type": "string" } },
+          "catalog": { "type": "object", "additionalProperties": {} }
+        },
+        "required": [
+          "design",
+          "frames",
+          "migrated",
+          "dropped",
+          "droppedText",
+          "catalog"
+        ]
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -8006,6 +8068,73 @@
           },
           "404": {
             "description": "Key was accepted by the auth middleware but its row was deleted concurrently.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a refusal the caller can act on",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Precondition failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/grant": {
+      "get": {
+        "tags": ["Auth"],
+        "summary": "What the calling credential holds, by place",
+        "description": "Returns the calling credential's own grant — the one the pod enforces on this request — as parts of permissions, each with the place it reaches: `pod` (reads everywhere in the pod: an app's pod-wide reads), `spaces` (named, with their names) or `anywhere`. An app reads it to say what it can see. Read-only; never another credential's grant. 403 for a caller with no key (a signed-in session holds the person's own reach, not a grant).",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The calling credential's grant.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OwnGrant" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request — the wrapped door refused the input",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": {
+            "description": "Forbidden — the caller holds no key grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -18616,6 +18745,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -19850,6 +19983,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -19915,7 +20052,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -19932,6 +20070,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -20001,6 +20148,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -20017,7 +20168,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -20034,6 +20186,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -20108,6 +20269,15 @@
                             "metadata": {
                               "type": "object",
                               "properties": {
+                                "triggers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "maxItems": 20
+                                },
                                 "lineage": {
                                   "type": "object",
                                   "properties": {
@@ -23904,6 +24074,10 @@
                                         "about": {
                                           "type": "string",
                                           "enum": ["result", "method"]
+                                        },
+                                        "outputKey": {
+                                          "type": "string",
+                                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                         }
                                       },
                                       "required": ["key", "statement", "check"],
@@ -25138,6 +25312,10 @@
                                   "about": {
                                     "type": "string",
                                     "enum": ["result", "method"]
+                                  },
+                                  "outputKey": {
+                                    "type": "string",
+                                    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                                   }
                                 },
                                 "required": ["key", "statement", "check"],
@@ -25203,7 +25381,8 @@
                                           "enters_status",
                                           "count",
                                           "schedule",
-                                          "manual"
+                                          "manual",
+                                          "run_ended"
                                         ]
                                       },
                                       "status": {
@@ -25220,6 +25399,15 @@
                                         "type": "integer",
                                         "minimum": 2,
                                         "maximum": 10000
+                                      },
+                                      "playbook": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      "outcome": {
+                                        "type": "string",
+                                        "enum": ["done", "not_done"]
                                       },
                                       "size": {
                                         "type": "string",
@@ -25289,6 +25477,10 @@
                                     "maxLength": 200
                                   },
                                   "maxItems": 50
+                                },
+                                "entityId": {
+                                  "type": "string",
+                                  "format": "uuid"
                                 }
                               },
                               "additionalProperties": {}
@@ -25305,7 +25497,8 @@
                                       "enters_status",
                                       "count",
                                       "schedule",
-                                      "manual"
+                                      "manual",
+                                      "run_ended"
                                     ]
                                   },
                                   "status": {
@@ -25322,6 +25515,15 @@
                                     "type": "integer",
                                     "minimum": 2,
                                     "maximum": 10000
+                                  },
+                                  "playbook": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "outcome": {
+                                    "type": "string",
+                                    "enum": ["done", "not_done"]
                                   },
                                   "size": {
                                     "type": "string",
@@ -25403,6 +25605,15 @@
                             "metadata": {
                               "type": "object",
                               "properties": {
+                                "triggers": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 120
+                                  },
+                                  "maxItems": 20
+                                },
                                 "lineage": {
                                   "type": "object",
                                   "properties": {
@@ -29677,7 +29888,8 @@
                       "assigned_to",
                       "serves",
                       "advances",
-                      "orchestrated_by"
+                      "orchestrated_by",
+                      "extends"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -31407,6 +31619,10 @@
                               "about": {
                                 "type": "string",
                                 "enum": ["result", "method"]
+                              },
+                              "outputKey": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                               }
                             },
                             "required": ["key", "statement", "check"],
@@ -32508,7 +32724,8 @@
                                 "enters_status",
                                 "count",
                                 "schedule",
-                                "manual"
+                                "manual",
+                                "run_ended"
                               ]
                             },
                             "status": {
@@ -32525,6 +32742,15 @@
                               "type": "integer",
                               "minimum": 2,
                               "maximum": 10000
+                            },
+                            "playbook": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "outcome": {
+                              "type": "string",
+                              "enum": ["done", "not_done"]
                             },
                             "size": {
                               "type": "string",
@@ -32591,7 +32817,8 @@
                           "maxLength": 200
                         },
                         "maxItems": 50
-                      }
+                      },
+                      "entityId": { "type": "string", "format": "uuid" }
                     },
                     "additionalProperties": {},
                     "description": "The kind this playbook runs ON, e.g. { profileSlug: 'crm-lead' }. A profileSlug that resolves to no profile is refused."
@@ -32669,6 +32896,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -34589,6 +34820,63 @@
         }
       }
     },
+    "/renderers/host-modules": {
+      "get": {
+        "tags": ["Renderers"],
+        "summary": "Read the installed renderer bundle's host modules",
+        "description": "The host-module set (React, react-dom, the JSX runtimes, the kit, the tokens CSS) of the renderer bundle installed on this pod, with `ETag: \"sha256:<setSha256>\"`. Send it back as `If-None-Match` to get 304 while the set is unchanged.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The host modules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "setSha256": { "type": "string" },
+                    "modules": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "kitExports": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["setSha256", "modules", "kitExports"]
+                }
+              }
+            }
+          },
+          "304": { "description": "The set the caller holds is current" },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No renderer bundle installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/whiteboards/{viewId}/scene": {
       "get": {
         "tags": ["Views"],
@@ -34824,219 +35112,78 @@
         }
       }
     },
-    "/whiteboards/{viewId}/placements": {
+    "/realtime/room-ticket": {
       "post": {
-        "tags": ["Views"],
-        "summary": "Place things on a whiteboard, or change what it holds",
-        "description": "The ONE governed place door (`placeOnBoard`, the same function as MCP `synap_place_on_board`). `resources` CREATES shapes: entity cards, live views, cells, html (an html-embed cell), urls (an iframe-embed cell), automations, and artboard decks (one artboard per slide). By default they appear at once; an agent's are marked `meta.pending` (with `meta.placedBy` / `meta.placedAt`) until the person keeps or rejects them on the board. `update` (position, size, props) and `remove` change shapes already there and are proposals by default. Written into the open board (every viewer sees it) or, when nobody has it open, into its saved file. Shape ids are fixed by `idempotencyKey` (else by the request), so a retry replaces what the first call placed. Needs edit access to the board; a board of another space than `workspaceId` is not found. A refusal is an error with a `reason`; a refused call wrote nothing to the board, and everything granted lands in one write.",
+        "tags": ["Documents"],
+        "summary": "Get a ticket to open one document's live room",
+        "description": "For a pod app's connection token (a key held by a person): answers a single-use ticket, valid 60 seconds, for ONE document's live Yjs room. The browser connects to the pod's Socket.IO server (path `/socket.io/`, namespace `/yjs|<room>`) with handshake auth `{ userId, token: ticket }`; a reconnect needs a new ticket. `access` is `edit` when the person may edit the document, the key holds hub-protocol.write and its grant permits `document.update` on it (or `view.update_content` on the view that owns a canvas); otherwise `read`, and a read socket's updates are dropped. Send `access: \"read\"` to ask for less. The socket closes when the app's connection is revoked. A document the person or the grant cannot read is 404. Refused (403) to an agent and to a signed-in session, which opens the room with its own token. Requires hub-protocol.read.",
         "security": [{ "bearerAuth": [] }],
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "format": "uuid",
-              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
-            },
-            "required": true,
-            "name": "viewId",
-            "in": "path"
-          }
-        ],
         "requestBody": {
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/BoardPlacementRequest" }
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "access": { "type": "string", "enum": ["read", "edit"] }
+                },
+                "required": ["documentId"]
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "What was placed, changed or proposed",
+            "description": "The ticket",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BoardPlacementResult"
+                  "type": "object",
+                  "properties": {
+                    "ticket": { "type": "string" },
+                    "expiresAt": { "type": "string" },
+                    "userId": { "type": "string" },
+                    "documentId": { "type": "string" },
+                    "room": { "type": "string" },
+                    "access": { "type": "string", "enum": ["read", "edit"] }
+                  },
+                  "required": [
+                    "ticket",
+                    "expiresAt",
+                    "userId",
+                    "documentId",
+                    "room",
+                    "access"
+                  ]
                 }
               }
             }
           },
           "400": {
-            "description": "Bad request, unknown frame, shape or reference",
+            "description": "Invalid body",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
           "403": {
-            "description": "Missing scope, read-only, or denied",
+            "description": "Not a person's key",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
           "404": {
-            "description": "No such board, or not in your space",
+            "description": "No such document",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "The board failed to load or has no document",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "The request body is too large",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -35044,143 +35191,7 @@
             "description": "Internal error",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "The board or a cell could not be read or made",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The realtime server or storage did not answer, or the save did not land",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
-              }
-            }
-          },
-          "504": {
-            "description": "The write took too long and may have landed: retry is safe",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "reason": {
-                      "type": "string",
-                      "enum": [
-                        "not_found",
-                        "not_a_board",
-                        "not_initialized",
-                        "read_only",
-                        "wrong_workspace",
-                        "bad_request",
-                        "frame_not_found",
-                        "shape_not_found",
-                        "reference_not_found",
-                        "denied",
-                        "load_failed",
-                        "unavailable",
-                        "timeout",
-                        "unreadable",
-                        "save_failed",
-                        "materialize_failed",
-                        "embed_refused"
-                      ]
-                    }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           }
@@ -44524,7 +44535,7 @@
       "get": {
         "tags": ["FocusSessions"],
         "summary": "The work graph: open work, recently settled work, every edge",
-        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
+        "description": "One read for a whole map (`services/focus-sessions/work-graph.ts`): every OPEN session, plus every session settled in the last `windowHours` (default 72), plus the far end of every edge of those, with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions point at. `trackId` narrows it to one goal's sessions, `rootSessionId` to one wave (the root and every session spawned under it); one or the other. `playbookId` narrows it to the sessions that follow a playbook: run from it, or filed in a goal whose method it is (each window node's `playbookMatch` says which: `session` or `goal`). `subjectEntityId` narrows it to the sessions on one thing (its subject, or a worker targeting it). Each goal carries its method (`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither `workspaceId` nor `projectId` is given. A workspace-bound key reads its own workspace, far ends included, and another `workspaceId` is a 403. Floored at the sessions the caller can read, like the list. At most 500 window sessions, open first: `window.truncated` / `window.omitted` say when it cut. A failed edge read is `sections.<name>.status: unavailable`, never an empty list. A pod app (a key holding `session.read` that does not read every subject of the graph) gets the sessions its grant covers and the edges between them; `window.omittedByGrant` counts the sessions it does not cover, and the parts that read past its grant (next move, interactions, waits on an output, PR facts, goals; holder without `agent.read`) are `unavailable` with a reason saying they were withheld.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -44678,6 +44689,7 @@
                             "enum": [
                               "blocked_by",
                               "spawned_from",
+                              "orchestrated_by",
                               "waits_on_output",
                               "triggered",
                               "updated"
@@ -44797,6 +44809,17 @@
                           },
                           "required": ["status"]
                         },
+                        "orchestration": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
                         "waitsOnOutputs": {
                           "type": "object",
                           "properties": {
@@ -44866,6 +44889,7 @@
                       },
                       "required": [
                         "blockedBy",
+                        "orchestration",
                         "waitsOnOutputs",
                         "interactions",
                         "farEnds",
@@ -48639,6 +48663,10 @@
                         "about": {
                           "type": "string",
                           "enum": ["result", "method"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         }
                       },
                       "required": ["key", "statement", "check"],
@@ -51064,7 +51092,7 @@
       "post": {
         "tags": ["FocusSessions"],
         "summary": "Start an orchestrator over several running sessions",
-        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+        "description": "Files ONE governed write (focus_session/orchestrate). On approval (or at once for a person): an orchestrator session (goal = the brief, a merged-plan deliverable, the person's plan-approval slot), one `orchestrated_by` link per picked session, each running one paused until the person answers plan-approval, and a handoff note in each room. Until then a held session changes no stage. A yes resumes them; a no resumes them as they were and cancels the orchestrator ('Plan declined'); an orchestrator that ends unanswered releases them. 403 when a picked session is outside the key's grant or bound workspace (nothing written). Same service as tRPC focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -52241,6 +52269,25 @@
                             },
                             "required": ["open", "onOlderVersion"]
                           },
+                          "startsAfter": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "playbookId": { "type": "string" },
+                                "playbookName": { "type": "string" },
+                                "outcome": {
+                                  "type": ["string", "null"],
+                                  "enum": ["done", "not_done", null]
+                                }
+                              },
+                              "required": [
+                                "playbookId",
+                                "playbookName",
+                                "outcome"
+                              ]
+                            }
+                          },
                           "workers": {
                             "type": "array",
                             "items": {
@@ -52283,6 +52330,7 @@
                           "owns",
                           "undeclaredStatuses",
                           "runs",
+                          "startsAfter",
                           "workers"
                         ]
                       }
@@ -52294,9 +52342,13 @@
                         "produces": {
                           "type": "array",
                           "items": { "type": "string" }
+                        },
+                        "helpers": {
+                          "type": "array",
+                          "items": { "type": "string" }
                         }
                       },
-                      "required": ["primaryOutput", "produces"]
+                      "required": ["primaryOutput", "produces", "helpers"]
                     },
                     "totals": {
                       "type": "object",
@@ -53241,14 +53293,22 @@
     "/brand/kit": {
       "get": {
         "tags": ["Brand"],
-        "summary": "The caller's brand kit (json, css, frame-md or od-design-system)",
-        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
+        "summary": "The caller's brand kit (json, css, frame-md, od-design-system, dtcg, synap-css or css-shadcn)",
+        "description": "Resolves the Brand space (the given workspace or the brand source it declares, else the pod's brand provider) and the brand identity in it — the project's brand, else the brand flagged default, else the only brand — and returns that brand's kit with a deterministic content `hash`. `dtcg`, `synap-css` and `css-shadcn` render the brand's approved DTCG token set instead (the file, its `--synap-*` declarations, or its shadcn variables for a client app's kit, as JSON `{vars, light, dark}` with no selector), hashed by that set; a brand with none renders `{}` and empty declarations. 404 with a typed `reason` and a human `message` when there is no brand; a failed read is a 5xx, never an empty kit.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
             "schema": {
               "type": "string",
-              "enum": ["json", "css", "frame-md", "od-design-system"],
+              "enum": [
+                "json",
+                "css",
+                "frame-md",
+                "od-design-system",
+                "dtcg",
+                "synap-css",
+                "css-shadcn"
+              ],
               "default": "json"
             },
             "required": false,
@@ -53278,7 +53338,15 @@
                   "properties": {
                     "format": {
                       "type": "string",
-                      "enum": ["json", "css", "frame-md", "od-design-system"]
+                      "enum": [
+                        "json",
+                        "css",
+                        "frame-md",
+                        "od-design-system",
+                        "dtcg",
+                        "synap-css",
+                        "css-shadcn"
+                      ]
                     },
                     "content": { "type": "string" },
                     "hash": { "type": "string" },
@@ -53347,6 +53415,334 @@
                     "projectId"
                   ]
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/catalog": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "The design catalog the pod checks designs against",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's). `detail=summary` answers prop names and kinds only; `components=A,B` answers those blocks in full. `hash` is in every answer.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's."
+            },
+            "required": false,
+            "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
+            "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["summary", "full"],
+              "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options."
+            },
+            "required": false,
+            "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options.",
+            "name": "detail",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`."
+            },
+            "required": false,
+            "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`.",
+            "name": "components",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The catalog",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignCatalog" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not an app, or a bad `detail` / `components`",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed, or the app's kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/kit": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "One code file of an app's component kit",
+        "description": "The bytes of an app's kit.js (`part=js`) or kit.css (`part=css`), as its catalog (the app's `design-kit` file) names them, for the Design app to load on its own origin through its Hub proxy. Read through the caller's read floor (the app, then each file). The bytes are checked against the sha256 the catalog pins: other bytes are refused (422 `DESIGN_KIT_BYTES_MISMATCH`), never served. Answered as JSON (`content` is the file's text, `sha256` its pinned hash), never as served code, so the pod's origin never runs or applies it; the Design app checks the hash again before it loads it. 404 when the app has no kit.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["js", "css"] },
+            "required": true,
+            "name": "part",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file's text and its hash",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignKitFile" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such app, or no kit",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "The kit cannot be read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "The bytes are not the pinned ones (DESIGN_KIT_BYTES_MISMATCH)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/apply": {
+      "post": {
+        "tags": ["Designs"],
+        "summary": "Change a design (or create one) through typed ops",
+        "description": "The ops of design.apply, applied in order, all or nothing, checked against the installed catalog. `designId` + `baseUpdatedAt` (the `updatedAt` GET /designs/:id returned) change a design; no `designId` and a first op `create_design` make one. The write goes through the entity door with the caller's own governance and the key's grant (`entity.ui-design.update` / `.create`). 200 applied / created / revised (a design past its review becomes a new draft revision) / proposed (`status` says which), 409 `DESIGN_CHANGED` changed since it was read (`updatedAt` is its time now), 422 `DESIGN_OP_REFUSED` (`opIndex`, `reasons`, `catalogHash`), 403 the grant does not allow it, 412 no catalog installed.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApplyDesignRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Applied, created, revised or proposed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "409": {
+            "description": "Changed since read",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "412": {
+            "description": "No catalog installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Refused",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ApplyDesignReply" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/designs/{id}": {
+      "get": {
+        "tags": ["Designs"],
+        "summary": "Read one design",
+        "description": "design.read: the design (status, `updatedAt` to send back as `baseUpdatedAt`, appId, whether it may be edited), its board, an outline per frame (width class, columns, block ids and types) and what the installed catalog cannot place (`dropped`). Read through the key's grant: a design it does not reach is a 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DesignRead" }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such design",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "412": {
+            "description": "Not a canvas yet",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "422": {
+            "description": "Unreadable board",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -54561,7 +54957,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
@@ -54799,7 +55196,11 @@
                             "type": "string",
                             "enum": ["active", "proposed"]
                           },
-                          "proposalId": { "type": "string" }
+                          "proposalId": { "type": "string" },
+                          "form": {
+                            "type": "string",
+                            "enum": ["loop", "prose"]
+                          }
                         },
                         "required": [
                           "id",
@@ -54944,7 +55345,8 @@
                               "received",
                               "completed",
                               "approved",
-                              "rejected"
+                              "rejected",
+                              "closed"
                             ]
                           },
                           "conditions": {
@@ -55051,6 +55453,7 @@
                     "required": ["trigger", "conditions", "actions"]
                   },
                   "draft": { "type": "boolean", "default": false },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
                   "agentUserId": { "type": "string", "format": "uuid" },
                   "userId": { "type": "string", "format": "uuid" }
                 },

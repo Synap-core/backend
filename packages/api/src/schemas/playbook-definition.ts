@@ -27,7 +27,10 @@
 
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
-import { validateGuidanceList } from "@synap-core/types/guidance";
+import {
+  podLocalGuidanceProblem,
+  validateGuidanceList,
+} from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
   isRunToolName,
@@ -60,6 +63,7 @@ import {
   runnerNamesAgentId,
 } from "./playbook-runner.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
+import { triggerWords } from "../services/routing/suggest-routes.js";
 
 export const playbookExecutorSchema = z.enum([
   "is-agent",
@@ -151,12 +155,41 @@ export const playbookExpectedOutputSchema = z.looseObject({
   lands: outputLandingSchema.optional(),
 });
 
+/** Most trigger phrases one playbook declares. */
+const PLAYBOOK_TRIGGERS_MAX = 20;
+/** Longest trigger phrase, in characters. */
+const PLAYBOOK_TRIGGER_MAX_CHARS = 120;
+
 /**
- * `metadata` — the owner's free-form bag, with ONE conventional key typed:
+ * `metadata.triggers` — phrases the playbook is FOR. The suggestion ranker
+ * (`rankRouteCandidates`) admits the playbook when a request holds every word
+ * of one, and scores those words like name words (plan a640c5bb). A phrase
+ * with no word the ranker reads (stop words only) could never match, so it is
+ * refused here rather than stored and silently ignored.
+ */
+export const playbookTriggersSchema = z
+  .array(z.string().trim().min(1).max(PLAYBOOK_TRIGGER_MAX_CHARS))
+  .max(PLAYBOOK_TRIGGERS_MAX)
+  .superRefine((phrases, ctx) => {
+    phrases.forEach((phrase, index) => {
+      if (triggerWords(phrase).length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index],
+          message: `triggers[${index}] ("${phrase}") holds no word a request can match: name the work ("workspace hygiene"), not only common words`,
+        });
+      }
+    });
+  });
+
+/**
+ * `metadata` — the owner's free-form bag, with two conventional keys typed:
  * `lineage` (where the process comes from — an APQC PCF id, a named method,
- * O*NET task ids). Convention only: nothing branches on it.
+ * O*NET task ids; convention only, nothing branches on it) and `triggers`
+ * (the phrases that offer it, read by the suggestion ranker).
  */
 export const playbookMetadataSchema = z.looseObject({
+  triggers: playbookTriggersSchema.optional(),
   lineage: z
     .looseObject({
       apqc: z.string().max(200).optional(),
@@ -279,6 +312,42 @@ export const playbookRequiredIntentsSchema = z
  * the validator does not know (an `id`) is refused by it, not silently
  * stripped. The update door applies the same schema.
  */
+/**
+ * What a PACKAGE playbook may not carry: a
+ * pod-local reference, i.e. a guidance `entity:<id>` ref or a dedicated
+ * record (`subjectProfile.entityId`). An id names one record of one pod; on
+ * the installing pod it means nothing. The package doors
+ * (`packagePlaybookDefinitionSchema`, the browser `createFromDefinition`)
+ * refine their playbooks with this; the catalog validator refuses the same
+ * two.
+ */
+export function refusePodLocalPlaybookRefs(
+  pb: { guidance?: unknown; subjectProfile?: unknown },
+  ctx: z.RefinementCtx
+): void {
+  if (Array.isArray(pb.guidance)) {
+    pb.guidance.forEach((item, i) => {
+      const problem = podLocalGuidanceProblem(item);
+      if (problem) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["guidance", i],
+          message: problem,
+        });
+      }
+    });
+  }
+  const sp = pb.subjectProfile as { entityId?: unknown } | null | undefined;
+  if (sp && typeof sp === "object" && sp.entityId !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["subjectProfile", "entityId"],
+      message:
+        "subjectProfile.entityId names one record of one pod, so it cannot travel in a package: dedicate the playbook to a record after it is installed",
+    });
+  }
+}
+
 export const playbookGuidanceSchema = z
   .array(
     z.looseObject({
@@ -382,7 +451,9 @@ export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
   .superRefine((def, ctx) => {
     // A package travels to other pods: an agent id or a playbook id names
     // something on THIS pod only. A role or an engine is portable; a step
-    // that is a playbook is not carried by a package yet.
+    // that is a playbook is not carried by a package yet. Nor is a guidance
+    // `entity:<id>` ref or a dedicated record.
+    refusePodLocalPlaybookRefs(def, ctx);
     if (runnerNamesAgentId(def.runner)) {
       ctx.addIssue({
         code: "custom",

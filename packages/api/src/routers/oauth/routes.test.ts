@@ -237,7 +237,26 @@ vi.mock("../../services/app-connect.js", () => ({
     permissions.map((permission) => ({ permission, workspaces: [] })),
   oauthAppPodWideKinds: async () => [],
   oauthAppPodWideOffer: () => [],
+  kindGroupIndex: () => new Map(),
   currentOAuthApproval: async () => [],
+  // The consent saves v2 (W3d): no connection yet, an empty offer.
+  currentOAuthAppApproval: async () => null,
+  connectOAuthAppAccess: (args: unknown) => appConnect.connect(args),
+  appAccessOffer: async () => ({
+    asked: { permissions: [], templates: [] },
+    places: {
+      read: { allSpaces: false, spaces: [], projects: [] },
+      write: { spaces: [], projects: [], suggestedSpaceIds: [] },
+    },
+    ceiling: {
+      permissions: [],
+      allSpacesReads: [],
+      read: { spaces: [], projects: [] },
+      write: { spaces: [], projects: [] },
+    },
+  }),
+  nameAppAccess: async () => null,
+  reconsentViewOf: async () => null,
 }));
 
 // The pod admin's pod-app policy (PB4). Read for real (pod_settings) in
@@ -2106,6 +2125,9 @@ describe("CIMD clients", () => {
         workspaceId: SPACE_ID,
         workspaceName: "Brand",
         scope: "space",
+        // Additive since app permissions W2.
+        projectId: null,
+        place: { kind: "spaces", ids: [SPACE_ID] },
       },
     ]);
     expect(body.synap_user).toEqual({ id: HUMAN_ID, name: "Ada" });

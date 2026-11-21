@@ -248,3 +248,35 @@ body {
   background: color-mix(in srgb, var(--synap-error) 8%, transparent);
   color: var(--synap-error-ink);
 }
+/* The decision bar's verbs follow the BAR's width, not the window's
+ * (founder, 18 Nov 2026), like the story above: a narrow bar (a phone, the
+ * docked panel) shows Approve▾ / Reject…▾ split buttons with no leading
+ * glyph; a bar wide enough for all four in one row shows the labelled
+ * "Always approve…" / "Always reject…" triggers beside the verbs. The width
+ * is just above where the four fit in one row: 600 px measured in Geist (en,
+ * 18 Nov 2026), so the /proposal card's 616 px bar (max-w-2xl, any desktop
+ * window) shows the four; the Review dock (about 450 px at 1280) keeps the
+ * split row. French labels are longer (not measured): in a bar just above
+ * the width the fourth may wrap under the others. */
+.rq-verbs {
+  container-type: inline-size;
+}
+.rq-verbs .rq-full-only,
+.rq-verbs svg.rq-lead {
+  display: none;
+}
+@container (min-width: 608px) {
+  .rq-verbs .rq-split-only {
+    display: none;
+  }
+  .rq-verbs .rq-full-only {
+    display: inline-flex;
+  }
+  .rq-verbs svg.rq-lead {
+    display: block;
+  }
+  /* A split button without its chevron is a whole button again. */
+  .rq-verbs [role="group"] > button:first-child {
+    border-radius: var(--heroui-radius-medium);
+  }
+}

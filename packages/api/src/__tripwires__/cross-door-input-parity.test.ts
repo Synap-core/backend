@@ -777,6 +777,9 @@ const ASK_PERSON_WITHHELD = [
   // Who works the stage entered (0422): rides with `currentStage`, which this
   // door withholds too.
   "stageRunner",
+  // The stage the caller read (W6 compare-and-set): rides with
+  // `currentStage`, which this door withholds too.
+  "expectedStage",
 ] as const;
 
 const ACKNOWLEDGED_GAPS: Gap[] = [

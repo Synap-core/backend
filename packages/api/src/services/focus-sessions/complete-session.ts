@@ -68,12 +68,14 @@ import {
   setSessionStatus,
   setRunStatus,
   oweSlotTransitions,
-  LIVE_RUN_STATUSES,
   workUnitActorOf,
   type WorkUnitActor,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  LIVE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { ASK_LIMITS } from "@synap-core/types/ask";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -106,7 +108,10 @@ import {
   cancelRecordMetadataSql,
   type SessionCancelRecord,
 } from "./cancel-session.js";
-import type { SessionVerdict } from "@synap-core/types/focus-sessions";
+import {
+  sessionClosedAs,
+  type SessionVerdict,
+} from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import {
   boundReason,
@@ -127,6 +132,8 @@ import {
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
+import { FOLLOWED_VIA_METADATA_KEY } from "./follow-markers.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -632,6 +639,13 @@ export async function completeFocusSession(
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: session.workspaceId,
+    // The key's grant: a project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`); governance stays at its home.
+    grantWorkspaceId: await sessionGrantWorkspaceId(session, {
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: sessionId },
+    }),
     // Attribute + honor pack-mode escape: stamp would force-propose without
     // ignoreSessionForcePropose; both must be set for lifecycle complete.
     sessionId,
@@ -1116,6 +1130,16 @@ export async function completeFocusSession(
     // Additive: reactors that do not know it ignore it.
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
+    // How the run ended, as a playbook link reads it (`run_ended`) and the
+    // dependency rule reads "delivered": THE derivation (`sessionClosedAs`);
+    // and whether the session was only ATTACHED to its playbook, not run
+    // under it. Every exit is terminal; a status that is not reads not_done.
+    closedAs:
+      sessionClosedAs(updated.status, closedNotDone != null) ?? "not_done",
+    attached:
+      (updated.metadata as Record<string, unknown> | null)?.[
+        FOLLOWED_VIA_METADATA_KEY
+      ] != null,
   };
 
   await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {

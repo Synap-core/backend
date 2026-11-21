@@ -63,7 +63,7 @@ describe("openIn — web-hosted objects", () => {
 });
 
 describe("openIn — desktop links always carry a fallback", () => {
-  it.each(["workspace", "project", "cell"])(
+  it.each(["workspace", "project"])(
     "%s bounces to the desktop app with a download fallback",
     (objectKind) => {
       const exit = openIn({ kind: "object", objectKind, id: ID });
@@ -72,6 +72,16 @@ describe("openIn — desktop links always carry a fallback", () => {
       expect(exit.fallback?.href).toContain("/download/browser");
     }
   );
+
+  it("a cell is hosted: its web page runs it, addressed by its key", () => {
+    const exit = openIn({
+      kind: "object",
+      objectKind: "cell",
+      id: "cell:synap-renderers:board",
+    });
+    expect(exit.isDesktopLink).toBe(false);
+    expect(exit.href).toContain("/open/cell/cell%3Asynap-renderers%3Aboard");
+  });
 
   it("never returns a desktop link without a fallback", () => {
     const targets = [
@@ -343,7 +353,6 @@ describe("placeExit — the device decides what a hand-off shows", () => {
   });
 
   it.each([
-    ["a cell", { kind: "object", objectKind: "cell", id: ID }],
     ["a desktop app", { kind: "app", appId: "data" }],
     [
       "a Settings section with no web twin",

@@ -16,6 +16,10 @@ const h = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
   result: { status: "running" } as Record<string, unknown>,
   inFlight: null as null | { id: string; status: string; title: string | null },
+  /** Overrides on the playbook row the executor reads at approval. */
+  playbook: {} as Record<string, unknown>,
+  /** Every `db.update` (the dispatch claim is the first one). */
+  updates: 0,
 }));
 
 vi.mock("@synap/jobs/utils/run-in-flight.js", () => ({
@@ -41,7 +45,10 @@ vi.mock("@synap/database", async (importOriginal) => {
         return this;
       },
       select: () => chain([{ status: "pending" }]),
-      update: () => chain([{ id: "claimed" }]),
+      update: () => {
+        h.updates += 1;
+        return chain([{ id: "claimed" }]);
+      },
       query: {
         playbooks: {
           findFirst: async () => ({
@@ -49,6 +56,7 @@ vi.mock("@synap/database", async (importOriginal) => {
             name: "Evaluate tools",
             params: [],
             subjectProfile: null,
+            ...h.playbook,
           }),
         },
       },
@@ -100,6 +108,8 @@ beforeEach(() => {
   h.runs.length = 0;
   h.result = { status: "running", session: { id: "s" }, run: { id: "r" } };
   h.inFlight = null;
+  h.playbook = {};
+  h.updates = 0;
 });
 
 describe("approving an agent's run proposal", () => {
@@ -175,6 +185,34 @@ describe("approving an agent's run proposal", () => {
     // …and one asked without it is replayed without it.
     await approve();
     expect(h.runs[1]).not.toHaveProperty("startAnother");
+  });
+
+  it("a playbook of ANOTHER space is refused BEFORE the dispatch claim, with its real reason (e93cf92b)", async () => {
+    // Thrown inside `dispatchExternalOnce` it kept the claim, and the next
+    // approval read "may already have reached the service" about a run that
+    // never started. Now: no claim, no run, the reason names where it lives.
+    h.playbook = { workspaceId: "ws-home" };
+    await expect(approve()).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message:
+        'Cannot apply this approval: Playbook "Evaluate tools" (pb-1) lives in space ws-home, so it is not visible in space ws-1: run it in space ws-home. Nothing was started.',
+    });
+    expect(h.updates).toBe(0);
+    expect(h.runs).toHaveLength(0);
+  });
+
+  it("a playbook archived since it was proposed is refused before the claim too", async () => {
+    h.playbook = { status: "archived" };
+    await expect(approve()).rejects.toThrow(/is archived, so it does not run/);
+    expect(h.updates).toBe(0);
+    expect(h.runs).toHaveLength(0);
+  });
+
+  it("CONTROL: a playbook of THIS space is claimed and run", async () => {
+    h.playbook = { workspaceId: "ws-1", status: "active" };
+    await expect(approve()).resolves.toMatchObject({ success: true });
+    expect(h.updates).toBeGreaterThan(0);
+    expect(h.runs).toHaveLength(1);
   });
 
   it("only a re-proposal on the approver's own check blames the role", () => {

@@ -8,10 +8,11 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
-  LIVE_RUN_STATUSES,
   setRunStatus,
   transitionProposal,
+  ownerAndActor,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
 // @synap/database — the database package's `ensure-external-channel.ts` says so
 // explicitly. Importing it from @synap/database is a compile error, which is how
@@ -101,8 +102,9 @@ export function registerPlaybookExecutors(): void {
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
   // approval (the promote path emits `playbook/promote` — its own executor
   // below — so this key materializes exactly one shape). Materializes via the
-  // SAME playbooksRouter.create the direct path uses — re-run as the APPROVER
-  // with NO agentUserId + no source, so the gate auto-grants for the operator.
+  // SAME playbooksRouter.create the direct path uses — re-run as the person
+  // the proposal was filed for (never the approver) with NO agentUserId + no
+  // source, so the gate grants on that person's role.
   // The propose gate widened `data` to the full create input (goalTemplate is
   // required by createInputSchema).
   //
@@ -150,13 +152,30 @@ export function registerPlaybookExecutors(): void {
           message: "No workspace access",
         });
       }
+      const owner = await ownerAndActor(
+        db,
+        proposal.subjectUserId ?? proposal.agentUserId ?? userId,
+        proposal.agentUserId
+      );
+      const ownerMembership =
+        owner.ownerId === userId
+          ? membership
+          : await getWorkspaceMembership(db, workspaceId, owner.ownerId);
+      if (!ownerMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "The person this playbook was proposed for is not a member of its space.",
+        });
+      }
       const { playbooksRouter } = await import("../../playbooks.js");
       const playbookCaller = playbooksRouter.createCaller({
         db,
         authenticated: true as const,
-        userId,
+        userId: owner.ownerId,
         workspaceId,
-        workspaceRole: membership.role,
+        workspaceRole: ownerMembership.role,
+        approvedAuthorAgentUserId: owner.agentUserId,
       } as unknown as Context);
       const createArgs = {
         ...(isLikelyUUID(proposal.targetId)
@@ -689,12 +708,36 @@ export function registerPlaybookExecutors(): void {
       // arguments the gate discarded (see the ⚠️ note above).
       const playbook = await db.query.playbooks.findFirst({
         where: eq(playbooks.id, playbookId),
-        columns: { id: true, name: true, params: true, subjectProfile: true },
+        columns: {
+          id: true,
+          name: true,
+          params: true,
+          subjectProfile: true,
+          workspaceId: true,
+          status: true,
+        },
       });
       if (!playbook) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Playbook to run no longer exists",
+        });
+      }
+      // RESOLVED BEFORE THE DISPATCH CLAIM: a playbook the run door would
+      // refuse here (another space's, or retired since it was proposed) is
+      // refused by that same rule (`playbookRunRefusal`, what
+      // `resolveRunnablePlaybook` applies) BEFORE `dispatchExternalOnce`
+      // claims the proposal. Thrown inside the claim it kept the claim, and
+      // the next approval read "may already have reached the service" about
+      // a run that never started (ticket e93cf92b, same class as e74a086c).
+      // Imported lazily, as `resolveRunnablePlaybook` is above.
+      const { playbookRunRefusal } =
+        await import("../../../services/playbooks/playbook-lifecycle.js");
+      const notRunnable = playbookRunRefusal(playbook, workspaceId);
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Cannot apply this approval: ${notRunnable} Nothing was started.`,
         });
       }
       const declaredParams = Array.isArray(playbook.params)

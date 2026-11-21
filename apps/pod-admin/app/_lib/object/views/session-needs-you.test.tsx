@@ -722,10 +722,11 @@ describe("Refuse — on every ask mode, with what refusing does (founder D2)", (
     const bar = html.indexOf("data-review-decision");
     expect(now).toBeGreaterThanOrEqual(0);
     expect(bar).toBeGreaterThan(now);
-    // Exactly one Refuse, and it stands in the bar, after the timeline.
+    // Exactly one Refuse, and it stands in the bar, after Now (a story with
+    // nothing to read is drawn flat: no timeline, founder 18 Nov 2026).
     expect(count(html, new RegExp(refuse))).toBe(1);
     expect(html.indexOf(refuse)).toBeGreaterThan(bar);
-    expect(html.slice(now, html.indexOf("</ol>"))).not.toContain(refuse);
+    expect(html.slice(now, bar)).not.toContain(refuse);
     // What refusing does rides the bar too.
     expect(html.slice(bar)).toContain("data-review-refusing");
   });

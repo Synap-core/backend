@@ -293,7 +293,7 @@ export function ProcessObject({
           actions={
             <Button
               as={Link}
-              href={navHref("governance")}
+              href={navHref("approvals", { view: "work" })}
               size="sm"
               variant="light"
               radius="md"
@@ -726,7 +726,7 @@ function AutomationRow({
   return (
     <div className="flex min-h-12 items-center justify-between gap-3 px-3 py-2">
       <Link
-        href={`${navHref("rules")}/${encodeURIComponent(automation.id)}`}
+        href={`${navHref("automations")}/${encodeURIComponent(automation.id)}`}
         className="flex min-w-0 items-center gap-2 text-[13px] text-foreground hover:underline"
       >
         <Zap className="h-4 w-4 shrink-0 text-foreground/40" aria-hidden />

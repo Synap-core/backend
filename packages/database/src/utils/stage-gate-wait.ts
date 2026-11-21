@@ -10,9 +10,10 @@
  *    be143ceb closed with its Draft gate 9c527c67 pending; the person
  *    approved it at 23:08 and nothing happened).
  *  - A session that DOES end (a person closes it, cancels it, it fails) takes
- *    its pending gates with it: they are EXPIRED, stamped why
+ *    its undecided gates with it (pending, or whose approval failed: plan
+ *    8032a127 D2): they are EXPIRED, stamped why
  *    ({@link expirePendingStageGatesOfEndedSessions}), so no approval is left
- *    that could only lead nowhere. Gates a session left pending before that
+ *    that could only lead nowhere. Gates a session left undecided before that
  *    rule, or through a race with its end, are expired the same way by the
  *    6-hourly sweep ({@link expireOrphanedStageGates}).
  *
@@ -27,7 +28,10 @@ import type { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
   type ProposalStatusWriter,
 } from "./proposal-transition.js";
 
@@ -51,10 +55,13 @@ export function stageGatePendingIn(sessionId: AnyPgColumn | SQL): SQL {
 }
 
 /**
- * Expire the pending stage gates of sessions that just ENDED (`endedAs`:
- * closed, failed or cancelled). EXPIRED, never rejected: nobody decided, the
- * moment passed (`ProposalStatus.EXPIRED`, not scored). Each row says why
- * (`expiredBy: "session_ended"`, `sessionEndedAs`). Returns their ids.
+ * Expire the undecided stage gates of sessions that just ENDED (`endedAs`:
+ * closed, failed or cancelled): pending ones, and ones whose approval failed
+ * (any failure class: the run is over, so a retry can only fail again).
+ * EXPIRED, never rejected: nobody decided, the moment passed
+ * (`ProposalStatus.EXPIRED`, not scored), naming no person
+ * (`endedByNoPersonSet`). Each row says why (`expiredBy: "session_ended"`,
+ * `sessionEndedAs`). Returns their ids.
  */
 export async function expirePendingStageGatesOfEndedSessions(
   executor: ProposalStatusWriter,
@@ -63,8 +70,10 @@ export async function expirePendingStageGatesOfEndedSessions(
   if (input.sessionIds.length === 0) return [];
   const rows = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
-    from: [ProposalStatus.PENDING],
+    from: UNDECIDED_PROPOSAL_STATUSES,
+    ended: { reason: "session_ended" },
     set: {
+      ...endedByNoPersonSet(),
       updatedAt: drizzleSql`now()`,
       data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
              'expiredBy', 'session_ended',
@@ -73,20 +82,24 @@ export async function expirePendingStageGatesOfEndedSessions(
     where: and(
       eq(proposals.targetType, "focus_session"),
       inArray(proposals.targetId, [...input.sessionIds]),
-      inArray(proposals.proposalType, [...STAGE_GATE_PROPOSAL_TYPES_MIRROR])
+      inArray(proposals.proposalType, [...STAGE_GATE_PROPOSAL_TYPES_MIRROR]),
+      NOT_PARTLY_APPLIED
     ),
   }).returning({ id: proposals.id });
   return rows.map((r) => r.id);
 }
 
 /**
- * Expire the pending stage gates whose session has ALREADY ended. The backstop
- * of {@link expirePendingStageGatesOfEndedSessions}: that one runs when a
- * session ends, so a gate left pending before it existed (or by a race with
- * the end) stays approvable, and its approval can only fail ("This run ended
- * (closed) before its stage gate was answered", playbook-stage-gate.ts).
+ * Expire the undecided stage gates whose session has ALREADY ended. The
+ * backstop of {@link expirePendingStageGatesOfEndedSessions}: that one runs
+ * when a session ends, so a gate left pending before it existed (or by a race
+ * with the end) stays approvable, and its approval can only fail ("This run
+ * ended (closed) before its stage gate was answered", playbook-stage-gate.ts).
  * Live, 16 Nov 2026: three gates of runs closed on 9 Nov were approved and
- * failed; gate 491def0c on closed session 432f5ac2 was still pending.
+ * failed; gate 491def0c on closed session 432f5ac2 was still pending. Those
+ * three FAILED gates (1836fd6e, 28c3b2e2, 88431e30) are why it reads the
+ * undecided list, not only `pending` (census bcef4627, group G): a failed gate
+ * of an ended run had no way out but a person's reject.
  * Terminal = `TERMINAL_SESSION_STATUSES`, the rule the approval refuses on;
  * a paused, stale or active session keeps its gates. Returns the ids expired.
  */
@@ -106,7 +119,7 @@ export async function expireOrphanedStageGates(
     .where(
       and(
         eq(proposals.targetType, "focus_session"),
-        eq(proposals.status, ProposalStatus.PENDING),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
         inArray(proposals.proposalType, [...STAGE_GATE_PROPOSAL_TYPES_MIRROR]),
         inArray(focusSessions.status, [...TERMINAL_SESSION_STATUSES])
       )

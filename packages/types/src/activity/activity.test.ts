@@ -102,12 +102,22 @@ describe("outcome mappers", () => {
     expect(activityOutcomeForRun("completed")).toBe("succeeded");
     expect(activityOutcomeForRun("waiting_on_you")).toBe("waiting");
     expect(activityOutcomeForRun("blocked_by_policy")).toBe("stopped");
+    expect(activityOutcomeForRun("cancelled")).toBe("stopped");
   });
   it("session statuses", () => {
     expect(activityOutcomeForSession("active")).toBe("running");
     expect(activityOutcomeForSession("closed")).toBe("succeeded");
     expect(activityOutcomeForSession("failed")).toBe("failed");
-    expect(activityOutcomeForSession("stale")).toBe("stopped");
+    expect(activityOutcomeForSession("cancelled")).toBe("stopped");
+  });
+  // stale = paused everywhere (founder, 2026-11-20). Rules out the two old
+  // readings: "stale stopped" (lumped with cancelled / withdrawn / expired)
+  // and "paused is running".
+  it("the paused category — paused and stale, on a session or a run — reads PAUSED", () => {
+    expect(activityOutcomeForSession("stale")).toBe("paused");
+    expect(activityOutcomeForSession("paused")).toBe("paused");
+    expect(activityOutcomeForRun("stale")).toBe("paused");
+    expect(activityOutcomeForRun("paused")).toBe("paused");
   });
 });
 

@@ -163,7 +163,10 @@ export const automations = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
+    /** Owner: the person it runs for (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
+    agentUserId: text("agent_user_id"),
 
     // Definition
     name: text("name").notNull(),
@@ -248,6 +251,9 @@ export const automations = pgTable(
     triggerTypeIdx: index("automations_trigger_type_idx").on(table.triggerType),
     nextRunAtIdx: index("automations_next_run_at_idx").on(table.nextRunAt),
     createdByIdx: index("automations_created_by_idx").on(table.createdBy),
+    agentUserIdIdx: index("automations_agent_user_id_idx").on(
+      table.agentUserId
+    ),
     // Name-identity backstop (0230, mirrors playbooks_workspace_name_active_uq /
     // 0227): at-most-one non-archived automation per (workspace | pod-wide,
     // lower(name)). MCP create_automation re-authored the SAME automation into a

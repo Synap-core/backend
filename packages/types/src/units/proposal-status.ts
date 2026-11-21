@@ -6,6 +6,7 @@
  * status MEANS.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
+import { categoryOf } from "../lifecycle/category-sets.js";
 import type { ProposalStatusValue } from "../proposals/attention.js";
 
 /**
@@ -35,8 +36,5 @@ export const PROPOSAL_STATUS_DECLARATION = {
 export function proposalStatusCategory(
   status: string | null | undefined
 ): LifecycleCategory | null {
-  if (status == null) return null;
-  return Object.hasOwn(PROPOSAL_STATUS_DECLARATION, status)
-    ? PROPOSAL_STATUS_DECLARATION[status as ProposalStatusValue].category
-    : null;
+  return categoryOf(PROPOSAL_STATUS_DECLARATION, status);
 }

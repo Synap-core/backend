@@ -471,10 +471,19 @@ export interface NeedsYouProposalFacts {
    * later. Absent / `false` = not measured or none.
    */
   blocksOpenPr?: boolean;
+  /**
+   * The pod HOLDS it: it cannot apply yet and nobody can approve it into
+   * applying now (`cannotApplyYet(row).held`, `../proposals/cannot-apply`: a
+   * message to someone not connected, with no profile on file, or past the
+   * account's daily limit). Absent / `false` = not held.
+   */
+  held?: boolean;
 }
 
 /**
- * THE rule for one pending proposal. A request the reader set aside ("Later")
+ * THE rule for one pending proposal. A request the pod HOLDS (it cannot
+ * apply yet, `held`) is a change to review, never the headline: nobody can
+ * approve it into applying now. A request the reader set aside ("Later")
  * is Review later for them until that time, whatever else holds: they chose
  * it. Otherwise it needs you only when something WAITS on
  * it (a gate, an owed slot, a parked run) on work that has not ended. A gate
@@ -489,6 +498,9 @@ export function classifyPendingProposal(
   now: Date | number = Date.now()
 ): NeedsYouProposalClass | null {
   if (p.status !== "pending") return null;
+  // HELD (plan 8032a127 D6): no headline card while the person cannot act;
+  // it stays counted, as a change to review, and the browser says why.
+  if (p.held === true) return "changes_to_review";
   const at = now instanceof Date ? now.getTime() : now;
   const snoozedUntil = timeOf(p.snoozedUntil);
   if (snoozedUntil !== null && snoozedUntil > at) return "review_later";

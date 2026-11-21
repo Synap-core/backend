@@ -65,6 +65,7 @@ type PlaybookMatch = {
   name: string;
   goalTemplate: string | null;
   description?: string | null;
+  triggers?: ReadonlyArray<string>;
   subjectProfileSlug: string | null;
   signals?: ReadonlyArray<{ type: string; profileSlug?: string }>;
 };
@@ -215,6 +216,7 @@ export async function loadRouteSuggestions(input: {
             name: p.name,
             text: [p.goalTemplate],
             description: p.description,
+            triggers: p.triggers,
             subjectProfileSlug: p.subjectProfileSlug,
             // Built for a kind, and no standing propose rule asks for it yet.
             ...(p.subjectProfileSlug && !rules.proposedPlaybookIds.has(p.id)

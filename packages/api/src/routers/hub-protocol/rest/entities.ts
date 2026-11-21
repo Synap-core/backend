@@ -2238,7 +2238,9 @@ export function registerEntitiesRoutes(app: HubHono): void {
       let url = uploaded?.url;
       if (uploaded) {
         try {
-          url = await storage.getSignedUrl(uploaded.storageKey, 3600);
+          url = await storage.getSignedUrl(uploaded.storageKey, 3600, {
+            contentType: body.mimeType as string,
+          });
         } catch {
           // Non-fatal — fall back to the canonical storage url.
         }

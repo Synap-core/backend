@@ -51,7 +51,11 @@ import {
   owedSlotWhere,
   personTouchedSubjectIds,
 } from "@synap/database";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  LIVE_RUN_SESSION_STATUSES,
+  TERMINAL_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import { workClockIn } from "@synap-core/types/work-clock";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { openLink } from "../../utils/deep-links.js";
@@ -74,10 +78,10 @@ export const LOOSE_ENDS_ITEMS = 5;
 export const READY_TO_CLOSE_SCAN_CAP = 50;
 /** Ended sessions read for their leftover asks before "at least this many". */
 const ENDED_SESSIONS_READ_CAP = 100;
-/** Statuses of a session still running (`stale` = running, idle 24 h). */
-const RUNNING_STATUSES = ["active", "paused", "forming", "stale"] as const;
 /** Ended without retiring its asks (`cancelled` retires them). */
-const ENDED_STATUSES = ["closed", "failed"] as const;
+const ENDED_STATUSES = TERMINAL_SESSION_STATUSES.filter(
+  (s) => s !== "cancelled"
+);
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -330,7 +334,7 @@ async function readIdleSessions(
     const cutoff = new Date(now.getTime() - LOOSE_END_IDLE_DAYS * MS_PER_DAY);
     const where = and(
       agentOpenedSessionsWhere(userId, agentUserId),
-      inArray(focusSessions.status, [...RUNNING_STATUSES]),
+      inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
       lt(focusSessions.updatedAt, cutoff),
       // Receipts (metadata.kind = the agent-proposal-package marker) are
       // bookkeeping the reaper closes, never a leftover to act on.
@@ -483,7 +487,8 @@ async function readNeverFiredAutomations(
       .from(automations)
       .where(
         and(
-          eq(automations.createdBy, agentUserId),
+          // The agent's own automations: those it authored (their actor).
+          eq(automations.agentUserId, agentUserId),
           inArray(automations.status, FIRING_STATUSES),
           inArray(automations.triggerType, PRODUCER_BACKED_TRIGGERS)
         )
@@ -525,7 +530,7 @@ export async function readSessionsReadyToClose(p: {
       .where(
         and(
           agentOpenedSessionsWhere(p.userId, p.agentUserId),
-          inArray(focusSessions.status, [...RUNNING_STATUSES]),
+          inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]),
           drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
           notReceiptWhere()
         )

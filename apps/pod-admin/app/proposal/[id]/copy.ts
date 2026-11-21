@@ -18,10 +18,20 @@ export const en = {
   "toolRun.heading": "{action} · {tool}",
   "toolRun.sends": "What it sends",
   "toolRun.noArguments": "It sends no arguments.",
+  "toolRun.details": "Details",
+  "toolRun.edit": "Edit",
+  "toolRun.undoEdit": "Back to what was proposed",
+  "toolRun.yourChange": "Your change, sent when you approve",
+  "toolRun.proposedAs": "Proposed as",
+  "toolRun.through": "through {tool}",
+  "toolRun.as": "as {account}",
+  "toolRun.approveWithChanges": "Approve with your changes",
   "toolRun.secret": "Hidden — a credential",
   "toolRun.empty": "empty",
   "toolRun.yes": "Yes",
   "toolRun.no": "No",
+  "toolRun.returned": "What it returned",
+  "toolRun.returnedNote": "The run finished. This is what it handed back.",
   "read.notFound.title": "This request couldn’t be found",
   "read.notFound": "It may have been withdrawn, or the link is out of date.",
   "read.forbidden.title": "You don’t have access to this request",
@@ -47,7 +57,10 @@ export const en = {
   "html.unchanged": "The page is the same before and after.",
   openInDesktop: "Open in the Synap desktop app",
   "decide.pickFirst": "Pick the record for each item first.",
-  "decide.as": "You decide as {identity} · recorded in the",
+  // An irreversible approve asks once more, in place (feedback-and-forms §3):
+  // the verb on the button, named, and Cancel focused beside it.
+  "decide.confirmIrreversible": "{verb} · can’t be undone",
+  "decide.confirmCancel": "Cancel",
   "decide.recorded": "Recorded in the",
   "outcome.approved": "You approved this change: it’s now in your pod.",
   "outcome.auto_approved":
@@ -55,11 +68,16 @@ export const en = {
   // One verb with the bar, its sheet and its consequence: reject.
   "outcome.rejected": "You rejected this: the AI was told why.",
   "outcome.reverted": "This change was undone after it was applied.",
-  "outcome.expired":
-    "Its moment passed before anyone decided: nothing was applied.",
-  "outcome.withdrawn": "The AI withdrew this request: nothing was applied.",
-  "repair.label": "Why approving failed",
-  "repair.default": "Approving this failed.",
+  // Expired and withdrawn: the status says it, the end line says who and why
+  // (`proposalEndLine`), so this line says only what was left.
+  "outcome.expired": "Nothing was applied.",
+  "outcome.withdrawn": "Nothing was applied.",
+  // A failed plan whose undo left items in place (`proposalItemsLeft`).
+  "outcome.partlyLeft":
+    "Not applied; {n, plural, one {# item} other {# items}} could not be rolled back",
+  // One word with the chip: "Couldn’t apply".
+  "repair.label": "Why it couldn’t apply",
+  "repair.default": "No reason was recorded.",
   "repair.loadFailed": "Couldn’t load what can be fixed.",
   "repair.checking": "Checking what to fix…",
   "repair.use": "Use “{value}” and approve",
@@ -69,6 +87,7 @@ export const en = {
   "repair.approved": "Repaired and approved",
   "repair.approveFailed": "Repaired, but couldn’t approve",
   "repair.failed": "Couldn’t repair this request",
+  "repair.cause": "Open the server error",
   "stopped.filed":
     "{filed} of {total, plural, one {# item} other {# items}} filed",
   "stopped.couldNot": "{n} could not be filed",
@@ -114,10 +133,21 @@ export const fr: Catalog<typeof en> = {
   "toolRun.heading": "{action} · {tool}",
   "toolRun.sends": "Ce qu’il envoie",
   "toolRun.noArguments": "Il n’envoie aucun argument.",
+  "toolRun.details": "Détails",
+  "toolRun.edit": "Modifier",
+  "toolRun.undoEdit": "Revenir à la proposition",
+  "toolRun.yourChange": "Votre modification, envoyée à l’approbation",
+  "toolRun.proposedAs": "Proposé\u00a0:",
+  "toolRun.through": "via {tool}",
+  "toolRun.as": "en tant que {account}",
+  "toolRun.approveWithChanges": "Approuver avec vos modifications",
   "toolRun.secret": "Masqué\u00a0: un identifiant",
   "toolRun.empty": "vide",
   "toolRun.yes": "Oui",
   "toolRun.no": "Non",
+  "toolRun.returned": "Ce qu’il a renvoyé",
+  "toolRun.returnedNote":
+    "L’exécution est terminée. Voici ce qu’elle a renvoyé.",
   "read.notFound.title": "Cette demande est introuvable",
   "read.notFound":
     "Elle a peut-être été retirée, ou le lien n’est plus à jour.",
@@ -145,7 +175,8 @@ export const fr: Catalog<typeof en> = {
   "html.unchanged": "La page est identique avant et après.",
   openInDesktop: "Ouvrir dans l’application Synap pour ordinateur",
   "decide.pickFirst": "Choisissez d’abord la fiche de chaque élément.",
-  "decide.as": "Vous décidez en tant que {identity} · enregistré dans",
+  "decide.confirmIrreversible": "{verb} · irréversible",
+  "decide.confirmCancel": "Annuler",
   "decide.recorded": "Enregistré dans",
   "outcome.approved":
     "Vous avez approuvé ce changement\u00a0: il est maintenant dans votre pod.",
@@ -154,12 +185,12 @@ export const fr: Catalog<typeof en> = {
   "outcome.rejected":
     "Vous avez rejeté cette demande\u00a0: l’IA a été prévenue du motif.",
   "outcome.reverted": "Ce changement a été annulé après son application.",
-  "outcome.expired":
-    "Le délai est passé avant toute décision\u00a0: rien n’a été appliqué.",
-  "outcome.withdrawn":
-    "L’IA a retiré cette demande\u00a0: rien n’a été appliqué.",
-  "repair.label": "Pourquoi l’approbation a échoué",
-  "repair.default": "L’approbation a échoué.",
+  "outcome.expired": "Rien n’a été appliqué.",
+  "outcome.withdrawn": "Rien n’a été appliqué.",
+  "outcome.partlyLeft":
+    "Non appliqué\u00a0; {n, plural, one {# élément n’a pas pu être annulé} other {# éléments n’ont pas pu être annulés}}",
+  "repair.label": "Pourquoi elle n’a pas été appliquée",
+  "repair.default": "Aucune raison n’a été enregistrée.",
   "repair.loadFailed": "Impossible de charger ce qui peut être corrigé.",
   "repair.checking": "Recherche de ce qu’il faut corriger…",
   "repair.use": "Utiliser «\u00a0{value}\u00a0» et approuver",
@@ -169,6 +200,7 @@ export const fr: Catalog<typeof en> = {
   "repair.approved": "Corrigée et approuvée",
   "repair.approveFailed": "Corrigée, mais impossible de l’approuver",
   "repair.failed": "Impossible de corriger cette demande",
+  "repair.cause": "Ouvrir l’erreur serveur",
   "stopped.filed":
     "{filed} sur {total, plural, one {# élément classé} other {# éléments classés}}",
   "stopped.couldNot":
@@ -216,7 +248,9 @@ export function proposalPageT() {
 }
 
 /**
- * "Approve and always allow…" (`AlwaysApproveMenu.tsx`): each option says
+ * "Always approve…" (`AlwaysApproveMenu.tsx`; the founder's words, 18 Nov
+ * 2026: the trigger is short, the menu's title and options say exactly what
+ * the rule covers): each option says
  * what it covers and what still asks. "Sending, publishing and deleting still
  * ask" is true for every option but "this tool" and a session's tool grant: a
  * broad rule never authorizes a tool run (the outward floor,
@@ -227,14 +261,14 @@ export function proposalPageT() {
  * and the pod-wide ones. The decision's title is the receipt's
  * (`_lib/receipt`).
  *
- * "Refuse and never allow…" (`RejectNeverMenu`, same file): stores a deny rule
+ * "Always reject…" (`RejectNeverMenu`, same file): stores a deny rule
  * for THIS agent and THIS act, pod-wide (`deriveGovernanceNeverOption`), then
  * rejects the request; the pod refuses that act from then on without asking
  * (decision 956930ad). Both rules are taken back in Settings.
  * `never.reason` is the rejection reason the agent reads.
  */
 export const alwaysEn = {
-  "always.trigger": "Approve and always allow…",
+  "always.trigger": "Always approve…",
   "always.menu": "Approve and keep allowing this",
   "always.capability.label": "Always let your AIs use “{name}”",
   "always.capability.covers":
@@ -256,7 +290,7 @@ export const alwaysEn = {
   "always.ruleSaved": "Rule saved",
   "always.ruleFailed": "Approved, but the rule wasn’t saved",
   "always.ruleFailedHint": "The next request like this one will ask you again.",
-  "never.trigger": "Reject and never allow…",
+  "never.trigger": "Always reject…",
   "never.menu": "Reject, and never allow this from now on",
   "never.action.label": "This change from this AI, never",
   "never.action.covers":
@@ -273,7 +307,7 @@ export const alwaysEn = {
 } as const;
 
 export const alwaysFr: Catalog<typeof alwaysEn> = {
-  "always.trigger": "Approuver et toujours autoriser…",
+  "always.trigger": "Toujours approuver…",
   "always.menu": "Approuver et continuer à l’autoriser",
   "always.capability.label": "Toujours laisser vos IA utiliser « {name} »",
   "always.capability.covers":
@@ -297,7 +331,7 @@ export const alwaysFr: Catalog<typeof alwaysEn> = {
   "always.ruleFailed": "Approuvée, mais la règle n’a pas été enregistrée",
   "always.ruleFailedHint":
     "La prochaine demande comme celle-ci vous sera de nouveau soumise.",
-  "never.trigger": "Rejeter et ne plus autoriser…",
+  "never.trigger": "Toujours rejeter…",
   "never.menu": "Rejeter et ne plus l’autoriser",
   "never.action.label": "Ce changement par cette IA, jamais",
   "never.action.covers":

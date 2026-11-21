@@ -226,6 +226,10 @@ import {
   handleExternalAgentPoll,
   EXTERNAL_AGENT_POLL_QUEUE,
 } from "./external-agent-poll.js";
+import {
+  handleComputeLeaseSweep,
+  COMPUTE_LEASE_SWEEPER_QUEUE,
+} from "./compute-lease-sweeper.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import {
   handleConnectionSyncApproval,
@@ -437,6 +441,8 @@ const ALL_QUEUES = [
   BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   EXTERNAL_AGENT_POLL_QUEUE,
+  // Compute leases: release each machine at its time to live (every 5 min).
+  COMPUTE_LEASE_SWEEPER_QUEUE,
   SESSION_RECAP_QUEUE,
   CONNECTION_SYNC_APPROVAL_QUEUE,
   // When we last spoke to someone: on demand (reactor) + the daily sweep.
@@ -1191,6 +1197,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleExternalAgentPoll(job)
   );
   logger.info("Registered worker: external-agent-poll");
+
+  // Compute lease sweeper (cron: every 5min) — invokes the api-side sweeper
+  // in-process (IoC slot): each compute machine past its time to live is
+  // destroyed through its declared release verb (pre-approved by the start).
+  await boss.work(COMPUTE_LEASE_SWEEPER_QUEUE, async ([job]: any[]) =>
+    handleComputeLeaseSweep(job)
+  );
+  logger.info("Registered worker: compute-lease-sweeper");
 
   // Session recap (on-demand) — enqueued by the session-recap reactor when a
   // focus session advances to the `post` stage. Delegates to the api-side runner

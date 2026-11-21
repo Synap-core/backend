@@ -20,6 +20,7 @@
  */
 
 import { defineCell } from "./define-cell.js";
+import type { DbOrTx } from "./place-cell-on-view.js";
 import {
   CONTENT_KINDS,
   isPackageCellRendererType,
@@ -144,6 +145,11 @@ export interface InstallCellFromDefinitionInput {
    * that adds the cell reconciler, not before it.
    */
   packageVersion?: string | null;
+  /**
+   * Write inside this transaction; the caller emits the change after its
+   * commit (`emitCellWritten`, see `DefineCellInput.tx`).
+   */
+  tx?: DbOrTx;
   userId: string;
 }
 
@@ -214,6 +220,7 @@ export async function installCellFromDefinition(
     // Omitted when the caller has no version to give, so an upsert can never
     // erase a stamp a versioned install wrote — see `packageVersion`.
     version: input.packageVersion ?? undefined,
+    tx: input.tx,
     userId: input.userId,
   });
 }

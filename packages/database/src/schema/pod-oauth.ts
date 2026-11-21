@@ -117,7 +117,25 @@ export const oauthClients = pgTable("oauth_clients", {
   // = "pod"`, 0379, decision e1b59d38): a subset of `requested_permissions`,
   // each a read of one named kind. Empty for DCR rows.
   requestedPodWide: text("requested_pod_wide").array().notNull().default([]),
+  // The entries that list their kinds (`synap_requests[] = {permission:
+  // "entity.read", kinds: [...]}`, 0437, decision 51ad8d1e F4), as declared:
+  // `requested_permissions` holds them expanded per kind (D4); this keeps the
+  // grouping, so the consent shows one row "Records: N kinds". '[]' for DCR
+  // rows, for documents with no such entry, and for a copy cached before
+  // 0437 (its kinds are then shown one per row, as before).
+  requestedKindGroups: jsonb("requested_kind_groups")
+    .$type<RequestedKindGroup[]>()
+    .notNull()
+    .default([]),
 });
+
+/** One `synap_requests` entry that lists its kinds (F4), as declared. */
+export interface RequestedKindGroup {
+  /** The every-kind permission it names (`entity.read`, `entity.create`…). */
+  permission: string;
+  /** Its kinds, each once, in the order given. */
+  kinds: string[];
+}
 
 export const oauthAuthorizationCodes = pgTable(
   "oauth_authorization_codes",

@@ -707,6 +707,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/webhook-worker.js");
         const { registerExternalAgentPoller } =
           await import("@synap/jobs/workers/external-agent-poll.js");
+        const { registerComputeLeaseSweeper } =
+          await import("@synap/jobs/workers/compute-lease-sweeper.js");
         const { registerTightenRecommender } =
           await import("@synap/jobs/workers/governance-tighten-cron.js");
         const { registerPromptVersionRegressionScanner } =
@@ -782,6 +784,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Pod default D2 (approval signal 1): a stage's approved work moves its
         // subject to the stage's `onApproved`, through the status door.
         registerReactionEffect(api.reachStageStatusReactionEffect);
+        // W6: a step whose work is all met moves on, through THE advance door.
+        registerReactionEffect(api.advanceStageReactionEffect);
         // A parent rolls up along a relation that declares it (pod
         // default 1) through THE thing's door; the relations' declarations
         // join the one list; and each rule's pause is its row in the rule
@@ -883,6 +887,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Unfilled, the fan-out sends key-bound subscriptions nothing.
         registerKeyGrantAudience((s) => api.keyGrantReadsSubject(s));
         registerExternalAgentPoller(() => api.pollExternalAgentRuns());
+        // Compute leases: destroy each machine at its time to live.
+        registerComputeLeaseSweeper(() => api.releaseExpiredComputeLeases());
         // Learning loop: the tighten recommender (was verb-only) and the
         // prompt-version regression scan run on daily crons. Both slots
         // are fail-closed — unregistered, the job throws.

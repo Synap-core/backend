@@ -10,7 +10,10 @@
  *   - `serviceUsageStats` aggregates message counts by serviceId from messages JSONB
  */
 
-import { presenceProofSchema } from "@synap-core/types/presence";
+import {
+  PRESENCE_BATCH_MAX,
+  presenceProofSchema,
+} from "@synap-core/types/presence";
 import { z } from "zod";
 import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
@@ -63,6 +66,7 @@ import { completeFocusSession } from "../services/focus-sessions/complete-sessio
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { enableMany } from "../services/capabilities/enable-many.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
@@ -76,6 +80,7 @@ import {
   listCapabilities,
   sectionCapabilities,
   DEFAULT_QUERY_LIMIT,
+  approvalVerdictForGrants,
 } from "../services/capabilities/capability-registry.js";
 import {
   buildProviderVerbSpec,
@@ -911,6 +916,35 @@ export const capabilitiesRouter = router({
     }),
 
   /**
+   * Turn several verbs and tools ON with ONE proof of presence (founder,
+   * 18 Nov 2026). The proof names the whole set (`capability_batch:<digest of
+   * the sorted ids>`); each item then takes the same owner checks as its single
+   * door, and comes back with its own result (a failed item never hides the
+   * others). At most `PRESENCE_BATCH_MAX` in all.
+   */
+  enableMany: protectedProcedure
+    .input(
+      z.object({
+        skillIds: z
+          .array(z.string().uuid())
+          .max(PRESENCE_BATCH_MAX)
+          .default([]),
+        toolIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      enableMany({
+        userId: requireUserId(ctx.userId),
+        skillIds: input.skillIds,
+        toolIds: input.toolIds,
+        agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        door: "trpc.capabilities.enableMany",
+      })
+    ),
+
+  /**
    * Apply a capability template — instantiate {vault · tools · skills · playbooks}
    * from an inline `definition` or a seed `templateKey`.
    *
@@ -1128,6 +1162,7 @@ export const capabilitiesRouter = router({
         userId: ctx.userId,
         connectionSelector: input.connectionSelector,
         idempotencyKey: input.idempotencyKey,
+        reasoning: input.reasoning,
         channelId: input.channelId ?? null,
         sourceMessageId: input.sourceMessageId ?? null,
         sessionId: input.sessionId ?? null,
@@ -1688,7 +1723,7 @@ export const capabilitiesRouter = router({
       // `data.capabilityId` (the tool row id) or `data.verbId` alone —
       // `CapabilityNodeDef.capabilityId` is OPTIONAL (schema/automations.ts)
       // and the shipped first-party report automation emits four verb-only
-      // nodes (`ensure-report-automation.ts`). A capabilityId-only containment
+      // nodes (base.yaml's report automation). A capabilityId-only containment
       // reports ZERO dependents for the built-in `synap_core` tool — the exact
       // "nothing depends on this" lie this door exists to prevent. So the
       // tool's own verb catalog is ORed in alongside the id match.
@@ -1713,19 +1748,19 @@ export const capabilitiesRouter = router({
       // Grants on the tool itself. Indexed by
       // (grantable_type, grantable_id, revoked_at) — the hot-path index.
       //
-      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`), a
-      // scope and an exec-mode, so it is not public metadata. Unless the caller
+      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`)
+      // and a scope, so it is not public metadata. Unless the caller
       // OWNS the tool, only grants the caller is a party to (issued them, or is
       // the grantee) are returned. A supplied workspace then NARROWS on top —
       // the same `or(isNull, eq)` shape the automation query uses, so pod-wide
       // grants are never dropped by the narrowing alone.
       const callerOwnsTool = tool.createdBy === userId;
-      const grantRows = await database
+      const grantRowsRead = await database
         .select({
           grantId: vaultGrants.id,
           grantedTo: vaultGrants.grantedTo,
+          workspaceId: vaultGrants.workspaceId,
           scope: vaultGrants.scope,
-          execMode: vaultGrants.execMode,
           expiresAt: vaultGrants.expiresAt,
         })
         .from(vaultGrants)
@@ -1749,6 +1784,24 @@ export const capabilitiesRouter = router({
           )
         )
         .orderBy(vaultGrants.createdAt);
+      // How each grant's agent runs this tool: the approval row (decision D2),
+      // never a column of the grant. Same wire shape as before (`execMode`).
+      const verdictByGrant = await approvalVerdictForGrants(
+        grantRowsRead.map((g) => ({
+          id: g.grantId,
+          grantableType: "tool",
+          grantableId: input.toolId,
+          grantedTo: g.grantedTo,
+          workspaceId: g.workspaceId,
+        }))
+      );
+      const grantRows = grantRowsRead.map((g) => ({
+        grantId: g.grantId,
+        grantedTo: g.grantedTo,
+        scope: g.scope,
+        execMode: verdictByGrant.get(g.grantId) ?? "propose",
+        expiresAt: g.expiresAt,
+      }));
 
       // The ONE honest per-connection number: literally the rows the detach
       // path flips to "disconnected" (capability-nango-sync.ts). `null` (not 0)

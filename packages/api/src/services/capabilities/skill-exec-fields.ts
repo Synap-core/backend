@@ -15,6 +15,10 @@
  * `executionMode` and `timeoutSeconds` swappable under an existing approval.
  */
 
+import {
+  SKILL_METADATA_PROPOSE_ONLY,
+  declaredProposeOnly,
+} from "@synap-core/types/proposals";
 import { canonicalJson } from "./capability-drift.js";
 
 /**
@@ -79,6 +83,27 @@ export function readOnlyWidened(
   // demote, the same regression a presence test caused on the MCP-server door.
   const before = (existingMetadata ?? {})["readOnly"] === true;
   return metadataPatch["readOnly"] === true && !before;
+}
+
+/**
+ * `metadata.proposeOnly` LOOSENED — a live `true` turned off (`false`) on an
+ * already-approved skill. The mirror image of `readOnlyWidened`: a verb that
+ * declared it is never run on its own by an auto grant or an auto rule
+ * (`capabilityVerbAllowsRuleWiden`), so dropping it lets a reviewed verb start
+ * running unattended. Only that direction re-earns approval; turning it ON
+ * tightens and keeps the approval. A patch that omits the key is inert: the
+ * applier never revokes a key the definition stops declaring.
+ */
+export function proposeOnlyLoosened(
+  metadataPatch: Record<string, unknown> | undefined,
+  existingMetadata: Record<string, unknown> | null | undefined
+): boolean {
+  if (!metadataPatch || !(SKILL_METADATA_PROPOSE_ONLY in metadataPatch))
+    return false;
+  return (
+    declaredProposeOnly(existingMetadata) === true &&
+    declaredProposeOnly(metadataPatch) !== true
+  );
 }
 
 /**

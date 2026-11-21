@@ -162,7 +162,8 @@ async function callerMayWriteToChannel(
  *
  *  - a SESSION's room (`resolveRoomSession`, the one rule the answer loop and
  *    the room notifier use): `session.update` at the session's own space and
- *    project — the rung of answering its asks (`answerGrantWrite`), since
+ *    project (a project-only session: a space its project uses) — the rung
+ *    of answering its asks (`answerGrantWrite`), since
  *    talking in a session's room is taking part in that session;
  *  - any other channel: `message.create` on the channel's own workspace (D4,
  *    the rule of `assertChannelWrite`; null = a pod-wide channel = pod scope,

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-import { LIVE_RUN_STATUSES } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
@@ -23,7 +23,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * a terminal literal ("completed" | "failed" | "cancelled" | "proposed") or any
  * NON-literal expression (a door forwarding a caller-supplied status can write
  * a terminal one). A LIVE literal is not a stamp — the set is DERIVED from
- * `LIVE_RUN_STATUSES` (@synap/database, the one "is this run still going?"
+ * `LIVE_RUN_STATUSES` (@synap-core/types/units, the one "is this run still going?"
  * answer: running, waiting_on_you, stale), never hand-listed here. The
  * hand-listed copy missed `stale` (D6, 2026-10-11) and read the reaper's
  * non-terminal stale sweep as an unsettled terminal write.

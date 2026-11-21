@@ -23,7 +23,8 @@
   "license": "MIT",
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -103,6 +104,10 @@
     "./cell-bridge": {
       "types": "./dist/cell-bridge/index.d.ts",
       "import": "./dist/cell-bridge/index.js"
+    },
+    "./renderer-resolution": {
+      "types": "./dist/renderer-resolution/index.d.ts",
+      "import": "./dist/renderer-resolution/index.js"
     },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
@@ -232,6 +237,14 @@
     "./proposals/fate": {
       "types": "./dist/proposals/fate.d.ts",
       "import": "./dist/proposals/fate.js"
+    },
+    "./proposals/ended": {
+      "types": "./dist/proposals/ended.d.ts",
+      "import": "./dist/proposals/ended.js"
+    },
+    "./proposals/cannot-apply": {
+      "types": "./dist/proposals/cannot-apply.d.ts",
+      "import": "./dist/proposals/cannot-apply.js"
     },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",

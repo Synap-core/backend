@@ -226,10 +226,12 @@ beforeAll(async () => {
     workflow: "CI",
     ingestedAt: at(-25).toISOString(),
   });
-  // A devbox job of this session, tied to no PR; another session's job.
+  // A devbox job of this session on the PR's head, naming no PR (the producer
+  // did not know it): the timeline reads the PR off the head `dev.pr_opened`
+  // named. Another session's job runs on a commit no PR names.
   await devFact(USER, "ci.finished", -20, {
     repo: BE,
-    sha: "d".repeat(40),
+    sha: HEAD,
     status: "success",
     workflow: "devbox dev-feed-h",
     sessionId: S.mine,
@@ -582,7 +584,7 @@ describe("readTimeline on PGlite", () => {
     expect(runs.map((e) => e.kind === "checks_finished" && e.checks)).toEqual([
       expect.objectContaining({
         job: "dev-feed-h",
-        pr: null,
+        pr: 47,
         result: "passed",
       }),
       expect.objectContaining({ job: null, pr: 47, result: "failed" }),
@@ -655,10 +657,15 @@ describe("readTimeline on PGlite", () => {
     const events = t!.events as DevTimelineEvent[];
     expect(kinds(events)).toEqual([
       "checks_finished", // the head-sha run naming no PR (-15)
+      "checks_finished", // the session's devbox job on the head (-20)
       "checks_finished", // the PR's run (-30)
       "pr_opened",
     ]);
     expect(events.some((e) => e.kind === "pr_merged")).toBe(false);
+    // Every run on the head carries the PR's number, named or read off the head.
+    expect(
+      events.flatMap((e) => (e.kind === "checks_finished" ? [e.checks.pr] : []))
+    ).toEqual([47, 47, 47]);
   });
 });
 
@@ -790,6 +797,12 @@ describe("the session chain (decision D3): stage moves, spawns, runners, room po
       to: "plan",
       actor: { kind: "agent", id: AGENT },
     });
+    // One entry, one id in every ledger reader (change feed, statusOf):
+    // from when it was entered and which stage, never its position.
+    expect(stages.map((e) => e.id)).toEqual([
+      `stage:${C.parent}:${at(-45).toISOString()}:build`,
+      `stage:${C.parent}:${at(-50).toISOString()}:plan`,
+    ]);
     expect(events.find((e) => e.kind === "child_started")).toMatchObject({
       at: at(-44).toISOString(),
       child: { id: C.child, title: "Ship the feed", status: "active" },

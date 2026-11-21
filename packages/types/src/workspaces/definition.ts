@@ -11,6 +11,7 @@
  */
 
 import type {
+  SpaceKindAs,
   WorkspaceDefaultSource,
   WorkspaceLayoutDefinition,
   WorkspaceSettings,
@@ -24,6 +25,12 @@ export interface LifecycleAuthoring {
   property: string;
   /** `[{ key, label?, category, tone?, humanOnly? }]` — every option needs a category. */
   options: unknown[];
+  /**
+   * The option a new thing starts in when its creator names none (the
+   * lifecycle's initial status, `setLifecycleInitialStatus`). Filled on apply
+   * when the lifecycle has none yet; never replaces one already set.
+   */
+  initialStatus?: string;
 }
 
 /**
@@ -33,7 +40,8 @@ export interface LifecycleAuthoring {
  */
 export interface WorkspaceIntentDefinition {
   label: string;
-  produces?: { profile: string }[];
+  /** Each kind the space works; `as` (default `output`): see `SpaceKindAs`. */
+  produces?: { profile: string; as?: SpaceKindAs }[];
   /** The ONE output the space produces: one of `produces` (decision 3). */
   primary?: string;
 }

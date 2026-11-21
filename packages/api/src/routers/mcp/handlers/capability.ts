@@ -22,10 +22,16 @@ import {
   parentToolMissingMessage,
   buildProviderVerbSpec,
 } from "../../../services/capabilities/create-declarative-verb.js";
-import { db, tools as toolsTable } from "@synap/database";
+import {
+  db,
+  tools as toolsTable,
+  ProfileResolutionService,
+  ownerAndActor,
+} from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import { proposeKindLifecycle } from "../../../services/lifecycle/declare-kind-lifecycle.js";
+import { proposeLifecycleOptionsChange } from "../../../services/lifecycle/change-lifecycle-options.js";
 import {
   ok,
   requireScope,
@@ -89,6 +95,66 @@ export const capabilityHandlers: McpHandlerMap = {
           ...(typeof args.initialStatus === "string"
             ? { initialStatus: args.initialStatus }
             : {}),
+        },
+        reason: readReasoning(args),
+      })
+    );
+  },
+  // Relabel, reorder or retire a kind's lifecycle options
+  // (`services/lifecycle/change-lifecycle-options.ts`, fd146324): the person's
+  // lifecycle door (tRPC `propertyDefs.changeLifecycleOptions`) filed as an
+  // always-pending proposal, or a refusal in that door's own words.
+  synap_change_lifecycle_options: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const profileId = args.profileId;
+    if (typeof profileId !== "string" || !profileId) {
+      return ok({ error: "profileId is required" });
+    }
+    if (!Array.isArray(args.options)) {
+      return ok({
+        error:
+          "options is required: the complete new list, each { key, category, label? }",
+      });
+    }
+    const lifecycle = await new ProfileResolutionService(
+      db
+    ).getEffectiveLifecycle(profileId);
+    if (!lifecycle) {
+      return ok({
+        status: "refused",
+        reasons: [
+          "This kind declares no lifecycle: declare one with synap_declare_lifecycle.",
+        ],
+      });
+    }
+    const remap =
+      args.remap && typeof args.remap === "object" && !Array.isArray(args.remap)
+        ? Object.fromEntries(
+            Object.entries(args.remap as Record<string, unknown>).filter(
+              (e): e is [string, string] => typeof e[1] === "string"
+            )
+          )
+        : undefined;
+    return ok(
+      await proposeLifecycleOptionsChange({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: {
+          propertyDefId: lifecycle.propertyDefId,
+          // A kept key starts from its stored option: a field the caller
+          // leaves out (a category, a wait, a date binding) keeps its value
+          // instead of being dropped by a relabel.
+          options: (args.options as unknown[]).map((o) => {
+            const key = (o as { key?: unknown } | null)?.key;
+            const stored = lifecycle.options.find((s) => s.key === key);
+            return stored && o && typeof o === "object"
+              ? { ...stored, ...(o as Record<string, unknown>) }
+              : o;
+          }),
+          ...(remap ? { remap } : {}),
         },
         reason: readReasoning(args),
       })
@@ -646,6 +712,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // the SAME source synap_create_verb reads). Lands on the resulting
       // `capability.run` proposal's session_id column; null outside a session.
       sessionId: sessionId ?? null,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     // Surface the same discriminated outcome the hub door returns, in a shape
     // the agent reads naturally (proposed is NOT an error). A `kind:"error"`
@@ -748,6 +815,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // so an agent-initiated create was evaluated as if the human owner did
       // it directly. Now threaded through, mirroring entities.ts's pattern.
       agentUserId: agentUserId ?? undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
 
     // WIRING — the MCP door used to write NONE of the edges the tRPC door
@@ -921,17 +989,31 @@ export const capabilityHandlers: McpHandlerMap = {
         loadIndex: async () => {
           const { listCapabilities } =
             await import("../../../services/capabilities/capability-registry.js");
-          const caps = await listCapabilities({
-            workspaceId: requestedWorkspaceId ?? null,
-            // The EXECUTION identity, not the bearer. `automations.create` sets
-            // `createdBy = agentUserId ?? ctx.userId`, and at run time a
-            // capability node resolves under that owner — `visibleSkillsWhere`
-            // has a per-user tier, so validating as the human would both
-            // FALSE-REJECT an agent-owned user-scoped skill and FALSE-ACCEPT a
-            // human-owned one that then throws "not found" mid-run. Keep this
-            // expression identical to the `createdBy` one below.
-            userId: agentUserId ?? userId,
-          });
+          // Validate against what the RUN will resolve: the owner
+          // `automations.create` stamps (the person), plus the authoring
+          // agent, whose own user-scope skills a run still reaches
+          // (`answeringSkillsWhere`). `visibleSkillsWhere` has a per-user
+          // tier, so validating as one of them alone would refuse the agent's
+          // own skill or accept one the run cannot find. Limit: the agent's
+          // workspace-tier skills are accepted here although the run reads that
+          // tier as the person.
+          const owner = await ownerAndActor(db, userId, agentUserId);
+          const principals = [
+            owner.ownerId,
+            ...(owner.agentUserId && owner.agentUserId !== owner.ownerId
+              ? [owner.agentUserId]
+              : []),
+          ];
+          const caps = (
+            await Promise.all(
+              principals.map((principal) =>
+                listCapabilities({
+                  workspaceId: requestedWorkspaceId ?? null,
+                  userId: principal,
+                })
+              )
+            )
+          ).flat();
           const verbIds = new Set<string>();
           const capabilityIds = new Set<string>();
           for (const cap of caps) {
@@ -1062,6 +1144,7 @@ export const capabilityHandlers: McpHandlerMap = {
         (args.status as "draft" | "active" | "paused" | "error" | undefined) ??
         "active",
       metadata,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -1102,6 +1185,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // empty falls back to all of them — never "searched nothing, no match".
       ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
       ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      ...(args.explain === true ? { explain: true } : {}),
     });
     if (!found.ok) {
       return ok({

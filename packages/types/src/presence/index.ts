@@ -268,6 +268,17 @@ function sensitiveApprovalRow(proposal: {
 }
 
 /**
+ * The key of the row of the approval lists this proposal falls under
+ * (`<targetType>/<proposalType>`, a type, or a type prefix), or null.
+ */
+export function sensitiveApprovalKey(proposal: {
+  targetType: string;
+  proposalType: string;
+}): string | null {
+  return sensitiveApprovalRow(proposal)?.key ?? null;
+}
+
+/**
  * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
  * first, then the `proposalType` alone, then a prefix: the registry's own
  * lookup order, so a proposal never escapes by being typed one way or the other.
@@ -441,6 +452,12 @@ export const PRESENCE_REQUEST_KINDS = {
   skill: "setup",
   /** tools.setApproved, Hub /tools/:id/approve: a tool turned ON. */
   tool: "setup",
+  /**
+   * capabilities.enableMany: several verbs and tools of one capability turned ON
+   * by ONE confirmation. The id is `presenceBatchId` of the exact set, so a
+   * proof for one set never turns on another.
+   */
+  capability_batch: "setup",
   /** trustedIssuers.approve: what an outside issuer may do on the pod. */
   trusted_issuer: "governance",
   /** marketplace.approveKeyChange: trusting a catalog source's new signing key. */
@@ -555,6 +572,8 @@ export const SENSITIVE_ACTIONS = {
   // A key or a client an app or AI service holds, or what it may do.
   "apps.issueKey": "setup",
   "apps.setWriteMode": "setup",
+  // What a pod app may do and where (W3d): it may widen within its ask.
+  "apps.updateAccess": "setup",
   "apps.setRedirectUris": "setup",
   "apps.setSignInPolicy": "setup",
   "intelligenceRegistry.register": "setup",
@@ -622,6 +641,7 @@ export const SENSITIVE_ACTION_TOKENS = {
   "apiKeys.setMachineDefaults": { action: "update", objectKind: "machine" },
   "apps.issueKey": { action: "create", objectKind: "api_key" },
   "apps.setWriteMode": { action: "update", objectKind: "app" },
+  "apps.updateAccess": { action: "update", objectKind: "app" },
   "apps.setRedirectUris": { action: "update", objectKind: "app" },
   "apps.setSignInPolicy": { action: "update", objectKind: "app" },
   "intelligenceRegistry.register": {
@@ -684,6 +704,111 @@ export function sensitiveActionTitle(
     mood: opts.mood ?? "imperative",
     ...(opts.locale ? { locale: opts.locale } : {}),
   });
+}
+
+/**
+ * The grace window (founder, 18 Nov 2026): after a passkey or device-key proof
+ * made from a person's own signed-in BROWSER session, that session may do the
+ * graceable acts below for this long without asking again. It starts when the
+ * proof is verified and never slides (a use does not extend it); only a new
+ * proof starts a new one. TOTP and recovery codes mint none.
+ */
+export const PRESENCE_GRACE_SECONDS = 300;
+
+/** Most verbs plus tools one `capabilities.enableMany` confirmation may turn on. */
+export const PRESENCE_BATCH_MAX = 50;
+
+/**
+ * What a grace may cover: an EXPLICIT allow-list, so a row added to any
+ * sensitive table asks for a fresh proof until someone lists it here (fail
+ * closed). Only a row whose reason is `setup` can be listed
+ * (`presenceGraceable` checks it). Everything else is NEVER graced, and
+ * `presenceNeverGrace` derives that set from the tables: keys and secrets
+ * (`apiKeys.*`, `key_request`, `vault/*`, `secretsVault.reveal`), factor and
+ * device changes (`device_enroll`, `passkey_change`, `totp_enroll`,
+ * `recovery_codes`), the mode and sensitivity switches, every governance,
+ * deploy and deletion row, a request filed AS the person, and any key caller.
+ *
+ * Request rows: the doors that turn a verb or tool ON, one at a time or
+ * as a set. Approval rows: none (an approval's content was written by
+ * someone else, often an AI: it asks every time). Action rows: none (every
+ * listed action creates or widens a credential or a rule).
+ */
+export const PRESENCE_GRACE_REQUEST_KINDS = [
+  "skill",
+  "tool",
+  "capability_batch",
+] as const satisfies readonly PresenceRequestKind[];
+export const PRESENCE_GRACE_APPROVALS =
+  [] as const satisfies readonly (keyof typeof SENSITIVE_APPROVALS)[];
+export const PRESENCE_GRACE_ACTIONS =
+  [] as const satisfies readonly SensitiveActionPath[];
+
+/** What a grace is asked to cover: a request kind, an approval row key, or an action path. */
+export type PresenceGraceTarget =
+  | { kind: "request"; key: string }
+  | { kind: "approval"; key: string }
+  | { kind: "action"; key: string };
+
+/** May a grace cover this? Only a listed row whose reason is `setup`; unknown = no. */
+export function presenceGraceable(target: PresenceGraceTarget): boolean {
+  const has = (list: readonly string[], key: string) => list.includes(key);
+  if (target.kind === "request") {
+    return (
+      has(PRESENCE_GRACE_REQUEST_KINDS, target.key) &&
+      (PRESENCE_REQUEST_KINDS as Record<string, SensitiveReason>)[
+        target.key
+      ] === "setup"
+    );
+  }
+  if (target.kind === "approval") {
+    return (
+      has(PRESENCE_GRACE_APPROVALS, target.key) &&
+      (SENSITIVE_APPROVALS as Record<string, SensitiveReason>)[target.key] ===
+        "setup"
+    );
+  }
+  return (
+    has(PRESENCE_GRACE_ACTIONS, target.key) &&
+    (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[target.key] ===
+      "setup"
+  );
+}
+
+/** Every row of the sensitive tables a grace NEVER covers, derived. */
+export function presenceNeverGrace(): PresenceGraceTarget[] {
+  const all: PresenceGraceTarget[] = [
+    ...Object.keys(PRESENCE_REQUEST_KINDS).map((key) => ({
+      kind: "request" as const,
+      key,
+    })),
+    ...[
+      ...Object.keys(SENSITIVE_APPROVALS),
+      ...Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES),
+    ].map((key) => ({ kind: "approval" as const, key })),
+    ...Object.keys(SENSITIVE_ACTIONS).map((key) => ({
+      kind: "action" as const,
+      key,
+    })),
+  ];
+  return all.filter((t) => !presenceGraceable(t));
+}
+
+/**
+ * The id a proof for a SET of verbs and tools names
+ * (`capability_batch:<id>`): hex SHA-256 of the canonical, sorted, de-duplicated
+ * ids. Add, drop or swap one id and the id changes, so the proof no longer
+ * fits. The client computes the same id as the pod.
+ */
+export function presenceBatchId(set: {
+  skillIds?: readonly string[];
+  toolIds?: readonly string[];
+}): Promise<string> {
+  const norm = (ids: readonly string[] | undefined) =>
+    [...new Set(ids ?? [])].sort();
+  return sha256Hex(
+    canonicalJson({ skills: norm(set.skillIds), tools: norm(set.toolIds) })
+  );
 }
 
 /**

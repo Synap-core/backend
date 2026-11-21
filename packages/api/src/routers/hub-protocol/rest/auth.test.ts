@@ -310,6 +310,136 @@ describe("/auth/status — access (the key's grant)", () => {
   });
 });
 
+/**
+ * `GET /auth/grant`: what the calling credential holds, by place — for an app
+ * to say what it can see. Its own grant only: the one the middleware entered
+ * for this request, whatever the request names.
+ */
+describe("/auth/grant — the caller's own grant, by place", () => {
+  const BRAND = "2f2f2f2f-0000-4000-8000-0000000000b1";
+  const SALES = "2f2f2f2f-0000-4000-8000-0000000000b2";
+  const APP_A = "app_2f2f2f2f-0000-4000-8000-00000000000a";
+  const APP_B = "app_2f2f2f2f-0000-4000-8000-00000000000b";
+  async function grantOf(grant: KeyGrant | undefined, query = "") {
+    vi.mocked(apiKeyService.getApiKeyStatus).mockResolvedValue({
+      status: "valid",
+      record: KEY_ROW as never,
+    });
+    (db as unknown as { _setRows: (r: unknown[]) => void })._setRows([
+      { id: BRAND, name: "Brand" },
+      { id: SALES, name: "Sales" },
+    ]);
+    const res = await buildTestApp(grant).request(`/auth/grant${query}`, {
+      headers: { authorization: `Bearer ${VALID_KEY}` },
+    });
+    return { status: res.status, body: await res.json() };
+  }
+
+  it("an app's token: its spaces by name, and its pod-wide reads as `pod`", async () => {
+    const { status, body } = await grantOf({
+      scopes: [
+        {
+          permissions: ["entity.note.read", "entity.note.create"],
+          workspaceIds: [BRAND],
+        },
+        { permissions: ["playbook.read", "session.read"] },
+      ],
+      clientId: APP_A,
+    });
+    expect(status).toBe(200);
+    expect(body).toEqual({
+      holder: "app",
+      clientId: APP_A,
+      isFullAccess: false,
+      summary: expect.any(String),
+      parts: [
+        {
+          permissions: ["entity.note.read", "entity.note.create"],
+          place: "spaces",
+          spaces: [{ id: BRAND, name: "Brand" }],
+          projectIds: null,
+          entityIds: null,
+        },
+        {
+          permissions: ["playbook.read", "session.read"],
+          place: "pod",
+          spaces: [],
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+    });
+  });
+
+  it("an app sees only its own grant: never another app's, whatever the request names", async () => {
+    const a = await grantOf(
+      {
+        scopes: [{ permissions: ["entity.note.read"], workspaceIds: [BRAND] }],
+        clientId: APP_A,
+      },
+      `?clientId=${APP_B}`
+    );
+    const b = await grantOf({
+      scopes: [{ permissions: ["entity.deal.read"], workspaceIds: [SALES] }],
+      clientId: APP_B,
+    });
+    expect(a.body.clientId).toBe(APP_A);
+    expect(b.body.clientId).toBe(APP_B);
+    expect(JSON.stringify(a.body)).not.toContain(SALES);
+    expect(JSON.stringify(a.body)).not.toContain("entity.deal.read");
+    expect(JSON.stringify(b.body)).not.toContain(BRAND);
+    expect(b.body.parts).toEqual([
+      expect.objectContaining({
+        place: "spaces",
+        spaces: [{ id: SALES, name: "Sales" }],
+      }),
+    ]);
+  });
+
+  it("a write with no space is never `pod`: a key's own reach is `anywhere`, full access says so", async () => {
+    const own = await grantOf({
+      scopes: [{ permissions: ["*"] }],
+      clientId: null,
+    });
+    expect(own.body).toMatchObject({
+      holder: "key",
+      isFullAccess: true,
+      parts: [{ permissions: ["*"], place: "anywhere", spaces: [] }],
+    });
+    // An app's part with a write and no space is no pod-wide read either.
+    const app = await grantOf({
+      scopes: [{ permissions: ["entity.note.create"] }],
+      clientId: APP_A,
+    });
+    expect(app.body.parts[0].place).toBe("anywhere");
+  });
+
+  it("a part that grants nothing is left out; one naming no space reaches none", async () => {
+    const { body } = await grantOf({
+      scopes: [
+        { permissions: [] },
+        { permissions: ["entity.note.read"], workspaceIds: [] },
+      ],
+      clientId: APP_A,
+    });
+    expect(body.parts).toEqual([
+      {
+        permissions: ["entity.note.read"],
+        place: "spaces",
+        spaces: [],
+        projectIds: null,
+        entityIds: null,
+      },
+    ]);
+  });
+
+  it("no grant read for the request → 403, never a guessed reach", async () => {
+    const { status, body } = await grantOf(undefined);
+    expect(status).toBe(403);
+    expect(body.error).toMatch(/key's grant/);
+  });
+});
+
 describe("/auth/status — 401 envelope", () => {
   it("returns reason=no_auth when no bearer is supplied", async () => {
     const app = buildTestApp();

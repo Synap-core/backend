@@ -26,8 +26,8 @@ import { createLogger } from "@synap-core/core";
 import {
   PRIVATE_CAPABILITY_TRUST,
   officialCatalogStanding,
-  type MarketplacePackageKind,
   type OfficialCatalogStanding,
+  type OfficialDigestKind,
 } from "@synap-core/types/marketplace-source";
 import { officialCatalogTrust } from "@synap/jobs/workers/official-catalog-signature.js";
 import { checkOfficialListing } from "@synap/jobs/workers/marketplace-source-verify.js";
@@ -70,7 +70,7 @@ export type OfficialAdmission =
  * Report mode answers `admitted: true` and logs what enforcement would refuse.
  */
 export async function admitOfficialDefinition(input: {
-  kind: MarketplacePackageKind;
+  kind: OfficialDigestKind;
   slug: string;
   version?: string | null;
   definition: Record<string, unknown>;
@@ -111,7 +111,7 @@ export async function admitOfficialDefinition(input: {
  * the reason when enforcement refuses. For the install doors.
  */
 export async function assertOfficialDefinition(input: {
-  kind: MarketplacePackageKind;
+  kind: OfficialDigestKind;
   slug: string;
   version?: string | null;
   definition: Record<string, unknown>;

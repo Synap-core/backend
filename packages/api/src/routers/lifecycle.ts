@@ -289,6 +289,8 @@ const producedKindWire = z.object({
       reason: z.enum(["needs_you", "being_worked", "stuck", "recent"]),
     })
     .nullable(),
+  /** `helper`: worked here to serve an output, not one; absent = an output. */
+  as: z.literal("helper").optional(),
 });
 
 const spaceIntentWire = z.object({

@@ -192,6 +192,11 @@ describe("W6 read/resolve verbs — registry", () => {
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.
       "connector.health_check",
+      // design.catalog / design.read (the design door, plan 0fc746f4 §2.6):
+      // the installed catalog snapshot, and one design through the caller's
+      // entity read floor. Write nothing; design.apply stays gated.
+      "design.catalog",
+      "design.read",
       // Four verbs joined while this file failed to COLLECT (a stale total
       // mock, 2026-09-25 → 2026-10-21), so this pin never saw them. Each
       // carries its written rationale beside READ_ONLY_BUILTIN_VERBS in

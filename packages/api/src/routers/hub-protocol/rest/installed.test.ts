@@ -137,7 +137,8 @@ describe("unstampedNote — the next step is the pod's one sentence", () => {
     };
     const warning = templateApplyWarning("crm", settings, ["p1"]);
     const note = unstampedNote(readTemplateState(settings), warning);
-    expect(note).toContain("Waiting on your approval of 1 proposal (p1)");
+    expect(note).toContain("Waiting on your approval of 1 proposal: ");
+    expect(note).toContain("/open/p1");
     expect(note).not.toMatch(/`synap templates update` finishes it/);
   });
 

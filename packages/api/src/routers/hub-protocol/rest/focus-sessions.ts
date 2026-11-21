@@ -23,6 +23,7 @@
  */
 
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../../access/session-counted-spaces.js";
 import {
   mergeOutcomesForStart,
   declaresVerify,
@@ -178,7 +179,9 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  fileableExpectedOutputs,
   droppedAskWarnings,
+  outputKeyWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
 import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
@@ -353,6 +356,7 @@ const WorkGraphWireSchema = z.object({
   ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
+    orchestration: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
@@ -940,8 +944,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
-      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
+      "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
       "under it); one or the other. `playbookId` narrows it to the sessions " +
@@ -2115,7 +2119,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
-        // An outcome with `verify` says what done means (F11's own words).
+        // An outcome with `verify` says what done means.
         declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
@@ -2329,6 +2333,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
       ) {
         delete patch.criteria;
+      }
+
+      // Step 2a: AUTHORITY FLOOR on the slots, before the membrane: the same
+      // `fileableExpectedOutputs` as `updateFocusSession`.
+      if (patch.expectedOutputs !== undefined) {
+        const fileable = fileableExpectedOutputs(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs
+        );
+        if (!fileable.ok) return c.json({ error: fileable.reason }, 400);
+        patch.expectedOutputs =
+          fileable.expectedOutputs as typeof patch.expectedOutputs;
       }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane
@@ -2572,6 +2590,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         agentUserId,
         workspaceId,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id },
+          ...(trackFiling ? { filesIntoProject: true } : {}),
+        }),
+        // A person's goal filing rides this patch and files the session into
+        // the goal's project: checked where it lives now with no project (the
+        // filing rule, `grant-write-check.ts`).
+        ...(trackFiling ? { grantFilesIntoProject: true } : {}),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
@@ -2964,7 +2994,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ),
               ...outcomeWarnings,
             ]
-          : outcomeWarnings;
+          : [...outcomeWarnings];
+      // A criterion whose outputKey names no output of this session.
+      warnings.push(
+        ...outputKeyWarnings(
+          patch.criteria as SessionCriterion[] | undefined,
+          updated.expectedOutputs
+        )
+      );
 
       return c.json({
         ...updated,
@@ -3544,8 +3581,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * agent key gets 202 `proposed`; a person 200 `started`. Same service and
    * input schema as tRPC `focusSessions.startOrchestrator` and MCP
    * `synap_start_orchestrator`. Refusals: 400 bad input, a session that is
-   * not running or paused, an agent that cannot take the work · 403 the gate
-   * or the key's grant · 404 a session that is not the caller's.
+   * not running or paused, an agent that cannot take the work · 403 the gate,
+   * a picked session outside the key's grant or its bound workspace · 404 a
+   * session that is not the caller's.
    */
   registerOpenApi(app, {
     method: "post",
@@ -3558,8 +3596,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "merged-plan deliverable, the person's plan-approval slot), one " +
       "`orchestrated_by` link per picked session, each running one paused " +
       "until the person answers plan-approval, and a handoff note in each " +
-      "room. Same service as tRPC focusSessions.startOrchestrator and MCP " +
-      "synap_start_orchestrator.",
+      "room. Until then a held session changes no stage. A yes resumes " +
+      "them; a no resumes them as they were and cancels the orchestrator " +
+      "('Plan declined'); an orchestrator that ends unanswered releases " +
+      "them. 403 when a picked session is outside the key's grant or bound " +
+      "workspace (nothing written). Same service as tRPC " +
+      "focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
     request: { body: startOrchestratorInputSchema },
     responses: {
       200: {
@@ -3590,6 +3632,9 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: c.get("userId") as string,
         agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
         input: raw,
+        // A workspace-bound key picks only sessions in its workspace (403
+        // otherwise), as the other session doors confine it.
+        boundWorkspaceId: c.get("keyWorkspaceId") ?? null,
       });
       return jsonGoverned(c, result);
     } catch (err) {
@@ -3857,7 +3902,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * a retry cannot mint two rooms.
    *
    * Ungoverned like `/used`: minting the room a session already implies is
-   * provenance plumbing, not a mutation of user data.
+   * provenance plumbing, not a mutation of user data. Bounded by the key's
+   * grant like every other session write: `session.update` where the session
+   * counts (its space, or its project's spaces: `answerGrantWrite`), so a
+   * person's app token passes only where it may take part in the session.
    */
   app.post("/focus-sessions/:id/channel", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3867,6 +3915,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     try {
       // Load by id, bind to the row's workspace (membership check) — the same
       // two steps `/used` and PATCH take.

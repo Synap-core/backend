@@ -70,4 +70,4 @@ This skill combines and replaces the previous `synap-memory` and `synap-os` skil
 
 ## License
 
-MIT
+PolyForm Noncommercial 1.0.0

@@ -25,7 +25,6 @@ const WS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const appended: any[] = [];
 const sends: Array<[string, any]> = [];
 /** The owner's `users` row the door reads (its `userType`). */
-let ownerRows: Array<{ userType: string }> = [];
 /** The observation keys table: key → event id (null = claimed, in flight). */
 const factKeys = new Map<string, string | null>();
 /** The next append throws this, once. */
@@ -48,11 +47,6 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    db: {
-      select: () => ({
-        from: () => ({ where: () => ({ limit: async () => ownerRows }) }),
-      }),
-    },
     getEventRepository: () => ({
       append: async (e: any) => {
         if (appendError) {
@@ -125,7 +119,6 @@ const record = (over: Record<string, unknown> = {}) =>
 beforeEach(() => {
   appended.length = 0;
   sends.length = 0;
-  ownerRows = [{ userType: "human" }];
   factKeys.clear();
   appendError = null;
 });
@@ -191,15 +184,18 @@ describe("record_observation — who the dev-loop sweep runs as", () => {
     });
   });
 
-  it("an agent owner: the event, the trigger hop and the sweep all name the agent", async () => {
-    ownerRows = [{ userType: "agent" }];
-    await record();
-    expect(appended[0].agentUserId).toBe("owner-1");
+  it("an agent-authored automation: the fact is the person's, the event, the trigger hop and the sweep name the agent", async () => {
+    // The person owns it (`ownerId`); the agent that authored it is its actor,
+    // carried on the run's chain.
+    await record({
+      automationContext: { ...chain, actorAgentUserId: "agent-1" },
+    });
+    expect(appended[0].agentUserId).toBe("agent-1");
     const hop = sends.find(([q]) => q === "automation-trigger-match");
-    expect(hop![1].producerAgentUserId).toBe("owner-1");
+    expect(hop![1].producerAgentUserId).toBe("agent-1");
     expect(sweepJob()![1]).toMatchObject({
       userId: "owner-1",
-      producerAgentUserId: "owner-1",
+      producerAgentUserId: "agent-1",
     });
   });
 });

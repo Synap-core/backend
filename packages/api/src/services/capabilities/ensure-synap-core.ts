@@ -973,6 +973,33 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "inbound_source.connect",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Connect a space's inbound webhook source to the site that posts to it (a contact form on Vercel): the pod creates the source (or replaces its secret), sets its URL (Config) and its secret (Secret, write-only) as environment variables on the host project, and redeploys production. ALWAYS files a proposal `webhook/inbound_source.connect`, for anyone, and does nothing else; a pod admin approves it on the console. The secret goes from the pod to the host directly: no agent or person ever sees it, so never ask a person to paste one. Checked before filing: PUBLIC_URL set, the Vercel capability installed and enabled (with vercel_upsert_env), the project found, and no same-named source unless replaceExistingSecret. Returns { status: 'proposed', proposalId } or { success: false, error } naming the fix.",
+      parameters: {
+        type: "object",
+        required: ["name", "project", "urlEnvKey", "secretEnvKey"],
+        properties: {
+          workspaceId: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          host: { type: "string", enum: ["vercel"] },
+          project: { type: "string" },
+          teamId: { type: "string" },
+          urlEnvKey: { type: "string" },
+          secretEnvKey: { type: "string" },
+          target: {
+            type: "string",
+            enum: ["production", "preview", "development"],
+          },
+          redeploy: { type: "boolean" },
+          replaceExistingSecret: { type: "boolean" },
+          reasoning: { type: "string" },
+        },
+      },
+    },
+    {
       name: "market.install",
       kind: "builtin",
       scope: "pod",

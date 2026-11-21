@@ -18,9 +18,12 @@
  *     A target with no `result` is still being worked; every other state is a
  *     mark ({@link WORKER_TARGET_RESULTS}), never an absence.
  *
- * Leaf module: imports nothing, so the browser, relay, CLI and every backend
- * package can read it.
+ * Leaf module: its one import is the session status leaf (itself
+ * dependency-free), so the browser, relay, CLI and every backend package can
+ * read it.
  */
+
+import { SESSION_CLOSE_OUTCOMES } from "../focus-sessions/statuses.js";
 
 // ── Activator ───────────────────────────────────────────────────────────────
 
@@ -36,6 +39,9 @@
  *                    `per_moment` (the count IS the moment).
  *   manual         — never by itself: a button that runs the worker over its
  *                    enablement's filter. Compiles no rule.
+ *   run_ended      — a LINK: a run of another playbook (`playbook`) ended,
+ *                    done or not (`outcome`, absent = either). The new run
+ *                    works on the ended run's subject. Space-wide only.
  */
 export const WORKER_ACTIVATOR_TRIGGERS = [
   "created",
@@ -43,8 +49,18 @@ export const WORKER_ACTIVATOR_TRIGGERS = [
   "schedule",
   "count",
   "manual",
+  "run_ended",
 ] as const;
 export type WorkerActivatorTrigger = (typeof WORKER_ACTIVATOR_TRIGGERS)[number];
+
+/**
+ * How a run ended, for a `run_ended` link: its session's `closedAs`
+ * (`sessionClosedAs`, focus-sessions/statuses.ts) — `done` = closed with
+ * nothing required left open (no `closedNotDone` record); `not_done` = closed
+ * anyway with required work open, or cancelled or failed.
+ */
+export const WORKER_RUN_OUTCOMES = SESSION_CLOSE_OUTCOMES;
+export type WorkerRunOutcome = (typeof WORKER_RUN_OUTCOMES)[number];
 
 /**
  * How much one run covers.
@@ -82,6 +98,10 @@ export const WORKER_COUNT_MIN_FLOOR = 2;
 
 export interface WorkerActivator {
   on: WorkerActivatorTrigger;
+  /** `run_ended` only (required): the linked playbook, by name or id. */
+  playbook?: string;
+  /** `run_ended` only: which end starts it; absent = any. */
+  outcome?: WorkerRunOutcome;
   /** The lifecycle option: required for `enters_status` and `count`,
    *  optional for `schedule` (narrows the set). */
   status?: string;
@@ -181,15 +201,31 @@ export function effectiveWorkerSize(
  * hash, and the convergence UPDATES the same rule in place. The pod's
  * `activatorKey` (`schemas/playbook-process.ts`) is this function.
  */
+/** Is this activator key a `run_ended` link's (`workerActivatorKey`)? */
+export function isLinkActivatorKey(key: string | null | undefined): boolean {
+  return typeof key === "string" && key.startsWith("run_ended:");
+}
+
+/**
+ * How many link-started runs back a link looks for the playbook it would
+ * start (the run-time loop guard, `@synap/jobs` `utils/link-lineage.ts`). A
+ * chain this long is refused too: no real chain of playbooks is.
+ */
+export const LINK_CHAIN_MAX = 32;
+
 export function workerActivatorKey(a: {
   on: string;
   status?: string | null;
   cron?: string | null;
+  playbook?: string | null;
+  outcome?: string | null;
 }): string {
   if (a.on === "enters_status") return `enters_status:${a.status ?? ""}`;
   if (a.on === "count") return `count:${a.status ?? ""}`;
   if (a.on === "schedule")
     return `schedule:${(a.cron ?? "").trim().split(/\s+/).join(" ")}`;
+  if (a.on === "run_ended")
+    return `run_ended:${(a.playbook ?? "").trim()}${a.outcome ? `:${a.outcome}` : ""}`;
   return a.on;
 }
 
@@ -309,6 +345,12 @@ export const WORKER_SKIP_REASONS = {
   unlessProperty: "unless_property",
   /** The thing's property holds none of the activator's `only` values (see {@link skippedByOnly}). */
   onlyValues: "only_values",
+  /**
+   * A `run_ended` link would start a playbook already in the chain of
+   * link-started runs that led here (a loop), or the chain is longer than
+   * {@link LINK_CHAIN_MAX}.
+   */
+  linkLoop: "link_loop",
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];

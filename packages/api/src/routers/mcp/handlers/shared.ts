@@ -498,7 +498,7 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
 // (`services/focus-sessions/session-statuses.ts`) so services can import it
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
-import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
 import { ambientWorkWhere } from "../../../services/focus-sessions/session-kind.js";
 import {
   resolveWorkSession,
@@ -543,10 +543,7 @@ export async function listOpenFocusSessions(
           // `startedAt`, so the column default stamps the cron's materialisation
           // time, and ordering by `startedAt desc` would pick it over the
           // person's real current work.
-          inArray(
-            focusSessions.status,
-            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-          ),
+          inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
           // The session the PERSON is in. This resolver decides which session
           // an agent's write is FILED UNDER. An open automation run or a
           // receipt is newer than the person's work most mornings (the 08:00
@@ -631,16 +628,23 @@ export interface SessionAttributionReport {
    */
   via?: "client" | "unclaimed";
   /**
-   * Several unclaimed work sessions were open, so NONE was guessed — the write
-   * is grouped under this client's own (auto-opened) session instead.
+   * Several sessions could answer, so NONE was guessed — the write is grouped
+   * under this client's own (auto-opened) session instead. Either several
+   * unclaimed work sessions, or (with `candidates`) several this client started.
    */
   ambiguous: boolean;
   /**
-   * Unclaimed open work sessions counted while resolving. `null` = NOT counted
-   * — an explicit handle or a client-bound session answered first, or the read
-   * failed (a failed read is not zero).
+   * Unclaimed open work sessions counted while resolving; with `candidates`,
+   * the open sessions this client started. `null` = NOT counted — an explicit
+   * handle or a client-bound session answered first, or the read failed (a
+   * failed read is not zero).
    */
   openCount: number | null;
+  /**
+   * The open sessions THIS client started when there were several (newest
+   * first, at most `CLIENT_OPEN_SESSIONS_LISTED`) — pass one as `sessionId`.
+   */
+  candidates?: Array<{ id: string; title: string; startedAt: string | null }>;
   /**
    * The explicit `sessionId` the caller sent and the resolver DROPPED. The call
    * then carries no session at all (no ambient fallback), which the caller must
@@ -738,6 +742,17 @@ export async function resolveSessionHandle(
         via: r.source,
         ambiguous: false,
         openCount: r.unclaimedOpenCount,
+      },
+    };
+  }
+  if (r.clientSessions) {
+    return {
+      session: undefined,
+      attribution: {
+        session: "none",
+        ambiguous: true,
+        openCount: r.clientSessions.count,
+        candidates: r.clientSessions.sessions,
       },
     };
   }

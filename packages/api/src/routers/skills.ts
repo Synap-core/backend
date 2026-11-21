@@ -65,6 +65,7 @@ import { gateCapabilityExecution } from "../services/capabilities/gate-capabilit
 import {
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -210,6 +211,7 @@ export function assertSkillGlobalsAllowed(
 export {
   RE_APPROVAL_FIELDS,
   allowedHostsChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
   skillExecFieldsChanged,
 } from "../services/capabilities/skill-exec-fields.js";
@@ -677,6 +679,8 @@ export const skillsRouter = router({
          * here in a way it is not in Zapier.
          */
         draft: z.boolean().default(false),
+        /** WHY — shown to the reviewer when an agent's create is proposed. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -694,6 +698,7 @@ export const skillsRouter = router({
         automationIds: input.automationIds,
         ...(input.sentence ? { sentence: input.sentence } : {}),
         ...(input.draft ? { draft: true } : {}),
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         auditSource: "rules.createRule",
       });
       // CONTRACT, deliberate and different from the Hub REST door (which maps
@@ -880,7 +885,7 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, RULE_CATEGORY } =
+      const { readRuleView, RULE_CATEGORY } =
         await import("../services/rules/index.js");
       const rows = await ctx.db.query.skills.findMany({
         where: and(
@@ -913,8 +918,12 @@ export const skillsRouter = router({
         rows.map((row: typeof skills.$inferSelect) => row.id)
       );
       const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
-        const rule = readRuleMetadata(row.metadata);
-        return rule
+        // A PROSE rule (category 'rule', no `metadata.rule`) is listed too
+        // (decision D1): its words are its body, and it has no automation, so
+        // the health fields below read empty for it.
+        const view = readRuleView(row);
+        const rule = view?.rule;
+        return view && rule
           ? [
               {
                 id: row.id,
@@ -923,6 +932,8 @@ export const skillsRouter = router({
                 workspaceId: row.workspaceId,
                 createdAt: row.createdAt,
                 rule,
+                /** `loop` (the rule loop wrote it) or `prose` (a guideline skill). */
+                form: view.form,
                 /**
                  * The rule's automations, from the `activates` edge — the
                  * membership store. Prefer this over `rule.behaviours`, which
@@ -1008,8 +1019,13 @@ export const skillsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, RULE_CATEGORY, RULE_METADATA_KEY } =
-        await import("../services/rules/index.js");
+      const {
+        readRuleMetadata,
+        isProseRule,
+        PROSE_RULE_EDIT_MESSAGE,
+        RULE_CATEGORY,
+        RULE_METADATA_KEY,
+      } = await import("../services/rules/index.js");
       const { withRuleExpiry } = await import("../services/rules/expiry.js");
 
       const row = await ctx.db.query.skills.findFirst({
@@ -1034,8 +1050,9 @@ export const skillsRouter = router({
       if (!metadata) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "This skill is categorised as a rule but carries no rule metadata, so there is no review date to move.",
+          message: isProseRule(row)
+            ? PROSE_RULE_EDIT_MESSAGE
+            : "This skill is categorised as a rule but carries no rule metadata, so there is no review date to move.",
         });
       }
 
@@ -1177,7 +1194,7 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, detectRuleDivergence, RULE_CATEGORY } =
+      const { readRuleView, detectRuleDivergence, RULE_CATEGORY } =
         await import("../services/rules/index.js");
       const row = await ctx.db.query.skills.findFirst({
         where: and(
@@ -1191,10 +1208,11 @@ export const skillsRouter = router({
           })
         ),
       });
-      const rule = row ? readRuleMetadata(row.metadata) : null;
-      if (!row || !rule) {
+      const view = row ? readRuleView(row) : null;
+      if (!row || !view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
       }
+      const rule = view.rule;
       // MEMBERSHIP from the `skill --activates--> automation` EDGE — the store.
       // `rule.behaviours[]` is consulted only for the flowHash snapshot, keyed
       // by the ids the edge yields.
@@ -1216,6 +1234,8 @@ export const skillsRouter = router({
           workspaceId: row.workspaceId,
           createdAt: row.createdAt,
           rule: { ...rule, ...(factSkillId ? { factSkillId } : {}) },
+          /** `loop` (the rule loop wrote it) or `prose` (a guideline skill). */
+          form: view.form,
         },
         divergence,
       };
@@ -1313,6 +1333,8 @@ export const skillsRouter = router({
          *  skill is gated by the agent's grant/role, not silently evaluated
          *  as if the human owner created it directly. */
         agentUserId: z.string().uuid().optional(),
+        /** WHY — shown to the reviewer when an agent's create is proposed. */
+        reasoning: z.string().max(2000).optional(),
         /** Free-form metadata bag persisted on the skill row — e.g. the
          *  marketplace source-link (`marketSource`) a standalone-install stamps
          *  so a published fix can reconcile the installed skill. */
@@ -1444,6 +1466,7 @@ export const skillsRouter = router({
         workspaceId: input.workspaceId,
         subjectType: "skill",
         action: "create",
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         // Widened (object-proposal manifest W1): carry the FULL resolved insert
         // shape (matching insertSkillGoverned's `values`) so an approved proposal
         // materializes a real skill via the shared insertSkillGoverned door. Only
@@ -1680,6 +1703,8 @@ export const skillsRouter = router({
          * skill's baseline could never advance past the first reconcile.
          */
         metadata: z.record(z.string(), z.unknown()).optional(),
+        /** WHY — shown to the reviewer when an agent's edit is proposed. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1690,6 +1715,7 @@ export const skillsRouter = router({
       const {
         id,
         agentUserId: _agentUserId,
+        reasoning,
         metadata: metadataPatch,
         requiredToolIds: requestedToolIds,
         ...updateData
@@ -1731,6 +1757,21 @@ export const skillsRouter = router({
       const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
       const writtenMode = input.executionMode ?? existingSkill.executionMode;
       assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
+      // `category: "rule"` makes a skill a rule, pushed into every piece of
+      // work in its scope (decision D1). Refused before the gate, so no
+      // proposal is filed for a change that could never apply.
+      const { skillCategoryChangeProblem } =
+        await import("../services/rules/index.js");
+      const categoryProblem = skillCategoryChangeProblem({
+        nextCategory: input.category,
+        currentCategory: existingSkill.category,
+        metadata: existingSkill.metadata,
+        kind: writtenKind,
+        currentKind: existingSkill.kind,
+      });
+      if (categoryProblem) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: categoryProblem });
+      }
       // A box declaration edit is parsed by the same rule as create, and a
       // box skill is never read-only: judged on the bag the UPDATE stores
       // (the patch shallow-merged onto the live bag, below), so a live
@@ -1789,6 +1830,7 @@ export const skillsRouter = router({
         workspaceId: existingSkill.workspaceId || undefined,
         subjectType: "skill",
         action: "update",
+        ...(reasoning ? { reasoning } : {}),
         // Widened (gate-payload sufficiency): `{ id }` described NO change, so an
         // approved skill-update proposal had nothing to apply. Carry the raw
         // patch (`updateData` = input minus `id`/`agentUserId`/`metadata`, plus
@@ -1865,6 +1907,12 @@ export const skillsRouter = router({
         // this verb before any grant rung — a reviewed action becomes an
         // unattended one. Same peeled-off-metadata blind spot as above.
         readOnlyWidened(
+          metadataPatch as Record<string, unknown> | undefined,
+          existingSkill.metadata as Record<string, unknown> | null
+        ) ||
+        // Turning a declared `metadata.proposeOnly` OFF lets an auto grant or
+        // rule run a verb that always asked: the same escalation.
+        proposeOnlyLoosened(
           metadataPatch as Record<string, unknown> | undefined,
           existingSkill.metadata as Record<string, unknown> | null
         ) ||
@@ -2111,6 +2159,18 @@ export const skillsRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `Skill is not active (status: ${skill.status})`,
+        });
+      }
+
+      // COMPUTE (plan a640c5bb B3): a compute start leaves a lease and a
+      // release closes one, in the capability runner only; this door runs
+      // the skill's code alone, so it would start a machine nothing releases.
+      const { readComputeRun } =
+        await import("../services/compute/compute-contract.js");
+      if (readComputeRun(skill, input.input).kind !== "none") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${skill.name}" starts or releases compute: run it as a capability (run_capability), which records its time to live.`,
         });
       }
 

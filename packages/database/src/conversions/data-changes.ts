@@ -35,6 +35,7 @@ import {
   type RunSummary,
 } from "./engine.js";
 import { selectManifestOps } from "./select.js";
+import { reservedProfileSlugs } from "../utils/reserved-profile-slugs.js";
 import type { DataChangePreview } from "@synap-core/types/package-updates";
 import {
   SLUG_WORDS,
@@ -102,6 +103,8 @@ const OP_PROFILE_SLUGS: {
     op.eventSlug,
   ],
   rekindByStatus: (op) => [op.slug, op.toSlug],
+  // The reserved `project` kinds it retires.
+  retireProjectTwins: () => reservedProfileSlugs(),
 };
 
 export function opProfileSlugs(op: ConversionOp): OpProfileSlugs {
@@ -167,6 +170,8 @@ const CHANGED_COUNTERS = [
   "relationsCreated",
   "entitiesArchived",
   "entitiesRekinded",
+  "projectTwinsRetired",
+  "entityVectorsDropped",
 ] as const satisfies ReadonlyArray<keyof OpCounts>;
 
 const _LEFT_ALONE_COUNTERS = [
@@ -301,6 +306,8 @@ export function describeConversionOp(
           : "")
       );
     }
+    case "retireProjectTwins":
+      return "Retire the leftover copies of your projects stored as things, keeping everything filed into each project.";
     default: {
       const unhandled: never = op;
       return unhandled;

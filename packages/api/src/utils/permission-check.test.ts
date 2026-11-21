@@ -2433,7 +2433,12 @@ describe("checkPermissionOrPropose — anonymous principal routed through decide
       const result = await anonymousWrite({
         subjectType,
         action,
-        data: { id: `${subjectType}-${action}` },
+        // A command the approval could run: one with none is refused at
+        // filing (`can-apply.ts`), which is not the floor this test pins.
+        data: {
+          id: `${subjectType}-${action}`,
+          ...(subjectType === "command" ? { command: "ls -la" } : {}),
+        },
       });
       expect(
         "granted" in result && result.granted === false,

@@ -11,8 +11,9 @@
  *
  * The throw site now attaches a structured cause (`KIND_MISSING`) carrying the
  * slug, the space it was looked up in, and the spaces the caller can see that
- * DO hold an active kind with that exact slug. The message is unchanged
- * ("Profile not found: <slug>"), so every reader of the text keeps working.
+ * DO hold an active kind with that exact slug. The message keeps its prefix
+ * ("Profile not found: <slug>") and, when the kind lives elsewhere, names
+ * where and the fix ({@link kindMissingMessage}).
  *
  * Pure: no database import. The lookup lives in
  * `services/profiles/kind-elsewhere.ts`; the classifier
@@ -54,15 +55,45 @@ interface KindMissingCause extends KindMissingDetail {
 /** How many other spaces a refusal names. */
 export const KIND_ELSEWHERE_MAX = 5;
 
-/** The refusal `entities.create` throws for an unresolvable kind slug. */
+/**
+ * The refusal `entities.create` throws for an unresolvable kind slug.
+ *
+ * The message STARTS with `Profile not found: <slug>` (older readers match
+ * that prefix). When the kind exists in another space the caller can read, the
+ * message goes on to say so and names the fix, because the caller of this
+ * door (an agent through MCP / Hub REST) reads the message, not the typed
+ * cause: file the record where the kind lives, or share the kind with this
+ * space (ticket 83d494dd). The person-facing sentence is
+ * {@link kindMissingSentence}, read from the cause.
+ */
 export function kindMissingError(detail: KindMissingDetail): TRPCError {
   const cause: KindMissingCause = { code: KIND_MISSING_CODE, ...detail };
   return new TRPCError({
     code: "NOT_FOUND",
-    // Kept verbatim: `materializationError` and older readers show this text.
-    message: `Profile not found: ${detail.profileSlug}`,
+    message: kindMissingMessage(detail),
     cause: cause as unknown as Error,
   });
+}
+
+/** The agent-facing text of {@link kindMissingError}. */
+export function kindMissingMessage(detail: KindMissingDetail): string {
+  const head = `Profile not found: ${detail.profileSlug}`;
+  if (detail.foundIn.length === 0) return head;
+  const kind = detail.kindName ?? detail.profileSlug;
+  const here = detail.workspaceName
+    ? `"${detail.workspaceName}" (${detail.workspaceId})`
+    : (detail.workspaceId ?? "this space");
+  const where = detail.foundIn
+    .map((f) => `"${f.name}" (${f.workspaceId})`)
+    .join(", ");
+  // The fix comes before the list of spaces: an MCP error is cut at 500
+  // characters (`toSafeToolError`), and the list is the part that can grow.
+  return (
+    `${head}. The kind "${kind}" lives in another space and is not shared with ${here}: ` +
+    `file the record in a space that has it, or widen the kind with change_kind_scope ` +
+    `(scope "shared", allowedWorkspaceIds naming this space; grant_profile_access if it is already shared). ` +
+    `It exists in ${where}.`
+  );
 }
 
 const str = (v: unknown, max = 200): string | undefined =>

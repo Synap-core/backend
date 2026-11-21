@@ -370,7 +370,7 @@ describe("buildNeedsYou link building", () => {
     expect(row.action).toEqual({ kind: "expand", label: "Show items" });
     expect(row.items.map((i) => i.exit?.href)).toEqual([
       "/kinds?focus=pr-1",
-      "/rules?filter=never-ran&focus=au-1",
+      "/automations?filter=never-ran&focus=au-1",
     ]);
   });
 

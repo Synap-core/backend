@@ -37,8 +37,14 @@ type Writer = Pick<Db, "insert" | "update" | "delete" | "select">;
 
 /** The role of the automation that drives a playbook from a cron schedule. */
 export const SCHEDULE_ROLE = "schedule";
-/** The role of the automation the playbook canvas saved (`playbooks.saveFlow`). */
+/** The role of the automation a playbook canvas saved (rows may still exist; no door writes it any more). */
 export const FLOW_ROLE = "flow";
+/**
+ * The role of a LINK's automation: a `run_ended` activator compiled to a rule
+ * ("when a run of X ends, start this playbook", `playbook-links.ts`). The
+ * other activators' automations carry `activator`.
+ */
+export const LINK_ROLE = "link";
 /** The two roles `flow_automation_id` stood for: the playbook's driving automation. */
 export const DRIVER_ROLES: readonly string[] = [SCHEDULE_ROLE, FLOW_ROLE];
 

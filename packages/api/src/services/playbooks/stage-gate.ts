@@ -61,7 +61,13 @@ import {
   CHECK_GATE_METADATA_KEY,
   CHECK_GATE_UNEVALUATED,
 } from "@synap-core/types/focus-sessions";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import {
+  owedOutputHint,
+  readStageOutcomes,
+  type StageOutcomesInput,
+} from "../focus-sessions/stage-outputs-approved.js";
 import { trackRepository } from "../tracks/track-repo.js";
 
 const logger = createLogger({ module: "stage-gate" });
@@ -264,6 +270,12 @@ export interface StageGateSubject {
 export interface CheckMeasure {
   failing: string[];
   reason?: string;
+  /**
+   * Every miss is a criterion the AI judge could not grade (the call failed):
+   * nothing was judged, so the gate HOLDS and never sends the run back to its
+   * `onFail` stage. The owner's grade, or a later evaluation, resumes it.
+   */
+  notJudged?: boolean;
 }
 
 export interface StageGateAdvance {
@@ -294,6 +306,8 @@ export interface CheckGateResult {
   paused: boolean;
   /** Why it held, in words — when the subject can say (a track does). */
   reason?: string;
+  /** It held only because the AI judge could not run ({@link CheckMeasure}). */
+  notJudged?: boolean;
 }
 
 export type StageGateOutcome =
@@ -395,7 +409,7 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason } = await subject.checkFailing(fromStage);
+  const { failing, reason, notJudged } = await subject.checkFailing(fromStage);
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
@@ -423,6 +437,7 @@ async function applyCheckGate(
     failing,
     paused,
     ...(reason ? { reason } : {}),
+    ...(notJudged ? { notJudged } : {}),
   };
 }
 
@@ -459,25 +474,72 @@ export async function applyStageGate(
   return { kind: "human", ...opened };
 }
 
-/** Pure: the required criteria of `fromStage` whose current verdict is not pass. */
+/**
+ * Pure: what holds the stage LEFT — its required outcomes not met
+ * (`readStageOutcomes`, the one reading of a stage's work; the goal gate's
+ * {@link measureTrackStage} reads the same projection). A stage with no
+ * outcome holds nothing.
+ */
 export function checkGateFailing(
-  summary: {
-    criteria: Array<{ key: string; required?: boolean; stageKey?: string }>;
-    evaluations: Array<{ criterionKey: string; verdict: string }>;
-  },
+  input: StageOutcomesInput & { stages: unknown },
   fromStage: string
 ): string[] {
-  const current = new Map(
-    summary.evaluations.map((e) => [e.criterionKey, e.verdict])
-  );
-  return summary.criteria
-    .filter(
-      (c) =>
-        c.stageKey === fromStage &&
-        c.required !== false &&
-        current.get(c.key) !== "pass"
-    )
-    .map((c) => c.key);
+  return checkGateHold(input, fromStage).failing;
+}
+
+/**
+ * {@link checkGateFailing}, with the hold's `reason` when the stage left owes
+ * an OUTPUT: the gate's pause carries it (`metadata.checkGate.reason`, the
+ * hold), and the session's nudge repeats it, so the agent reads which slot to
+ * deliver and how (`owedOutputHint`). Pure.
+ */
+export function checkGateHold(
+  input: StageOutcomesInput & { stages: unknown },
+  fromStage: string,
+  notJudged?: ReadonlyMap<string, string>
+): CheckMeasure {
+  const stage = readStageOutcomes(input.stages, fromStage, input);
+  // The judge could not run on criteria this check needed. When those are
+  // the ONLY misses, the work was never graded: the gate holds with the
+  // failure in words and the owner's way out, and is not a failed check.
+  if (notJudged && notJudged.size > 0 && stage.unmet.length > 0) {
+    // An unmet outcome is unjudged when every criterion still open on it is
+    // one the judge could not grade: a real verdict among them, or a declared
+    // output nothing judges, is a miss and keeps today's path (`onFail`).
+    const unjudged = (key: string): string[] | null => {
+      const outcome = stage.outcomes.find((o) => o.key === key);
+      if (!outcome) return null;
+      const open =
+        outcome.source === "criterion"
+          ? [outcome.key]
+          : (outcome.criteria ?? []).filter((c) => !c.met).map((c) => c.key);
+      return open.length > 0 && open.every((k) => notJudged.has(k))
+        ? open
+        : null;
+    };
+    const blocked = stage.unmet.map(unjudged);
+    if (blocked.every((keys): keys is string[] => keys !== null)) {
+      const criteria = [...new Set(blocked.flat())];
+      const why = [...new Set(criteria.flatMap((k) => notJudged.get(k) ?? []))];
+      return {
+        failing: stage.unmet,
+        notJudged: true,
+        reason: [
+          ...why,
+          `The check of "${fromStage}" holds here instead of failing: the owner can grade ${criteria.map((k) => `"${k}"`).join(", ")} by hand to move on.`,
+          ...stage.unmetOutputs.map(owedOutputHint),
+        ].join(" "),
+      };
+    }
+  }
+  if (stage.unmetOutputs.length === 0) return { failing: stage.unmet };
+  return {
+    failing: stage.unmet,
+    reason: [
+      `The check of "${fromStage}" did not pass: ${stage.unmet.join(", ")}.`,
+      ...stage.unmetOutputs.map(owedOutputHint),
+    ].join(" "),
+  };
 }
 
 // The gate's two stored literals live in `@synap-core/types/focus-sessions`,
@@ -568,18 +630,44 @@ export function sessionGateSubject(
         userId: params.userId,
         agentUserId: params.agentUserId ?? null,
         stageKey: fromStage,
+        asGateCheck: true,
       });
       // An evaluation that did not RUN is not a clean gate. `evaluateSession`
       // answers `not_found` when the session cannot be loaded for this caller
       // (a race with a close, the wrong userId) — reading that as "nothing
       // failing" would advance the run ungated on the one path the gate exists
       // to hold. Unmeasured is not passed.
-      return {
-        failing:
-          result.status === "evaluated"
-            ? checkGateFailing(result, fromStage)
-            : [CHECK_GATE_UNEVALUATED],
-      };
+      if (result.status !== "evaluated") {
+        return { failing: [CHECK_GATE_UNEVALUATED] };
+      }
+      const [row] = await db
+        .select({ expectedOutputs: focusSessions.expectedOutputs })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, params.sessionId))
+        .limit(1);
+      const proc = await loadSessionProcess({
+        sessionId: params.sessionId,
+        playbookId: params.playbookId ?? null,
+      });
+      // The judge criteria this evaluation could not grade because the AI
+      // call failed, with that failure in words (`evaluate.ts`).
+      const notJudged = new Map(
+        result.results.flatMap((r) =>
+          r.status === "skipped" && r.failureClass && r.reason
+            ? [[r.key, r.reason] as const]
+            : []
+        )
+      );
+      return checkGateHold(
+        {
+          stages: proc?.stages ?? [],
+          expectedOutputs: row?.expectedOutputs ?? [],
+          criteria: result.criteria,
+          evaluations: result.evaluations,
+        },
+        fromStage,
+        notJudged
+      );
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,

@@ -8,7 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  *
  * This file tries to DEFEAT the floor, one widening per row; each row rules
  * out one wrong placement:
- *  - an auto grant widening the agent run       → floor below the grant rung;
+ *  - an auto approval row widening the agent run → floor below the row rung;
  *  - an auto governance rule widening it        → floor below the rule rung (2.8);
  *  - a verb claiming `readOnly`                 → floor below the read short-circuit;
  *  - a person token of an app (owner bypass)    → floor below the owner bypass;
@@ -21,7 +21,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  */
 
 const grantMock = vi.fn();
-const findCapabilityGrantMock = vi.fn();
 const resolveGovernanceRuleMock = vi.fn();
 const intentRows = new Map<string, { effect: string }>([
   ["publish_post", { effect: "write" }],
@@ -52,7 +51,6 @@ const fakeDb = {
 vi.mock("@synap/database", () => ({
   getDb: async () => fakeDb,
   eq: (a: unknown, b: unknown) => ({ a, b }),
-  findCapabilityGrant: (...args: unknown[]) => findCapabilityGrantMock(...args),
   getRequestGrant: () => grantMock(),
 }));
 
@@ -99,11 +97,10 @@ describe("gateCapabilityExecution — a run that sends a pod file proposes", () 
   beforeEach(() => {
     grantMock.mockReset();
     grantMock.mockReturnValue(undefined);
-    findCapabilityGrantMock.mockReset();
-    // An ACTIVE auto grant: without the floor, this agent run would run.
-    findCapabilityGrantMock.mockResolvedValue({ ok: true, execMode: "auto" });
+    // An auto approval row (decision D2: the only "runs without asking"):
+    // without the floor, this agent run would run.
     resolveGovernanceRuleMock.mockReset();
-    resolveGovernanceRuleMock.mockResolvedValue(undefined);
+    resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
   });
 
   it("names its reason code", () => {
@@ -116,14 +113,13 @@ describe("gateCapabilityExecution — a run that sends a pod file proposes", () 
     ).toEqual({ decision: "run" });
   });
 
-  it("an auto grant does not widen it", async () => {
+  it("an auto approval row does not widen it", async () => {
     expect(await gateCapabilityExecution(agentRun())).toMatchObject(
       PROPOSES_FOR_THE_FILE
     );
   });
 
-  it("an auto governance rule does not widen it (no grant at all)", async () => {
-    findCapabilityGrantMock.mockResolvedValue({ ok: false });
+  it("an auto governance rule does not widen it (the gate reads no grant)", async () => {
     resolveGovernanceRuleMock.mockResolvedValue({ verdict: "auto" });
     // Control: the rule alone does widen the same run without a file.
     expect(

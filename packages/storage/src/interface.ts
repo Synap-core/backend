@@ -47,6 +47,12 @@ export interface FileInfo {
   contentType: string;
 }
 
+/** What {@link IFileStorage.getSignedUrl} must know of the object it signs. */
+export interface SignedGetObject {
+  /** The Content-Type recorded for it at upload; `null` when none was. */
+  contentType: string | null;
+}
+
 /** Options for {@link IFileStorage.getSignedUploadUrl}. */
 export interface SignedUploadOptions {
   /** Signed — the PUT must send exactly this Content-Type. */
@@ -292,19 +298,29 @@ export interface IFileStorage {
   getMetadata(path: string): Promise<FileInfo>;
 
   /**
-   * Generate a signed URL for temporary access
+   * Generate a signed GET URL for temporary access. It is always `attachment`
+   * (`attachmentDisposition`), and a script or style object is served as
+   * `text/plain; charset=utf-8` (`servedContentTypeOverride`), so a stored
+   * file never runs as the pod's own script or style.
    *
    * @param path - Storage path/key
-   * @param expiresIn - Expiration time in seconds (default: 3600 = 1 hour)
+   * @param expiresIn - Expiration time in seconds
+   * @param object - The object's stored type: REQUIRED so no caller can sign
+   *   without saying it (`contentType: null` only when nothing recorded one)
    * @returns Signed URL valid for the specified duration
    *
    * @example
    * ```typescript
-   * const url = await storage.getSignedUrl('users/123/private/doc.pdf', 3600);
-   * // URL valid for 1 hour
+   * const url = await storage.getSignedUrl('users/123/private/doc.pdf', 3600, {
+   *   contentType: 'application/pdf',
+   * });
    * ```
    */
-  getSignedUrl(path: string, expiresIn?: number): Promise<string>;
+  getSignedUrl(
+    path: string,
+    expiresIn: number,
+    object: SignedGetObject
+  ): Promise<string>;
 
   /**
    * The canonical (unsigned) storage URL of an object — the same value

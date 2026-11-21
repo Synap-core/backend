@@ -364,6 +364,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- 0379: the permissions it asks for pod-wide (`synap_requests[].scope = "pod"`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';
+-- 0437: the entries that list their kinds (`synap_requests[].kinds`), as declared.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_kind_groups" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -2594,6 +2596,8 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"      text    NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "name"            text    NOT NULL,
   "description"     text,
   "trigger_type"    text    NOT NULL,
@@ -2646,6 +2650,9 @@ CREATE INDEX IF NOT EXISTS "automations_next_run_at_idx"
 
 CREATE INDEX IF NOT EXISTS "automations_created_by_idx"
   ON "automations" ("created_by");
+
+CREATE INDEX IF NOT EXISTS "automations_agent_user_id_idx"
+  ON "automations" ("agent_user_id");
 
 -- Name-identity backstop (0230): at-most-one non-archived automation per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
@@ -4450,6 +4457,8 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"     uuid,
   "created_by"       text        NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"    text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"             text        NOT NULL,
   "description"      text,
   "goal_template"    text        NOT NULL,
@@ -4470,6 +4479,7 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+CREATE INDEX IF NOT EXISTS "idx_playbooks_agent_user_id" ON "playbooks" ("agent_user_id");
 -- TOCTOU race backstop (0227): at-most-one non-archived playbook per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
 -- pod-wide rows participate. Soft-archive of pre-existing name clones is only
@@ -4967,6 +4977,7 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_appro
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_invitations_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_actions_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'compute_spend_daily_cents';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -5295,6 +5306,104 @@ VALUES
    ARRAY['list_records', 'fetch_record'], ARRAY[]::text[])
 ON CONFLICT ("slug") DO NOTHING;
 
+-- Compute leases (0431, 0432): one row per compute start; the TTL sweeper
+-- destroys each active lease past `expires_at`, except a new pod's server
+-- that registered (`kept`, 0432). Mirrors 0431 and 0432.
+CREATE TABLE IF NOT EXISTS "compute_leases" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"              text        NOT NULL,
+  "workspace_id"         uuid,
+  "agent_user_id"        text,
+  "proposal_id"          uuid,
+  "session_id"           uuid,
+  "provision_skill_id"   uuid,
+  "provision_verb"       text        NOT NULL,
+  "release_verb"         text        NOT NULL,
+  "connection_selector"  jsonb,
+  "resource_id"          text,
+  "registration_code_hash" text,
+  "ttl_minutes"          integer     NOT NULL,
+  "max_spend_cents"      integer     NOT NULL,
+  "state"                text        NOT NULL DEFAULT 'starting',
+  "expires_at"           timestamptz NOT NULL,
+  "release_attempts"     integer     NOT NULL DEFAULT 0,
+  "last_release_error"   text,
+  "release_result"       jsonb,
+  "released_at"          timestamptz,
+  "created_at"           timestamptz NOT NULL DEFAULT now(),
+  "updated_at"           timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "compute_leases_state_check"
+    CHECK ("state" IN ('starting', 'active', 'released', 'not_started', 'unknown', 'kept')),
+  CONSTRAINT "compute_leases_ttl_check" CHECK ("ttl_minutes" > 0),
+  CONSTRAINT "compute_leases_spend_check" CHECK ("max_spend_cents" > 0)
+);
+
+-- The sweeper's read: active leases past their TTL.
+CREATE INDEX IF NOT EXISTS "compute_leases_due_idx"
+  ON "compute_leases" ("expires_at") WHERE "state" = 'active';
+-- The ceiling's read: the day's starts.
+CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
+  ON "compute_leases" ("created_at");
+-- A manual destroy closes the lease of the machine it names.
+CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
+  ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
+
+-- Realtime room tickets (0438): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0438.
+CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
+  "ticket_hash"  text        PRIMARY KEY,
+  "user_id"      text        NOT NULL,
+  "document_id"  uuid        NOT NULL,
+  "access"       text        NOT NULL,
+  "api_key_id"   uuid        NOT NULL,
+  "expires_at"   timestamptz NOT NULL,
+  "consumed_at"  timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "realtime_room_tickets_access_check"
+    CHECK ("access" IN ('read', 'edit'))
+);
+CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
+  ON "realtime_room_tickets" ("expires_at");
+
+-- Renderer bundles (0436): a bundle row (its defaults are the host fallback,
+-- never a renderer binding) and its ONE host-module set per pod (unique on
+-- `module`; the modules' FK is checked at commit). Mirrors 0436.
+CREATE TABLE IF NOT EXISTS "renderer_bundles" (
+  "slug"          text        PRIMARY KEY,
+  "version"       text        NOT NULL,
+  "set_sha256"    text        NOT NULL,
+  "react_version" text        NOT NULL,
+  "kit_exports"   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  "defaults"      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "source"        text        NOT NULL,
+  "installed_by"  text        NOT NULL,
+  "installed_at"  timestamptz NOT NULL DEFAULT now(),
+  "updated_at"    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_host_modules" (
+  "bundle_slug" text    NOT NULL,
+  "module"      text    NOT NULL,
+  "source"      text    NOT NULL,
+  "sha256"      text    NOT NULL,
+  "byte_length" integer NOT NULL,
+  PRIMARY KEY ("bundle_slug", "module")
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'renderer_host_modules_bundle_fk'
+  ) THEN
+    ALTER TABLE "renderer_host_modules" ADD CONSTRAINT "renderer_host_modules_bundle_fk"
+      FOREIGN KEY ("bundle_slug") REFERENCES "renderer_bundles"("slug")
+      ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
+  ON "renderer_host_modules" ("module");
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
@@ -5384,6 +5493,8 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "logo_url"          text,
   "mode"              text        NOT NULL DEFAULT 'specific',
   "approved_requests" jsonb,
+  -- 0434: the approval in its v2 form (what + where per tier), or NULL.
+  "approved_access"   jsonb,
   "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "last_used_at"      timestamptz,
   "created_at"        timestamptz NOT NULL DEFAULT now(),

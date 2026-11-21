@@ -7,10 +7,11 @@
  * `pauseAutomationsOfRemovedMember` the member-removal door calls:
  *   1. a run whose owner left the space is refused before any step runs, the
  *      run reads `blocked_by_policy` with the reason, the automation is paused;
- *   2. an agent-owned automation stops when the agent's PERSON left;
+ *   2. a legacy agent-owned automation (a row 0443 could not move) stops when
+ *      the agent's PERSON left;
  *   3. CONTROL: a member's automation runs its step;
- *   4. removal pauses exactly the removed person's (and their agents')
- *      active automations in that space.
+ *   4. removal pauses exactly the removed person's active automations in that
+ *      space, the ones their agents authored included (owner = the person).
  *
  * Stubbed (seams with their own suites): the IS command transport, session
  * open/close, narration.
@@ -127,12 +128,15 @@ const SINGLE_COMMAND = {
   edges: [{ id: "e1", source: "t", target: "cmd" }],
 };
 
-async function automation(owner: string): Promise<string> {
+async function automation(
+  owner: string,
+  actor: string | null = null
+): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into automations (id, workspace_id, created_by, name, trigger_type, trigger_config, flow_definition, status, success_count, failure_count, run_count, version)
-     values ($1, $2, $3, $4, 'cron', '{}'::jsonb, $5::jsonb, 'active', 0, 0, 0, 1)`,
-    [id, WS, owner, `rule-${id}`, JSON.stringify(SINGLE_COMMAND)]
+    `insert into automations (id, workspace_id, created_by, agent_user_id, name, trigger_type, trigger_config, flow_definition, status, success_count, failure_count, run_count, version)
+     values ($1, $2, $3, $4, $5, 'cron', '{}'::jsonb, $6::jsonb, 'active', 0, 0, 0, 1)`,
+    [id, WS, owner, actor, `rule-${id}`, JSON.stringify(SINGLE_COMMAND)]
   );
   return id;
 }
@@ -186,7 +190,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   h.commandCalls = 0;
   await h.client!.exec(
-    "delete from automations; delete from automation_runs; delete from automation_step_runs; delete from users; delete from workspace_members;"
+    "delete from automations; delete from automation_runs; delete from automation_step_runs; delete from users; delete from workspace_members; delete from api_keys;"
   );
   await q(
     `insert into users (id, email, user_type) values ($1, 'm@x.test', 'human'), ($2, 'l@x.test', 'human')`,
@@ -244,9 +248,9 @@ describe("a run whose person left the space is refused (audit F9)", () => {
 });
 
 describe("removing a member pauses what runs for them in that space", () => {
-  it("pauses the person's and their agents' active automations, and nobody else's", async () => {
+  it("pauses the person's active automations, their agents' included (owned by the person, the agent as actor), and nobody else's", async () => {
     const own = await automation(LEFT);
-    const agents = await automation(LEFT_AGENT);
+    const agents = await automation(LEFT, LEFT_AGENT);
     const others = await automation(MEMBER);
 
     const paused = await pauseAutomationsOfRemovedMember(db, {
@@ -258,5 +262,29 @@ describe("removing a member pauses what runs for them in that space", () => {
     expect((await automationRow(own)).status).toBe("paused");
     expect((await automationRow(agents)).status).toBe("paused");
     expect((await automationRow(others)).status).toBe("active");
+  });
+
+  it("pauses what an agent acting for the person wrote, even when someone else owns it", async () => {
+    // An agent MEMBER provisioned for LEFT: its key acts for LEFT.
+    const forLeft = randomUUID();
+    const forMember = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id) values ($1, 'f@x.test', 'agent', $3), ($2, 'g@x.test', 'agent', $3)`,
+      [forLeft, forMember, MEMBER]
+    );
+    await q(
+      `insert into api_keys (id, user_id, linked_user_id) values ($1, $2, $3), ($4, $5, $6)`,
+      [randomUUID(), forLeft, LEFT, randomUUID(), forMember, MEMBER]
+    );
+    const written = await automation(MEMBER, forLeft);
+    const untouched = await automation(MEMBER, forMember);
+
+    await pauseAutomationsOfRemovedMember(db, {
+      workspaceId: WS,
+      userId: LEFT,
+    });
+
+    expect((await automationRow(written)).status).toBe("paused");
+    expect((await automationRow(untouched)).status).toBe("active");
   });
 });

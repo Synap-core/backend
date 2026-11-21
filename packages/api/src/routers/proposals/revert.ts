@@ -8,6 +8,7 @@
 
 import type { MergeMaterializedStamp } from "@synap/database";
 import { assertUnmergeable } from "@synap/database";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import type { StoredProposalData } from "@synap-core/types";
 import {
   isRequestShapedProposalData,
@@ -617,7 +618,7 @@ export function revertableForRow(row: RevertPlannerInput): boolean {
   if (row.status === "approved" || row.status === "auto_approved") {
     return planProposalRevert(row).kind !== "unsupported";
   }
-  if (row.status === "pending" || row.status === "approval_failed") {
+  if (isProposalUndecided(row.status)) {
     return wouldBeRevertable(row);
   }
   return false;

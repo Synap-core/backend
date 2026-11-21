@@ -34,6 +34,7 @@ import {
   isHumanRevision,
   isPartiallyApprovedData,
 } from "@synap-core/types/proposals";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import { proposalReasonBucket } from "../proposals/reason-bucket.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { authoredByUser } from "../agent-identity-service.js";
@@ -224,11 +225,11 @@ export function foldAgentScorecard(
   let rejected = 0;
   for (const { status, count } of agg.statusCounts) {
     total += count;
+    if (isProposalUndecided(status)) {
+      pending += count;
+      continue;
+    }
     switch (status) {
-      case ProposalStatus.PENDING:
-      case ProposalStatus.APPROVAL_FAILED:
-        pending += count;
-        break;
       case ProposalStatus.APPROVED:
       case ProposalStatus.AUTO_APPROVED:
         applied += count;
@@ -584,6 +585,11 @@ export function foldAgentStatusRows(
       withdrawn: 0,
       writes7d: 0,
     };
+    byAgent.set(r.agentUserId, a);
+    if (isProposalUndecided(r.status)) {
+      a.pending += r.count;
+      continue;
+    }
     switch (r.status) {
       // A partially-applied row carries status `"approved"`/`"auto_approved"`
       // like any other; only `data.dispositions` distinguishes it. Route it to
@@ -608,17 +614,12 @@ export function foldAgentStatusRows(
       case ProposalStatus.REVERTED:
         a.reverted += r.count;
         break;
-      case ProposalStatus.PENDING:
-      case ProposalStatus.APPROVAL_FAILED:
-        a.pending += r.count;
-        break;
       case ProposalStatus.WITHDRAWN:
         a.withdrawn += r.count;
         break;
       default:
         break;
     }
-    byAgent.set(r.agentUserId, a);
   }
   return byAgent;
 }

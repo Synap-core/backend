@@ -34,7 +34,6 @@ import {
   focusSessions,
   inArray,
   links,
-  OPEN_SESSION_STATUSES,
   proposals,
   drizzleSql,
 } from "@synap/database";
@@ -48,7 +47,10 @@ import {
 } from "@synap/database/schema";
 import { isHttpUrl } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  UNDERWAY_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import type {
   NeedsYouContextRead,
   RequestAiCanDo,
@@ -85,6 +87,7 @@ import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { aiCanDoItems } from "../focus-sessions/continuation-packet.js";
 import { resolveProposalWaits } from "../proposals/proposal-waits.js";
 import { readSessionTimelines } from "../timeline/read-timeline.js";
+import type { TimelineWithheldSource } from "@synap-core/types/units";
 
 const logger = createLogger({ module: "needs-you-context" });
 
@@ -277,6 +280,14 @@ export interface NeedsYouContextReader extends Omit<SessionReader, "lens"> {
 }
 
 const SESSION_KEY = "session:";
+/**
+ * The timeline sources the request card's story never shows: the runners
+ * that stamped in and the room posts (it has its own room read). Not read.
+ */
+export const NEEDS_YOU_TIMELINE_WITHHELD = [
+  "runners",
+  "room_posts",
+] as const satisfies readonly TimelineWithheldSource[];
 const UNREADABLE = { status: "unreadable" } as const;
 
 /** The session a row names: its door, else its group (`session:<id>`). */
@@ -407,10 +418,13 @@ export async function readNeedsYouContext(
 
   const [timelines, slotRows, waitingRows, waits, subjects] = await Promise.all(
     [
+      // The story reads what HAPPENED to the session, not who stamped in or
+      // what was said in its room: those sources are not read at all, so
+      // their cost and their failure never reach this card.
       part("timeline", () =>
         readSessionTimelines(
           sessionIds,
-          { userId: reader.userId },
+          { userId: reader.userId, withhold: NEEDS_YOU_TIMELINE_WITHHELD },
           timelineItems
         )
       ),
@@ -452,7 +466,7 @@ export async function readNeedsYouContext(
                   eq(links.toType, "session"),
                   eq(links.linkType, "blocked_by"),
                   inArray(links.toId, sessionIds),
-                  inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+                  inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
                   sessionReadableWhere(floor)
                 )
               )

@@ -91,7 +91,10 @@ a package that consumes nothing would go stale in the one direction that is invi
    (0360, read), `edit_video` (0370, act — sends the person's video to an
    outside service; its one input, `{ video }`, is seeded on `input_schema` in
    the same file), `transcribe_media` and `download_media` (0413, act — media
-   work on the person's computer; no app input yet).
+   work on the person's computer; no app input yet), `provision_compute` and
+   `release_compute` (0429, act — a cloud machine started for a required time
+   to live and spend maximum, and stopped or destroyed; the contract is
+   `services/compute/compute-contract.ts`).
 3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
 4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in

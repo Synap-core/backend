@@ -9,6 +9,8 @@
  * flat definition is returned as is.
  */
 
+import type { TemplateDependency } from "@synap/database";
+
 /**
  * The skill inside a skill package's catalog definition — the ONE unwrap both
  * the install door (`marketplace-install.ts`) and the update door
@@ -48,4 +50,50 @@ export function capabilityElementOf(definition: unknown): unknown {
     !Array.isArray(capability)
     ? capability
     : definition;
+}
+
+/**
+ * What a capability package `require`s present before it applies: the
+ * package's own `dependencies` (on the wrapped CP package body, beside
+ * `capability`), plus, for an ADD-ON, its base (`capability.extends`) when the
+ * body does not list it. The catalog derives that same base dependency when it
+ * publishes (`capabilityDependencies` in workspace-templates' catalog-lib); it
+ * is derived again here because the capability feed the pod caches serves the
+ * capability element alone, without the package's `dependencies`.
+ *
+ * Read by the capability apply step (`applyCapabilityDefinition`), which
+ * hands them to the dependency resolver's capability branch
+ * (`resolveCapabilityDependencies`).
+ */
+export function capabilityDependenciesOf(
+  definition: unknown
+): TemplateDependency[] {
+  if (!definition || typeof definition !== "object") return [];
+  const declared = (definition as { dependencies?: unknown }).dependencies;
+  const deps: TemplateDependency[] = Array.isArray(declared)
+    ? declared.filter(
+        (d): d is TemplateDependency =>
+          !!d &&
+          typeof d === "object" &&
+          typeof (d as { slug?: unknown }).slug === "string" &&
+          (d as { slug: string }).slug.length > 0
+      )
+    : [];
+  const element = capabilityElementOf(definition) as {
+    extends?: unknown;
+  } | null;
+  const base =
+    typeof element?.extends === "string" ? element.extends.trim() : "";
+  const listed = deps.some(
+    (d) => d.slug === base && (d.kind ?? "workspace") === "capability"
+  );
+  if (base && !listed) {
+    deps.push({
+      slug: base,
+      kind: "capability",
+      relation: "require",
+      reason: `An add-on of ${base}: its actions run through ${base}'s access.`,
+    });
+  }
+  return deps;
 }

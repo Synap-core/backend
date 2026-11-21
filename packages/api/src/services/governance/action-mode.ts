@@ -11,8 +11,9 @@
  * tool run. Nothing new is stored and no rung moves: a more specific rule (one
  * agent, one space) still outranks it, the floors above rung 2.8 (untrusted
  * origin, a pod file leaving, an app's outward run) still propose, and the
- * public-post actions (`capabilityVerbAllowsRuleWiden`: the listed names and
- * every verb serving a propose-only intent) never run on their own.
+ * propose-only actions (`capabilityVerbAllowsRuleWiden`: a verb declaring
+ * `metadata.proposeOnly`, every verb serving a propose-only intent, and the
+ * legacy Postiz names) never run on their own.
  *
  * WHO: a person who is a pod admin (a pod-wide rule), never an agent's
  * credential and never a scoped key (an app's sign-in): an AI does not loosen
@@ -27,6 +28,7 @@ import {
   eq,
   inArray,
   isNull,
+  or,
   authoredCreatedBy,
   getRequestGrant,
   isFullAccessGrant,
@@ -37,6 +39,7 @@ import {
   actionRunModeOf,
   type ActionRunMode,
 } from "@synap-core/types/governance-rules";
+import { isUuid } from "@synap-core/types/property-render";
 import { activeRulePredicate } from "../../utils/governance-rule-reads.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { isAgentCaller } from "../library/agent-door.js";
@@ -56,7 +59,8 @@ export interface ActionModeRow {
   mode: ActionRunMode;
   /** The rule that sets it; `null` when it asks first (no rule). */
   ruleId: string | null;
-  /** False for an action no rule may run on its own (a public post). */
+  /** False for an action no rule may run on its own (a public post, a
+   * verb declaring `metadata.proposeOnly`). */
   mayRunOnItsOwn: boolean;
 }
 
@@ -89,23 +93,37 @@ function decidingRow(rows: readonly ModeRuleRow[]): ModeRuleRow | undefined {
 
 /**
  * May each action run on its own? The ONE derivation the gate reads
- * (`capabilityVerbAllowsRuleWiden`), with the intents of the skills named
- * after it: one serving a public post never may, whatever its name.
+ * (`capabilityVerbAllowsRuleWiden`), with the intent and metadata of the
+ * skills it names, by name or by row id (a capability rule matches either):
+ * one serving a public post, or declaring `metadata.proposeOnly`, never may,
+ * whatever its name. Also the refusal of `governanceRules.create`.
  */
-async function actionsMayRunOnTheirOwn(
+export async function actionsMayRunOnTheirOwn(
   actions: readonly string[]
 ): Promise<Map<string, boolean>> {
+  const ids = actions.filter((a) => isUuid(a));
   const rows = await db
-    .select({ name: skills.name, intent: skills.intent })
+    .select({
+      id: skills.id,
+      name: skills.name,
+      intent: skills.intent,
+      metadata: skills.metadata,
+    })
     .from(skills)
-    .where(inArray(skills.name, [...actions]));
+    .where(
+      ids.length > 0
+        ? or(inArray(skills.name, [...actions]), inArray(skills.id, ids))
+        : inArray(skills.name, [...actions])
+    );
   return new Map(
     actions.map((action) => [
       action,
       capabilityVerbAllowsRuleWiden(action) &&
         rows
-          .filter((r) => r.name === action)
-          .every((r) => capabilityVerbAllowsRuleWiden(action, r.intent)),
+          .filter((r) => r.name === action || r.id === action)
+          .every((r) =>
+            capabilityVerbAllowsRuleWiden(r.name, r.intent, r.metadata)
+          ),
     ])
   );
 }
@@ -234,7 +252,7 @@ export async function writeActionMode(input: {
   ) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `"${action}" publishes in public: it always asks you first.`,
+      message: `"${action}" publishes in public or cannot be undone: it always asks you first.`,
       cause: { reasonCode: ACTION_ALWAYS_ASKS },
     });
   }

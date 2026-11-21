@@ -40,11 +40,11 @@ import {
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
   startedByAgentPatch,
-  LIVE_RUN_STATUSES,
   setRunStatus,
   uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import type {
   FocusSession,
   PlaybookRun,
@@ -109,6 +109,7 @@ import {
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { resolveRunner } from "../agent-dispatch/runner.js";
 import type { RunOn } from "@synap-core/types/agents";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
 import { refuseRunMissingTools } from "./run-tools-missing.js";
@@ -667,41 +668,21 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
 
 /**
  * Idempotency-by-subject reuses an existing (playbook, subject) session instead
- * of dispatching a fresh run — UNLESS that session is in one of these TERMINAL
- * states, in which case a new run is allowed again.
+ * of dispatching a fresh run, except in these statuses: the terminal set
+ * (`TERMINAL_SESSION_STATUSES`) plus `scheduled`.
  *
- * The bug this closes (Stellar runaway): keying reuse on `status === 'active'`
- * alone re-spawned a fresh session+run on EVERY daily cron once a stuck session
- * aged out of 'active'. The focus-session reaper flips an idle session
- * active/paused → 'stale' at 24h (focus-session-reaper.ts), and the playbook-run
- * reaper later force-fails its orphaned run and flips the session → 'closed'
- * (playbook-run-reaper.ts). Reusing across every IN-FLIGHT state (active,
- * paused, stale, forming) means a stuck/in-flight subject is not re-dispatched
- * daily; only once the run is terminally failed/closed — session in ('closed' |
- * 'failed' | 'cancelled') — is a new run allowed, so a subject always has a
- * legitimate path back to eligibility and is never permanently locked out.
- * Exported so a test can lock the SHAPE of this decision.
- */
-export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = [
-  "closed",
-  "failed",
-  "cancelled",
-] as const;
-
-/**
- * The statuses subject-idempotency must NOT reuse: the terminal set above, plus
- * `scheduled`.
+ * Every in-flight state (active, paused, stale, forming) is reused, so a stuck
+ * subject is not re-dispatched by every daily cron (Stellar runaway: reuse on
+ * `active` alone re-spawned a run daily once the reaper aged the session to
+ * `stale`); a terminal one is not, so a subject always gets back to eligible.
  *
- * `scheduled` is not terminal, but it is not in flight either — it is an
- * APPOINTMENT (`materializeScheduledSession`): a person's future slot that has
- * executed nothing. Reusing it returned `{ run: null, reused: true }` — a run
- * that reads as handled and never ran — and because an unopened appointment
- * rolls forward and stays `scheduled`, it could suppress that subject's run for
- * weeks. Appointments do not need this reuse to avoid duplicates: the
- * scheduler enforces one open appointment per calendar with its own lookup.
+ * `scheduled` is an APPOINTMENT (`materializeScheduledSession`) that has
+ * executed nothing: reusing it returned a run that reads as handled and never
+ * ran, and could suppress the subject's run for weeks while the appointment
+ * rolled forward. The scheduler keeps one open appointment per calendar itself.
  */
 export const IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES = [
-  ...IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+  ...TERMINAL_SESSION_STATUSES,
   FocusSessionStatus.SCHEDULED,
 ] as const;
 

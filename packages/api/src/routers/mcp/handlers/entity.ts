@@ -741,10 +741,11 @@ export const entityHandlers: McpHandlerMap = {
     if (typeof args.uploadToken === "string" && args.uploadToken.trim()) {
       if (
         typeof args.content === "string" ||
-        typeof args.contentBase64 === "string"
+        typeof args.contentBase64 === "string" ||
+        typeof args.sourceUrl === "string"
       ) {
         throw new Error(
-          "Provide either `uploadToken` or inline `content`/`contentBase64`, not both."
+          "Provide either `uploadToken` or `content`/`contentBase64`/`sourceUrl`, not both."
         );
       }
       const fin = await finalizeAgentUpload({
@@ -783,24 +784,48 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
 
-    const filename =
+    let filename =
       typeof args.filename === "string" ? args.filename.trim() : "";
-    const mimeType =
+    let mimeType =
       typeof args.mimeType === "string" ? args.mimeType.trim() : "";
-    if (!filename) throw new Error("filename is required.");
-    if (!mimeType) throw new Error("mimeType is required.");
 
-    // Exactly ONE of content (UTF-8 text) | contentBase64 (binary).
+    // Exactly ONE of content (UTF-8 text) | contentBase64 (binary) |
+    // sourceUrl (the pod fetches it: an agent with no disk keeps a generated
+    // image as a file, report 630ff4f7).
     const hasText = typeof args.content === "string";
     const hasBase64 = typeof args.contentBase64 === "string";
-    if (hasText === hasBase64) {
+    const sourceUrl =
+      typeof args.sourceUrl === "string" && args.sourceUrl.trim()
+        ? args.sourceUrl.trim()
+        : undefined;
+    if (Number(hasText) + Number(hasBase64) + Number(!!sourceUrl) !== 1) {
       throw new Error(
-        "Provide exactly one of `content` (UTF-8 text) or `contentBase64` (binary)."
+        "Provide exactly one of `content` (UTF-8 text), `contentBase64` (binary) or `sourceUrl` (an https URL the pod downloads)."
       );
     }
-    const buffer = hasText
-      ? Buffer.from(args.content as string, "utf-8")
-      : Buffer.from(args.contentBase64 as string, "base64");
+    let buffer: Buffer;
+    if (sourceUrl) {
+      // The SSRF-guarded door (https on every hop, public addresses only,
+      // size cap, served type checked); the bytes then meet the same guards
+      // below as inline content.
+      const { fetchUrlFile } =
+        await import("../../../services/files/fetch-url-file.js");
+      const got = await fetchUrlFile(sourceUrl, {
+        ...(mimeType ? { mimeType } : {}),
+        maxBytes: MAX_FILE_SIZE,
+        isAllowedType: isAllowedMimeType,
+      });
+      if (!got.ok) throw new Error(got.error);
+      buffer = got.bytes;
+      mimeType = got.mimeType;
+      filename = filename || got.filename;
+    } else {
+      if (!filename) throw new Error("filename is required.");
+      if (!mimeType) throw new Error("mimeType is required.");
+      buffer = hasText
+        ? Buffer.from(args.content as string, "utf-8")
+        : Buffer.from(args.contentBase64 as string, "base64");
+    }
 
     // SAME guards as the POST /files door: non-empty, allowed mime, size cap.
     if (buffer.length === 0) throw new Error("Decoded file is empty.");

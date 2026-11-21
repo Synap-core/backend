@@ -19,6 +19,10 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import {
+  spacesCoveredWhole,
+  spacesOfScopeRows,
+} from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -43,6 +47,7 @@ import {
   getRequestGrant,
   recordWriteSessionFiling,
   derivedReceiptProjectFor,
+  getNamedSessionId,
   callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
@@ -690,7 +695,8 @@ export type PermissionResult =
       /**
        * A typed refusal: `DENIED_BY_RULE` = a person's stored "Never" for this
        * agent and this kind of act (0381). The reason text opens with it too,
-       * for doors that forward only the text.
+       * for doors that forward only the text. Or the code of a proposal
+       * that cannot apply, refused when filed (`can-apply.ts`).
        */
       reasonCode?: string;
       /**
@@ -1064,6 +1070,21 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * This write files the row into or out of a project (a session's filing):
+   * rung 0 checks it where the row lives now with NO project, so a key pinned
+   * to projects never covers it (`grant-write-check.ts`, the filing rule).
+   * Rung 0 only.
+   */
+  grantFilesIntoProject?: boolean;
+  /**
+   * `projectId` is the row's STORED project, read by the door from the row
+   * itself (a goal's project, a session's): rung 0 checks a key's project
+   * pin against it. Without this flag a non-create write's `projectId` is a
+   * lens or a provenance tag, which never places a row for a key's grant
+   * (`grant-write-check.ts`, the filing rule). Rung 0 only.
+   */
+  grantProjectIdIsStored?: boolean;
+  /**
    * A NAMED permission that also permits this write at rung 0 (the key's
    * grant), when the door's act is narrower than its gate subject/action:
    * `package.install` for a template apply (`workspace.create` /
@@ -1122,7 +1143,11 @@ export interface PermissionCheckBaseOpts {
   commandRunId?: string;
   /** Provenance: which specific message triggered this proposal */
   sourceMessageId?: string;
-  /** Session ID to link proposals to the active focus session */
+  /**
+   * Session ID to link proposals to the active focus session. Absent ⇒ the
+   * session the caller NAMED at the MCP or Hub door, if any
+   * (`withNamedSession`); a door that files elsewhere on purpose passes it.
+   */
   sessionId?: string;
   /**
    * The declared output slot this write fulfils, as the CALLER named it
@@ -1320,8 +1345,9 @@ export type PermissionCheckOpts = PermissionCheckBaseOpts & GovernedWritePair;
  * 7. Otherwise → return { granted: true }
  */
 export async function checkPermissionOrPropose(
-  opts: PermissionCheckOpts
+  callerOpts: PermissionCheckOpts
 ): Promise<PermissionResult> {
+  const opts = withNamedSession(callerOpts);
   const result = await evaluatePermission(opts, false);
   if ("__dryRunPropose" in result) {
     // Unreachable: the sentinel is only ever returned in dry-run mode. Treated
@@ -1368,13 +1394,32 @@ export async function checkPermissionOrPropose(
 export async function previewPermissionDecision(
   opts: PermissionCheckOpts
 ): Promise<PermissionDecisionPreview> {
-  const result = await evaluatePermission(opts, true);
+  const result = await evaluatePermission(withNamedSession(opts), true);
   if ("__dryRunPropose" in result) return { decision: "propose" };
   if ("denied" in result) return { decision: "deny", reason: result.reason };
   if (result.granted === true) return { decision: "execute" };
   // Defensive: no propose path reaches createProposal in dry-run mode, so a
   // granted:false result should be impossible here.
   return { decision: "propose" };
+}
+
+/**
+ * Plan a640c5bb (ticket 4bc6b9f4): the session the caller NAMED at the MCP
+ * or Hub door (`runWithNamedSession`) fills the gate's `sessionId` when the
+ * door passed none. Most write doors never forward `ctx.sessionId`, so the gate
+ * used to run the client ladder and file the write into the client's newest
+ * session. One read here, not one per call site.
+ *
+ * A door's own `sessionId` always wins. A `focus_session` subject is never
+ * filled: those doors name the session they write about (`data.id`), and a
+ * session's update belongs to that session, not to the one the caller is in.
+ */
+function withNamedSession(opts: PermissionCheckOpts): PermissionCheckOpts {
+  if (opts.sessionId !== undefined) return opts;
+  if (opts.subjectType.startsWith("focus_session")) return opts;
+  const named = getNamedSessionId();
+  if (!named) return opts;
+  return { ...opts, sessionId: named, sessionSource: "explicit" as const };
 }
 
 /**
@@ -1662,6 +1707,10 @@ async function evaluatePermission(
     projectId,
     data: data as Record<string, unknown> | undefined,
     namedPermission: opts.grantNamedPermission,
+    ...(opts.grantFilesIntoProject ? { filesIntoProject: true } : {}),
+    ...(opts.grantProjectIdIsStored
+      ? { storedProjectIds: projectId ? [projectId] : null }
+      : {}),
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;
@@ -4020,13 +4069,18 @@ export async function createPendingProposal(
    * the caller's transaction and notifications are SKIPPED here — the caller must
    * invoke notifyProposalCreated() AFTER the tx commits (see createProposal).
    */
-  tx?: DbTx
+  tx?: DbTx,
+  /**
+   * `canApplyAsked`: the caller asked the one filing check itself, before
+   * the event it writes first (`createEventBackedProposal`).
+   */
+  opts: { canApplyAsked?: true } = {}
 ) {
   // Public shape unchanged (returns the row) so the many simple callers stay
   // as-is; they still benefit transparently from the SSOT's dedup guard (they
   // get the existing row back, no duplicate). Only createProposal needs the
   // `deduped` signal — it uses createPendingProposalRow directly.
-  const { proposal } = await createPendingProposalRow(input, tx);
+  const { proposal } = await createPendingProposalRow(input, tx, opts);
   return proposal;
 }
 
@@ -4084,8 +4138,38 @@ export async function resolveAgentRunReceipt(input: {
  */
 async function createPendingProposalRow(
   input: CreatePendingProposalInput,
-  tx?: DbTx
+  tx?: DbTx,
+  opts: {
+    /**
+     * The caller asked the one filing check itself, before its transaction
+     * (`createProposal`). Every other caller is asked here.
+     */
+    canApplyAsked?: true;
+  } = {}
 ): Promise<InsertPendingProposalResult> {
+  // CAN IT APPLY? The ONE check per proposal kind (`can-apply.ts`, plan
+  // 8032a127 D1), asked here because every API door files through this row:
+  // a proposal its approval would refuse is refused NOW, before a receipt
+  // session is minted or a row inserted, with the approval's own sentence.
+  // A read that fails files as before. Its own reads go through the caller's
+  // transaction when there is one.
+  if (!opts.canApplyAsked) {
+    const { proposalCannotApply, ProposalCannotApplyError } =
+      await import("../services/proposals/can-apply.js");
+    const cannotApply = await proposalCannotApply({
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+      ...(tx ? { reader: tx } : {}),
+    });
+    if (cannotApply) throw new ProposalCannotApplyError(cannotApply);
+  }
+
   // Wave 2 — agent writes without a session get packaged into a focus session
   // (teammate metaphor). Humans and already-sessioned callers are untouched.
   // Never mint for focus_session self-writes (recursion). Best-effort.
@@ -4863,6 +4947,30 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
+  //
+  // CAN IT APPLY? The ONE filing check (`can-apply.ts`), asked HERE, before
+  // the transaction: its reads are not the transaction's, and a proposal its
+  // approval would refuse writes neither the event nor the row. It comes
+  // back as this gate's denial, with the approval's own sentence and code.
+  const { proposalCannotApply } =
+    await import("../services/proposals/can-apply.js");
+  const cannotApply = await proposalCannotApply({
+    targetType: singularType,
+    targetId,
+    proposalType: action,
+    data: storedData,
+    userId,
+    workspaceId: workspaceId ?? null,
+    agentUserId: attributionAgentUserId ?? null,
+    sessionId: sessionId ?? null,
+  });
+  if (cannotApply) {
+    return {
+      denied: true,
+      reason: cannotApply.message,
+      reasonCode: cannotApply.reasonCode,
+    };
+  }
   const { proposal, pendingInput, deduped, superseded } = await db.transaction(
     async (tx) => {
       let reqEventId = requestedEventId;
@@ -4913,7 +5021,9 @@ async function createProposal(args: {
         proposal: created,
         deduped,
         superseded,
-      } = await createPendingProposalRow(pendingInput, tx);
+      } = await createPendingProposalRow(pendingInput, tx, {
+        canApplyAsked: true,
+      });
       return { proposal: created, pendingInput, deduped, superseded };
     }
   );
@@ -4998,6 +5108,28 @@ async function verifyWorkspaceAccess(opts: {
 }
 
 /**
+ * Would the gate's membership check admit this write in `workspaceId`? The
+ * same check (`verifyWorkspaceAccess`, track-space grant included), asked
+ * before a door picks a space: the session space ladder
+ * (`resolveSessionWorkspacePlacement`) places a start only where this says
+ * yes, so the ladder and the gate cannot disagree.
+ */
+export async function gateAdmitsWorkspace(opts: {
+  userId: string;
+  agentUserId?: string;
+  workspaceId: string;
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+}): Promise<boolean> {
+  const result = await verifyWorkspaceAccess({
+    ...opts,
+    requiredPermission: requiredPermissionFor(opts.action),
+  });
+  return result.allowed;
+}
+
+/**
  * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
  * written (finding 590ca76a). A door whose one call makes several writes (a
  * capture graph) cannot let the gate decide at each write: the first write
@@ -5069,6 +5201,195 @@ export async function parkWriteOnWorkspaceJoin(opts: {
     return join && !("__dryRunPropose" in join) ? join : null;
   }
   return null;
+}
+
+/** Why an agent cannot join (or write in) an archived space. */
+function archivedSpaceRefusal(name: string): string {
+  return `The space "${name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`;
+}
+
+/** What {@link requestWorkspaceJoin} answers. */
+export type WorkspaceJoinRequestResult =
+  | {
+      status: "member";
+      workspaceId: string;
+      /** The actor's role in the space, when one is recorded. */
+      role: string | null;
+      /** Set when the role does not cover writing: writes are proposed. */
+      note?: string;
+    }
+  | {
+      status: "proposed";
+      workspaceId: string;
+      proposalId: string;
+      summary: string;
+      reviewUrl: string;
+      message: string;
+    }
+  | { status: "refused"; workspaceId: string; reason: string };
+
+/**
+ * Why a key pinned to projects or records does not ask to join a space: it
+ * covers no space whole, but a write of one of its rows there still files the
+ * join (the gate's membership-miss branch), so it is told that, never that it
+ * cannot write there.
+ */
+const PINNED_JOIN_REFUSAL =
+  "This key is limited to projects or records, not to this whole space, so it " +
+  "cannot ask to join the space on its own. Writing one of its records in this " +
+  "space files the join request for the person, with that write. Nothing was filed.";
+
+/**
+ * A scope pinned to named projects or records, holding more than reads, whose
+ * rows may sit in `workspaceId`: pinned with no space, or inside that space.
+ */
+function pinnedRowsMaySitIn(
+  scope: Parameters<typeof spacesOfScopeRows>[0],
+  workspaceId: string
+): boolean {
+  if (!scope.projectIds?.length && !scope.entityIds?.length) return false;
+  if (!scope.permissions.some((p) => !p.endsWith(".read"))) return false;
+  const rows = spacesOfScopeRows(scope);
+  return (
+    rows !== null &&
+    rows !== "anywhere" &&
+    (rows.length === 0 || rows.includes(workspaceId))
+  );
+}
+
+/** Said with a filed (or reused) join request. */
+const WORKSPACE_JOIN_REQUESTED_MESSAGE =
+  "A workspace JOIN request is pending the person's review (a pending one for " +
+  "this space is reused, never doubled). Until it is approved, a write into " +
+  "this space is kept on the join and replayed for you on approval: do not " +
+  "resend it, and do not retry it into another space.";
+
+/**
+ * ASK, on purpose, for the workspace JOIN the gate would otherwise file on an
+ * agent's first write into a space it is not a member of (ticket 4790c862).
+ * The SAME join: the gate's own membership check (`verifyWorkspaceAccess`)
+ * and its only producer (`maybeCreateWorkspaceJoinProposal`: agent rows only,
+ * an archived space refused, a pending join reused), so a write made after
+ * this request is kept on that join and replayed with the rest.
+ *
+ * Refused before anything is filed when no scope of the key's grant covers
+ * the WHOLE space beyond pod-wide reads (`spacesCoveredWhole`). A scope of
+ * other spaces, or of pod-wide reads only, would be denied every write there
+ * by the gate's rung 0, so a join would put a card in front of the person
+ * that changes nothing. A scope pinned to projects or objects covers no
+ * space whole (decision 51ad8d1e F3), so it does not ask for one on its own;
+ * its rows may still sit in the space, and a write of one of them there
+ * meets the gate's membership-miss branch, which files the join WITH that
+ * write. The refusal says so (`pinnedJoinRefusal`), never that the key
+ * cannot write there.
+ * An archived space is refused, a member's included: no agent writes there.
+ */
+export async function requestWorkspaceJoin(opts: {
+  userId: string;
+  agentUserId?: string | null;
+  workspaceId: string;
+  sessionId?: string;
+}): Promise<WorkspaceJoinRequestResult> {
+  const { workspaceId } = opts;
+  const grant = getRequestGrant();
+  if (
+    grant &&
+    !grant.scopes.some((scope) => {
+      // A join is a membership of the WHOLE space: only a scope that covers
+      // it whole counts, never one pinned to projects or objects.
+      const spaces = spacesCoveredWhole(scope);
+      return (
+        spaces === "anywhere" ||
+        (spaces !== null && spaces.includes(workspaceId))
+      );
+    })
+  ) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: grant.scopes.some((scope) =>
+        pinnedRowsMaySitIn(scope, workspaceId)
+      )
+        ? PINNED_JOIN_REFUSAL
+        : "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
+    };
+  }
+  const [ws] = await db
+    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!ws) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: "No space has this id: find it with synap_list_workspaces.",
+    };
+  }
+  if (ws.archivedAt) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: archivedSpaceRefusal(ws.name),
+    };
+  }
+  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
+  const access = await verifyWorkspaceAccess({
+    userId: opts.userId,
+    agentUserId,
+    workspaceId,
+    requiredPermission: requiredPermissionFor("create"),
+    subjectType: "workspace",
+    action: "join",
+    sessionId: opts.sessionId,
+  });
+  if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) {
+    return {
+      status: "member",
+      workspaceId,
+      role: access.role ?? null,
+      ...(access.allowed
+        ? {}
+        : {
+            note: `${access.reason}: a write beyond this role is proposed for the person's review.`,
+          }),
+    };
+  }
+  const join = agentUserId
+    ? await maybeCreateWorkspaceJoinProposal({
+        agentUserId,
+        requesterUserId: opts.userId,
+        workspaceId,
+        sessionId: opts.sessionId,
+      })
+    : null;
+  if (!join) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason:
+        "Only an agent asks to join a space; a person is added by an owner of the space.",
+    };
+  }
+  if ("denied" in join && join.denied) {
+    return { status: "refused", workspaceId, reason: join.reason };
+  }
+  // Not filed (this call is never a dry run, so never the dry-run sentinel).
+  if (!("proposalId" in join)) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: "The join request could not be filed.",
+    };
+  }
+  return {
+    status: "proposed",
+    workspaceId,
+    proposalId: join.proposalId,
+    summary: join.summary,
+    reviewUrl: join.reviewUrl,
+    message: WORKSPACE_JOIN_REQUESTED_MESSAGE,
+  };
 }
 
 /**
@@ -5151,10 +5472,7 @@ async function maybeCreateWorkspaceJoinProposal(opts: {
   // approved into a retired space (ticket 86b6faae). Refused in words, in
   // dry-run too, since it is the verdict.
   if (ws?.archivedAt) {
-    return {
-      denied: true,
-      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
-    };
+    return { denied: true, reason: archivedSpaceRefusal(ws.name) };
   }
 
   // Verdict resolved (agent → join proposal). In dry-run stop here: everything

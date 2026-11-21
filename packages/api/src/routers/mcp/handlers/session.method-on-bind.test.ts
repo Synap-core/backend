@@ -102,6 +102,8 @@ describe("synap_start_session with templateId", () => {
       stages: STAGES,
       // The guidance renders what the PERSON may read, not the agent.
       userId: "11111111-1111-4111-8111-111111111111",
+      // `subject:` guidance refs resolve on the session's subject (none here).
+      subjectEntityId: null,
     });
     expect(r.method).toEqual(METHOD);
   });
@@ -157,6 +159,8 @@ describe("synap_update_session with followPlaybookId", () => {
       stages: [],
       // The guidance renders what the PERSON may read, not the agent.
       userId: "11111111-1111-4111-8111-111111111111",
+      // `subject:` guidance refs resolve on the session's subject (none here).
+      subjectEntityId: null,
     });
     expect(r.method).toEqual(METHOD);
   });

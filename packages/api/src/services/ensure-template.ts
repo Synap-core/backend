@@ -123,6 +123,8 @@ function grantCoversSpace(
         return true;
       case "spaces":
         return place.ids.includes(workspaceId);
+      case "projects":
+        return false; // a project covers no whole space (already refused above)
       default:
         return assertNeverPlace(place);
     }

@@ -28,7 +28,13 @@ const h = vi.hoisted(() => ({
    * altitude and the validator, narrowed to `workspace_id IS NULL`, accepted
    * none). A single shared queue would have hidden that split behind ordering.
    */
-  playbookRows: [] as Array<{ id: string; name: string }>,
+  playbookRows: [] as Array<{
+    id: string;
+    name: string;
+    workspaceId?: string | null;
+  }>,
+  /** What the governance gate was asked (its workspace is the filing space). */
+  permissionArgs: [] as Array<Record<string, unknown>>,
   insertValues: [] as Array<Record<string, unknown>>,
   updateSets: [] as Array<Record<string, unknown>>,
   permissionCalls: 0,
@@ -55,6 +61,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
     // The visibility registry resolves `playbooks` through the MODULE-LEVEL
     // `db` (`query: () => db.query.playbooks`), not through `getDb()`, so the
     // getDb stub below cannot intercept the scoped playbook read. Overriding
@@ -116,8 +130,9 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/permission-check.js")>()),
-  checkPermissionOrPropose: vi.fn(async () => {
+  checkPermissionOrPropose: vi.fn(async (args: Record<string, unknown>) => {
     h.permissionCalls += 1;
+    h.permissionArgs.push(args);
     return { granted: true };
   }),
 }));
@@ -205,6 +220,7 @@ beforeEach(() => {
   h.insertValues.length = 0;
   h.updateSets.length = 0;
   h.permissionCalls = 0;
+  h.permissionArgs.length = 0;
   h.existing.metadata = {};
   h.existing.flowDefinition = { nodes: [], edges: [] };
   h.membership = { role: "owner" };
@@ -572,6 +588,110 @@ describe("automations flow catalog validation", () => {
 
     expect(message).toContain("mode");
     expect(message).not.toContain("require an explicit");
+    expect(h.insertValues).toHaveLength(0);
+  });
+});
+
+/**
+ * A playbook runs only in its home space (`playbookNotInSpaceReason`, the run
+ * door's rule), so a POD-WIDE automation naming a space-scoped playbook fired
+ * runs refused everywhere but there (ticket 6c15da33). Create now files it
+ * where its playbooks run, or refuses with the fix.
+ */
+describe("a pod-wide automation naming a space-scoped playbook (6c15da33)", () => {
+  const HOME = "22222222-2222-4222-8222-222222222222";
+  const OTHER = "33333333-3333-4333-8333-333333333333";
+  const AGENT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const PLAYBOOK_CONTRACT = {
+    ...VALID_DATA_CONTRACT,
+    gets: [{ ...VALID_DATA_CONTRACT.gets[0], nodeIds: ["playbook-step"] }],
+    reacts: [{ ...VALID_DATA_CONTRACT.reacts[0], nodeIds: ["playbook-step"] }],
+  };
+
+  it("is filed in the playbook's home: the gate and the row both get that space, and the reply says so", async () => {
+    h.selectResults.push([]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Weekly radar",
+      workspaceId: HOME,
+    });
+
+    const result = await caller().create({
+      // No workspaceId: pod-wide as asked.
+      name: "Radar every Monday",
+      triggerType: "manual",
+      triggerConfig: {},
+      flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+      agentUserId: AGENT,
+      metadata: { dataContract: PLAYBOOK_CONTRACT },
+    });
+
+    expect(result.status).toBe("created");
+    expect(result.message).toContain(`filed in space ${HOME}`);
+    expect(h.permissionArgs[0]).toMatchObject({ workspaceId: HOME });
+    expect(h.insertValues[0]).toMatchObject({ workspaceId: HOME });
+  });
+
+  it("CONTROL: a pod-wide playbook keeps the automation pod-wide", async () => {
+    h.selectResults.push([]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Pod-wide radar",
+      workspaceId: null,
+    });
+
+    const result = await caller().create({
+      name: "Radar every Monday",
+      triggerType: "manual",
+      triggerConfig: {},
+      flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+      agentUserId: AGENT,
+      metadata: { dataContract: PLAYBOOK_CONTRACT },
+    });
+
+    expect(result.status).toBe("created");
+    expect(result.message).not.toContain("filed in space");
+    expect(h.permissionArgs[0]).toMatchObject({ workspaceId: null });
+    expect(h.insertValues[0]?.workspaceId ?? null).toBeNull();
+  });
+
+  it("playbooks of two spaces: refused with the fix, nothing filed", async () => {
+    h.selectResults.push([]);
+    h.playbookRows.push(
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        name: "Weekly radar",
+        workspaceId: HOME,
+      },
+      {
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        name: "Monthly review",
+        workspaceId: OTHER,
+      }
+    );
+
+    await expect(
+      caller().create({
+        name: "Two spaces",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: {
+          nodes: [
+            ...UNKNOWN_PLAYBOOK_ONLY_FLOW.nodes,
+            {
+              id: "playbook-step-2",
+              type: "playbook_run",
+              data: { playbookId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+            },
+          ],
+          edges: [],
+        },
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining("make one automation per space"),
+    });
+    expect(h.permissionCalls).toBe(0);
     expect(h.insertValues).toHaveLength(0);
   });
 });

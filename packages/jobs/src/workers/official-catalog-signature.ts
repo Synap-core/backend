@@ -13,7 +13,9 @@
  * or, on a private mirror, keys the operator sets (`SYNAP_CATALOG_PUBLIC_KEYS`)
  * that sign the index directly. Nothing is ever trusted on first fetch.
  *
- * A verified index replaces `official_catalog_digests`; a failed one leaves
+ * A verified index replaces `official_catalog_digests` (its `packages`, and
+ * the digest-only `rendererBundles` as kind `renderer-bundle`, read from the
+ * verified bytes: `officialRendererBundleDigests`); a failed one leaves
  * it as it was (never wiped) and records why. What a failure or a lapsed
  * index means for installs is decided by `officialCatalogStanding`
  * (@synap-core/types/marketplace-source): only REPORTED until enforcement is
@@ -49,6 +51,7 @@ import {
   checkOfficialListing,
   ed25519PublicKey,
   keyFingerprint,
+  officialRendererBundleDigests,
   sha256Hex,
   verifyKeysStatement,
   verifyOfficialIndex,
@@ -387,17 +390,34 @@ export async function checkOfficialCatalogSignature(
           : "invalid";
       return { ...kept, state, message: verdict.message };
     }
+    // The renderer bundles' digests: not in the parsed index (its schema
+    // drops the key), so from the very bytes the signature just covered.
+    const bundles = officialRendererBundleDigests(indexFile.bytes);
+    if (bundles.refused.length > 0) {
+      logger.error(
+        { refused: bundles.refused.slice(0, 5), count: bundles.refused.length },
+        "Synap's signed index lists renderer bundles this pod cannot read; they stay unlisted"
+      );
+    }
     try {
-      await replaceOfficialCatalogDigests(
-        verdict.index.packages.map((pkg) => ({
+      await replaceOfficialCatalogDigests([
+        ...verdict.index.packages.map((pkg) => ({
           kind: pkg.kind,
           slug: pkg.slug,
           version: pkg.version,
           contentHash: pkg.contentHash,
           requiredTier: pkg.requiredTier ?? null,
           syncedAt: now,
-        }))
-      );
+        })),
+        ...bundles.rows.map((bundle) => ({
+          kind: bundle.kind,
+          slug: bundle.slug,
+          version: bundle.version,
+          contentHash: bundle.contentHash,
+          requiredTier: null,
+          syncedAt: now,
+        })),
+      ]);
     } catch (err) {
       logger.error({ err }, "Could not store Synap's verified catalog digests");
       return {

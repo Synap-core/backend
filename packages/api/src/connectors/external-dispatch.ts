@@ -44,7 +44,17 @@ import { getMessagingConnector } from "./index.js";
 import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
-import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
+import {
+  resolveCapabilityGrant,
+  getRequestGrant,
+  inArray,
+  proposals,
+  ProposalStatus,
+  UNDECIDED_PROPOSAL_STATUSES,
+  endReplacedProposal,
+  getOpenSupersedes,
+} from "@synap/database";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   validateExternalUrl,
   safePublicFetch,
@@ -768,11 +778,6 @@ export interface SendExternalMessageInput {
   sessionId?: string | null;
   playbookId?: string | null;
   /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
-  /**
    * BYPASS CONTRACT (W3b): set ONLY by the `messaging.external.send` proposal
    * executor (the send is already past governance at proposal-approval time).
    * When `true`, the capability-execution gate is SKIPPED and the send dispatches
@@ -847,6 +852,8 @@ export interface SendExternalMessageResult {
   errorClass?: FailureErrorClass;
   /** P1: the provider/platform the failed send targeted (for the action label). */
   providerRef?: string;
+  /** A `missing_field` refusal of a channel send: what is missing. */
+  missing?: "profile" | "provider_id";
   /** A channel send: the channel the message landed in (another one when its chat was already held). */
   channelId?: string;
   /** A channel send: the provider's chat id. */
@@ -1090,9 +1097,11 @@ export async function sendExternalMessage(
     !input.alreadyApproved
   ) {
     // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
-    // LinkedIn first message to someone who is not a connection is HELD, never
+    // LinkedIn first message to someone who is not a connection, or who has
+    // no LinkedIn profile on file (plan 8032a127 D1), is HELD, never
     // refused: filed as a proposal with `data.held` and the next step named,
-    // so the draft is kept and shown, and becomes sendable once they connect
+    // so the draft is kept and shown. It becomes sendable once they connect;
+    // a missing profile, on an approval after the person fixes their record
     // (`services/channels/held-sends.ts`). Same rule as at dispatch
     // (`readChannelReach`); a failed read files as before. An ungated send
     // skips it: the dispatch check runs straight after.
@@ -1103,7 +1112,15 @@ export async function sendExternalMessage(
         connector,
         namedAccountId: input.accountId,
       });
-      if (unreachable) held = heldSend(unreachable.error);
+      if (unreachable)
+        held = heldSend(
+          unreachable.error,
+          new Date(),
+          unreachable.errorClass === "missing_field"
+            ? "missing_field"
+            : "not_connected",
+          unreachable.missing
+        );
     }
     held = held ?? limitHold;
     const gateResult = await gateMessagingSend({
@@ -1395,6 +1412,7 @@ async function sendOnChannel(args: {
       error: plan.error,
       errorClass: plan.errorClass,
       providerRef: plan.providerRef ?? provider,
+      ...(plan.missing ? { missing: plan.missing } : {}),
     };
   }
   // THE provider call. The provider REFUSING it (an HTTP 4xx answer: a rate
@@ -1561,6 +1579,83 @@ async function sendOnChannel(args: {
 }
 
 /**
+ * ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2; decision Q3, 17
+ * Nov 2026). The undecided send already on `channelId` for its owner
+ * (pending, or failed and never dispatched: `externalDispatchedAt` is the
+ * at-most-once claim), newest pending first; null when there is none.
+ *
+ * Its AUTHOR filing again revises it in place, through the normal author rung
+ * ({@link reviseOwnUndecidedSend}). Anyone else's send, or a revise that fails,
+ * is filed as a new row that ends this one (`endReplacedProposal`).
+ */
+export async function undecidedSendOn(input: {
+  ownerUserId: string;
+  channelId: string;
+}): Promise<{ id: string; agentUserId: string | null } | null> {
+  const [row] = await db
+    .select({ id: proposals.id, agentUserId: proposals.agentUserId })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, "messaging.external.send"),
+        eq(proposals.targetType, "messaging"),
+        eq(proposals.targetId, input.channelId),
+        eq(proposals.subjectUserId, input.ownerUserId),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
+        isNull(proposals.externalDispatchedAt)
+      )
+    )
+    .orderBy(
+      drizzleSql`CASE WHEN ${proposals.status} = ${ProposalStatus.PENDING} THEN 0 ELSE 1 END`,
+      desc(proposals.createdAt)
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The author's new words on its own undecided send: the one revise door, its
+ * author rung (the acting agent is the row's author), only the words. A
+ * failed row reopens for review. True when it landed; false when the revise
+ * refused (decided meanwhile, a payload refusal): the caller files instead.
+ */
+async function reviseOwnUndecidedSend(input: {
+  proposalId: string;
+  ownerUserId: string;
+  authorAgentUserId: string;
+  body: string;
+  subject: string | null;
+}): Promise<boolean> {
+  const { mergeProposalRevision } =
+    await import("../services/proposals/proposals-service.js");
+  try {
+    await mergeProposalRevision({
+      proposalId: input.proposalId,
+      patch: {
+        kind: "envelope",
+        fields: {
+          body: input.body,
+          ...(input.subject !== null ? { subject: input.subject } : {}),
+        },
+      },
+      actorId: input.ownerUserId,
+      actingAgentUserId: input.authorAgentUserId,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: input.proposalId },
+      "send refile: the author's revise refused, filing a new send instead"
+    );
+    return false;
+  }
+  // A `supersedes` naming this very row is answered: the row now carries the
+  // corrected request (the MCP door must not say it was left failed).
+  const slot = getOpenSupersedes();
+  if (slot?.proposalId === input.proposalId) slot.replacedBy = input.proposalId;
+  return true;
+}
+
+/**
  * Verdict of the messaging-send capability gate (W3b). Mirrors the four
  * `gateCapabilityExecution` outcomes, with `propose` carrying the created
  * proposal id so the caller can surface it.
@@ -1633,7 +1728,6 @@ async function gateMessagingSend(
     capabilityId,
     tool:
       input.mustPropose && !seeded ? { ...toolRow, approved: null } : toolRow,
-    grantMetadata: input.grantMetadata ?? null,
     actorUserId: input.agentUserId ?? input.userId,
     agentUserId: input.agentUserId ?? null,
     workspaceId: input.workspaceId ?? null,
@@ -1706,6 +1800,28 @@ async function gateMessagingSend(
     const accountId = channel
       ? input.accountId || (channelMeta(channel).accountId as string) || null
       : null;
+    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (`undecidedSendOn`): never a
+    // second card for the same person, of which both could go out.
+    const undecided = channel
+      ? await undecidedSendOn({
+          ownerUserId: input.userId,
+          channelId: channel.id,
+        })
+      : null;
+    if (
+      undecided &&
+      input.agentUserId &&
+      undecided.agentUserId === input.agentUserId &&
+      (await reviseOwnUndecidedSend({
+        proposalId: undecided.id,
+        ownerUserId: input.userId,
+        authorAgentUserId: input.agentUserId,
+        body: input.body,
+        subject: input.subject ?? null,
+      }))
+    ) {
+      return { kind: "propose", proposalId: undecided.id };
+    }
     const proposal = await createPendingProposal({
       userId: input.userId,
       // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
@@ -1754,6 +1870,21 @@ async function gateMessagingSend(
         ? `Send a ${humanizeToken(provider)} message to ${channel.title ?? "them"}`
         : `Send message via ${provider}`,
     });
+    if (undecided && channel) {
+      // The new send replaces the one already there (another author's, or one
+      // its revise refused): it ends withdrawn, pointing here.
+      const ended = await endReplacedProposal(db, {
+        replacedId: undecided.id,
+        replacement: {
+          id: proposal.id,
+          proposalType: "messaging.external.send",
+          targetType: "messaging",
+          targetId: channel.id,
+        },
+        from: UNDECIDED_PROPOSAL_STATUSES,
+      });
+      await settleSupersededProposals(ended, input.userId);
+    }
     return { kind: "propose", proposalId: proposal.id };
   }
 
@@ -1849,11 +1980,6 @@ export interface TriggerProviderActionInput {
    * below (a non-owner `userId` is treated as a delegated agent → propose).
    */
   agentUserId?: string | null;
-  /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
   /** Optional session/playbook context for the gate's proposal payload + audit. */
   sessionId?: string | null;
   playbookId?: string | null;
@@ -1873,7 +1999,14 @@ export interface TriggerProviderActionInput {
   connectionSelector?: ConnectionSelector | null;
   /**
    * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
-   * executor (and the auto `run` decision re-entry). When `true`, the
+   * executor (and the auto `run` decision re-entry), and by
+   * `services/webhooks/connect-inbound-source.ts`: its approval executor
+   * (`webhook/inbound_source.connect`, with `sourceProposalId`) writes the
+   * host's env vars and redeploys, and its filing preflight READS the host
+   * (project, env var keys) once the caller's own gate on each read verb said
+   * run (`gateHostReads`), as `executeProviderVerb` sends a read once its
+   * verb's gate ran. That module checks the tool's enable floor itself, since
+   * this flag skips it, and pins the pod-wide tool by id. When `true`, the
    * capability-execution gate is SKIPPED and the dispatch runs directly, exactly
    * once — so an already-approved proposal never loops back into a new proposal.
    * No external/untrusted caller may supply it.
@@ -3369,7 +3502,6 @@ export async function triggerProviderAction(
         approved: tool.approved,
         createdBy: tool.createdBy,
       },
-      grantMetadata: input.grantMetadata ?? null,
       actorUserId: effectiveActorUserId,
       agentUserId: input.agentUserId ?? null,
       workspaceId: input.workspaceId ?? null,

@@ -16,8 +16,9 @@
  *     counts once, a child session spawned under a goal's session counts;
  *   - `readProjectPillars`: a contributing goal changes nothing in the
  *     pillar's health, a dropped primary goal leaves it, a paused primary
- *     goal stalls its pillar, the root is the worst pillar, and a space
- *     with no declared-lifecycle kind says so.
+ *     goal stalls its pillar, the root is the worst pillar, a space
+ *     with no declared-lifecycle kind says so, and a kind the space declares
+ *     a HELPER is not the pillar's output.
  *
  * Only `getEffectiveLifecycle` is stubbed (its own suites prove it).
  */
@@ -101,6 +102,7 @@ import {
 import {
   applyGoalPlacement,
   PARENT_OTHER_PROJECT_ERROR,
+  readGoalPlacements,
 } from "../../tracks/goal-placement.js";
 import {
   applyTrackDirection,
@@ -108,12 +110,14 @@ import {
   startTrack,
 } from "../../tracks/tracks-service.js";
 import { assertMainGoal } from "../update-project.js";
+import { addSessionServes } from "../../focus-sessions/session-serves.js";
 import {
   readGoalGroupWork,
   readScopeMoves,
   readScopeRollup,
 } from "../../status/status-rollup.js";
 import {
+  indicatorOf,
   readProjectPillarFields,
   readProjectPillars,
 } from "../pillar-health.js";
@@ -786,6 +790,47 @@ describe("readProjectPillars — the derived read", () => {
   it("another user's project is null, never empty pillars", async () => {
     expect(await readProjectPillars("user-stranger", P)).toBeNull();
   });
+
+  it("a kind the space declares a HELPER is not the pillar's output", async () => {
+    // Through the real read: Sales declaring its deals a helper drops them
+    // from its indicator (the first test reads them there without it).
+    const [{ settings }] = (
+      await q(`select settings from workspaces where id = $1`, [W_SALES])
+    ).rows as Array<{ settings: unknown }>;
+    await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+      JSON.stringify({
+        intent: {
+          label: "Sales",
+          produces: ["deal"],
+          helpers: ["deal"],
+          source: "template",
+        },
+      }),
+      W_SALES,
+    ]);
+    try {
+      const read = await readProjectPillars(ME, P);
+      const sales = read!.pillars.find((p) => p.workspaceId === W_SALES)!;
+      expect(sales.indicator).toEqual({ declared: false, kinds: [] });
+    } finally {
+      await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+        JSON.stringify(settings ?? {}),
+        W_SALES,
+      ]);
+    }
+    // The rule itself: a helper with things is left out; a declared output
+    // with none is still listed.
+    const counts = { open: 2, active: 0, paused: 0, done: 0, lost: 0 };
+    expect(
+      indicatorOf(
+        [
+          { kind: "story", byCategory: counts, stuck: 0 },
+          { kind: "feature", byCategory: counts, stuck: 1 },
+        ] as Parameters<typeof indicatorOf>[0],
+        { outputs: ["feature", "release"], helpers: ["story"] }
+      ).kinds.map((k) => k.kind)
+    ).toEqual(["feature", "release"]);
+  });
 });
 
 describe("a sub-goal with two parents counts in one pillar", () => {
@@ -1322,6 +1367,87 @@ describe("the unlink cascade stays inside its project", () => {
           primary: true,
         });
       }
+    }
+  });
+});
+
+describe("readGoalPlacements — where each goal of a page sits (ticket 3fb0e2c3)", () => {
+  // The goal list rows carry it: a reader drawing the goal tree or a space
+  // chip must not invent either.
+  it("reads the primary parent and the pillars, primary first, and drops a space the project does not use", async () => {
+    const g = randomUUID();
+    await goal(g, P, "Placed", "active");
+    await link("track", g, "workspace", W_SALES, "advances");
+    await link("track", g, "workspace", W_BRAND, "advances", {
+      primary: true,
+    });
+    await link("track", g, "workspace", W_UNUSED, "advances");
+    await link("track", g, "track", G_OTHER_ROOT, "serves");
+    await link("track", g, "track", G_RUN, "serves", { primary: true });
+    try {
+      const read = await readGoalPlacements([g, G_ELSEWHERE]);
+      expect(read.get(g)).toEqual({
+        parentGoalId: G_RUN,
+        pillars: [W_BRAND, W_SALES],
+      });
+      // A goal with neither is read as a root with no pillar, never absent.
+      expect(read.get(G_ELSEWHERE)).toEqual({
+        parentGoalId: null,
+        pillars: [],
+      });
+      // A sub-goal whose only parent is non-primary still names it.
+      await q(
+        `delete from links where from_id = $1 and to_id = $2 and link_type = 'serves'`,
+        [g, G_RUN]
+      );
+      expect((await readGoalPlacements([g])).get(g)!.parentGoalId).toBe(
+        G_OTHER_ROOT
+      );
+    } finally {
+      await q(`delete from links where from_id = $1`, [g]);
+      await q(
+        `update project_tracks set status = 'archived', verdict = 'mistake' where id = $1`,
+        [g]
+      );
+    }
+  });
+});
+
+describe("addSessionServes — a session filed under a second goal (ticket 3fb0e2c3)", () => {
+  // THE dependency door writes it: the same `serves` edge the goal rollup
+  // counts, never a new link type; one outcome per goal.
+  it("links the session to another goal, says `exists` on a repeat, and refuses a goal it cannot see", async () => {
+    const s = randomUUID();
+    await session(s, G_RUN, W_SALES);
+    const unseen = randomUUID();
+    const before = (await readGoalGroupWork(ME, [G_OTHER_ROOT])).sessions;
+    try {
+      const first = await addSessionServes({
+        sessionId: s,
+        trackIds: [G_OTHER_ROOT, unseen],
+        userId: ME,
+        door: "test",
+      });
+      expect(first[0]).toEqual({ trackId: G_OTHER_ROOT, status: "linked" });
+      expect(first[1]).toMatchObject({ trackId: unseen, status: "failed" });
+      expect(await linkRow(s, G_OTHER_ROOT, "serves")).toBeDefined();
+      expect(await linkRow(s, unseen, "serves")).toBeUndefined();
+      // The goal's work now counts the session (the reader of `serves`).
+      expect((await readGoalGroupWork(ME, [G_OTHER_ROOT])).sessions).toBe(
+        before + 1
+      );
+      const again = await addSessionServes({
+        sessionId: s,
+        trackIds: [G_OTHER_ROOT],
+        userId: ME,
+        door: "test",
+      });
+      expect(again).toEqual([{ trackId: G_OTHER_ROOT, status: "exists" }]);
+    } finally {
+      await q(`delete from links where from_id = $1`, [s]);
+      await q(`update focus_sessions set status = 'cancelled' where id = $1`, [
+        s,
+      ]);
     }
   });
 });

@@ -104,6 +104,7 @@ vi.mock("../focus-sessions/evaluations/evaluate.js", () => ({
 import {
   applyStageGateOnAdvance,
   checkGateFailing,
+  checkGateHold,
   findStage,
   CHECK_GATE_UNEVALUATED,
 } from "./stage-gate.js";
@@ -137,7 +138,12 @@ function advance(toStage: string) {
 
 beforeEach(() => {
   evaluateCalls.length = 0;
-  evaluation = { status: "evaluated", criteria: [], evaluations: [] };
+  evaluation = {
+    status: "evaluated",
+    results: [],
+    criteria: [],
+    evaluations: [],
+  };
   updates.length = 0;
   proposalCalls.length = 0;
   updateReturns = [{ id: SESSION_ID }];
@@ -293,6 +299,7 @@ describe("check gate", () => {
   it("evaluates the stage being LEFT, and passes without pausing or filing", async () => {
     evaluation = {
       status: "evaluated",
+      results: [],
       criteria: buildCriteria,
       evaluations: [{ criterionKey: "tests", verdict: "pass" }],
     };
@@ -313,6 +320,7 @@ describe("check gate", () => {
   it("a failing required criterion pauses the session — and files NO proposal", async () => {
     evaluation = {
       status: "evaluated",
+      results: [],
       criteria: buildCriteria,
       evaluations: [{ criterionKey: "tests", verdict: "fail" }],
     };
@@ -323,9 +331,69 @@ describe("check gate", () => {
       failing: ["tests"],
       paused: true,
     });
+    // A verdict: the stage's `onFail` applies (advance-stage.ts).
+    expect(result).not.toHaveProperty("notJudged");
     expect(updates).toHaveLength(1);
     expect(updates[0].status).toBe("paused");
     expect(proposalCalls).toHaveLength(0);
+  });
+
+  // The 20 Nov 2026 stall (findings 881e0b61, 0f4fd344): the judge got an
+  // account-quota 429, its criteria were skipped, and the gate sent the run
+  // back a stage as if the work had failed.
+  const JUDGED = [
+    {
+      key: "audit",
+      statement: "The audit cites file:line",
+      check: { kind: "judge" },
+      stageKey: "build",
+    },
+  ];
+  const QUOTA =
+    "The AI judge could not run: This account has used up its monthly AI quota.";
+  const notJudged = (key: string) => ({
+    key,
+    status: "skipped",
+    reason: QUOTA,
+    failureClass: "account_quota",
+  });
+
+  it("a judge that could not run HOLDS the gate: why, and the owner's way out", async () => {
+    evaluation = {
+      status: "evaluated",
+      results: [notJudged("audit")],
+      criteria: JUDGED,
+      evaluations: [],
+    };
+    const result = await advance("ship");
+    expect(result).toMatchObject({
+      kind: "check",
+      passed: false,
+      failing: ["audit"],
+      paused: true,
+      notJudged: true,
+    });
+    const reason = (result as { reason?: string }).reason ?? "";
+    expect(reason).toContain(QUOTA);
+    expect(reason).toContain('the owner can grade "audit" by hand');
+    expect(updates[0].status).toBe("paused");
+    expect(proposalCalls).toHaveLength(0);
+  });
+
+  it("a real fail beside a criterion the judge could not run is still a miss", async () => {
+    evaluation = {
+      status: "evaluated",
+      results: [notJudged("audit")],
+      criteria: [...JUDGED, ...buildCriteria],
+      evaluations: [{ criterionKey: "tests", verdict: "fail" }],
+    };
+    const result = await advance("ship");
+    expect(result).toMatchObject({ passed: false, paused: true });
+    expect((result as { failing: string[] }).failing.sort()).toEqual([
+      "audit",
+      "tests",
+    ]);
+    expect(result).not.toHaveProperty("notJudged");
   });
 
   it("an evaluation that did not RUN holds the gate — it never reads as clean", async () => {
@@ -346,29 +414,140 @@ describe("check gate", () => {
 });
 
 describe("checkGateFailing", () => {
+  const evidence = { kind: "evidence" as const, evidenceKey: "e" };
   const criteria = [
-    { key: "a", stageKey: "build" },
-    { key: "b", stageKey: "build", required: false },
-    { key: "c", stageKey: "ship" },
+    { key: "a", statement: "A", check: evidence, stageKey: "build" },
+    {
+      key: "b",
+      statement: "B",
+      check: evidence,
+      stageKey: "build",
+      required: false,
+    },
+    { key: "c", statement: "C", check: evidence, stageKey: "ship" },
   ];
+  const pass = (criterionKey: string) => ({
+    criterionKey,
+    verdict: "pass" as const,
+    evaluatorKind: "evidence" as const,
+    createdAt: "2026-11-19T10:00:00.000Z",
+  });
+  const none = { stages: [], expectedOutputs: [] };
+
   it("counts only the left stage's REQUIRED criteria that are not passing", () => {
-    expect(checkGateFailing({ criteria, evaluations: [] }, "build")).toEqual([
-      "a",
-    ]);
+    expect(
+      checkGateFailing({ ...none, criteria, evaluations: [] }, "build")
+    ).toEqual(["a"]);
     expect(
       checkGateFailing(
         {
+          ...none,
           criteria,
-          evaluations: [{ criterionKey: "a", verdict: "unmeasured" }],
+          evaluations: [{ ...pass("a"), verdict: "unmeasured" as const }],
         },
         "build"
       )
     ).toEqual(["a"]);
     expect(
+      checkGateFailing({ ...none, criteria, evaluations: [pass("a")] }, "build")
+    ).toEqual([]);
+  });
+
+  // W6: the session gate reads the stage's OUTCOMES, as the goal gate does —
+  // an output the stage declares holds it until it is delivered.
+  const stages = [
+    {
+      key: "build",
+      name: "Build",
+      expectedOutputs: [{ kind: "code", label: "Pull request" }],
+    },
+    { key: "ship", name: "Ship", gate: { kind: "check" } },
+  ];
+  const slot = (extra: Record<string, unknown> = {}) => ({
+    key: "pull-request",
+    kind: "code",
+    label: "Pull request",
+    ...extra,
+  });
+
+  it("an output the left stage declares holds it until delivered", () => {
+    expect(
       checkGateFailing(
-        { criteria, evaluations: [{ criterionKey: "a", verdict: "pass" }] },
+        { stages, expectedOutputs: [slot()], criteria: [], evaluations: [] },
+        "build"
+      )
+    ).toEqual(["pull-request"]);
+    expect(
+      checkGateFailing(
+        {
+          stages,
+          expectedOutputs: [slot({ status: "done" })],
+          criteria: [],
+          evaluations: [],
+        },
         "build"
       )
     ).toEqual([]);
+  });
+
+  it("a delivered output a failing required criterion checks still holds it (D4 a)", () => {
+    const checked = [
+      {
+        key: "pr-green",
+        statement: "Checks green",
+        check: evidence,
+        stageKey: "build",
+        outputKey: "pull-request",
+      },
+    ];
+    const input = {
+      stages,
+      expectedOutputs: [slot({ status: "done" })],
+      criteria: checked,
+    };
+    expect(
+      checkGateFailing(
+        {
+          ...input,
+          evaluations: [{ ...pass("pr-green"), verdict: "fail" as const }],
+        },
+        "build"
+      )
+    ).toEqual(["pull-request"]);
+    expect(
+      checkGateFailing({ ...input, evaluations: [pass("pr-green")] }, "build")
+    ).toEqual([]);
+  });
+
+  // A criterion of a LATER step (the merge check on the PR output) decides
+  // the output at its own step: it never holds the step that declares it.
+  it("a later step's criterion on the output does not hold the step that declares it", () => {
+    const merge = {
+      key: "pr-merged",
+      statement: "Merged",
+      check: evidence,
+      stageKey: "ship",
+      outputKey: "pull-request",
+    };
+    expect(
+      checkGateFailing(
+        {
+          stages,
+          expectedOutputs: [slot({ status: "done" })],
+          criteria: [merge],
+          evaluations: [],
+        },
+        "build"
+      )
+    ).toEqual([]);
+    // Undelivered and decided later: the hold says a claim cannot meet it here.
+    const held = checkGateHold(
+      { stages, expectedOutputs: [slot()], criteria: [merge], evaluations: [] },
+      "build"
+    );
+    expect(held.failing).toEqual(["pull-request"]);
+    expect(held.reason).toContain(
+      'Output "pull-request" is owed here, but "pr-merged" decides it later, so completing it does not meet it now: name it by outputKey "pull-request" in a criterion of this step.'
+    );
   });
 });

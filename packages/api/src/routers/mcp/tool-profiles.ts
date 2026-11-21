@@ -74,6 +74,7 @@ export const TOOL_GROUPS = {
     "synap_get_entities",
     "synap_get_entity",
     "synap_get_document",
+    "synap_get_file",
     "synap_get_thread_context",
     "synap_get_relations",
     "synap_get_graph",
@@ -138,6 +139,7 @@ export const TOOL_GROUPS = {
     "synap_change_kind_scope",
     "synap_retire_field",
     "synap_declare_lifecycle",
+    "synap_change_lifecycle_options",
   ],
   /** Spaces, projects and focus. */
   spaces: [
@@ -155,6 +157,7 @@ export const TOOL_GROUPS = {
     "synap_create_project",
     "synap_update_project",
     "synap_project_use_workspace",
+    "synap_request_workspace_access",
     "synap_file_into_project",
     "synap_export_project_pack",
   ],

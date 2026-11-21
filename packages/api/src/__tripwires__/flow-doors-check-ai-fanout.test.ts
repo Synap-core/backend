@@ -61,7 +61,6 @@ describe("tripwire: every flow persist door runs the AI fan-out rule", () => {
     const files = doors().map((d) => d.file);
     for (const known of [
       "routers/automations.ts",
-      "routers/playbooks.ts",
       "routers/sync.ts",
       "services/playbooks/cron-automation.ts",
       "services/rules/compile.ts",

@@ -23,6 +23,8 @@ import {
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
+import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
+import { findNonArchivedAutomationByName } from "../services/playbooks/cron-automation.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -102,9 +104,11 @@ import {
   getActingAgentUserId,
   getRequestGrant,
   isUniqueViolation,
+  ownerAndActor,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
+  OwnerAndActor,
   FlowDefinition,
   OutputNodeDef,
 } from "@synap/database";
@@ -129,6 +133,7 @@ import {
   isUnboundedFullAccess,
 } from "../access/grant-door-fence.js";
 import { TRPCError } from "@trpc/server";
+import { isCronTimezone, nextCronRunAtFor } from "@synap/shared-utils";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
@@ -429,12 +434,22 @@ export function playbookValidationAccess(
   return workspaceId ? access.withLens(workspaceId) : access;
 }
 
+/** A playbook a flow's `playbook_run` node names BY ID, with its home. */
+type ReferencedPlaybook = {
+  id: string;
+  name: string;
+  workspaceId: string | null;
+};
+
 async function loadFlowValidationResolvers(
   database: Awaited<ReturnType<typeof getDb>>,
   flow: { nodes: Array<Record<string, unknown>>; edges: unknown[] },
   workspaceId: string | null | undefined,
   userId: string
-): Promise<FlowValidationResolvers> {
+): Promise<{
+  resolvers: FlowValidationResolvers;
+  playbooksById: ReferencedPlaybook[];
+}> {
   const verbIds = new Set<string>();
   const skillIds = new Set<string>();
   const skillNames = new Set<string>();
@@ -498,8 +513,9 @@ async function loadFlowValidationResolvers(
       ? await scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
           id: string;
           name: string;
+          workspaceId: string | null;
         }>(playbooks, {
-          columns: { id: true, name: true },
+          columns: { id: true, name: true, workspaceId: true },
           where: and(
             // Archived playbooks are not referenceable, matching the OFFER door.
             ne(playbooks.status, "archived"),
@@ -523,72 +539,63 @@ async function loadFlowValidationResolvers(
   );
 
   return {
-    verbExists: (verbId) => foundSkillNames.has(verbId),
-    skillExists: ({ skillId, skillName }) =>
-      skillId
-        ? foundSkillIds.has(skillId)
-        : !!skillName && foundSkillNames.has(skillName),
-    playbookExists: ({ playbookId, playbookName }) =>
-      playbookId
-        ? foundPlaybookIds.has(playbookId)
-        : !!playbookName && foundPlaybookNames.has(playbookName),
+    resolvers: {
+      verbExists: (verbId) => foundSkillNames.has(verbId),
+      skillExists: ({ skillId, skillName }) =>
+        skillId
+          ? foundSkillIds.has(skillId)
+          : !!skillName && foundSkillNames.has(skillName),
+      playbookExists: ({ playbookId, playbookName }) =>
+        playbookId
+          ? foundPlaybookIds.has(playbookId)
+          : !!playbookName && foundPlaybookNames.has(playbookName),
+    },
+    playbooksById: playbookRows.filter((row) => playbookIds.has(row.id)),
   };
 }
 
 /**
- * Compute next cron run time by forward-scanning from a base date.
- * Supports standard 5-field cron (minute hour dayOfMonth month dayOfWeek).
+ * The space a flow's playbooks run in, for an automation filed in `workspaceId`
+ * (`null` = pod-wide). A playbook runs only in its home space (the run door's
+ * rule, `playbookNotInSpaceReason`), so a pod-wide automation naming a
+ * space-scoped playbook would fire runs that are refused everywhere but there
+ * (ticket 6c15da33).
+ *
+ *  - every playbook usable in `workspaceId` → `workspaceId` (nothing moves);
+ *  - a pod-wide automation whose space-scoped playbooks share ONE home → that
+ *    home (`adopted`): the automation is filed where its playbooks run;
+ *  - anything else → a refusal naming the fix.
+ *
+ * Only playbooks named BY ID are placed: a name-only node is resolved by name
+ * in the run's own space when it runs (`resolveRunnablePlaybook`).
  */
-function computeNextCronRunAt(cronExpr: string, fromDate: Date): Date | null {
-  const parts = cronExpr.trim().split(/\s+/);
-  if (parts.length !== 5) return null;
-
-  const [minExpr, hourExpr, domExpr, monthExpr, dowExpr] = parts;
-  const dayNames: Record<string, number> = {
-    SUN: 0,
-    MON: 1,
-    TUE: 2,
-    WED: 3,
-    THU: 4,
-    FRI: 5,
-    SAT: 6,
-  };
-
-  function matches(field: string, value: number): boolean {
-    if (field === "*") return true;
-    if (field.startsWith("*/")) {
-      const step = parseInt(field.slice(2), 10);
-      return step > 0 && value % step === 0;
-    }
-    for (const v of field.split(",")) {
-      if (v.includes("-")) {
-        const [s, e] = v.split("-").map(Number);
-        if (value >= s && value <= e) return true;
-        continue;
-      }
-      const resolved = dayNames[v.toUpperCase()] ?? parseInt(v, 10);
-      if (resolved === value) return true;
-    }
-    return false;
+function placeFlowByPlaybooks(
+  referenced: ReferencedPlaybook[],
+  workspaceId: string | null
+): { workspaceId: string | null; adopted: boolean } {
+  if (referenced.every((pb) => !playbookNotInSpaceReason(pb, workspaceId))) {
+    return { workspaceId, adopted: false };
   }
-
-  const candidate = new Date(fromDate);
-  candidate.setSeconds(0, 0);
-  candidate.setMinutes(candidate.getMinutes() + 1);
-
-  for (let i = 0; i < 366 * 24 * 60; i++) {
-    if (
-      matches(minExpr, candidate.getMinutes()) &&
-      matches(hourExpr, candidate.getHours()) &&
-      matches(domExpr, candidate.getDate()) &&
-      matches(monthExpr, candidate.getMonth() + 1) &&
-      matches(dowExpr, candidate.getDay())
-    ) {
-      return candidate;
-    }
-    candidate.setMinutes(candidate.getMinutes() + 1);
+  const homes = [
+    ...new Set(
+      referenced
+        .map((pb) => pb.workspaceId)
+        .filter((id): id is string => id !== null)
+    ),
+  ];
+  if (workspaceId === null && homes.length === 1) {
+    return { workspaceId: homes[0]!, adopted: true };
   }
-  return null;
+  const away = referenced
+    .map((pb) => playbookNotInSpaceReason(pb, workspaceId))
+    .find((reason): reason is string => reason !== null)!;
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      homes.length > 1
+        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only in its own space: make one automation per space.`
+        : `${away} Create this automation in that space (workspaceId ${homes[0]}).`,
+  });
 }
 
 /**
@@ -677,6 +684,27 @@ function assertValidAudience(triggerConfig: unknown): void {
 }
 
 /**
+ * CREATE/UPDATE-DOOR GATE for a cron trigger's `timezone` — asked of the SAME
+ * clock the scheduler fires with (`isCronTimezone` → `nextCronRunAt`), so the
+ * door never stores a zone the scheduler would park as unschedulable. Absent =
+ * UTC, every row written before zones were read.
+ */
+function assertValidCronTimezone(
+  triggerType: string,
+  triggerConfig: Record<string, unknown>
+): void {
+  if (triggerType !== "cron") return;
+  const timezone = triggerConfig.timezone;
+  if (timezone === undefined || timezone === null) return;
+  if (typeof timezone !== "string" || !isCronTimezone(timezone)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Unknown time zone ${JSON.stringify(timezone)}: triggerConfig.timezone must be an IANA time zone name such as "Europe/Paris" or "UTC" (leave it out for UTC).`,
+    });
+  }
+}
+
+/**
  * CREATE/UPDATE-DOOR GATE for an AI fan-out over an unfiltered `query` — THE
  * rule (`unfilteredAiFanoutError`, @synap-core/types/automations). Only the
  * flow being submitted is checked; a stored automation is never rewritten.
@@ -736,8 +764,9 @@ async function prepareAutomationForMaterialization(
   }
   assertValidDailyCap(input.triggerConfig);
   assertValidAudience(input.triggerConfig);
+  assertValidCronTimezone(input.triggerType, input.triggerConfig);
 
-  const resolvers = await loadFlowValidationResolvers(
+  const { resolvers, playbooksById } = await loadFlowValidationResolvers(
     database,
     input.flowDefinition,
     input.workspaceId,
@@ -748,6 +777,10 @@ async function prepareAutomationForMaterialization(
     throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
   }
   assertFilteredAiFanout(input.flowDefinition);
+  // Filed where its playbooks run (6c15da33): BEFORE the gate, RBAC and the
+  // insert read `input.workspaceId`, so all of them see the adopted space.
+  const placed = placeFlowByPlaybooks(playbooksById, input.workspaceId ?? null);
+  if (placed.adopted) input.workspaceId = placed.workspaceId;
 
   // Normalize template-friendly skill names before either proposal storage or
   // final materialization, so every persisted flow dispatches by stable id.
@@ -762,36 +795,6 @@ async function prepareAutomationForMaterialization(
     input.workspaceId,
     createdBy
   );
-}
-
-/**
- * Load the surviving non-archived automation for (workspaceId, name).
- * Case-insensitive on name; NULL workspace = pod-wide (matches the unique index
- * COALESCE sentinel). Newest-wins (updated_at DESC) so concurrent 23505 recovery
- * agrees with 0230's soft-archive keep-most-recently-updated rule.
- */
-async function findNonArchivedAutomationByName(
-  database: AutomationDatabase,
-  workspaceId: string | null | undefined,
-  name: string
-): Promise<{ id: string } | null> {
-  const scope =
-    workspaceId == null || workspaceId === ""
-      ? isNull(automations.workspaceId)
-      : eq(automations.workspaceId, workspaceId);
-  const [row] = await database
-    .select({ id: automations.id })
-    .from(automations)
-    .where(
-      and(
-        scope,
-        drizzleSql`lower(${automations.name}) = lower(${name})`,
-        ne(automations.status, "archived")
-      )
-    )
-    .orderBy(desc(automations.updatedAt), desc(automations.id))
-    .limit(1);
-  return row ?? null;
 }
 
 /**
@@ -860,18 +863,18 @@ async function proposeAgentActivation(
 /**
  * W-B3 (supervision plan, founder Q-B1): an agent archives an automation on
  * its own, without a proposal, only when it is the agent's OWN work that NEVER
- * RAN — the agent made it (`createdBy`, the runtime principal of every
- * agent-authored automation) and the `automation_runs` ledger holds no row for
- * it (`loadRunCounts`, the warden's "never fired" read). Nothing it did can be
- * lost, and the row stays (`archived` is a soft state). Anything else — a
- * person's automation, another agent's, or one that ever ran — proposes.
+ * RAN — the agent authored it (its actor) and the `automation_runs` ledger
+ * holds no row for it (`loadRunCounts`, the warden's "never fired" read).
+ * Nothing it did can be lost, and the row stays (`archived` is a soft state).
+ * Anything else — a person's automation, another agent's, or one that ever
+ * ran — proposes.
  */
 export function agentArchivesDirectly(input: {
-  createdBy: string | null;
+  actorAgentUserId: string | null;
   agentUserId: string;
   runs: number;
 }): boolean {
-  return input.createdBy === input.agentUserId && input.runs === 0;
+  return input.actorAgentUserId === input.agentUserId && input.runs === 0;
 }
 
 /**
@@ -927,7 +930,8 @@ async function gateAgentAutomationChange(
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
-  createdBy: string,
+  /** From `ownerAndActor`: never an agent as the owner. */
+  owner: OwnerAndActor,
   stableId?: string,
   /**
    * P2-3 (draft-state remedy): true for every agent-originated create — the
@@ -952,11 +956,10 @@ async function insertAutomationAfterGovernance(
     triggerType: input.triggerType,
     triggerConfig: input.triggerConfig,
   });
-  let nextRunAt: Date | null = null;
-  if (status === "active" && input.triggerType === "cron") {
-    const expression = input.triggerConfig.expression as string | undefined;
-    if (expression) nextRunAt = computeNextCronRunAt(expression, new Date());
-  }
+  const nextRunAt =
+    status === "active" && input.triggerType === "cron"
+      ? nextCronRunAtFor(input.triggerConfig, new Date())
+      : null;
 
   // Insert with 23505 recovery against automations_workspace_name_active_uq
   // (0230). Re-authoring the same automation (MCP create_automation, a capability
@@ -972,7 +975,8 @@ async function insertAutomationAfterGovernance(
       .values({
         ...(stableId ? { id: stableId } : {}),
         workspaceId: input.workspaceId ?? null,
-        createdBy,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name: input.name,
         description: input.description,
         triggerType: input.triggerType,
@@ -1031,9 +1035,9 @@ async function insertAutomationAfterGovernance(
 export async function materializeAutomationForPrincipal(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  /** The row's `createdBy` — the runtime principal. */
+  /** Who it is for; an agent id is stored as its person (`ownerAndActor`). */
   createdBy: string;
-  /** Present ⇒ an AGENT authored this ⇒ forced `draft`, unless `approved`. */
+  /** The authoring agent (the actor). An agent author ⇒ `draft`, unless `approved`. */
   agentUserId?: string | undefined;
   /**
    * A person APPROVED this exact definition (proposal approval): the approval
@@ -1044,40 +1048,42 @@ export async function materializeAutomationForPrincipal(input: {
   /** Converge retries on a caller-owned id (proposal target, rule id). */
   stableId?: string | undefined;
 }): Promise<string | null> {
+  const owner = await ownerAndActor(
+    input.database,
+    input.createdBy,
+    input.agentUserId
+  );
   await prepareAutomationForMaterialization(
     input.database,
     input.definition,
-    input.createdBy
+    owner.ownerId
   );
   return insertAutomationAfterGovernance(
     input.database,
     input.definition,
-    input.createdBy,
+    owner,
     input.stableId,
-    Boolean(input.agentUserId) && !input.approved
+    Boolean(owner.agentUserId) && !input.approved
   );
 }
 
 /**
- * Canonical materialization path for an already-approved AI proposal.
- * It repeats current catalog validation, preserves the agent as runtime
- * principal, and converges retries on the proposal's stable target id.
- *
- * Thin wrapper over `materializeAutomationForPrincipal`: the agent IS the
- * principal here, so the door's own rule forces `draft` — this path does not
- * pass a flag for it.
+ * Materialize an approved AI proposal: re-validate, own it by the person it
+ * was filed for (`proposals.subject_user_id`, never the approver), record the
+ * agent as actor, converge retries on the proposal's target id.
  */
 export async function materializeApprovedAutomation(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
-  agentUserId: string;
+  ownerId: string;
+  agentUserId: string | null;
   stableId: string;
 }): Promise<string | null> {
   return materializeAutomationForPrincipal({
     database: input.database,
     definition: input.definition,
-    createdBy: input.agentUserId,
-    agentUserId: input.agentUserId,
+    createdBy: input.ownerId,
+    agentUserId: input.agentUserId ?? undefined,
     approved: true,
     stableId: input.stableId,
   });
@@ -2516,6 +2522,8 @@ export const automationsRouter = router({
           source: z
             .enum(["user", "ai", "intelligence", "system", "agent"])
             .optional(),
+          /** WHY — shown to the reviewer when an agent's create is proposed. */
+          reasoning: z.string().max(2000).optional(),
         })
         .superRefine(validateAiAutomationDataContract)
     )
@@ -2526,10 +2534,16 @@ export const automationsRouter = router({
       // The authenticated agent governs, never only the input (an agent key
       // omitting `agentUserId` must still propose / be bounded by its grant).
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
-      const createdBy = agentUserId ?? ctx.userId!;
+      const owner = await ownerAndActor(database, ctx.userId!, agentUserId);
       await assertKeyMayActAsFlowOwner({ ...ctx, agentUserId });
 
-      await prepareAutomationForMaterialization(database, input, createdBy);
+      const askedWorkspaceId = input.workspaceId ?? null;
+      await prepareAutomationForMaterialization(database, input, owner.ownerId);
+      // Filed in the space its playbooks run in (6c15da33): said, never silent.
+      const placedNote =
+        input.workspaceId && input.workspaceId !== askedWorkspaceId
+          ? ` (filed in space ${input.workspaceId}, where its playbooks run)`
+          : "";
 
       // Governance membrane. AI agents (agentUserId set) route through
       // checkPermissionOrPropose; on "proposed" no row is written and the
@@ -2559,6 +2573,7 @@ export const automationsRouter = router({
           // EventSources — normalize via the canonical guard before this reaches
           // the top-level event source.
           source: normalizeEventSource(input.source),
+          ...(input.reasoning ? { reasoning: input.reasoning } : {}),
           // Widened (object-proposal manifest W1): carry the FULL create input so
           // an approved proposal materializes a real automation via
           // automationsRouter.create — not just a labelled shell. This branch is
@@ -2583,10 +2598,11 @@ export const automationsRouter = router({
           return {
             status: "proposed" as const,
             id: null as string | null,
-            message: proposedMessageFor(
-              perm.proposalType,
-              "Automation creation proposed for review"
-            ),
+            message:
+              proposedMessageFor(
+                perm.proposalType,
+                "Automation creation proposed for review"
+              ) + placedNote,
             proposalId: perm.proposalId,
           };
         }
@@ -2616,11 +2632,11 @@ export const automationsRouter = router({
       // through to a firing state, so force draft regardless of the
       // requested `status`. The operator's own direct create (no
       // agentUserId) keeps its requested status untouched.
-      const forceDraft = Boolean(agentUserId);
+      const forceDraft = Boolean(owner.agentUserId);
       const automationId = await insertAutomationAfterGovernance(
         database,
         input,
-        createdBy,
+        owner,
         undefined,
         forceDraft
       );
@@ -2645,7 +2661,7 @@ export const automationsRouter = router({
         id: automationId,
         message: `Automation "${input.name}" created as ${
           forceDraft ? "draft" : (input.status ?? "draft")
-        }`,
+        }${placedNote}`,
         proposalId: null as string | null,
         ...(source
           ? {
@@ -2779,6 +2795,10 @@ export const automationsRouter = router({
         }
         assertValidDailyCap(input.triggerConfig);
         assertValidAudience(input.triggerConfig);
+        assertValidCronTimezone(
+          effectiveTriggerType,
+          input.triggerConfig as Record<string, unknown>
+        );
         // A malformed source declaration is refused before any proposal.
         declaredWebhookSource(effectiveTriggerType, input.triggerConfig);
       }
@@ -2787,7 +2807,7 @@ export const automationsRouter = router({
       // is checked (a no-op update that omits flowDefinition is untouched, so
       // this never retroactively rejects an already-persisted automation).
       if (input.flowDefinition !== undefined) {
-        const updateFlowResolvers = await loadFlowValidationResolvers(
+        const updateFlow = await loadFlowValidationResolvers(
           database,
           input.flowDefinition,
           existing.workspaceId,
@@ -2795,7 +2815,7 @@ export const automationsRouter = router({
         );
         const updateFlowError = flowValidationErrorMessage(
           input.flowDefinition,
-          updateFlowResolvers
+          updateFlow.resolvers
         );
         if (updateFlowError) {
           throw new TRPCError({
@@ -2938,6 +2958,26 @@ export const automationsRouter = router({
             stableStringify(existing.triggerConfig));
       if (definitionChanged) updates.version = (existing.version ?? 1) + 1;
 
+      // A live cron row whose schedule changed is re-stamped NOW: an edited
+      // time or zone moves the next run, not the one after the old slot.
+      const storedTriggerType = updates.triggerType ?? existing.triggerType;
+      const triggerChanged =
+        (updates.triggerType !== undefined &&
+          updates.triggerType !== existing.triggerType) ||
+        (updates.triggerConfig !== undefined &&
+          stableStringify(updates.triggerConfig) !==
+            stableStringify(existing.triggerConfig));
+      if (
+        triggerChanged &&
+        storedTriggerType === "cron" &&
+        (updates.status ?? existing.status) === "active"
+      ) {
+        updates.nextRunAt = nextCronRunAtFor(
+          updates.triggerConfig ?? existing.triggerConfig,
+          new Date()
+        );
+      }
+
       await database
         .update(automations)
         .set(updates)
@@ -3007,6 +3047,7 @@ export const automationsRouter = router({
           status: true,
           workspaceId: true,
           createdBy: true,
+          agentUserId: true,
         },
       });
       if (!existing) {
@@ -3034,7 +3075,7 @@ export const automationsRouter = router({
       const direct =
         agentUserId !== undefined &&
         agentArchivesDirectly({
-          createdBy: existing.createdBy,
+          actorAgentUserId: existing.agentUserId,
           agentUserId,
           runs: (await loadRunCounts([existing.id])).get(existing.id) ?? 0,
         });
@@ -3097,15 +3138,10 @@ export const automationsRouter = router({
       const proposed = await proposeAgentActivation(ctx.userId, existing);
       if (proposed) return proposed;
 
-      // For cron triggers, compute the next run time
-      let nextRunAt: Date | null = null;
-      if (existing.triggerType === "cron") {
-        const triggerConfig = existing.triggerConfig as Record<string, unknown>;
-        const cronExpression = triggerConfig?.expression as string | undefined;
-        if (cronExpression) {
-          nextRunAt = computeNextCronRunAt(cronExpression, new Date());
-        }
-      }
+      const nextRunAt =
+        existing.triggerType === "cron"
+          ? nextCronRunAtFor(existing.triggerConfig, new Date())
+          : null;
 
       await database
         .update(automations)

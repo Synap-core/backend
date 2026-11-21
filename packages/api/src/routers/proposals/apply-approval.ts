@@ -8,6 +8,7 @@
  * before the privileged `governance_rules` insert (see the comment inline).
  */
 
+import { withProposalTargetPlace } from "../../access/proposal-target-place.js";
 import { settleGenerateRunOnDecision } from "../../services/playbooks/generate-run-decision.js";
 import { TRPCError } from "@trpc/server";
 import { twinsShownOnCard } from "../../services/duplicates/find-duplicate-candidates.js";
@@ -36,6 +37,7 @@ import {
   type GovernanceScope,
   type GovernanceTarget,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
   canTransitionProposal,
   APPLIED_PROPOSAL_STATUSES,
 } from "@synap/database";
@@ -70,6 +72,7 @@ import {
   classifyThrownFailure,
   failureRecord,
 } from "./failure-classification.js";
+import { recordProposalFault } from "../../services/server-faults/record.js";
 import { assertFreshAuthentication } from "../../utils/device-session.js";
 import { assertPresenceForApproval } from "../../services/presence/gate.js";
 import type { PresenceProof } from "@synap-core/types/presence";
@@ -116,6 +119,7 @@ import {
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { approvalIdempotency } from "../../services/proposals/approval-idempotency.js";
 import { handOffBackgroundApproval } from "../../services/proposals/approval-runs.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../../services/proposals/proposal-class.js";
 import {
   buildMaterializedRecord,
   stampMaterialized,
@@ -632,7 +636,11 @@ export async function applyProposalApproval(args: {
   // spaces / projects / objects approves only there (a person's app sign-in
   // token "cannot approve outside these spaces"). A signed-in session holds
   // no grant and is unaffected.
-  assertMayDecideProposalAt("approve", "approve", args.proposal);
+  assertMayDecideProposalAt(
+    "approve",
+    "approve",
+    await withProposalTargetPlace(args.proposal)
+  );
   // A person signed in to an app may approve its OWN AI's proposals unless
   // the app's owner turned that off (PR #29 M2, app-sign-in-policy.ts).
   const viaApp = await assertAppSignInMayApprove(args.proposal);
@@ -652,11 +660,15 @@ export async function applyProposalApproval(args: {
     });
   }
 
-  // A LARGE graph is applied by the background job — every gate above has
-  // already run, here, in the request. A graph that is being applied right
-  // now is joined (background caller) or refused (synchronous caller), never
-  // applied a second time alongside.
-  if (isCompositeProposalData(args.proposal.data as StoredProposalData)) {
+  // A LARGE graph, or a run of a verb that declares itself async (report
+  // 48dbf93b: the run outlived the approve request), is applied by the
+  // background job — every gate above has already run, here, in the request.
+  // One being applied right now is joined (background caller) or refused
+  // (synchronous caller), never applied a second time alongside.
+  if (
+    isCompositeProposalData(args.proposal.data as StoredProposalData) ||
+    args.proposal.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE
+  ) {
     const handedOff = await handOffBackgroundApproval({
       proposal: args.proposal,
       userId: args.userId,
@@ -860,7 +872,7 @@ export async function assertApprovalLanded(
   );
   const healed = await transitionProposal(db, {
     to: ProposalStatus.APPROVED,
-    from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+    from: UNDECIDED_PROPOSAL_STATUSES,
     set: { reviewedBy: userId, reviewedAt: new Date(), updatedAt: new Date() },
     where: eq(proposals.id, proposal.id),
   }).returning({ id: proposals.id });
@@ -1176,6 +1188,7 @@ async function applyProposalApprovalInner(
           ...buildRuleLoopCallers({
             database: db,
             userId,
+            ownerUserId: proposal.subjectUserId,
             workspaceId: compositeCtx.workspaceId,
             auditSource: "rule_loop_approval",
             // The proposal's author (the actor `compositeCtx` already
@@ -1248,6 +1261,15 @@ async function applyProposalApprovalInner(
       // recovery affordance and the AI explanation were blind to every plan
       // failure — the one failure shape that is hardest to read unaided.
       const planMeta = classifyThrownFailure(err);
+      // The exact cause, for the pod's owner only (plan 8032a127 D5): the
+      // row keeps its id, never the text.
+      const planErrorId = await recordProposalFault({
+        proposalId: proposal.id,
+        err,
+        meta: planMeta,
+        userId,
+        agentUserId: proposal.agentUserId,
+      });
       // REDACTED at write. `CompositePlanApplyError.message` is built FROM the
       // per-step reasons, and a step's reason is whatever the step threw —
       // including a provider body that echoes the Authorization header that
@@ -1261,7 +1283,7 @@ async function applyProposalApprovalInner(
           rejectionReason: safePlanMessage,
           data: {
             ...((proposal.data as Record<string, unknown> | null) ?? {}),
-            failure: failureRecord(planMeta),
+            failure: failureRecord({ ...planMeta, errorId: planErrorId }),
             planFailure: {
               at: new Date().toISOString(),
               by: userId,
@@ -2395,7 +2417,7 @@ async function applyProposalApprovalInner(
       ctx,
       deps: approveDeps,
     },
-    async (proposalId, errorMessage, failure) => {
+    async (proposalId, errorMessage, failure, err) => {
       // Guard against a concurrent winner: if another approval attempt already
       // flipped this proposal to APPROVED (a confirmed external dispatch), do NOT
       // clobber it back to APPROVAL_FAILED. Only non-approved rows record failure.
@@ -2414,10 +2436,23 @@ async function applyProposalApprovalInner(
       // The classifier ALWAYS returns an errorClass now (`unknown` at worst),
       // so a failed row can no longer be written with no class at all — that
       // absence is what made a whole population of failures unexplainable.
+      //
+      // The exact cause (error and stack, redacted) goes to the owner-only
+      // `server_faults` and the row keeps only its id (plan 8032a127 D5,
+      // finding 7ca4953f): agents and members still read the safe sentence.
+      const errorId = failure
+        ? await recordProposalFault({
+            proposalId,
+            err,
+            meta: failure,
+            userId,
+            agentUserId: proposal.agentUserId,
+          })
+        : undefined;
       const nextData = failure
         ? {
             ...((proposal.data as Record<string, unknown> | null) ?? {}),
-            failure: failureRecord(failure),
+            failure: failureRecord({ ...failure, errorId }),
           }
         : undefined;
       await transitionProposal(db, {

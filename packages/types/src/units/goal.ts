@@ -461,6 +461,8 @@ export interface GoalCriterionView {
   stageKey?: string;
   checkKind?: CriterionCheckMeaning;
   about?: CriterionAbout;
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
   /** The judge's stored decision — `null` until one is made. */
   acceptance: GoalCriterionAcceptance | null;
   mark: GoalCriterionMark | null;

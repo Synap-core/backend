@@ -47,6 +47,10 @@ export const PROJECTED_FAILURE_FIELDS = [
   // A missing kind: its slug and display name, the space it was looked up in
   // and the spaces where it exists (ids + names the proposal's user can read).
   "kindMissing",
+  // The `server_faults` id of the exact cause (plan 8032a127 D5): projected so
+  // pod admin can link to it; the cause itself is read only by a pod admin
+  // (`services/server-faults/read.ts`), so the id alone discloses nothing.
+  "errorId",
 ] as const satisfies ReadonlyArray<keyof ProposalFailureMeta>;
 
 /**

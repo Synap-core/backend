@@ -62,11 +62,13 @@ import {
   isTerminalSessionStatus,
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
+import { runStatusesIn } from "@synap-core/types/units";
 import { createLogger } from "@synap-core/core";
 import {
   grantWriteDenial,
   type GrantWriteInput,
 } from "../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 import {
   stagesLeft,
   stagesLeftWords,
@@ -76,8 +78,13 @@ import {
 
 const logger = createLogger({ module: "continue-run" });
 
-/** The run statuses a run ENDED in (not live, not a draft, not cancelled). */
-const ENDED_RUN_STATUSES = ["completed", "failed"] as const;
+/**
+ * The run statuses a run ENDED in (categories `done` and `lost`), except
+ * `cancelled`: a cancel is the person's stop, never "stopped early".
+ */
+const ENDED_RUN_STATUSES = runStatusesIn(["done", "lost"]).filter(
+  (s) => s !== "cancelled"
+);
 
 /** What the Continue predicate reads, from the session and its newest run. */
 export interface ContinueFacts {
@@ -189,6 +196,7 @@ export type ContinueSession = Pick<
   | "userId"
   | "workspaceId"
   | "projectId"
+  | "metadata"
   | "status"
   | "playbookId"
   | "stages"
@@ -232,11 +240,25 @@ export async function continueCheck<R extends { status: string }>(input: {
     };
   }
   // The key's grant bounds it like any session write (the gate's rung 0).
-  const denial = await input.grantDenial({
+  const write = {
     subjectType: "focus_session",
     action: "update",
-    workspaceId: session.workspaceId ?? null,
     projectId: session.projectId ?? null,
+    // Read from the row: where the session lives now (`grant-write-check.ts`).
+    storedProjectIds: session.projectId ? [session.projectId] : null,
+  };
+  const denial = await input.grantDenial({
+    ...write,
+    // A project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`).
+    workspaceId: await sessionGrantWorkspaceId(
+      {
+        workspaceId: session.workspaceId ?? null,
+        projectId: session.projectId ?? null,
+        metadata: session.metadata,
+      },
+      write
+    ),
   });
   if (denial) return { ok: false, reason: "denied", message: denial };
   const left = continueAt({

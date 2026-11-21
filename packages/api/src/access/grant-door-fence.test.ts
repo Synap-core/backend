@@ -421,10 +421,18 @@ describe("self-introspection doors", () => {
   // A computer / agent key from the device flow carries the AI preset; it must
   // still learn who it is (2026-10-11: Claude Code's installer got 403 here).
   const denyAll = key({ permissions: [] });
-  it.each(["/users/me", "/auth/status"])(
+  // An app's token: pinned to a space, plus pod-wide reads, naming the app.
+  const appToken = {
+    scopes: [
+      { permissions: ["entity.note.create"], workspaceIds: ["w1"] },
+      { permissions: ["playbook.read"] },
+    ],
+    clientId: "app_00000000-0000-4000-8000-000000000001",
+  } as never;
+  it.each(["/users/me", "/auth/status", "/auth/grant"])(
     "GET %s is open to every scoped key",
     (path) => {
-      for (const grant of [AI, DOC_ONLY, denyAll]) {
+      for (const grant of [AI, DOC_ONLY, appToken, denyAll]) {
         expect(restDoorAllowed("GET", path, grant)).toBe(true);
       }
     }
@@ -1522,5 +1530,75 @@ describe("the work graph and timeline doors: an app reads them under its grant (
       roomPosts: false,
       runners: true,
     });
+  });
+});
+
+describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", () => {
+  const S = "11111111-1111-4111-8111-111111111111";
+  const PERMS = [
+    "session.read",
+    "proposal.read",
+    "channel.read",
+    "view.read",
+    "track.read",
+    "project.read",
+    "entity.read",
+  ];
+  const IN_PROJECT = key({ permissions: PERMS, projectIds: ["p1"] });
+  const IN_SPACE = key({ permissions: PERMS, workspaceIds: ["w1"] });
+
+  it.each([
+    // Seamed list doors: the grant clause narrows each row (`projectReach`).
+    ["GET", "/focus-sessions"],
+    ["GET", "/proposals"],
+    ["GET", "/views"],
+    ["GET", "/channels"],
+    ["GET", "/tracks"],
+    ["GET", "/projects"],
+    // A narrowed door: the row read through the grant-aware predicate.
+    ["GET", `/focus-sessions/${S}`],
+  ] as const)(
+    "%s %s admits a project pin as it admits a space pin",
+    (m, path) => {
+      expect(restDoorAllowed(m, path, IN_SPACE)).toBe(true);
+      expect(restDoorAllowed(m, path, IN_PROJECT)).toBe(true);
+    }
+  );
+
+  it("an aggregate READS door refuses a project pin as it refuses a space pin", () => {
+    for (const tool of ["synap_list_sessions", "synap_list_proposals"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(false);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(false);
+    }
+    // The seamed MCP lists pass both.
+    for (const tool of ["synap_list_tracks", "synap_list_views"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(true);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(true);
+    }
+  });
+
+  it("events stay fail-closed on a project pin (no project path)", () => {
+    expect(
+      workReleaseReach(
+        key({ permissions: ["event.read", "session.read"], projectIds: ["p1"] })
+      ).snapshotSpaces
+    ).toEqual([]);
+  });
+});
+
+describe("GET /renderers/host-modules: the renderer kit, full keys only", () => {
+  it("is refused to every scoped key, however wide its reads", () => {
+    for (const g of [
+      AI,
+      DOC_ONLY,
+      key({ permissions: aiDefaultCapabilities() }),
+      key({ permissions: ["entity.read", "widget.read", "document.read"] }),
+      key({ permissions: [] }),
+    ]) {
+      expect(isFencedGrant(g)).toBe(true);
+      expect(restDoorAllowed("GET", "/renderers/host-modules", g)).toBe(false);
+      expect(restDoorAllowed("GET", "/renderers/host-modules/", g)).toBe(false);
+    }
+    expect(hubRouteClass("GET", "/renderers/host-modules")).toBe("read");
   });
 });

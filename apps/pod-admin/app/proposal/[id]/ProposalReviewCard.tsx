@@ -17,11 +17,14 @@
  *         lines; a possible twin under it, each a door ("Looks like");
  *       why, as ONE mark (the reason's short label, its sentence on press),
  *         then the requester's own note, labelled as theirs and clamped;
- *       the decision bar, pinned to the bottom, with who decides. A create
- *         with a record twin has no plain Approve: its verbs ARE the approve
- *         (Fill empty fields · Use existing · Overwrite · Keep both); a
- *         capture graph's Approve sends one choice per item. "Can't be undone"
- *         is the one consequence marked — undo is the default;
+ *       the decision bar, pinned to the bottom: ONE row of verbs, Approve
+ *         and Reject as split buttons whose chevrons hold "always allow" /
+ *         "never allow" (founder, 17 Nov 2026, on a phone). A create with a
+ *         record twin has no plain Approve: its verbs ARE the approve (Fill
+ *         empty fields · Use existing · Overwrite · Keep both); a capture
+ *         graph's Approve sends one choice per item. "Can't be undone" is
+ *         said on the first press of Approve (`ApproveConfirm`) — undo is
+ *         the default;
  *       Advanced (ids + raw request), collapsed, last.
  *
  * This file owns provenance and the ONE "Advanced". Hosts draw only their
@@ -39,7 +42,13 @@
 
 import Link from "next/link";
 import { useEffect, useState, type ReactNode } from "react";
-import { Button, Popover, PopoverContent, PopoverTrigger } from "@heroui/react";
+import {
+  Button,
+  ButtonGroup,
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@heroui/react";
 import {
   Check,
   Clock,
@@ -88,6 +97,7 @@ import { DocumentUpdateChanges } from "./DocumentUpdateChanges";
 import { UpdatedDoor } from "./UpdatedDoor";
 import { documentChanges } from "../../_lib/object/content/document-changes-model";
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
+import { ApproveConfirm, approvePressAct } from "./ApproveConfirm";
 import { proposalPageT, type OutcomeKey } from "./copy";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
@@ -117,7 +127,10 @@ import {
 import { useProposalStory } from "../../_lib/request/use-proposal-story";
 import { REQUEST_CATALOGS } from "../../_lib/request/copy";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
-import { DecisionFooter } from "../../_lib/request/decision-footer";
+import {
+  DecisionFooter,
+  RecordedInAuditLog,
+} from "../../_lib/request/decision-footer";
 import { RefuseSheet, RefuseTrigger } from "../../_lib/request/refuse-sheet";
 import { proposalSetupBlock, type SetupBlock } from "./proposal-setup-model";
 import {
@@ -168,15 +181,27 @@ import {
   type ApproveChoice,
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
-import { ToolRunArguments } from "./ToolRunArguments";
-import { reviewToolRun, toolRunArguments } from "./tool-run-model";
+import { RunResult, ToolRunArguments } from "./ToolRunArguments";
+import {
+  changedDrafts,
+  reviewToolRun,
+  toolRunArguments,
+} from "./tool-run-model";
+import { toolRunEdits } from "@synap-core/types/proposals/capability-run";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
+import {
+  proposalEndLine,
+  proposalItemsLeft,
+  type ProposalEndLine,
+  type ProposalItemLeft,
+} from "@synap-core/types/proposals/ended";
 
 /**
- * `pending` and `approval_failed` are the two states a reviewer can still decide;
- * everything else is terminal (already approved / rejected / reverted / withdrawn).
+ * Can a reviewer still decide it? The one predicate (`isProposalUndecided`:
+ * pending, or an approval that failed); everything else is terminal.
  */
 export function isActionable(status: string): boolean {
-  return status === "pending" || status === "approval_failed";
+  return isProposalUndecided(status);
 }
 
 /**
@@ -419,9 +444,15 @@ const OUTCOME_TONE: Record<
 function Outcome({
   status,
   created,
+  ended,
+  left = [],
 }: {
   status: string;
   created?: CreatedObject | null;
+  /** Why a withdrawn or expired request ended, and who (`proposalEndLine`). */
+  ended?: ProposalEndLine | null;
+  /** What a failed plan applied and could not roll back (`proposalItemsLeft`). */
+  left?: readonly ProposalItemLeft[];
 }) {
   const o = terminalOutcome(status);
   const tone = OUTCOME_TONE[o.tone];
@@ -438,12 +469,109 @@ function Outcome({
         <span className="text-[15px] font-medium text-foreground">
           {resolveStatusLabel(status)}
         </span>
-        <span className="text-[13px] leading-relaxed text-foreground/70">
-          {t(o.messageKey)}
-        </span>
+        {/* An ended request says who and why ONCE (its end line), then what
+            it left: never the status word a second and third time. */}
+        {ended && <EndLine ended={ended} />}
+        {ended && left.length > 0 ? (
+          <LeftInPlace items={left} />
+        ) : (
+          <span className="text-[13px] leading-relaxed text-foreground/70">
+            {t(o.messageKey)}
+          </span>
+        )}
         {created && <CreatedDoor created={created} />}
+        {/* Where the decision is kept, said once it is made (it left the
+            bar before it, founder 17 Nov 2026). */}
+        <RecordedInAuditLog />
       </div>
     </div>
+  );
+}
+
+/**
+ * Why it ended with nobody deciding it: the one end line (who took it back,
+ * or why it ended), the words its author gave (theirs, quoted), and the door
+ * to what it names: the newer version, the record that already exists, the
+ * session or goal that ended.
+ */
+function EndLine({ ended }: { ended: ProposalEndLine }) {
+  const door = ended.door;
+  return (
+    <span
+      data-end-reason={ended.reason}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] text-foreground/80"
+    >
+      <span>{ended.text}</span>
+      {ended.withdrawReason && (
+        <q className="min-w-0 break-words text-foreground/70">
+          {ended.withdrawReason}
+        </q>
+      )}
+      {door?.kind === "proposal" ? (
+        <Link
+          href={`/proposal/${encodeURIComponent(door.id)}`}
+          data-superseded-by={door.id}
+          className="self-start font-medium rq-ink underline underline-offset-2"
+        >
+          {door.label}
+        </Link>
+      ) : door ? (
+        <span className="self-start" data-end-door={door.kind}>
+          <ExitLink
+            exit={openIn({
+              kind: "object",
+              objectKind: door.kind,
+              id: door.id,
+            })}
+            label={door.label}
+          />
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** The kinds a left item opens as (the rest are named, with no door). */
+const LEFT_ITEM_KIND: Readonly<Record<string, string>> = {
+  entity: "entity",
+  document: "document",
+  session: "session",
+  skill: "skill",
+  automation: "automation",
+  playbook: "playbook",
+};
+const LEFT_ITEMS_SHOWN = 5;
+
+/**
+ * A failed plan that could not roll back everything it applied: "nothing was
+ * applied" would be false, so it says how many items are still in place and
+ * opens each one.
+ */
+function LeftInPlace({ items }: { items: readonly ProposalItemLeft[] }) {
+  const t = proposalPageT();
+  const doors = items.filter((i) => LEFT_ITEM_KIND[i.kind]);
+  return (
+    <span
+      data-items-left={items.length}
+      className="mt-1 flex min-w-0 flex-col gap-1 text-[13px] leading-relaxed text-foreground/70"
+    >
+      <span>{t("outcome.partlyLeft", { n: items.length })}</span>
+      {doors.length > 0 && (
+        <span className="flex flex-wrap gap-x-3 gap-y-1">
+          {doors.slice(0, LEFT_ITEMS_SHOWN).map((item) => (
+            <ExitLink
+              key={`${item.kind}:${item.id}`}
+              exit={openIn({
+                kind: "object",
+                objectKind: LEFT_ITEM_KIND[item.kind]!,
+                id: item.id,
+              })}
+              label={resolveObjectNoun(LEFT_ITEM_KIND[item.kind]!)}
+            />
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -500,8 +628,15 @@ function DecisionButtons({
   resume = false,
   stopTwins = null,
   setupBlock = null,
+  toolEdits = null,
 }: {
   proposal: ProposalReviewData;
+  /**
+   * The text changes made on a tool run's card, not yet sent: Approve then
+   * says "Approve with your changes" and sends them with the approval, in one
+   * press (`decision.approveWithChanges`).
+   */
+  toolEdits?: Readonly<Record<string, string>> | null;
   /**
    * What must be handed over before it can apply (founder default B5): the
    * label of the first required setup row still empty. Approve waits, with
@@ -520,6 +655,8 @@ function DecisionButtons({
   stopTwins?: readonly ApprovalRunTwin[] | null;
 }) {
   const [rejecting, setRejecting] = useState(false);
+  // An irreversible Approve, pressed once: the verbs become its named confirm.
+  const [confirming, setConfirming] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
   // A rule menu decides through its own calls (approve or reject, then a
   // rule): the bar holds every verb while either it or a menu is deciding.
@@ -557,6 +694,9 @@ function DecisionButtons({
       onPress={() => setRejecting(true)}
     />
   );
+  /* The twin verbs approve in one press each, with no confirm step: there
+     "Can't be undone" stays a mark beside Reject. The plain Approve says it
+     on its first press instead (`ApproveConfirm`). */
   const undoChip = undo && <DisclosedMark mark={undo} icon={TriangleAlert} />;
 
   if (stopTwins && stopTwins.length > 0 && mode.kind !== "twin-verbs") {
@@ -617,43 +757,123 @@ function DecisionButtons({
     waiting = missing.length > 0;
   }
 
+  // A tool run's text edited before approving goes on its revision chain
+  // (`decision.approveWithChanges`, main): the verb says so.
+  const withEdits =
+    toolEdits !== null && Object.keys(toolEdits).length > 0 && !resume;
+  const verb = withEdits
+    ? t("toolRun.approveWithChanges")
+    : resolveActionLabel(resume ? "resume" : "approve");
+  const approve = () =>
+    withEdits
+      ? decision.approveWithChanges({ ...toolEdits }, choice)
+      : decision.approve(choice);
+  if (confirming && undo) {
+    return (
+      <ApproveConfirm
+        verb={verb}
+        undo={undo}
+        loading={decision.approving}
+        disabled={busy || waiting || setupBlock !== null}
+        onConfirm={approve}
+        onCancel={() => setConfirming(false)}
+      />
+    );
+  }
+  /* Never widen autonomy beside the approval of something that acts on its
+     own: that moment is for reading it, not for "always". */
+  const mayAlways =
+    mayRule &&
+    mode.kind === "plain" &&
+    !pageOnlyReasonActs(proposalPageOnlyReason(p));
+  // "Never" narrows, so it stays beside a change that acts on its own.
+  const mayNever = mayRule && mode.kind === "plain";
+  // A tool run's policy menus are the advanced part: behind Details, never
+  // in the row (main, the tool-run card).
+  const menusInDetails = reviewToolRun(p.review) !== null;
+
+  /* ONE row at every width. In a narrow bar (a phone, founder 17 Nov 2026)
+     Approve and Reject are split buttons, each chevron opening its rule
+     menu, and the verbs drop their glyph or the two groups wrap at 390 px.
+     In a wide bar (desktop, founder 18 Nov 2026: "keep the full row with
+     approve always & reject always") the four are labelled buttons. Both
+     forms are rendered; the BAR's width picks one (`.rq-verbs` in
+     globals.css: a container query, so the docked panel follows its own
+     width, not the window's). Without a menu the verb is a plain button. */
+  const ruleProps = {
+    proposal: p,
+    disabled: busy,
+    onRunningChange: setRuleRunning,
+    onDone: onDecided,
+  };
+  const rowAlways = mayAlways && !menusInDetails;
+  const rowNever = mayNever && !menusInDetails;
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Button
-        color="success"
-        className="min-h-11"
-        startContent={<Check size={16} />}
-        isLoading={decision.approving}
-        isDisabled={busy || waiting || setupBlock !== null}
-        // The primary verb, at the same size as Refuse beside it (S8).
-        aria-describedby={setupBlock ? "review-setup-block" : undefined}
-        onPress={() => decision.approve(choice)}
-      >
-        {resolveActionLabel(resume ? "resume" : "approve")}
-      </Button>
-      {rejectButton}
-      {/* Never widen autonomy beside the approval of something that acts on
-          its own: that moment is for reading it, not for "always". */}
-      {mayRule &&
-        mode.kind === "plain" &&
-        !pageOnlyReasonActs(proposalPageOnlyReason(p)) && (
-          <AlwaysApproveMenu
-            proposal={p}
-            disabled={busy}
-            onRunningChange={setRuleRunning}
-            onDone={onDecided}
-          />
-        )}
-      {/* "Never" narrows, so it stays beside a change that acts on its own. */}
-      {mayRule && mode.kind === "plain" && (
-        <RejectNeverMenu
-          proposal={p}
-          disabled={busy}
-          onRunningChange={setRuleRunning}
-          onDone={onDecided}
-        />
-      )}
-      {undoChip}
+    <div className="flex flex-col gap-1.5">
+      <div className="rq-verbs">
+        <div
+          data-decision-verbs=""
+          className="flex flex-wrap items-center gap-2"
+        >
+          <ButtonGroup>
+            <Button
+              color="success"
+              className="min-h-11 px-3 sm:px-4"
+              startContent={
+                <Check size={16} className="rq-lead hidden sm:block" />
+              }
+              isLoading={decision.approving}
+              isDisabled={busy || waiting || setupBlock !== null}
+              aria-describedby={setupBlock ? "review-setup-block" : undefined}
+              onPress={() =>
+                approvePressAct(undo) === "confirm"
+                  ? setConfirming(true)
+                  : approve()
+              }
+            >
+              {verb}
+            </Button>
+            {rowAlways ? (
+              <AlwaysApproveMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
+          <ButtonGroup>
+            {rejectButton}
+            {rowNever ? (
+              <RejectNeverMenu {...ruleProps} className="rq-split-only" />
+            ) : null}
+          </ButtonGroup>
+          {rowAlways ? (
+            <AlwaysApproveMenu
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
+            />
+          ) : null}
+          {rowNever ? (
+            <RejectNeverMenu
+              {...ruleProps}
+              trigger="labelled"
+              className="rq-full-only"
+            />
+          ) : null}
+        </div>
+      </div>
+      {menusInDetails && (mayAlways || mayNever) ? (
+        <details data-tool-run-policy="" className="text-[12.5px]">
+          <summary className="min-h-11 cursor-pointer select-none py-2.5 font-medium text-foreground/70">
+            {t("toolRun.details")}
+          </summary>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {mayAlways ? (
+              <AlwaysApproveMenu {...ruleProps} trigger="labelled" />
+            ) : null}
+            {mayNever ? (
+              <RejectNeverMenu {...ruleProps} trigger="labelled" />
+            ) : null}
+          </div>
+        </details>
+      ) : null}
       {waiting && (
         <span className="text-[12px] text-foreground/70">
           {t("decide.pickFirst")}
@@ -847,6 +1067,9 @@ export function ProposalReviewBody({
     !graph && !appConnect && !docChanges && !deferredWrites && !turnsOn
       ? reviewToolRun(p.review)
       : null;
+  // The text changes made on a tool run's card, not yet sent.
+  const [toolDrafts, setToolDrafts] = useState<Record<string, string>>({});
+  const toolEdits = toolRun ? changedDrafts(toolRun, toolDrafts) : null;
   const edges = graphItems.flatMap((item) =>
     item.shape === "edge" ? [item.edge] : []
   );
@@ -1004,7 +1227,6 @@ export function ProposalReviewBody({
   const reason = reasonMark(p.governanceReason);
   const reasonComputer = askingComputer(p);
   const undo = undoMark(p.revertable);
-  const { actor } = proposalRequesterParts({ ...p, agentActorName: agentName });
 
   /* A single create's twins sit under its own card; a graph item's sit inside
      that item's card, with its choice. */
@@ -1070,24 +1292,10 @@ export function ProposalReviewBody({
         }
         footer={
           <DecisionFooter
-            identity={identity}
             className={`${actionable ? "sticky" : ""} ${barClassName}`}
-            consequence={
-              actionable && !applying ? (
-                <>
-                  {/* Flat: what approving does is said here, once. */}
-                  {flat && (
-                    <span data-story-after="approve">
-                      {rt("story.approveDoes", { change: heading })}{" "}
-                    </span>
-                  )}
-                  {/* The requester is named by the head, once. */}
-                  {actor?.role === "agent"
-                    ? rt("refuse.proposalConsequenceAgent")
-                    : rt("refuse.proposalConsequenceAnyone")}
-                </>
-              ) : undefined
-            }
+            /* No sentence under the verbs (founder, 17 Nov 2026): what
+               approving does is the title and the head; what rejecting does
+               is said in the Reject step. */
             verbs={
               applying && run ? (
                 <>
@@ -1114,12 +1322,27 @@ export function ProposalReviewBody({
                     resume={stopped}
                     stopTwins={stoppedOnTwins(run) ? run.twins : null}
                     setupBlock={status === "pending" ? setupBlock : null}
+                    toolEdits={status === "pending" ? toolEdits : null}
                   />
                 </>
               ) : (
                 <>
                   <Outcome
                     status={status}
+                    ended={proposalEndLine(
+                      {
+                        status,
+                        data: p.data,
+                        approverName: p.approverName ?? null,
+                        agentActorName: agentName,
+                        authorName: p.authorName ?? null,
+                        sessionId: p.sessionId ?? null,
+                        targetType: p.targetType ? String(p.targetType) : null,
+                        targetId: p.targetId ?? null,
+                      },
+                      locale
+                    )}
+                    left={proposalItemsLeft(p.data)}
                     created={createdObject({
                       status,
                       action,
@@ -1200,7 +1423,34 @@ export function ProposalReviewBody({
             />
           </Section>
         ) : toolRun ? (
-          <ToolRunArguments run={toolRun} />
+          <>
+            <ToolRunArguments
+              run={toolRun}
+              drafts={toolDrafts}
+              onDraft={
+                actionable && status === "pending"
+                  ? (key, text) =>
+                      setToolDrafts((d) => {
+                        const { [key]: _gone, ...rest } = d;
+                        return text === undefined
+                          ? rest
+                          : { ...rest, [key]: text };
+                      })
+                  : null
+              }
+              recorded={toolRunEdits(p.revisionHistory, {
+                isSecretName: () => false,
+                secretKeys: new Set(
+                  toolRun.parameters.filter((x) => x.secret).map((x) => x.key)
+                ),
+              })}
+            >
+              {/* The reason it needed approval: said once, in Details. */}
+              {reason && <DisclosedMark mark={reason} icon={ShieldCheck} />}
+            </ToolRunArguments>
+            {/* Once it ran: what it handed back (report 48dbf93b). */}
+            {!actionable && <RunResult data={p.data} />}
+          </>
         ) : records.length > 0 ? (
           <div className="flex flex-col gap-3">
             {groups.map((group) => (
@@ -1295,22 +1545,23 @@ export function ProposalReviewBody({
         {/* Why: ONE mark (its sentence on press), then the requester's own
           words, as theirs. Worded for every status: an approved proposal
           still needed approval. */}
-        {(reason ||
+        {((reason && !toolRun) ||
           why.proposer ||
           duplicate?.check.status === "unchecked") && (
           <section
             aria-label={pt("review.why")}
             className="flex flex-col gap-3"
           >
-            {(reason || duplicate?.check.status === "unchecked") && (
+            {((reason && !toolRun) ||
+              duplicate?.check.status === "unchecked") && (
               <div className="flex flex-wrap items-center gap-2">
-                {reason && (
+                {reason && !toolRun && (
                   <DisclosedMark
                     mark={reason}
                     icon={reason.tone === "warning" ? ShieldAlert : ShieldCheck}
                   />
                 )}
-                {reason && reasonComputer && (
+                {reason && !toolRun && reasonComputer && (
                   <Link
                     href={computerHref(reasonComputer.id)}
                     className="text-[12.5px] font-medium rq-ink underline underline-offset-2"

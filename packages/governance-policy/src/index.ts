@@ -353,6 +353,16 @@ export const LINKEDIN_INVITATIONS_DAILY_LIMIT = 20;
 export const LINKEDIN_ACTIONS_DAILY_LIMIT = 50;
 
 /**
+ * The spend maximums (`maxSpendCents`) of the compute an agent may start in
+ * one UTC day, summed, before a start that would run is proposed instead
+ * (0430, `COMPUTE_SPEND_CEILING` in @synap/capability-gate). The default of
+ * the `compute_spend_daily_cents` axis: `null`, NO limit (founder, 18 Nov
+ * 2026: opt-in per pod, like the daily-write limit). Every start carries its
+ * own required maximum whatever this says.
+ */
+export const DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS: number | null = null;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -372,6 +382,8 @@ export const CEILING_DEFAULTS = {
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
   linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
   linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
+  /** No ceiling by default: opt-in per pod (a stored row). */
+  compute_spend_daily_cents: DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
 } as const;
 
 /**
@@ -749,6 +761,24 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // or a "make a rule from this" would compose.
   "trusted_issuer.trusted_issuer.widen_scopes" satisfies DirectProposalEventKey,
   "trusted_issuer.widen_scopes",
+  // CREDENTIAL WIDENINGS (ticket 370ee329). Each write below is approved by an
+  // executor that declares `widensCredential`: approving it is a person's act
+  // on the console, after a fresh sign-in (`assertFreshAuthentication`). A
+  // rule that executed it would skip both, so no rule may (tripwire
+  // `credential-writes-are-floored`, derived from the executors). An agent
+  // never installs on a computer by itself (decision c78d8bcf): its install
+  // ask reaches the gate, so this floor is live for it.
+  "installation.request" satisfies GateEventKey,
+  // Filed directly today (`createPendingProposal` / `insertPendingProposal`),
+  // so these never reach the engine: the floor holds the day one does, and
+  // refuses "Make a rule from this" for them.
+  "app.connect" satisfies GateEventKey,
+  "agent.connect" satisfies DirectProposalEventKey,
+  "vault.vault.request" satisfies DirectProposalEventKey,
+  "capability.capability.install" satisfies DirectProposalEventKey,
+  "capability.capability.update" satisfies DirectProposalEventKey,
+  "workspace.join" satisfies DirectProposalEventKey,
+  "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -1410,19 +1440,14 @@ export interface AgentPolicyInput {
    */
   capabilityGovernance?: "auto" | "propose" | "block" | null;
   /**
-   * The GRANT's exec-mode (the `grant_exec_mode` enum / `@synap/playbooks
-   * ExecMode` — the PERSISTABLE truth: `auto | propose`). Narrows the
-   * capability's own approval-state for THIS grant: "propose" forces a reviewable
-   * per-run proposal even if the capability is "auto". When present it takes
-   * precedence over capabilityGovernance in rung 2.7.
-   *
-   * NOTE: exec-mode lives in TWO layers. `dry-run` is the third persistable
-   * grant_exec_mode value but is a GATE-level concern — `gateCapabilityExecution`
-   * short-circuits it to a preview BEFORE calling `decideAgentPolicy`, so it never
-   * reaches this policy union. The retired `propose-each`/`block` values were
-   * orphaned (never persistable in the grant column); `propose` already covers
-   * what `propose-each` meant, and deny comes from no-grant / not-approved, not a
-   * `block` mode.
+   * The run's exec mode from its APPROVAL ROW (decision D2, document b387ca45:
+   * a `governance_rules` capability row is the ONLY answer to "may this run
+   * without asking?"; a grant means only "may use", and the grant's
+   * `exec_mode` column is no longer read since migration 0435). `gateCapabilityExecution`
+   * passes `auto` when the best-ranked row for this agent says auto; an "ask
+   * first" row or no row never reaches the policy (the gate proposes first).
+   * When present it takes precedence over capabilityGovernance in rung 2.7, so
+   * an "auto" row still meets rung 7's channel tightening.
    */
   capabilityExecMode?: "auto" | "propose" | null;
   /**
@@ -2070,16 +2095,17 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // (the two new fields absent → byte-identical to the prior verdict). Sits after
   // CBAC (rung 1) and ADMIN_ACTIONS (rung 2) — a capability the agent isn't
   // allowed must still deny first, and admin actions are non-negotiable — but
-  // BEFORE ownership/autoApprove/writesRequireProposal, because the per-grant
-  // exec-mode is the most specific, operator-authored signal about THIS run and
-  // must not be silently overridden by the routing workspace.
+  // BEFORE ownership/autoApprove/writesRequireProposal, because the run's
+  // approval row (its exec mode, D2) is the most specific, person-authored
+  // signal about THIS run and must not be silently overridden by the routing
+  // workspace.
   if (input.capabilityGovernance) {
     const mode = input.capabilityExecMode ?? input.capabilityGovernance;
     //   "auto"    → execute (operator pre-approved this capability)
     //   "propose" → propose  (reviewable capability.run proposal)
     //   "block"   → deny     (capability present but disabled — reachable only via
-    //                         capabilityGovernance; the grant exec-mode is just
-    //                         auto|propose, dry-run handled at the gate)
+    //                         capabilityGovernance; the approval row's exec mode
+    //                         is just auto|propose)
     if (mode === "block") {
       return { verdict: "deny", reason: CAPABILITY_BLOCKED_REASON };
     }
@@ -2992,9 +3018,20 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kind every space may read — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and calls `declareLifecycle`.
   "profile/declare_lifecycle": "direct",
+  // Relabelling, reordering or retiring a declared lifecycle's options
+  // (`services/lifecycle/change-lifecycle-options.ts`, ticket fd146324): the
+  // same policy — always a pending proposal; the approval half runs the
+  // lifecycle door (`changeLifecycleOptions`), which re-decides.
+  "property_def/change_lifecycle_options": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
+  // Wiring a space's inbound webhook source into a host (decision abaaa696):
+  // the Synap Core verb `inbound_source.connect` ALWAYS files this, for anyone
+  // (`services/webhooks/connect-inbound-source.ts`). Approved by
+  // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
+  // mints the source and hands its secret to the host, never to a person.
+  "webhook/inbound_source.connect": "direct",
   "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by

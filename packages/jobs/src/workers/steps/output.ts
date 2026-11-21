@@ -16,7 +16,6 @@ import {
   desc,
   automations,
   entities,
-  users,
   channels,
   focusSessions,
   playbookEnrollments,
@@ -244,6 +243,7 @@ export async function executeOutputStep(
       // auto-approve, or a PENDING proposal attributed to the owning agent.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "entity",
         action: "create",
@@ -310,33 +310,24 @@ export async function executeOutputStep(
         };
       }
 
-      // Attribution: this write is authored by the automation's owning
-      // principal (`ownerId`). For AI-created automations that principal IS an
-      // agent user; for manual automations it is a human. Resolve which, so the
-      // materialized row's provenance is honest (previously it defaulted to
-      // "human", mis-attributing agent-authored automation writes). We only
-      // reach this direct-write branch after the governance gate GRANTED.
-      const [ownerUser] = await db
-        .select({ userType: users.userType })
-        .from(users)
-        .where(eq(users.id, ownerId))
-        .limit(1);
+      // Attribution: the owner's row, with the authoring agent (if any) as
+      // its actor. Reached only after the governance gate GRANTED.
       // `correlationId` is carried on the SAME provenance object the document
       // path already uses, so the entity and its body land with identical run
       // attribution — "which run produced this?" is answerable for both.
-      const provenance =
-        ownerUser?.userType === "agent"
-          ? {
-              createdByKind: "ai_agent" as const,
-              agentUserId: ownerId,
-              createdByUserId: ownerId,
-              correlationId: automationContext.rootRunId,
-            }
-          : {
-              createdByKind: "system" as const,
-              createdByUserId: ownerId,
-              correlationId: automationContext.rootRunId,
-            };
+      const actorAgentUserId = automationContext.actorAgentUserId;
+      const provenance = actorAgentUserId
+        ? {
+            createdByKind: "ai_agent" as const,
+            agentUserId: actorAgentUserId,
+            createdByUserId: ownerId,
+            correlationId: automationContext.rootRunId,
+          }
+        : {
+            createdByKind: "system" as const,
+            createdByUserId: ownerId,
+            correlationId: automationContext.rootRunId,
+          };
 
       // BODY (optional) — materialized through the canonical door BEFORE the
       // entity row is inserted, with the row id pre-minted, exactly like the
@@ -535,6 +526,7 @@ export async function executeOutputStep(
       // Governed — same gate as entity_create above.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "entity",
         action: "update",
@@ -1168,6 +1160,7 @@ export async function executeOutputStep(
       // Governed — same gate as entity_create / entity_update above.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "focus_session",
         action: "update",
@@ -1383,6 +1376,7 @@ export async function executeOutputStep(
 
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "focus_session",
         action: "update",
@@ -1547,6 +1541,7 @@ export async function executeOutputStep(
           chainDepth: automationContext.chainDepth,
           rootRunId: automationContext.rootRunId,
           chainAutomationIds: automationContext.chainAutomationIds,
+          actorAgentUserId: automationContext.actorAgentUserId ?? null,
         },
       });
       return { status: "recorded", eventId: recorded.id, type: type.trim() };

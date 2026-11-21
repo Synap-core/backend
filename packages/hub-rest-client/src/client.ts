@@ -312,7 +312,11 @@ export interface HubRestClientConfig {
   podUrl: string;
   /** Hub Protocol API key (Bearer token) */
   apiKey: string;
-  /** Default workspace ID — used when not specified per call */
+  /**
+   * Default workspace ID for a call that names none. `createEntity` is the
+   * exception: it never uses this default, so a new entity lands in a
+   * workspace only when you pass `workspaceId` to it.
+   */
   workspaceId?: string;
   /** Optional request timeout in ms (default: 30000). Fallback when read/write timeouts are unset. */
   timeoutMs?: number;
@@ -714,6 +718,12 @@ export class HubRestClient {
     return unwrapList(result);
   }
 
+  /**
+   * Create an entity. It is placed only in the `workspaceId` you pass here,
+   * never in the client's default workspace: without one it lands where its
+   * kind's scope puts it (a pod-wide kind pod-wide), so a list scoped to the
+   * default workspace may not show it.
+   */
   async createEntity(input: CreateEntityInput): Promise<HubGovernanceResult> {
     const { content, url, status, priority, dueDate, properties, ...rest } =
       input;
@@ -1085,11 +1095,25 @@ export class HubRestClient {
    * other failure throws too — never an empty kit.
    */
   async getBrandKit(options?: {
-    format?: "json" | "css" | "frame-md" | "od-design-system";
+    format?:
+      | "json"
+      | "css"
+      | "frame-md"
+      | "od-design-system"
+      | "dtcg"
+      | "synap-css"
+      | "css-shadcn";
     projectId?: string;
     workspaceId?: string;
   }): Promise<{
-    format: "json" | "css" | "frame-md" | "od-design-system";
+    format:
+      | "json"
+      | "css"
+      | "frame-md"
+      | "od-design-system"
+      | "dtcg"
+      | "synap-css"
+      | "css-shadcn";
     content: string;
     hash: string;
     brandWorkspaceId: string;

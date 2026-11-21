@@ -141,10 +141,15 @@ export function goalNextRunBrief(input: {
   ].join("\n");
 }
 
-/** A goal criterion as a run carries it: the session shape, no judge's decision. */
-function asRunCriterion(c: GoalCriterion): SessionCriterion {
-  const { acceptance: _decided, ...criterion } = c;
-  return criterion;
+/**
+ * A goal criterion as a run carries it: the session shape, no judge's
+ * decision, marked `about: "method"` — it checks the goal through this run,
+ * not one of the run's outputs, so it hangs on none and any `outputKey` the
+ * goal named is dropped (work-model W4; the schema refuses method + output).
+ */
+export function asRunCriterion(c: GoalCriterion): SessionCriterion {
+  const { acceptance: _decided, outputKey: _output, ...criterion } = c;
+  return { ...criterion, about: "method" };
 }
 
 /**
@@ -231,9 +236,10 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   const carried = criteria.filter((c) => decision.carry.includes(c.key));
   const owner = await goalOwnerToAsk(track);
   const templateId = await methodPlaybookFor(track, owner);
+  // No space named: the session space ladder places the run in the project's
+  // home (`project_home`) when the owner may start work there.
   const result = await createFocusSession({
     userId: owner,
-    workspaceId: row.workspaceId,
     projectId: track.projectId,
     trackId: track.id,
     title: goalNextRunTitle(track.name),

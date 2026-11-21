@@ -31,6 +31,7 @@ export type NavIconName =
   | "Database"
   | "Bot"
   | "Grid3x3"
+  | "ListChecks"
   | "Laptop"
   | "AppWindow"
   | "KeyRound"
@@ -161,13 +162,38 @@ export const CONSOLE_NAV = [
       {
         // Folded into Processes: a process lists its own automations, and
         // this page is the one list of every automation (Processes links
-        // here for the ones outside a process). Not in the nav itself.
-        id: "rules",
-        href: "/rules",
+        // here for the ones outside a process). Not in the nav itself. It
+        // lived at `/rules` until "Rule" took its own meaning (founder, 19
+        // Nov 2026, document b387ca45 §9): an old link keeps landing here.
+        id: "automations",
+        href: "/automations",
         label: "Automations",
         icon: "Zap",
         kind: "automation",
         within: "processes",
+        legacy: [
+          { source: "/rules/:id", destination: "/automations/:id" },
+          {
+            source: "/rules",
+            query: { key: "filter", value: "(?<filter>.+)" },
+          },
+          {
+            source: "/rules",
+            query: { key: "process", value: "(?<process>.+)" },
+          },
+        ],
+        audience: "admin",
+      },
+      {
+        // Rules: the guidelines (always / never) pushed into every piece of
+        // work in their scope; the agent cannot skip one (founder, 19 Nov
+        // 2026, document b387ca45 §9). A skill is pulled when needed, so it
+        // stays under Tools.
+        id: "rules",
+        href: "/rules",
+        label: "Rules",
+        icon: "ListChecks",
+        kind: "rule",
         audience: "admin",
       },
     ],
@@ -214,13 +240,18 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
-        // The agent × work matrix: what each agent may do, per process, and
-        // why. `/governance` itself redirects here.
-        id: "governance",
-        href: "/governance/agents",
-        label: "Agents & work",
+        // Approvals (decision b387ca45 D5): who × what × where → runs on its
+        // own / asks first / never, every row with where it came from and a
+        // way to take it back; the agent × work matrix is its By work view.
+        id: "approvals",
+        href: "/approvals",
+        label: "Approvals",
         icon: "Grid3x3",
-        match: ["/governance"],
+        kind: "governance_rule",
+        legacy: [
+          { source: "/governance/agents", destination: "/approvals?view=work" },
+          { source: "/governance" },
+        ],
         audience: "admin",
       },
       {

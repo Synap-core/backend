@@ -478,6 +478,8 @@ export interface InstallationAskInput {
   action: InstallationRequestAction;
   version?: string | null;
   sessionId?: string;
+  /** The asker's own WHY, appended to the card's sentence. */
+  reasoning?: string;
   /**
    * The pod does not have the capability yet: check it against Synap's
    * catalog definition, and add it from the catalog when the install is
@@ -693,15 +695,20 @@ export async function requestInstallation(
     // agent's ask would be refused, never filed.
     proposeBeyondGrant: true,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    ...(input.filedByPod
-      ? { forcePropose: true, machineAuthor: input.filedByPod.author }
-      : {}),
+    // An agent never installs by itself (decision c78d8bcf): its ask is a
+    // proposal whatever rule or grant would widen it, so approving it runs
+    // the executor and its fresh sign-in (`widensCredential`); a grant here
+    // would apply it below with neither (ticket 370ee329).
+    ...(input.agentUserId || input.filedByPod ? { forcePropose: true } : {}),
+    ...(input.filedByPod ? { machineAuthor: input.filedByPod.author } : {}),
     // The pod's own sentence; a marketplace addition still says so.
     reasoning: input.filedByPod
       ? addition
         ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition, change)}`
         : input.filedByPod.reasoning
-      : reasoningFor(input, !!live, addition, change),
+      : input.reasoning
+        ? `${reasoningFor(input, !!live, addition, change)} Why: ${input.reasoning}`
+        : reasoningFor(input, !!live, addition, change),
     data: {
       id: computer.id,
       computerId: computer.id,

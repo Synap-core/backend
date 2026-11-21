@@ -4,7 +4,8 @@
  *    (`writeStageSubjectStatus`) and reports it;
  *  - a HUMAN gate holds that write (the approval does it);
  *  - a HOLDING check gate on a stage that declares `onFail` returns the run to
- *    that stage — un-paused, through the same door, never re-routed again;
+ *    that stage — un-paused, through the same door, never re-routed again —
+ *    unless it held only because the AI judge could not run (it stays held);
  *  - STEP = STATUS: a door advance the subject leads moves the subject and
  *    does NOT write `current_stage` (the follow does).
  */
@@ -85,6 +86,12 @@ vi.mock("../stage-subject-status.js", () => ({
 }));
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
+}));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
 }));
 
 import { advanceSessionStage } from "../advance-stage.js";
@@ -198,6 +205,31 @@ describe("advanceSessionStage — process hooks", () => {
     );
     // The return advance wrote draft's status (ungated); review's never was.
     expect(h.writes.map((w) => w.toStage)).toEqual(["draft"]);
+  });
+
+  it("a check gate held because the AI judge could not run stays held: no onFail", async () => {
+    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.gate = {
+      kind: "check",
+    };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k"],
+      paused: true,
+      notJudged: true,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
+    expect(r).toMatchObject({ gated: true, paused: true });
+    expect(r.onFail).toBeUndefined();
+    // Never un-paused, never moved back to "draft".
+    expect(h.updates.some((u) => u.status === "active")).toBe(false);
+    expect(h.writes).toEqual([]);
   });
 
   it("a holding check gate WITHOUT onFail just holds (today's behaviour)", async () => {

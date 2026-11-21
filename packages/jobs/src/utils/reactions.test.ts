@@ -8,6 +8,7 @@ import {
   BUILT_IN_REACTIONS,
   MAX_REACTION_DEPTH,
   OUTCOME_MET_REACTION_ID,
+  STAGE_MET_REACTION_ID,
   bornReceiptTransition,
   decideReactionWrites,
   declaredSubjectTypes,
@@ -57,7 +58,7 @@ const SOURCE = { transitionId: "t-1" };
 afterEach(() => resetReactionRegistryForTests());
 
 describe("the built-in rules", () => {
-  it("declares defaults 3 and 4, and D2's reached status, with stable ids, plain titles and a fixed order", () => {
+  it("declares defaults 3 and 4, D2's reached status and W6's step advance, with stable ids, plain titles and a fixed order", () => {
     expect(BUILT_IN_REACTIONS.map((r) => [r.id, r.title, r.order])).toEqual([
       [OUTCOME_MET_REACTION_ID, "An outcome is met wherever it was filed", 10],
       [
@@ -69,6 +70,11 @@ describe("the built-in rules", () => {
         "builtin:approved-output-reaches-status",
         "A stage's approved work moves its thing to the stage's result",
         30,
+      ],
+      [
+        STAGE_MET_REACTION_ID,
+        "A step whose work is all met moves on to the next step",
+        40,
       ],
     ]);
   });
@@ -165,6 +171,7 @@ describe("the one list", () => {
       OUTCOME_MET_REACTION_ID,
       "builtin:stopped-run-needs-you",
       "builtin:approved-output-reaches-status",
+      STAGE_MET_REACTION_ID,
     ]);
     expect(all.find((r) => r.id === OUTCOME_MET_REACTION_ID)!.enabled).toBe(
       false

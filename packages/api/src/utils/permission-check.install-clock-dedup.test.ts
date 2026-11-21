@@ -50,21 +50,29 @@ vi.mock("@synap/database", async (importOriginal) => {
     };
     return b;
   };
+  const db = {
+    insert: vi.fn(() => ({ values: mockValues })),
+    select,
+    transaction: async (cb: (tx: unknown) => unknown) =>
+      cb({ insert: vi.fn(() => ({ values: mockValues })) }),
+    query: {
+      focusSessions: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      entities: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      // The playbook an update edits exists: the filing check reads it
+      // (`assertRevisedPlaybookPayload`), as the approval does.
+      playbooks: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ goalTemplate: "Fix it.", params: [] }),
+      },
+      automations: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      skills: { findFirst: vi.fn().mockResolvedValue(undefined) },
+    },
+  };
   return {
     ...actual,
-    db: {
-      insert: vi.fn(() => ({ values: mockValues })),
-      select,
-      transaction: async (cb: (tx: unknown) => unknown) =>
-        cb({ insert: vi.fn(() => ({ values: mockValues })) }),
-      query: {
-        focusSessions: { findFirst: vi.fn().mockResolvedValue(undefined) },
-        entities: { findFirst: vi.fn().mockResolvedValue(undefined) },
-        playbooks: { findFirst: vi.fn().mockResolvedValue(undefined) },
-        automations: { findFirst: vi.fn().mockResolvedValue(undefined) },
-        skills: { findFirst: vi.fn().mockResolvedValue(undefined) },
-      },
-    },
+    db,
+    getDb: async () => db,
     insertPendingProposal: mockInsertPendingProposal,
     resolveAgentProposalSessionOnce: vi.fn().mockResolvedValue(null),
     resolveOrCreateAgentProposalSession: vi.fn().mockResolvedValue(null),
@@ -100,6 +108,8 @@ vi.mock("../lib/event-helpers.js", () => ({
 import { computeProposalDedupHash } from "@synap/database";
 import { checkPermissionOrPropose } from "./permission-check.js";
 
+const PLAYBOOK_1 = "11111111-1111-4111-8111-111111111111";
+const PLAYBOOK_2 = "22222222-2222-4222-8222-222222222222";
 const RUN_1 = "2026-11-15T09:00:00.000Z";
 const RUN_2 = "2026-11-16T21:30:00.000Z";
 
@@ -165,6 +175,7 @@ const playbookUpdate = (
     {
       key: "fix-in-code",
       name: "Fix in code",
+      category: "started",
       goal: over.goal ?? "Reproduce the finding and fix it at the root.",
     },
   ];
@@ -172,7 +183,7 @@ const playbookUpdate = (
     subjectType: "playbook" as const,
     action: "update" as const,
     data: {
-      id: over.id ?? "playbook-1",
+      id: over.id ?? PLAYBOOK_1,
       stages,
       metadata: stamped(installedAt, { scope: "session", stages }),
     },
@@ -278,7 +289,7 @@ describe("the install clock never tells two proposals apart (real door)", () => 
     });
     it("the same patch on another playbook hashes UNEQUAL", async () => {
       expect(await fileAndHash(playbookUpdate(RUN_1))).not.toBe(
-        await fileAndHash(playbookUpdate(RUN_1, { id: "playbook-2" }))
+        await fileAndHash(playbookUpdate(RUN_1, { id: PLAYBOOK_2 }))
       );
     });
   });

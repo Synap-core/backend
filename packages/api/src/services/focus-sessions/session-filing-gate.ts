@@ -140,6 +140,12 @@ export async function gateSessionFiling(p: {
     subjectType: "focus_session",
     action: "update",
     source: "intelligence",
+    // Filing into or out of a project (or a goal, which files into its
+    // project) needs a write where the session lives now, with NO project: a
+    // project write never covers it (the filing rule, `grant-write-check.ts`).
+    ...(p.filing.projectId !== undefined || p.filing.trackFiling
+      ? { grantFilesIntoProject: true }
+      : {}),
     // Where a session belongs is the person's call — UNLESS the agent files
     // its OWN FRESH session into the project the person named, or a goal of
     // it (FB1020 B3, D1): then only the pod's own-organise class row may

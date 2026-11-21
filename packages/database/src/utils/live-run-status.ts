@@ -21,13 +21,7 @@
 
 import { inArray, notInArray, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-
-export const LIVE_RUN_STATUSES = [
-  "running",
-  "waiting_on_you",
-  "stale",
-] as const;
-export type LiveRunStatus = (typeof LIVE_RUN_STATUSES)[number];
+import { LIVE_RUN_STATUSES, type LiveRunStatus } from "@synap-core/types/units";
 
 export function isLiveRunStatus(status: unknown): status is LiveRunStatus {
   return (LIVE_RUN_STATUSES as readonly unknown[]).includes(status);

@@ -107,8 +107,8 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
   createPendingProposal: async (input: Record<string, unknown>) => {
     const id = randomUUID();
     await h.client!.query(
-      `insert into proposals (id, proposed_by_user_id, created_by, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, governance_reason, created_at, updated_at)
-       values ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10,now(),now())`,
+      `insert into proposals (id, proposed_by_user_id, created_by, workspace_id, target_type, target_id, proposal_type, status, data, agent_user_id, governance_reason, subject_user_id, created_at, updated_at)
+       values ($1,$2,$3,$4,$5,$6,$7,'pending',$8,$9,$10,$2,now(),now())`,
       [
         id,
         input.userId,
@@ -480,6 +480,63 @@ describe("an agent with no grant never sends", () => {
     )) as Record<string, unknown>;
     expect(out).toMatchObject({ proposed: true });
     expect(startChat).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ONE undecided send per person's channel (plan 8032a127 D2; decision Q3, 17
+ * Nov 2026), through the REAL send door. Its author filing again revises its
+ * own send; another agent's send replaces it (the old one ends withdrawn,
+ * pointing at the new one). Rules out "two cards for one person", and "the
+ * filer takes over another agent's draft".
+ */
+describe("one undecided send per person's channel", () => {
+  const OTHER_AGENT = randomUUID();
+  const agentSends = (agentUserId: string, content: string) =>
+    handler()(
+      { to: PERSON, content },
+      {
+        userId: OWNER,
+        workspaceId: CRM,
+        agentUserId,
+        mustPropose: true,
+        governanceReason: "CAPABILITY_PROPOSE",
+      }
+    ) as Promise<Record<string, unknown>>;
+  const rowsOn = async (channelId: string) =>
+    (
+      await q<{
+        id: string;
+        status: string;
+        agent_user_id: string | null;
+        data: Record<string, unknown>;
+      }>(
+        `select id, status, agent_user_id, data from proposals where target_id = $1 order by created_at`,
+        [channelId]
+      )
+    ).rows;
+
+  it("its author sending again revises its own send: one row, the new words, the author kept", async () => {
+    const first = await agentSends(AGENT, "First draft");
+    const second = await agentSends(AGENT, "Second draft");
+    expect(second.proposalId).toBe(first.proposalId);
+    const rows = await rowsOn(first.channelId as string);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ status: "pending", agent_user_id: AGENT });
+    expect(rows[0]!.data.body).toBe("Second draft");
+  });
+
+  it("another agent's send replaces it: the old one ends withdrawn, pointing at the new one", async () => {
+    const first = await agentSends(AGENT, "First draft");
+    const second = await agentSends(OTHER_AGENT, "Another draft");
+    expect(second.proposalId).not.toBe(first.proposalId);
+    const rows = await rowsOn(first.channelId as string);
+    expect(rows.map((r) => [r.id, r.status])).toEqual([
+      [first.proposalId, "withdrawn"],
+      [second.proposalId, "pending"],
+    ]);
+    expect(rows[0]!.data.supersededBy).toBe(second.proposalId);
+    expect(rows[1]!.agent_user_id).toBe(OTHER_AGENT);
   });
 });
 
@@ -1353,6 +1410,79 @@ describe("LinkedIn reach: HELD when filed, released on connected, and recorded o
       relationRequest: null,
     });
     startChat.mockResolvedValue({ chatId: "chat-rel", messageId: "m-rel" });
+    await approve(id);
+    expect(startChat).toHaveBeenCalledTimes(1);
+    const sent = await heldOf(id);
+    expect(sent.status).toBe("approved");
+    expect(sent.data).not.toHaveProperty("held");
+  });
+
+  it("no LinkedIn profile on file: filed HELD (missing_field) with the next step, the text kept; nothing read, nothing sent (plan 8032a127 D1)", async () => {
+    await q(`update entities set properties = '{}'::jsonb where id = $1`, [
+      PERSON,
+    ]);
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    const held = out.held as { reason: string; errorClass: string };
+    expect(held.errorClass).toBe("missing_field");
+    expect(held.reason).toMatch(/No Linkedin profile on file/i);
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      body: "Hello Marie",
+      held: {
+        errorClass: "missing_field",
+        missing: "profile",
+        reason: held.reason,
+      },
+    });
+    expect(getProfile).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("a profile on file that LinkedIn gives no id for: filed HELD (missing_field, missing provider_id), its own next step; nothing sent", async () => {
+    profileSays({
+      providerId: "",
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      held: { errorClass: "missing_field", missing: "provider_id" },
+    });
+    expect((row.data.held as { reason: string }).reason).toMatch(
+      /No Linkedin id on file/i
+    );
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("approved while still no profile on file: kept pending and HELD (missing_field), never failed; once the profile is on file and they are connected, the approval sends it once", async () => {
+    await q(`update entities set properties = '{}'::jsonb where id = $1`, [
+      PERSON,
+    ]);
+    const out = await appSendsTo(PERSON);
+    const id = out.proposalId as string;
+    await expect(approve(id)).rejects.toBeTruthy();
+    const still = await heldOf(id);
+    expect(still.status).toBe("pending");
+    expect(still.data).toMatchObject({ held: { errorClass: "missing_field" } });
+    expect(still.data).not.toHaveProperty("failure");
+    await q(`update entities set properties = $2 where id = $1`, [
+      PERSON,
+      JSON.stringify({
+        linkedinUrl: "https://www.linkedin.com/in/marie-dupont",
+      }),
+    ]);
+    profileSays({
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    startChat.mockResolvedValue({ chatId: "chat-prof", messageId: "m-prof" });
     await approve(id);
     expect(startChat).toHaveBeenCalledTimes(1);
     const sent = await heldOf(id);

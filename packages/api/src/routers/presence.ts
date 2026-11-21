@@ -110,6 +110,7 @@ import {
   readPresenceMode,
   readPresenceSensitivity,
 } from "../services/presence/mode.js";
+import { readGrace } from "../services/presence/grace.js";
 import { changePresenceMode } from "../services/presence/mode-change.js";
 import { changePresenceSensitivity } from "../services/presence/sensitivity-change.js";
 import { auditLog } from "../utils/audit-log.js";
@@ -445,12 +446,29 @@ export const presenceRouter = router({
    * Security page says up front that their last passkey stays while it is
    * `enforce` (`presence.mode` itself is a pod admin read).
    */
-  sensitivity: protectedProcedure.query(async () => {
+  sensitivity: protectedProcedure.query(async ({ ctx }) => {
     const [choice, { mode }] = await Promise.all([
       readPresenceSensitivity(),
       readPresenceMode(),
     ]);
-    return { ...choice, mode };
+    // The caller's own grace window (`services/presence/grace.ts`): seconds
+    // left, or null when none (or it could not be read: the client then asks
+    // for a proof, which is the safe side). Only a browser session holds one.
+    let graceSecondsLeft: number | null = null;
+    if (ctx.sessionKind === "kratos") {
+      try {
+        graceSecondsLeft =
+          (
+            await readGrace({
+              userId: ctx.userId,
+              sessionKey: callerSessionKey(ctx),
+            })
+          )?.remainingSeconds ?? null;
+      } catch {
+        graceSecondsLeft = null;
+      }
+    }
+    return { ...choice, mode, graceSecondsLeft };
   }),
 
   /**

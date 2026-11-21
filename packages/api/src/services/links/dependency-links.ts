@@ -64,7 +64,10 @@ import {
   drizzleSql,
   isLifecycleCategory,
 } from "@synap/database";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  sessionClosedAs,
+} from "@synap-core/types/focus-sessions";
 import {
   ADVANCES_LINK_TYPE,
   DEPENDENCY_LINK_TYPE,
@@ -99,6 +102,7 @@ import {
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
+import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
 
 const logger = createLogger({ module: "dependency-links" });
 
@@ -252,6 +256,14 @@ async function restampPrimaryMark(
 }
 
 /**
+ * A goal's `advances` edge (`links`, the outer row) is a pillar only while
+ * the goal's project still `uses` that space. Read by both pillar readers
+ * (`readGoalPrimary`, `readGoalPlacements`).
+ */
+export const pillarStillUsedSql = () =>
+  drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`;
+
+/**
  * THE primary reader: the end of goal `goalId`'s PRIMARY `linkType` edge
  * (`metadata.primary`), or `null` when it has none. For `advances`, only an
  * edge to a space the goal's project still `uses` counts (a pillar the
@@ -276,9 +288,7 @@ export async function readGoalPrimary(
         except
           ? drizzleSql`NOT (${links.toType} = ${except.toType} AND ${links.toId} = ${except.toId})`
           : undefined,
-        linkType === ADVANCES_LINK_TYPE
-          ? drizzleSql`EXISTS (SELECT 1 FROM links u JOIN ${projectTracks} t ON t.project_id::text = u.from_id WHERE t.id::text = ${links.fromId} AND u.link_type = 'uses' AND u.from_type = 'project' AND u.to_type = 'workspace' AND u.to_id = ${links.toId})`
-          : undefined
+        linkType === ADVANCES_LINK_TYPE ? pillarStillUsedSql() : undefined
       )
     )
     .limit(1);
@@ -1116,6 +1126,7 @@ async function readStates(
         status: focusSessions.status,
         title: focusSessions.title,
         goal: focusSessions.goal,
+        closedNotDone: closedNotDoneRecordedSql(),
       })
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessionIds));
@@ -1128,6 +1139,8 @@ async function readStates(
           ? { missing: true }
           : {
               status: row.status ?? null,
+              // "Delivered" = closed with the work done (`sessionClosedAs`).
+              closedAs: sessionClosedAs(row.status, row.closedNotDone),
               title: resolveSessionTitle(row),
               hidden: !visible.has(id),
             }

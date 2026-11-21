@@ -14,7 +14,8 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "scripts": {
     "build": "rm -rf dist tsconfig.tsbuildinfo && tsup && tsc --emitDeclarationOnly --declaration",

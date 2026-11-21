@@ -13,6 +13,7 @@ import {
   type WorkSessionRow,
 } from "../status-work-model.js";
 import type { ContinuationPacket } from "../../focus-sessions/continuation-packet.js";
+import type { SessionOutcomesSection } from "../../focus-sessions/session-outputs.js";
 
 const S = "11111111-1111-4111-8111-111111111111";
 const PRODUCE = [
@@ -134,6 +135,68 @@ const packet = (over: Partial<ContinuationPacket> = {}) =>
     ...over,
   }) as unknown as ContinuationPacket;
 
+const mark = (state: string) => ({
+  state,
+  tone: "neutral",
+  glyph: "",
+  rail: "",
+});
+
+/**
+ * THE outcomes section (`readSessionOutcomesSection`): Slides delivered but
+ * held by its criterion, a Post still owed, and a retired outcome.
+ */
+const outcomesSection = (): SessionOutcomesSection =>
+  ({
+    status: "ok",
+    counts: { met: 0, total: 2 },
+    outcomes: [
+      {
+        key: "slides",
+        label: "Slides",
+        kind: "document",
+        source: "slot+criterion",
+        owner: "agent",
+        verify: "judge",
+        required: true,
+        met: false,
+        metBy: null,
+        retired: false,
+        state: mark("working"),
+        verdict: null,
+        evidence: [],
+        criteria: [
+          {
+            key: "every-slide-picture",
+            statement: "Every slide has a picture",
+            verify: "judge",
+            required: true,
+            met: false,
+            verdict: null,
+            state: mark("not_started"),
+          },
+        ],
+      },
+      {
+        key: "post",
+        label: "Post",
+        kind: "document",
+        source: "slot",
+        owner: "human",
+        verify: "evidence",
+        required: true,
+        met: false,
+        metBy: null,
+        retired: false,
+        state: mark("needs_you"),
+        verdict: null,
+        evidence: [],
+      },
+    ],
+    inputs: [],
+    unattached: [],
+  }) as unknown as SessionOutcomesSection;
+
 const item = (
   over: Partial<Parameters<typeof workItemOf>[0]> = {}
 ): ReturnType<typeof workItemOf> =>
@@ -143,6 +206,7 @@ const item = (
     kind: "run",
     packet: packet(),
     run: run(),
+    outcomes: outcomesSection(),
     may: { continue: true, review: new Set(["p-1"]) },
     link: "https://pod/open/x",
     ...over,
@@ -285,7 +349,70 @@ describe("workItemOf — what THIS reader may do is the read's, placed as given"
   });
 });
 
+describe("workItemOf — the run's outcomes, as synap_get_session reads them", () => {
+  it("carries each outcome's key, label, kind, met and state, and the criteria that check an output", () => {
+    const { outcomes } = item();
+    expect(outcomes).toEqual({
+      status: "ok",
+      counts: { met: 0, total: 2 },
+      items: [
+        {
+          key: "slides",
+          label: "Slides",
+          kind: "document",
+          owner: "agent",
+          met: false,
+          retired: false,
+          state: "working",
+          criteria: [
+            {
+              key: "every-slide-picture",
+              label: "Every slide has a picture",
+              met: false,
+              state: "not_started",
+              outputKey: "slides",
+            },
+          ],
+        },
+        {
+          key: "post",
+          label: "Post",
+          kind: "document",
+          owner: "human",
+          met: false,
+          retired: false,
+          state: "needs_you",
+        },
+      ],
+    });
+  });
+
+  it("a session that declares none: an empty list, which IS the answer", () => {
+    expect(
+      item({
+        outcomes: {
+          status: "ok",
+          counts: { met: 0, total: 0 },
+          outcomes: [],
+          inputs: [],
+          unattached: [],
+        },
+      }).outcomes
+    ).toEqual({ status: "ok", counts: { met: 0, total: 0 }, items: [] });
+  });
+});
+
 describe("workItemOf — a failed read is its own state, never empty", () => {
+  it("outcomes that could not be read are unavailable, never an empty list", () => {
+    const w = item({
+      outcomes: { status: "unavailable", reason: "read_failed" },
+    });
+    expect(w.outcomes).toEqual({
+      status: "unavailable",
+      reason: "Its outcomes could not be read.",
+    });
+  });
+
   it("a packet that could not be built: every section unavailable, next move unknown", () => {
     const w = item({ packet: { failed: "could not read" } });
     for (const part of [

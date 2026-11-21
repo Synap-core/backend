@@ -360,6 +360,8 @@ describe("getProjectPath", () => {
           title: "Price the plans",
           status: "active",
           statusLabel: expect.any(String),
+          // How it ended (`sessionClosedAs`): not ended.
+          closedAs: null,
         },
       ],
     });
@@ -378,6 +380,7 @@ describe("getProjectPath", () => {
           title: "Wire billing",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
       ],
     });

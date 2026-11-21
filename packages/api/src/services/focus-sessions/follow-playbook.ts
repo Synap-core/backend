@@ -66,7 +66,7 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
-  LIVE_RUN_STATUSES,
+  listHolds,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -81,6 +81,10 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
+import {
+  nameSharedKeyOutputs,
+  LIVE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -91,6 +95,7 @@ import {
 } from "../links/links-service.js";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { playbookSlotsMissingFrom } from "./playbook-slots.js";
+import { stageSlotsThrough } from "./stage-slots.js";
 import {
   guidanceForBlockedSlots,
   newlyBlockedSlots,
@@ -108,14 +113,19 @@ import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "follow-playbook" });
 
-/** Where the follow receipt lives on `focus_sessions.metadata`. */
-export const FOLLOWED_AT_METADATA_KEY = "followedAt";
-/** How the session came to follow its playbook — `"attach"` is this door. */
-export const FOLLOWED_VIA_METADATA_KEY = "followedVia";
-/** Stamped on release; the `followedAt` stays, because it happened. */
-export const UNFOLLOWED_AT_METADATA_KEY = "unfollowedAt";
-/** The only value this door writes for {@link FOLLOWED_VIA_METADATA_KEY}. */
-export const FOLLOWED_VIA_ATTACH = "attach";
+// The follow receipt's keys live in a leaf (the close door reads them).
+import {
+  FOLLOWED_AT_METADATA_KEY,
+  FOLLOWED_VIA_ATTACH,
+  FOLLOWED_VIA_METADATA_KEY,
+  UNFOLLOWED_AT_METADATA_KEY,
+} from "./follow-markers.js";
+export {
+  FOLLOWED_AT_METADATA_KEY,
+  FOLLOWED_VIA_ATTACH,
+  FOLLOWED_VIA_METADATA_KEY,
+  UNFOLLOWED_AT_METADATA_KEY,
+};
 
 /**
  * What the door DID, as the UIs must render it.
@@ -220,14 +230,19 @@ function stageKeysOf(playbook: { stages: unknown }): string[] {
  *   - a HUMAN gate is a PENDING proposal targeting the session
  *     (`openStageGate` → `STAGE_GATE_TARGET_TYPE` + `action: "stage_gate"`);
  *   - a CHECK gate is `metadata.checkGate` on the row (`applyCheckGate`),
- *     cleared by `resumeCheckGateIfMet`.
+ *     cleared by `resumeCheckGateIfMet` — and holding only while it is the
+ *     gate's OWN hold ({@link checkGateRecordHolds}).
  */
 export async function pendingStageGate(session: {
   id: string;
   metadata: unknown;
+  currentStage: string | null;
 }): Promise<"human" | "check" | null> {
   const bag = (session.metadata ?? {}) as Record<string, unknown>;
-  if (bag[CHECK_GATE_METADATA_KEY] != null) return "check";
+  const record = bag[CHECK_GATE_METADATA_KEY];
+  if (record != null && (await checkGateRecordHolds(session, record))) {
+    return "check";
+  }
   const [open] = await db
     .select({ id: proposals.id })
     .from(proposals)
@@ -247,6 +262,31 @@ export async function pendingStageGate(session: {
     )
     .limit(1);
   return open ? "human" : null;
+}
+
+/**
+ * Does a `metadata.checkGate` record still HOLD the session? The record
+ * outlives its hold: an `onFail` return leaves it (it says why the run went
+ * back) and nothing clears it but `resumeCheckGateIfMet`. Read as a hold
+ * forever, it froze a session its check had sent back (finding 881e0b61,
+ * session 6f5410fa): paused later for a reason of its own, no agent could
+ * resume or advance it. A record is STALE, and holds nothing, when
+ *   - the run no longer stands on the gated stage (sent back, or moved on), or
+ *   - the session's current hold is another one (paused for its own reason).
+ * Otherwise it holds, fail-closed: no hold recorded (a pause from before
+ * holds) is still the gate's.
+ */
+async function checkGateRecordHolds(
+  session: { id: string; currentStage: string | null },
+  record: unknown
+): Promise<boolean> {
+  const stageKey = (record as { stageKey?: unknown } | null)?.stageKey;
+  if (typeof stageKey !== "string") return true;
+  if (session.currentStage !== stageKey) return false;
+  const [current] = await listHolds(db, {
+    subjects: [{ subjectType: "focus_session", subjectId: session.id }],
+  });
+  return !current || current.hold.ref === `check:${stageKey}`;
 }
 
 /**
@@ -417,6 +457,7 @@ export async function followPlaybook(
           criteria: focusSessions.criteria,
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
+          currentStage: focusSessions.currentStage,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -439,12 +480,29 @@ export async function followPlaybook(
         followedAt,
         PARAM_SLOT_CIRCUMSTANCE.followed
       );
+      const playbookAdded = sanitizeDeclaredOutputs(
+        playbookSlotsMissingFrom(playbook, currentOutputs)
+      );
+      // STAGE SLOTS (db6a5e17): the work is IN a stage (named now, or one of
+      // this playbook's it already held), so it owes what every stage up to it
+      // declares, as a session that advanced there would (`stage-slots.ts`).
+      // `playbook.stages` IS the run's frozen definition: this call pins the
+      // same row as the new run's snapshot below, the newest live run that
+      // `loadSessionProcess` reads from now on.
+      const inStage =
+        stageKey ??
+        (locked?.currentStage && validKeys.includes(locked.currentStage)
+          ? locked.currentStage
+          : null);
+      const stageAdded = stageSlotsThrough(playbook.stages, inStage, [
+        ...currentOutputs,
+        ...playbookAdded,
+      ]);
       // Merged by label like the playbook's own slots, so following twice does
       // not file the same question again.
       const added = [
-        ...sanitizeDeclaredOutputs(
-          playbookSlotsMissingFrom(playbook, currentOutputs)
-        ),
+        ...playbookAdded,
+        ...stageAdded,
         ...paramSlots.filter(
           (slot) =>
             !currentOutputs.some(
@@ -470,7 +528,8 @@ export async function followPlaybook(
         .update(focusSessions)
         .set({
           playbookId: playbook.id,
-          criteria: nextCriteria,
+          // A criterion sharing a slot's key names it (`outputKey`, W4).
+          criteria: [...nameSharedKeyOutputs(nextCriteria, nextOutputs)],
           expectedOutputs: nextOutputs,
           // Only when NAMED. Absent leaves the column exactly as it was.
           ...(stageKey !== null ? { currentStage: stageKey } : {}),

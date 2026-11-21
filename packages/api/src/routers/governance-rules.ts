@@ -5,8 +5,10 @@
  * see docs/decisions/agent-governance.md). This is the "always approve for X" door:
  * approving a proposal can additionally widen governance by inserting ONE
  * revocable, audited rule instead of hand-editing `workspaces.settings` or
- * `agentMetadata` JSONB. The resolver that *consumes* these rows (rung 2.8 in
- * `decideAgentPolicy`) is a separate wave — this router only stores/lists/revokes.
+ * `agentMetadata` JSONB. The resolver that *consumes* these rows
+ * (`resolveGovernanceRule`, rung 2.8 of `decideAgentPolicy`, and the
+ * capability gate) is wired; this router stores, lists and revokes them. For
+ * a tool run a capability row is the ONLY "runs without asking" (decision D2).
  *
  * The five "always approve for X" granularities the UI offers map to `create`
  * inputs as:
@@ -91,7 +93,9 @@ import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
+  ACTION_ALWAYS_ASKS,
   ACTION_MODES_BATCH_MAX,
+  actionsMayRunOnTheirOwn,
   assertPersonSetsActionMode,
   readActionModes,
   writeActionMode,
@@ -838,6 +842,21 @@ export const governanceRulesRouter = router({
             message: `NON_WIDENABLE_FLOOR (${floor}): "${input.targetPattern}" always needs review — no governance rule can auto-approve it.`,
           });
         }
+      }
+      // The same for a capability the gate never widens (a public post, a
+      // verb declaring `metadata.proposeOnly`): the one derivation it reads.
+      if (
+        input.verdict === "auto" &&
+        input.targetKind === "capability" &&
+        !(await actionsMayRunOnTheirOwn([input.targetPattern])).get(
+          input.targetPattern
+        )
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${input.targetPattern}" publishes in public or cannot be undone: it always asks you first.`,
+          cause: { reasonCode: ACTION_ALWAYS_ASKS },
+        });
       }
 
       await assertCanManageRule(ctx.userId, input);

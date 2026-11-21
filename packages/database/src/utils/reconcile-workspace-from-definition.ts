@@ -64,6 +64,7 @@ import {
 } from "../repositories/profile-repository.js";
 import { type ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { ownerAndActor } from "./owner-person.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import {
   buildStoredConstraints,
@@ -75,6 +76,7 @@ import {
   declareLifecycle,
   withLifecycleOptions,
 } from "../services/lifecycle/declare-lifecycle.js";
+import { setLifecycleInitialStatus } from "../services/lifecycle/lifecycle-def-guard.js";
 import type {
   PropertyDef,
   PropertyValueType,
@@ -281,6 +283,8 @@ export interface ReconcileReport {
     lifecycles?: {
       declared: Array<{ profile: string; property: string }>;
       refused: Array<{ profile: string; reason: string }>;
+      /** The template's `initialStatus`, filled on a lifecycle that had none. */
+      initial?: Array<{ profile: string; status: string }>;
     };
     /** Template type differs from the live type — NOT changed; needs a decision. */
     conflicts: Array<{
@@ -1013,6 +1017,31 @@ export async function reconcileWorkspaceFromDefinition(
           property: profile.lifecycle.property,
         });
       }
+      // The status new things start in, through the lifecycle door (the link
+      // default every birth door reads). Fill-only: an initial a person set
+      // since, or another door, is kept.
+      const initialStatus = profile.lifecycle.initialStatus;
+      if (
+        initialStatus &&
+        (declared.status === "declared" || declared.status === "unchanged")
+      ) {
+        const initial = await setLifecycleInitialStatus(dbConn, {
+          propertyDefId: declared.propertyDefId,
+          initialStatus,
+          onlyWhenUnset: true,
+        });
+        if (initial.status === "refused") {
+          report.properties.lifecycles!.refused.push({
+            profile: profile.slug,
+            reason: `initialStatus: ${initial.reason}`,
+          });
+        } else if (initial.status === "changed") {
+          (report.properties.lifecycles!.initial ??= []).push({
+            profile: profile.slug,
+            status: initialStatus,
+          });
+        }
+      }
     }
   }
 
@@ -1652,10 +1681,12 @@ export async function reconcileWorkspaceFromDefinition(
           triggerType: auto.triggerType,
           triggerConfig: auto.triggerConfig ?? {},
         });
+        const owner = await ownerAndActor(dbConn, userId);
         try {
           await dbConn.insert(automations).values({
             workspaceId,
-            createdBy: userId,
+            createdBy: owner.ownerId,
+            agentUserId: owner.agentUserId,
             name: auto.name,
             description: auto.description,
             triggerType: auto.triggerType,
@@ -1692,7 +1723,7 @@ export async function reconcileWorkspaceFromDefinition(
     // Drift (or a legacy int `seedVersion`) → overwrite flow + description,
     // MERGE-stamp the new hash (NEVER clobber the rest of the metadata bag —
     // `tags`/`createdVia`/`averageExecutionTime` live there; see
-    // ensure-report-automation.ts:1738), and bump the monotonic `version` so a
+    // the retired ensure-report-automation), and bump the monotonic `version` so a
     // run's `definitionSnapshot` reports the right number.
     report.automations.updated.push(auto.name);
     if (!dryRun) {

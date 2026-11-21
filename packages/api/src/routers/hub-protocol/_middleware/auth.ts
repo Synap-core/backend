@@ -20,6 +20,8 @@
  */
 
 import {
+  APP_PERSON_WRITE_UNSUPPORTED,
+  appPersonWriteAllowed,
   GRANT_DOOR_UNSUPPORTED,
   GRANT_OWNER_WIDE_UNSUPPORTED,
   isFencedGrant,
@@ -686,6 +688,21 @@ export const hubAuthMiddleware = async (
           403
         );
       }
+    }
+    // A person's app token acts AS the person, so every owner check passes
+    // for it: it may not use a write nobody has classified against its grant
+    // yet (A1 step 1), whatever that grant is.
+    if (
+      keyRecord.keyType === APP_PERSON_KEY_TYPE &&
+      !appPersonWriteAllowed(c.req.method, rel)
+    ) {
+      return c.json(
+        {
+          error: APP_PERSON_WRITE_UNSUPPORTED,
+          code: "GRANT_DOOR_UNSUPPORTED",
+        },
+        403
+      );
     }
     // Owner-wide doors (webhooks, …; plus write-only owner-wide doors such as
     // capability credentials): no grant narrows their effect, so only an

@@ -45,6 +45,7 @@
 import {
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
+  type SessionClosedAs,
 } from "../focus-sessions/statuses.js";
 import { classifyDependencyBlocker } from "../connections/dependency.js";
 import {
@@ -360,12 +361,17 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
 
 /**
  * A row's blocked-by edges as the path wire carries them: the blockers with
- * their own status, or a section the pod could not read.
+ * their own status and how they ended (`closedAs`; absent from an older pod),
+ * or a section the pod could not read.
  */
 export type BlockerEdges =
   | {
       status: "ok";
-      items: ReadonlyArray<{ title: string; status: string }>;
+      items: ReadonlyArray<{
+        title: string;
+        status: string;
+        closedAs?: SessionClosedAs | null;
+      }>;
     }
   | { status: "unavailable" }
   | null
@@ -374,9 +380,9 @@ export type BlockerEdges =
 /**
  * The title of the first session this row still waits on, or `null`. THE
  * dependency rule decides ({@link classifyDependencyBlocker}): only a
- * DELIVERED blocker (closed) clears; one that ended without delivering
- * (cancelled, failed) still holds until someone re-plans, and so does a stale
- * one. An unreadable section claims no blocker (the row's edge chip says
+ * DELIVERED blocker (closed with the work done) clears; one that ended without
+ * delivering (cancelled, failed, closed with required work open) still holds
+ * until someone re-plans, and so does a stale one. An unreadable section claims no blocker (the row's edge chip says
  * "couldn't load" — the MARK does not guess).
  */
 export function openBlockerTitle(edges: BlockerEdges): string | null {
@@ -384,7 +390,12 @@ export function openBlockerTitle(edges: BlockerEdges): string | null {
   return (
     edges.items.find(
       (item) =>
-        classifyDependencyBlocker("session", item.status) !== "delivered"
+        classifyDependencyBlocker(
+          "session",
+          item.status,
+          null,
+          item.closedAs
+        ) !== "delivered"
     )?.title ?? null
   );
 }

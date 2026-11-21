@@ -462,6 +462,21 @@ describe("proposals: needs you only when something waits on it", () => {
     expect(classifyPendingProposal(base, NOW)).toBe("needs_you");
   });
 
+  it("HELD (it cannot apply yet, plan 8032a127 D6) ⇒ never the headline, even when a gate waits on it", () => {
+    expect(classifyPendingProposal({ ...base, held: true }, NOW)).toBe(
+      "changes_to_review"
+    );
+    expect(
+      classifyPendingProposal(
+        { ...base, held: true, waits: { waits: true, reason: "gate" } },
+        NOW
+      )
+    ).toBe("changes_to_review");
+    expect(classifyPendingProposal({ ...base, held: false }, NOW)).toBe(
+      "needs_you"
+    );
+  });
+
   it("nothing waits ⇒ a change to review (bookkeeping)", () => {
     expect(
       classifyPendingProposal({ ...base, waits: { waits: false } }, NOW)

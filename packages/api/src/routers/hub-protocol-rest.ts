@@ -19,6 +19,8 @@ import { hubAuthMiddleware } from "./hub-protocol/_middleware/auth.js";
 import { grantDenialCodeMiddleware } from "./hub-protocol/_middleware/grant-denial-code.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
+import { supersedesMiddleware } from "./hub-protocol/_middleware/supersedes.js";
+import { SUPERSEDES_DOORS } from "../services/proposals/supersedes-door.js";
 import { hubRequestGuardMiddleware } from "../middleware/hub-request-guard.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
@@ -81,6 +83,7 @@ import {
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
+  registerDesignsRoutes,
   registerChatRoutes,
   registerLibraryRoutes,
   registerToolsRoutes,
@@ -91,8 +94,10 @@ import {
   registerViewsRoutes,
   registerWidgetDefinitionsRoutes,
   registerCellsRoutes,
+  registerRenderersRoutes,
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
+  registerRealtimeRoutes,
   registerWorkspacesRoutes,
   registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
@@ -301,6 +306,17 @@ app.use(
   })
 );
 
+// ── `supersedes` on the filing doors (plan 8032a127 D3) ────────────────────
+//
+// The routes that file the same requests as the MCP tools taking
+// `supersedes` (`SUPERSEDES_DOORS`, one table for both doors) accept it too,
+// through the one function MCP calls (`./hub-protocol/_middleware/
+// supersedes.ts`). AFTER idempotency, so a replay serves the answer that
+// already says what became of the failed proposal; before the routes.
+for (const door of SUPERSEDES_DOORS) {
+  app.use(door.route, supersedesMiddleware(door.method));
+}
+
 // ── Mount route slices in EXACTLY the original order ───────────────────────
 //
 // Hono is first-match: the order in which routes are registered matters when
@@ -366,8 +382,10 @@ registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerPlaybooksRoutes(app); // /playbooks/promote-from-session (governed)
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
+registerRenderersRoutes(app); // /renderers/host-modules
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
 registerWhiteboardsRoutes(app); // /whiteboards/:viewId/{scene,placements,state}
+registerRealtimeRoutes(app); // POST /realtime/room-ticket — a pod app opens a live room (0438)
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerVaultRoutes(app); // /vault/request
@@ -402,6 +420,7 @@ registerFocusSessionsRoutes(app); // /focus-sessions*
 registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
+registerDesignsRoutes(app); // GET /designs/catalog, GET /designs/kit, POST /designs/apply (static, first), GET /designs/:id — the design door for apps
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list), PATCH /rules/:id (edit, LAST)
 registerUiRoutes(app); // /ui/focus

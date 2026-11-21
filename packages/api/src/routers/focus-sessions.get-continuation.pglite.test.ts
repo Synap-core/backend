@@ -553,6 +553,7 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Wire the Stripe webhook",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
       ],
     });
@@ -616,6 +617,7 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Get the Stripe key",
           status: "closed",
           statusLabel: expect.any(String),
+          closedAs: "done",
         },
       ],
     });
@@ -646,6 +648,14 @@ describe("focusSessions.get returns the continuation packet", () => {
       expect(c.unblocks).toEqual({
         status: "unavailable",
         reason: "The sessions waiting on this one could not be read.",
+      });
+      expect(c.orchestratedBy).toEqual({
+        status: "unavailable",
+        reason: "The orchestrator coordinating this session could not be read.",
+      });
+      expect(c.orchestrates).toEqual({
+        status: "unavailable",
+        reason: "The sessions this orchestrator coordinates could not be read.",
       });
     } finally {
       await h.client!.exec(ddlFor(links as unknown as PgTable));
@@ -709,12 +719,14 @@ describe("focusSessions.get returns the continuation packet", () => {
           title: "Launch billing",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
         {
           id: waitingClosed,
           title: "Old launch",
           status: "closed",
           statusLabel: expect.any(String),
+          closedAs: "done",
         },
       ],
     });
@@ -724,6 +736,68 @@ describe("focusSessions.get returns the continuation packet", () => {
     });
     const mcp = await mcpGet(session);
     expectSamePacket(mcp.continuation, trpc);
+  });
+
+  it("orchestratedBy names the orchestrator, orchestrates its sessions, owner-floored — the same on both doors", async () => {
+    await h.client!.exec("delete from links;");
+    const orchestrator = randomUUID();
+    const coordinatedOpen = randomUUID();
+    const coordinatedClosed = randomUUID();
+    const strangers = randomUUID();
+    await insertSession(orchestrator, USER, "Orchestrate the launch", "active");
+    await insertSession(coordinatedClosed, USER, "Old copy", "closed", {
+      minsAgo: 60,
+    });
+    await insertSession(coordinatedOpen, USER, "Pricing page", "paused");
+    await insertSession(strangers, "user-2", "Not yours", "active");
+    await edge(coordinatedClosed, orchestrator, "orchestrated_by");
+    await edge(coordinatedOpen, orchestrator, "orchestrated_by");
+    await edge(strangers, orchestrator, "orchestrated_by");
+
+    const o = (await get(orchestrator)).continuation;
+    expect(o.orchestrates).toEqual({
+      status: "ok",
+      total: 2,
+      items: [
+        {
+          id: coordinatedOpen,
+          title: "Pricing page",
+          status: "paused",
+          statusLabel: expect.any(String),
+          closedAs: null,
+        },
+        {
+          id: coordinatedClosed,
+          title: "Old copy",
+          status: "closed",
+          statusLabel: expect.any(String),
+          closedAs: "done",
+        },
+      ],
+    });
+    expect(o.orchestratedBy).toEqual({ status: "ok", total: 0, items: [] });
+    // Neither is a blocker nor a child: orchestration is its own edge.
+    expect(o.unblocks).toMatchObject({ total: 0 });
+    expect(o.children).toMatchObject({ total: 0 });
+
+    const k = (await get(coordinatedOpen)).continuation;
+    expect(k.orchestratedBy).toEqual({
+      status: "ok",
+      total: 1,
+      items: [
+        {
+          id: orchestrator,
+          title: "Orchestrate the launch",
+          status: "active",
+          statusLabel: expect.any(String),
+          closedAs: null,
+        },
+      ],
+    });
+    expect(k.orchestrates).toEqual({ status: "ok", total: 0, items: [] });
+    expect(k.blockedBy).toMatchObject({ total: 0 });
+    const mcp = await mcpGet(orchestrator);
+    expectSamePacket(mcp.continuation, o);
   });
 
   const questionPart = (sessionId: string, status: string, question: string) =>
@@ -1226,5 +1300,84 @@ describe("focusSessions.get returns the continuation packet", () => {
     } finally {
       await h.client!.exec(ddlFor(projects as unknown as PgTable));
     }
+  });
+  it("precedents: the reader's earlier SUCCESSFUL runs of the same playbook, what each used, and the scorecard", async () => {
+    const playbookId = randomUUID();
+    const toolId = randomUUID();
+    await q(
+      `insert into tools (id, created_by, name, kind, created_at, updated_at) values ($1, $2, 'web.read', 'read', now(), now())`,
+      [toolId, USER]
+    );
+    const CRITERIA = JSON.stringify([
+      {
+        key: "tsc",
+        statement: "Typecheck passes",
+        required: true,
+        check: { kind: "judge" },
+      },
+    ]);
+    const earlier = async (
+      title: string,
+      verdict: "pass" | "fail",
+      daysAgo: number
+    ) => {
+      const id = randomUUID();
+      await q(
+        `insert into focus_sessions (id, user_id, goal, title, status, playbook_id, criteria, expected_outputs, metadata, created_at, updated_at, closed_at)
+         values ($1, $2, 'Ship it', $3, 'closed', $4, $5::jsonb, '[]'::jsonb, '{}'::jsonb, now(), now(), now() - ($6::int * interval '1 day'))`,
+        [id, USER, title, playbookId, CRITERIA, daysAgo]
+      );
+      await q(
+        `insert into session_evaluations (id, session_id, criterion_key, verdict, evaluator_kind, attempt, created_at)
+         values ($1, $2, 'tsc', $3, 'ai', 1, now())`,
+        [randomUUID(), id, verdict]
+      );
+      return id;
+    };
+    const older = await earlier("Ship v1", "pass", 9);
+    const newer = await earlier("Ship v2", "pass", 2);
+    await earlier("Ship v3", "fail", 1);
+    // Outside the learning window: never a precedent, never counted.
+    await earlier("Ship v0", "pass", 100);
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, created_at)
+       values ($1, 'session', $2, 'tool', $3, 'used', $4, now())`,
+      [randomUUID(), newer, toolId, USER]
+    );
+    const id = await seed({ owed: false });
+    await q(`update focus_sessions set playbook_id = $1 where id = $2`, [
+      playbookId,
+      id,
+    ]);
+
+    const c = (await get(id)).continuation;
+    expect(c.precedents).toEqual({
+      status: "ok",
+      playbookId,
+      scorecard: expect.objectContaining({ closedRuns: 3, evaluatedRuns: 3 }),
+      runs: {
+        status: "ok",
+        total: 2,
+        // Newest first; the failed run is no precedent.
+        items: [
+          expect.objectContaining({
+            sessionId: newer,
+            title: "Ship v2",
+            used: ["web.read"],
+          }),
+          expect.objectContaining({
+            sessionId: older,
+            title: "Ship v1",
+            used: [],
+          }),
+        ],
+      },
+    });
+    expectSamePacket((await mcpGet(id)).continuation, c);
+  });
+
+  it("precedents is null for a session that follows no playbook", async () => {
+    const id = await seed({ owed: false });
+    expect((await get(id)).continuation.precedents).toBeNull();
   });
 });

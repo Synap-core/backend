@@ -1,0 +1,396 @@
+"use client";
+
+/**
+ * Approvals — the ONE place pod admin edits who × what × where → runs on its
+ * own / asks first / never (decision b387ca45 D5, founder 19 Nov 2026). Every
+ * way of answering lands here: "Always approve…" / "Always reject…" and "Next
+ * time, do it and tell me" on a request, a playbook pre-approval, a tool's run
+ * mode, an agent's posture, a pod default, Widen in the grid. Each row says
+ * where it came from (a door to it) and how it is taken back.
+ *
+ *   (list)        every active `governance_rules` row the reader can see
+ *                 (`governanceRules.listAll`: pod rows and the reader's
+ *                 spaces), newest first, narrowed by ONE filter row: agent,
+ *                 tool, verdict, space (`approvals-model.ts`);
+ *   ?view=grid    the agents × tools grid, read from the same rows (lane
+ *                 W3, `tools-grid.tsx`): who × each tool those rows name,
+ *                 narrowed by the same filter row;
+ *   ?view=work    the agent × work matrix (each space's processes; it was
+ *                 Governance › Agents & work, `/governance/agents`
+ *                 redirects here), `?agent=` narrowing it to one agent's row.
+ *
+ * Taking a row back is `governanceRules.revoke` (the pod re-checks who may,
+ * `use-take-back.tsx`, the same on a tool's and an agent's page); a pod
+ * default is changed by its switch and a posture row on its agent's page, so
+ * a revoke here never fights the setting that wrote it. Receivers:
+ * `?agent=`, `?tool=`, `?verdict=`, `?space=`, `?view=`, `?focus=<row id>`.
+ */
+
+import { Button } from "@heroui/react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import {
+  APPROVALS_TITLE,
+  humanizePrincipal,
+  humanizeScope,
+} from "@synap-core/types/governance-rules";
+import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
+import { trpc } from "../../../lib/trpc";
+import { navHref } from "../../../lib/console-nav";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { useT } from "../../../lib/i18n/locale-provider";
+import { useReplaceParams } from "../../../lib/use-replace-params";
+import {
+  buildConnectionLabelLookup,
+  type GovernanceRuleRow,
+} from "../../../lib/governance-rules/rule-view-model";
+import {
+  APPROVAL_VERDICTS,
+  POD_SPACE,
+  approvalAgentKey,
+  approvalMatches,
+  approvalMode,
+  approvalSpaceKey,
+  approvalTitle,
+  approvalToolName,
+  filterValues,
+  toolNamesOf,
+} from "../../../lib/governance-rules/approvals-model";
+import {
+  CAPABILITY_READ_OPTIONS,
+  CATALOG_INPUT,
+} from "../tools/_lib/tools-model";
+import { matrixAgents } from "../../../lib/agent-matrix/matrix-view-model";
+import {
+  toolIndex,
+  toolsGrid,
+} from "../../../lib/governance-rules/tool-approvals-model";
+import {
+  FilterChip,
+  ListCard,
+  ListToolbar,
+  PageHeader,
+} from "../components/list-page";
+import { PageFallback, PageShell } from "../components/page-header";
+import { SegmentedChoice } from "../components/segmented-choice";
+import { useFocusRow } from "../components/use-focus-row";
+import { en, fr } from "./_lib/copy";
+import { ApprovalLine, MODE_ICON, MODE_TONE } from "./_lib/approval-line";
+import { ApprovalsGrid } from "./_lib/matrix/matrix-view";
+import { ToolsGridView } from "./_lib/tools-grid";
+import { useTakeBack } from "./_lib/use-take-back";
+
+const CATALOGS = { en, fr };
+const BASE = navHref("approvals");
+/** Rows drawn before "Show N more" (lists are capped, ui-composition §4). */
+const FIRST_ROWS = 50;
+
+type View = "list" | "grid" | "work";
+const VIEWS: readonly View[] = ["list", "grid", "work"];
+
+export default function ApprovalsPage() {
+  return (
+    <Suspense fallback={<PageFallback />}>
+      <ApprovalsInner />
+    </Suspense>
+  );
+}
+
+function ApprovalsInner() {
+  const t = useT(CATALOGS);
+  const params = useSearchParams();
+  const replaceParams = useReplaceParams();
+  const asked = params.get("view");
+  const view: View = VIEWS.find((v) => v === asked) ?? "list";
+  const filters = {
+    agent: params.get("agent"),
+    tool: params.get("tool"),
+    verdict: params.get("verdict"),
+    space: params.get("space"),
+  };
+
+  const rules = trpc.governanceRules.listAll.useQuery(undefined, {
+    staleTime: 30_000,
+    enabled: view !== "work",
+  });
+  // The work grid's agents, for the Agent chip when it is shown.
+  const matrix = trpc.governanceRules.matrix.useQuery(
+    { lens: "pod" },
+    { staleTime: 30_000, enabled: view === "work" }
+  );
+  const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  const all: GovernanceRuleRow[] = useMemo(
+    () => rules.data?.rules ?? [],
+    [rules.data]
+  );
+  // A connection rule names a registry row: its provider, never the uuid.
+  const connections = trpc.connectors.allConnections.useQuery(undefined, {
+    enabled: all.some((r) => r.targetKind === "connection"),
+  });
+  const connectionLabel = useMemo(
+    () => buildConnectionLabelLookup(connections.data ?? []),
+    [connections.data]
+  );
+  // A tool rule names an action by its stable id: its words come from the
+  // catalog (the Tools list's read), else the vocabulary; never the raw id.
+  const namesTools = all.some((r) => r.targetKind === "capability");
+  const catalog = trpc.capabilities.catalog.useQuery(CATALOG_INPUT, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: namesTools,
+  });
+  // A row made from a grant names one of a tool's member tool rows.
+  const compositions = trpc.capabilities.compositions.useQuery(undefined, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: namesTools,
+  });
+  const toolName = useMemo(
+    () => toolNamesOf(catalog.data ?? [], compositions.data ?? []),
+    [catalog.data, compositions.data]
+  );
+
+  useEffect(() => {
+    if (rules.error) redirectToLoginIfUnauthorized(rules.error);
+  }, [rules.error]);
+
+  const spaceName = useMemo(() => {
+    const byId = new Map((spaces.data ?? []).map((s) => [s.id, s.name]));
+    return (id: string) => byId.get(id);
+  }, [spaces.data]);
+  const whereOf = (row: GovernanceRuleRow) =>
+    approvalSpaceKey(row) === POD_SPACE
+      ? t("space.pod")
+      : humanizeScope(row, spaceName(row.workspaceId ?? ""));
+
+  // Pattern → the tool it belongs to: the Tool filter and the grid's columns
+  // are tools, each holding the rows on the whole tool and on its actions.
+  const index = useMemo(
+    () => toolIndex(catalog.data ?? [], compositions.data ?? []),
+    [catalog.data, compositions.data]
+  );
+  const toolKeyOf = useMemo(
+    () => (row: { targetKind: string; targetPattern: string }) =>
+      row.targetKind === "capability"
+        ? (index.get(row.targetPattern)?.id ?? row.targetPattern)
+        : null,
+    [index]
+  );
+  const shown = useMemo(
+    () =>
+      all.filter((r) =>
+        approvalMatches(
+          r,
+          {
+            agent: filters.agent,
+            tool: filters.tool,
+            verdict: filters.verdict,
+            space: filters.space,
+          },
+          toolKeyOf
+        )
+      ),
+    [
+      all,
+      filters.agent,
+      filters.tool,
+      filters.verdict,
+      filters.space,
+      toolKeyOf,
+    ]
+  );
+  const [expanded, setExpanded] = useState(false);
+  const focusId = useFocusRow({ ready: !rules.isLoading });
+  const focusIndex = focusId ? shown.findIndex((r) => r.id === focusId) : -1;
+  const drawn =
+    expanded || focusIndex >= FIRST_ROWS ? shown : shown.slice(0, FIRST_ROWS);
+
+  // Each chip's values come from the rows (or the grid's agents).
+  const agentOptions =
+    view === "work"
+      ? matrix.data
+        ? matrixAgents(matrix.data).map(({ agent }) => ({
+            id: agent.agentUserId,
+            label: agent.name,
+          }))
+        : []
+      : filterValues(all, approvalAgentKey).map((v) => ({
+          id: v.id,
+          label: humanizePrincipal(v.sample),
+          count: v.count,
+        }));
+  const toolOptions = filterValues(all, toolKeyOf).map((v) => ({
+    id: v.id,
+    label: index.get(v.id)?.name ?? approvalToolName(v.id, toolName),
+    count: v.count,
+  }));
+  const verdictOptions = APPROVAL_VERDICTS.map((v) => {
+    const mode = approvalMode(v);
+    return {
+      id: v,
+      label: resolveActionRunModeLabel(mode),
+      count: all.filter((r) => r.verdict === v).length,
+      icon: MODE_ICON[mode],
+      tone: MODE_TONE[mode],
+    };
+  });
+  const spaceOptions = filterValues(all, approvalSpaceKey).map((v) => ({
+    id: v.id,
+    label:
+      v.id === POD_SPACE
+        ? t("space.pod")
+        : (spaceName(v.id) ?? t("space.unknown")),
+    count: v.count,
+  }));
+
+  const titleOf = (row: GovernanceRuleRow) =>
+    approvalTitle(row, { connectionLabel, toolName });
+  const takeBack = useTakeBack<GovernanceRuleRow>(titleOf);
+
+  // The agents × tools grid: the filtered rows, each tool grouped through
+  // the catalog (a failed catalog read is a failure, never fewer columns).
+  const gridReady =
+    !namesTools || (catalog.isSuccess && compositions.isSuccess);
+  const grid = useMemo(
+    () => (view === "grid" && gridReady ? toolsGrid(shown, index) : null),
+    [view, gridReady, shown, index]
+  );
+  const gridWaits = namesTools && (catalog.isLoading || compositions.isLoading);
+  const gridFailed = namesTools && (catalog.isError || compositions.isError);
+
+  const viewSwitch = (
+    <SegmentedChoice<View>
+      ariaLabel={t("view.label")}
+      options={[
+        { key: "list", label: t("view.list") },
+        { key: "grid", label: t("view.grid") },
+        { key: "work", label: t("view.work") },
+      ]}
+      active={view}
+      onSelect={(next) =>
+        replaceParams((p) => {
+          if (next === "list") p.delete("view");
+          else p.set("view", next);
+        })
+      }
+    />
+  );
+
+  return (
+    <PageShell>
+      <PageHeader title={APPROVALS_TITLE} description={t("description")} />
+
+      <ListToolbar
+        filters={
+          <>
+            <FilterChip
+              label={t("filter.agent")}
+              allLabel={t("filter.anyAgent")}
+              param="agent"
+              value={filters.agent}
+              options={agentOptions}
+            />
+            {view !== "work" && (
+              <>
+                <FilterChip
+                  label={t("filter.tool")}
+                  allLabel={t("filter.anyTool")}
+                  param="tool"
+                  value={filters.tool}
+                  options={toolOptions}
+                />
+                <FilterChip
+                  label={t("filter.verdict")}
+                  allLabel={t("filter.anyVerdict")}
+                  param="verdict"
+                  value={filters.verdict}
+                  options={verdictOptions}
+                />
+                <FilterChip
+                  label={t("filter.space")}
+                  allLabel={t("filter.anySpace")}
+                  param="space"
+                  value={filters.space}
+                  options={spaceOptions}
+                />
+              </>
+            )}
+          </>
+        }
+        tabs={viewSwitch}
+      />
+
+      {view === "work" ? (
+        <ApprovalsGrid agentId={filters.agent} base={BASE} />
+      ) : view === "grid" ? (
+        <ListCard
+          title={t("view.grid")}
+          count={null}
+          loading={rules.isLoading || gridWaits}
+          isError={rules.isError || gridFailed}
+          onRetry={() => {
+            if (rules.isError) void rules.refetch();
+            if (catalog.isError) void catalog.refetch();
+            if (compositions.isError) void compositions.refetch();
+          }}
+          errorMessage={
+            rules.isError ? t("list.failed") : t("toolsGrid.failed")
+          }
+          rowCount={grid ? Math.max(grid.principals.length, 1) : 1}
+          emptyMessage={t("toolsGrid.empty")}
+          skeletonRows={4}
+        >
+          {grid && (
+            <ToolsGridView
+              grid={grid}
+              toolName={toolName}
+              listHref={(agent) => `${BASE}?agent=${encodeURIComponent(agent)}`}
+            />
+          )}
+        </ListCard>
+      ) : (
+        <ListCard
+          title={t("list.title")}
+          count={rules.isLoading || rules.isError ? null : shown.length}
+          loading={rules.isLoading}
+          isError={rules.isError}
+          onRetry={() => void rules.refetch()}
+          errorMessage={t("list.failed")}
+          rowCount={shown.length}
+          emptyMessage={
+            all.length === 0 ? t("list.empty") : t("list.emptyFiltered")
+          }
+          skeletonRows={5}
+          footer={
+            drawn.length < shown.length ? (
+              <div className="px-1 pt-3">
+                <Button
+                  size="sm"
+                  variant="light"
+                  radius="md"
+                  onPress={() => setExpanded(true)}
+                >
+                  {t("list.more", { count: shown.length - drawn.length })}
+                </Button>
+              </div>
+            ) : undefined
+          }
+        >
+          <div className="-mx-2 divide-y divide-foreground/[0.05]">
+            {drawn.map((row) => (
+              <ApprovalLine
+                key={row.id}
+                row={row}
+                title={titleOf(row)}
+                where={whereOf(row)}
+                onTakeBack={() => takeBack.ask(row)}
+              />
+            ))}
+          </div>
+        </ListCard>
+      )}
+
+      {takeBack.modal}
+    </PageShell>
+  );
+}

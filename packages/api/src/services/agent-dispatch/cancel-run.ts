@@ -23,9 +23,9 @@ import {
   eq,
   playbookRuns,
   isLiveRunStatus,
-  LIVE_RUN_STATUSES,
   setRunStatus,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { resolveServiceName } from "@synap-core/types/service-marks";

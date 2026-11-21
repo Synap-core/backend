@@ -17,6 +17,12 @@
  *      exposes a record to every project member, so reading it is not enough.
  *      A record that fails reads "not found or not writable" — the refusal does
  *      not say which, so it is no existence oracle.
+ *   1b. KEY (the filing rule, app-permission plan 8189ae7c W1): under a key's
+ *      grant, EVERY record must also be one the grant may WRITE where it
+ *      lives now (`entity.update` in its own space, with no project), so a
+ *      key that holds a write in project P cannot pull into P a record it can
+ *      only read, then write it through P. A project pin never covers the
+ *      `belongs_to_project` edge itself (`grant-write-check.ts`).
  *   2. GATE: `checkPermissionOrPropose` —
  *        file   → `project/file_entities`, `forcePropose` (an ACCESS decision:
  *                 an agent proposes; rules cannot widen rung 2.1). The
@@ -39,6 +45,7 @@
 import { TRPCError } from "@trpc/server";
 import {
   getDb,
+  getRequestGrant,
   and,
   eq,
   inArray,
@@ -49,6 +56,10 @@ import {
   unlinkEntitiesFromProject,
 } from "@synap/database";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  grantDeniedKey,
+  grantWriteDenial,
+} from "../../utils/grant-write-check.js";
 import { auditLog } from "../../utils/audit-log.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
@@ -338,6 +349,76 @@ async function filingGovernance(
     : { forcePropose: true };
 }
 
+/**
+ * The KEY half of the floor (step 1b): under a key's grant, each record must
+ * be one the grant may write where it lives now, with no project. Refuses the
+ * whole batch, naming the records, like the floor. No grant (a signed-in
+ * person) checks nothing here.
+ */
+export async function assertGrantMayFile(
+  plan: Pick<ProjectFilingPlan, "entities">
+): Promise<void> {
+  const grant = getRequestGrant();
+  if (!grant) return;
+  const refused: string[] = [];
+  let reason: string | null = null;
+  for (const e of plan.entities) {
+    const denial = await grantWriteDenial(
+      {
+        subjectType: "entity",
+        action: "update",
+        workspaceId: e.workspaceId,
+        data: { id: e.id },
+        filesIntoProject: true,
+      },
+      grant
+    );
+    if (denial) {
+      refused.push(e.id);
+      reason ??= denial;
+    }
+  }
+  if (refused.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `${reason} Filing a record into or out of a project needs a write on it where it is now, never a write in a project — nothing was filed: ${refused.join(", ")}`,
+    });
+  }
+}
+
+/**
+ * Of these EXISTING records (a capture that linked or merged into them), the
+ * ones the request's key may file into a project: those its grant may write
+ * where they are now, with no project (step 1b's rule, without refusing).
+ * No grant: all of them.
+ */
+export async function existingEntitiesGrantMayFile(
+  entityIds: readonly string[]
+): Promise<string[]> {
+  const grant = getRequestGrant();
+  if (!grant || entityIds.length === 0) return [...entityIds];
+  const database = await getDb();
+  const rows = await database
+    .select({ id: entities.id, workspaceId: entities.workspaceId })
+    .from(entities)
+    .where(inArray(entities.id, [...new Set(entityIds)]));
+  const out: string[] = [];
+  for (const row of rows) {
+    const denied = await grantDeniedKey(
+      {
+        subjectType: "entity",
+        action: "update",
+        workspaceId: row.workspaceId,
+        data: { id: row.id },
+        filesIntoProject: true,
+      },
+      grant
+    );
+    if (!denied) out.push(row.id);
+  }
+  return out;
+}
+
 /** The ONE governed door (see file header). */
 export async function fileEntitiesGoverned(params: {
   userId: string;
@@ -354,6 +435,8 @@ export async function fileEntitiesGoverned(params: {
     projectId: params.projectId,
     entityIds: params.entityIds,
   });
+
+  await assertGrantMayFile(plan);
 
   const payload = filingPayload(plan);
   const common = {

@@ -35,7 +35,7 @@ import {
   loadFacetSlugsBatch,
 } from "@synap/database";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { subjectProfileSlug } from "./pinned-subject.js";
+import { dedicatedSubjectId, subjectProfileSlug } from "./pinned-subject.js";
 
 /** Profile inheritance is shallow in practice; the walk is bounded anyway. */
 const MAX_ANCESTOR_DEPTH = 8;
@@ -140,6 +140,15 @@ export async function assertRunSubjectMatchesPlaybook(input: {
 }): Promise<void> {
   const subjectId =
     typeof input.subjectId === "string" ? input.subjectId.trim() : "";
+  // A playbook dedicated to one record runs on that record only, so a run
+  // with no subject or another one is refused (a schedule included).
+  const dedicated = dedicatedSubjectId(input.subjectProfile);
+  if (dedicated && subjectId.toLowerCase() !== dedicated) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `This ${resolveObjectNoun("playbook").toLowerCase()} is dedicated to one record (${dedicated}): run it on that record.`,
+    });
+  }
   if (!subjectId) return;
   const expected = subjectProfileSlug(input.subjectProfile);
   if (!expected) return;

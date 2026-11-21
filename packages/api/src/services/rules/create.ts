@@ -103,6 +103,8 @@ export interface CreateRuleGovernedInput {
   automationIds?: string[];
   /** Folded into the gate payload for observability. */
   auditSource?: string;
+  /** WHY this write — shown to the reviewer when an agent's call is proposed. */
+  reasoning?: string;
   /**
    * Template provenance (`metadata.rule.seed`) — set ONLY by the template-rule
    * applier (`./template-rules.ts`). Rides the proposal payload so an approved
@@ -328,6 +330,7 @@ export async function createRuleGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "rule",
     action: "create",
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // FULL payload — an approved proposal must materialize the real rule
     // (intent + scope + expiry + both halves), never a labelled shell. That
     // "the gate stored only {id}" shape is the exact defect this repo has

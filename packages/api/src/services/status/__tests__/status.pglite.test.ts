@@ -988,6 +988,9 @@ describe('include: ["history"] — a session\'s stage ledger (0382)', () => {
       events: [
         {
           kind: "stage_entered",
+          // The id every ledger reader gives this entry (the timeline's and
+          // the change feed's `stage_moved` too).
+          id: `stage:${S_STAGED}:${REVIEW_AT}:review`,
           at: REVIEW_AT,
           stageKey: "review",
           fromStage: "draft",
@@ -1012,6 +1015,29 @@ describe('include: ["history"] — a session\'s stage ledger (0382)', () => {
     }
     // Asked without history, the ledger is not carried.
     expect(await statusOf(S_STAGED)).not.toHaveProperty("history");
+  });
+
+  it("the timeline sources history never keeps are not read: their failure leaves it readable", async () => {
+    // Runners, room posts, dev facts and decisions never reach the history
+    // (`STATUS_HISTORY_TIMELINE_WITHHELD`); a fault only they meet must not
+    // make it unavailable.
+    await client.exec(
+      `alter table session_runners rename to session_runners_away;
+       alter table messages rename column message_category to message_category_away`
+    );
+    try {
+      const a = await statusOf(S_STAGED, { include: ["history"] });
+      expect(a.history).toMatchObject({
+        events: expect.arrayContaining([
+          expect.objectContaining({ kind: "status_moved" }),
+        ]),
+      });
+    } finally {
+      await client.exec(
+        `alter table session_runners_away rename to session_runners;
+         alter table messages rename column message_category_away to message_category`
+      );
+    }
   });
 
   it("a thing without a ledger is unchanged; a hidden session's stays hidden", async () => {
@@ -1700,6 +1726,21 @@ describe('include: ["work"] — where its work stands', () => {
     { key: "draft", name: "Draft" },
     { key: "publish", name: "Publish" },
   ];
+  // What the gated run must yield: a brief delivered, slides delivered but
+  // held by the criterion that checks them (never graded), a post still owed.
+  const GATED_OUTPUTS = [
+    { key: "brief", label: "Brief", kind: "document", status: "done" },
+    { key: "slides", label: "Slides", kind: "document", status: "done" },
+    { key: "post", label: "Post", kind: "document" },
+  ];
+  const GATED_CRITERIA = [
+    {
+      key: "every-slide-picture",
+      statement: "Every slide has a picture",
+      check: { kind: "judge" },
+      outputKey: "slides",
+    },
+  ];
 
   beforeAll(async () => {
     await q(
@@ -1743,9 +1784,17 @@ describe('include: ["work"] — where its work stands', () => {
     );
     const gatedPlaybook = randomUUID();
     await q(
-      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, metadata, playbook_id, channel_id, stages, current_stage, started_at, created_at, updated_at)
-       values ($1, $2, 'Ship it', 'Ship it', 'active', 'playbook', '[]'::jsonb, '{}'::jsonb, $3, $4, $5::jsonb, 'draft', now(), now(), now())`,
-      [S_GATED, ME, gatedPlaybook, randomUUID(), JSON.stringify(GATED)]
+      `insert into focus_sessions (id, user_id, goal, title, status, origin, expected_outputs, criteria, metadata, playbook_id, channel_id, stages, current_stage, started_at, created_at, updated_at)
+       values ($1, $2, 'Ship it', 'Ship it', 'active', 'playbook', $6::jsonb, $7::jsonb, '{}'::jsonb, $3, $4, $5::jsonb, 'draft', now(), now(), now())`,
+      [
+        S_GATED,
+        ME,
+        gatedPlaybook,
+        randomUUID(),
+        JSON.stringify(GATED),
+        JSON.stringify(GATED_OUTPUTS),
+        JSON.stringify(GATED_CRITERIA),
+      ]
     );
     await q(
       `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, definition_snapshot, started_at)
@@ -1815,6 +1864,40 @@ describe('include: ["work"] — where its work stands', () => {
       stopped.stages.status === "ok" &&
         stopped.stages.items.map((s) => s.position)
     ).toEqual(["done", "current", "left", "left"]);
+  });
+
+  it("each item carries its run's outcomes, as synap_get_session reads them", async () => {
+    const [gated] = (await workOf(S_GATED)).items;
+    expect(gated!.outcomes).toEqual({
+      status: "ok",
+      counts: { met: 1, total: 3 },
+      items: [
+        expect.objectContaining({
+          key: "brief",
+          label: "Brief",
+          kind: "document",
+          met: true,
+          state: "done",
+        }),
+        expect.objectContaining({
+          key: "slides",
+          kind: "document",
+          met: false,
+          criteria: [
+            expect.objectContaining({
+              key: "every-slide-picture",
+              label: "Every slide has a picture",
+              met: false,
+              outputKey: "slides",
+            }),
+          ],
+        }),
+        expect.objectContaining({ key: "post", met: false }),
+      ],
+    });
+    // A session that declares nothing says so: an empty list, not unavailable.
+    const stopped = (await workOf(S_STOPPED)).items[0]!;
+    expect(stopped.outcomes).toMatchObject({ status: "ok", items: [] });
   });
 
   it("a session asked about lists itself; a run without include carries no work", async () => {

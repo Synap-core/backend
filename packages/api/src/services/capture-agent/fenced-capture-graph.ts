@@ -42,6 +42,7 @@ import { isFencedGrant } from "../../access/grant-door-fence.js";
 import {
   grantWriteDenial,
   recordGrantDenial,
+  type GrantWriteInput,
 } from "../../utils/grant-write-check.js";
 import { isUuid } from "@synap-core/types/property-render";
 
@@ -157,5 +158,117 @@ export async function fenceCaptureGraphOperations(
       grant
     );
     if (denial) refuse(denial);
+  }
+}
+
+/**
+ * What an IMPORT graph from a SPACE-LIMITED key may file (`POST
+ * /import/analyze`, finding c54ff30e, 18 Nov 2026). The import is one
+ * `capture.graph` proposal the person approves, and approval materializes it
+ * AS the person, so before anything is filed each operation is checked with
+ * the gate's rung 0 (`grantWriteDenial`), in the import's space:
+ *
+ *  - `create_entity` (a new record): `entity.<kind>.create` in its pinned
+ *    space, else the import's (a pod-wide kind is created through the
+ *    import's space, as `POST /entities` does; its pin is left alone).
+ *  - each role `facets` entry: `facet.create` (the attach door's key) there.
+ *  - a link to a record the pod already holds (`existingEntityId`) and the
+ *    identity step's fill (`update_entity`): `entity.<stored kind>.update` in
+ *    the record's stored space, or in the import's space for a pod-wide
+ *    record.
+ *  - `create_relation`: `relation.create` in the import's space, between
+ *    records of this import, never a raw record id.
+ *
+ * Unlike a capture, roles and links are allowed: an import places people and
+ * companies in a space, and its identity step links those the pod already
+ * holds. Every other step is refused, and so is an import with no space.
+ * The first refusal names the missing permission. Unfenced keys never reach
+ * past the first line.
+ */
+export async function fenceImportGraphOperations(
+  operations: readonly CompositeProposalOperation[],
+  input: { workspaceId: string | null; projectId: string | null },
+  grant: KeyGrant | undefined = getRequestGrant()
+): Promise<void> {
+  if (!isFencedGrant(grant)) return;
+  const { workspaceId, projectId } = input;
+  if (!workspaceId)
+    refuse(
+      "A key limited to spaces imports into one of its spaces: name the workspaceId."
+    );
+
+  // One verdict per distinct write: a 2,000-row file asks a handful.
+  const asked = new Set<string>();
+  const deny = async (write: GrantWriteInput): Promise<void> => {
+    const key = JSON.stringify(write);
+    if (asked.has(key)) return;
+    const denial = await grantWriteDenial(write, grant);
+    if (denial) refuse(denial);
+    asked.add(key);
+  };
+  const mayEditRecord = async (entityId: string): Promise<void> => {
+    const [row] = isUuid(entityId)
+      ? await db
+          .select({ workspaceId: entities.workspaceId })
+          .from(entities)
+          .where(eq(entities.id, entityId))
+          .limit(1)
+      : [];
+    if (!row)
+      refuse(
+        recordedGrantDenial(
+          "This key's grant does not allow linking that existing record."
+        )
+      );
+    await deny({
+      subjectType: "entity",
+      action: "update",
+      workspaceId: row!.workspaceId ?? workspaceId,
+      projectId,
+      data: { id: entityId },
+    });
+  };
+
+  const graphRefs = new Set(
+    operations.flatMap((op, i) =>
+      op.op === "create_entity" ? [`$op${i}`, ...(op.ref ? [op.ref] : [])] : []
+    )
+  );
+  for (const op of operations) {
+    if (op.op === "create_relation") {
+      if (!graphRefs.has(op.sourceRef) || !graphRefs.has(op.targetRef))
+        refuse("A key limited to spaces links records of its own import only.");
+      await deny({ subjectType: "relation", action: "create", workspaceId });
+      continue;
+    }
+    if (op.op === "update_entity") {
+      await mayEditRecord(op.entityId);
+      continue;
+    }
+    if (op.op !== "create_entity")
+      refuse(
+        `A key limited to spaces imports records, their roles and links only, not a "${op.op}" step.`
+      );
+    const entityOp = op as CompositeCreateEntityOp;
+    const space = entityOp.targetWorkspaceId ?? workspaceId;
+    const project = entityOp.projectId ?? projectId;
+    if (entityOp.existingEntityId)
+      await mayEditRecord(entityOp.existingEntityId);
+    else
+      await deny({
+        subjectType: "entity",
+        action: "create",
+        workspaceId: space,
+        projectId: project,
+        data: { profileSlug: entityOp.profileSlug },
+      });
+    for (const facet of entityOp.facets ?? [])
+      await deny({
+        subjectType: "facet",
+        action: "attach",
+        workspaceId: space,
+        projectId: project,
+        data: { profileSlug: facet.profileSlug },
+      });
   }
 }

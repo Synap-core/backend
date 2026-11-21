@@ -263,6 +263,8 @@ const BY_PAIR: Readonly<Record<string, ReviewPackage>> = {
   "agent/updateCapabilities": "access",
   "app/connect": "access",
   "vault/grant": "access",
+  // A space's inbound source minted and its secret handed to a host.
+  "webhook/inbound_source.connect": "access",
   // A playbook run hands work to an agent; a capability or command run is an
   // action on the person's data, decided like any other change.
   "playbook/run": "hand-offs",

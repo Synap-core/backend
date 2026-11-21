@@ -25,8 +25,16 @@ import {
 import { getAgentFocusWorkspaceId } from "../../services/agent-identity-service.js";
 import {
   runWithDerivedSession,
+  runWithNamedSession,
   runWithWriteSessionLedger,
 } from "@synap/database";
+import { toolError } from "./tool-errors.js";
+import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
+import {
+  fileSuperseding,
+  leftFailedNote,
+  readSupersedes,
+} from "../../services/proposals/supersedes-door.js";
 import {
   describeWriteSessions,
   firstTopicHint,
@@ -52,6 +60,7 @@ import { trackHandlers } from "./handlers/track.js";
 import { trackParticipantHandlers } from "./handlers/track-participants.js";
 import { workerHandlers } from "./handlers/workers.js";
 import { installationHandlers } from "./handlers/installations.js";
+import { fileHandlers } from "./handlers/files.js";
 import { devApprovalHandlers } from "./handlers/dev-approval.js";
 import { askPersonHandlers } from "./handlers/ask-person.js";
 import { parseJsonObject, withUiStructuredContent } from "./ui-tools.js";
@@ -85,6 +94,7 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...trackParticipantHandlers,
   ...workerHandlers,
   ...installationHandlers,
+  ...fileHandlers,
   ...devApprovalHandlers,
   ...askPersonHandlers,
 };
@@ -242,12 +252,42 @@ export async function executeMCPToolViaHubProtocol(
   // write, by client + project), so the reply below names what landed. A
   // derived RECEIPT carries its project so the gate can re-key a write of
   // another project to that project's receipt.
-  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
+  //
+  // Plan a640c5bb: a session the caller NAMED is entered too, so the gate files into it
+  // at every door, not only the doors that forward `ctx.sessionId` (4bc6b9f4).
+  const routed = () =>
     session?.attribution === "derived"
       ? runWithDerivedSession(session.sessionId, invokeHandler, session.receipt)
-      : invokeHandler()
+      : session?.attribution === "explicit"
+        ? runWithNamedSession(session.sessionId, invokeHandler)
+        : invokeHandler();
+  // D3 (plan 8032a127): a write that REPLACES a failed proposal names it
+  // (`supersedes`, on SUPERSEDES_TOOLS only: any other tool refuses it).
+  // The ONE door `fileSuperseding` (also Hub REST's) refuses it before the
+  // handler when the name cannot be replaced (the insert door checks it
+  // again, and the request kind, against the row it files); otherwise the
+  // proposal this call files for it ends it.
+  if (args.supersedes !== undefined && !SUPERSEDES_TOOLS.includes(toolName)) {
+    return toolError(
+      `${toolName} does not take \`supersedes\` — NOTHING WAS CHANGED. Only ${SUPERSEDES_TOOLS.join(", ")} file a request that replaces a failed one.`
+    );
+  }
+  const named = readSupersedes(args.supersedes);
+  if (!named.ok) return toolError(named.problem);
+  const supersedes = named.id;
+  const { ledger, result: pending } = runWithWriteSessionLedger(() =>
+    fileSuperseding(supersedes, userId, routed)
   );
-  const result = await pending;
+  const run = await pending;
+  if (run.refused !== null) return toolError(run.refused);
+  const handled = run.result;
+  // Said when nothing this call filed went to review (a refusal, a write that
+  // applied at once): the failed proposal is still there, and the agent must
+  // not believe it ended.
+  const result =
+    run.slot && !run.slot.replacedBy && !handled.isError
+      ? withNote(handled, leftFailedNote(run.slot))
+      : handled;
   const filed = resolution
     ? await describeWriteSessions(ledger.filings, { userId, agentUserId })
     : undefined;
@@ -264,7 +304,7 @@ export async function executeMCPToolViaHubProtocol(
     toolName !== "synap_start_session" &&
     filed?.status === "ok" &&
     filed.filedIn.length > 0
-      ? withSessionDisclosure(result, resolution.attribution.openCount ?? 0)
+      ? withSessionDisclosure(result, resolution.attribution)
       : result;
   // A started session never splits; a write about another project says so,
   // once per session and project (the data rides on `attribution` every time).
@@ -396,16 +436,22 @@ function withSessionAttribution(
 /** Appends the ambiguity note to a tool result without disturbing its payload. */
 function withSessionDisclosure(
   result: CallToolResult,
-  openCount: number
+  attribution: SessionAttributionReport
 ): CallToolResult {
   // `openCount` = unclaimed work sessions touched in the last 24 hours, counted
   // exactly (`resolveWorkSession`) — it used to stop at 10 and read as exact.
-  const note =
-    `Note: ${openCount} of your focus sessions were active in the last 24 hours ` +
-    `and none is yours, so this write was not filed under any of them — it is ` +
-    `grouped in a session opened for you (named in \`attribution.filed\`). If ` +
-    `it belongs to one of them, pass that session's id as \`sessionId\`; to ` +
-    `name your own unit of work, call synap_start_session.`;
+  // With `candidates` it is the sessions THIS conversation started.
+  const openCount = attribution.openCount ?? 0;
+  const note = attribution.candidates
+    ? `Note: this conversation has ${openCount} open sessions, so this write ` +
+      `was not filed under any of them — it is grouped in a session opened ` +
+      `for you (named in \`attribution.filed\`). Pass the \`sessionId\` of ` +
+      `the one it belongs to (listed in \`attribution.candidates\`).`
+    : `Note: ${openCount} of your focus sessions were active in the last 24 hours ` +
+      `and none is yours, so this write was not filed under any of them — it is ` +
+      `grouped in a session opened for you (named in \`attribution.filed\`). If ` +
+      `it belongs to one of them, pass that session's id as \`sessionId\`; to ` +
+      `name your own unit of work, call synap_start_session.`;
   return withNote(result, note);
 }
 

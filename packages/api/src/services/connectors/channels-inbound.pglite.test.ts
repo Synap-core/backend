@@ -961,9 +961,12 @@ describe("a message sent outside the pod closes the drafts it replaces (contract
       const row = await statusOf(id);
       expect(row.status).toBe("withdrawn");
       expect(row.data).toMatchObject({
-        withdrawReason: expect.stringMatching(/directly/),
+        ended: { reason: "sent_outside" },
         closedByMessageId: m!.id,
       });
+      // Why it ended is the reason; no sentence stored as if someone wrote it.
+      expect(row.data).not.toHaveProperty("withdrawReason");
+      expect(row.data.ended).not.toHaveProperty("withdrawReason");
     }
     // Filed after the message: it is not what the message replaced.
     expect((await statusOf(later)).status).toBe("pending");

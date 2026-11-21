@@ -114,6 +114,9 @@ const UNHOMED = randomUUID(); // no home, works_at ATTITUDE  → not (unread end
 const HOMED = randomUUID(); // home CRM, works_at HOMEDCO     → not (no role)
 const OTTO = randomUUID(); // home CRM, works_at OTHERCO      → not (role elsewhere)
 const REL_RELATED = randomUUID(); // JEANLUC related_to ATTITUDE → not (type)
+// Home OTHER, works_at ATTITUDE (lead in CRM): read only through OTHER, the
+// role only in CRM. Per-space scopes never join the two (finding 3, W3d).
+const MIXED = randomUUID();
 
 const READ_ONLY = ["hub-protocol.read"];
 const KEYS = {
@@ -127,6 +130,21 @@ const KEYS = {
       "relation.read",
     ],
     workspaceIds: [CRM] as string[] | null,
+  },
+  /**
+   * The same reads over CRM AND OTHER in ONE scope (an AppAccess v2 mints one
+   * scope per tier over its spaces, W2): the works_at join must still read the
+   * role and both ends in the SAME space (W3d, finding 3 of #1196).
+   */
+  merged: {
+    id: randomUUID(),
+    permissions: [
+      "entity.person.read",
+      "entity.company.read",
+      "facet.read",
+      "relation.read",
+    ],
+    workspaceIds: [CRM, OTHER] as string[] | null,
   },
   /** The owner, unbounded: the floor alone. */
   full: {
@@ -195,6 +213,7 @@ beforeAll(async () => {
     [UNHOMED, "person", PERSON_KIND, "Una Unhomed", null],
     [HOMED, "person", PERSON_KIND, "Hugo Homed", CRM],
     [OTTO, "person", PERSON_KIND, "Otto", CRM],
+    [MIXED, "person", PERSON_KIND, "Mia Mixed", OTHER],
   ] as const) {
     await q(
       `insert into entities (id, user_id, workspace_id, home_workspace_id, profile_id, type, title, properties, system_data)
@@ -221,6 +240,7 @@ beforeAll(async () => {
     [randomUUID(), HOMED, HOMEDCO, "works_at"],
     [randomUUID(), OTTO, OTHERCO, "works_at"],
     [REL_RELATED, JEANLUC, ATTITUDE, "related_to"],
+    [randomUUID(), MIXED, ATTITUDE, "works_at"],
   ] as const) {
     await q(
       `insert into relations (id, user_id, workspace_id, source_entity_id, target_entity_id, type)
@@ -348,9 +368,27 @@ describe("SECURITY: nothing else reaches the app", () => {
 
   it("control: the owner's full key reads every one of those edges (the grant is what keeps them out)", async () => {
     expect(neighbours(await graphOf("full", ATTITUDE))).toEqual(
-      [JEANLUC, JEANLUC, UNHOMED].sort()
+      [JEANLUC, JEANLUC, UNHOMED, MIXED].sort()
     );
     expect(neighbours(await graphOf("full", HOMEDCO))).toEqual([HOMED]);
     expect(neighbours(await graphOf("full", OTTO))).toEqual([OTHERCO]);
   });
+});
+
+describe("SECURITY: one scope over two spaces joins works_at per space (W3d, finding 3)", () => {
+  it("the edge whose role is in CRM and whose person is read only through OTHER is NOT returned", async () => {
+    // Per-space scopes (CRM; OTHER) never read the role and both ends in one
+    // space: CRM does not read Mia (home OTHER), OTHER holds no role on
+    // Attitude. Read once over [CRM, OTHER] the join saw all three.
+    expect(neighbours(await graphOf("merged", ATTITUDE))).toEqual([JEANLUC]);
+    expect(await graphOf("merged", MIXED)).toEqual([]);
+  });
+
+  it("what one space joins on its own still comes back (Jean-Luc, Pauline)", async () => {
+    expect(neighbours(await graphOf("merged", JEANLUC))).toEqual([ATTITUDE]);
+    expect(neighbours(await graphOf("merged", PODCO))).toEqual([PAULINE]);
+  });
+
+  // Control: the owner's full key reads Mia's edge (the ATTITUDE row of the
+  // full-access control above): the grant is what keeps it out.
 });

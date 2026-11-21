@@ -60,6 +60,8 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
   synap_ai:
     "a runner value (the pod's own AI) in a playbook's or a step's `runner`, not a tool",
   synap_packages: "a database table (the marketplace catalog), not a tool",
+  run_ended:
+    "a playbook activator trigger (`on: run_ended`, a link between playbooks), not a tool",
   market_publish:
     "a tool of the Synap control-plane connector (the catalog), not a pod tool",
   market_search:
@@ -76,6 +78,18 @@ export const NOT_A_DOOR_TOOL_TOKENS: Record<string, string> = {
     "a document patch op (an `ops[]` entry of update_document) setting a living document's scope, not a tool",
   set_refresher:
     "a document patch op (an `ops[]` entry of update_document) binding a living document's refresher, not a tool",
+  create_design:
+    "a design op (an `ops[]` entry of the builtin verb design.apply, run through run_capability) making a new design, not a tool",
+  update_frame:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) renaming, moving or resizing a frame, not a tool",
+  update_block:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's props, not a tool",
+  set_span:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting a block's column span at one width class, not a tool",
+  set_start:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) setting the column a block starts at, at one width class, not a tool",
+  set_hide:
+    "a design op (an `ops[]` entry of the builtin verb design.apply) hiding a block at one width class, not a tool",
   search_web:
     "an ABSTRACT INTENT (routing axis over the verb catalog), not a tool — the concrete verb is vendor-keyed, e.g. `exa_search`; agents search with the builtin web.search through run_capability",
   update_run:

@@ -19,6 +19,7 @@ import { AgentView } from "../../_views/agent-view";
 import { AutomationView } from "../../_views/automation-view";
 import { BounceView } from "../../_views/bounce-view";
 import { CapabilityView } from "../../_views/capability-view";
+import { CellView } from "../../_views/cell-view";
 import { ChannelView } from "../../_views/channel-view";
 import { DocumentView } from "../../_views/document-view";
 import { EntityView } from "../../_views/entity-view";
@@ -121,6 +122,8 @@ function OpenSurfaceBody({ parsed, flowType, viewerIsPodAdmin }: SurfaceProps) {
           return <SkillView id={parsed.id} />;
         case "tool":
           return <ToolView id={parsed.id} />;
+        case "cell":
+          return <CellView id={parsed.id} />;
       }
   }
 }

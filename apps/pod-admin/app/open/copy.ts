@@ -28,6 +28,8 @@ export const en = {
   "view.handoff.bodySnapshot":
     "This is a read-only summary. Moving cards and filtering happen in the app.",
   "view.handoff.cta": "Open view in the app",
+  "view.untitled": "Untitled view",
+  "cell.keyLabel": "Cell key",
   "view.snapshot.title": "By state",
   "view.snapshot.loading": "Loading this pipeline…",
   "view.snapshot.failed": "This pipeline couldn’t be read.",
@@ -81,6 +83,8 @@ export const fr: Catalog<typeof en> = {
   "view.handoff.bodySnapshot":
     "Ceci est un résumé en lecture seule. Déplacer les cartes et filtrer se fait dans l’application.",
   "view.handoff.cta": "Ouvrir la vue dans l’application",
+  "view.untitled": "Vue sans titre",
+  "cell.keyLabel": "Clé de la cellule",
   "view.snapshot.title": "Par état",
   "view.snapshot.loading": "Chargement de ce pipeline…",
   "view.snapshot.failed": "Ce pipeline n’a pas pu être lu.",

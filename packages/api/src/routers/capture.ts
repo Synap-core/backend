@@ -4546,7 +4546,30 @@ const captureBaseRouter = router({
         // something into a project and it merges into an existing entity, that
         // entity now belongs to the project too (linkEntityToProject is
         // idempotent + best-effort, so re-linking an existing member is a no-op).
-        const entityIdsToLink = created.map((c) => c.entityId);
+        // Under a key's grant, a record that was ALREADY there (linked or
+        // merged) is filed only when the grant may write it where it is now:
+        // a write in the project never pulls a record into it (the filing
+        // rule, `services/projects/file-entities.ts`).
+        const existing = created
+          .filter(
+            (c) => c.linked || ("deduplicated" in c && c.deduplicated === true)
+          )
+          .map((c) => c.entityId);
+        const { existingEntitiesGrantMayFile } =
+          await import("../services/projects/file-entities.js");
+        const fileable = new Set(await existingEntitiesGrantMayFile(existing));
+        const entityIdsToLink = created
+          .map((c) => c.entityId)
+          .filter((id) => !existing.includes(id) || fileable.has(id));
+        if (entityIdsToLink.length < created.length) {
+          logger.warn(
+            {
+              projectId: resolvedProjectId,
+              skipped: created.length - entityIdsToLink.length,
+            },
+            "capture.execute: existing record(s) not filed — the key's grant may not write them where they are"
+          );
+        }
         for (const entityId of entityIdsToLink) {
           await linkEntityToProject(database, {
             entityId,

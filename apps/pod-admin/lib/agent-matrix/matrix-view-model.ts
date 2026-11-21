@@ -1,5 +1,5 @@
 /**
- * Pure view-model for Governance › Agents & work — the agent × work matrix
+ * Pure view-model for Approvals › Grid (it was Agents & work) — the agent × work matrix
  * (`governanceRules.matrix`, contract `@synap-core/types/agent-matrix`).
  *
  * Framework-free on purpose (no React / HeroUI / trpc): the grouping, the
@@ -226,19 +226,24 @@ export const agentRowKey = (agentUserId: string) => `agent:${agentUserId}`;
 
 // ─── One agent's grid (`?agent=<id>`) ───────────────────────────────────────
 
-/** The query param that narrows Agents & work to one agent's grid. */
+/** The query param that narrows Approvals (list and grid) to one agent. */
 export const AGENT_PARAM = "agent";
-/** The query param that opens the whole grid (every agent, grouped). */
+/** The query param that picks Approvals' view (list, by tool, by work). */
 export const VIEW_PARAM = "view";
+/** Approvals' agent × work matrix (`?view=work`; `?view=grid` is by tool, lane W3). */
+export const WORK_VIEW = "work";
 
-/** Agents & work: the list, one agent's grid, or the whole grid. */
+/**
+ * Approvals (it folded Agents & work in, decision b387ca45 D5): its list, the
+ * whole agent × work matrix, or one agent's row of it.
+ */
 export function agentsAndWorkHref(
   base: string,
   target: { agentUserId: string } | "grid" | null = null
 ): string {
-  if (target === "grid") return `${base}?${VIEW_PARAM}=grid`;
+  if (target === "grid") return `${base}?${VIEW_PARAM}=${WORK_VIEW}`;
   if (target)
-    return `${base}?${AGENT_PARAM}=${encodeURIComponent(target.agentUserId)}`;
+    return `${base}?${VIEW_PARAM}=${WORK_VIEW}&${AGENT_PARAM}=${encodeURIComponent(target.agentUserId)}`;
   return base;
 }
 
@@ -447,9 +452,9 @@ export function combineWidenOutcomes(
   return order.find((o) => outcomes.includes(o)) ?? null;
 }
 
-/** The rule's door: the space's Governance tab lists it with Revoke. */
-export function ruleHref(workspaceId: string | null): string | null {
-  return workspaceId ? `/workspaces/${workspaceId}?tab=governance` : null;
+/** The approval's door: its row on Approvals, with its origin and Take back. */
+export function ruleHref(ruleId: string): string {
+  return `/approvals?focus=${encodeURIComponent(ruleId)}`;
 }
 
 // ─── Page state ─────────────────────────────────────────────────────────────

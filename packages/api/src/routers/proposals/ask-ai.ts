@@ -3,14 +3,22 @@
  *
  * ## What it is (and is deliberately NOT)
  *
- * It is NOT a repair. It does not revise the proposal, it does not retry the
- * approval, it does not widen `revise` to `approval_failed`. Repairing a failed
- * proposal in place would let an agent change a request the user already acted
- * on. Instead this opens the CONVERSATION that already exists for every
- * proposal — the proposal-bound thread (`contextObjectType: "proposal"`) — with
- * a seed message, and lets the agent do what an agent is for: explain the
- * failure in plain words and, if a fix exists, FILE A NEW PROPOSAL through the
- * normal governed door. The user still decides.
+ * This door repairs nothing itself and never retries the approval. It opens
+ * the CONVERSATION that already exists for every proposal — the
+ * proposal-bound thread (`contextObjectType: "proposal"`) — with a seed
+ * message, and lets the agent do what an agent is for: explain the failure in
+ * plain words and, if a fix exists, fix it through a governed door. The user
+ * still decides.
+ *
+ * WHICH door depends on who the woken agent is (plan 8032a127 D3, founder 17
+ * Nov 2026; finding d6ac7003). Its AUTHOR repairs it in place with revise,
+ * which reopens a failed proposal for review (decision fa6c8833). Any OTHER
+ * agent may not revise it (author-only, `mergeProposalRevision`), so it files
+ * the corrected request naming `supersedes: <this id>`: the failed one ends
+ * `withdrawn` + `supersededBy` when the new one is filed
+ * (`insertPendingProposal`), and the person keeps ONE request, never an
+ * orphaned failure beside its fix. The seed below stays the person's words;
+ * that rule reaches the agent through its instructions and tool texts.
  *
  * ## Why the whole flow is server-side
  *

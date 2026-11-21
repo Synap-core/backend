@@ -81,9 +81,10 @@ import type {
   SlotClearedBy,
   SlotPendingRelay,
 } from "@synap/playbooks";
-import type {
-  ThingBlockerBlocks,
-  ThingBlockerClearedBy,
+import {
+  criteriaNamingNoOutput,
+  type ThingBlockerBlocks,
+  type ThingBlockerClearedBy,
 } from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { restatedAskHints, withoutRestatedWhy } from "./ask-text.js";
@@ -164,6 +165,7 @@ import {
   titleSourcePatch,
   type SessionStatus,
 } from "@synap-core/types/focus-sessions";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
 import {
   decideMoveHold,
   moveFactsWithoutMoveMessage,
@@ -195,6 +197,13 @@ export interface UpdateFocusSessionParams {
   occurredAt?: string | null;
   progress?: number;
   currentStage?: string;
+  /**
+   * With `currentStage`: the stage the caller READ (null: none). A session
+   * whose step moved meanwhile — a step advances by itself once its work is
+   * met (W6) — answers `conflict` (`stage_stale`) and nothing is written.
+   * Absent, the move is still a compare-and-set on the stage this door read.
+   */
+  expectedStage?: string | null;
   /**
    * With `currentStage`: who works the stage being entered, named for THIS
    * entry (the stage runner's first rung, spec 7111934d §2.4). `"self"` = the
@@ -310,10 +319,49 @@ export interface UpdateFocusSessionParams {
   followStageKey?: string | null;
 }
 
+/** A stale step move (`expectedStage` no longer holds): nothing was written. */
+export interface StageConflictResult {
+  status: "conflict";
+  conflict: {
+    reason: "stage_stale";
+    /** The stage the caller said it saw. */
+    expectedStage: string | null;
+    /** The stage the session stands on now — re-plan from this. */
+    currentStage: string | null;
+  };
+  message: string;
+}
+
+function stageConflict(
+  expectedStage: string | null,
+  currentStage: string | null
+): StageConflictResult {
+  return {
+    status: "conflict",
+    conflict: { reason: "stage_stale", expectedStage, currentStage },
+    message: `The step moved meanwhile: you expected "${expectedStage ?? "none"}", it is now "${currentStage ?? "none"}". Nothing was changed — re-read it and decide again.`,
+  };
+}
+
+/** The stale step inside an error the write threw (`SessionStageConflictError`), or null. */
+function stageConflictOf(err: unknown): StageConflictResult | null {
+  const e = err as {
+    code?: unknown;
+    expectedStage?: unknown;
+    actualStage?: unknown;
+  } | null;
+  if (!e || e.code !== "STAGE_STALE") return null;
+  return stageConflict(
+    typeof e.expectedStage === "string" ? e.expectedStage : null,
+    typeof e.actualStage === "string" ? e.actualStage : null
+  );
+}
+
 export type UpdateFocusSessionResult =
   | { status: "not_found" }
   /** A stale move (`expectedStatus` no longer holds): nothing was written. */
   | LifecycleConflictResult
+  | StageConflictResult
   | {
       status: "denied";
       reason: string;
@@ -436,6 +484,13 @@ export type UpdateFocusSessionResult =
        * runner, `enterStage`): its runner, the hand-off, the tools it waits on.
        */
       stageRun?: EnterStageResult;
+      /**
+       * The entered stage's CHECK gate held and its `onFail` sent the run
+       * back to `toStage` (active again). `session` is then the row as it
+       * stands after that return, never the stage this call asked for
+       * (finding f9c80d6f).
+       */
+      sentBack?: { toStage: string; failing: string[] };
       trackFiling?: {
         trackId: string | null;
         trackStage: string | null;
@@ -1469,6 +1524,52 @@ export function serverStampedWriteError(
 }
 
 /**
+ * The `expectedOutputs` a door may FILE — in a proposal, or a direct write —
+ * against the row it loaded: refused when the list changes a server-stamped
+ * field ({@link detectServerStampedWrites}), else the list with every
+ * ROUND-TRIPPED stamp removed. Every door that files a session update calls
+ * this before the membrane (`updateFocusSession`, Hub REST `PATCH`), so the
+ * caller gets the refusal and the person never gets a proposal that cannot
+ * apply.
+ *
+ * WHY ROUND-TRIPS ARE STRIPPED, not just allowed (finding 68a89ded, proposal
+ * a6a39fcd). A stamp equal to the stored one is a round-trip TODAY; frozen
+ * into a proposal, it is compared again at approval, against the row as it is
+ * THEN. Once the person answers the slot, its `owedSince` / `askedBy` are gone
+ * and the frozen copy reads as an agent authoring them: the approval is
+ * refused, every time. An `outcomes` update freezes the WHOLE stored list this
+ * way (`upsertOutcomes` onto the loaded row). A round-tripped stamp carries no
+ * information — the merge always carries a stamp from storage — so dropping it
+ * changes nothing the merge would write now, and nothing can go stale later.
+ *
+ * `key` is kept: it is not a receipt but the slot's identity, how the merge
+ * finds the stored twin of a slot whose label changed meanwhile. A slot with
+ * no stored twin is left as sent: the merge drops its stamps (a new slot has
+ * no receipts).
+ */
+export function fileableExpectedOutputs(
+  current: OutputItem[],
+  incoming: OutputItem[]
+): { ok: true; expectedOutputs: OutputItem[] } | { ok: false; reason: string } {
+  const violations = detectServerStampedWrites(current, incoming);
+  if (violations.length > 0) {
+    return { ok: false, reason: serverStampedWriteError(violations).message };
+  }
+  const { twinOf } = storedTwins(current);
+  return {
+    ok: true,
+    expectedOutputs: incoming.map((item) => {
+      if (!twinOf(item)) return item;
+      const out: OutputItem = { ...item };
+      for (const field of SERVER_STAMPED_OUTPUT_FIELDS) {
+        if (field !== "key") delete out[field];
+      }
+      return out;
+    }),
+  };
+}
+
+/**
  * THE `owedSince` INVARIANT, in one place: the stamp is present IFF the slot is
  * owned by the human.
  *
@@ -1537,6 +1638,23 @@ export function reconcileOwedSince(
     ...rest
   } = item;
   return rest;
+}
+
+/**
+ * The criteria this patch sent whose `outputKey` names no outcome slot of the
+ * session as written (`criteriaNamingNoOutput`): they check nothing until such
+ * a slot exists. One sentence each, never a refusal. A stage's criterion is
+ * left out: its output arrives when its stage is entered. Pure.
+ */
+export function outputKeyWarnings(
+  criteria: readonly SessionCriterion[] | undefined,
+  writtenSlots: unknown
+): string[] {
+  const sent = (criteria ?? []).filter((c) => !c.stageKey);
+  return criteriaNamingNoOutput(sent, writtenSlots).map((key) => {
+    const c = sent.find((x) => x.key === key)!;
+    return `Criterion "${key}": outputKey "${c.outputKey}" names no output of this session, so it checks nothing yet. Declare that output, or use the key of one it has.`;
+  });
 }
 
 /**
@@ -2052,6 +2170,14 @@ export async function updateFocusSession(
       new LifecycleConflictError(params.expectedStatus, existing.status)
     )!;
   }
+  // A stale step: the caller decided on a stage the session left (W6).
+  if (
+    params.currentStage !== undefined &&
+    params.expectedStage !== undefined &&
+    params.expectedStage !== (existing.currentStage ?? null)
+  ) {
+    return stageConflict(params.expectedStage, existing.currentStage ?? null);
+  }
   const reopening = closedRunRefusal(existing.status, params.status);
   if (reopening) return { status: "denied", reason: reopening };
   // WHEN and WHAT IT WAITS ON (W4), refused before anything is filed; the
@@ -2099,31 +2225,27 @@ export async function updateFocusSession(
   // refusal goes back to the caller that tried it, as the `denied` this result
   // type already carries.
   //
-  // Not a second derivation: `detectServerStampedWrites` is the derivation, and
-  // both call sites pass it the stored array. This one races (the load is
-  // unlocked) — harmlessly, because the merge inside the row lock is the one
-  // that decides; this only spares the human a poisoned proposal.
+  // Not a second derivation: `fileableExpectedOutputs` runs the one detector
+  // (the merge inside the row lock still decides; this unlocked read only
+  // spares the human a poisoned proposal), and files the list without its
+  // round-tripped stamps.
   if (params.expectedOutputs !== undefined) {
     const storedOutputs: OutputItem[] = Array.isArray(existing.expectedOutputs)
       ? (existing.expectedOutputs as OutputItem[])
       : [];
-    const violations = detectServerStampedWrites(
+    const fileable = fileableExpectedOutputs(
       storedOutputs,
       params.expectedOutputs
     );
-    if (violations.length > 0) {
-      return {
-        status: "denied",
-        reason: serverStampedWriteError(violations).message,
-      };
+    if (!fileable.ok) {
+      return { status: "denied", reason: fileable.reason };
     }
+    const expectedOutputs = fileable.expectedOutputs;
+    params = { ...params, expectedOutputs };
     // Same floor, same reason: an agent taking back the person's turn is
     // refused to the agent, never proposed to the person it was taken from.
     if (agentUserId) {
-      const handedAway = personsSlotsHandedAway(
-        storedOutputs,
-        params.expectedOutputs
-      );
+      const handedAway = personsSlotsHandedAway(storedOutputs, expectedOutputs);
       if (handedAway.length > 0) {
         return {
           status: "denied",
@@ -2353,6 +2475,33 @@ export async function updateFocusSession(
       params.currentStage
     );
     if (undeclared) return { status: "denied", reason: undeclared.reason };
+  }
+
+  // BACK OVER A STEP THAT MOVED BY ITSELF (W6): a step advances on its own
+  // once its work is met, so an agent moving the session BACK without saying
+  // which stage it read could undo that move unseen. Refused unless the
+  // agent names `expectedStage` (then the compare-and-set decides).
+  if (
+    agentUserId &&
+    params.currentStage !== undefined &&
+    params.expectedStage === undefined &&
+    existing.currentStage
+  ) {
+    const { loadSessionProcess } =
+      await import("@synap/jobs/utils/session-process.js");
+    const proc = await loadSessionProcess({
+      sessionId: existing.id,
+      playbookId: existing.playbookId,
+    });
+    const order = (proc?.stages ?? []).map((st) => st?.key);
+    const from = order.indexOf(existing.currentStage);
+    const to = order.indexOf(params.currentStage);
+    if (from >= 0 && to >= 0 && to < from) {
+      return {
+        status: "denied",
+        reason: `Moving the step back (from "${existing.currentStage}" to "${params.currentStage}") needs expectedStage: the stage you read. A step moves on by itself once its work is met.`,
+      };
+    }
   }
 
   // TRACK FILING (adopt into a step) — resolved BEFORE the membrane for the
@@ -2606,12 +2755,25 @@ export async function updateFocusSession(
     criteriaChange ? params : { ...params, criteria: undefined },
     { trackFilingWithoutUses }
   );
+  // The patch files the session into or out of a project (or a goal of one).
+  const filesIntoProject = params.projectId !== undefined || !!trackFiling;
   const perm = filingAlone
     ? ({ granted: true, autoApprovedProposalId: filingReceiptId } as const)
     : await checkPermissionOrPropose({
         userId,
         agentUserId,
         workspaceId: existing.workspaceId ?? undefined,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id: sessionId },
+          ...(filesIntoProject ? { filesIntoProject: true } : {}),
+        }),
+        // A person's own filing rides this patch: checked where the session
+        // lives now with no project (the filing rule, `grant-write-check.ts`).
+        ...(filesIntoProject ? { grantFilesIntoProject: true } : {}),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
@@ -2838,11 +3000,16 @@ export async function updateFocusSession(
         hold: params.hold,
         occurredAt: params.occurredAt ? new Date(params.occurredAt) : null,
         expectedStatus: params.expectedStatus ?? null,
+        // A step move is a compare-and-set on the stage this door read, so
+        // a step that advanced by itself meanwhile is never jumped (W6).
+        ...(params.currentStage !== undefined
+          ? { expectedStage: existing.currentStage ?? null }
+          : {}),
       });
     })
     .catch((err: unknown) => {
       // Moved between the read above and the write: the same conflict.
-      const stale = lifecycleConflictOf(err);
+      const stale = lifecycleConflictOf(err) ?? stageConflictOf(err);
       if (stale) return stale;
       throw err;
     });
@@ -2961,6 +3128,7 @@ export async function updateFocusSession(
   let subjectMove: StageSubjectStatusOutcome | undefined;
   let subjectReached: StageSubjectStatusOutcome | undefined;
   let stageRun: EnterStageResult | undefined;
+  let sentBack: { toStage: string; failing: string[] } | undefined;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -2986,6 +3154,16 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // The check held and its `onFail` sent the run back (active again, at
+    // that stage): the row moved twice in this call, so the reply reads it
+    // back below rather than echo the stage the call asked for (f9c80d6f).
+    if (advance.onFail) {
+      gatedStatus = undefined;
+      sentBack = {
+        toStage: advance.onFail.toStage,
+        failing: advance.check?.failing ?? [],
+      };
+    }
     // What the advance did to the subject, whenever the entered stage asked
     // for a move: a move that did not happen is never silent.
     const { reportedSubjectMove } = await import("./stage-subject-status.js");
@@ -3104,13 +3282,19 @@ export async function updateFocusSession(
     ...(params.expectedOutputs ?? []),
     ...(params.addOutput ? [params.addOutput] : []),
   ];
-  const warnings = mutatesOutputs
-    ? [
-        ...droppedAskWarnings(declaredOutputs, outputsAfter),
-        ...restatedAskHints(declaredOutputs),
-        ...(unblocksAdvice ? [unblocksAdvice] : []),
-      ]
-    : [];
+  const warnings = [
+    ...(mutatesOutputs
+      ? [
+          ...droppedAskWarnings(declaredOutputs, outputsAfter),
+          ...restatedAskHints(declaredOutputs),
+          ...(unblocksAdvice ? [unblocksAdvice] : []),
+        ]
+      : []),
+    ...outputKeyWarnings(
+      criteriaChange ? params.criteria : undefined,
+      (reboundSession ?? followedSession ?? updated).expectedOutputs
+    ),
+  ];
 
   // The ask AS POSED, durably (`slot-asked-event.ts`) — diffed on the same
   // locked base, so only asks this patch posed are recorded.
@@ -3135,7 +3319,13 @@ export async function updateFocusSession(
   // than `updated` and carries the `playbookId`, the merged criteria and the
   // merged deliverables. Returning the pre-follow row would tell the caller its
   // attach did nothing.
-  const finalSession = reboundSession ?? followedSession ?? updated;
+  const sentBackSession = sentBack
+    ? ((await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, sessionId),
+      })) as typeof updated | undefined)
+    : undefined;
+  const finalSession =
+    sentBackSession ?? reboundSession ?? followedSession ?? updated;
   return {
     status: "updated",
     session: gatedStatus
@@ -3152,6 +3342,7 @@ export async function updateFocusSession(
     ...(subjectMove ? { subjectMove } : {}),
     ...(subjectReached ? { subjectReached } : {}),
     ...(stageRun ? { stageRun } : {}),
+    ...(sentBack ? { sentBack } : {}),
     ...(warnings.length > 0 ? { warnings } : {}),
     ...(handOff ? { handOff } : {}),
     ...(filing ? { filing } : {}),

@@ -32,18 +32,22 @@ describe("executeCapability direct skillId visibility and lifecycle contract", (
   );
 
   it("resolves through the one answering-skill rule", () => {
-    expect(resolver).toContain("answeringSkillsWhere(userId, workspaceId)");
+    // The caller's lens, widened only by the running automation's author (its
+    // own user-scope skills; execute-capability.author-skill.pglite.test.ts).
+    expect(resolver).toMatch(
+      /answeringSkillsWhere\(\s*userId,\s*workspaceId,\s*input\.automationRun\?\.agentUserId\s*\)/
+    );
   });
 
   it("does not resolve a foreign user skill id outside the canonical caller lens", () => {
     expect(ruleBody).toContain(
-      "visibleSkillsWhere(userId, workspaceId ?? undefined)"
+      "visibleSkillsWhere(userId, workspaceId ?? undefined, { alsoUserId })"
     );
   });
 
   it("does not resolve a foreign workspace skill id without the shared membership predicate", () => {
     expect(ruleBody).toContain(
-      "visibleSkillsWhere(userId, workspaceId ?? undefined)"
+      "visibleSkillsWhere(userId, workspaceId ?? undefined, { alsoUserId })"
     );
   });
 

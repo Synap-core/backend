@@ -43,7 +43,14 @@ import {
   assertPermissions,
   InvalidPermissionError,
 } from "@synap/governance-policy/grants";
-import { isPodWideReadPermission } from "@synap/database/schema";
+import {
+  isPodWideReadPermission,
+  type RequestedKindGroup,
+} from "@synap/database/schema";
+import {
+  KindsRequestError,
+  permissionsForKinds,
+} from "@synap-core/types/grants";
 
 import {
   resolvePublicIssuerEndpoint,
@@ -89,10 +96,20 @@ export const CIMD_STALE_GRACE_MS = 24 * 60 * 60 * 1000;
  */
 export const CIMD_FETCH_MAX = 120;
 export const CIMD_FETCH_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * A copy fetched this recently is never read again EARLY (`CimdReadOptions.
+ * rereadIf`): an early re-read costs at most one fetch per app a minute,
+ * whatever asks for it, on top of the pod-wide budget.
+ */
+export const CIMD_REREAD_FLOOR_MS = 60 * 1000;
 
 const CIMD_MAX_REDIRECT_URIS = 8;
 const CIMD_MAX_CLIENT_NAME_LENGTH = 100;
-/** 48 (founder 2026-10-27; was 32, which Content Studio filled). Mirrored by the SDK's `MAX_REQUESTS`. */
+/**
+ * 48 (founder 2026-10-27; was 32, which Content Studio filled). Mirrored by
+ * the SDK's `MAX_REQUESTS`. It counts ENTRIES (decision 51ad8d1e F4): one
+ * entry that lists its kinds counts once, however many kinds it names.
+ */
 const CIMD_MAX_REQUESTS = 48;
 const CIMD_MAX_REASON_LENGTH = 200;
 const CIMD_MAX_TEMPLATES = 8;
@@ -126,6 +143,13 @@ export interface ValidatedClientMetadataDocument {
    * named kind (`isPodWideReadPermission`).
    */
   requestedPodWide: string[];
+  /**
+   * The entries that list their kinds (decision 51ad8d1e F4), as declared:
+   * `{permission: "entity.read", kinds: ["note", "task"]}`, kinds each once.
+   * `requestedPermissions` holds them expanded per kind (D4); this keeps the
+   * grouping for the consent's one row "Records: N kinds". Display only.
+   */
+  requestedKindGroups: RequestedKindGroup[];
   /**
    * `synap_requests[].reason` by permission, as display text
    * (`displayReason`); a permission sent with no reason has no entry.
@@ -210,6 +234,29 @@ function requestScope(permission: string, scope: unknown): "space" | "pod" {
     );
   }
   return "pod";
+}
+
+/**
+ * The permissions one `synap_requests` entry asks: its `permission`, or,
+ * with `kinds`, that permission once per kind (`permissionsForKinds`,
+ * decision 51ad8d1e F4). `kinds` must be a non-empty array of kind slugs on
+ * an every-kind record permission (`entity.read`, `entity.create`…).
+ */
+function entryPermissions(permission: string, kinds: unknown): string[] {
+  if (kinds === undefined) return [permission];
+  if (!Array.isArray(kinds)) {
+    throw new ClientMetadataError(
+      `synap_requests kinds must be an array of kind slugs (for ${permission})`
+    );
+  }
+  try {
+    return permissionsForKinds(permission, kinds);
+  } catch (err) {
+    if (err instanceof KindsRequestError) {
+      throw new ClientMetadataError(`synap_requests: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 /** Removed from a reason: they could make it read as something else. */
@@ -369,6 +416,8 @@ export function validateClientMetadataDocument(
   const requestedReasons = new Map<string, string>();
   // Each permission's scope as first declared: "space" (default) or "pod".
   const scopeOf = new Map<string, "space" | "pod">();
+  // The entries that list their kinds, as declared (F4).
+  const requestedKindGroups: RequestedKindGroup[] = [];
   if (d.synap_requests !== undefined) {
     if (!Array.isArray(d.synap_requests)) {
       throw new ClientMetadataError("synap_requests must be an array");
@@ -384,7 +433,7 @@ export function validateClientMetadataDocument(
           "each synap_requests entry must be an object"
         );
       }
-      const { permission, reason, scope } = r as Record<string, unknown>;
+      const { permission, reason, scope, kinds } = r as Record<string, unknown>;
       if (typeof permission !== "string") {
         throw new ClientMetadataError(
           "each synap_requests entry needs a permission string"
@@ -398,19 +447,34 @@ export function validateClientMetadataDocument(
           `synap_requests reason must be a string of at most ${CIMD_MAX_REASON_LENGTH} characters`
         );
       }
-      assertAppPermission(permission);
-      const asked = requestScope(permission, scope);
-      const before = scopeOf.get(permission);
-      if (before && before !== asked) {
-        throw new ClientMetadataError(
-          `synap_requests: "${permission}" is declared both pod-wide and per space; declare it once`
-        );
+      // One entry may list its kinds (F4): `{permission: "entity.read",
+      // kinds: ["note", "task"]}` asks `entity.note.read` and
+      // `entity.task.read`, each checked and granted per kind (D4), with the
+      // entry's reason and scope. Without `kinds`, the entry is one
+      // permission, as before.
+      const expanded = entryPermissions(permission, kinds);
+      if (kinds !== undefined) {
+        requestedKindGroups.push({
+          permission: permission.trim(),
+          // `entity.<kind>.<action>` → its kind (`permissionsForKinds`).
+          kinds: expanded.map((p) => p.split(".")[1]!),
+        });
       }
-      scopeOf.set(permission, asked);
-      if (!requestedPermissions.includes(permission)) {
-        requestedPermissions.push(permission);
-        const shown = typeof reason === "string" ? displayReason(reason) : "";
-        if (shown) requestedReasons.set(permission, shown);
+      for (const one of expanded) {
+        assertAppPermission(one);
+        const asked = requestScope(one, scope);
+        const before = scopeOf.get(one);
+        if (before && before !== asked) {
+          throw new ClientMetadataError(
+            `synap_requests: "${one}" is declared both pod-wide and per space; declare it once`
+          );
+        }
+        scopeOf.set(one, asked);
+        if (!requestedPermissions.includes(one)) {
+          requestedPermissions.push(one);
+          const shown = typeof reason === "string" ? displayReason(reason) : "";
+          if (shown) requestedReasons.set(one, shown);
+        }
       }
     }
   }
@@ -444,6 +508,7 @@ export function validateClientMetadataDocument(
     requestedPodWide: requestedPermissions.filter(
       (p) => scopeOf.get(p) === "pod"
     ),
+    requestedKindGroups,
     requestedReasons: Object.fromEntries(requestedReasons),
     requestedTemplates,
     clientUri,
@@ -575,6 +640,37 @@ const defaultStore: ClientMetadataStore = {
   upsert: upsertCimdClient,
 };
 
+/**
+ * When a caller needs the app's CURRENT document rather than any copy still
+ * fresh by its Cache-Control (founder dogfood 18 Nov 2026: an app that newly
+ * declared pod-wide reads was offered them per space, from a copy cached
+ * before it declared them).
+ */
+export interface CimdReadOptions {
+  /**
+   * Read the document again, before its copy expires, when this says the
+   * cached copy cannot answer the request (it lacks what the request asks
+   * for, or a person is about to decide on it). Never sooner than
+   * `CIMD_REREAD_FLOOR_MS` after the copy was fetched; the same SSRF-safe
+   * fetch, budget and one-in-flight rule apply, and a re-read that FAILS to
+   * fetch keeps the cached copy (it is still fresh by its own TTL).
+   */
+  rereadIf?: (cached: StoredClient) => boolean;
+}
+
+/** May a copy still fresh by its TTL be read again now (`rereadIf`)? */
+function rereadEarly(
+  cached: StoredClient,
+  now: number,
+  options: CimdReadOptions
+): boolean {
+  if (!options.rereadIf) return false;
+  const fetchedAt = cached.metadataFetchedAt?.getTime();
+  if (fetchedAt !== undefined && now - fetchedAt < CIMD_REREAD_FLOOR_MS)
+    return false;
+  return options.rereadIf(cached);
+}
+
 /** One fetch in flight per client_id, process-wide (T11). */
 const inflight = new Map<string, Promise<StoredClient>>();
 
@@ -603,23 +699,28 @@ async function refresh(
 }
 
 /**
- * The client a CIMD client_id names: the cached copy while fresh, else a new
- * fetch. A FETCH failure falls back to a copy fetched within the last 24 h; an
- * INVALID document never does (the app changed it, and the pod must not keep
+ * The client a CIMD client_id names: the cached copy while fresh (and while
+ * `options.rereadIf` does not ask for the current one), else a new fetch. A
+ * FETCH failure falls back to a copy fetched within the last 24 h; an INVALID
+ * document never does (the app changed it, and the pod must not keep
  * honouring the version it replaced). Throws `ClientMetadataError`.
  */
 export async function resolveCimdClient(
   clientId: string,
   issuer: string | null,
   store: ClientMetadataStore = defaultStore,
-  deps: ClientMetadataDeps = {}
+  deps: ClientMetadataDeps = {},
+  options: CimdReadOptions = {}
 ): Promise<StoredClient> {
   const url = assertClientMetadataUrl(clientId, issuer);
   const now = deps.now?.() ?? Date.now();
 
   const cachedRow = await store.find(clientId);
   const cached = cachedRow?.clientKind === "cimd" ? cachedRow : null;
-  if (cached?.metadataExpiresAt && cached.metadataExpiresAt.getTime() > now) {
+  const fresh = Boolean(
+    cached?.metadataExpiresAt && cached.metadataExpiresAt.getTime() > now
+  );
+  if (cached && fresh && !rereadEarly(cached, now, options)) {
     return cached;
   }
 
@@ -643,8 +744,12 @@ export async function resolveCimdClient(
   } catch (err) {
     if (
       err instanceof ClientMetadataFetchError &&
-      cached?.metadataFetchedAt &&
-      now - cached.metadataFetchedAt.getTime() < CIMD_STALE_GRACE_MS
+      cached &&
+      // An early re-read (`rereadIf`) of a copy still fresh by its own TTL,
+      // or a copy fetched within the grace window.
+      (fresh ||
+        (cached.metadataFetchedAt &&
+          now - cached.metadataFetchedAt.getTime() < CIMD_STALE_GRACE_MS))
     ) {
       logger.warn(
         { clientId, reason: err.message },

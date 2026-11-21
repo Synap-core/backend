@@ -73,6 +73,12 @@ import {
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { mergeVerbCatalog } from "./verb-catalog.js";
 import { findContainerByAddress } from "./container-address.js";
+import {
+  catalogueAddOnVerbsOnBaseTool,
+  resolveAddOnBase,
+  skillsStillInBase,
+  writeExtendsEdge,
+} from "./addon.js";
 
 import { createLogger } from "@synap-core/core";
 // Validate DECLARED emit patterns before persisting them to `metadata.emits` —
@@ -99,6 +105,7 @@ import {
   MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
 import {
@@ -437,6 +444,13 @@ export interface CreateCapabilityResult {
        * complete install that is missing its membership edges.
        */
       partsNotAttached: number;
+      /**
+       * ADD-ON only: the base it extends, and its actions that are still
+       * members of the base because `removePart` refused (reported, like
+       * `partsNotAttached`: they show on both pages until a pod admin re-runs
+       * the install).
+       */
+      addOnOf?: { id: string; name: string; partsNotMoved: number };
     } | null;
     vault: { ref: string; vaultRef: string; secretId: string }[];
     mcpServers: {
@@ -552,7 +566,8 @@ export function definitionSkillChangesExecution(
  * The execution fields applying `s` would change on its installed row, by
  * name: the `RE_APPROVAL_FIELDS` columns (`code`, `inputMap`, ...) in that
  * order, then the `metadata` keys the same rule reads, as
- * `metadata.allowedHosts`, `metadata.box` and `metadata.readOnly`. Empty =
+ * `metadata.allowedHosts`, `metadata.box`, `metadata.readOnly` and
+ * `metadata.proposeOnly`. Empty =
  * the update leaves what the skill runs alone. A held update names these to
  * the owner (`reconcile-capabilities-to-templates.ts`).
  */
@@ -615,6 +630,17 @@ export function definitionSkillExecChanges(
     )
   ) {
     changed.push("metadata.readOnly");
+  }
+  // The mirror image: turning a declared `metadata.proposeOnly` OFF lets an
+  // auto grant or rule run a verb that always asked. Turning it on tightens
+  // and keeps the approval.
+  if (
+    proposeOnlyLoosened(
+      s.metadata as Record<string, unknown> | undefined,
+      existing.metadata as Record<string, unknown> | null
+    )
+  ) {
+    changed.push("metadata.proposeOnly");
   }
   return changed;
 }
@@ -879,6 +905,12 @@ export async function createCapabilityFromDefinition(
     await requireServerManager(userId, connWorkspaceId ?? null);
   }
 
+  // ADD-ON (founder decision D6): refused before ANY write unless its base is
+  // installed in a scope that covers it, and it declares no tool or credential
+  // of its own. Its skills then `require` the BASE's tools by name, so they run
+  // through the base's tool rows (services/capabilities/addon.ts).
+  const addOnBase = await resolveAddOnBase(db, rawDef, connWorkspaceId ?? null);
+
   const proposals: string[] = [];
 
   // 1. Vault secrets — reuse the SAME server-side encryption the
@@ -1030,6 +1062,11 @@ export async function createCapabilityFromDefinition(
   //    capability-matrix axis, source-of-truth = this CapabilityDefinition.
   const toolsCaller = toolsRouter.createCaller(ctx as never);
   const toolIdByName = new Map<string, string>();
+  // A skill's `requires` names a tool of THIS definition or, for an add-on, of
+  // its base. Kept apart from `toolIdByName`, which is also the list of tools
+  // this container owns (they become its members below).
+  const requiredToolId = (name: string): string | undefined =>
+    toolIdByName.get(name) ?? addOnBase?.toolIdByName.get(name);
   const createdTools: CreateCapabilityResult["created"]["tools"] = [];
   const knownIntents = await knownIntentSetFor(
     def.skills.map((s) => (s as { intent?: unknown }).intent)
@@ -1108,8 +1145,8 @@ export async function createCapabilityFromDefinition(
     if (result.proposalId) proposals.push(result.proposalId);
     // Seed the ENFORCEMENT grant so an APPROVED tool is runnable by agents once
     // the born-draft tool is approved (Wave 2 + 3b: seed(draft) → approve →
-    // grant → agent run is governed). Conservative `execMode: "propose"` for a
-    // side-effecting tool — an agent run routes to review unless re-granted auto.
+    // grant → agent run is governed). No approval row: an agent run of a
+    // side-effecting tool asks first until a person writes an auto row.
     if (result.status === "created" && toolId) {
       await issueCapabilityGrant(
         "tool",
@@ -1118,8 +1155,7 @@ export async function createCapabilityFromDefinition(
         connWorkspaceId ?? null
       );
       // Derive + persist the verb catalog from the skills that require this tool.
-      // `govDefault` aligns to the exec-mode `issueCapabilityGrant` just seeded
-      // ("propose") so the verb never bypasses the approved+grant model.
+      // `govDefault` is "propose": with no approval row the gate asks first.
       const verbs = deriveToolVerbs(
         t.name,
         def.skills,
@@ -1251,7 +1287,7 @@ export async function createCapabilityFromDefinition(
       // `POST /api/hub/capabilities/apply` grew an approved skill's scope with
       // no proposal (review of #199, R2).
       const requiredToolIds = (s.requires ?? [])
-        .map((name) => toolIdByName.get(name))
+        .map((name) => requiredToolId(name))
         .filter((id): id is string => !!id);
       let requiresWidened = false;
       if (existingSkill.approved && requiredToolIds.length > 0) {
@@ -1411,7 +1447,7 @@ export async function createCapabilityFromDefinition(
     // referenced tools resolved to real ids (proposed tools have no id yet).
     if (result.status === "created" && s.requires && s.requires.length > 0) {
       const toolIds = s.requires
-        .map((name) => toolIdByName.get(name))
+        .map((name) => requiredToolId(name))
         .filter((id): id is string => !!id);
       if (toolIds.length > 0) {
         await skillsCaller.setRequiredTools({ skillId: result.id, toolIds });
@@ -1419,7 +1455,7 @@ export async function createCapabilityFromDefinition(
     }
 
     // Seed the enforcement grant for a created skill (same conservative policy
-    // as tools — approved skill runnable by agents, execMode propose by default).
+    // as tools — approved skill usable by agents, asking first with no approval row).
     if (result.status === "created") {
       await issueCapabilityGrant(
         "skill",
@@ -1617,6 +1653,23 @@ export async function createCapabilityFromDefinition(
     }
   }
 
+  // ADD-ON: list its actions on the base tools they run through, so an agent
+  // finds them under that connection (the catalogue merge is additive).
+  if (addOnBase) {
+    for (const [toolName, toolId] of addOnBase.toolIdByName) {
+      await catalogueAddOnVerbsOnBaseTool(
+        db,
+        toolId,
+        deriveToolVerbs(
+          toolName,
+          def.skills,
+          GRANT_DEFAULT_EXEC_MODE,
+          knownIntents
+        )
+      );
+    }
+  }
+
   // 5. Capability CONTAINER — group the seeded tools + skills under ONE named
   //    capability (the container model). Idempotent on ADDRESS within scope
   //    (`template_key`, 0242) and, for containers that predate the column, on
@@ -1763,7 +1816,48 @@ export async function createCapabilityFromDefinition(
       await attachPart("automation", a.automationId);
       await stampSourceCapability(automationsTable, a.automationId, def.key);
     }
-    container = { ...container, partsNotAttached };
+    // ADD-ON: its actions belong to it, never to its base. A skill this install
+    // reused by name that is still a member of the base (today's Apify verbs)
+    // is MOVED: same row, same id, same action id. Then the relation itself.
+    let addOnOf:
+      { id: string; name: string; partsNotMoved: number } | undefined;
+    if (addOnBase) {
+      let partsNotMoved = 0;
+      const ownSkillIds = createdSkills.flatMap((s) =>
+        s.skillId ? [s.skillId] : []
+      );
+      for (const skillId of await skillsStillInBase(
+        db,
+        addOnBase.id,
+        ownSkillIds
+      )) {
+        try {
+          await containersCaller.removePart({
+            capabilityId: addOnBase.id,
+            partType: "skill",
+            partId: skillId,
+          });
+        } catch (err) {
+          partsNotMoved += 1;
+          logger.warn(
+            { containerId, baseId: addOnBase.id, skillId, err },
+            "createFromDefinition: could not move an add-on action out of its base"
+          );
+        }
+      }
+      await writeExtendsEdge(db, {
+        addOnId: containerId,
+        baseId: addOnBase.id,
+        workspaceId: connWorkspaceId ?? null,
+        userId,
+      });
+      addOnOf = { id: addOnBase.id, name: addOnBase.name, partsNotMoved };
+    }
+    container = {
+      ...container,
+      partsNotAttached,
+      ...(addOnOf ? { addOnOf } : {}),
+    };
 
     // W3: the vault IS the connection registry. Stamp the secrets this applier
     // created as THIS capability's connections (`capability_id`), promoting one to
@@ -1815,9 +1909,9 @@ export async function createCapabilityFromDefinition(
 
 // ── Verb-catalog derivation (the capability-matrix axis) ──────────────────────
 //
-// The exec-mode the applier seeds on every tool/skill grant (`issueCapabilityGrant`
-// below). The verb catalog's `govDefault` reuses this SAME constant so a verb's
-// governance default can never drift from the grant the gate actually enforces.
+// A verb's governance default in the catalog (`govDefault`): `propose`, what
+// the gate applies to a tool run no approval row names. (Before 0435 the
+// applier also seeded it as each grant's exec_mode; a grant now carries none.)
 export const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
 const VERB_WRITE_SIGNALS = [
@@ -1984,13 +2078,14 @@ export function deriveToolVerbs(
 // ── Capability-grant seeding (Wave 3b applier grant) ──────────────────────────
 //
 // Issue a `capability_grants` (vault_grants) row for a freshly-created tool/skill
-// so that — once the born-draft capability is approved — an agent can RUN it
-// under governance. Workspace-scoped when a workspace is present (grantedTo null,
-// runnable by any agent in that workspace); otherwise pod-wide, bound to the
-// acting user (grantedTo = userId) so the canonical wildcard firewall
-// (`assertGrantScoped`: never both null) is satisfied. `execMode: "propose"` is
-// the conservative default for a side-effecting tool/skill — the capability
-// runs through review unless an explicit auto grant is later issued.
+// so that — once the born-draft capability is approved — an agent MAY USE it.
+// Workspace-scoped when a workspace is present (grantedTo null, any agent in
+// that workspace); otherwise pod-wide, bound to the acting user (grantedTo =
+// userId) so the canonical wildcard firewall (`assertGrantScoped`: never both
+// null) is satisfied. It writes no approval row: with none, a run asks first,
+// the conservative default for a side-effecting tool/skill, until a person
+// writes an "auto" approval row (decision D2: the grant's exec_mode, always
+// "propose" here, is no longer read or written since 0435).
 export async function issueCapabilityGrant(
   grantableType: "tool" | "skill",
   grantableId: string,
@@ -2007,7 +2102,6 @@ export async function issueCapabilityGrant(
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,
-    execMode: GRANT_DEFAULT_EXEC_MODE,
     grantedTo,
     workspaceId,
     // `permanent` (not `session`): a seeded capability grant persists beyond any

@@ -15,7 +15,9 @@
  * every served non-GET Hub route is a declared read, names its gate, or sits
  * in a shrink-only baseline (the classification tripwire). The free-form
  * `POST /proposals` passes no gate, so it runs rung 0 itself on an allowlist
- * (`fenced-proposal.ts`, 2026-10-28). On the Bearer tRPC door (S7,
+ * (`fenced-proposal.ts`, 2026-10-28). A person's app token (`app_person`)
+ * is refused every route still in that baseline (`appPersonWriteAllowed`,
+ * plan a640c5bb A1 step 1, 18 Nov 2026). On the Bearer tRPC door (S7,
  * 2026-10-20) a mutation passes only when `TRPC_KEY_MUTATION_DOORS` says the
  * gate really bounds it; every other one needs an unbounded `*` key.
  *
@@ -43,6 +45,7 @@ import {
   WORK_RELEASE_SOURCE_STATES,
   type WorkReleasePart,
 } from "@synap-core/types/work-release";
+import { UNCLASSIFIED_WRITE_ROUTES } from "./grant-door-write-baseline.js";
 
 /** How a fenced read door is bounded by a grant. */
 export type FencedReadDoor =
@@ -250,7 +253,16 @@ export function grantHoldsAction(
   });
 }
 
-/** Is ONE scope pinned to some spaces, projects or objects? */
+/**
+ * Is ONE scope pinned to some spaces, projects or objects? A project pin is
+ * narrowed exactly like a space pin (app-permission plan 8189ae7c, W1): the
+ * row reads behind `SEAMED` and `NARROWED` doors AND the grant clause, and
+ * `grant-read.ts` gives sessions, proposals, channels, views, goals, records,
+ * their bodies and edges a project path (`projectReach`), so a project-pinned
+ * key passes those doors and reads the project's rows. An aggregate `READS`
+ * door cannot narrow row by row, so it refuses a project pin as it refuses a
+ * space pin. Events have no project path (`scopeReadsDevEvents`).
+ */
 function scopeIsPinned(scope: GrantScope): boolean {
   return Boolean(scope.workspaceIds || scope.projectIds || scope.entityIds);
 }
@@ -352,6 +364,10 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   // (the CLI's agent installers do, right after a device-flow approval).
   /^\/users\/me\/?$/,
   /^\/auth\/status\/?$/,
+  // What the calling credential holds, by place (`describeOwnGrant`): the
+  // grant entered for this request and the names of the spaces it already
+  // names — an app reads it to say what it can see.
+  /^\/auth\/grant\/?$/,
   // `userId` is the caller's own id or `me` (rest/entities.ts).
   new RegExp(`^/users/(?:me|${ID})/entities/?$`),
   // The list door. Every branch reads through `entities.getEntities` (the
@@ -941,6 +957,18 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // runs: `scopedDb`, subject `playbook`); flows without `playbook.read`
   // and the workers (no seam) come back `withheld`. Same as MCP `synap_get_flow`.
   [/^\/flow\/?$/, FLOW_OF],
+  // THE DESIGN DOOR (Hub `rest/designs.ts`, the service behind design.read and
+  // design.catalog). One design is read through `entityReadVisibleWhere`
+  // (`accessScopeWhere`, the key's grant ANDed: a design it does not reach is
+  // a 404). The catalog is the installed `design` capability's snapshot (no
+  // person's row): given to a key that reads some kind, the designs it
+  // validates. Admitted when one live scope grants `entity.<some kind>.read`.
+  [/^\/designs\/catalog\/?$/, NARROWED("entity", [])],
+  // An app's kit file (W6, `services/designs/app-kit.ts`): the app read
+  // through `entityReadVisibleWhere`, each file through `readableFileEntity`
+  // (`scopedDb`, the key's grant ANDed). Same admission as the catalog.
+  [/^\/designs\/kit\/?$/, NARROWED("entity", [])],
+  [route("/designs/:id"), NARROWED("entity", [])],
   // THE PROCESS READ (one playbook whole, or a space's process cards): see
   // `PROCESS_READ` for the subjects it composes.
   [route("/playbooks/:id/process"), PROCESS_READ],
@@ -1051,6 +1079,13 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
     /^\/errors\/[^/]+\/?$/,
     REFUSED("Pod internals: the cause of every server error on the pod."),
   ],
+  // The installed renderer bundle's host modules (`rest/renderers.ts`): the
+  // licensed kit's code (React, the kit, the tokens CSS), served only to a
+  // full key's host. A narrowly scoped key (an app, a site) never fetches it.
+  [
+    /^\/renderers\/host-modules\/?$/,
+    REFUSED("The renderer kit's code: only a full key's host fetches it."),
+  ],
   // A person's channels (`listPersonChannels`, services/channels/
   // person-channels.ts): the record through `entityReadVisibleWhere`, its
   // channels through `channelVisibilityWhere` (a channel follows its person,
@@ -1138,6 +1173,12 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // No pod row: the static routing rules, the text sent classified, the tabs
   // sent clustered by the intelligence service.
   [/^\/routing\/resolve\/?$/, SEAMED],
+  // A pod app's live-room ticket (0438). Writes no pod data (the ticket row
+  // only): the document is read through `resolveDocumentRoomAccess`, i.e.
+  // `scopedDb` with the key's grant ANDed (a view-owned canvas through its
+  // view), and edit needs the grant's `document.update` / `view.update_content`
+  // (`grantDeniedKey`, services/realtime/room-ticket.ts).
+  [/^\/realtime\/room-ticket\/?$/, SEAMED],
   [/^\/rules\/classify\/?$/, SEAMED],
   [/^\/capture\/cluster-tabs\/?$/, SEAMED],
   // Writes nothing: reads one file entity through `scopedDb` (grant ANDed,
@@ -1222,6 +1263,11 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
 export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   synap_get_entities: SEAMED,
   synap_get_document: SEAMED,
+  // A file entity's signed URL (+ a small image inline): the ONE signer of
+  // `GET /files/:id/url` (`signFileEntityUrl` → `loadSignableFileEntity`,
+  // the entity read through `scopedDb`, grant ANDed), so a key pinned to
+  // one space reads that space's files and is refused the others.
+  synap_get_file: SEAMED,
   synap_get_relations: SEAMED,
   synap_list_tracks: SEAMED,
   synap_resolve_identity: SEAMED,
@@ -1393,6 +1439,10 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_add_track_stage: WRITE,
     synap_update_project: WRITE,
     synap_project_use_workspace: WRITE,
+    // Files the gate's own workspace JOIN proposal (never through the gate:
+    // it is the gate's rung-4 join, asked for on purpose), after checking the
+    // key's grant reaches the space; returns the receipt, never rows.
+    synap_request_workspace_access: WRITE,
     synap_file_into_project: WRITE,
     synap_archive_workspace: WRITE,
     synap_retire_workspace: WRITE,
@@ -1405,6 +1455,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     // Always files a profile/declare_lifecycle proposal and returns its receipt,
     // never rows (backend#689).
     synap_declare_lifecycle: WRITE,
+    // Always files a property_def/change_lifecycle_options proposal (or
+    // refuses), never rows; authority on the loaded def at filing and approval.
+    synap_change_lifecycle_options: WRITE,
     synap_create_view: WRITE,
     synap_update_view_content: WRITE,
     // The board write (`placeOnBoard`): through the gate on the board's own
@@ -1663,6 +1716,44 @@ export function restDoorAllowed(
 }
 
 /**
+ * The unclassified write baseline (`grant-door-write-baseline.ts`) as
+ * matchers: `METHOD /path/:param` → the method and a regex of the path
+ * relative to /api/hub, each `:param` standing for one segment. The
+ * classification tripwire checks that no other served write matches one.
+ */
+const UNCLASSIFIED_WRITES: ReadonlyArray<readonly [string, RegExp]> =
+  UNCLASSIFIED_WRITE_ROUTES.map((row) => {
+    const [method, path] = row.split(" ") as [string, string];
+    const pattern = path
+      .split("/")
+      .map((seg) =>
+        seg.startsWith(":")
+          ? "[^/]+"
+          : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      )
+      .join("/");
+    return [method, new RegExp(`^${pattern}/?$`)] as const;
+  });
+
+/**
+ * Hub REST: may a person's app token (`app_person`) make this request? Not a
+ * write nobody has classified yet (the baseline): its handler is not known
+ * to check what the person granted the app, and the token acts AS the person,
+ * so every owner check behind it passes (a connected app hard-purging a
+ * space, R1 A risk 1). Any other request goes on to the fence and the gate.
+ * The Hub middleware asks it for an `app_person` key only, whatever its
+ * grant (step 2 extends the refusal to every fenced key).
+ */
+export function appPersonWriteAllowed(method: string, path: string): boolean {
+  const m = method.toUpperCase();
+  return !UNCLASSIFIED_WRITES.some(([um, r]) => um === m && r.test(path));
+}
+
+/** The 403 message for a request `appPersonWriteAllowed` refused. */
+export const APP_PERSON_WRITE_UNSUPPORTED =
+  "This door does not take an app's sign-in yet: it does not check what you allowed this app to do. Nothing was changed. Do this in your pod, or through a door the app's access covers.";
+
+/**
  * MCP: may a scoped key call this listed tool? A read tool through its door
  * (`MCP_READ_TOOL_DOORS`); any other tool as `MCP_WRITE_TOOL_DOORS` classifies
  * it: a write passes to the gate, a row-returning one through its door, and an
@@ -1812,7 +1903,8 @@ export const TRPC_KEY_MUTATION_DOORS: Readonly<Record<string, TrpcWriteDoor>> =
     "automations.activateAutomation": GATED,
     "automations.triggerAutomation": GATED,
     // D3: revising honours the key's space / project / object pins, and a
-    // fenced key never changes the payload or the space (issue 314a6554).
+    // fenced key never changes the payload or the space (issue 314a6554),
+    // save a message's words and its own proposal's title.
     "proposals.updateProposal": GATED,
     // D5: an observation is `event.create` where it lands; never widened.
     "observations.append": GATED,

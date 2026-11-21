@@ -18,6 +18,9 @@
  *    writer itself, at most once an hour per process.
  */
 
+import { randomUUID } from "node:crypto";
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
 import {
   db,
@@ -25,7 +28,16 @@ import {
   insertServerFault,
   SERVER_FAULT_RETENTION_DAYS,
 } from "@synap/database";
-import type { DescribedFault } from "./describe-fault.js";
+import {
+  describeFault,
+  type DescribedError,
+  type DescribedFault,
+} from "./describe-fault.js";
+import { redactSecrets } from "../../utils/redact-secrets.js";
+import {
+  CLASS_TRPC_CODE,
+  type ProposalFailureMeta,
+} from "../../routers/proposals/failure-classification.js";
 import { toPodAdminOrigin } from "../../utils/pod-admin-origin.js";
 
 const logger = createLogger({ module: "server-faults" });
@@ -35,7 +47,11 @@ const PRUNE_EVERY_MS = 60 * 60_000;
 
 export interface ServerFaultRecord {
   errorId: string;
-  door: "rest" | "trpc";
+  /**
+   * Which door answered: `rest` (Hono), `trpc`, or `proposal` (an approval
+   * that failed, {@link recordProposalFault}; `path` names the proposal).
+   */
+  door: "rest" | "trpc" | "proposal";
   method?: string | null;
   /** Already redacted (`redactSecretPath`). */
   path?: string | null;
@@ -108,6 +124,59 @@ export async function recordServerFault(
       .catch((err) => logger.warn({ err }, "Server fault retention failed"));
   }
   return true;
+}
+
+/**
+ * Keep the exact cause of a failed approval for the pod's owner (plan 8032a127
+ * D5, finding 7ca4953f): the proposal stores a safe sentence and, for agents, a
+ * redacted `detail`; the error itself and its stack were kept nowhere a person
+ * could read without ssh. Called by every writer of `approval_failed` (the
+ * approve door's two failure writes in `apply-approval.ts`, the receipt's in
+ * `stamp-materialized.ts`), which then put ONLY the returned id on the row
+ * (`data.failure.errorId`): reading what it names takes pod-admin rights
+ * (`read.ts`).
+ *
+ * Redaction: `describeFault`'s (a query's bound values, a URL's credential
+ * parameters, a bearer token), then `redactSecrets`, the scrubber every
+ * stored approval error already goes through: an approval's error is often a
+ * provider body echoing the credential that produced it (`sk-…`, a quoted
+ * `"api_key"`), which a 5xx's rarely is. Whitespace and stack frames are kept.
+ *
+ * `status` is the HTTP status of the error the approval answered with
+ * (`CLASS_TRPC_CODE` of its class), so the column keeps its meaning. Resolves
+ * the errorId only when the row was written; `undefined` when the minute's
+ * budget was spent or the write failed, so a proposal never points at a fault
+ * that does not exist. Never rejects.
+ */
+export async function recordProposalFault(args: {
+  proposalId: string;
+  err: unknown;
+  meta: Pick<ProposalFailureMeta, "errorClass">;
+  /** The person on whose behalf it ran (the approver, or the receipt's owner). */
+  userId?: string | null;
+  agentUserId?: string | null;
+}): Promise<string | undefined> {
+  const errorId = randomUUID();
+  const described = describeFault(args.err);
+  const scrub = <E extends DescribedError>(e: E): E => ({
+    ...e,
+    message: redactSecrets(e.message),
+    stack: e.stack === null ? null : redactSecrets(e.stack),
+  });
+  const written = await recordServerFault({
+    errorId,
+    door: "proposal",
+    path: `/proposal/${args.proposalId}`,
+    status: getHTTPStatusCodeFromError(
+      new TRPCError({
+        code: CLASS_TRPC_CODE[args.meta.errorClass ?? "unknown"],
+      })
+    ),
+    userId: args.userId,
+    agentUserId: args.agentUserId,
+    fault: { ...scrub(described), causes: described.causes.map(scrub) },
+  });
+  return written ? errorId : undefined;
 }
 
 /**

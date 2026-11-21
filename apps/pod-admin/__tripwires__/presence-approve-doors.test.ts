@@ -64,6 +64,8 @@ const DOORS: Record<string, RegExp> = {
     /["'`]\/api\/device["'`]/,
   "tRPC applicationConnections.approveRequest":
     /\bapplicationConnections\s*\.\s*approveRequest\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
+  "tRPC capabilities.enableMany":
+    /\bcapabilities\s*\.\s*enableMany\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC capabilities.setToolEnabled":
     /\bcapabilities\s*\.\s*setToolEnabled\s*\.\s*(?:useMutation|mutate|mutateAsync)\b/,
   "tRPC skills.setApproved":
@@ -155,7 +157,10 @@ const POD_DOORS: Record<string, { inputs: number; doors: string[] }> = {
     inputs: 1,
     doors: ["tRPC applicationConnections.approveRequest"],
   },
-  "capabilities.ts": { inputs: 1, doors: ["tRPC capabilities.setToolEnabled"] },
+  "capabilities.ts": {
+    inputs: 2,
+    doors: ["tRPC capabilities.enableMany", "tRPC capabilities.setToolEnabled"],
+  },
   "hub-protocol/rest/skills-crud.ts": {
     inputs: 1,
     doors: ["REST /skills/:id/approve"],
@@ -260,6 +265,7 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "tRPC apiKeys.decideKeyRequest",
         "tRPC apiKeys.decideOAuthAuthorization",
         "tRPC applicationConnections.approveRequest",
+        "tRPC capabilities.enableMany",
         "tRPC capabilities.setToolEnabled",
         "tRPC marketplace.sources.approveKeyChange",
         "tRPC proposals.approve",

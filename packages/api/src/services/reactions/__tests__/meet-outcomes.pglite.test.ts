@@ -318,9 +318,10 @@ describe("default 3: an approval meets the outcome wherever it was filed", () =>
       checked,
       JSON.stringify([
         {
-          key: "proposal-animated",
+          key: "recipe-right",
           statement: "The recipe is right",
           check: { kind: "judge" },
+          outputKey: "proposal-animated",
         },
       ]),
     ]);

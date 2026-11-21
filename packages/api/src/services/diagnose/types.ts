@@ -261,6 +261,13 @@ export interface CapabilityComposition {
    * `workspaceId` is null (pod-wide).
    */
   workspaceName?: string | null;
+  /**
+   * ADD-ON (founder decision D6): the base capability this container extends
+   * (`capability --extends--> capability`), batched in LIST mode only. `null`
+   * when it is not an add-on, or its base is not visible to the reader;
+   * `undefined` from single-object callers that do not load it.
+   */
+  extends?: { id: string; name: string } | null;
   provenance: { templateKey?: string; contentHash?: string } | null;
   members: Array<{
     kind: "tool" | "skill" | "playbook" | "automation";

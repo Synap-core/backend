@@ -97,6 +97,8 @@ export async function createPlaybookDoor(
     name: unknown;
     goalTemplate: unknown;
     description?: string;
+    /** WHY this write, shown to the reviewer of a proposal (governance gate). */
+    reasoning?: string;
     stages?: PlaybookStageInput[];
     status?: PlaybookStatus;
     /**
@@ -142,6 +144,11 @@ export async function createPlaybookDoor(
     requires?: PlaybookDefinition["requires"];
     /** What a run may use, "only these" (`playbookToolsSchema`, validated by `playbooks.create`). */
     tools?: PlaybookDefinition["tools"];
+    /**
+     * The phrases that offer it (`metadata.triggers`), validated by
+     * `playbooks.create` (`playbookTriggersSchema`).
+     */
+    triggers?: string[];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -166,6 +173,7 @@ export async function createPlaybookDoor(
     name: input.name,
     goalTemplate: input.goalTemplate,
     description: input.description,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // `playbooks.create` validates these with `playbookStagesSchema` (category
     // required, keys unique); this only types the untyped input.
     stages: input.stages,
@@ -188,6 +196,9 @@ export async function createPlaybookDoor(
     ...(input.runner !== undefined ? { runner: input.runner } : {}),
     ...(input.requires !== undefined ? { requires: input.requires } : {}),
     ...(input.tools !== undefined ? { tools: input.tools } : {}),
+    ...(input.triggers !== undefined
+      ? { metadata: { triggers: input.triggers } }
+      : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }

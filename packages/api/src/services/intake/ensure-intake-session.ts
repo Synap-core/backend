@@ -34,12 +34,14 @@ import {
   db,
   focusSessions,
   openRunSession,
+  resolveRunSessionPlacement,
   and,
   eq,
   isNull,
   or,
   drizzleSql,
 } from "@synap/database";
+import type { SessionWorkspaceRung } from "@synap/database";
 import { resolveVerifiedSessionId } from "../../routers/hub-protocol/_middleware/session.js";
 
 const logger = createLogger({ module: "intake/ensure-intake-session" });
@@ -53,6 +55,11 @@ export interface EnsureIntakeSessionInput {
   userId: string;
   /** Placement of a MINTED session only; a provided session keeps its own. */
   workspaceId?: string | null;
+  /**
+   * With a `workspaceId` copied from another session (a rerun's parent): the
+   * rung that placed that session, so the minted room keeps its reach.
+   */
+  workspaceRung?: SessionWorkspaceRung | null;
   projectId?: string | null;
   agentUserId?: string | null;
   /** A handle already verified upstream (the `X-Session-Id` middleware). */
@@ -242,6 +249,19 @@ export async function ensureIntakeSession(
   }
 
   try {
+    // Where a MINTED room would sit (project and space ladders), resolved
+    // BEFORE the reuse lookup: a room is reused where a mint would have put
+    // it, so a retry never mints a second room beside a placed first one.
+    const placement = await resolveRunSessionPlacement(db, {
+      userId: input.userId,
+      agentUserId: input.agentUserId ?? null,
+      workspaceId: input.workspaceId ?? null,
+      workspaceRung: input.workspaceRung ?? null,
+      projectId: input.projectId ?? null,
+      parentSessionId: input.parentSessionId ?? null,
+      subjectEntityId: input.subjectEntityId ?? null,
+    });
+    const placedWorkspaceId = placement.workspace.workspaceId;
     const reuseKeys = [
       ...(input.correlationKey
         ? [
@@ -255,7 +275,12 @@ export async function ensureIntakeSession(
         : []),
     ];
     if (reuseKeys.length > 0) {
-      const workspaces = input.reuseWorkspaceIds ?? [input.workspaceId ?? null];
+      const workspaces = Array.from(
+        new Set([
+          ...(input.reuseWorkspaceIds ?? [input.workspaceId ?? null]),
+          placedWorkspaceId,
+        ])
+      );
       const [existing] = await db
         .select({ id: focusSessions.id })
         .from(focusSessions)
@@ -291,8 +316,10 @@ export async function ensureIntakeSession(
       title:
         input.title ??
         buildDerivedSessionTitle({ kind: "capture", label: input.goal }),
-      workspaceId: input.workspaceId ?? null,
-      projectId: input.projectId ?? null,
+      // The placement resolved above, passed as the room's own pin.
+      workspaceId: placedWorkspaceId,
+      workspaceRung: placement.workspace.rung,
+      projectId: placement.projectId,
       agentUserId: input.agentUserId ?? null,
       // A person's capture is a human-started run; only an agent key is "agent".
       origin: input.agentUserId ? "agent" : "human",

@@ -1017,7 +1017,18 @@ export async function applyPackagePostWorkspace(
             : p.metadata,
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
-          source: "intelligence",
+          // AI provenance only when an agent acts. With no agent the write is
+          // the person's: a person applying on pod admin, or the approver of
+          // an agent's update (`enrollAgentUserId`, no `agentUserId`). Branded
+          // "intelligence" anyway, `playbooks.create` took it for an
+          // unattributed AI write, and the gate's anonymous path floored it
+          // (2.09 AGENT_STRUCTURE_WRITE): the template's NEW playbook was
+          // re-filed as a proposal, the apply held at awaiting-approval and
+          // the version never stamped (perso pod, 18 Nov 2026: Operations'
+          // "Onboard a client"). The playbook and automation updates here
+          // carry no source, and the automations door gates on the acting
+          // agent, never on `source`.
+          ...(agentUserId ? { source: "intelligence" } : {}),
         });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via
@@ -1315,10 +1326,26 @@ export async function applyPackagePostWorkspace(
         workspaceId,
         userId,
       });
-      const rows = await db
+      const spaceRows = await db
         .select({ id: entities.id })
         .from(entities)
         .where(eq(entities.workspaceId, workspaceId));
+      // THE FILING RULE (app-permission plan 8189ae7c, W1): filing a record
+      // into a project needs a write on it where it lives now; a project
+      // write never covers the edge. The `uses` door refused an app
+      // (`app_grant`): honour it and file nothing. Under any other key's
+      // grant, only the records it may write where they are now
+      // (`existingEntitiesGrantMayFile`). A person (no grant) files them all.
+      const { existingEntitiesGrantMayFile } =
+        await import("./projects/file-entities.js");
+      const fileable =
+        !uses.linked && uses.reason === "app_grant"
+          ? new Set<string>()
+          : new Set(
+              await existingEntitiesGrantMayFile(spaceRows.map((r) => r.id))
+            );
+      const rows = spaceRows.filter((r) => fileable.has(r.id));
+      const withheld = spaceRows.length - rows.length;
       // Count what the DOOR actually did, never the loop iterations.
       // `linkEntityToProject` can REFUSE (`{linked:false}`) when the project is
       // gone or invisible — it stopped writing ghost edges. Incrementing
@@ -1348,6 +1375,7 @@ export async function applyPackagePostWorkspace(
               projectId: body.projectId,
               entities: linked,
               ...(refused > 0 ? { refused } : {}),
+              ...(withheld > 0 ? { withheldByGrant: withheld } : {}),
             }
           : {
               status: "not_linked",
@@ -1357,8 +1385,10 @@ export async function applyPackagePostWorkspace(
               message:
                 !uses.linked && uses.reason === "workspace_not_found"
                   ? `Workspace ${workspaceId} does not exist — the project was not indexed to it.`
-                  : `Project ${body.projectId} is not visible or no longer exists — ` +
-                    `no entity was filed into it.`,
+                  : !uses.linked && uses.reason === "app_grant"
+                    ? `An app cannot add a space to a project: the person files project ${body.projectId} into this space.`
+                    : `Project ${body.projectId} is not visible or no longer exists — ` +
+                      `no entity was filed into it.`,
             };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };

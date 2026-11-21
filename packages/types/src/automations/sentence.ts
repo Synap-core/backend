@@ -157,6 +157,10 @@ export type ActionVerb =
   // event of the moveStatus door, `entity.transition.completed`. Kinds AND
   // roles: a role's status lives on its facet, which no "updated" sees.
   | "transitioned"
+  // A focus session ENDED (closed, cancelled or failed; `status` says which)
+  // — the close door's one event, `focus_session.closed.completed`. A
+  // playbook link (`run_ended` activator) compiles onto it.
+  | "closed"
   | "received"
   | "completed"
   | "approved"
@@ -884,6 +888,8 @@ export function proposePlaybookOnKindSentence(input: {
  *                     created on its own, and the entity's create event
  *                     names its kind.
  *   `enters_status` — WHEN the subject (a kind OR a role) ENTERS `status`.
+ *   `run_ended`     — WHEN a run of another playbook ENDS (a link): the
+ *                     session close event, on that playbook and outcome.
  *
  * `enters_status` follows the event that actually fires for the property:
  *
@@ -927,6 +933,20 @@ export type PlaybookActivatorTrigger =
        *  {@link isSentenceCron}; the worker spec carries the set. */
       on: "schedule";
       cron: string;
+    }
+  | {
+      /**
+       * A LINK: a run of `afterPlaybookId` ended — the session close event
+       * (`focus_session.closed.completed`), filtered on its data: the
+       * session's `playbookId`, its owner (`userId`: the rule owner's own
+       * runs only), not a session merely `attached` to the playbook, and for
+       * an `outcome` its `closedAs` (`done` / `not_done`). The new run works
+       * on the ended session's subject (`run-subject.ts`).
+       */
+      on: "run_ended";
+      afterPlaybookId: string;
+      ownerUserId: string;
+      outcome?: "done" | "not_done";
     };
 
 /**
@@ -976,18 +996,25 @@ export function playbookActivatorSentence(
             ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
             cronTimezone: "UTC",
           }
-        : {
-            triggerType: "event",
-            subjectCategory: "entity",
-            profileSlug: input.profileSlug,
-            actionVerb: trigger.actionVerb,
-            // Only a role says so: a kind's sentence stays byte-identical to the
-            // one every activator compiled before roles could be subjects (so its
-            // seed hash does not move and no installed rule is rewritten).
-            ...(input.on === "created" && input.profileKind === "role"
-              ? { profileKind: "role" as const }
-              : {}),
-          },
+        : input.on === "run_ended"
+          ? {
+              // A session's event: no kind filter (the subject rides on it).
+              triggerType: "event",
+              subjectCategory: "focus_session",
+              actionVerb: trigger.actionVerb,
+            }
+          : {
+              triggerType: "event",
+              subjectCategory: "entity",
+              profileSlug: input.profileSlug,
+              actionVerb: trigger.actionVerb,
+              // Only a role says so: a kind's sentence stays byte-identical to the
+              // one every activator compiled before roles could be subjects (so its
+              // seed hash does not move and no installed rule is rewritten).
+              ...(input.on === "created" && input.profileKind === "role"
+                ? { profileKind: "role" as const }
+                : {}),
+            },
     conditions: trigger.conditions,
     actions: [
       {
@@ -1022,6 +1049,41 @@ function activatorTriggerShape(
   conditions: ConditionRow[];
 } {
   if (t.on === "created") return { actionVerb: "created", conditions: [] };
+  if (t.on === "run_ended") {
+    return {
+      actionVerb: "closed",
+      conditions: [
+        {
+          id: "link-playbook",
+          key: "playbookId",
+          operator: "is",
+          value: t.afterPlaybookId,
+        },
+        {
+          id: "link-owner",
+          key: "userId",
+          operator: "is",
+          value: t.ownerUserId,
+        },
+        {
+          id: "link-attached",
+          key: "attached",
+          operator: "is_false",
+          value: "",
+        },
+        ...(t.outcome
+          ? [
+              {
+                id: "link-outcome",
+                key: "closedAs",
+                operator: "is" as const,
+                value: t.outcome,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
   if (t.lifecycle === "declared") {
     return {
       actionVerb: "transitioned",

@@ -30,6 +30,8 @@ import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
+  /** The session room `ensureSessionChannel` answers (null: none). */
+  channel: null as string | null,
   client: null as null | {
     exec: (sql: string) => Promise<unknown>;
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
@@ -68,8 +70,23 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
 });
 vi.mock("../ensure-session-channel.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
-  return { ...actual, ensureSessionChannel: async () => null };
+  return { ...actual, ensureSessionChannel: async () => h.channel };
 });
+const { postChannelMessage, triggerAutoRespond } = vi.hoisted(() => ({
+  postChannelMessage: vi.fn(async (_p: Record<string, unknown>) => ({
+    success: true as const,
+    messageId: "msg-1",
+  })),
+  triggerAutoRespond: vi.fn(async (_p: Record<string, unknown>) => true),
+}));
+vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  postChannelMessage,
+}));
+vi.mock("../../../utils/trigger-auto-respond.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  triggerAutoRespond,
+}));
 vi.mock("../../../utils/domain-event-bridge.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return { ...actual, emitHubRealtimeEvent: () => undefined };
@@ -84,6 +101,7 @@ import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { createFocusSession } from "../create-session.js";
 import { updateFocusSession } from "../update-session.js";
+import { delegateExpectedOutput } from "../delegate-output.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 
@@ -153,7 +171,8 @@ const handOffCalls = () =>
 
 async function approveHandOff(
   sessionId: string,
-  data: Record<string, unknown>
+  data: Record<string, unknown>,
+  agentUserId: string | null = null
 ) {
   const executor = proposalExecRegistry.resolveExact(
     "focus_session/assign_agent"
@@ -166,6 +185,7 @@ async function approveHandOff(
       workspaceId: null,
       projectId: null,
       subjectUserId: USER,
+      agentUserId,
       data: { data },
       targetType: "focus_session",
       proposalType: "assign_agent",
@@ -462,6 +482,69 @@ describe("THE route decides which agent may take the session", () => {
         `update users set agent_paused_at = null where id = $1`,
         [WORKER]
       );
+    }
+  });
+});
+
+describe("delegating a SLOT to another agent — approval finishes the delegation", () => {
+  it("proposed with the slot; approving it attaches the agent, delegates the slot, posts the ask and starts the turn", async () => {
+    const sessionId = await seedSession();
+    await h.client!.query(
+      `update focus_sessions set expected_outputs = $2::jsonb where id = $1`,
+      [
+        sessionId,
+        JSON.stringify([{ kind: "document", label: "Research brief" }]),
+      ]
+    );
+    h.channel = randomUUID();
+    postChannelMessage.mockClear();
+    triggerAutoRespond.mockClear();
+    try {
+      const res = await delegateExpectedOutput({
+        sessionId,
+        userId: USER,
+        expectedLabel: "research brief",
+        agentType: "meta",
+        actingAgentUserId: AGENT,
+      });
+      expect(res.status).toBe("proposed");
+      expect(postChannelMessage).not.toHaveBeenCalled();
+      const [gate] = handOffCalls();
+      expect(gate!.data).toMatchObject({
+        addAgentId: HOUSE,
+        expectedLabel: "Research brief",
+        agentType: "meta",
+      });
+
+      const approved = await approveHandOff(sessionId, gate!.data!, AGENT);
+      expect(approved).toMatchObject({ success: true });
+      expect(approved).not.toHaveProperty("refusals");
+      expect(await roster(sessionId)).toEqual([AGENT, HOUSE]);
+      const slots = (
+        await h.client!.query<{
+          expected_outputs: Array<Record<string, unknown>>;
+        }>(`select expected_outputs from focus_sessions where id = $1`, [
+          sessionId,
+        ])
+      ).rows[0]!.expected_outputs;
+      expect(slots[0]).toMatchObject({
+        label: "Research brief",
+        delegatedTo: "meta",
+      });
+      expect(postChannelMessage).toHaveBeenCalledTimes(1);
+      expect(postChannelMessage.mock.calls[0]![0]).toMatchObject({
+        channelId: h.channel,
+        agentUserId: AGENT,
+      });
+      expect(triggerAutoRespond).toHaveBeenCalledTimes(1);
+      expect(triggerAutoRespond.mock.calls[0]![0]).toMatchObject({
+        agentType: "meta",
+        focusSessionId: sessionId,
+      });
+      // Approving asks governance nothing more: one hand-off, one proposal.
+      expect(handOffCalls()).toHaveLength(1);
+    } finally {
+      h.channel = null;
     }
   });
 });

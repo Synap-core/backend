@@ -719,6 +719,9 @@ const ACTION_VERB_ROWS = {
   // Library: run a reader on a kept link again (or with another reader). The
   // button asks "Read again"; the receipt says it was "Read".
   read_again: { imperative: "Read again", past: "Read" },
+  // The design door (`design.apply`, matched on its last segment): an
+  // agent's ops applied to a design. Humanized, the receipt said "Apply".
+  apply: { imperative: "Apply", past: "Applied" },
 } satisfies Readonly<Record<string, ActionVerb>>;
 
 export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> =
@@ -928,6 +931,10 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   assigned_to: { outgoing: "Assigned to", incoming: "Assigned agent" },
   // session --orchestrated_by--> session: coordinated by that orchestrator.
   orchestrated_by: { outgoing: "Orchestrated by", incoming: "Orchestrates" },
+  // capability(add-on) --extends--> capability(base) (founder decision D6):
+  // the add-on runs through its base. From the base's side the row is the
+  // add-on that extends it.
+  extends: { outgoing: "Add-on of", incoming: "Extended by" },
 };
 
 export function resolveLineageEdgeLabel(
@@ -1471,16 +1478,23 @@ const BUILD_TAG_TOKEN =
   /^(?:(?:local|build)-[0-9a-f]{7,}|(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,})$/i;
 
 /**
- * One word that is a machine token, not a name. Narrow ON PURPOSE — a false
- * positive deletes a real name from the title a person approves:
+ * THE door for "is this string a machine token, not a name a person can
+ * read" — one word only. Every surface that is about to show a stored name
+ * (a session title, a graph neighbour's name) asks this instead of keeping
+ * its own id pattern. Narrow ON PURPOSE — a false positive deletes a real
+ * name from what a person reads:
  *   - a UUID, a build tag (above);
  *   - a dotted id whose last segment is a known ACTION (`entity.create`,
  *     `gmail.send`) — so `report.pdf`, `synap.live`, `j.doe` stay names;
- *   - a snake_case slug only when the object is a Tool, whose identity IS its
- *     key (`routines_horizon`) — `meeting_notes` names a document.
+ *   - a snake_case slug only when `noun` is the Tool noun, whose identity IS
+ *     its key (`routines_horizon`) — `meeting_notes` names a document. With
+ *     no `noun` a snake_case slug is a name.
+ * Surrounding whitespace is ignored; an empty string is not a token (an
+ * empty name is the caller's own case).
  */
-function isMachineToken(text: string, noun: string): boolean {
-  if (/\s/.test(text)) return false;
+export function isMachineToken(raw: string, noun = ""): boolean {
+  const text = raw.trim();
+  if (!text || /\s/.test(text)) return false;
   if (UUID_TOKEN.test(text) || BUILD_TAG_TOKEN.test(text)) return true;
   if (DOTTED_TOKEN.test(text)) {
     return text.slice(text.lastIndexOf(".") + 1) in ACTION_VERBS;
@@ -1687,6 +1701,14 @@ export function resolveProposalKindLabel(
 }
 
 /**
+ * The name of the pod acting on its own, with no person and no agent behind
+ * the act (a sweep that expired a request, the failure of a receipt no agent
+ * recorded): "Synap", never "Automation", which is the user's own rules
+ * (`automation` kind). A product name: the same in every locale.
+ */
+export const POD_ACTOR_NAME = "Synap";
+
+/**
  * Lifecycle STATUS labels — the state a thing is in, as a human word.
  *
  * SCOPE. These are the CANONICAL lifecycle states of Synap's own objects
@@ -1711,7 +1733,11 @@ const STATUS_LABEL_ROWS = {
   // `PROPOSAL_REJECTION_REASONS` taxonomy, and the DB enum value.
   rejected: "Rejected",
   denied: "Rejected",
-  approval_failed: "Approval failed",
+  // DEFAULT word (plan 8032a127 D6, the founder has not decided; override it
+  // here and in `catalog.fr.ts`): the approval happened, applying it did not.
+  // "Couldn't apply" says what the person sees; "Approval failed" read as if
+  // the approving had failed.
+  approval_failed: "Couldn't apply",
   // The proposal's effect was taken back after approval. One word for the row's
   // status chip on every surface (the workbench and the phone both name it).
   reverted: "Reverted",
@@ -2573,6 +2599,7 @@ export const NEED_LABELS = {
   "social-publishing": "Social publishing",
   "linkedin-reach": "LinkedIn reach",
   analytics: "Analytics",
+  compute: "Compute",
 } as const;
 
 /** The need rows, exactly typed: the keys of the `need.*` catalog. */
@@ -2605,6 +2632,8 @@ export const INTENT_LABELS = {
   edit_video: "Edit a video",
   transcribe_media: "Transcribe media",
   download_media: "Download media",
+  provision_compute: "Start a cloud machine",
+  release_compute: "Stop a cloud machine",
 } as const;
 
 /** The intent rows, exactly typed: the keys of the `intent.*` catalog. */

@@ -21,6 +21,11 @@ type T = ReturnType<typeof approvalProgressT>;
 export interface ApprovalRun {
   runId: string;
   proposalId: string;
+  /**
+   * `run`: one approved verb's run (an async verb, report 48dbf93b), said as
+   * a run, never as records. Absent from a pod older than this field: records.
+   */
+  kind?: "records" | "run";
   state: "queued" | "running" | "succeeded" | "failed" | "stalled";
   phase: "entities" | "relations" | "finishing" | null;
   total: number;
@@ -72,6 +77,8 @@ export interface ApprovalProgressCopy {
   percent: number | null;
   /** Where "see what was created" goes, once it succeeded. */
   door: ExitTarget | null;
+  /** The door's words when they are not "See what was created" (a run's result). */
+  doorLabel?: string;
   /** The person can approve again to finish what is left. */
   resumable: boolean;
 }
@@ -119,10 +126,55 @@ function percentOf(run: ApprovalRun): number | null {
   return Math.min(100, Math.round((run.done / run.total) * 100));
 }
 
+/** One approved verb's run: running, done (its result is on the proposal), or stopped. */
+function runCopy(run: ApprovalRun, t: T): ApprovalProgressCopy {
+  const proposalDoor: ExitTarget = {
+    kind: "object",
+    objectKind: "proposal",
+    id: run.proposalId,
+  };
+  switch (run.state) {
+    case "queued":
+    case "running":
+      return {
+        tone: "default",
+        busy: true,
+        title: t(run.state === "queued" ? "run.queued" : "run.running"),
+        detail: t("run.runningDetail"),
+        percent: null,
+        door: null,
+        resumable: false,
+      };
+    case "succeeded":
+      return {
+        tone: "success",
+        busy: false,
+        title: t("run.done"),
+        detail: null,
+        percent: 100,
+        door: proposalDoor,
+        doorLabel: t("run.door"),
+        resumable: false,
+      };
+    case "failed":
+    case "stalled":
+      return {
+        tone: "danger",
+        busy: false,
+        title: t("run.stopped"),
+        detail: run.error ?? t("stopped.detail"),
+        percent: null,
+        door: null,
+        resumable: true,
+      };
+  }
+}
+
 export function approvalProgressCopy(
   run: ApprovalRun,
   t: T = approvalProgressT()
 ): ApprovalProgressCopy {
+  if (run.kind === "run") return runCopy(run, t);
   const counts = countsLine(run, t);
   const of = { done: n(run.done), total: n(run.total) };
   switch (run.state) {

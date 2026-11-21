@@ -125,11 +125,12 @@ export interface AutomationGovernanceOpts {
    */
   lifecycleMove?: { intoTerminal: boolean; humanOnly: boolean };
   /**
-   * The automation's owning principal (automation.createdBy). For AI-created
-   * automations this is the agent's user id; for manual automations it is a
-   * human user id. The gate resolves which it is and applies the correct policy.
+   * The automation's owner (`createdBy`), the person it runs for: RBAC and the
+   * proposal floor.
    */
   ownerId: string;
+  /** The authoring agent (`agent_user_id`): the ladder judges it, else `ownerId`. */
+  actorAgentUserId?: string | null;
   workspaceId: string;
   subjectType: string;
   /** "create" | "update" — the write action being governed. */
@@ -206,13 +207,12 @@ export async function checkAutomationWriteOrPropose(
     nodeId,
     producerAgentUserId,
   } = opts;
+  const governedId = opts.actorAgentUserId || ownerId;
 
   // Map action → required RBAC permission (canonical map in @synap/governance-policy).
   const requiredPermission = requiredPermissionFor(action);
 
-  // 1. RBAC: the OWNING principal's workspace role gates the action. If the
-  //    owner is an agent user, this is the agent's own role (per the platform
-  //    model). If the owner is a human, this is the human's role.
+  // 1. RBAC: the owner's workspace role gates the action.
   const rbac = await verifyPermission({
     db,
     userId: ownerId,
@@ -240,7 +240,7 @@ export async function checkAutomationWriteOrPropose(
   //    AutoApproveFor: false` preserves this door's workspace-only autoApproveFor.
   const gov = await resolveAgentGovernanceDecision({
     db,
-    agentUserId: ownerId,
+    agentUserId: governedId,
     workspaceId,
     subjectType,
     action,
@@ -270,18 +270,13 @@ export async function checkAutomationWriteOrPropose(
     // shows the right principal). If the producer does not resolve as an agent
     // user (a human/system producer), there is no agent in the chain after all
     // and we fall through to the human-RBAC grant, exactly as before.
-    // PRECISE INVARIANT (the `!== ownerId` gate matters): this branch is only
-    // reached when the OWNER resolved `not-agent` (a human). When the owner is
-    // ITSELF an agent, we never get here — `gov.decision` was `execute`/`propose`/
-    // `deny` above and the OWNER-agent ladder already governed the write; the
-    // producer cross-check is deliberately skipped. So the effect is "governed
-    // against the OWNER when the owner is an agent, else against the PRODUCER."
-    // The `!== ownerId` term additionally no-ops the degenerate case where the
-    // same agent is both owner and producer (the owner ladder already covered it).
+    // Reached only for a person's own automation: an agent-authored one was
+    // governed by its actor's ladder above. `!== governedId` no-ops an actor
+    // that is also the producer.
     const producerInChain =
       typeof producerAgentUserId === "string" &&
       producerAgentUserId.length > 0 &&
-      producerAgentUserId !== ownerId;
+      producerAgentUserId !== governedId;
 
     if (producerInChain) {
       const producerGov = await resolveAgentGovernanceDecision({
@@ -341,7 +336,12 @@ export async function checkAutomationWriteOrPropose(
 
   if (gov.decision === "deny") {
     logger.warn(
-      { ownerId, workspaceId, eventKey: `${subjectType}.${action}` },
+      {
+        ownerId,
+        agentUserId: governedId,
+        workspaceId,
+        eventKey: `${subjectType}.${action}`,
+      },
       "Automation write denied by agent governance policy"
     );
     return { denied: true, reason: gov.reason };
@@ -349,7 +349,8 @@ export async function checkAutomationWriteOrPropose(
 
   if (gov.decision === "propose") {
     return proposeAutomationWrite({
-      agentUserId: ownerId,
+      agentUserId: governedId,
+      subjectUserId: ownerId,
       workspaceId,
       subjectType,
       action,
@@ -375,7 +376,7 @@ export async function checkAutomationWriteOrPropose(
   // write is packaged the same way a proposed one is (see the helper's contract
   // for why it is per RUN and not per row).
   await recordAutomationAutoApproveReceipt({
-    agentUserId: ownerId,
+    agentUserId: governedId,
     workspaceId,
     subjectType,
     action,
@@ -947,6 +948,7 @@ async function proposeAutomationWrite(opts: {
  */
 export async function proposeRulePlaybookRun(opts: {
   ownerId: string;
+  actorAgentUserId?: string | null;
   workspaceId: string;
   automationId: string;
   automationRunId?: string;
@@ -1175,18 +1177,8 @@ async function fileRulePlaybookRunProposal(
     subjectId,
   } = opts;
 
-  // Attribution: an agent-owned rule proposes AS that agent (the Reactions
-  // queue, the scorecard and the approval replay all read `agentUserId`); a
-  // human-owned rule's proposal is the human's own standing instruction, so it
-  // carries no agent — the same split `openRunSession` makes for run sessions.
-  // Read on the caller's executor: inside the batch transaction a second
-  // connection would wait on the lock this one holds.
-  const [ownerRow] = await executor
-    .select({ userType: users.userType })
-    .from(users)
-    .where(eq(users.id, ownerId))
-    .limit(1);
-  const agentUserId = ownerRow?.userType === "agent" ? ownerId : null;
+  // An agent-authored rule proposes as its agent; a person's own carries none.
+  const agentUserId = opts.actorAgentUserId ?? null;
 
   const targetId = playbookId ?? randomUUID();
   const correlationId = randomUUID();

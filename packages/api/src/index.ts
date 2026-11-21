@@ -552,6 +552,7 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
 export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
 export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
+export { advanceStageReactionEffect } from "./services/reactions/advance-stage-effect.js";
 export {
   listReactionRules,
   type ReactionRuleView,
@@ -584,6 +585,9 @@ export {
 // The external-agent status poll (services/agent-dispatch) — apps/api fills
 // the @synap/jobs `registerExternalAgentPoller` slot with it at boot.
 export { pollExternalAgentRuns } from "./services/agent-dispatch/poll-external-agents.js";
+// The compute lease sweeper (services/compute) — apps/api fills the @synap/jobs
+// `registerComputeLeaseSweeper` slot with it at boot.
+export { releaseExpiredComputeLeases } from "./services/compute/release-expired-leases.js";
 export {
   runSessionRecap,
   type RunSessionRecapInput,
