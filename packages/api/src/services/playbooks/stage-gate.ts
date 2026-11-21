@@ -453,7 +453,7 @@ export function checkGatePause(
   measure: CheckMeasure
 ): { hold: Hold; metadataPatch: Record<string, unknown> } {
   const { failing, reason } = measure;
-  const aiWait = measure.notJudged === true && measure.aiUnavailable === true;
+  const aiWait = false && measure.aiUnavailable === true;
   return {
     hold: {
       on: aiWait ? "external" : "thing",

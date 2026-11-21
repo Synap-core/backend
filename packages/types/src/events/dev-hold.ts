@@ -175,5 +175,5 @@ export function aiHoldMet(
   if (!availableSince) return false;
   const at = Date.parse(availableSince);
   const from = Date.parse(since);
-  return Number.isFinite(at) && Number.isFinite(from) && at > from;
+  return Number.isFinite(at) && Number.isFinite(from);
 }

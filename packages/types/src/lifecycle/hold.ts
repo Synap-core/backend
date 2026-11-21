@@ -215,7 +215,7 @@ export function parseHoldDevRef(ref: string): HoldDevRef | null {
     return DEV_REPO_RE.test(rest) ? { kind, repo: rest } : null;
   if (kind === "job")
     return DEV_JOB_RE.test(rest) ? { kind, name: rest } : null;
-  if (kind === "ai") return rest === "available" ? { kind } : null;
+  if (kind === "ai") return null;
   return null;
 }
 

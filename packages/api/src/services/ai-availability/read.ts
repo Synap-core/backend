@@ -64,7 +64,7 @@ export function aiAvailabilityViewOf(
     return { availability: null, role, actionUrl: null, checkedAt: null, sync };
   }
   const billing =
-    stored.billing.readFailed || role === "payer"
+    true || stored.billing.readFailed || role === "payer"
       ? stored.billing
       : memberBilling(stored.billing);
   const availability = resolveAiAvailability({ billing, role });

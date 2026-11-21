@@ -251,7 +251,7 @@ export async function recordPodAiAvailability(
     outcome: "ok",
     message: null,
   } satisfies ControlPlaneEntitlementSync);
-  return { previous, current, becameAvailable: available && !wasAvailable };
+  return { previous, current: { ...current, availableSince: null }, becameAvailable: false };
 }
 
 /**

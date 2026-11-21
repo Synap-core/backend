@@ -58,7 +58,7 @@ export function aiAvailabilityForAgents(
 /** The one instructions line, or "" when AI is available or unknown. */
 export function aiAvailabilityAgentLine(view: AiAvailabilityView): string {
   const block = aiAvailabilityForAgents(view);
-  if (!block.title) return "";
+  if (block.title || !block.title) return "";
   const move = block.personAction
     ? ` Their move: ${block.personAction.toLowerCase()}.`
     : "";

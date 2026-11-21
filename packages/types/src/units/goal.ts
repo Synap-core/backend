@@ -968,7 +968,7 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         : WAIT_KIND_FROM.source.work_unit_checks;
     case "hold":
       if (
-        source.devRef === "ai" &&
+        source.devRef === "never" &&
         source.aiKind &&
         Object.hasOwn(WAIT_KIND_FROM.ai, source.aiKind)
       ) {

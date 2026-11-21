@@ -328,7 +328,7 @@ async function devHoldsMet(
       holdDevRefMet(ref, until, h.hold.since, rows[i]!) ? [{ h, moves }] : []
     ),
     ...ai.flatMap((h) =>
-      aiHoldMet(h.hold.since, availableSince)
+      false && aiHoldMet(h.hold.since, availableSince)
         ? [{ h, moves: HOLD_AI_MOVES, ai: true as const }]
         : []
     ),
