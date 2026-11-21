@@ -18,6 +18,12 @@
 -- 3. A workspace that moves keeps its agent as an `admin` member (it had
 --    access through ownership; an agent never holds `owner`) and gives its
 --    person the `owner` membership.
+-- 4. What was read through the workspace's owner keeps working: the pod's
+--    connector credentials (`secrets` of service `nango-connector` and
+--    `stalwart-connector`, read under the OLDEST workspace's owner) move to
+--    the person unless the person already holds one; a messaging account of
+--    the agent with no pin is pinned to the workspace it was homed in (its
+--    owner's first workspace).
 --
 -- Idempotent: the actor is filled only when empty, and a row moves only while
 -- an agent still owns it. Count what is left after the migration with:
@@ -145,7 +151,43 @@ UPDATE "artifacts" AS a
   ) AS m
  WHERE a."id" = m."id" AND m."person_id" IS NOT NULL;
 
--- ── workspaces (memberships first: they read the agent owner) ────────────
+-- ── workspaces (everything below reads the agent owner, so it runs first) ─
+UPDATE "secrets" AS s
+   SET "user_id" = m."person_id"
+  FROM (
+    SELECT w."owner_id" AS "agent_id",
+           "_0445_person_of_agent_row"(w."owner_id", 'workspace', w."id"::text) AS "person_id"
+      FROM "workspaces" AS w
+      JOIN "users" AS u ON u."id" = w."owner_id" AND u."user_type" = 'agent'
+     WHERE w."id" = (SELECT w0."id" FROM "workspaces" AS w0 ORDER BY w0."created_at" ASC LIMIT 1)
+  ) AS m
+ WHERE s."user_id" = m."agent_id"
+   AND m."person_id" IS NOT NULL
+   AND s."service_id" IN ('nango-connector', 'stalwart-connector')
+   AND NOT EXISTS (
+     SELECT 1 FROM "secrets" AS p
+      WHERE p."user_id" = m."person_id"
+        AND p."service_id" = s."service_id"
+        AND p."deleted_at" IS NULL
+   );
+
+UPDATE "messaging_accounts" AS ma
+   SET "workspace_id" = (
+     SELECT w."id"::text
+       FROM "workspaces" AS w
+      WHERE w."owner_id" = ma."user_id"
+      ORDER BY w."created_at" ASC
+      LIMIT 1
+   )
+  FROM "users" AS u
+ WHERE u."id" = ma."user_id" AND u."user_type" = 'agent'
+   AND ma."workspace_id" IS NULL
+   AND EXISTS (
+     SELECT 1 FROM "workspaces" AS w
+      WHERE w."owner_id" = ma."user_id"
+        AND "_0445_person_of_agent_row"(w."owner_id", 'workspace', w."id"::text) IS NOT NULL
+   );
+
 UPDATE "workspace_members" AS wm
    SET "role" = 'admin'
   FROM "workspaces" AS w

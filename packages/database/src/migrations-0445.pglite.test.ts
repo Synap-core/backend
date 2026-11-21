@@ -7,6 +7,9 @@
  *     the person who created the agent; a humanless agent keeps its rows;
  *   - a moved workspace keeps its agent as an admin member and gives its
  *     person the owner membership;
+ *   - the pod's connector credentials, read under the oldest workspace's
+ *     owner, follow that owner; an agent's unpinned messaging account stays
+ *     homed in the workspace it was homed in;
  *   - a person's own rows are untouched; a second run changes nothing;
  *   - the baseline carries the columns; the boot coherence list names them.
  */
@@ -59,6 +62,10 @@ const snapshot = async () => ({
   members: await q(
     `SELECT workspace_id, user_id, role FROM workspace_members ORDER BY workspace_id, user_id`
   ),
+  secrets: await q(`SELECT id, user_id FROM secrets ORDER BY id`),
+  accounts: await q(
+    `SELECT id, workspace_id FROM messaging_accounts ORDER BY id`
+  ),
 });
 
 beforeAll(async () => {
@@ -89,7 +96,22 @@ beforeAll(async () => {
       "origin_kind" text NOT NULL DEFAULT 'user',
       "actor_id" text
     );
-    CREATE TABLE "workspaces" ("id" uuid PRIMARY KEY, "owner_id" text NOT NULL);
+    CREATE TABLE "workspaces" (
+      "id" uuid PRIMARY KEY,
+      "owner_id" text NOT NULL,
+      "created_at" timestamptz NOT NULL DEFAULT now()
+    );
+    CREATE TABLE "secrets" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "service_id" text,
+      "deleted_at" timestamptz
+    );
+    CREATE TABLE "messaging_accounts" (
+      "id" text PRIMARY KEY,
+      "user_id" text NOT NULL,
+      "workspace_id" text
+    );
     CREATE TABLE "workspace_members" (
       "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       "workspace_id" uuid,
@@ -123,10 +145,20 @@ beforeAll(async () => {
     INSERT INTO artifacts (id, user_id, origin_kind, actor_id) VALUES
       ('${A_AGENT}', '${AGENT}', 'user', NULL),
       ('${A_ACTOR_KEPT}', '${POD_AGENT}', 'agent', '${AGENT}');
-    INSERT INTO workspaces (id, owner_id) VALUES
-      ('${W_AGENT}', '${AGENT}'),
-      ('${W_POD}', '${POD_AGENT}'),
-      ('${W_ORPHAN}', '${ORPHAN}');
+    -- W_AGENT is the pod's oldest: the connector credentials live under its owner.
+    INSERT INTO workspaces (id, owner_id, created_at) VALUES
+      ('${W_AGENT}', '${AGENT}', '2026-01-01'),
+      ('${W_POD}', '${POD_AGENT}', '2026-02-01'),
+      ('${W_ORPHAN}', '${ORPHAN}', '2026-03-01');
+    INSERT INTO secrets (id, user_id, service_id) VALUES
+      ('sec-nango', '${AGENT}', 'nango-connector'),
+      ('sec-mail', '${AGENT}', 'stalwart-connector'),
+      ('sec-own', '${AGENT}', 'github'),
+      ('sec-pod-nango', '${POD_AGENT}', 'nango-connector');
+    INSERT INTO messaging_accounts (id, user_id, workspace_id) VALUES
+      ('acc-unpinned', '${AGENT}', NULL),
+      ('acc-pinned', '${AGENT}', '${W_POD}'),
+      ('acc-orphan', '${ORPHAN}', NULL);
     INSERT INTO workspace_members (workspace_id, user_id, role) VALUES
       ('${W_AGENT}', '${AGENT}', 'owner'),
       ('${W_AGENT}', '${PERSON}', 'admin'),
@@ -187,6 +219,23 @@ describe("migration 0445 — the person owns it, the agent is the actor", () => 
       { workspace_id: W_POD, user_id: ADMIN, role: "owner" },
       { workspace_id: W_POD, user_id: POD_AGENT, role: "admin" },
       { workspace_id: W_ORPHAN, user_id: ORPHAN, role: "owner" },
+    ]);
+  });
+
+  it("moves the pod's connector credentials with the oldest workspace's owner, and keeps an agent's account homed", async () => {
+    const s = await snapshot();
+    expect(s.secrets).toEqual([
+      { id: "sec-mail", user_id: PERSON },
+      { id: "sec-nango", user_id: PERSON },
+      // The agent's own credential stays the agent's.
+      { id: "sec-own", user_id: AGENT },
+      // Not the oldest workspace's owner: never read as the pod's.
+      { id: "sec-pod-nango", user_id: POD_AGENT },
+    ]);
+    expect(s.accounts).toEqual([
+      { id: "acc-orphan", workspace_id: null },
+      { id: "acc-pinned", workspace_id: W_POD },
+      { id: "acc-unpinned", workspace_id: W_AGENT },
     ]);
   });
 
