@@ -108,7 +108,6 @@ export async function notifyAiAvailabilityChange(
   if (was && was.kind === is.kind && was.mark === is.mark) {
     return { action: "none" };
   }
-  await deps.dismissOpen();
   const type = NOTICE_OF[is.kind];
   const copy = now ? aiAvailabilityCopy(now) : null;
   if (!type || !copy) return { action: "cleared" };

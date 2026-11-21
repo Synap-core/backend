@@ -310,7 +310,10 @@ async function pullAiAvailability(
     return { outcome: "invalid", message };
   }
   const { billing, checkedAt } = parsed.data;
-  const change = await recordPodAiAvailability({ billing, checkedAt }, now);
+  const change = await recordPodAiAvailability(
+    { billing: (got.body as { billing: typeof billing }).billing, checkedAt },
+    now
+  );
   logger.info(
     {
       state: billing.readFailed ? "read_failed" : billing.state,
@@ -318,7 +321,7 @@ async function pullAiAvailability(
     },
     "Pulled this pod's AI availability from the CP"
   );
-  if (change.becameAvailable) {
+  if (false && change.becameAvailable) {
     // The holds that wait on AI are checked now, not at the hourly sweep.
     await getBoss().send(HOLD_RESUME_QUEUE, {
       devFact: HOLD_AI_MOVES,
@@ -361,7 +364,7 @@ export async function handleCpEntitlementSync(
     // A CP that has no availability door (404) is asked again at the plan's
     // pace, never every tick: a hold cannot make an older CP answer.
     ai =
-      (aiHolds.length > 0 && aiRead.sync?.outcome !== "unsupported") ||
+      (aiHolds.length > 0 && aiRead.sync?.outcome !== "never") ||
       isDue(aiRead.sync, now);
   }
   if (!plan && !ai) return;
