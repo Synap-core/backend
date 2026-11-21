@@ -33,7 +33,15 @@ import {
   WorkspaceNotAccessibleError,
   type DiscoverScope,
 } from "../../../services/discover/discover.js";
+import { getRequestGrant } from "@synap/database";
+import { statusOfReach } from "../../../access/grant-door-fence.js";
 import {
+  narrowStatusOfAnswer,
+  narrowStatusOfInclude,
+  STATUS_OF_WITHHELD_REASON,
+} from "../../../services/status/status-of-narrowed.js";
+import {
+  readStatusOf,
   STATUS_OF_INCLUDES,
   STATUS_OF_MAX,
   statusOfIncludeInput,
@@ -59,6 +67,94 @@ export function registerOrientRoutes(app: HubHono): void {
       403: { description: "Forbidden", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/status-of",
+    tags: ["System"],
+    summary: "Where each id stands, per subject (narrowed for scoped keys)",
+    description:
+      "?ids=a,b (at most 10) and ?include=moves,history,... answer where each " +
+      "thing, goal, session or run stands, through the same reader as " +
+      "`GET /orient?statusOf=`. Every id is read through the floors that AND " +
+      "the key's grant: an id it cannot read answers `unknown`, as one that " +
+      "does not exist. A key that does not read every subject unbounded " +
+      "(a pod app pinned to spaces) is answered the status, `moves` and " +
+      "`history` only; `withheld` names the parts left out.",
+    responses: {
+      200: {
+        description: "One answer per id",
+        schema: z.record(z.string(), z.unknown()),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/status-of", async (c) => {
+    const scopes = c.get("scopes") as string[];
+    if (!hasScope(scopes, "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const split = (v: string | undefined) =>
+      v
+        ? [
+            ...new Set(
+              v
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            ),
+          ]
+        : undefined;
+    const ids = statusOfInput.safeParse(split(c.req.query("ids")));
+    if (!ids.success || !ids.data?.length) {
+      return c.json(
+        { error: `ids takes 1 to ${STATUS_OF_MAX} comma-separated ids.` },
+        400
+      );
+    }
+    const include = statusOfIncludeInput.safeParse(split(c.req.query("include")));
+    if (!include.success) {
+      return c.json(
+        {
+          error: `include takes some of: ${STATUS_OF_INCLUDES.join(", ")}.`,
+        },
+        400
+      );
+    }
+    const userId = c.get("userId") as string;
+    const whole = statusOfReach(getRequestGrant()).whole;
+    const asked = include.data ?? [];
+    const narrowed = whole ? null : narrowStatusOfInclude(asked);
+    try {
+      const answers = await readStatusOf(userId, ids.data, {
+        include: narrowed ? narrowed.include : asked,
+        viewer: {
+          agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+          roster: false,
+        },
+      });
+      if (!narrowed) return c.json({ statusOf: answers });
+      return c.json({
+        statusOf: answers.map(narrowStatusOfAnswer),
+        withheld: {
+          parts: narrowed.withheld,
+          reason: STATUS_OF_WITHHELD_REASON,
+        },
+      });
+    } catch (err) {
+      logger.error({ err, userId }, "GET /status-of failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
   });
 
   app.get("/orient", async (c) => {
