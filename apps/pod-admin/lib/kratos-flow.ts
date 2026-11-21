@@ -16,6 +16,7 @@ import {
   POD_PUBLIC_URL_CONFIGURATION_ERROR,
   publicPodUrl as runtimePublicPodUrl,
 } from "./public-pod-url";
+import { clearPersistedQueryCache } from "./query-persist";
 
 /**
  * Resolve the public Pod API URL from server-injected runtime configuration.
@@ -673,6 +674,9 @@ export async function listOtherSessions(): Promise<KratosSessionListItem[]> {
  * the caller says so rather than pretending the account changed.
  */
 export async function signOutInPlace(): Promise<void> {
+  // The page stays, the person changes: stop keeping the query cache for the
+  // old identity and wipe what was kept (`lib/query-persist.ts`).
+  await clearPersistedQueryCache();
   const created = await fetch(`${kratosPublic()}/self-service/logout/browser`, {
     credentials: "include",
     headers: { Accept: "application/json" },

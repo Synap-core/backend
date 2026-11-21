@@ -136,13 +136,19 @@ import { isAppPublicId } from "@synap-core/types/membrane";
 
 import { apiKeyService } from "./api-keys.js";
 import { attachGrantsOrRevoke } from "./key-grant.js";
-import { grantsForApprovedRequests } from "./app-connect.js";
+import {
+  appApprovalOf,
+  approvalGivesAnything,
+  grantsForApprovedRequests,
+} from "./app-connect.js";
+import type { AppAccess } from "@synap-core/types/grants";
 import { createAndVerifyHubInboundKey } from "./external-registration.js";
 import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { oauthKeyInstanceId } from "../routers/oauth/config.js";
 import {
   APP_PERSON_SCOPES,
   APP_PERSON_TOKEN_TTL_DAYS,
+  appSignInGrant,
   appSignInReach,
   intersectAppGrant,
   loadLiveApp,
@@ -280,6 +286,10 @@ export type MintPodAppPersonTokenResult =
       expiresAt: Date;
       /** What the token may touch: one entry per permission × space. */
       grant: AppGrantRequest[];
+      /** Its v2 reach, projects included (null: it keeps its pairs, Q3). */
+      access: AppAccess | null;
+      /** What "all" projects meant at this mint. */
+      allProjects: string[];
     }
   | {
       ok: false;
@@ -343,15 +353,17 @@ export async function mintPodAppPersonToken(args: {
     app.mode !== "oauth" ||
     app.oauthClientId !== args.oauthClientId ||
     app.ownerUserId !== person.id ||
-    (app.approvedRequests ?? []).length === 0
+    !approvalGivesAnything(appApprovalOf(app))
   ) {
     return { ok: false, reason: "app_unavailable" };
   }
   // The connection is the person's own (owner = person), so the reach rule
-  // never refuses WHO; it bounds WHAT: approval ∩ grantable now ∩ reach.
-  const reach = await appSignInReach(app, person.id);
-  const grant = reach === "not_for_you" ? [] : reach;
-  if (grant.length === 0) return { ok: false, reason: "nothing_left" };
+  // never refuses WHO; it bounds WHAT: approval ∩ grantable now ∩ reach,
+  // read from its v2 access (W3d: projects included).
+  const reach = await appSignInGrant(app, person.id);
+  if (reach === "not_for_you" || reach.scopes.length === 0)
+    return { ok: false, reason: "nothing_left" };
+  const grant = reach.pairs;
 
   const instanceId = personTokenInstanceId(app, person.id);
   const previous = await db
@@ -383,7 +395,9 @@ export async function mintPodAppPersonToken(args: {
     });
   }
 
-  const writes = grant.some((r) => r.permission.split(".").at(-1) !== "read");
+  const writes = reach.scopes.some((g) =>
+    g.permissions.some((p) => p.split(".").at(-1) !== "read")
+  );
   const minted = await createAndVerifyHubInboundKey(
     new ApiKeyRepository(db, new EventRepository(sql)),
     {
@@ -416,7 +430,7 @@ export async function mintPodAppPersonToken(args: {
     apiKeyId: minted.apiKey.id,
     principalUserId: person.id,
     onBehalfOf: person.id,
-    grants: grantsForApprovedRequests(grant).map((g) => ({
+    grants: reach.scopes.map((g) => ({
       ...g,
       label: `Signed in to ${app.name}`,
     })),
@@ -431,6 +445,8 @@ export async function mintPodAppPersonToken(args: {
     keyId: minted.apiKey.id,
     expiresAt: args.expiresAt,
     grant,
+    access: reach.access,
+    allProjects: reach.allProjects,
   };
 }
 
@@ -481,7 +497,7 @@ export async function classifyAppPersonKey(args: {
   ) {
     return { kind: "dead" };
   }
-  const reach = await appSignInReach(app, args.holderUserId);
+  const reach = await appSignInGrant(app, args.holderUserId);
   if (reach === "not_for_you") {
     // The rule refuses this person for good (the owner is no longer a pod
     // admin): END the token, not only this request, so nothing that reads its

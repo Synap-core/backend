@@ -35,6 +35,7 @@ export const hubAutomationsRouter = router({
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         state: z.record(z.string(), z.unknown()).optional(),
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -60,6 +61,7 @@ export const hubAutomationsRouter = router({
         status: input.status,
         metadata: input.metadata,
         state: input.state,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         agentUserId,
         source: agentUserId ? "agent" : "intelligence",
       });

@@ -86,6 +86,7 @@ import {
 } from "../../routers/proposals/display.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { resolvePrivateObjectLabel } from "@synap-core/types/vocabulary";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -181,7 +182,7 @@ export interface GraphNeighbor extends GraphNode {
     // vault_grants (capability grants) — NOT mirrored into `links`, folded in
     // read-time for capability/tool/skill/command↔agent bindings.
     | "grant"
-    // automations.createdBy ownership — an agent → the automations it authored.
+    // automations.agent_user_id — an agent → the automations it authored.
     | "automation"
     // ── The TEMPORAL half (why-spine) ────────────────────────────────────────
     // Neither of these is a stored EDGE: both are derived at read time from the
@@ -777,7 +778,9 @@ export async function getLinkNeighbors(
       // The hydrated kind: an intake-source document is emitted as `capture`.
       kind: node?.kind ?? r.kind,
       id: r.id,
-      name: node?.name ?? r.id,
+      // A hidden far end is named by the private placeholder, never by its
+      // id: every reader (browser, relay, an agent's get_graph) shows `name`.
+      name: node?.name ?? (hidden ? resolvePrivateObjectLabel(r.kind) : r.id),
       subtype: node?.subtype ?? null,
       subtypes: node?.subtypes ?? [],
       workspaceId: node?.workspaceId ?? null,
@@ -886,7 +889,7 @@ function agentFloor(userId: string) {
  *  - focus agent → the tools/skills/commands/secrets granted TO it
  *    (`vault_grants WHERE granted_to = <agent's agent-user id>`), PLUS the
  *    channels it is assigned to / an ai_agent member of, and the automations it
- *    created (`automations.createdBy = <agent-user id>`).
+ *    authored (`automations.agent_user_id = <agent-user id>`).
  *
  * Every far endpoint is hydrated through `hydrateNodes`, so it inherits the SAME
  * visibility floor as every other neighbour — an endpoint in a workspace the
@@ -1078,14 +1081,14 @@ export async function getGovernanceNeighbors(
       }
     }
 
-    // B3. Automations the agent CREATED (automations.createdBy = agent-user id).
-    // This is the owner-approved definition of agent→automations; the
-    // "runs/governs" dimension has no stored link (see report).
+    // B3. Automations the agent AUTHORED (their actor, automations.agent_user_id;
+    // the owner is the person). The "runs/governs" dimension has no stored
+    // link (see report).
     if (agentUserId) {
       const autoRows = await db
         .select({ id: automations.id })
         .from(automations)
-        .where(eq(automations.createdBy, agentUserId));
+        .where(eq(automations.agentUserId, agentUserId));
       const autoIds = autoRows.map((r) => r.id);
       if (autoIds.length > 0) {
         const autoNodes = await hydrateNodes(

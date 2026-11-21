@@ -30,9 +30,12 @@
  * With no `viewer` the reader may do nothing (both `false`). A check that
  * fails to read offers nothing, never a button the door might refuse.
  *
+ * Each item also carries the session's OUTCOMES: THE section `synap_get_session`
+ * reads (`readSessionOutcomesSection`), one per listed session.
+ *
  * THROWS when the session lists cannot be read; the caller answers the part
- * `unavailable`. A packet or a run read that fails makes only ITS sections
- * `unavailable`, never the whole part.
+ * `unavailable`. A packet, a run or an outcomes read that fails makes only
+ * ITS sections `unavailable`, never the whole part.
  */
 import {
   and,
@@ -231,8 +234,11 @@ export async function readStatusWork(
     for (const { row } of l.items) sessions.set(row.id, row);
   }
   const ids = [...sessions.keys()];
-  const { projectContinuationPacket } =
-    await import("../focus-sessions/continuation-packet.js");
+  const [{ projectContinuationPacket }, { readSessionOutcomesSection }] =
+    await Promise.all([
+      import("../focus-sessions/continuation-packet.js"),
+      import("../focus-sessions/session-outputs.js"),
+    ]);
   const packets = new Map<
     string,
     Promise<ContinuationPacket | { failed: string }>
@@ -248,6 +254,14 @@ export async function readStatusWork(
           return { failed: "Where this session stands could not be read." };
         }
       ),
+    ])
+  );
+  // THE outcomes section `synap_get_session` reads, under the same floor; it
+  // never throws (a failed read is its own `unavailable`).
+  const outcomes = new Map(
+    ids.map((id) => [
+      id,
+      readSessionOutcomesSection({ db, userId, sessionId: id }),
     ])
   );
   const runs = newestRuns(ids).catch((err: unknown) => {
@@ -281,11 +295,14 @@ export async function readStatusWork(
     return null;
   });
 
-  const [runRows, holdRows, packetOf] = await Promise.all([
+  const [runRows, holdRows, packetOf, outcomesOf] = await Promise.all([
     runs,
     holds,
     Promise.all(
       ids.map(async (id) => [id, await packets.get(id)!] as const)
+    ).then((pairs) => new Map(pairs)),
+    Promise.all(
+      ids.map(async (id) => [id, await outcomes.get(id)!] as const)
     ).then((pairs) => new Map(pairs)),
   ]);
   const [mayContinue, mayReview] = await Promise.all([
@@ -326,6 +343,7 @@ export async function readStatusWork(
             runRows === null
               ? { failed: "Its run could not be read." }
               : (runRows.get(id) ?? null),
+          outcomes: outcomesOf.get(id)!,
           ...(hold ? { hold } : {}),
           may: { continue: mayContinue.has(id), review: mayReview },
           link: openLink(id),

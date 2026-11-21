@@ -1184,7 +1184,7 @@ export async function mergeProposalRevision(
     }
 
     // A revision that changes the PAYLOAD was checked before the lock by
-    // what its approval will run (`REVISED_PAYLOAD_VALIDATORS`); refused here,
+    // the one check its filing ran (`checkRevisedPayload`); refused here,
     // after authority and the PENDING check, so a refusal is never an
     // existence oracle. Judged against the row as read then: a payload that
     // moved in between is refused rather than stored unchecked.
@@ -1369,52 +1369,46 @@ function failureSummaryOf(data: unknown): string | null {
 }
 
 /**
- * Per-target validators for a revised PAYLOAD, keyed `targetType/changeType`
- * — the same key the approve executors register under. Each runs what that
- * executor's replay will run, so a revision it would fail is refused at revise
- * time (BAD_REQUEST, nothing changed) on all three revise doors, instead of
+ * A revised PAYLOAD is judged by the ONE check its filing ran
+ * (`proposalCannotApply`, `can-apply.ts`, keyed like the approve executors):
+ * what that kind's approval would refuse is refused at revise time
+ * (BAD_REQUEST, nothing changed) on all three revise doors, instead of
  * landing as an approval failure. Revise itself stays generic: no
  * target-specific tool or field list, only this hook. Composite `operations`
  * have their own pre-lock preflight (`validateRevisedOperations`).
  */
-const REVISED_PAYLOAD_VALIDATORS: Record<
-  string,
-  (payload: Record<string, unknown>) => Promise<void>
-> = {
-  "playbook/create": async (payload) =>
-    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
-      "create",
-      payload
-    ),
-  "playbook/update": async (payload) =>
-    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
-      "update",
-      payload
-    ),
-  // A revised shell command is judged by the same policy the Hub door files
-  // it under (audit F1): otherwise a revise is a way around the denylist.
-  "command/execute": async (payload) => {
-    const { commandPolicyRefusal } = await import("@synap/governance-policy");
-    const refusal = commandPolicyRefusal(payload.command);
-    if (refusal) throw new Error(refusal);
-  },
-};
-
 async function checkRevisedPayload(
   params: MergeProposalRevisionParams
 ): Promise<{ base: string; problem: string | null } | null> {
   if (!params.patch) return null;
   const [row] = await db
-    .select({ data: proposals.data })
+    .select({
+      data: proposals.data,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      proposalType: proposals.proposalType,
+      workspaceId: proposals.workspaceId,
+      subjectUserId: proposals.subjectUserId,
+      agentUserId: proposals.agentUserId,
+      sessionId: proposals.sessionId,
+    })
     .from(proposals)
     .where(eq(proposals.id, params.proposalId))
     .limit(1);
   // Absent row: the locked read answers NOT_FOUND.
   if (!row) return null;
   const before = (row.data ?? {}) as Record<string, unknown>;
-  const validate =
-    REVISED_PAYLOAD_VALIDATORS[`${before.targetType}/${before.changeType}`];
-  if (!validate) return null;
+  // The kind as the request envelope names it (what the approve executors
+  // replay), else as the row's columns do (a flat payload: capability.run).
+  const targetType =
+    typeof before.targetType === "string" ? before.targetType : row.targetType;
+  const proposalType =
+    typeof before.changeType === "string"
+      ? before.changeType
+      : row.proposalType;
+  const { proposalCannotApply, isCheckedProposalKind } =
+    await import("./can-apply.js");
+  if (!isCheckedProposalKind(targetType, proposalType)) return null;
   let merged: Record<string, unknown>;
   try {
     ({ merged } = computeRevisedEnvelope({
@@ -1440,17 +1434,23 @@ async function checkRevisedPayload(
   if (JSON.stringify(payloadOf(before)) === JSON.stringify(payload)) {
     return null;
   }
-  try {
-    await validate(payload);
-    return { base, problem: null };
-  } catch (err) {
-    return {
-      base,
-      problem:
-        `Revision refused — the revised ${String(before.targetType)} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
-        (err instanceof Error ? err.message : String(err)),
-    };
-  }
+  const refusal = await proposalCannotApply({
+    targetType,
+    targetId: row.targetId,
+    proposalType,
+    data: merged,
+    userId: row.subjectUserId ?? params.actorId ?? "",
+    workspaceId: row.workspaceId ?? null,
+    agentUserId: row.agentUserId ?? null,
+    sessionId: row.sessionId ?? null,
+  });
+  return {
+    base,
+    problem: refusal
+      ? `Revision refused — the revised ${targetType} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
+        refusal.message
+      : null,
+  };
 }
 
 /**

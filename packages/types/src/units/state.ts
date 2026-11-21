@@ -29,6 +29,7 @@
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import { isWaitKind, waitKindBall, type WaitKind } from "./wait-kind.js";
+import { sessionStatusCategory } from "../focus-sessions/statuses.js";
 
 export const UNIT_STATES = [
   "not_started",
@@ -493,8 +494,9 @@ export const RUN_STATUS_WAITING_ON_YOU = "waiting_on_you";
  * A RUN's lifecycle status (`automation_runs` / `playbook_runs` / the unified
  * runs read) as a unit-state input — so a run wears the same mark a session
  * does. `waiting_on_you` is your turn (`needs_you`), never a failure;
- * `blocked_by_policy` is `blocked` (a rule stopped it); an unknown or absent
- * status is `unmeasured`, never a guess at calm.
+ * `blocked_by_policy` is `blocked` (a rule stopped it); `paused` and `stale`
+ * are `paused`; an unknown or absent status is `unmeasured`, never a guess at
+ * calm.
  */
 export function unitStateInputOfRunStatus(
   status: string | null | undefined
@@ -520,7 +522,12 @@ export function unitStateInputOfRunStatus(
     case "skipped":
       return { terminal: true };
     default:
-      return { unreadable: true };
+      // The `paused` CATEGORY reads paused (quiet, resumable), never
+      // unmeasured: the feed's `paused`, and the reaper's stored `stale` on a
+      // run or a session (founder, 2026-11-20: stale = paused everywhere).
+      return sessionStatusCategory(status) === "paused"
+        ? { idle: true }
+        : { unreadable: true };
   }
 }
 

@@ -42,14 +42,13 @@ import {
 import type { db as Db } from "@synap/database";
 import {
   CRITERION_SLOT_KIND,
+  isTerminalSessionStatus,
   latestEvaluationPerCriterion,
   type EvaluationRowLike,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, readCriteria } from "@synap/playbooks";
 import { isUuid } from "@synap-core/types/property-render";
 import { FOCUS_SESSION_CLOSED_EVENT_TYPE } from "../workers/automation-trigger-matcher.js";
-
-const TERMINAL = new Set(["closed", "cancelled", "failed"]);
 
 /**
  * How far back the runs that teach a playbook are read (the lessons scanner's
@@ -234,7 +233,8 @@ export function projectPlaybookScorecard(
       evaluated: closed.filter((s) => bySession.has(s.id)).length,
       reopened: sessions.filter(
         (s) =>
-          s.closeEvents >= 2 || (s.closeEvents >= 1 && !TERMINAL.has(s.status))
+          s.closeEvents >= 2 ||
+          (s.closeEvents >= 1 && !isTerminalSessionStatus(s.status))
       ).length,
       instantiated: sessions.filter((s) => !s.attached).length,
       attached: sessions.filter((s) => s.attached).length,

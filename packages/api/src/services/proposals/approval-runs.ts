@@ -37,6 +37,16 @@
  * the approval goes on instead of stopping again.
  *
  * Small approvals never come here: they keep today's synchronous apply.
+ *
+ * AN APPROVED RUN OF AN ASYNC VERB comes here too (agent report 48dbf93b,
+ * 18 Nov 2026): approving `fal_generate_image` ran the billed generation inside
+ * the approve request, the request outlived the client's wait, and the person
+ * saw an error for a run that had succeeded. A `capability.run` proposal whose
+ * verb DECLARES `executionMode: "async"` (the catalog's word for "this takes a
+ * while") is applied by the same job: the approve returns at once with the
+ * run (`kind: "run"`, one step), the job runs it through the same executor, and
+ * the proposal then carries the run's real result (`data.runResult`) or the
+ * run row its failure.
  */
 
 import { TRPCError } from "@trpc/server";
@@ -50,6 +60,7 @@ import {
   lt,
   proposalApplyRuns,
   proposals,
+  skills,
   type ProposalApplyRunRow,
 } from "@synap/database";
 import { config, createLogger } from "@synap-core/core";
@@ -66,6 +77,7 @@ import type { Context } from "../../context.js";
 import type { MaterializeProgress } from "../../utils/materialize-composite.js";
 import { readWeakDedupWire } from "../../utils/weak-dedup-wire.js";
 import { notifyUnseenApprovalFailure } from "./unseen-approval-failure.js";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "./proposal-class.js";
 import {
   classifyThrownFailure,
   safeFailureSentence,
@@ -85,6 +97,13 @@ export const BACKGROUND_APPROVAL_MIN_OPERATIONS = 100;
 
 /** A running attempt whose heartbeat is older than this has stopped. */
 export const APPROVAL_RUN_STALE_AFTER_MS = 5 * 60_000;
+
+/**
+ * A running job beats at least this often even when it reports no progress: a
+ * verb's run makes no progress writes, and a run longer than the stale window
+ * would otherwise read `stalled` while it works.
+ */
+export const APPROVAL_RUN_HEARTBEAT_MS = 60_000;
 
 /** At most one progress write per this interval (plus every phase change). */
 export const APPROVAL_PROGRESS_WRITE_INTERVAL_MS = 1_000;
@@ -106,10 +125,17 @@ export interface ApprovalViaApp {
   name: string;
 }
 
+/**
+ * What the background applies: a large graph's `records`, or one approved
+ * verb's `run` (its copy says "running", never "creating records").
+ */
+export type ApprovalRunKind = "records" | "run";
+
 /** One attempt, as every reader sees it. */
 export interface ApprovalRunView {
   runId: string;
   proposalId: string;
+  kind: ApprovalRunKind;
   /** `stalled` = stored `running`, but its heartbeat stopped. */
   state: "queued" | "running" | "succeeded" | "failed" | "stalled";
   phase: "entities" | "relations" | "finishing" | null;
@@ -162,6 +188,33 @@ export function shouldApplyInBackground(data: unknown): boolean {
   return countApprovalOperations(data) >= BACKGROUND_APPROVAL_MIN_OPERATIONS;
 }
 
+/** The kind a proposal's background attempt reads as, from its type alone. */
+function runKindOf(proposalType: string | null | undefined): ApprovalRunKind {
+  return proposalType === CAPABILITY_RUN_PROPOSAL_TYPE ? "run" : "records";
+}
+
+/**
+ * Does this proposal apply in the background, and as what? A large graph
+ * (`records`), or a `capability.run` of a verb that declares itself async
+ * (`run`, read from the verb's own row: the catalog decides, never a verb
+ * name here). Null: it applies in the request, as before.
+ */
+export async function backgroundApprovalKind(proposal: {
+  proposalType?: string | null;
+  data: unknown;
+}): Promise<ApprovalRunKind | null> {
+  if (shouldApplyInBackground(proposal.data)) return "records";
+  if (proposal.proposalType !== CAPABILITY_RUN_PROPOSAL_TYPE) return null;
+  const skillId = (proposal.data as { skillId?: unknown } | null)?.skillId;
+  if (typeof skillId !== "string" || !skillId) return null;
+  const [verb] = await db
+    .select({ executionMode: skills.executionMode })
+    .from(skills)
+    .where(eq(skills.id, skillId))
+    .limit(1);
+  return verb?.executionMode === "async" ? "run" : null;
+}
+
 function isStale(row: ProposalApplyRunRow, now: number): boolean {
   return (
     row.status === "running" &&
@@ -172,6 +225,7 @@ function isStale(row: ProposalApplyRunRow, now: number): boolean {
 /** The projection every reader gets. */
 export function toApprovalRunView(
   row: ProposalApplyRunRow,
+  kind: ApprovalRunKind,
   now: number = Date.now()
 ): ApprovalRunView {
   const stalled = isStale(row, now);
@@ -185,6 +239,7 @@ export function toApprovalRunView(
   return {
     runId: row.id,
     proposalId: row.proposalId,
+    kind,
     state: stalled ? "stalled" : row.status,
     phase: row.phase ?? null,
     total: row.total,
@@ -214,13 +269,16 @@ export function toApprovalRunView(
 export async function readLatestApprovalRun(
   proposalId: string
 ): Promise<ApprovalRunView | null> {
-  const [row] = await db
-    .select()
+  const [found] = await db
+    .select({ run: proposalApplyRuns, proposalType: proposals.proposalType })
     .from(proposalApplyRuns)
+    .innerJoin(proposals, eq(proposals.id, proposalApplyRuns.proposalId))
     .where(eq(proposalApplyRuns.proposalId, proposalId))
     .orderBy(desc(proposalApplyRuns.createdAt))
     .limit(1);
-  return row ? toApprovalRunView(row) : null;
+  return found
+    ? toApprovalRunView(found.run, runKindOf(found.proposalType))
+    : null;
 }
 
 /**
@@ -301,7 +359,8 @@ async function assertMayResume(
 
 function queuedResult(
   row: ProposalApplyRunRow,
-  joined: boolean
+  joined: boolean,
+  kind: ApprovalRunKind
 ): {
   success: true;
   queued: true;
@@ -312,31 +371,37 @@ function queuedResult(
     success: true,
     queued: true,
     joined,
-    approvalRun: toApprovalRunView(row),
+    approvalRun: toApprovalRunView(row, kind),
   };
 }
 
 /**
  * Called by `applyProposalApproval` AFTER its gates, for a composite
- * proposal. Returns the queued result when the approval went to the
+ * proposal or a capability run. Returns the queued result when the approval went to the
  * background (or joined one already running), null when it applies in this
  * request. Never runs for a caller that did not opt in (`background`), except
  * to refuse a second, synchronous apply of a proposal that is being applied.
  */
 export async function handOffBackgroundApproval(args: {
-  proposal: { id: string; data: unknown; revisionHistory?: unknown };
+  proposal: {
+    id: string;
+    data: unknown;
+    proposalType?: string | null;
+    revisionHistory?: unknown;
+  };
   userId: string;
   input: BackgroundApprovalInput;
   ctx: Pick<Context, "workspaceId">;
   viaApp: ApprovalViaApp | null;
   background: boolean;
 }): Promise<ReturnType<typeof queuedResult> | null> {
-  // Below the threshold no run can exist (only large proposals get one), so a
-  // small approval pays no read and keeps its synchronous apply unchanged.
-  if (!shouldApplyInBackground(args.proposal.data)) return null;
+  // Below the threshold no run can exist (only large proposals and async
+  // verbs get one), so a small approval keeps its synchronous apply unchanged.
+  const kind = await backgroundApprovalKind(args.proposal);
+  if (!kind) return null;
   const active = await activeApprovalRun(args.proposal.id);
   if (active) {
-    if (args.background) return queuedResult(active, true);
+    if (args.background) return queuedResult(active, true, kind);
     throw new TRPCError({
       code: "CONFLICT",
       message: `This proposal is being applied right now (${active.done} of ${active.total}). Wait for it to finish.`,
@@ -354,7 +419,8 @@ export async function handOffBackgroundApproval(args: {
       proposalId: args.proposal.id,
       userId: args.userId,
       status: "queued",
-      total: countApprovalOperations(args.proposal.data),
+      // A run is one step: done when the verb has run.
+      total: kind === "run" ? 1 : countApprovalOperations(args.proposal.data),
       input: JSON.parse(JSON.stringify(args.input ?? {})),
       viaApp: args.viaApp,
       requestWorkspaceId: args.ctx.workspaceId ?? null,
@@ -365,7 +431,7 @@ export async function handOffBackgroundApproval(args: {
     .returning();
   if (!row) {
     const winner = await activeApprovalRun(args.proposal.id);
-    if (winner) return queuedResult(winner, true);
+    if (winner) return queuedResult(winner, true, kind);
     throw new TRPCError({
       code: "CONFLICT",
       message: "This proposal was just being applied. Reload it and try again.",
@@ -401,10 +467,10 @@ export async function handOffBackgroundApproval(args: {
     });
   }
   logger.info(
-    { runId: row.id, proposalId: args.proposal.id, total: row.total },
-    "large approval handed to the background"
+    { runId: row.id, proposalId: args.proposal.id, total: row.total, kind },
+    "approval handed to the background"
   );
-  return queuedResult(row, false);
+  return queuedResult(row, false, kind);
 }
 
 /**
@@ -536,6 +602,24 @@ export async function runApprovalJob(payload: {
   }
 
   const progress = approvalProgressWriter(run.id);
+  // A verb's run reports no progress: beat anyway, so a run longer than the
+  // stale window is not read as stopped while it works.
+  const beat = setInterval(() => {
+    const at = new Date();
+    void db
+      .update(proposalApplyRuns)
+      .set({ heartbeatAt: at, updatedAt: at })
+      .where(
+        and(
+          eq(proposalApplyRuns.id, run.id),
+          eq(proposalApplyRuns.status, "running")
+        )
+      )
+      .catch((err: unknown) =>
+        logger.warn({ err, runId: run.id }, "background approval: beat failed")
+      );
+  }, APPROVAL_RUN_HEARTBEAT_MS);
+  beat.unref?.();
   try {
     const proposal = await db.query.proposals.findFirst({
       where: eq(proposals.id, run.proposalId),
@@ -641,5 +725,7 @@ export async function runApprovalJob(payload: {
     // while the proposal is still undecided (plan 8032a127 D6).
     await notifyUnseenApprovalFailure(run.proposalId, { sentence });
     return { status: "failed" };
+  } finally {
+    clearInterval(beat);
   }
 }

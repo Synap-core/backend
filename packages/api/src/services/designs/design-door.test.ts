@@ -406,6 +406,37 @@ describe("no catalog installed: an error, never an empty catalog", () => {
     });
   });
 
+  it("design.catalog: the summary and chosen blocks both carry the hash; the summary has no select options", async () => {
+    const summary = await designCatalog("owner-1", null, {
+      detail: "summary",
+    });
+    expect(summary).toMatchObject({
+      kitId: "synap",
+      hash: "h-1",
+      detail: "summary",
+      components: { SpatialButton: { variant: "select" } },
+      layout: { Section: { children: "slot" }, Text: { text: "text" } },
+    });
+    expect(JSON.stringify(summary.components)).not.toContain("primary");
+    const chosen = await designCatalog("owner-1", null, {
+      detail: "summary",
+      components: ["SpatialButton", "Missing"],
+    });
+    expect(chosen).toMatchObject({
+      hash: "h-1",
+      detail: "full",
+      components: { SpatialButton: CATALOG.components.SpatialButton },
+      layout: {},
+      unknown: ["Missing"],
+    });
+    // Called with no view (the Hub route's default): the full catalog.
+    expect(await designCatalog("owner-1")).toMatchObject({
+      detail: "full",
+      components: CATALOG.components,
+      layout: CATALOG.layout,
+    });
+  });
+
   it("a catalog the pod cannot read is refused, not read as empty", async () => {
     h.catalogRows = [{ metadata: { designCatalog: { kitId: "synap" } } }];
     await expect(designCatalog("owner-1")).rejects.toThrow(/cannot read/);

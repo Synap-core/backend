@@ -182,7 +182,11 @@ describe("system-written reasoning is not stored as the proposer's", () => {
         agentUserId: "agent-7",
         subjectType: "playbook",
         action: "create",
-        data: { name: "Evaluate an integration candidate" },
+        data: {
+          name: "Evaluate an integration candidate",
+          goalTemplate:
+            "Evaluate the candidate against the integration checklist.",
+        },
       })
     );
     expect(mockInsertPendingProposal).toHaveBeenCalledTimes(1);

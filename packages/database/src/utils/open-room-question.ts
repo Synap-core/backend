@@ -31,10 +31,8 @@ import type { QuestionClosed } from "@synap-core/types/ask";
 import type { db } from "../client-pg.js";
 import { messages, MessageAuthorType } from "../schema/messages.js";
 import { focusSessions } from "../schema/focus-sessions.js";
-import {
-  owedSlotExistsIn,
-  OPEN_SESSION_STATUSES,
-} from "./owed-slot-predicate.js";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import { owedSlotExistsIn } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
 
 /** The `messages.metadata` key a room post's kind / slot / answer live under. */
@@ -110,7 +108,7 @@ export function openRoomQuestionIn(channelId: AnyPgColumn | SQL): SQL {
 }
 
 const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
-  OPEN_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
+  UNDERWAY_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
 );
 
 /**

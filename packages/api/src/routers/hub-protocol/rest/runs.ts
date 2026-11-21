@@ -31,6 +31,7 @@ import { reviveSessionForWrite } from "../../../services/focus-sessions/revive-s
 import { cancelRun } from "../../../services/agent-dispatch/cancel-run.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { listRuns, getRun } from "../../../services/runs/index.js";
+import { RUN_STATUSES } from "../../../services/runs/types.js";
 import { readRunRecordForKey } from "../../../services/runs/run-record-for-key.js";
 import { runDetailReadable } from "../../../access/grant-door-fence.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
@@ -54,16 +55,7 @@ const FlowTypeSchema = z.enum([
   "session",
   "chat",
 ]);
-const RunStatusSchema = z.enum([
-  "running",
-  "completed",
-  "failed",
-  "proposed",
-  "cancelled",
-  "skipped",
-  "blocked_by_policy",
-  "waiting_on_you",
-]);
+const RunStatusSchema = z.enum(RUN_STATUSES);
 
 // ── Wire schemas ─────────────────────────────────────────────────────────────
 

@@ -10,13 +10,8 @@
  * run it dispatched (see `poll-external-agents.ts`).
  */
 
-import {
-  db,
-  inArray,
-  LIVE_RUN_STATUSES,
-  setRunStatus,
-  type WorkUnitActor,
-} from "@synap/database";
+import { db, inArray, setRunStatus, type WorkUnitActor } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import { entities } from "@synap/database/schema";
 import type { PlaybookRun } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";

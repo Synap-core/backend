@@ -23,7 +23,12 @@ import {
   requestInstallation,
   requestPodInstall,
 } from "../../../services/installations/request-installation.js";
-import { ok, requireScope, type McpHandlerMap } from "./shared.js";
+import {
+  ok,
+  readReasoning,
+  requireScope,
+  type McpHandlerMap,
+} from "./shared.js";
 import { fullUuidError } from "../tool-errors.js";
 
 /** Where a refused capability CAN go: its computer blocks, read once. */
@@ -174,6 +179,9 @@ export const installationHandlers: McpHandlerMap = {
         action,
         version,
         ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(readReasoning(ctx.args)
+          ? { reasoning: readReasoning(ctx.args) }
+          : {}),
         fromCatalog: true,
       });
       if (out.status !== "refused") return ok(out);

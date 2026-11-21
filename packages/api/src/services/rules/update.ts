@@ -68,9 +68,11 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { classifyRuleIntent } from "../knowledge/classify-intent.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import {
+  PROSE_RULE_EDIT_MESSAGE,
   RULE_CATEGORY,
   RULE_METADATA_KEY,
   buildRuleMetadata,
+  isProseRule,
   linkRuleHalves,
   readRuleMetadata,
   ruleNameFromIntent,
@@ -156,6 +158,8 @@ export interface UpdateRuleGovernedInput {
    */
   draft?: boolean;
   auditSource?: string;
+  /** WHY this write — shown to the reviewer when an agent's call is proposed. */
+  reasoning?: string;
   /**
    * A NEW template stamp — set only by the template-rule applier when it
    * updates a rule its owner never touched. Absent ⇒ the stored seed is
@@ -227,8 +231,9 @@ export async function updateRuleGoverned(
   if (!existing) {
     return {
       status: "denied",
-      reason:
-        "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
+      reason: isProseRule(row)
+        ? PROSE_RULE_EDIT_MESSAGE
+        : "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
     };
   }
 
@@ -328,6 +333,7 @@ export async function updateRuleGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "rule",
     action: "update",
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // FULL payload — an approved edit must reproduce THIS edit, not a labelled
     // shell. `id` is the rule being changed, so the executor re-enters this same
     // door rather than creating a second rule.

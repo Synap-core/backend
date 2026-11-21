@@ -64,6 +64,7 @@ import {
 import type { SessionReader } from "../../access/session-visibility.js";
 import {
   resolveSessionTitle,
+  sessionClosedAs,
   sessionStatusCategory,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
@@ -94,6 +95,7 @@ import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { closedNotDoneRecordedSql } from "./session-closed-as.js";
 import { projectTriage } from "./triage.js";
 import { stagesLeft } from "../runs/stages-left.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -300,6 +302,7 @@ async function readEdges(
       title: focusSessions.title,
       goal: focusSessions.goal,
       status: focusSessions.status,
+      closedNotDone: closedNotDoneRecordedSql().as("closed_not_done"),
       rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${statusOrder}, ${focusSessions.createdAt} asc)`.as(
         "rn"
       ),
@@ -333,6 +336,7 @@ async function readEdges(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
     })
   );
 }

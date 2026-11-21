@@ -11,7 +11,11 @@
  * The skill read and the gate are stubbed; `planRecipeRun` (the plan the
  * approval runs, proven on PGlite in `hosted-verbs.pglite.test.ts`) answers
  * what each case needs; the assertion is on what reaches
- * `createPendingProposal`, the row that would be inserted.
+ * `createPendingProposal`, the row that would be inserted. The check is the
+ * ONE filing check (`can-apply.ts`), which `createPendingProposal` asks
+ * first: the stub below asks it the same way, for real (that the real door
+ * asks it is `can-apply.pglite.test.ts` and tripwire
+ * `filing-and-approval-share-the-check`).
  *
  * NOT covered: the MCP / Hub wrappers' rendering of `kind:"deny"` (they
  * forward `reason` and `reasonCode`; see capability.ts / capabilities-execute.ts).
@@ -45,6 +49,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         from: () => ({
           where: () => ({
             orderBy: () => ({ limit: async () => [SKILL_ROW] }),
+            // The one filing check reads the verb by id.
+            limit: async () => [SKILL_ROW],
           }),
         }),
       }),
@@ -69,6 +75,12 @@ vi.mock("../../utils/permission-check.js", async (importOriginal) => {
   return {
     ...actual,
     createPendingProposal: async (input: Record<string, unknown>) => {
+      const { proposalCannotApply, ProposalCannotApplyError } =
+        await import("../proposals/can-apply.js");
+      const refusal = await proposalCannotApply(
+        input as unknown as Parameters<typeof proposalCannotApply>[0]
+      );
+      if (refusal) throw new ProposalCannotApplyError(refusal);
       h.proposals.push(input);
       return { id: `prop-${h.proposals.length}` };
     },

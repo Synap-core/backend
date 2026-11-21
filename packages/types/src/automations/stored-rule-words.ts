@@ -202,7 +202,12 @@ export function ruleWhenWords(
       (typeof config.expression === "string" && config.expression) ||
       (typeof config.cron === "string" && config.cron) ||
       "";
-    return { text: cronWords(expr) ?? "On a custom schedule", ...none };
+    const timezone =
+      typeof config.timezone === "string" ? config.timezone : undefined;
+    return {
+      text: cronWords(expr, timezone) ?? "On a custom schedule",
+      ...none,
+    };
   }
   if (triggerType !== "event") {
     return { text: fallback?.trim() || humanizeToken(triggerType), ...none };

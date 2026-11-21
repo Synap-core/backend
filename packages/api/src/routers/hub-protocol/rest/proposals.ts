@@ -37,6 +37,7 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { filingRefusalOf } from "../../../services/proposals/can-apply.js";
 import { getRequestGrant } from "@synap/database";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { fencedProposalVerdict } from "../../../access/fenced-proposal.js";
@@ -59,6 +60,7 @@ import {
   identityResolutionByRefInput,
   identityResolutionInput,
 } from "../../proposals/executors/identity-resolution.js";
+import { ACCESS_DOORS } from "../../../services/proposals/proposal-class.js";
 
 /** Page size when the caller names none — matches the historical tRPC default,
  *  so an existing caller that sends no `limit` sees byte-identical membership. */
@@ -1250,6 +1252,25 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // A proposal whose approval changes WHO MAY ACT (a credential, a
+    // membership, a role, an exposure: `ACCESS_DOORS`) is never filed from
+    // caller data (review of #1197). Its executor applies what the row
+    // carries (`app/connect`'s access, `agent/connect`'s key and requests),
+    // so a row filed here could name one principal on its card and act on
+    // another, or skip the asking door's own rules (frozen ask, no nagging).
+    // Each is filed by its own door (`requestAccess`, the consent, the app's
+    // and the AI's ask, `requestWorkspaceJoin`, the membership and key
+    // routers), none of which comes through here.
+    if (ACCESS_DOORS.has(`${body.targetType}/${body.proposalType}`)) {
+      return c.json(
+        {
+          error:
+            "A change to who may act is asked through its own door, never filed as a proposal here.",
+          code: "CREDENTIAL_PROPOSAL_NOT_FILED_HERE",
+        },
+        403
+      );
+    }
     // Item 3 Part 3: confine a bound service key to its workspace before the write.
     let workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
     const ctxAgentUserId = c.get("agentUserId") as string | undefined;
@@ -1336,6 +1357,23 @@ export function registerProposalsRoutes(app: HubHono): void {
       });
       return c.json({ id: proposal.id, status: "pending" });
     } catch (err) {
+      // A proposal its approval would refuse (the one filing check): the
+      // caller's error, answered with its sentence and code, not a failure.
+      const refused = filingRefusalOf(err);
+      if (refused) {
+        logger.info(
+          {
+            reasonCode: refused.reasonCode,
+            targetType: body.targetType,
+            proposalType: body.proposalType,
+          },
+          "createProposal refused at filing: it cannot apply"
+        );
+        return c.json(
+          { error: refused.message, code: refused.reasonCode },
+          400
+        );
+      }
       logger.error({ err }, "createProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

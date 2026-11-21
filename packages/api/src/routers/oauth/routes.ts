@@ -606,6 +606,10 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
       projectId: null,
       place: parseRequestPlace(r, "app"),
     })),
+    // Additive since W3d: what the token reaches as an AppAccess v2, with
+    // names (`NamedAppAccess`), its projects included, which no pair can
+    // say. null for a connection that keeps its pairs until it re-consents.
+    synap_access: minted.access,
     synap_user: minted.user,
     // Which app this connection is on the pod, and the pod-admin page where
     // the person narrows or revokes it (null: no valid POD_ADMIN_URL).

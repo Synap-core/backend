@@ -29,7 +29,8 @@ const catalog: DesignCatalogSnapshot = {
       gap: { kind: "select", options: ["space-100", "space-200"] },
       children: { kind: "slot" },
     },
-    Split: { start: { kind: "slot" }, end: { kind: "slot" } },
+    // Two slots (`start` is a grid prop every block has, so not a slot name).
+    Split: { lead: { kind: "slot" }, end: { kind: "slot" } },
     Text: { text: { kind: "text" } },
   },
 };
@@ -408,6 +409,102 @@ describe("applyOps: blocks", () => {
         { kind: "span-too-wide", class: "compact", span: 5, columns: 4 },
       ],
     });
+  });
+
+  it("set_start places a block at a column of one class, kept with its span; null gives it back to the grid", () => {
+    const r = ok(
+      applyOps(
+        seeded(),
+        [
+          { op: "set_span", id: "st", class: "expanded", span: 4 },
+          { op: "set_start", id: "st", class: "expanded", start: 9 },
+          { op: "set_start", id: "st", class: "compact", start: 4 },
+          { op: "set_start", id: "st", class: "medium", start: 3 },
+          { op: "set_start", id: "st", class: "medium", start: null },
+        ],
+        catalog
+      )
+    );
+    expect(kids(blocksOf(r.board)[0]!)[0]!.props).toMatchObject({
+      span: { expanded: 4 },
+      start: { expanded: 9, compact: 4 },
+    });
+    expect(kids(blocksOf(r.board)[0]!)[0]!.props.start).toEqual({
+      expanded: 9,
+      compact: 4,
+    });
+    const cleared = ok(
+      applyOps(
+        r.board,
+        [
+          { op: "set_start", id: "st", class: "expanded", start: null },
+          { op: "set_start", id: "st", class: "compact", start: null },
+        ],
+        catalog
+      )
+    );
+    expect(kids(blocksOf(cleared.board)[0]!)[0]!.props).not.toHaveProperty(
+      "start"
+    );
+  });
+
+  it("a start and a span that run past the class's columns are refused, from either op, and named", () => {
+    const placed = ok(
+      applyOps(
+        seeded(),
+        [
+          { op: "set_span", id: "st", class: "expanded", span: 4 },
+          { op: "set_start", id: "st", class: "expanded", start: 9 },
+        ],
+        catalog
+      )
+    ).board;
+    const startPast = applyOps(
+      placed,
+      [{ op: "set_start", id: "st", class: "expanded", start: 10 }],
+      catalog
+    );
+    expect(startPast).toMatchObject({
+      ok: false,
+      reasons: [
+        {
+          kind: "start-past-grid",
+          class: "expanded",
+          start: 10,
+          span: 4,
+          columns: 12,
+        },
+      ],
+    });
+    const spanPast = applyOps(
+      placed,
+      [{ op: "set_span", id: "st", class: "expanded", span: 5 }],
+      catalog
+    );
+    expect(spanPast).toMatchObject({
+      ok: false,
+      reasons: [
+        {
+          kind: "start-past-grid",
+          class: "expanded",
+          start: 9,
+          span: 5,
+          columns: 12,
+        },
+      ],
+    });
+    const noColumn = applyOps(
+      seeded(),
+      [{ op: "set_start", id: "st", class: "compact", start: 5 }],
+      catalog
+    );
+    if (noColumn.ok || spanPast.ok) throw new Error("expected refusals");
+    expect(noColumn.reasons.map(describeRefusal)).toEqual([
+      "a start at the compact width is a column from 1 to 4, not 5",
+    ]);
+    expect(spanPast.reasons.map(describeRefusal)).toEqual([
+      "at the expanded width a block starting at column 9 and spanning 5 ends past column 12: lower the start or the span (set_span) first",
+    ]);
   });
 });
 

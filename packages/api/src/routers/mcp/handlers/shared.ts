@@ -498,7 +498,7 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
 // (`services/focus-sessions/session-statuses.ts`) so services can import it
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
-import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
 import { ambientWorkWhere } from "../../../services/focus-sessions/session-kind.js";
 import {
   resolveWorkSession,
@@ -543,10 +543,7 @@ export async function listOpenFocusSessions(
           // `startedAt`, so the column default stamps the cron's materialisation
           // time, and ordering by `startedAt desc` would pick it over the
           // person's real current work.
-          inArray(
-            focusSessions.status,
-            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-          ),
+          inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
           // The session the PERSON is in. This resolver decides which session
           // an agent's write is FILED UNDER. An open automation run or a
           // receipt is newer than the person's work most mornings (the 08:00

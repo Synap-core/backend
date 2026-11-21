@@ -86,6 +86,30 @@ describe("synap_get_entities filters + includeFacets", () => {
     );
   });
 
+  it("reads a bare non-core field as a property of the named kind", async () => {
+    await run({
+      profileSlug: "deal",
+      filters: [
+        { field: "recommendation", operator: "equals", value: "go" },
+        { field: "title", operator: "equals", value: "x" },
+      ],
+    });
+    expect(getEntities.mock.calls[0]![0]).toMatchObject({
+      filters: [
+        { field: "properties.recommendation", operator: "equals", value: "go" },
+        { field: "title", operator: "equals", value: "x" },
+      ],
+    });
+  });
+
+  it("a bare field with no kind named is still refused", async () => {
+    const r = await run({
+      filters: [{ field: "recommendation", operator: "equals", value: "go" }],
+    });
+    expect(text(r)).toContain("Invalid filters");
+    expect(getEntities).not.toHaveBeenCalled();
+  });
+
   it("a malformed filter is an error, never a silent unfiltered list", async () => {
     const r = await run({
       profileSlug: "deal",

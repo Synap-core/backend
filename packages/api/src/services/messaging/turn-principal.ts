@@ -34,7 +34,7 @@
  * caller's job (every door authorizes the channel before it gets here).
  */
 
-import { db, eq, users } from "@synap/database";
+import { db, personOfOwner } from "@synap/database";
 import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 
 export interface TurnPrincipal {
@@ -52,14 +52,9 @@ export async function resolveTurnPrincipal(p: {
   const summonerId = p.summonerId?.trim();
   if (!summonerId || summonerId === p.roomOwnerId) return owner;
 
-  const row = await db.query.users.findFirst({
-    where: eq(users.id, summonerId),
-    columns: { id: true, userType: true, createdByUserId: true },
-  });
-  if (!row) return owner;
-
-  const human =
-    row.userType === "agent" ? (row.createdByUserId ?? null) : row.id;
+  // The person the summoner stands for (an agent → its person): the one
+  // reading, `personOfOwner`. No users row, or an agent nobody owns → the owner.
+  const human = await personOfOwner(db, summonerId);
   if (!human || human === p.roomOwnerId) return owner;
   return { userId: human, isRoomOwner: false };
 }

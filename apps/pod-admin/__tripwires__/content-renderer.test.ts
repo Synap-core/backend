@@ -10,13 +10,14 @@ import { stripComments } from "../../../scripts/strip-comments.mjs";
  * (`app/_lib/object/content/`) that turns markdown into React elements, and
  * no HTML injected anywhere. These scans keep it that way.
  *
- * HTML RUNS in exactly one frame (`content/html-frame.tsx`,
- * `sandbox="allow-scripts"` srcdoc, contract `@synap-core/types/cell-bridge`),
- * mounted in exactly two places: a stored HTML document's own page
- * (`content-block.tsx`) and an HTML cell embedded in a body
- * (`embed-view.tsx`). Its behaviour is pinned by `html-frame.test.tsx` and
- * `embed-view.test.tsx`; the scans below pin that there is no SECOND frame
- * and no third site.
+ * Code RUNS in exactly two frames, both on the contract
+ * `@synap-core/types/cell-bridge`: `content/html-frame.tsx` (a stored HTML
+ * page, `sandbox="allow-scripts"` srcdoc, read-only bridge) and
+ * `content/module-frame.tsx` (a module cell on the pod's renderer bundle,
+ * `CELL_MODULE_FRAME_SANDBOX` srcdoc, reads and governed writes). Their
+ * behaviour is pinned by `html-frame.test.tsx`, `module-frame.test.tsx` and
+ * `embed-view.test.tsx`; the scans below pin that there is no THIRD frame
+ * and no site beyond the listed ones.
  */
 
 const APP_ROOT = join(fileURLToPath(new URL(".", import.meta.url)), "..");
@@ -126,23 +127,34 @@ describe("content is drawn, never injected", () => {
     expect(modelBody).toContain("flowchart: { htmlLabels: false }");
   });
 
-  it("runs HTML only in the one frame, never same-origin", () => {
-    // A second <iframe> (or a srcdoc anywhere else) would be a frame whose
+  it("runs code only in exactly two frames, never same-origin", () => {
+    // A third <iframe> (or a srcdoc anywhere else) would be a frame whose
     // sandbox nobody tests. `allow-same-origin` anywhere in app code would
     // hand a page the console's origin. Comments are stripped before the
     // scan, so prose may name it; code may not. It does NOT see a frame
     // built at runtime (`document.createElement("iframe")` is caught below
     // only by name).
     const door = join("app", "_lib", "object", "content", "html-frame.tsx");
+    const moduleDoor = join(
+      "app",
+      "_lib",
+      "object",
+      "content",
+      "module-frame.tsx"
+    );
     const code = FILES.filter((f) => !f.test);
     const frames = code.filter((f) =>
       /<iframe\b|\bsrcDoc\b|createElement\(\s*["']iframe["']/i.test(f.body)
     );
-    expect(frames.map((f) => f.path)).toEqual([door]);
-    // Non-vacuity: the door is seen, and its sandbox is the shared constant.
+    expect(frames.map((f) => f.path).sort()).toEqual([door, moduleDoor].sort());
+    // Non-vacuity: each door is seen, and its sandbox is the shared constant.
     expect(code.find((f) => f.path === door)?.body).toContain(
       "sandbox={CELL_FRAME_SANDBOX}"
     );
+    const moduleBody = code.find((f) => f.path === moduleDoor)?.body ?? "";
+    expect(moduleBody).toContain("sandbox={CELL_MODULE_FRAME_SANDBOX}");
+    // srcdoc only: the module frame never takes a `src` address.
+    expect(moduleBody).not.toMatch(/<iframe\b[^>]*\ssrc=/);
     const sameOrigin = code.filter((f) => /allow-same-origin/.test(f.body));
     expect(sameOrigin.map((f) => f.path)).toEqual([]);
   });
@@ -199,8 +211,18 @@ describe("content is drawn, never injected", () => {
       "object",
       "connected-objects.tsx"
     );
+    // A cell's own page (`/open/cell/<key>`) runs a page cell as a
+    // document's body does: the same bridged frame.
+    const cellPage = join("app", "open", "_views", "cell-view.tsx");
     expect(sites.sort()).toEqual(
-      [pageSite, embedSite, previewDoor, connectedSite, ...proposalSites].sort()
+      [
+        pageSite,
+        embedSite,
+        previewDoor,
+        connectedSite,
+        cellPage,
+        ...proposalSites,
+      ].sort()
     );
     // The connected-objects site draws through the PREVIEW (no bridge) only:
     // never the bridged frame, section or body.
@@ -218,6 +240,65 @@ describe("content is drawn, never injected", () => {
     expect(FILES.find((f) => f.path === embedSite)?.body).toMatch(
       /<HtmlFrame\b/
     );
+  });
+
+  it("mounts the module frame only through rendered-object, at the listed sites", () => {
+    // `ModuleFrame` is mounted in ONE file (`rendered-object.tsx`: the cell's
+    // source + the bundle's host modules), and that file's components are
+    // used only by a cell embed, a cell's page, a view's page and an
+    // entity's detail. A new site would run a cell where no test looks.
+    const content = ["app", "_lib", "object", "content"];
+    const moduleDoor = join(...content, "module-frame.tsx");
+    const renderedDoor = join(...content, "rendered-object.tsx");
+    const frameSites = FILES.filter(
+      (f) =>
+        !f.test &&
+        f.path !== moduleDoor &&
+        /\b(?:ModuleFrame|ModuleSandbox|createModuleFrameHost)\b/.test(f.body)
+    ).map((f) => f.path);
+    expect(frameSites).toEqual([renderedDoor]);
+    const renderedSites = FILES.filter(
+      (f) =>
+        !f.test &&
+        f.path !== renderedDoor &&
+        /\b(?:RenderedObject|CellByKey|ModuleCell)\b/.test(f.body)
+    ).map((f) => f.path);
+    expect(renderedSites.sort()).toEqual(
+      [
+        join(...content, "embed-view.tsx"),
+        join("app", "open", "_views", "cell-view.tsx"),
+        join("app", "open", "_views", "view-view.tsx"),
+        join("app", "open", "_views", "entity-view.tsx"),
+      ].sort()
+    );
+    // Non-vacuity: the door mounts the frame by its name.
+    expect(FILES.find((f) => f.path === renderedDoor)?.body).toMatch(
+      /<ModuleFrame\b/
+    );
+  });
+
+  it("a body frames at most ONE entity card, and every module frame mounts lazily", () => {
+    // Each module frame carries the renderer bundle (about 3 MB of srcdoc).
+    // A body with twenty record embeds must not mount twenty: the body picks
+    // its framed cards (`entityFrameNodes`, capped by
+    // `MAX_FRAMED_ENTITY_CARDS`), every other card is its identity card, and
+    // each frame mounts only near the viewport (`observeNear`). Behaviour:
+    // `embed-view.test.tsx` ("a body runs at most …"), `module-frame.test.tsx`.
+    const content = ["app", "_lib", "object", "content"];
+    const body = (name: string) =>
+      FILES.find((f) => f.path === join(...content, name))?.body ?? "";
+    const embed = body("embed-view.tsx");
+    expect(embed).toMatch(/export const MAX_FRAMED_ENTITY_CARDS = 1;/);
+    // The card slot is reached only within the cap.
+    expect(embed).toMatch(/if \(!subject \|\| !mayFrame\) return identity;/);
+    const markdown = body("markdown-view.tsx");
+    expect(markdown).toMatch(/entityFrameNodes\(tree\)/);
+    expect(markdown).toMatch(/<EmbedBodyContext\.Provider\b/);
+    expect(markdown).toMatch(/node=\{node\}/);
+    const frame = body("module-frame.tsx");
+    // No srcdoc is built before the frame is near.
+    expect(frame).toMatch(/refusal \|\| !near\s*\?\s*""/);
+    expect(frame).toMatch(/useNearViewport\(/);
   });
 
   it("draws an image only through the one image door", () => {

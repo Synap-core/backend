@@ -66,13 +66,15 @@ import {
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
+  ownerAndActor,
+  verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
+import { requiredPermissionFor } from "@synap/governance-policy";
 import type {
   Playbook,
   PlaybookRun,
   FocusSession,
-  Automation,
 } from "@synap/database/schema";
 import {
   resolveStageCategory,
@@ -164,6 +166,7 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   PlaybookParamsError,
+  playbookRunRefusal,
   promoteSessionToPlaybook,
 } from "../services/playbooks/playbook-lifecycle.js";
 import {
@@ -187,15 +190,10 @@ import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choi
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
+import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
 import {
-  materializePlaybookCronAutomation,
-  findNonArchivedAutomationByName,
-} from "../services/playbooks/cron-automation.js";
-import {
-  FLOW_ROLE,
   addPlaybookAutomation,
   readDriverAutomationId,
-  setDriverAutomation,
 } from "../services/playbooks/playbook-automation-links.js";
 import {
   listProcesses,
@@ -209,12 +207,11 @@ import {
 } from "../services/playbooks/goal-references.js";
 import { findUnenabledPlaybookSkills } from "../services/playbooks/playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../services/capabilities/propose-capability-enable.js";
-import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
+import { revokeGrantApprovalRows } from "../services/capabilities/grant-approval-rows.js";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
-import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -759,6 +756,7 @@ const capabilityGrantsRouter = router({
           id: true,
           grantableType: true,
           grantableId: true,
+          grantedTo: true,
           workspaceId: true,
           revokedAt: true,
         },
@@ -796,10 +794,18 @@ const capabilityGrantsRouter = router({
       }
 
       if (!grant.revokedAt) {
-        await db
-          .update(vaultGrants)
-          .set({ revokedAt: new Date() })
-          .where(eq(vaultGrants.id, input.grantId));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(vaultGrants)
+            .set({ revokedAt: new Date() })
+            .where(eq(vaultGrants.id, input.grantId));
+          // The grant's "runs without asking" is an approval row (decision
+          // D2): revoking the grant takes back the auto row on exactly its
+          // agent × action × space, so the agent asks again.
+          if (grant.grantableType !== "secret") {
+            await revokeGrantApprovalRows(tx, [grant]);
+          }
+        });
 
         auditLog({
           subjectType: "capability_grant",
@@ -825,7 +831,7 @@ const capabilityGrantsRouter = router({
 // the first EDITABLE surface for that composition — until now only the
 // automation-trigger-matcher worker read it. Auth mirrors this router's other
 // write procedures: load-by-id, `assertWorkspaceWrite` on the LOADED
-// workspaceId (never caller input) — see `saveFlow` above.
+// workspaceId (never caller input) — see `update` above.
 const playbookAutomationsRouter = router({
   /** List a playbook's composed automations, joined + ordered by sortOrder. */
   listAutomations: protectedProcedure
@@ -866,7 +872,7 @@ const playbookAutomationsRouter = router({
 
   /**
    * Compose an automation into a playbook. Write-gate on the LOADED playbook's
-   * workspaceId (mirrors `update`/`saveFlow`), plus an explicit IDOR guard that
+   * workspaceId (mirrors `update`), plus an explicit IDOR guard that
    * the automation itself is visible in that same workspace (or pod-wide) —
    * mirrors `resolveVisibleSubjectId` above. Governance-gated as a playbook
    * "update" (composition is a playbook-shape change).
@@ -919,7 +925,7 @@ const playbookAutomationsRouter = router({
         });
       }
 
-      // 4. Governance membrane — same verb/subject as update/saveFlow.
+      // 4. Governance membrane — same verb/subject as update.
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -2311,6 +2317,30 @@ export const playbooksRouter = router({
       // caller who may not write must never learn whether the playbook exists,
       // nor receive its row. Only a caller that would have been permitted (to
       // execute OR to propose) reaches the lookup.
+      // The person it is filed for owns it; the agent that wrote it (here, or
+      // the proposal an approval replays) is its actor.
+      const owner = await ownerAndActor(
+        await getDb(),
+        ctx.userId,
+        input.agentUserId ?? ctx.approvedAuthorAgentUserId
+      );
+      // An agent files for its person, never for the approver: a person who
+      // may not create playbooks here cannot have one filed in their name.
+      if (input.agentUserId && ctx.workspaceId) {
+        const allowed = await verifyPermission({
+          db: await getDb(),
+          userId: owner.ownerId,
+          workspace: { id: ctx.workspaceId },
+          requiredPermission: requiredPermissionFor("create"),
+        });
+        if (!allowed.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "The person this agent works for cannot create playbooks in this space.",
+          });
+        }
+      }
       const isAiCaller =
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
@@ -2400,7 +2430,8 @@ export const playbooksRouter = router({
             .values({
               id: playbookId,
               workspaceId: ctx.workspaceId,
-              createdBy: input.agentUserId ?? ctx.userId,
+              createdBy: owner.ownerId,
+              agentUserId: owner.agentUserId,
               name: input.name,
               description: input.description ?? null,
               goalTemplate: input.goalTemplate,
@@ -2468,7 +2499,8 @@ export const playbooksRouter = router({
         // S1: a scheduled playbook maintains ONE backing cron automation (its
         // `schedule` row in playbook_automations) that the cron scheduler fires.
         await materializePlaybookCronAutomation(created, {
-          userId: input.agentUserId ?? ctx.userId,
+          userId: ctx.userId,
+          agentUserId: owner.agentUserId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this
@@ -2891,7 +2923,8 @@ export const playbooksRouter = router({
           wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
         (input.status !== undefined && input.status !== existing.status);
       await materializePlaybookCronAutomation(updated, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
         preserveArming: !armingChanged,
       });
 
@@ -2995,7 +3028,8 @@ export const playbooksRouter = router({
       // call the backing cron automation stayed `active` with a live nextRunAt
       // and kept firing a playbook nothing else would surface.
       await materializePlaybookCronAutomation(archived as Playbook, {
-        userId: input.agentUserId ?? ctx.userId,
+        userId: ctx.userId,
+        agentUserId: input.agentUserId,
       });
       // Same rule for what STARTS it: an archived playbook declares no live
       // activator, so this pass retires its activator rules.
@@ -3375,6 +3409,17 @@ export const playbooksRouter = router({
         throw new TRPCError({
           code: "BAD_REQUEST",
           message: `"${playbook.name}" is a pod-wide playbook, so nothing says which workspace this run belongs to. Pass workspaceId (or a subject entity that has one).`,
+        });
+      }
+
+      // Usable here: refused at FILING by the run door's own rule
+      // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
+      // proposal is filed that could only fail once approved.
+      const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: notRunnable,
         });
       }
 
@@ -3795,7 +3840,7 @@ export const playbooksRouter = router({
    * If it has one → load that automation's flowDefinition.
    * If NOT set → return a lazy starter graph (NOT persisted) seeded from the
    * playbook's name and goalTemplate. `automationId: null` signals the caller
-   * that no automation exists yet (saveFlow will create one on first save).
+   * that no automation exists yet.
    */
   /**
    * WHO RUNS IT, for the caller (slice 5a, plan v2 66d229dc): their
@@ -3916,163 +3961,6 @@ export const playbooksRouter = router({
       return {
         flowDefinition: starterFlow,
         automationId: null as string | null,
-      };
-    }),
-
-  /**
-   * Save the flow graph for a playbook (Option-C model).
-   *
-   * If the playbook has a driving automation (its `schedule`/`flow` row in
-   * `playbook_automations`, 0425) → update that automation's flowDefinition
-   * in-place.
-   * If NOT → create a new "manual" draft automation and link it with role
-   * `flow` (the ONE link; `flow_automation_id` is still written beside it for
-   * one release). The `automation --activates--> playbook` edge it used to
-   * write had no reader and is no longer written.
-   *
-   * Governance-gated (mirrors `update`): write-gate on the LOADED playbook's
-   * workspaceId + checkPermissionOrPropose. On "proposed" returns without
-   * writing.
-   */
-  saveFlow: protectedProcedure
-    .input(
-      z.object({
-        playbookId: z.string().uuid(),
-        flowDefinition: z.object({
-          nodes: z.array(z.unknown()),
-          edges: z.array(z.unknown()),
-        }),
-        agentUserId: z.string().uuid().optional(),
-        source: z.string().optional(),
-        reasoning: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const database = await getDb();
-
-      // 1. Load by id ONLY — never trust a caller-supplied workspaceId.
-      const existing = await database.query.playbooks.findFirst({
-        where: eq(playbooks.id, input.playbookId),
-      });
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Playbook ${input.playbookId} not found`,
-        });
-      }
-
-      // 2. Write-gate on the LOADED row's workspaceId (never input.*).
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: existing.workspaceId,
-      });
-
-      // 2b. Node-contract validation — same gate as automations.create/update.
-      // saveFlow is the playbook-canvas author-time door that writes an
-      // automation's flowDefinition (update in-place or first-save insert), so a
-      // malformed flow must be rejected here too, not only via automations.*.
-      const flowError =
-        flowValidationErrorMessage(input.flowDefinition) ??
-        // An AI fan-out over an unfiltered query — the guardrail rule.
-        unfilteredAiFanoutError(input.flowDefinition);
-      if (flowError) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
-      }
-
-      // 3. Governance membrane — same verb as update.
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: existing.workspaceId,
-        subjectType: "playbook",
-        action: "update",
-        source: input.source,
-        reasoning: input.reasoning,
-        data: { id: input.playbookId, name: existing.name },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return {
-          automationId: null as string | null,
-          status: "proposed" as const,
-          message: proposedMessageFor(
-            perm.proposalType,
-            "Flow save proposed for review"
-          ),
-          proposalId: perm.proposalId,
-        };
-      }
-
-      const flowDef = input.flowDefinition as FlowDefinition;
-
-      // 4a. Existing automation → update its flowDefinition in-place.
-      const driverId = await readDriverAutomationId(database, existing.id);
-      if (driverId) {
-        await database
-          .update(automations)
-          .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, driverId));
-
-        return {
-          automationId: driverId,
-          status: "updated" as const,
-          message: "Flow definition updated",
-          proposalId: null as string | null,
-        };
-      }
-
-      // 4b. No automation yet → create one, stamp playbook, write link edge.
-      // 23505 recovery against automations_workspace_name_active_uq (0230): a
-      // non-archived automation of this name may already exist (the playbook's
-      // backing row survived a schedule teardown). Adopt it and persist
-      // THIS flow onto it — saveFlow's whole contract — rather than 500-ing or
-      // cloning. Case-insensitive identity handled by findNonArchivedAutomationByName.
-      let automationId: string;
-      try {
-        const [created] = await database
-          .insert(automations)
-          .values({
-            workspaceId: existing.workspaceId,
-            createdBy: input.agentUserId ?? ctx.userId,
-            name: existing.name,
-            description: existing.description ?? null,
-            triggerType: "manual",
-            triggerConfig: {},
-            flowDefinition: flowDef,
-            status: "draft",
-            metadata: { createdVia: "manual", playbookId: existing.id },
-          })
-          .returning({ id: automations.id });
-        automationId = (created as Pick<Automation, "id">).id;
-      } catch (err) {
-        if (!isUniqueViolation(err)) throw err;
-        const winner = await findNonArchivedAutomationByName(
-          database,
-          existing.workspaceId,
-          existing.name
-        );
-        if (!winner) throw err;
-        await database
-          .update(automations)
-          .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, winner.id));
-        automationId = winner.id;
-      }
-
-      // The ONE link (0425): the canvas flow is the playbook's `flow` row.
-      await setDriverAutomation(database, {
-        playbookId: existing.id,
-        automationId,
-        role: FLOW_ROLE,
-      });
-
-      return {
-        automationId: automationId as string,
-        status: "created" as const,
-        message: "Flow automation created and linked",
-        proposalId: null as string | null,
       };
     }),
 });

@@ -18,9 +18,12 @@
  *     A target with no `result` is still being worked; every other state is a
  *     mark ({@link WORKER_TARGET_RESULTS}), never an absence.
  *
- * Leaf module: imports nothing, so the browser, relay, CLI and every backend
- * package can read it.
+ * Leaf module: its one import is the session status leaf (itself
+ * dependency-free), so the browser, relay, CLI and every backend package can
+ * read it.
  */
+
+import { SESSION_CLOSE_OUTCOMES } from "../focus-sessions/statuses.js";
 
 // ── Activator ───────────────────────────────────────────────────────────────
 
@@ -51,11 +54,12 @@ export const WORKER_ACTIVATOR_TRIGGERS = [
 export type WorkerActivatorTrigger = (typeof WORKER_ACTIVATOR_TRIGGERS)[number];
 
 /**
- * How a run ended, for a `run_ended` link: `done` = its session closed with
- * nothing required left open (no `closedNotDone` record); `not_done` = it
- * closed anyway with required work open, or was cancelled or failed.
+ * How a run ended, for a `run_ended` link: its session's `closedAs`
+ * (`sessionClosedAs`, focus-sessions/statuses.ts) — `done` = closed with
+ * nothing required left open (no `closedNotDone` record); `not_done` = closed
+ * anyway with required work open, or cancelled or failed.
  */
-export const WORKER_RUN_OUTCOMES = ["done", "not_done"] as const;
+export const WORKER_RUN_OUTCOMES = SESSION_CLOSE_OUTCOMES;
 export type WorkerRunOutcome = (typeof WORKER_RUN_OUTCOMES)[number];
 
 /**

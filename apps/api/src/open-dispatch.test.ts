@@ -469,12 +469,26 @@ describe("dispatchOpen", () => {
     });
   });
 
-  it("cell typeKey + human + admin → bounce synap://open/cell/<typeKey>", () => {
+  it("cell typeKey + human + admin → redirect to pod-admin's cell page (it runs the cell)", () => {
     expect(
       dispatchOpen({
         type: "cell",
         id: "generated:product-development-board",
         userAgent: HUMAN,
+        adminBase: ADMIN,
+      })
+    ).toEqual({
+      action: "redirect",
+      url: `${ADMIN}/open/cell/generated:product-development-board`,
+    });
+  });
+
+  it("cell typeKey + bot → bounce synap://open/cell/<typeKey> (no body in an unfurl)", () => {
+    expect(
+      dispatchOpen({
+        type: "cell",
+        id: "generated:product-development-board",
+        userAgent: DISCORDBOT,
         adminBase: ADMIN,
       })
     ).toEqual({

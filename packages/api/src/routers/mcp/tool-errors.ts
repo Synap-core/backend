@@ -137,16 +137,29 @@ function integrityViolation(
   return constraint ? { code: e.code, constraint } : { code: e.code };
 }
 
-/** Flatten a ZodError into a capped, readable issue list (never the raw dump). */
+/** Most issues one error lists; the rest are counted, never silently cut. */
+const MAX_ZOD_ISSUES = 30;
+
+/**
+ * Flatten a ZodError (direct, or the `.cause` of a tRPC error) into a readable
+ * issue list that names EVERY issue up to a generous cap and says how many
+ * were omitted (never the raw dump).
+ */
 function zodIssues(err: unknown): string[] | null {
-  if (!err || typeof err !== "object") return null;
-  const e = err as { name?: unknown; issues?: unknown };
-  if (e.name !== "ZodError" || !Array.isArray(e.issues)) return null;
-  return e.issues.slice(0, 5).map((i) => {
-    const issue = i as { path?: unknown[]; message?: unknown };
-    const path = Array.isArray(issue.path) ? issue.path.join(".") : "";
-    return path ? `${path}: ${issue.message}` : String(issue.message);
-  });
+  for (const candidate of [err, (err as { cause?: unknown } | null)?.cause]) {
+    if (!candidate || typeof candidate !== "object") continue;
+    const e = candidate as { name?: unknown; issues?: unknown };
+    if (e.name !== "ZodError" || !Array.isArray(e.issues)) continue;
+    const lines = e.issues.slice(0, MAX_ZOD_ISSUES).map((i) => {
+      const issue = i as { path?: unknown[]; message?: unknown };
+      const path = Array.isArray(issue.path) ? issue.path.join(".") : "";
+      return path ? `${path}: ${issue.message}` : String(issue.message);
+    });
+    const omitted = e.issues.length - lines.length;
+    if (omitted > 0) lines.push(`(${omitted} more issues omitted)`);
+    return lines;
+  }
+  return null;
 }
 
 /**

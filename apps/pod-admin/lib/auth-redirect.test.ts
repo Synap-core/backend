@@ -4,6 +4,13 @@ const sessionState = vi.fn<() => Promise<"active" | "none" | "unknown">>();
 vi.mock("./kratos-flow", () => ({
   browserSessionState: () => sessionState(),
 }));
+const order: string[] = [];
+const clearCache = vi.fn(async () => {
+  order.push("clear");
+});
+vi.mock("./query-persist", () => ({
+  clearPersistedQueryCache: () => clearCache(),
+}));
 
 const { redirectToLogin, redirectToLoginIfUnauthorized } =
   await import("./auth-redirect");
@@ -33,6 +40,8 @@ const settle = () => new Promise((r) => setTimeout(r, 0));
 afterEach(() => {
   vi.unstubAllGlobals();
   sessionState.mockReset();
+  clearCache.mockClear();
+  order.length = 0;
 });
 
 describe("redirectToLoginIfUnauthorized", () => {
@@ -110,5 +119,26 @@ describe("redirectToLogin", () => {
     await settle();
     const target = new URL(assign.mock.calls[0][0], "https://pod.example");
     expect(target.searchParams.get("return")).toBe("/updates");
+  });
+});
+
+describe("the query cache this browser kept", () => {
+  it("is wiped before leaving for login when the session is gone", async () => {
+    sessionState.mockResolvedValue("none");
+    const assign = stubLocation("https://pod.example/runs");
+    assign.mockImplementation(() => order.push("assign"));
+    redirectToLogin();
+    await settle();
+    expect(order).toEqual(["clear", "assign"]);
+  });
+
+  it("is kept when the session is alive or Kratos did not answer", async () => {
+    for (const state of ["active", "unknown"] as const) {
+      sessionState.mockResolvedValue(state);
+      stubLocation("https://pod.example/runs");
+      redirectToLogin();
+      await settle();
+    }
+    expect(clearCache).not.toHaveBeenCalled();
   });
 });

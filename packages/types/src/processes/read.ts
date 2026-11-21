@@ -96,7 +96,7 @@ export interface ProcessNeed {
 /**
  * The role an automation plays in a process (`playbook_automations.role`).
  * `schedule`: the backing cron automation of `playbooks.schedule`.
- * `flow`: the automation the playbook canvas saved (`playbooks.saveFlow`).
+ * `flow`: the automation a playbook canvas saved (read-only: no writer remains).
  * `activator`: a declared activator compiled to a rule (workers).
  * `link`: a `run_ended` activator compiled to a rule — this process starts
  *   when a run of another one ends (the chain between playbooks).

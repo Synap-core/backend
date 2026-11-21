@@ -5,7 +5,7 @@ import { segmentSlides } from "./sections.js";
  * CONTRACT TEST: the seeded assembler prompt ⇄ this segmenter.
  *
  * These two live in different repos with nothing binding them — the prompt is
- * `ensure-report-automation.ts` in `synap-backend`, the parser is here — so a
+ * the report automation in `synap-backend`'s base.yaml, the parser is here — so a
  * change to either can silently break the other. That already happened once:
  * the generator emitted no headings, the segmenter fell back to section
  * ATTRIBUTES, and every slide's largest text read "Analyze · analyst" while the

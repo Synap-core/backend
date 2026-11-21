@@ -111,7 +111,7 @@ import {
 } from "@synap/events";
 import { advanceSessionStageViaSlot } from "./stage-advance.js";
 import { loadSessionProcess } from "./session-process.js";
-import { FOLLOWING_SESSION_STATUSES } from "./following-sessions.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   releaseHeldWorkerRuns,
   workerAutomationOfProposal,
@@ -361,7 +361,7 @@ async function followSubjectStatus(
     .where(
       and(
         eq(focusSessions.subjectEntityId, ev.subjectId),
-        inArray(focusSessions.status, [...FOLLOWING_SESSION_STATUSES]),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         isNotNull(focusSessions.playbookId)
       )
     );

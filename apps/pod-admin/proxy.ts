@@ -31,7 +31,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import { checkSession, podAdminRole } from "./lib/kratos";
+import { gateAnswers } from "./lib/gate-cache";
 import {
   CONSOLE_ROLE_HEADER,
   isMemberConsolePath,
@@ -84,8 +84,18 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Self-service receivers need only the session (each one's reason lives
+  // in `lib/route-policy.ts`). The member console (`/home`, `/review`)
+  // opens for any member but still asks the role, because the nav it
+  // renders depends on it. Everything else is pod_admin or /forbidden.
+  // Both questions go out together and a positive answer is reused for 30 s
+  // (`lib/gate-cache.ts`); the verdicts below are read in the same order as
+  // before: the session first, then the role.
+  const needsRole = isMemberConsolePath(path) || !isSelfService(path);
+  const answers = await gateAnswers(req.headers, needsRole);
+
   // ── 1. Kratos session ─────────────────────────────────────────────
-  const session = await checkSession(req.headers);
+  const { session } = answers;
   if (session.state === "unavailable") return podUnavailable();
   if (session.state === "none") {
     const loginUrl = new URL(
@@ -97,14 +107,10 @@ export async function proxy(req: NextRequest) {
   const { identity } = session;
 
   // ── 2. pod_admin role ─────────────────────────────────────────────
-  // Self-service receivers need only the session (each one's reason lives
-  // in `lib/route-policy.ts`). The member console (`/home`, `/review`)
-  // opens for any member but still asks the role, because the nav it
-  // renders depends on it. Everything else is pod_admin or /forbidden.
   let role: ConsoleRole | null = null;
-  if (isMemberConsolePath(path) || !isSelfService(path)) {
-    const answer = await podAdminRole(req.headers);
-    if (answer === "unavailable") return podUnavailable();
+  if (needsRole) {
+    const answer = answers.role;
+    if (answer === null || answer === "unavailable") return podUnavailable();
     if (answer === "member" && !isMemberConsolePath(path)) {
       return NextResponse.redirect(new URL("/forbidden", req.url));
     }

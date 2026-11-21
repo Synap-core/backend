@@ -778,11 +778,6 @@ export interface SendExternalMessageInput {
   sessionId?: string | null;
   playbookId?: string | null;
   /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
-  /**
    * BYPASS CONTRACT (W3b): set ONLY by the `messaging.external.send` proposal
    * executor (the send is already past governance at proposal-approval time).
    * When `true`, the capability-execution gate is SKIPPED and the send dispatches
@@ -857,6 +852,8 @@ export interface SendExternalMessageResult {
   errorClass?: FailureErrorClass;
   /** P1: the provider/platform the failed send targeted (for the action label). */
   providerRef?: string;
+  /** A `missing_field` refusal of a channel send: what is missing. */
+  missing?: "profile" | "provider_id";
   /** A channel send: the channel the message landed in (another one when its chat was already held). */
   channelId?: string;
   /** A channel send: the provider's chat id. */
@@ -1100,9 +1097,11 @@ export async function sendExternalMessage(
     !input.alreadyApproved
   ) {
     // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
-    // LinkedIn first message to someone who is not a connection is HELD, never
+    // LinkedIn first message to someone who is not a connection, or who has
+    // no LinkedIn profile on file (plan 8032a127 D1), is HELD, never
     // refused: filed as a proposal with `data.held` and the next step named,
-    // so the draft is kept and shown, and becomes sendable once they connect
+    // so the draft is kept and shown. It becomes sendable once they connect;
+    // a missing profile, on an approval after the person fixes their record
     // (`services/channels/held-sends.ts`). Same rule as at dispatch
     // (`readChannelReach`); a failed read files as before. An ungated send
     // skips it: the dispatch check runs straight after.
@@ -1113,7 +1112,15 @@ export async function sendExternalMessage(
         connector,
         namedAccountId: input.accountId,
       });
-      if (unreachable) held = heldSend(unreachable.error);
+      if (unreachable)
+        held = heldSend(
+          unreachable.error,
+          new Date(),
+          unreachable.errorClass === "missing_field"
+            ? "missing_field"
+            : "not_connected",
+          unreachable.missing
+        );
     }
     held = held ?? limitHold;
     const gateResult = await gateMessagingSend({
@@ -1405,6 +1412,7 @@ async function sendOnChannel(args: {
       error: plan.error,
       errorClass: plan.errorClass,
       providerRef: plan.providerRef ?? provider,
+      ...(plan.missing ? { missing: plan.missing } : {}),
     };
   }
   // THE provider call. The provider REFUSING it (an HTTP 4xx answer: a rate
@@ -1720,7 +1728,6 @@ async function gateMessagingSend(
     capabilityId,
     tool:
       input.mustPropose && !seeded ? { ...toolRow, approved: null } : toolRow,
-    grantMetadata: input.grantMetadata ?? null,
     actorUserId: input.agentUserId ?? input.userId,
     agentUserId: input.agentUserId ?? null,
     workspaceId: input.workspaceId ?? null,
@@ -1973,11 +1980,6 @@ export interface TriggerProviderActionInput {
    * below (a non-owner `userId` is treated as a delegated agent → propose).
    */
   agentUserId?: string | null;
-  /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
   /** Optional session/playbook context for the gate's proposal payload + audit. */
   sessionId?: string | null;
   playbookId?: string | null;
@@ -3500,7 +3502,6 @@ export async function triggerProviderAction(
         approved: tool.approved,
         createdBy: tool.createdBy,
       },
-      grantMetadata: input.grantMetadata ?? null,
       actorUserId: effectiveActorUserId,
       agentUserId: input.agentUserId ?? null,
       workspaceId: input.workspaceId ?? null,

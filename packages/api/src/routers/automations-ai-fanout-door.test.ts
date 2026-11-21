@@ -20,6 +20,7 @@ vi.mock("../utils/split-brain-service.js", () => ({
 }));
 
 import { automationsRouter } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {
@@ -82,7 +83,10 @@ async function create(
   triggerConfig: Record<string, unknown> = { expression: "0 9 * * *" }
 ) {
   const captured: { values?: Record<string, unknown> } = {};
-  mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+  mockGetDb.mockResolvedValue({
+    ...NO_USERS,
+    insert: vi.fn(() => insertChain(captured)),
+  });
   const outcome = await caller()
     .create({
       name: "Assess every company",

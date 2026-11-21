@@ -38,6 +38,7 @@ import {
   type HumanizeTargetOptions,
 } from "@synap-core/types/governance-rules";
 import { resolveVerbStepLabel } from "@synap-core/types/vocabulary";
+import { verbDisplayName } from "./tool-approvals-model";
 
 /** The author prefixes the pod stamps (`@synap/database`), as stored. */
 export const AUTHORED_PREFIX = "user:";
@@ -189,10 +190,17 @@ export interface ApprovalFilters {
 
 export function approvalMatches(
   row: ApprovalRowLike,
-  f: ApprovalFilters
+  f: ApprovalFilters,
+  /**
+   * The tool a row names, as the Tool filter reads it. Default: its pattern.
+   * The page passes the tool it belongs to (`toolIndex`), so the filter for
+   * a tool also holds the rows on each of its actions (a tool's page links
+   * to `?tool=<its id>`).
+   */
+  toolKey: (row: ApprovalRowLike) => string | null = approvalToolKey
 ): boolean {
   if (f.agent && approvalAgentKey(row) !== f.agent) return false;
-  if (f.tool && approvalToolKey(row) !== f.tool) return false;
+  if (f.tool && toolKey(row) !== f.tool) return false;
   if (f.verdict && row.verdict !== f.verdict) return false;
   if (f.space && approvalSpaceKey(row) !== f.space) return false;
   return true;
@@ -227,7 +235,11 @@ export function filterValues(
 export interface ToolNameSource {
   id: string | null;
   name: string;
-  verbs: ReadonlyArray<{ verbId: string; label: string }>;
+  verbs: ReadonlyArray<{
+    verbId: string;
+    label: string;
+    skillId?: string | null;
+  }>;
 }
 
 /**
@@ -237,14 +249,33 @@ export interface ToolNameSource {
  * hold it.
  */
 export function toolNamesOf(
-  cards: readonly ToolNameSource[] | null | undefined
+  cards: readonly ToolNameSource[] | null | undefined,
+  /**
+   * The compositions (`capabilities.compositions`): a row 0435 made from a
+   * grant names one of a tool's member tool rows, named here as the tool.
+   */
+  compositions?: ReadonlyArray<{
+    id: string;
+    members: ReadonlyArray<{ kind: string; id: string }>;
+  }> | null
 ): (pattern: string) => string | null {
   const names = new Map<string, string>();
   for (const card of cards ?? []) {
     if (card.id) names.set(card.id, card.name);
-    for (const v of card.verbs)
-      if (!names.has(v.verbId))
-        names.set(v.verbId, `${v.label} (${card.name})`);
+    for (const v of card.verbs) {
+      // The action's words, never its id (finding 47ff4216): the catalog
+      // labels most actions with their id.
+      const name = `${verbDisplayName(v)} (${card.name})`;
+      if (!names.has(v.verbId)) names.set(v.verbId, name);
+      // An older row names the action by its skill row id.
+      if (v.skillId && !names.has(v.skillId)) names.set(v.skillId, name);
+    }
+  }
+  for (const comp of compositions ?? []) {
+    const name = names.get(comp.id);
+    if (!name) continue;
+    for (const m of comp.members)
+      if (m.kind === "tool" && !names.has(m.id)) names.set(m.id, name);
   }
   return (pattern) => names.get(pattern) ?? null;
 }

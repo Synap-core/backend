@@ -13,13 +13,18 @@
 import { skills, eq, and, desc } from "@synap/database";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 
-/** The skills that may answer a verb for `userId` in this lens. */
+/**
+ * The skills that may answer a verb for `userId` in this lens. `alsoUserId`:
+ * the agent that authored the automation running it (its own user-scope
+ * skills stay reachable while the run executes as the person).
+ */
 export function answeringSkillsWhere(
   userId: string,
-  workspaceId: string | null
+  workspaceId: string | null,
+  alsoUserId?: string | null
 ) {
   return and(
-    visibleSkillsWhere(userId, workspaceId ?? undefined),
+    visibleSkillsWhere(userId, workspaceId ?? undefined, { alsoUserId }),
     eq(skills.status, "active")
   );
 }

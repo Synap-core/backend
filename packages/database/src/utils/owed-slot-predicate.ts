@@ -32,6 +32,7 @@
 
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
@@ -95,15 +96,15 @@ export function owedSlotWhere(): SQL {
 }
 
 /**
- * The session statuses in which an owed slot can still PARK a run. A closed,
- * failed or cancelled session with a leftover owed slot still counts in the
- * needs-you tray (the slot is owed), but it must not hold a run in
- * `waiting_on_you` forever: nothing will ever resume that session's run.
+ * The session statuses in which an owed slot can still PARK a run: started
+ * and not ended (`UNDERWAY_SESSION_STATUSES`, read off the session
+ * declaration). A closed, failed or cancelled session with a leftover owed
+ * slot still counts in the needs-you tray (the slot is owed), but it must not
+ * hold a run in `waiting_on_you` forever: nothing will ever resume that
+ * session's run.
  */
-export const OPEN_SESSION_STATUSES = ["active", "paused", "stale"] as const;
-
 const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
-  OPEN_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
+  UNDERWAY_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
 );
 
 /**

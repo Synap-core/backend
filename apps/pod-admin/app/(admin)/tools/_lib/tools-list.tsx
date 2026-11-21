@@ -41,6 +41,7 @@ import { StatusPill } from "../../components/status-pill";
 import { TOOLS_CATALOGS } from "./copy";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
+  addOnOfLine,
   CAPABILITY_READ_OPTIONS,
   CATALOG_INPUT,
   filterTools,
@@ -356,7 +357,11 @@ function ToolCard({ item, where }: { item: ToolItem; where: string }) {
       </p>
       <div className="mt-auto flex min-w-0 items-center gap-2 pt-1 text-[11px] text-foreground/65">
         <StatusPill kind={item.status.kind} label={item.status.label} />
-        <span className="truncate">{where}</span>
+        <span className="truncate">
+          {item.addOnOf
+            ? `${addOnOfLine(item.addOnOf.name)} · ${where}`
+            : where}
+        </span>
       </div>
     </Link>
   );

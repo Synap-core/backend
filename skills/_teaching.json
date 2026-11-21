@@ -1068,7 +1068,7 @@
     "teachesTools": [],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Design-to-code loop: ui-design canvas JSON (frames, sections on a 12/8/4 grid, spans, viewport frames), the design door (design.catalog, design.read, design.apply ops checked against the catalog), three variants, Checked/Pattern/Opinion critique, human approval, implement, compare Today/Design/Built, where designs are viewed.",
+    "summary": "Design-to-code loop: ui-design canvas JSON (frames, sections on a 12/8/4 grid, spans, viewport frames), the design door (design.catalog summary then the blocks you use in full, design.read, design.apply ops checked against the catalog), three variants, Checked/Pattern/Opinion critique, human approval, implement, compare Today/Design/Built, where designs are viewed.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,

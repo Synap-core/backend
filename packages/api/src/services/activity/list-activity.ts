@@ -107,7 +107,10 @@ import {
   type ActivitySource,
   type ParsedActivityActorFilter,
 } from "@synap-core/types/activity";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  LIVE_RUN_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   buildRequestFromProposal,
   type Proposal,
@@ -326,8 +329,6 @@ interface Candidate extends ActivityCursor {
   sessionTitle?: string;
   origin?: string | null;
 }
-
-const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
 
 /**
  * A proposal filed into one of this track's sessions, or about the track
@@ -697,7 +698,7 @@ async function readSessions<P extends Projection>(
   const actorId = drizzleSql<string>`coalesce(${agentId}, ${focusSessions.userId})`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
-  const live = drizzleSql`${focusSessions.status} in ('active', 'paused', 'forming')`;
+  const live = inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]);
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
   const where = and(
     scopedDb(q.access).predicate(focusSessions),
@@ -1099,7 +1100,7 @@ async function enrich(
     }
 
     // session
-    const live = (LIVE_SESSION_STATUSES as readonly string[]).includes(
+    const live = (LIVE_RUN_SESSION_STATUSES as readonly string[]).includes(
       c.status
     );
     const action = live ? "start" : "close";

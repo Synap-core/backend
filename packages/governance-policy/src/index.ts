@@ -761,6 +761,24 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // or a "make a rule from this" would compose.
   "trusted_issuer.trusted_issuer.widen_scopes" satisfies DirectProposalEventKey,
   "trusted_issuer.widen_scopes",
+  // CREDENTIAL WIDENINGS (ticket 370ee329). Each write below is approved by an
+  // executor that declares `widensCredential`: approving it is a person's act
+  // on the console, after a fresh sign-in (`assertFreshAuthentication`). A
+  // rule that executed it would skip both, so no rule may (tripwire
+  // `credential-writes-are-floored`, derived from the executors). An agent
+  // never installs on a computer by itself (decision c78d8bcf): its install
+  // ask reaches the gate, so this floor is live for it.
+  "installation.request" satisfies GateEventKey,
+  // Filed directly today (`createPendingProposal` / `insertPendingProposal`),
+  // so these never reach the engine: the floor holds the day one does, and
+  // refuses "Make a rule from this" for them.
+  "app.connect" satisfies GateEventKey,
+  "agent.connect" satisfies DirectProposalEventKey,
+  "vault.vault.request" satisfies DirectProposalEventKey,
+  "capability.capability.install" satisfies DirectProposalEventKey,
+  "capability.capability.update" satisfies DirectProposalEventKey,
+  "workspace.join" satisfies DirectProposalEventKey,
+  "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -1422,19 +1440,14 @@ export interface AgentPolicyInput {
    */
   capabilityGovernance?: "auto" | "propose" | "block" | null;
   /**
-   * The GRANT's exec-mode (the `grant_exec_mode` enum / `@synap/playbooks
-   * ExecMode` — the PERSISTABLE truth: `auto | propose`). Narrows the
-   * capability's own approval-state for THIS grant: "propose" forces a reviewable
-   * per-run proposal even if the capability is "auto". When present it takes
-   * precedence over capabilityGovernance in rung 2.7.
-   *
-   * NOTE: exec-mode lives in TWO layers. `dry-run` is the third persistable
-   * grant_exec_mode value but is a GATE-level concern — `gateCapabilityExecution`
-   * short-circuits it to a preview BEFORE calling `decideAgentPolicy`, so it never
-   * reaches this policy union. The retired `propose-each`/`block` values were
-   * orphaned (never persistable in the grant column); `propose` already covers
-   * what `propose-each` meant, and deny comes from no-grant / not-approved, not a
-   * `block` mode.
+   * The run's exec mode from its APPROVAL ROW (decision D2, document b387ca45:
+   * a `governance_rules` capability row is the ONLY answer to "may this run
+   * without asking?"; a grant means only "may use", and the grant's
+   * `exec_mode` column is no longer read since migration 0435). `gateCapabilityExecution`
+   * passes `auto` when the best-ranked row for this agent says auto; an "ask
+   * first" row or no row never reaches the policy (the gate proposes first).
+   * When present it takes precedence over capabilityGovernance in rung 2.7, so
+   * an "auto" row still meets rung 7's channel tightening.
    */
   capabilityExecMode?: "auto" | "propose" | null;
   /**
@@ -2082,16 +2095,17 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // (the two new fields absent → byte-identical to the prior verdict). Sits after
   // CBAC (rung 1) and ADMIN_ACTIONS (rung 2) — a capability the agent isn't
   // allowed must still deny first, and admin actions are non-negotiable — but
-  // BEFORE ownership/autoApprove/writesRequireProposal, because the per-grant
-  // exec-mode is the most specific, operator-authored signal about THIS run and
-  // must not be silently overridden by the routing workspace.
+  // BEFORE ownership/autoApprove/writesRequireProposal, because the run's
+  // approval row (its exec mode, D2) is the most specific, person-authored
+  // signal about THIS run and must not be silently overridden by the routing
+  // workspace.
   if (input.capabilityGovernance) {
     const mode = input.capabilityExecMode ?? input.capabilityGovernance;
     //   "auto"    → execute (operator pre-approved this capability)
     //   "propose" → propose  (reviewable capability.run proposal)
     //   "block"   → deny     (capability present but disabled — reachable only via
-    //                         capabilityGovernance; the grant exec-mode is just
-    //                         auto|propose, dry-run handled at the gate)
+    //                         capabilityGovernance; the approval row's exec mode
+    //                         is just auto|propose)
     if (mode === "block") {
       return { verdict: "deny", reason: CAPABILITY_BLOCKED_REASON };
     }

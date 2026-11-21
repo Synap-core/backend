@@ -56,7 +56,7 @@ export function buildCapabilityExecuteAgentJsonSchema(): Record<
     "The capability's inputs — e.g. { to, subject, body } for gmail_send, { query } for gmail_search.";
   properties.workspaceId.description = "Workspace UUID";
   properties.connectionSelector.description =
-    "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection — a selector matching nothing fails the run.";
+    "Which of the capability's connections this run uses, when it has more than one. `connectionId` names a specific connection; `contextObjectId` names the connection bound to that context object. Omit to use the only/default connection.";
   properties.idempotencyKey.description =
     "Optional: a stable key that correlates retries of THIS run. Note: a direct capability run has NO automatic content dedup — a retried call CAN produce a second external effect (e.g. a second send). Pass a key when the effect must be at-most-once; the key is recorded on the run.";
 

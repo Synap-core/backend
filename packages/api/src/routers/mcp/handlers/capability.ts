@@ -26,6 +26,7 @@ import {
   db,
   tools as toolsTable,
   ProfileResolutionService,
+  ownerAndActor,
 } from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
@@ -711,6 +712,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // the SAME source synap_create_verb reads). Lands on the resulting
       // `capability.run` proposal's session_id column; null outside a session.
       sessionId: sessionId ?? null,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     // Surface the same discriminated outcome the hub door returns, in a shape
     // the agent reads naturally (proposed is NOT an error). A `kind:"error"`
@@ -813,6 +815,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // so an agent-initiated create was evaluated as if the human owner did
       // it directly. Now threaded through, mirroring entities.ts's pattern.
       agentUserId: agentUserId ?? undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
 
     // WIRING — the MCP door used to write NONE of the edges the tRPC door
@@ -986,17 +989,31 @@ export const capabilityHandlers: McpHandlerMap = {
         loadIndex: async () => {
           const { listCapabilities } =
             await import("../../../services/capabilities/capability-registry.js");
-          const caps = await listCapabilities({
-            workspaceId: requestedWorkspaceId ?? null,
-            // The EXECUTION identity, not the bearer. `automations.create` sets
-            // `createdBy = agentUserId ?? ctx.userId`, and at run time a
-            // capability node resolves under that owner — `visibleSkillsWhere`
-            // has a per-user tier, so validating as the human would both
-            // FALSE-REJECT an agent-owned user-scoped skill and FALSE-ACCEPT a
-            // human-owned one that then throws "not found" mid-run. Keep this
-            // expression identical to the `createdBy` one below.
-            userId: agentUserId ?? userId,
-          });
+          // Validate against what the RUN will resolve: the owner
+          // `automations.create` stamps (the person), plus the authoring
+          // agent, whose own user-scope skills a run still reaches
+          // (`answeringSkillsWhere`). `visibleSkillsWhere` has a per-user
+          // tier, so validating as one of them alone would refuse the agent's
+          // own skill or accept one the run cannot find. Limit: the agent's
+          // workspace-tier skills are accepted here although the run reads that
+          // tier as the person.
+          const owner = await ownerAndActor(db, userId, agentUserId);
+          const principals = [
+            owner.ownerId,
+            ...(owner.agentUserId && owner.agentUserId !== owner.ownerId
+              ? [owner.agentUserId]
+              : []),
+          ];
+          const caps = (
+            await Promise.all(
+              principals.map((principal) =>
+                listCapabilities({
+                  workspaceId: requestedWorkspaceId ?? null,
+                  userId: principal,
+                })
+              )
+            )
+          ).flat();
           const verbIds = new Set<string>();
           const capabilityIds = new Set<string>();
           for (const cap of caps) {
@@ -1127,6 +1144,7 @@ export const capabilityHandlers: McpHandlerMap = {
         (args.status as "draft" | "active" | "paused" | "error" | undefined) ??
         "active",
       metadata,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },

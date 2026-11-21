@@ -84,10 +84,12 @@ vi.mock("../../../services/rules/update.js", () => ({
   updateRuleGoverned: async () => ({ status: "not_found" }),
 }));
 
-vi.mock("../../../services/rules/index.js", () => ({
-  RULE_CATEGORY: "rule",
-  readRuleMetadata: (m: unknown) =>
-    (m as { rule?: unknown } | null)?.rule ?? null,
+// The REAL rule readers (`readRuleView` tells a loop rule from a prose one);
+// only the database under them is mocked.
+vi.mock("../../../services/rules/index.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/rules/index.js")
+  >()),
 }));
 
 vi.mock("../../../services/skills/visibility.js", () => ({
@@ -369,6 +371,8 @@ describe("GET /rules", () => {
       {
         id: "r1",
         name: "Rule one",
+        category: "rule",
+        scope: "pod",
         approved: true,
         workspaceId: null,
         createdAt: new Date("2026-01-01T00:00:00.000Z"),
@@ -377,17 +381,48 @@ describe("GET /rules", () => {
       {
         id: "r2",
         name: "Not a rule",
+        category: null,
+        scope: "pod",
         approved: false,
         workspaceId: null,
         createdAt: new Date("2026-01-01T00:00:00.000Z"),
         metadata: {},
       },
+      // A PROSE rule (decision D1): category 'rule', no `metadata.rule`. Its
+      // words are its body; it is listed, as a rule, with no behaviour.
+      {
+        id: "r3",
+        name: "Shared tree",
+        category: "rule",
+        scope: "workspace",
+        body: "Never stash in a shared tree.",
+        approved: true,
+        workspaceId: "ws-1",
+        createdAt: new Date("2026-01-02T00:00:00.000Z"),
+        metadata: { autoLoad: false },
+      },
     ];
     const app = buildApp();
     const res = await app.request("/rules");
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { rules: Array<{ id: string }> };
-    expect(json.rules.map((r) => r.id)).toEqual(["r1"]);
+    const json = (await res.json()) as {
+      rules: Array<{
+        id: string;
+        form: string;
+        status: string;
+        rule: { intent: string; scope: unknown; behaviours: unknown[] };
+      }>;
+    };
+    expect(json.rules.map((r) => r.id)).toEqual(["r1", "r3"]);
+    expect(json.rules.map((r) => r.form)).toEqual(["loop", "prose"]);
+    const prose = json.rules[1]!;
+    expect(prose.status).toBe("active");
+    expect(prose.rule.intent).toBe("Never stash in a shared tree.");
+    expect(prose.rule.scope).toEqual({
+      kind: "workspace",
+      workspaceId: "ws-1",
+    });
+    expect(prose.rule.behaviours).toEqual([]);
   });
 
   it("403s without hub-protocol.read", async () => {

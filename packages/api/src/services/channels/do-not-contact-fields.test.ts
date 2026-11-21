@@ -47,6 +47,26 @@ describe("isDoNotContactSetWrite", () => {
       { id: "x", properties: {} },
       { id: "x" },
       undefined,
+      // A null or blank reason or date erases the recorded evidence
+      // (ticket 85a8f115): a removal, never a set.
+      {
+        id: "x",
+        properties: {
+          doNotContact: true,
+          doNotContactReason: null,
+          doNotContactSince: null,
+        },
+      },
+      {
+        id: "x",
+        properties: {
+          doNotContact: true,
+          doNotContactReason: "",
+          doNotContactSince: "1970-01-01",
+        },
+      },
+      { id: "x", properties: { doNotContact: true, doNotContactSince: "  " } },
+      { id: "x", properties: { doNotContact: true, doNotContactReason: 0 } },
     ]) {
       expect(isDoNotContactSetWrite(write), JSON.stringify(write)).toBe(false);
     }
@@ -62,6 +82,16 @@ describe("clearsDoNotContact", () => {
       { deleteProperties: ["doNotContact"] },
       { deleteProperties: ["doNotContactReason"] },
       { deleteProperties: ["email", "doNotContactSince"] },
+      // The flag re-set, its reason or date written empty: still a removal.
+      {
+        properties: {
+          doNotContact: true,
+          doNotContactReason: null,
+          doNotContactSince: null,
+        },
+      },
+      { properties: { doNotContact: true, doNotContactReason: "" } },
+      { properties: { doNotContactSince: " " } },
     ]) {
       expect(clearsDoNotContact(write), JSON.stringify(write)).toBe(true);
     }

@@ -16,7 +16,10 @@ import {
   runResolvedSkill,
   assertApprovalTargetResolves,
 } from "../../../services/capabilities/execute-capability.js";
-import { applyMarketInstall } from "../../../services/capabilities/marketplace-install.js";
+import {
+  applyMarketInstall,
+  type MarketInstallKind,
+} from "../../../services/capabilities/marketplace-install.js";
 import { setCapabilityRenderer } from "../../../services/capabilities/set-capability-renderer.js";
 import type { CapabilityRendererPage } from "@synap/database";
 import { resolveOrCreateContainer } from "../../../services/capabilities/container-address.js";
@@ -24,7 +27,6 @@ import {
   triggerProviderAction,
   type ConnectionSelector,
 } from "../../../connectors/external-dispatch.js";
-import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../../context.js";
 import {
   registerProposalExecutor,
@@ -587,7 +589,7 @@ export function registerCapabilityExecutors(): void {
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
       const slug = data.slug as string | undefined;
-      const kind = data.kind as CatalogKind | undefined;
+      const kind = data.kind as MarketInstallKind | undefined;
       if (!slug || !kind) {
         throw new TRPCError({
           code: "BAD_REQUEST",

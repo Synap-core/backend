@@ -54,6 +54,20 @@ export const DESIGN_VERB_PARAMETERS: Readonly<
         description:
           "The app (devplane_app) a design is for. Its designs are drawn with the app's own component kit when it has one (its `design-kit`); omit it for Synap's own components.",
       },
+      detail: {
+        type: "string",
+        enum: ["summary", "full"],
+        description:
+          "summary (default): every block's prop names and kinds, no select options. full: every prop spec (long: read the blocks you use with `components` instead).",
+      },
+      components: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 100,
+        description:
+          "Block names (kit components or canvas blocks): only these, with their full prop specs (select options, list items, slot rules). Names the catalog does not declare come back in `unknown`.",
+      },
     },
     additionalProperties: false,
   },
@@ -77,7 +91,7 @@ export const DESIGN_VERB_PARAMETERS: Readonly<
         maxItems: 200,
         items: { type: "object" },
         description:
-          "The ops, applied in order, all or nothing: create_design {title, appId?, projectId?} (first only), add_frame {preset, name?, id?, pageOf?, x?, y?}, update_frame {frameId, name?, preset?, x?, y?, w?, h?}, remove_frame {frameId}, add_block {frameId, parentId?, slot?, index?, type, props?}, update_block {id, props?, unset?}, move_block {id, frameId?, parentId?, slot?, index?}, remove_block {id}, set_span {id, class, span}, set_hide {id, class, hide}, replace_page {frameId, page}, replace_board {board}.",
+          "The ops, applied in order, all or nothing: create_design {title, appId?, projectId?} (first only), add_frame {preset, name?, id?, pageOf?, x?, y?}, update_frame {frameId, name?, preset?, x?, y?, w?, h?}, remove_frame {frameId}, add_block {frameId, parentId?, slot?, index?, type, props?}, update_block {id, props?, unset?}, move_block {id, frameId?, parentId?, slot?, index?}, remove_block {id}, set_span {id, class, span}, set_start {id, class, start}, set_hide {id, class, hide}, replace_page {frameId, page}, replace_board {board}.",
       },
       acceptDrops: {
         type: "boolean",

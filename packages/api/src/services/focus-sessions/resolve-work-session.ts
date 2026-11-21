@@ -51,7 +51,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { workClockIn } from "@synap-core/types/work-clock";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
 import { ambientWorkWhere } from "./session-kind.js";
 
 const logger = createLogger({ module: "focus-sessions/resolve-work-session" });
@@ -143,10 +143,7 @@ function unclaimedOpenWorkWhere(userId: string) {
   return and(
     eq(focusSessions.userId, userId),
     // `scheduled` is a future appointment, never where a present write goes.
-    inArray(
-      focusSessions.status,
-      OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-    ),
+    inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
     // A session the PERSON is in — `work`, plus a work session they
     // later attached to a playbook (which reads `run` by design).
     ambientWorkWhere(),
@@ -335,7 +332,7 @@ function startedByClientWhere(
   clientKey: string,
   statuses: ReadonlyArray<
     (typeof focusSessions.$inferSelect)["status"]
-  > = OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+  > = IN_FLIGHT_SESSION_STATUSES
 ) {
   return and(
     eq(focusSessions.userId, userId),

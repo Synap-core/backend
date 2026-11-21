@@ -121,6 +121,7 @@ vi.mock("../../../utils/event-backed-proposal.js", () => ({
 vi.mock("../evaluations/evaluate.js", () => ({
   evaluateSession: async () => ({
     status: "evaluated",
+    results: [],
     // A stored criterion's shape (`readCriteria`): the gate reads it through
     // the outcome projection (W6), which reads its check.
     criteria: [

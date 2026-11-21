@@ -42,6 +42,8 @@
  * `@synap/jobs` both depend on it, so there is no new edge and no cycle.
  */
 
+import type { IsFailureEnvelope } from "@synap-core/types";
+
 /**
  * The three IS workload shapes. These are NOT one number because they are not
  * one kind of work:
@@ -305,6 +307,36 @@ export function describeISEmptyGeneration(
 }
 
 /**
+ * The IS's `failure` envelope from a non-2xx JSON body, when it sent one.
+ *
+ * The IS's own refusals (`enforceQuota` 429, entitlement 403, inactive-account
+ * 403, spend-guard 429) answer `{ error, message, failure: { code, retryable } }`.
+ * This body used to be logged and dropped, so the pod classified on the bare
+ * status: a monthly-quota 429 read as "rate-limited, try again" and a
+ * not-entitled / inactive 403 as "credentials rejected". The ONE parser: the
+ * interactive client and every headless transport (through
+ * {@link describeISHttpError}) read the body here.
+ */
+export function extractFailureEnvelope(
+  body: string
+): IsFailureEnvelope | undefined {
+  if (!body) return undefined;
+  try {
+    const failure = (JSON.parse(body) as { failure?: unknown })?.failure;
+    if (
+      typeof failure === "object" &&
+      failure !== null &&
+      typeof (failure as { code?: unknown }).code === "string"
+    ) {
+      return failure as IsFailureEnvelope;
+    }
+  } catch {
+    // Not JSON — nothing to carry; the body stays in the logs.
+  }
+  return undefined;
+}
+
+/**
  * The `IS error` half: the IS answered with a non-2xx. Same envelope so an
  * operator reads ONE format regardless of which side failed. `body` is
  * truncated because an IS stack trace can be megabytes and this string lands in
@@ -328,5 +360,15 @@ export function describeISHttpError(
   // The status, for a caller that must tell a refused REQUEST (4xx) from a
   // failed service. Non-enumerable, like the retry marker above.
   Object.defineProperty(err, "status", { value: status, enumerable: false });
+  // The IS's own classification, when it sent one: `classifyAiFailure` (api
+  // `utils/ai-failure.ts`) prefers it over the status, so a quota 429 reads as
+  // the account's quota and not as "rate-limited, try again".
+  const failure = extractFailureEnvelope(body ?? "");
+  if (failure) {
+    Object.defineProperty(err, "failure", {
+      value: failure,
+      enumerable: false,
+    });
+  }
   return err;
 }

@@ -1,11 +1,16 @@
 /**
- * The playbook RUN status declaration (`playbook_runs.status`), in a leaf with
- * no runtime imports, like `./track-status.ts`. A run's status moves through
+ * The playbook RUN status declaration (`playbook_runs.status`), in a leaf
+ * whose one runtime import is the category-set leaf. A run's status moves through
  * THE transition door (`setRunStatus`, @synap/database), which reads each
  * status's category here; the read side (`statusOf`) reads the same map. One
  * declaration, never a second category system.
  */
 import type { LifecycleCategory } from "../lifecycle/option.js";
+import {
+  categoryOf,
+  statusesInCategories,
+  type StatusOfCategory,
+} from "../lifecycle/category-sets.js";
 
 /**
  * Every status a run row can carry, as stored. The DB column
@@ -54,8 +59,31 @@ export const RUN_STATUS_DECLARATION = {
 export function runStatusCategory(
   status: string | null | undefined
 ): LifecycleCategory | null {
-  if (status == null) return null;
-  return Object.hasOwn(RUN_STATUS_DECLARATION, status)
-    ? RUN_STATUS_DECLARATION[status as PlaybookRunStatusValue].category
-    : null;
+  return categoryOf(RUN_STATUS_DECLARATION, status);
 }
+
+/**
+ * The run statuses whose category is one of `categories` — the one way a
+ * reader names a set of run statuses (`lifecycle/category-sets.ts`).
+ */
+export function runStatusesIn<C extends LifecycleCategory>(
+  categories: readonly C[]
+): StatusOfCategory<typeof RUN_STATUS_DECLARATION, C>[] {
+  return statusesInCategories(RUN_STATUS_DECLARATION, categories);
+}
+
+/**
+ * LIVE run statuses — the ONE answer to "is this playbook/automation run still
+ * going?": the `active` and `paused` categories (running, waiting_on_you,
+ * stale) EXCEPT `proposed`, a run waiting for its approved start that has not
+ * begun. `@synap/database` (`utils/live-run-status.ts`, where the full rule
+ * is written down) and the external-agent cancel read this one set.
+ */
+export type LiveRunStatus = Exclude<
+  StatusOfCategory<typeof RUN_STATUS_DECLARATION, "active" | "paused">,
+  "proposed"
+>;
+export const LIVE_RUN_STATUSES: readonly LiveRunStatus[] = runStatusesIn([
+  "active",
+  "paused",
+]).filter((s): s is LiveRunStatus => s !== "proposed");

@@ -55,6 +55,7 @@
 import { type z } from "zod";
 import { BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
 import { looksLikeJsonSchema } from "./parameter-dialect.js";
+import { parameterRuleViolations } from "./parameter-rules.js";
 
 /** What the caller must change, machine-readable. */
 export interface ParameterRepair {
@@ -318,11 +319,41 @@ export function checkVerbParameters(
     kind: string | null;
     name: string;
     parameters?: unknown;
+    /** Carries the verb's conditional rules (`parameter-rules.ts`). */
+    metadata?: unknown;
   },
   parameters: Record<string, unknown> | undefined
 ): VerbParameterCheck {
-  const params = parameters ?? {};
+  const declared = checkDeclaredParameters(skill, parameters ?? {});
+  // The catalog's conditional rules ("for this model, only these ratios"),
+  // after the type map: their sentences ride in `hints`, and any one of them
+  // makes the call invalid, whatever the type map could read.
+  const ruled = parameterRuleViolations(skill.metadata, parameters ?? {});
+  if (ruled.length === 0) return declared;
+  if (declared.status === "invalid") {
+    return {
+      status: "invalid",
+      repair: {
+        ...declared.repair,
+        hints: [...(declared.repair.hints ?? []), ...ruled],
+      },
+    };
+  }
+  return {
+    status: "invalid",
+    repair: {
+      missing: [],
+      wrongType: {},
+      unknown: declared.status === "ok" ? declared.unknown : [],
+      hints: ruled,
+    },
+  };
+}
 
+function checkDeclaredParameters(
+  skill: { kind: string | null; name: string; parameters?: unknown },
+  params: Record<string, unknown>
+): VerbParameterCheck {
   if (skill.kind === "builtin") {
     const schema = BUILTIN_VERB_PARAM_SCHEMAS[skill.name];
     // A builtin with no registered schema (e.g. `feed.read`, which parses

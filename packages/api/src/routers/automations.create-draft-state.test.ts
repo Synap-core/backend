@@ -49,6 +49,7 @@ import {
   automationsRouter,
   materializeApprovedAutomation,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {
@@ -111,7 +112,10 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("forces an agent-originated (auto-approved) create to 'draft', overriding the requested 'active' status", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     const result = await caller.create({
@@ -132,7 +136,10 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("does NOT force a human direct create (no agentUserId) — requested 'active' status is honored", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     const result = await caller.create({
@@ -153,9 +160,13 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("materializeApprovedAutomation: an approval IS the activation — the author's status is kept, unstated lands 'active' via the executor", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    const database = { insert: vi.fn(() => insertChain(captured)) };
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
 
     const result = await materializeApprovedAutomation({
+      ownerId: "person-1",
       database: database as never,
       agentUserId: "agent-1",
       stableId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -176,8 +187,12 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("materializeApprovedAutomation keeps an explicit 'draft' (prepare, do not run)", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    const database = { insert: vi.fn(() => insertChain(captured)) };
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
     await materializeApprovedAutomation({
+      ownerId: "person-1",
       database: database as never,
       agentUserId: "agent-1",
       stableId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",

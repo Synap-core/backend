@@ -16,6 +16,7 @@ import { setupBridge } from "./bridge.js";
 import { validateRealtimeApiKey } from "./api-key-auth.js";
 import { verifyHandshakeUser } from "./session-auth.js";
 import { startDeviceSocketSweep, trackDeviceSocket } from "./device-sockets.js";
+import { startTicketSocketSweep } from "./ticket-sockets.js";
 import { canPrincipalJoinRoom, type RealtimePrincipal } from "./room-authz.js";
 import { firstDeniedHandshakeRoom, handshakeRooms } from "./presence-rooms.js";
 import { startPresenceSweep, type SweptSocket } from "./presence-sweep.js";
@@ -385,6 +386,8 @@ httpServer.listen(PORT, "0.0.0.0", () => {
 
 // A socket opened with a device token closes when its device ends.
 startDeviceSocketSweep();
+// A pod app's room-ticket sockets end with its connection (0438).
+startTicketSocketSweep();
 // Every open /presence socket: its credential, handshake rooms and joined
 // rooms are re-checked periodically.
 startPresenceSweep(

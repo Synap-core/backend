@@ -14,8 +14,9 @@
  *   - the playbooks `create` / `update` tRPC mutations, and
  *   - the workspace-definition materializer (`automations[]` → playbook_run).
  *
- * Cron `nextRunAt` is computed by REUSING the scheduler's `computeNextRunAt`
- * (imported from the worker) — there is deliberately no second cron parser here.
+ * Cron `nextRunAt` is the pod's one cron clock, `nextCronRunAt`
+ * (`@synap/shared-utils`), the one the scheduler fires with. A playbook
+ * schedule names no zone, so it is read in UTC like its trigger says.
  *
  * Pure domain side effect — the caller MUST have already gated the parent
  * mutation (checkPermissionOrPropose); these automation writes ride that
@@ -32,13 +33,13 @@ import {
   drizzleSql,
   automations,
   isUniqueViolation,
+  ownerAndActor,
   type FlowDefinition,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
 import type { PlaybookSchedule, PlaybookScheduleMode } from "@synap/playbooks";
 import { normalizePlaybookScheduleMode } from "@synap/playbooks";
-// Reuse the scheduler's cron parser — do NOT add a second one.
-import { computeNextRunAt } from "@synap/jobs/workers/automation-cron-scheduler.js";
+import { nextCronRunAt } from "@synap/shared-utils";
 // Same validator the automations create/update door runs — this module writes
 // `automations` directly and would otherwise bypass it entirely.
 import { flowValidationErrorMessage } from "../automations/validate-flow.js";
@@ -55,15 +56,11 @@ import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 const logger = createLogger({ module: "playbook-cron-automation" });
 
 /**
- * Load the surviving non-archived automation for (workspaceId, name).
- * Mirrors automations.ts's private `findNonArchivedAutomationByName` and 0230's
+ * Load the surviving non-archived automation for (workspaceId, name), the one
+ * read of a name clash for the automations router and this module. 0230's
  * newest-wins keep rule: case-insensitive on name, NULL workspace = pod-wide
  * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
  * 23505 recovery converges on the same winner the migration's soft-archive kept.
- *
- * Exported so both automation-writing playbook doors that live OUTSIDE the
- * automations router (this module + `playbooks.saveFlow`) recover 23505 the same
- * way, without re-deriving the identity predicate a third time.
  */
 export async function findNonArchivedAutomationByName(
   db: Awaited<ReturnType<typeof getDb>>,
@@ -250,8 +247,9 @@ export function buildPlaybookRunFlowDefinition(
 }
 
 export interface CronAutomationCtx {
-  /** Acting principal — stamped as the automation's createdBy. */
+  /** Who wrote the change; the backing automation is owned by its person. */
   userId: string;
+  agentUserId?: string | null;
   /**
    * The write did NOT change the playbook's `schedule` or `status` (an
    * adoption / metadata merge / text edit). Then this reconcile may refresh the
@@ -329,7 +327,7 @@ export async function materializePlaybookCronAutomation(
     // Who each run is handed to — also the user's words on the schedule.
     handToAgentId: schedule.handToAgentId,
   });
-  const nextRunAt = computeNextRunAt(schedule.cron, new Date());
+  const nextRunAt = nextCronRunAt(schedule.cron, new Date());
 
   // This path writes `automations` DIRECTLY, so it never meets the create/update
   // door's `flowValidationErrorMessage`. Run the SAME validator here: the flow is
@@ -397,13 +395,15 @@ export async function materializePlaybookCronAutomation(
   // the INSERT collides with the still-non-archived paused row of the same
   // `<name> (schedule)`. Re-arm that surviving row instead of 500-ing on the dup.
   const insertName = `${playbook.name} (schedule)`;
+  const owner = await ownerAndActor(db, ctx.userId, ctx.agentUserId);
   let automationId: string | null = null;
   try {
     const [created] = await db
       .insert(automations)
       .values({
         workspaceId: playbook.workspaceId,
-        createdBy: ctx.userId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name: insertName,
         description: `Scheduled run of playbook "${playbook.name}"`,
         triggerType: "cron",

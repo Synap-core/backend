@@ -100,6 +100,7 @@ const REL = {
   inside: randomUUID(), // E.p --related_to--> E.p2 (both in P)
   outside: randomUUID(), // E.p --related_to--> E.n (one end out)
   bpPerson: randomUUID(), // PERSON --belongs_to_project--> P
+  cross: randomUUID(), // E.p --related_to--> E.q (one end in P, one in Q)
 };
 const SESS = { p: randomUUID(), q: randomUUID(), n: randomUUID() };
 const CH = {
@@ -199,6 +200,7 @@ beforeAll(async () => {
   );
   await rel(REL.bpPerson, PERSON, P, "belongs_to_project");
   await rel(REL.outside, E.p, E.n, "related_to");
+  await rel(REL.cross, E.p, E.q, "related_to");
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, project_id, channel_id, goal, status) values
        ($1,$4,null,$5,$7,'g','active'), ($2,$4,null,$6,null,'g','active'), ($3,$4,$8,null,null,'g','active')`,
@@ -355,6 +357,21 @@ describe("a scope pinned to project P reads the rows IN P (W1)", () => {
       expect(
         grantReadClause(table, { permissions: [permission] })
       ).toBeUndefined();
+  });
+
+  // Review of #1197 (as works_at per space, finding 3): ONE scope over P and
+  // Q reads an edge only when both ends are in the SAME project, as a scope
+  // per project does. Read over the union, E.p (P) -> E.q (Q) came back.
+  it("a pin on P and Q reads the edges inside P and inside Q, never one across them", async () => {
+    const both: GrantScope = {
+      permissions: ["relation.read"],
+      projectIds: [P, Q],
+    };
+    const read = await reads(relations, relations.id, both);
+    expect(read).toEqual(
+      sorted(REL.bpP, REL.bpP2, REL.bpPerson, REL.inside, REL.bpQ)
+    );
+    expect(read).not.toContain(REL.cross);
   });
 
   it("a pin on Q reads Q's rows, never P's", async () => {

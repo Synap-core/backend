@@ -195,6 +195,30 @@ describe("safePublicFetch — ports and abort", () => {
     expect(resolved).toBe(false);
   });
 
+  it("httpsOnly refuses an http URL before resolving anything; off by default", async () => {
+    let resolved = false;
+    const resolve: AddressResolver = async () => {
+      resolved = true;
+      return [{ address: "127.0.0.1", family: 4 }];
+    };
+    await expect(
+      safePublicFetch(`http://img.test:${port}/x`, {}, 0, {
+        resolve,
+        isAllowedAddress: () => true,
+        allowedPorts: "any",
+        httpsOnly: true,
+      })
+    ).rejects.toThrow(/only https URLs are allowed/);
+    expect(resolved).toBe(false);
+    // Without the flag the same request goes through (the default is unchanged).
+    const res = await safePublicFetch(`http://img.test:${port}/x`, {}, 0, {
+      resolve,
+      isAllowedAddress: () => true,
+      allowedPorts: "any",
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("an abort cuts a hanging DNS resolution short", async () => {
     const ctl = new AbortController();
     const pending = safePublicFetch(

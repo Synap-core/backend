@@ -167,7 +167,7 @@ function isCallerSuppliedInput(path: string): boolean {
  * object key is `missing` either way.
  *
  * WHY THIS MATTERS ENOUGH TO SPECIAL-CASE — measured, not hypothesised. The
- * report flow's per-kind projections (`ensure-report-automation.ts`,
+ * report flow's per-kind projections (base.yaml's report automation,
  * `projectionNode`) render `status`/`priority`/`dueDate`/`email`/
  * `lastInteractionAt`/`industry`/`location` for EVERY row of a `map:` pipe. A
  * healthy run on 2026-08-01 recorded 88 "missing" hits across 7 such paths and

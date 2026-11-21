@@ -173,6 +173,13 @@ export interface Context {
    */
   presenceChecked?: "applyProposalApproval";
   /**
+   * INTERNAL CHANNEL — never from a request. An approval executor replaying an
+   * agent's create sets it to the agent that wrote the proposal: the row
+   * records it as its actor. Governance never reads it (the replay carries no
+   * `agentUserId`, so it applies instead of proposing again).
+   */
+  approvedAuthorAgentUserId?: string | null;
+  /**
    * The message ID that triggered this hub-protocol request.
    * When set, proposals created during this request are linked to this message.
    */

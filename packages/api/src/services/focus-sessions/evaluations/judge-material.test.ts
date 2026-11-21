@@ -368,7 +368,51 @@ describe("judge rung — an IS still capped at 8000 (deploy order)", () => {
     expect(out.status === "evaluated" && out.results[0]).toMatchObject({
       key: "mapped",
       status: "skipped",
+      failureClass: "bad_request",
     });
+  });
+});
+
+describe("judge rung — a judge that could not run says why in words", () => {
+  const answer = (status: number, statusText: string, body: unknown) =>
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(body, { status, statusText }))
+    );
+
+  it("an IS quota refusal (429 + failure envelope) is the account's quota, not the raw body", async () => {
+    answer(429, "Too Many Requests", {
+      error: "Token quota exceeded",
+      message: "Monthly token quota exceeded for this account",
+      failure: { code: "account_quota_exceeded", retryable: false },
+    });
+    const out = await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    const result = out.status === "evaluated" ? out.results[0] : undefined;
+    expect(result).toMatchObject({
+      key: "mapped",
+      status: "skipped",
+      failureClass: "account_quota",
+    });
+    expect(result?.reason).toMatch(
+      /^The AI judge could not run: This account has used up its monthly AI quota\./
+    );
+    expect(result?.reason).not.toContain("HTTP 429");
+    expect(result?.reason).not.toContain("Token quota exceeded");
+  });
+
+  it("the IS's generic 502 'Judge error' (no envelope) is classified from its status", async () => {
+    answer(502, "Bad Gateway", {
+      error: "Judge error",
+      message: "provider exploded",
+    });
+    const out = await evaluateSession({ sessionId: "s-1", userId: "u-1" });
+    const result = out.status === "evaluated" ? out.results[0] : undefined;
+    expect(result).toMatchObject({
+      status: "skipped",
+      failureClass: "upstream",
+    });
+    expect(result?.reason).toContain("The AI service returned a server error.");
+    expect(result?.reason).not.toContain("provider exploded");
   });
 });
 

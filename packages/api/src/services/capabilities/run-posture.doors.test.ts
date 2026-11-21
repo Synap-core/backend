@@ -54,11 +54,14 @@ function toolVerb(
     id,
     label: id,
     kind,
-    // An UNGRANTED verb's effective mode falls back to govDefault (`auto` here)
-    // — exactly the value that used to read as "runs now".
+    // `govDefault` is `auto` here on purpose: since decision D2 the builder
+    // never falls back to it (only an approval row makes a verb `auto`), so an
+    // UNGRANTED verb with no row reads `propose` whatever its catalog default.
+    // In this fixture `granted` + `execMode` stand for the approval row the
+    // builder read: granted + auto = an auto row.
     govDefault: "auto",
     granted,
-    effectiveExecMode: granted ? execMode : "auto",
+    effectiveExecMode: granted ? execMode : "propose",
     backingSkillExecutable: true,
   } as CapabilityVerbState;
 }
@@ -91,9 +94,9 @@ function toolRow(
  *   - `execute-capability.ts` sets `readOnly` iff the skill is builtin AND in
  *     READ_ONLY_BUILTIN_VERBS; `gateCapabilityExecution` returns `run` for it
  *     before any grant rung;
- *   - otherwise no active grant → the no-grant rung proposes; a grant → policy
- *     rung 2.7: mode `auto` executes (a write included), anything else proposes
- *     (`dry-run` short-circuits to a preview, never "runs now").
+ *   - otherwise the approval row decides (decision D2): an `auto` row → policy
+ *     rung 2.7 executes (a write included); an "ask first" row or no row
+ *     proposes. A grant ("may use") decides nothing.
  * It proves the doors agree with THIS model; it cannot see a gate rung added
  * later — a sameness proof, not correctness.
  */
@@ -104,7 +107,6 @@ function gateVerdict(v: {
   execMode?: string;
 }): "auto" | "propose" {
   if (v.builtin && READ_ONLY_BUILTIN_VERBS.has(v.verbId)) return "auto";
-  if (v.granted !== true) return "propose";
   return v.execMode === "auto" ? "auto" : "propose";
 }
 
@@ -150,6 +152,22 @@ describe("run posture — behavioural, every door", () => {
     expect(byVerb.get("mail_create_draft")?.governance).toBe("auto");
     expect(byVerb.get("mail_send")?.governance).toBe("auto");
     expect(byVerb.get("mail_send_ungranted")?.governance).toBe("propose");
+  });
+
+  it("an auto approval row runs a verb with NO grant (decision D2: a grant means only may-use)", () => {
+    // The discriminating row: before D2 `runPosture` required `granted`, so an
+    // auto row for everyone with no grant read `propose` while the gate ran it.
+    const rowOnly = {
+      ...toolVerb("crm_lookup", "read", false, "auto"),
+      effectiveExecMode: "auto",
+    } as CapabilityVerbState;
+    const caps = [
+      toolRow("source-provider", "CRM", [rowOnly], "container-crm"),
+    ];
+    const actions = new Map(
+      projectRunnableActions(caps).map((a) => [a.verbId, a.governance])
+    );
+    expect(actions.get("crm_lookup")).toBe("auto");
   });
 
   it("MCP sections: skill rows carry posture + a separate enabled; verbs carry their own posture", () => {
@@ -311,7 +329,7 @@ describe("tripwire — every door's label equals the gate verdict over a derived
         builtin: false,
         verbId: c.verbId,
         granted: c.granted,
-        execMode: c.granted ? c.mode : "auto",
+        execMode: c.granted ? c.mode : "propose",
       }),
     ])
   );
@@ -322,7 +340,7 @@ describe("tripwire — every door's label equals the gate verdict over a derived
       builtin: true,
       verbId,
       granted: g.granted,
-      execMode: g.granted ? g.mode : "auto",
+      execMode: g.granted ? g.mode : "propose",
     });
 
   it("non-vacuity: real reads + writes, every tool case, both verdicts, and the discriminating rows", () => {

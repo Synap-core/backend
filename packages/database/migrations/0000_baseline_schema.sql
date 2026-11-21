@@ -2596,6 +2596,8 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"      text    NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "name"            text    NOT NULL,
   "description"     text,
   "trigger_type"    text    NOT NULL,
@@ -2648,6 +2650,9 @@ CREATE INDEX IF NOT EXISTS "automations_next_run_at_idx"
 
 CREATE INDEX IF NOT EXISTS "automations_created_by_idx"
   ON "automations" ("created_by");
+
+CREATE INDEX IF NOT EXISTS "automations_agent_user_id_idx"
+  ON "automations" ("agent_user_id");
 
 -- Name-identity backstop (0230): at-most-one non-archived automation per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
@@ -4452,6 +4457,8 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"     uuid,
   "created_by"       text        NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"    text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"             text        NOT NULL,
   "description"      text,
   "goal_template"    text        NOT NULL,
@@ -4472,6 +4479,7 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+CREATE INDEX IF NOT EXISTS "idx_playbooks_agent_user_id" ON "playbooks" ("agent_user_id");
 -- TOCTOU race backstop (0227): at-most-one non-archived playbook per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
 -- pod-wide rows participate. Soft-archive of pre-existing name clones is only
@@ -5339,6 +5347,62 @@ CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
 -- A manual destroy closes the lease of the machine it names.
 CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
   ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
+
+-- Realtime room tickets (0438): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0438.
+CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
+  "ticket_hash"  text        PRIMARY KEY,
+  "user_id"      text        NOT NULL,
+  "document_id"  uuid        NOT NULL,
+  "access"       text        NOT NULL,
+  "api_key_id"   uuid        NOT NULL,
+  "expires_at"   timestamptz NOT NULL,
+  "consumed_at"  timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "realtime_room_tickets_access_check"
+    CHECK ("access" IN ('read', 'edit'))
+);
+CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
+  ON "realtime_room_tickets" ("expires_at");
+
+-- Renderer bundles (0436): a bundle row (its defaults are the host fallback,
+-- never a renderer binding) and its ONE host-module set per pod (unique on
+-- `module`; the modules' FK is checked at commit). Mirrors 0436.
+CREATE TABLE IF NOT EXISTS "renderer_bundles" (
+  "slug"          text        PRIMARY KEY,
+  "version"       text        NOT NULL,
+  "set_sha256"    text        NOT NULL,
+  "react_version" text        NOT NULL,
+  "kit_exports"   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  "defaults"      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "source"        text        NOT NULL,
+  "installed_by"  text        NOT NULL,
+  "installed_at"  timestamptz NOT NULL DEFAULT now(),
+  "updated_at"    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_host_modules" (
+  "bundle_slug" text    NOT NULL,
+  "module"      text    NOT NULL,
+  "source"      text    NOT NULL,
+  "sha256"      text    NOT NULL,
+  "byte_length" integer NOT NULL,
+  PRIMARY KEY ("bundle_slug", "module")
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'renderer_host_modules_bundle_fk'
+  ) THEN
+    ALTER TABLE "renderer_host_modules" ADD CONSTRAINT "renderer_host_modules_bundle_fk"
+      FOREIGN KEY ("bundle_slug") REFERENCES "renderer_bundles"("slug")
+      ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
+  ON "renderer_host_modules" ("module");
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.

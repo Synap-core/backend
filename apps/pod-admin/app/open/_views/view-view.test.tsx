@@ -1,12 +1,34 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
 
 let answer: unknown = null;
 /** What `flow.of` answers: the flow, a failure, or still loading. */
 let flowRead: { data?: unknown; error?: unknown; isLoading?: boolean } = {};
+/** The pod's renderer bundle: none installed unless a test installs it. */
+const { renderers, answered } = vi.hoisted(() => ({
+  renderers: {
+    status: { bundle: null, defaults: {}, installed: [] } as unknown,
+    modules: undefined as unknown,
+    cell: undefined as unknown,
+  },
+  answered: (data: () => unknown) => ({
+    useQuery: () => ({
+      data: data(),
+      error: null,
+      isLoading: false,
+      refetch: () => {},
+    }),
+  }),
+}));
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
+    renderers: {
+      status: answered(() => renderers.status),
+      hostModules: answered(() => renderers.modules),
+    },
+    widgetDefinitions: { get: answered(() => renderers.cell) },
+    profiles: { getEffectiveRenderers: answered(() => undefined) },
     views: {
       get: {
         useQuery: () => ({
@@ -32,7 +54,9 @@ vi.mock("../../../lib/trpc", () => ({
   },
 }));
 
+import { CELL_MODULE_FRAME_SANDBOX } from "@synap-core/types/cell-bridge";
 import { ViewView } from "./view-view";
+import { ConsoleRoleProvider } from "../../(admin)/components/side-nav-role";
 import { describeView, viewKind, widgetCount } from "./view-summary";
 import { pipelineSnapshot, type FlowLike } from "./view-pipeline-model";
 import { openT } from "../copy";
@@ -113,7 +137,7 @@ describe("/open/view: a view pod admin does not draw", () => {
     answer = view({});
     const out = renderToStaticMarkup(<ViewView id="v1" />);
     expect(out.split("Open view in the app").length - 1).toBe(1);
-    expect(out).not.toContain(">Open in app<");
+    expect(out).not.toContain("Open in app");
   });
 
   it("a generated dashboard counts its widgets and names its kind", () => {
@@ -310,5 +334,102 @@ describe("describeView: only what the row carries", () => {
     expect(describeView({ type: null, config: "not an object" }, t())).toBe(
       "A saved view."
     );
+  });
+});
+
+describe("/open/view: a board the pod's renderer bundle draws", () => {
+  const BOARD = "cell:synap-renderers:board";
+  const INSTALLED = {
+    bundle: {
+      slug: "synap-renderers",
+      version: "1",
+      setSha256: "s1",
+      reactVersion: "19.2.3",
+    },
+    defaults: { views: { board: "board" } },
+    installed: [
+      {
+        key: BOARD,
+        runtime: "frame",
+        contentKind: "collection",
+        viewTypes: ["board"],
+      },
+    ],
+  };
+  beforeEach(() => {
+    setAmbientCatalogLocale("en");
+    renderers.status = INSTALLED;
+    renderers.modules = {
+      notModified: false,
+      setSha256: "s1",
+      modules: {
+        react: "r",
+        reactDom: "rd",
+        reactDomClient: "rdc",
+        jsxRuntime: "jsx",
+        tokensCss: ":root{}",
+      },
+      kitExports: [],
+    };
+    renderers.cell = {
+      typeKey: BOARD,
+      rendererType: "frame",
+      rendererSource: "export default function Board() { return null; }",
+    };
+  });
+  afterEach(() => {
+    renderers.status = { bundle: null, defaults: {}, installed: [] };
+  });
+
+  it("runs the board under the header in the module frame, with no hand-off card", () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    const frames = out.match(/<iframe\b[^>]*>/gi) ?? [];
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toContain(`sandbox="${CELL_MODULE_FRAME_SANDBOX}"`);
+    expect(out).not.toContain("This view is worked in the Synap app");
+    // The way to the app stays, as the object's own link.
+    expect(out).toContain("Open in app");
+    // The card reads wide around the drawn view.
+    expect(out).toContain("data-reads-wide");
+  });
+
+  it("a layout the bundle does not draw keeps its card", () => {
+    answer = view({ type: "calendar" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out.match(/<iframe\b/gi) ?? []).toHaveLength(0);
+    expect(out).toContain("This view is worked in the Synap app");
+  });
+});
+
+describe("/open/view: no renderer bundle on this pod", () => {
+  beforeEach(() => setAmbientCatalogLocale("en"));
+
+  it("a pod admin reads it in ONE line inside the hand-off card, never a pill above it", () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(
+      <ConsoleRoleProvider role="admin">
+        <ViewView id="v1" />
+      </ConsoleRoleProvider>
+    );
+    const card = out.indexOf("This view is worked in the Synap app");
+    const line = out.indexOf("Synap’s renderers aren’t on this pod.");
+    expect(card).toBeGreaterThan(-1);
+    expect(line).toBeGreaterThan(card);
+    expect(line).toBeLessThan(out.indexOf("Open view in the app"));
+    expect(out).not.toContain("Not drawn");
+  });
+
+  it("a member is not told about the pod's setup", () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out).toContain("This view is worked in the Synap app");
+    expect(out).not.toContain("Synap’s renderers aren’t on this pod.");
+  });
+
+  it('the hand-off is the one door: no second "Open in app" in the header', () => {
+    answer = view({ type: "board" });
+    const out = renderToStaticMarkup(<ViewView id="v1" />);
+    expect(out).not.toContain("Open in app");
   });
 });
