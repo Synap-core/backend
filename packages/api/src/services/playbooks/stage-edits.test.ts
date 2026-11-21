@@ -19,7 +19,11 @@ describe("applyStageEdits", () => {
         stage: { key: "review", name: "Review", category: "started" },
         after: "build",
       },
-      { op: "update", key: "shape", fields: { name: "Shaped", description: null } },
+      {
+        op: "update",
+        key: "shape",
+        fields: { name: "Shaped", description: null },
+      },
       { op: "remove", key: "ship" },
     ]);
     expect(out).toEqual({
@@ -34,7 +38,10 @@ describe("applyStageEdits", () => {
 
   it("appends an add with no `after`", () => {
     const out = applyStageEdits(STORED, [
-      { op: "add", stage: { key: "learn", name: "Learn", category: "completed" } },
+      {
+        op: "add",
+        stage: { key: "learn", name: "Learn", category: "completed" },
+      },
     ]);
     expect(out.ok && out.stages.map((s) => s.key)).toEqual([
       "shape",

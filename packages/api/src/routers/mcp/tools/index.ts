@@ -3316,8 +3316,7 @@ export const tools = {
             quote: {
               type: "string",
               maxLength: ASK_LIMITS.relayQuoteMaxChars,
-              description:
-                `The person's own words, verbatim, as they typed them. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} characters they are kept whole as a document (\`quoteDocumentId\`).`,
+              description: `The person's own words, verbatim. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} characters: kept whole as a document (\`quoteDocumentId\`).`,
             },
             text: {
               type: "string",
@@ -3991,7 +3990,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes). Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Check here BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes). Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4008,7 +4007,7 @@ export const tools = {
             limit: {
               type: "number",
               description:
-                "Page size (1–100, default 25). With playbookId: its stages alone, a page (default 6).",
+                "Page size (1–100, default 25). With playbookId: stages per page (6).",
             },
             cursor: {
               type: "string",
@@ -4016,12 +4015,12 @@ export const tools = {
             },
             offset: {
               type: "number",
-              description: "With playbookId: the first stage to read (nextOffset).",
+              description: "With playbookId: first stage (nextOffset).",
             },
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (definition, `process`, `stagesRevision`), instead of listing.",
+                "Read ONE playbook whole (with `process` and `stagesRevision`).",
             },
             detail: {
               type: "string",
@@ -4181,13 +4180,13 @@ export const tools = {
             stageEdits: {
               type: "array",
               description:
-                "Change stages by key, in order, on the stored list: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears one) | {op:'remove', key}. Instead of `stages`.",
+                "Edit stages by key, in order: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears) | {op:'remove', key}.",
               items: { type: "object" },
             },
             stagesRevision: {
               type: "string",
               description:
-                "With `stages`: the `stagesRevision` of your read, required when it has stages (a read cut to fit has none: use stageEdits).",
+                "Needed with `stages`: from a whole read (a cut read has none; use stageEdits).",
             },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
@@ -4198,8 +4197,7 @@ export const tools = {
             triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             subjectProfileSlug: {
               type: "string",
-              description:
-                "The kind or role it runs ON (must resolve).",
+              description: "The kind or role it runs ON (must resolve).",
             },
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
@@ -4576,7 +4574,7 @@ export const tools = {
             documents: {
               type: "array",
               description:
-                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`; never beside its long `content`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`; not with long `content`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
               items: {
                 type: "object",
                 properties: {

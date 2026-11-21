@@ -102,7 +102,11 @@ export function applyStageEdits(
           error: `${where}: no stage "${String(edit.after)}" to add after (${knownKeys(stages)}).`,
         };
       }
-      stages = [...stages.slice(0, after + 1), stage, ...stages.slice(after + 1)];
+      stages = [
+        ...stages.slice(0, after + 1),
+        stage,
+        ...stages.slice(after + 1),
+      ];
       continue;
     }
     if (edit.op !== "update" && edit.op !== "remove") {

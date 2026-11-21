@@ -456,7 +456,9 @@ describe("the relay door", () => {
       value: EU,
     });
     expect(docs.written).toHaveLength(1);
-    expect((await slot(short.sessionId)).answer!.quoteDocumentId).toBeUndefined();
+    expect(
+      (await slot(short.sessionId)).answer!.quoteDocumentId
+    ).toBeUndefined();
   });
 
   it("COMMITMENT: never answers, never unblocks, never files, never wakes — it waits for the tap, and the needs-you row carries it", async () => {

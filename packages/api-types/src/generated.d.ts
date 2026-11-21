@@ -16286,6 +16286,8 @@ export interface SlotAnswerProvenance {
 	relaySurface?: string;
 	/** The person's own words, verbatim. */
 	quote?: string;
+	/** The document holding `quote` whole when it was too long: `quote` is its start. */
+	quoteDocumentId?: string;
 	/** The person confirmed a relayed answer (set with `via: 'tap'` only). */
 	confirmedAt?: string;
 }
@@ -16300,6 +16302,7 @@ export interface SlotPendingRelay {
 	relayedBy: string;
 	relaySurface?: string;
 	quote?: string;
+	quoteDocumentId?: string;
 	relayedAt: string;
 }
 /**
@@ -41750,6 +41753,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -41881,6 +41885,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -42158,6 +42163,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					paramName?: string | undefined;
 					pendingRelay?: {
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedAt: string;
 						relayedBy: string;
@@ -43130,6 +43136,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -43261,6 +43268,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -43538,6 +43546,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					paramName?: string | undefined;
 					pendingRelay?: {
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedAt: string;
 						relayedBy: string;

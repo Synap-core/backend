@@ -337,7 +337,7 @@ describe("stages: edits by key, a whole list only from a whole read", () => {
           stageEdits: [{ op: "remove", key: "nope" }],
         })
       )
-    ).toMatchObject({ error: expect.stringContaining("no stage \"nope\"") });
+    ).toMatchObject({ error: expect.stringContaining('no stage "nope"') });
     expect(h.gate).not.toHaveBeenCalled();
   });
 });
