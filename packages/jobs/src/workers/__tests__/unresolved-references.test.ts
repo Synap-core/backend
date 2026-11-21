@@ -202,7 +202,7 @@ describe("caller-supplied input is not a wiring fault", () => {
  * An UNSET ENTITY PROPERTY is data, not a wiring fault.
  *
  * Live regression (2026-08-01 13:55, a SUCCESSFUL report run): the per-kind
- * projections in `ensure-report-automation.ts` render a fixed field list for
+ * projections in base.yaml's report automation render a fixed field list for
  * every row of a `map:` pipe, so 88 hits across 7 paths
  * (dueDate 18, lastInteractionAt 15, location 15, email 12, industry 12,
  * priority 10, status 6) were recorded as `missing` and SATURATED

@@ -181,7 +181,7 @@ import {
   type ApproveChoice,
 } from "./use-proposal-decision";
 import { useRecordDefinitions } from "./use-record-definitions";
-import { ToolRunArguments } from "./ToolRunArguments";
+import { RunResult, ToolRunArguments } from "./ToolRunArguments";
 import {
   changedDrafts,
   reviewToolRun,
@@ -1423,30 +1423,34 @@ export function ProposalReviewBody({
             />
           </Section>
         ) : toolRun ? (
-          <ToolRunArguments
-            run={toolRun}
-            drafts={toolDrafts}
-            onDraft={
-              actionable && status === "pending"
-                ? (key, text) =>
-                    setToolDrafts((d) => {
-                      const { [key]: _gone, ...rest } = d;
-                      return text === undefined
-                        ? rest
-                        : { ...rest, [key]: text };
-                    })
-                : null
-            }
-            recorded={toolRunEdits(p.revisionHistory, {
-              isSecretName: () => false,
-              secretKeys: new Set(
-                toolRun.parameters.filter((x) => x.secret).map((x) => x.key)
-              ),
-            })}
-          >
-            {/* The reason it needed approval: said once, in Details. */}
-            {reason && <DisclosedMark mark={reason} icon={ShieldCheck} />}
-          </ToolRunArguments>
+          <>
+            <ToolRunArguments
+              run={toolRun}
+              drafts={toolDrafts}
+              onDraft={
+                actionable && status === "pending"
+                  ? (key, text) =>
+                      setToolDrafts((d) => {
+                        const { [key]: _gone, ...rest } = d;
+                        return text === undefined
+                          ? rest
+                          : { ...rest, [key]: text };
+                      })
+                  : null
+              }
+              recorded={toolRunEdits(p.revisionHistory, {
+                isSecretName: () => false,
+                secretKeys: new Set(
+                  toolRun.parameters.filter((x) => x.secret).map((x) => x.key)
+                ),
+              })}
+            >
+              {/* The reason it needed approval: said once, in Details. */}
+              {reason && <DisclosedMark mark={reason} icon={ShieldCheck} />}
+            </ToolRunArguments>
+            {/* Once it ran: what it handed back (report 48dbf93b). */}
+            {!actionable && <RunResult data={p.data} />}
+          </>
         ) : records.length > 0 ? (
           <div className="flex flex-col gap-3">
             {groups.map((group) => (

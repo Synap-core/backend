@@ -1214,6 +1214,17 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // The actor column (0442): every automation and playbook read names it.
+  {
+    table: "automations",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "playbooks",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
   // apps.approved_access — the approval in its v2 form (0434, app permissions
   // W2). Missing means every app read and approval write would 42703.
   {
@@ -1904,14 +1915,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // vault_grants → capability grants generalization (0142). The polymorphic
   // subject columns are what the resolver/issuance now key on; their absence
   // means a pod is on a pre-0142 schema and grant redemption would break.
+  // (`exec_mode`, also added by 0142, is no longer read since 0435: an approval row
+  // is the only verdict, a grant means "may use".)
   {
     table: "vault_grants",
     column: "grantable_type",
-    addedBy: "0142_capability_grants.sql",
-  },
-  {
-    table: "vault_grants",
-    column: "exec_mode",
     addedBy: "0142_capability_grants.sql",
   },
 
@@ -2276,6 +2284,37 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "compute_leases",
     column: "registration_code_hash",
     addedBy: "0432_compute_lease_kept.sql",
+  },
+
+  // Realtime room tickets (0438): every pod app's room ticket is written and
+  // claimed here; absence means no app could open a live room (42P01).
+  {
+    table: "realtime_room_tickets",
+    column: "consumed_at",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+  {
+    table: "realtime_room_tickets",
+    column: "api_key_id",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+  // Renderer bundles (0436): the install writes both tables and pod admin
+  // reads them on every page that draws pod content; absence means every
+  // install and every host-module read would fail (42P01).
+  {
+    table: "renderer_bundles",
+    column: "set_sha256",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_bundles",
+    column: "defaults",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_host_modules",
+    column: "sha256",
+    addedBy: "0436_renderer_bundles.sql",
   },
 
   // Document passages (0358b) — a document body as recall-sized units, and

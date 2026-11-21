@@ -63,7 +63,11 @@ import type { SQL } from "@synap/database";
 import { parsePullRequestRef, type PullRequestRef } from "@synap-core/types";
 import { holdDevMovesRef, type Hold } from "@synap-core/types/lifecycle";
 import { workClockIn } from "@synap-core/types/work-clock";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  runStatusesIn,
+} from "@synap-core/types/units";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionKindWhere } from "./session-kind.js";
 import { attachNextMove } from "./session-path-sections.js";
@@ -79,9 +83,6 @@ export const LONG_STALE_DAYS = workClockIn("stuck", "days");
 const STALE_HOURS = workClockIn("stale", "hours");
 /** Most sessions each move handles per tick (each runs a full door). */
 const BATCH = 200;
-
-/** Statuses an open session stands in that these moves may end. */
-const OPEN = ["active", "paused", "stale"] as const;
 
 /**
  * SQL: a RUN session — the session kind's own predicate, NULL-safe. `NOT` of
@@ -112,7 +113,7 @@ const nothingOwed = () =>
 export function metWorkSessionWhere(): SQL {
   return and(
     sessionKindWhere("work"),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     quietFor(MET_CLOSE_QUIET_HOURS),
     drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
     drizzleSql`NOT ${outstandingSlotExistsIn(focusSessions.expectedOutputs)}`,
@@ -307,8 +308,8 @@ const AUTOMATION_RUN_ENDED = [
   "skipped",
   "blocked_by_policy",
 ] as const;
-/** The playbook run statuses after which nothing more runs. */
-const PLAYBOOK_RUN_ENDED = ["completed", "failed", "cancelled"] as const;
+/** The playbook run statuses after which nothing more runs (done or lost). */
+const PLAYBOOK_RUN_ENDED = runStatusesIn(["done", "lost"]);
 
 const sqlList = (values: readonly string[]) =>
   drizzleSql.raw(values.map((v) => `'${v}'`).join(", "));
@@ -338,7 +339,7 @@ export function endedRunSessionWhere(): SQL {
     ))`;
   return and(
     runSessionWhere(),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     drizzleSql`(${automationEnded} OR ${playbookEnded} OR ${intakeEnded})`,
     nothingOwed(),
     // A run paused at its human stage gate has "ended" its turn, not its

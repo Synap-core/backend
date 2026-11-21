@@ -43,6 +43,11 @@ export const en = {
   "where.space": "A space",
   "row.actionsOn": "{on} of {total} actions on",
   "row.lastRan": "last ran {when}",
+  "addOns.title": "Add-ons",
+  "addOns.why":
+    "Each add-on is its own tool, with its own actions and approvals. It runs through {base}’s access and stops when that is off.",
+  "addOn.why":
+    "It runs through {base}’s access: when that is off, its actions don’t run.",
   "card.noDescription": "No description.",
   "status.on": "On",
   "status.off": "Off",
@@ -127,6 +132,11 @@ export const fr: Catalog<typeof en> = {
   "where.space": "Un espace",
   "row.actionsOn": "{on} actions activées sur {total}",
   "row.lastRan": "dernière exécution {when}",
+  "addOns.title": "Extensions",
+  "addOns.why":
+    "Chaque extension est un outil à part, avec ses propres actions et validations. Elle passe par l’accès de {base} et s’arrête quand il est désactivé.",
+  "addOn.why":
+    "Elle passe par l’accès de {base} : quand il est désactivé, ses actions ne tournent pas.",
   "card.noDescription": "Pas de description.",
   "status.on": "Activé",
   "status.off": "Désactivé",

@@ -31,7 +31,13 @@ import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { links, skills, tools, vaultGrants } from "@synap/database/schema";
+import {
+  governanceRules,
+  links,
+  skills,
+  tools,
+  vaultGrants,
+} from "@synap/database/schema";
 import {
   retireCapabilityShadows,
   type CapabilityShadow,
@@ -64,7 +70,7 @@ const PACK = randomUUID();
 
 async function seed() {
   const client = new PGlite();
-  for (const t of [skills, tools, links, vaultGrants]) {
+  for (const t of [skills, tools, links, vaultGrants, governanceRules]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
   holder.db = drizzle(client);

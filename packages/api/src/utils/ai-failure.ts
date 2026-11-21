@@ -335,15 +335,17 @@ const COPY: Record<
     message:
       "The AI provider says this account's quota is used up. Retrying will not help — an operator has to raise the quota or wait for it to reset.",
   },
-  // The account holder can act on both of the next two (wait for the reset,
-  // change the plan) — no operator fix exists, so `needsOperator: false`; the
+  // No operator fix exists for the next two, so `needsOperator: false`; the
   // same request cannot succeed until the account changes, so not retryable.
+  // The IS quota resets with the CALENDAR month (its billing periods), and a
+  // plan change does not touch the balance before then: the copy offers no
+  // upgrade it cannot honour.
   account_quota: {
     code: "account_quota_exceeded",
     retryable: false,
     needsOperator: false,
     message:
-      "This account has used up its monthly AI quota. Retrying will not help \u2014 it resets at the start of the next billing period, or a plan upgrade raises it.",
+      "This account has used up its monthly AI quota. Retrying will not help \u2014 it resets at the start of next month.",
   },
   not_entitled: {
     code: "not_entitled",

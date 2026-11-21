@@ -360,6 +360,8 @@ export async function changeLifecycleOptions(
 export type SetLifecycleInitialStatusResult =
   | { status: "changed"; links: number }
   | { status: "unchanged" }
+  /** `onlyWhenUnset`: the lifecycle already starts things in `current`; nothing written. */
+  | { status: "kept"; current: string }
   | { status: "refused"; reason: string };
 
 /**
@@ -374,10 +376,18 @@ export type SetLifecycleInitialStatusResult =
  * birth path cannot classify would be dropped there silently. A terminal or
  * person-only initial is allowed (`decision` → `accepted`): the create door's
  * lifecycle floor turns an agent's birth there into a proposal.
+ *
+ * `onlyWhenUnset` (a template's declaration, applied on every reconcile): it
+ * fills an initial status the lifecycle does not have yet, and never replaces
+ * one a person or another door already set (`kept`).
  */
 export async function setLifecycleInitialStatus(
   db: Db,
-  input: { propertyDefId: string; initialStatus: string | null }
+  input: {
+    propertyDefId: string;
+    initialStatus: string | null;
+    onlyWhenUnset?: boolean;
+  }
 ): Promise<SetLifecycleInitialStatusResult> {
   const links = await db
     .select({
@@ -397,6 +407,13 @@ export async function setLifecycleInitialStatus(
       reason:
         "this property is not a declared lifecycle: an initial status belongs to a lifecycle",
     };
+  }
+  if (input.onlyWhenUnset) {
+    const current = links.find(
+      (l) => typeof l.defaultValue === "string" && l.defaultValue !== ""
+    )?.defaultValue as string | undefined;
+    if (current !== undefined && current !== input.initialStatus)
+      return { status: "kept", current };
   }
   if (input.initialStatus !== null) {
     const [def] = await db

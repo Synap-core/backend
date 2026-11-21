@@ -3383,6 +3383,11 @@
             "minLength": 1,
             "description": "A stable key correlating retries of THIS logical run, so an external-send verb is at-most-once. Omitted → a content hash is derived."
           },
+          "reasoning": {
+            "type": "string",
+            "maxLength": 2000,
+            "description": "Why, shown to the reviewer."
+          },
           "channelId": {
             "type": "string",
             "description": "Instruction-provenance: the acting channel of this agent turn. A run triggered from an untrusted-origin channel force-proposes instead of auto-running."
@@ -6948,8 +6953,10 @@
         "properties": {
           "kitId": { "type": "string" },
           "hash": { "type": "string" },
+          "detail": { "type": "string", "enum": ["summary", "full"] },
           "components": { "type": "object", "additionalProperties": {} },
           "layout": { "type": "object", "additionalProperties": {} },
+          "unknown": { "type": "array", "items": { "type": "string" } },
           "grid": { "type": "object", "additionalProperties": {} },
           "frames": {},
           "generatedAt": { "type": "string" },
@@ -6966,7 +6973,7 @@
             "required": ["kitId", "hash", "react", "files"]
           }
         },
-        "required": ["kitId", "hash", "components", "layout", "grid"]
+        "required": ["kitId", "hash", "detail", "components", "layout", "grid"]
       },
       "DesignKitFile": {
         "type": "object",
@@ -29881,7 +29888,8 @@
                       "assigned_to",
                       "serves",
                       "advances",
-                      "orchestrated_by"
+                      "orchestrated_by",
+                      "extends"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -34812,6 +34820,63 @@
         }
       }
     },
+    "/renderers/host-modules": {
+      "get": {
+        "tags": ["Renderers"],
+        "summary": "Read the installed renderer bundle's host modules",
+        "description": "The host-module set (React, react-dom, the JSX runtimes, the kit, the tokens CSS) of the renderer bundle installed on this pod, with `ETag: \"sha256:<setSha256>\"`. Send it back as `If-None-Match` to get 304 while the set is unchanged.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "The host modules",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "setSha256": { "type": "string" },
+                    "modules": {
+                      "type": "object",
+                      "additionalProperties": { "type": "string" }
+                    },
+                    "kitExports": {
+                      "type": "array",
+                      "items": { "type": "string" }
+                    }
+                  },
+                  "required": ["setSha256", "modules", "kitExports"]
+                }
+              }
+            }
+          },
+          "304": { "description": "The set the caller holds is current" },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No renderer bundle installed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/whiteboards/{viewId}/scene": {
       "get": {
         "tags": ["Views"],
@@ -35041,6 +35106,92 @@
                   },
                   "required": ["error"]
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/realtime/room-ticket": {
+      "post": {
+        "tags": ["Documents"],
+        "summary": "Get a ticket to open one document's live room",
+        "description": "For a pod app's connection token (a key held by a person): answers a single-use ticket, valid 60 seconds, for ONE document's live Yjs room. The browser connects to the pod's Socket.IO server (path `/socket.io/`, namespace `/yjs|<room>`) with handshake auth `{ userId, token: ticket }`; a reconnect needs a new ticket. `access` is `edit` when the person may edit the document, the key holds hub-protocol.write and its grant permits `document.update` on it (or `view.update_content` on the view that owns a canvas); otherwise `read`, and a read socket's updates are dropped. Send `access: \"read\"` to ask for less. The socket closes when the app's connection is revoked. A document the person or the grant cannot read is 404. Refused (403) to an agent and to a signed-in session, which opens the room with its own token. Requires hub-protocol.read.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "documentId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i"
+                  },
+                  "access": { "type": "string", "enum": ["read", "edit"] }
+                },
+                "required": ["documentId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The ticket",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ticket": { "type": "string" },
+                    "expiresAt": { "type": "string" },
+                    "userId": { "type": "string" },
+                    "documentId": { "type": "string" },
+                    "room": { "type": "string" },
+                    "access": { "type": "string", "enum": ["read", "edit"] }
+                  },
+                  "required": [
+                    "ticket",
+                    "expiresAt",
+                    "userId",
+                    "documentId",
+                    "room",
+                    "access"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Not a person's key",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such document",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           }
@@ -53340,7 +53491,7 @@
       "get": {
         "tags": ["Designs"],
         "summary": "The design catalog the pod checks designs against",
-        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's).",
+        "description": "The installed `design` capability's catalog snapshot: the kit (`kitId`, `hash`), its components and their props, the canvas blocks (`layout`), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets. With `appId`, the catalog of that app's designs: when the app names its own kit (`design-kit`), the kit's components with Synap's canvas blocks, a hash naming both, and `kit` (React major, the two code files' sha256, how a dropped block starts). 412 when no catalog is installed or the app's kit cannot be read (never an empty catalog, never Synap's in place of the app's). `detail=summary` answers prop names and kinds only; `components=A,B` answers those blocks in full. `hash` is in every answer.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -53352,6 +53503,28 @@
             "required": false,
             "description": "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
             "name": "appId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["summary", "full"],
+              "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options."
+            },
+            "required": false,
+            "description": "full (default here): every prop spec. summary: every block's prop names and kinds, no select options.",
+            "name": "detail",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`."
+            },
+            "required": false,
+            "description": "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`.",
+            "name": "components",
             "in": "query"
           }
         ],
@@ -53365,7 +53538,7 @@
             }
           },
           "400": {
-            "description": "Not an app",
+            "description": "Not an app, or a bad `detail` / `components`",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -55081,7 +55254,11 @@
                             "type": "string",
                             "enum": ["active", "proposed"]
                           },
-                          "proposalId": { "type": "string" }
+                          "proposalId": { "type": "string" },
+                          "form": {
+                            "type": "string",
+                            "enum": ["loop", "prose"]
+                          }
                         },
                         "required": [
                           "id",
@@ -55334,6 +55511,7 @@
                     "required": ["trigger", "conditions", "actions"]
                   },
                   "draft": { "type": "boolean", "default": false },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
                   "agentUserId": { "type": "string", "format": "uuid" },
                   "userId": { "type": "string", "format": "uuid" }
                 },

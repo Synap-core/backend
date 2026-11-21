@@ -254,8 +254,16 @@ describe("createProjectGoverned — tRPC and Hub REST are one door", () => {
 
     // Non-vacuity: there IS something to compare on each axis.
     expect(a.projects).toHaveLength(1);
+    // The subject link, and the home as a pillar (`uses`): the home came from
+    // `workspaceId`, not `homeWorkspaceId`, and is still stamped (d6636ed2).
     expect(a.links).toEqual([
       expect.objectContaining({ to_id: SUBJECT, to_type: "entity" }),
+      {
+        from_type: "project",
+        to_type: "workspace",
+        to_id: WA,
+        link_type: "uses",
+      },
     ]);
     expect(a.audits).toEqual([
       expect.objectContaining({ subjectType: "project", action: "create" }),

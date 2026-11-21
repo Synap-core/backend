@@ -59,7 +59,7 @@ import type { PreparedContent } from "./markdown-model";
  * door, and (for the author) the technical reason behind "Why". Never a
  * sentence of hostnames in the reader's line.
  */
-function NotRun({
+export function NotRun({
   mark,
   line,
   why,

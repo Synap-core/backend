@@ -31,6 +31,7 @@
  * a 412 that says how to install it, never an empty catalog.
  */
 import { z } from "@hono/zod-openapi";
+import { CATALOG_DETAILS } from "@synap-core/types/design-board";
 
 import {
   KitBytesMismatchError,
@@ -82,8 +83,12 @@ const DesignCatalogSchema = z
   .object({
     kitId: z.string(),
     hash: z.string(),
+    /** `summary`: prop names and kinds only; `full`: every prop spec. */
+    detail: z.enum(CATALOG_DETAILS),
     components: z.record(z.string(), z.unknown()),
     layout: z.record(z.string(), z.unknown()),
+    /** Names asked for in `components` that the catalog does not declare. */
+    unknown: z.array(z.string()).optional(),
     grid: z.record(z.string(), z.unknown()),
     frames: z.unknown(),
     generatedAt: z.string().optional(),
@@ -105,6 +110,14 @@ const DesignCatalogQuerySchema = z.object({
   appId: z.string().uuid().optional().openapi({
     description:
       "The app (devplane_app) whose designs to check: its own kit when it names one (`design-kit`), else Synap's.",
+  }),
+  detail: z.enum(CATALOG_DETAILS).optional().openapi({
+    description:
+      "full (default here): every prop spec. summary: every block's prop names and kinds, no select options.",
+  }),
+  components: z.string().min(1).optional().openapi({
+    description:
+      "Comma-separated block names (kit components or canvas blocks): only these, in full. Names the catalog does not declare come back in `unknown`.",
   }),
 });
 
@@ -168,11 +181,16 @@ export function registerDesignsRoutes(app: HubHono): void {
       "with Synap's canvas blocks, a hash naming both, and `kit` (React " +
       "major, the two code files' sha256, how a dropped block starts). 412 " +
       "when no catalog is installed or the app's kit cannot be read (never " +
-      "an empty catalog, never Synap's in place of the app's).",
+      "an empty catalog, never Synap's in place of the app's). `detail=summary` " +
+      "answers prop names and kinds only; `components=A,B` answers those " +
+      "blocks in full. `hash` is in every answer.",
     request: { query: DesignCatalogQuerySchema },
     responses: {
       200: { description: "The catalog", schema: DesignCatalogSchema },
-      400: { description: "Not an app", schema: ErrorSchema },
+      400: {
+        description: "Not an app, or a bad `detail` / `components`",
+        schema: ErrorSchema,
+      },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "No such app", schema: ErrorSchema },
       412: {
@@ -187,14 +205,29 @@ export function registerDesignsRoutes(app: HubHono): void {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
     const query = DesignCatalogQuerySchema.safeParse({
       appId: c.req.query("appId") || undefined,
+      detail: c.req.query("detail") || undefined,
+      components: c.req.query("components") || undefined,
     });
     if (!query.success)
-      return c.json({ error: "`appId` is not an app id (uuid)." }, 400);
+      return c.json(
+        {
+          error:
+            "`appId` must be an app id (uuid), `detail` summary or full, `components` comma-separated block names.",
+        },
+        400
+      );
+    const components = query.data.components
+      ?.split(",")
+      .map((n) => n.trim())
+      .filter((n) => n !== "");
     const acting = await resolveActingContext(c, {});
     if (!acting.ok) return c.json({ error: acting.error }, acting.status);
     try {
       return c.json(
-        await designCatalog(acting.userId, query.data.appId ?? null),
+        await designCatalog(acting.userId, query.data.appId ?? null, {
+          detail: query.data.detail ?? "full",
+          ...(components?.length ? { components } : {}),
+        }),
         200
       );
     } catch (err) {

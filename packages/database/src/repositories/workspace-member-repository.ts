@@ -6,8 +6,9 @@
 
 import type { EventRepository } from "./event-repository.js";
 import { workspaceMembers, invites } from "../schema/index.js";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { pauseAutomationsOfRemovedMember } from "../utils/automation-owner-access.js";
+import { agentsActingFor } from "../utils/owner-person.js";
 
 export interface AddMemberInput {
   workspaceId: string;
@@ -75,34 +76,52 @@ export class WorkspaceMemberRepository {
   }
 
   async remove(input: RemoveMemberInput, actingUserId: string): Promise<void> {
-    await this.db
+    // Offboarding offboards (finding 747c485f): the agents that act FOR this
+    // person (`agentsActingFor`: a key linked to them) lose their own
+    // membership of the space with the person's, because the write gate checks
+    // the ACTING agent's membership. A pod-wide agent that serves every member
+    // (Capture, a persona) acts for nobody and keeps its seat. Interim until
+    // agents stop being members (consolidation W3).
+    const agentIds = await agentsActingFor(this.db, input.userId);
+    const removed: Array<{ userId: string }> = await this.db
       .delete(workspaceMembers)
       .where(
         and(
           eq(workspaceMembers.workspaceId, input.workspaceId),
-          eq(workspaceMembers.userId, input.userId)
+          inArray(workspaceMembers.userId, [input.userId, ...agentIds])
         )
-      );
+      )
+      .returning({ userId: workspaceMembers.userId });
 
     // Offboarding offboards (audit F9): what ran for this person in the space
     // (their automations, and their agents') stops with their membership.
     await pauseAutomationsOfRemovedMember(this.db, input);
 
-    await this.eventRepo.append({
-      id: crypto.randomUUID(),
-      version: "v1",
-      type: "workspaceMembers.remove.completed",
-      subjectId: input.userId,
-      subjectType: "workspaceMember",
-      userId: actingUserId,
-      source: "api",
-      timestamp: new Date(),
-      data: {
-        workspaceId: input.workspaceId,
-        userId: input.userId,
-      },
-      metadata: {},
-    });
+    // One audit event per membership removed: the person's, as before, and
+    // each agent's, naming the person it left with.
+    const removedAgents = removed
+      .map((r) => r.userId)
+      .filter((id) => id !== input.userId);
+    for (const userId of [input.userId, ...removedAgents]) {
+      await this.eventRepo.append({
+        id: crypto.randomUUID(),
+        version: "v1",
+        type: "workspaceMembers.remove.completed",
+        subjectId: userId,
+        subjectType: "workspaceMember",
+        userId: actingUserId,
+        source: "api",
+        timestamp: new Date(),
+        data: {
+          workspaceId: input.workspaceId,
+          userId,
+          ...(userId === input.userId
+            ? {}
+            : { withPersonUserId: input.userId }),
+        },
+        metadata: {},
+      });
+    }
   }
 
   async updateRole(

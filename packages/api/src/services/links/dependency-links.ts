@@ -64,7 +64,10 @@ import {
   drizzleSql,
   isLifecycleCategory,
 } from "@synap/database";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  sessionClosedAs,
+} from "@synap-core/types/focus-sessions";
 import {
   ADVANCES_LINK_TYPE,
   DEPENDENCY_LINK_TYPE,
@@ -99,6 +102,7 @@ import {
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
+import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
 
 const logger = createLogger({ module: "dependency-links" });
 
@@ -1122,6 +1126,7 @@ async function readStates(
         status: focusSessions.status,
         title: focusSessions.title,
         goal: focusSessions.goal,
+        closedNotDone: closedNotDoneRecordedSql(),
       })
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessionIds));
@@ -1134,6 +1139,8 @@ async function readStates(
           ? { missing: true }
           : {
               status: row.status ?? null,
+              // "Delivered" = closed with the work done (`sessionClosedAs`).
+              closedAs: sessionClosedAs(row.status, row.closedNotDone),
               title: resolveSessionTitle(row),
               hidden: !visible.has(id),
             }

@@ -1585,3 +1585,20 @@ describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", 
     ).toEqual([]);
   });
 });
+
+describe("GET /renderers/host-modules: the renderer kit, full keys only", () => {
+  it("is refused to every scoped key, however wide its reads", () => {
+    for (const g of [
+      AI,
+      DOC_ONLY,
+      key({ permissions: aiDefaultCapabilities() }),
+      key({ permissions: ["entity.read", "widget.read", "document.read"] }),
+      key({ permissions: [] }),
+    ]) {
+      expect(isFencedGrant(g)).toBe(true);
+      expect(restDoorAllowed("GET", "/renderers/host-modules", g)).toBe(false);
+      expect(restDoorAllowed("GET", "/renderers/host-modules/", g)).toBe(false);
+    }
+    expect(hubRouteClass("GET", "/renderers/host-modules")).toBe("read");
+  });
+});

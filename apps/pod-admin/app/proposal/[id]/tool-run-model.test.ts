@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   changedDrafts,
   reviewToolRun,
+  runResultSplit,
   toolRunArguments,
   toolRunSplit,
   toolRunValue,
@@ -134,5 +135,41 @@ describe("the card shows what the tool does", () => {
       })
     ).toEqual({ text: "Hello, LinkedIn" });
     expect(changedDrafts(post, { text: "Hello world" })).toEqual({});
+  });
+});
+
+/**
+ * What an approved run returned (report 48dbf93b: the approved fal run had made
+ * two images, and the review page could not show them).
+ */
+describe("runResultSplit", () => {
+  it("the stamped result reads field by field, links as links, ids behind Details", () => {
+    const split = runResultSplit({
+      skillId: "s1",
+      runResult: {
+        success: true,
+        imageUrl: "https://v3.fal.media/files/out-1.png",
+        imageCount: 2,
+        model: "fal-ai/flux-pro/kontext/max/multi",
+        proposalId: "8d2f4c1e-0b7a-4c55-9a7e-3f1f0d1c2b3a",
+      },
+    });
+    expect(split).not.toBeNull();
+    expect(split!.shown.map((a) => [a.label, a.value.kind])).toEqual([
+      ["Image URL", "link"],
+      ["Image count", "text"],
+      ["Model", "text"],
+    ]);
+    expect(split!.detail.map((a) => a.key)).toEqual(["proposalId"]);
+    // The status word is the outcome mark's, never a row.
+    expect(split!.shown.some((a) => a.key === "success")).toBe(false);
+    expect(split!.shown.every((a) => !a.editable)).toBe(true);
+  });
+
+  it("nothing returned yet (pending, or a run that returns nothing): no section", () => {
+    expect(runResultSplit({ skillId: "s1" })).toBeNull();
+    expect(runResultSplit({ runResult: null })).toBeNull();
+    expect(runResultSplit({ runResult: { success: true } })).toBeNull();
+    expect(runResultSplit(null)).toBeNull();
   });
 });

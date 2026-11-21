@@ -88,7 +88,7 @@ function schemaProblem(label: string, raw: unknown): string | null {
     if (!isObj(fields)) return `${label}.${name} is not an object of props.`;
     for (const [prop, spec] of Object.entries(fields)) {
       if (GRID_PROPS.includes(prop))
-        return `${label}.${name} declares \`${prop}\`, which every block already has (span and hide per width class).`;
+        return `${label}.${name} declares \`${prop}\`, which every block already has (span, start and hide per width class).`;
       if (!fieldSpecOk(spec))
         return `${label}.${name}.${prop} is not a prop spec the canvas knows.`;
     }
@@ -139,6 +139,79 @@ export function readDesignCatalog(raw: unknown): ReadCatalogResult {
 /** The one schema a design is validated against: the canvas blocks and the kit's components. */
 export function catalogSchema(catalog: DesignCatalogSnapshot): CanvasSchema {
   return { ...catalog.layout, ...catalog.components };
+}
+
+// ─── What design.catalog answers (summary, or chosen blocks in full) ────────
+
+/**
+ * How much of the catalog `design.catalog` answers. `summary`: every block's
+ * prop names and their kind, no select options, list items or slot rules.
+ * `full`: every prop spec. The whole catalog in full (~25K characters for
+ * Synap's kit) is more than an MCP door returns in one reply (16K), so an
+ * agent reads the summary, then the blocks it uses in full (`components`).
+ */
+export const CATALOG_DETAILS = ["summary", "full"] as const;
+export type CatalogDetail = (typeof CATALOG_DETAILS)[number];
+
+/** A block's props as the summary names them: prop → its kind. */
+export type CanvasSchemaSummary = Record<
+  string,
+  Record<string, FieldSpec["kind"]>
+>;
+
+export function summarizeSchema(schema: CanvasSchema): CanvasSchemaSummary {
+  const out: CanvasSchemaSummary = {};
+  for (const [name, props] of Object.entries(schema)) {
+    const kinds: Record<string, FieldSpec["kind"]> = {};
+    for (const [prop, spec] of Object.entries(props)) kinds[prop] = spec.kind;
+    out[name] = kinds;
+  }
+  return out;
+}
+
+export interface CatalogView {
+  detail: CatalogDetail;
+  components: CanvasSchema | CanvasSchemaSummary;
+  layout: CanvasSchema | CanvasSchemaSummary;
+  /** Names asked for (`components`) that neither half declares. */
+  unknown?: string[];
+}
+
+/**
+ * The catalog's two halves as one answer shows them. With `components`
+ * (block names, kit components or canvas blocks alike), those blocks only,
+ * in full, and the names the catalog does not declare listed in `unknown`
+ * (an answer, never an empty catalog). Without, both halves at `detail`.
+ */
+export function catalogView(
+  catalog: DesignCatalogSnapshot,
+  request: { detail: CatalogDetail; components?: readonly string[] }
+): CatalogView {
+  if (request.components) {
+    const components: CanvasSchema = {};
+    const layout: CanvasSchema = {};
+    const unknown: string[] = [];
+    for (const name of new Set(request.components)) {
+      if (Object.prototype.hasOwnProperty.call(catalog.components, name))
+        components[name] = catalog.components[name]!;
+      else if (Object.prototype.hasOwnProperty.call(catalog.layout, name))
+        layout[name] = catalog.layout[name]!;
+      else unknown.push(name);
+    }
+    return {
+      detail: "full",
+      components,
+      layout,
+      ...(unknown.length ? { unknown } : {}),
+    };
+  }
+  return request.detail === "full"
+    ? { detail: "full", components: catalog.components, layout: catalog.layout }
+    : {
+        detail: "summary",
+        components: summarizeSchema(catalog.components),
+        layout: summarizeSchema(catalog.layout),
+      };
 }
 
 // ─── A client app's kit (plan 0fc746f4 §3.1 K1, W6) ────────────────────────

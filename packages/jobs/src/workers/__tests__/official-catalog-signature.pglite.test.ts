@@ -8,7 +8,11 @@
  *   - a refused index (rogue key) or a replayed statement keeps the last
  *     verified digests — never wiped — and records why;
  *   - operator keys sign the index directly, with no keys statement;
- *   - the report-only pass counts the cached rows the index does not vouch for.
+ *   - the report-only pass counts the cached rows the index does not vouch for;
+ *   - the digest-only `rendererBundles` (a top-level key the parsed index
+ *     drops) is stored as kind `renderer-bundle` from the verified bytes; a
+ *     row that is not in its strict shape, or a slug listed twice, is left
+ *     out and the rest still stored.
  */
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { generateKeyPairSync, sign } from "node:crypto";
@@ -119,10 +123,12 @@ function keysFile(
 function indexFile(
   signer: Key = CATALOG,
   contentHash = CAP_HASH,
-  name = "Synap"
+  name = "Synap",
+  extra: Record<string, unknown> = {}
 ) {
   return signed(
     {
+      ...extra,
       schemaVersion: 1,
       source: { id: "synap", name, publicKey: signer.publicKey },
       expires: at(14),
@@ -270,6 +276,75 @@ describe("checkOfficialCatalogSignature on PGlite", () => {
     expect((await readMarketplaceSources()).officialSignature?.state).toBe(
       "ok"
     );
+  });
+
+  it("stores the signed index's renderer bundles, digest only, beside its packages", async () => {
+    const BUNDLE_HASH = "b".repeat(64);
+    const { fetchImpl } = served({
+      "/api/marketplace/synap-catalog-keys.json": keysFile(3),
+      "/api/marketplace/synap-index.json": indexFile(
+        CATALOG,
+        CAP_HASH,
+        "Synap",
+        {
+          rendererBundles: [
+            {
+              kind: "renderer-bundle",
+              slug: "synap-renderers",
+              version: `h-${BUNDLE_HASH.slice(0, 12)}`,
+              contentHash: BUNDLE_HASH,
+            },
+            // Not the strict shape: a definition URL is never listed.
+            {
+              kind: "renderer-bundle",
+              slug: "with-url",
+              version: "h-1",
+              contentHash: BUNDLE_HASH,
+              definitionUrl: "/x.json",
+            },
+            // Listed twice: vouches for neither.
+            {
+              kind: "renderer-bundle",
+              slug: "twice",
+              version: "h-1",
+              contentHash: BUNDLE_HASH,
+            },
+            {
+              kind: "renderer-bundle",
+              slug: "twice",
+              version: "h-2",
+              contentHash: BUNDLE_HASH,
+            },
+          ],
+        }
+      ),
+    });
+    const status = await checkOfficialCatalogSignature(BASE, null, {
+      fetchImpl,
+      now: NOW,
+      trust: ROOTS,
+    });
+    expect(status).toMatchObject({ state: "ok", packageCount: 1 });
+    expect(await digests()).toEqual([
+      {
+        kind: "capability",
+        slug: "gmail",
+        content_hash: CAP_HASH,
+        required_tier: "pro",
+      },
+      {
+        kind: "renderer-bundle",
+        slug: "synap-renderers",
+        content_hash: BUNDLE_HASH,
+        required_tier: null,
+      },
+    ]);
+    const version = await q<{ version: string }>(
+      `select version from official_catalog_digests where kind = 'renderer-bundle'`
+    );
+    expect(version.rows).toEqual([
+      { version: `h-${BUNDLE_HASH.slice(0, 12)}` },
+    ]);
   });
 
   it("keeps the last verified digests when an index is signed by a key the statement does not name", async () => {

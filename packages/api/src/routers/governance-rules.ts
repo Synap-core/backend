@@ -5,8 +5,10 @@
  * see docs/decisions/agent-governance.md). This is the "always approve for X" door:
  * approving a proposal can additionally widen governance by inserting ONE
  * revocable, audited rule instead of hand-editing `workspaces.settings` or
- * `agentMetadata` JSONB. The resolver that *consumes* these rows (rung 2.8 in
- * `decideAgentPolicy`) is a separate wave — this router only stores/lists/revokes.
+ * `agentMetadata` JSONB. The resolver that *consumes* these rows
+ * (`resolveGovernanceRule`, rung 2.8 of `decideAgentPolicy`, and the
+ * capability gate) is wired; this router stores, lists and revokes them. For
+ * a tool run a capability row is the ONLY "runs without asking" (decision D2).
  *
  * The five "always approve for X" granularities the UI offers map to `create`
  * inputs as:

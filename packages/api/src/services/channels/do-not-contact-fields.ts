@@ -46,10 +46,30 @@ const SET_NEUTRAL_KEYS = new Set([
   "forcePropose",
 ]);
 
+/** The flag's evidence: why and since when the person opted out. */
+const DO_NOT_CONTACT_EVIDENCE: readonly string[] = [
+  DO_NOT_CONTACT_REASON_PROPERTY,
+  DO_NOT_CONTACT_SINCE_PROPERTY,
+];
+
+/**
+ * Does this write REMOVE a piece of the evidence? Its reason or date written
+ * as anything but a non-empty string (null, blank, a value that is not text)
+ * erases what was recorded: a removal, never part of a set.
+ */
+function removesEvidence(properties: Record<string, unknown>): boolean {
+  return DO_NOT_CONTACT_EVIDENCE.some((k) => {
+    if (!(k in properties)) return false;
+    const value = properties[k];
+    return !(typeof value === "string" && value.trim() !== "");
+  });
+}
+
 /**
  * Does this entity update ONLY SET the flag? `properties` carries
- * `doNotContact: true` (and at most its reason and date), and no other key
- * of the write is set (no title, body, kind, home, status move, deletion).
+ * `doNotContact: true` (and at most its reason and date, each a non-empty
+ * string), and no other key of the write is set (no title, body, kind, home,
+ * status move, deletion).
  *
  * Setting the flag only REDUCES what the pod does (the send door then refuses
  * every message to that person), so it is a DE-ESCALATION, like pausing an
@@ -67,6 +87,9 @@ export function isDoNotContactSetWrite(write: unknown): boolean {
   if (properties[DO_NOT_CONTACT_PROPERTY] !== true) return false;
   if (!Object.keys(properties).every((k) => DO_NOT_CONTACT_FIELDS.includes(k)))
     return false;
+  // A null or blank reason or date would erase the recorded evidence while
+  // the flag stays on (ticket 85a8f115): a removal, the person's alone.
+  if (removesEvidence(properties)) return false;
   return Object.entries(write).every(
     ([k, v]) => v === undefined || SET_NEUTRAL_KEYS.has(k)
   );
@@ -74,7 +97,8 @@ export function isDoNotContactSetWrite(write: unknown): boolean {
 
 /**
  * Does this entity update CLEAR the flag, or remove its reason or date? A
- * `doNotContact` written to anything but yes, or any of the three removed.
+ * `doNotContact` written to anything but yes, any of the three deleted, or
+ * the reason or date written empty (null or blank).
  * Lifting an opt-out is the person's alone: an app or an agent asking for it
  * files a proposal the person approves (`routers/entities/mutate.ts`).
  */
@@ -84,8 +108,9 @@ export function clearsDoNotContact(write: {
 }): boolean {
   if (write.deleteProperties?.some((k) => DO_NOT_CONTACT_FIELDS.includes(k)))
     return true;
+  if (!isRecord(write.properties)) return false;
+  if (removesEvidence(write.properties)) return true;
   return (
-    isRecord(write.properties) &&
     DO_NOT_CONTACT_PROPERTY in write.properties &&
     !isDoNotContactSet(write.properties)
   );

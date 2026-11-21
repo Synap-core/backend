@@ -10,9 +10,16 @@
  * (`loadAgentOwner`, `governance-rules.ts`). This file is the one place that
  * turns "a row's owner" into "the person it stands for", so the write gate and
  * the automation run check cannot read it two ways.
+ *
+ * Two facts, two questions. `users.createdByUserId` is ACCOUNTABILITY (who
+ * answers for the agent's rows; the readings above). `api_keys.linkedUserId` is
+ * ACTING-FOR (whose person the agent's calls run as; {@link agentsActingFor}).
+ * A pod-wide agent that serves every member (the Capture agent, the
+ * Intelligence Service personas, a `podWide` key) is accountable to the person
+ * who installed it but acts for nobody in particular.
  */
 import { and, eq, inArray } from "drizzle-orm";
-import { users } from "../schema/index.js";
+import { apiKeys, users } from "../schema/index.js";
 
 type OwnerRow = {
   id: string;
@@ -49,6 +56,32 @@ export async function personOfOwner(
     .limit(1)) as OwnerRow[];
   if (!owner) return undefined;
   return personOfRow(owner);
+}
+
+export interface OwnerAndActor {
+  ownerId: string;
+  agentUserId: string | null;
+}
+
+/**
+ * The owner and actor of a row `principalId` writes: a person owns it, the
+ * agent is only the actor. Every automation and playbook insert stamps this,
+ * so a caller handing in an agent id cannot make the agent the owner.
+ * `ownerId` falls back to `principalId` for a system id or an agent nobody
+ * installed. A failed read throws.
+ */
+export async function ownerAndActor(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  principalId: string,
+  agentUserId?: string | null
+): Promise<OwnerAndActor> {
+  const person = await personOfOwner(database, principalId);
+  const isAgent = person !== undefined && person !== principalId;
+  return {
+    ownerId: person ?? principalId,
+    agentUserId: agentUserId || (isAgent ? principalId : null),
+  };
 }
 
 /**
@@ -99,4 +132,28 @@ export async function actorsOfSamePerson(
       and(eq(users.userType, "agent"), eq(users.createdByUserId, person))
     )) as Array<{ id: string }>;
   return Array.from(new Set([person, actorId, ...agents.map((a) => a.id)]));
+}
+
+/**
+ * The agents that act FOR `personId`: every `userType = 'agent'` user holding
+ * an api key whose `linkedUserId` is that person (a surface agent's
+ * `hub_inbound` key, an app's or a computer's `user_pat`; revoked keys count,
+ * so a re-minted key for the same agent cannot revive what was taken away).
+ * An agent with no key linked to a person (the Capture agent, an Intelligence
+ * Service persona, a `podWide` key) acts for nobody and is never in this set.
+ * One read. A FAILED read throws.
+ */
+export async function agentsActingFor(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  personId: string
+): Promise<string[]> {
+  const rows = (await database
+    .selectDistinct({ id: users.id })
+    .from(apiKeys)
+    .innerJoin(users, eq(users.id, apiKeys.userId))
+    .where(
+      and(eq(users.userType, "agent"), eq(apiKeys.linkedUserId, personId))
+    )) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }

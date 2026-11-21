@@ -45,6 +45,7 @@ import {
   WIDTH_CLASS_BREAKPOINTS,
   applyOps,
   catalogSchema,
+  catalogView,
   composeAppCatalog,
   designEditability,
   designOpSchema,
@@ -55,6 +56,7 @@ import {
   readDesignLifecycle,
   widthClassOf,
   type Board,
+  type CatalogDetail,
   type DesignCatalogSnapshot,
   type DesignChange,
   type DesignKitCatalog,
@@ -192,10 +194,15 @@ const appOf = (p: Record<string, unknown>): string | null => {
  * blocks, the grid, the frame presets. With `appId`, the catalog of that
  * app's designs; when the app has its own kit, `kit` says how the Design app
  * loads it (React major, the two files' hashes, how a dropped block starts).
+ * `detail` and `components` choose how much of the two halves it shows
+ * (`catalogView`); `hash` is in every answer, whatever it shows.
  */
 export async function designCatalog(
   userId: string,
-  appId: string | null = null
+  appId: string | null = null,
+  view: { detail: CatalogDetail; components?: readonly string[] } = {
+    detail: "full",
+  }
 ) {
   const read = await readCatalogFor(userId, appId);
   if (read.status !== "installed")
@@ -204,8 +211,7 @@ export async function designCatalog(
   return {
     kitId: catalog.kitId,
     hash: catalog.hash,
-    components: catalog.components,
-    layout: catalog.layout,
+    ...catalogView(catalog, view),
     grid: { columns: GRID_COLUMNS, breakpoints: WIDTH_CLASS_BREAKPOINTS },
     frames: FRAME_PRESETS,
     ...(catalog.generatedAt ? { generatedAt: catalog.generatedAt } : {}),

@@ -46,6 +46,8 @@ interface HandoffCardProps {
   /** Imperative label for the primary action, e.g. "Open Connectors settings". */
   cta: string;
   icon?: LucideIcon;
+  /** One quiet line under the body (what this reader alone needs to know). */
+  note?: string;
 }
 
 export function HandoffCard({
@@ -54,6 +56,7 @@ export function HandoffCard({
   exit,
   cta,
   icon: Icon,
+  note,
 }: HandoffCardProps) {
   const placed = usePlacedExit(exit);
   const open = useAppOpenAttempt(placed);
@@ -72,6 +75,7 @@ export function HandoffCard({
           <p className="text-[12.5px] leading-relaxed text-foreground/65">
             {body}
           </p>
+          {note && <p className="text-tiny text-foreground/55">{note}</p>}
         </div>
       </div>
 

@@ -37,7 +37,9 @@ import {
   GRID_COLUMNS,
   HIDE_PROP,
   SPAN_PROP,
+  START_PROP,
   WIDTH_CLASSES,
+  fitsPlacement,
   fitsSpan,
   type WidthClass,
 } from "./grid.js";
@@ -135,6 +137,15 @@ export const designOpSchema = z.discriminatedUnion("op", [
       span: z.number().nullable(),
     })
     .strict(),
+  /** The column (1-based) a block starts at, at one width class; null = the grid places it again. */
+  z
+    .object({
+      op: z.literal("set_start"),
+      id: ref,
+      class: widthClass,
+      start: z.number().nullable(),
+    })
+    .strict(),
   /** Hide (or show again) a block at one width class. */
   z
     .object({
@@ -166,6 +177,7 @@ export const DESIGN_OP_NAMES: readonly DesignOpName[] = [
   "move_block",
   "remove_block",
   "set_span",
+  "set_start",
   "set_hide",
   "replace_page",
   "replace_board",
@@ -196,6 +208,14 @@ export type OpRefusalReason =
   | { kind: "into-itself"; id: string }
   /** A span that is not a whole number of the class's columns. */
   | { kind: "span-too-wide"; class: WidthClass; span: number; columns: number }
+  /** A start that is not a column of the class, or a start and a span that together run past its columns. */
+  | {
+      kind: "start-past-grid";
+      class: WidthClass;
+      start: number;
+      span: number | null;
+      columns: number;
+    }
   /** `replace_page` on a frame that shows another frame's page. */
   | { kind: "frame-shows-page"; frameId: string; pageOf: string }
   /** A frame whose page other frames show cannot go before they do. */
@@ -288,6 +308,10 @@ export function describeRefusal(r: OpRefusalReason): string {
       return `block "${r.id}" cannot move into its own slots`;
     case "span-too-wide":
       return `a span at the ${r.class} width is a whole number from 1 to ${r.columns} columns, not ${r.span}`;
+    case "start-past-grid":
+      return r.span === null
+        ? `a start at the ${r.class} width is a column from 1 to ${r.columns}, not ${r.start}`
+        : `at the ${r.class} width a block starting at column ${r.start} and spanning ${r.span} ends past column ${r.columns}: lower the start or the span (set_span) first`;
     case "frame-shows-page":
       return `frame "${r.frameId}" shows the page of "${r.pageOf}"; change that frame's page`;
     case "frame-has-viewers":
@@ -313,6 +337,21 @@ function refuse(...reasons: OpRefusalReason[]): never {
 
 const isObj = (v: unknown): v is Record<string, unknown> =>
   v !== null && typeof v === "object" && !Array.isArray(v);
+
+/** A block's stored number for one width class of a grid prop (span or start), when it has one. */
+function gridNumberAt(
+  block: PageBlock,
+  prop: string,
+  cls: WidthClass
+): number | undefined {
+  const v = block.props[prop];
+  const n = isObj(v) ? v[cls] : undefined;
+  return typeof n === "number" ? n : undefined;
+}
+const spanAt = (block: PageBlock, cls: WidthClass) =>
+  gridNumberAt(block, SPAN_PROP, cls);
+const startAt = (block: PageBlock, cls: WidthClass) =>
+  gridNumberAt(block, START_PROP, cls);
 
 /** A block's slot props (declared by the schema) as the LIVE arrays, so a change lands in the board. */
 function slotsOf(
@@ -662,9 +701,48 @@ function applyOne(
           span: op.span,
           columns: GRID_COLUMNS[op.class],
         });
-      else span[op.class] = op.span;
+      else {
+        // A wider span must still fit from where the block starts.
+        const start = startAt(at.block, op.class);
+        if (start !== undefined && !fitsPlacement(op.class, start, op.span))
+          refuse({
+            kind: "start-past-grid",
+            class: op.class,
+            start,
+            span: op.span,
+            columns: GRID_COLUMNS[op.class],
+          });
+        span[op.class] = op.span;
+      }
       if (Object.keys(span).length > 0) at.block.props[SPAN_PROP] = span;
       else delete at.block.props[SPAN_PROP];
+      return { board, change: { change: "block-updated", blockId: op.id } };
+    }
+
+    case "set_start": {
+      const at =
+        locate(board, op.id, schema) ?? refuse({ kind: "no-block", id: op.id });
+      const start = isObj(at.block.props[START_PROP])
+        ? { ...(at.block.props[START_PROP] as Record<string, unknown>) }
+        : {};
+      if (op.start === null) delete start[op.class];
+      else {
+        const span = spanAt(at.block, op.class);
+        if (
+          !fitsSpan(op.class, op.start) ||
+          !fitsPlacement(op.class, op.start, span)
+        )
+          refuse({
+            kind: "start-past-grid",
+            class: op.class,
+            start: op.start,
+            span: span ?? null,
+            columns: GRID_COLUMNS[op.class],
+          });
+        start[op.class] = op.start;
+      }
+      if (Object.keys(start).length > 0) at.block.props[START_PROP] = start;
+      else delete at.block.props[START_PROP];
       return { board, change: { change: "block-updated", blockId: op.id } };
     }
 

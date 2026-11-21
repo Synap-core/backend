@@ -433,6 +433,7 @@ export async function executePlaybookRun(
     if (!readiness.ready) throw new Error(readiness.message);
     const proposed = await proposeRulePlaybookRun({
       ownerId,
+      actorAgentUserId: automationContext.actorAgentUserId,
       workspaceId,
       automationId: automationContext.automationId,
       automationRunId: automationContext.automationRunId,

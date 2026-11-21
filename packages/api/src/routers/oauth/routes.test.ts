@@ -239,6 +239,24 @@ vi.mock("../../services/app-connect.js", () => ({
   oauthAppPodWideOffer: () => [],
   kindGroupIndex: () => new Map(),
   currentOAuthApproval: async () => [],
+  // The consent saves v2 (W3d): no connection yet, an empty offer.
+  currentOAuthAppApproval: async () => null,
+  connectOAuthAppAccess: (args: unknown) => appConnect.connect(args),
+  appAccessOffer: async () => ({
+    asked: { permissions: [], templates: [] },
+    places: {
+      read: { allSpaces: false, spaces: [], projects: [] },
+      write: { spaces: [], projects: [], suggestedSpaceIds: [] },
+    },
+    ceiling: {
+      permissions: [],
+      allSpacesReads: [],
+      read: { spaces: [], projects: [] },
+      write: { spaces: [], projects: [] },
+    },
+  }),
+  nameAppAccess: async () => null,
+  reconsentViewOf: async () => null,
 }));
 
 // The pod admin's pod-app policy (PB4). Read for real (pod_settings) in

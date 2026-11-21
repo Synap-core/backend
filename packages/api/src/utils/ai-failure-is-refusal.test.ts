@@ -72,8 +72,10 @@ const CASES = [
     },
     cls: "account_quota",
     code: "account_quota_exceeded",
-    says: /monthly AI quota/,
-    never: /rate-limit|credential|try again/i,
+    // The IS quota resets with the calendar month; a plan change does not
+    // touch the balance before then, so the copy never offers an upgrade.
+    says: /monthly AI quota\. Retrying will not help \u2014 it resets at the start of next month\./,
+    never: /rate-limit|credential|try again|upgrade|billing period/i,
   },
   {
     name: "plan does not include AI (403)",

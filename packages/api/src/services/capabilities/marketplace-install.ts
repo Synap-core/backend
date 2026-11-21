@@ -120,6 +120,9 @@ import {
   type CreateCapabilityResult,
 } from "./create-from-definition.js";
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
+// Type-only: the resolver is imported dynamically at its call site (it imports
+// this module for its cell and skill dependencies).
+import type { ResolvedPackageDependency } from "../package-dependency-resolver.js";
 // Type-only (erased at runtime) — the applier itself is imported dynamically at
 // its call site, mirroring the approve-executors, so this module never pulls the
 // post-workspace layer graph into an eager import cycle.
@@ -155,9 +158,14 @@ import {
   type InstalledToolWebhook,
 } from "../webhooks/provision-inbound-webhook.js";
 import { requireUserId } from "../../utils/user-scoped.js";
-import { capabilityElementOf, skillElementOf } from "./package-element.js";
+import {
+  capabilityDependenciesOf,
+  capabilityElementOf,
+  skillElementOf,
+} from "./package-element.js";
 import { installAgentTemplate } from "../agent-templates/install.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 
 const logger = createLogger({ module: "marketplace-install" });
 
@@ -557,6 +565,10 @@ export const capabilityInstallParamsSchema = z.record(z.string(), z.unknown());
  * the two collection fields the applier iterates unguarded and threads
  * install-time `params` into the governed `createCapabilityFromDefinition`.
  *
+ * What the package `require`s is installed FIRST, here, so every door honours
+ * it (`ensureCapabilityDependencies`); the result lists the resolved
+ * dependencies when there were any.
+ *
  * It then provisions the inbound webhook of every installed tool a provider
  * calls back (`provisionInstalledToolWebhooks`) and returns each URL with the
  * one manual step on the provider's side, so every install door shows it. Only
@@ -568,7 +580,13 @@ export async function applyCapabilityDefinition(
   params: Record<string, unknown> | undefined,
   ctx: Context,
   opts: CreateCapabilityOptions = {}
-): Promise<CreateCapabilityResult & { webhooks: InstalledToolWebhook[] }> {
+): Promise<
+  CreateCapabilityResult & {
+    webhooks: InstalledToolWebhook[];
+    dependencies?: ResolvedPackageDependency[];
+  }
+> {
+  const dependencies = await ensureCapabilityDependencies(definition, ctx);
   const result = await createCapabilityFromDefinition(
     // A CP capability PACKAGE arrives wrapped (`{capability:{…}}`): unwrap it
     // here, where every door converges (`capabilityElementOf`).
@@ -587,11 +605,94 @@ export async function applyCapabilityDefinition(
     result.created.tools,
     requireUserId(ctx.userId)
   );
-  return { ...result, webhooks };
+  return {
+    ...result,
+    webhooks,
+    ...(dependencies.length > 0 ? { dependencies } : {}),
+  };
 }
 
+/**
+ * Install what a capability package `require`s before the capability itself
+ * (`capabilityDependenciesOf`: its declared `dependencies`, and an add-on's
+ * base). The resolution is the package-dependency resolver's own capability
+ * branch, the one the template graph runs (`resolveCapabilityDependencies`): a
+ * dependency already installed for the whole pod or in the target space is
+ * `found`, a missing one installs from Synap's catalog through the governed
+ * capability applier. A tool installs only the tools it requires.
+ *
+ * Where a template treats a dependency it could not install as non-fatal, a
+ * capability does not: its actions call what it requires by name and would
+ * fail only when they run ("Tool not found"). So ANY dependency that is still
+ * absent (a capability that could not be installed, or another kind that is
+ * not there) refuses the install, naming what to install first, before
+ * anything of this capability is written.
+ *
+ * The dependencies install under the caller's own authority: its user, the
+ * space it installs into (or the pod), and its agent when an agent acts, so
+ * the governed applier proposes for an agent exactly as for the install itself.
+ */
+async function ensureCapabilityDependencies(
+  definition: unknown,
+  ctx: Context
+): Promise<ResolvedPackageDependency[]> {
+  const element = capabilityElementOf(definition) as {
+    key?: unknown;
+    name?: unknown;
+  } | null;
+  const key = typeof element?.key === "string" ? element.key : undefined;
+  // A package never requires itself.
+  const declared = capabilityDependenciesOf(definition).filter(
+    (d) => d.slug !== key
+  );
+  if (declared.length === 0) return [];
+  const displayName =
+    typeof element?.name === "string" ? element.name : (key ?? "This tool");
+  if (declared.some((d) => (d.relation ?? "require") === "compose")) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${displayName}" declares a compose dependency; a capability can only require what it needs. Nothing was installed.`,
+    });
+  }
+  const { resolveCapabilityDependencies } =
+    await import("../package-dependency-resolver.js");
+  const installed = await resolveCapabilityDependencies({
+    dependencies: declared,
+    userId: requireUserId(ctx.userId),
+    agentUserId: ctx.agentUserId ?? undefined,
+    workspaceId: ctx.workspaceId ?? null,
+  });
+  const absent = installed.filter((d) => d.action === "required-absent");
+  if (absent.length > 0) {
+    const names = absent.map((d) => `"${d.slug}"`).join(", ");
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `"${displayName}" needs ${names} installed first, and ${
+        absent.length === 1 ? "it" : "they"
+      } could not be installed now: ${absent
+        .map((d) => d.message ?? d.slug)
+        .join(
+          " "
+        )} Install ${names}, then install "${displayName}" again. Nothing of "${displayName}" was installed.`,
+      cause: {
+        code: "CAPABILITY_DEPENDENCY_MISSING",
+        missing: absent.map((d) => d.slug),
+      },
+    });
+  }
+  return installed;
+}
+
+/**
+ * What `market.install` installs: a catalog kind, or a RENDERER BUNDLE
+ * (`renderer-bundle`, spec c9b1e4d0 §3d). A bundle is never in the catalog
+ * cache (the CP withholds its definition from every public read) and installs
+ * only from Synap's control plane, so it never reaches `lookupCatalogEntry`.
+ */
+export type MarketInstallKind = CatalogKind | typeof RENDERER_BUNDLE_KIND;
+
 export interface ApplyMarketInstallInput {
-  kind: CatalogKind;
+  kind: MarketInstallKind;
   slug: string;
   /**
    * The catalog source id the target is listed under (`synap`, or a source a
@@ -1147,6 +1248,48 @@ async function assertNoPodWideKindChange(
 }
 
 /**
+ * A renderer bundle installs from Synap's control plane only: the official
+ * source, and never a supplied definition (the control plane's managed-pod
+ * gate is the point, and a payload would walk around it).
+ */
+function assertRendererBundleRequest(
+  input: { definition?: Record<string, unknown> },
+  official: boolean
+): void {
+  if (!official) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A renderer bundle installs only from Synap's catalog, through this pod's control plane.",
+      cause: { code: "MARKET_SOURCE_REFUSED" },
+    });
+  }
+  if (input.definition) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A renderer bundle is never installed from a supplied definition: this pod fetches it from its control plane.",
+    });
+  }
+}
+
+/** `market.install` kind `renderer-bundle`: fetch from the CP, admit, install. */
+async function applyRendererBundleInstall(
+  input: ApplyMarketInstallInput,
+  official: boolean
+): Promise<Record<string, unknown>> {
+  assertRendererBundleRequest(input, official);
+  const { installOfficialRendererBundle } =
+    await import("../renderers/official-renderer-bundle.js");
+  const result = await installOfficialRendererBundle({
+    slug: input.slug,
+    version: input.version ?? null,
+    userId: input.userId,
+  });
+  return { kind: RENDERER_BUNDLE_KIND, ...result };
+}
+
+/**
  * The ONE apply function per kind. Called by BOTH the direct-operator path
  * (market.install builtin verb, no agent involved) and the `capability.install`
  * approve-executor (post-approval re-entry) — never re-implemented twice.
@@ -1167,6 +1310,10 @@ export async function applyMarketInstall(
       message:
         "A supplied definition installs only as a Synap package — a package from another source installs from its own signed listing.",
     });
+  }
+  // A renderer bundle: Synap's control plane only, never a payload.
+  if (input.kind === RENDERER_BUNDLE_KIND) {
+    return applyRendererBundleInstall(input, source.official);
   }
   const entry = input.definition
     ? null
@@ -1260,6 +1407,9 @@ export async function applyMarketInstall(
       workspaceId: input.workspaceId,
       workspaceRole,
     } as unknown as Context;
+    // What it requires is installed first, inside the shared apply step, under
+    // this install's authority (an agent's install reaches here only once a
+    // person approved it).
     const result = await applyCapabilityDefinition(
       definition,
       input.params,
@@ -1272,6 +1422,7 @@ export async function applyMarketInstall(
       key: result.capabilityKey,
       created: result.created,
       webhooks: result.webhooks,
+      ...(result.dependencies ? { dependencies: result.dependencies } : {}),
     };
   }
 
@@ -2045,7 +2196,7 @@ export async function applyMarketInstall(
 
 export interface RunMarketInstallInput {
   slug: string;
-  kind: CatalogKind;
+  kind: MarketInstallKind;
   /**
    * The catalog source: omitted (or `synap`) = the official source; an added
    * source's id otherwise. A bare request never reaches an added source.
@@ -2098,11 +2249,15 @@ export async function runMarketInstall(
   input: RunMarketInstallInput
 ): Promise<MarketInstallOutcome> {
   const source = await resolveMarketSource(input.source);
-  const entry = await lookupCatalogEntry(
-    input.kind,
-    input.slug,
-    source.cacheKey
-  );
+  // A renderer bundle is refused BEFORE a proposal is filed when no approval
+  // could install it (another source, a payload); it has no cache row.
+  if (input.kind === RENDERER_BUNDLE_KIND) {
+    assertRendererBundleRequest(input, source.official);
+  }
+  const entry =
+    input.kind === RENDERER_BUNDLE_KIND
+      ? null
+      : await lookupCatalogEntry(input.kind, input.slug, source.cacheKey);
   // Capability resolves by key even without a cache row — opt-in caps
   // (syncByDefault:false) never enter cp_catalog_cache but the CP serves them by
   // key (applyMarketInstall re-resolves via fetchCPCapabilityTemplate). The same

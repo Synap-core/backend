@@ -228,20 +228,22 @@ export const agentRowKey = (agentUserId: string) => `agent:${agentUserId}`;
 
 /** The query param that narrows Approvals (list and grid) to one agent. */
 export const AGENT_PARAM = "agent";
-/** The query param that opens Approvals' grid (every agent, grouped). */
+/** The query param that picks Approvals' view (list, by tool, by work). */
 export const VIEW_PARAM = "view";
+/** Approvals' agent × work matrix (`?view=work`; `?view=grid` is by tool, lane W3). */
+export const WORK_VIEW = "work";
 
 /**
  * Approvals (it folded Agents & work in, decision b387ca45 D5): its list, the
- * whole grid, or one agent's row of the grid.
+ * whole agent × work matrix, or one agent's row of it.
  */
 export function agentsAndWorkHref(
   base: string,
   target: { agentUserId: string } | "grid" | null = null
 ): string {
-  if (target === "grid") return `${base}?${VIEW_PARAM}=grid`;
+  if (target === "grid") return `${base}?${VIEW_PARAM}=${WORK_VIEW}`;
   if (target)
-    return `${base}?${VIEW_PARAM}=grid&${AGENT_PARAM}=${encodeURIComponent(target.agentUserId)}`;
+    return `${base}?${VIEW_PARAM}=${WORK_VIEW}&${AGENT_PARAM}=${encodeURIComponent(target.agentUserId)}`;
   return base;
 }
 

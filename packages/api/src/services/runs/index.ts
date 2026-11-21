@@ -113,7 +113,12 @@ import {
   listBoxRunsForFeed,
   loadBoxRunDetail,
 } from "../box-runs/box-run-reads.js";
-import { runStatusOfPlaybookRun } from "./playbook-run-status.js";
+import {
+  playbookRunStatusesReadingAs,
+  runStatusOfPlaybookRun,
+  runStatusOfSession,
+  sessionStatusesReadingAs,
+} from "./playbook-run-status.js";
 import {
   CAPABILITY_RUN_EVENT_KIND,
   capabilityRunEventWhere,
@@ -277,33 +282,11 @@ export interface ListRunsInput {
   roster?: boolean;
 }
 
-// ── Status normalisers ───────────────────────────────────────────────────────
-
-/** focus_sessions lifecycle → the run vocabulary. */
-function sessionStatus(s: string): RunStatus {
-  switch (s) {
-    case "closed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    // A reaper-marked stale session is NOT "still going" — mapping it to
-    // "running" in the run feed would mislabel a dead session as active. It is
-    // a terminal, non-success end-state → cancelled.
-    case "stale":
-      return "cancelled";
-    // active / paused / forming are "still going" for a run view. `scheduled`
-    // never reaches this mapper: an appointment has executed nothing, so it is
-    // not a run at all and `listSessionRuns` excludes it at the query.
-    default:
-      return "running";
-  }
-}
-
 // ── Status-filter mappers (normalised RunStatus → each ledger's own vocabulary) ─
 // Each returns the concrete column values matching the normalised filter; an
 // EMPTY array means the ledger can never produce that status (skip the query).
+// Sessions and playbook runs have a declaration: their reading and their
+// filter both come from it (`./playbook-run-status.ts`).
 
 type AutomationRunStatus =
   | "running"
@@ -313,24 +296,6 @@ type AutomationRunStatus =
   | "skipped"
   | "blocked_by_policy"
   | "waiting_on_you";
-type PlaybookRunStatusValue =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
-  | "waiting_on_you"
-  | "stale";
-type FocusSessionStatus =
-  | "active"
-  | "paused"
-  | "closed"
-  | "forming"
-  | "scheduled"
-  | "failed"
-  | "cancelled"
-  | "stale";
-
 function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
   switch (status) {
     case "running":
@@ -342,50 +307,8 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
     case "waiting_on_you":
       return [status];
     case "proposed":
-      return []; // automation_runs has no "proposed"
-  }
-}
-
-function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
-  switch (status) {
-    // A `stale` run projects to `cancelled` (`runStatusOfPlaybookRun`), so the
-    // reverse filter MUST include it — the same pairing `sessionStatusValues`
-    // keeps for a stale session.
-    case "cancelled":
-      return ["cancelled", "stale"];
-    // `waiting_on_you` — W2 calm: the reaper found the run quiet, its session
-    // owing the person.
-    case "running":
-    case "completed":
-    case "failed":
-    case "proposed":
-    case "waiting_on_you":
-      return [status];
-    case "skipped":
-    case "blocked_by_policy":
-      return []; // playbook_runs has no "skipped"/"blocked_by_policy"
-  }
-}
-
-function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
-  switch (status) {
-    case "running":
-      // No `scheduled`: an appointment is not a run (see listSessionRuns).
-      return ["active", "paused", "forming"];
-    case "completed":
-      return ["closed"];
-    case "failed":
-      return ["failed"];
-    case "cancelled":
-      // `stale` projects to the `cancelled` RunStatus (see normalizeSessionStatus),
-      // so the reverse filter MUST include it — else a stale session shows a
-      // `cancelled` badge in the run feed but is unreachable by the cancelled filter.
-      return ["cancelled", "stale"];
-    case "proposed":
-    case "skipped":
-    case "blocked_by_policy":
-    case "waiting_on_you":
-      return []; // focus_sessions is never "proposed"/"skipped"/"blocked_by_policy"/"waiting_on_you"
+    case "paused":
+      return []; // automation_runs has no "proposed"/"paused"
   }
 }
 
@@ -423,6 +346,7 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
     case "skipped":
     case "blocked_by_policy":
     case "waiting_on_you":
+    case "paused":
       return []; // chat_turns has none of these
   }
 }
@@ -533,7 +457,7 @@ async function listPlaybookRuns(
   exactRunId?: string,
   roster = false
 ): Promise<UnifiedRun[]> {
-  const statusValues = status ? playbookStatusValues(status) : null;
+  const statusValues = status ? playbookRunStatusesReadingAs(status) : null;
   if (statusValues && statusValues.length === 0) return [];
   const rows = await db
     .select({
@@ -1231,7 +1155,7 @@ async function listSessionRuns(
   exactRunId?: string,
   roster = false
 ): Promise<UnifiedRun[]> {
-  const statusValues = status ? sessionStatusValues(status) : null;
+  const statusValues = status ? sessionStatusesReadingAs(status) : null;
   if (statusValues && statusValues.length === 0) return [];
   // Sessions that carry their OWN story — i.e. have NO playbook_runs row. This
   // covers both standalone agent/interactive sessions AND playbook-linked sessions
@@ -1312,7 +1236,7 @@ async function listSessionRuns(
     flowType: "session" as const,
     flowId: null,
     flowName: resolveSessionTitle(r) || "Session",
-    status: sessionStatus(r.status),
+    status: runStatusOfSession(r.status),
     startedAt: r.startedAt,
     completedAt: r.closedAt ?? null,
     lastActivityAt: r.lastActivityAt ?? null,

@@ -23,6 +23,8 @@ import {
 } from "@synap/database/schema";
 import { isNull } from "@synap/database";
 import type { Context } from "../../types/context.js";
+import { requireUserId } from "../../utils/user-scoped.js";
+import { assertNoAddOnsOf } from "./addon.js";
 
 /**
  * Uninstall a capability container by id.
@@ -36,8 +38,17 @@ import type { Context } from "../../types/context.js";
  */
 export async function uninstallCapability(
   containerId: string,
-  _ctx: Context
+  ctx: Context
 ): Promise<{ success: true; deleted: { tools: number; skills: number } }> {
+  // A base with add-ons installed stays: they run through its tool rows
+  // (services/capabilities/addon.ts). Refused before anything is deleted.
+  const [container] = await db
+    .select({ id: capabilitiesTable.id, name: capabilitiesTable.name })
+    .from(capabilitiesTable)
+    .where(eq(capabilitiesTable.id, containerId))
+    .limit(1);
+  if (container)
+    await assertNoAddOnsOf(db, requireUserId(ctx.userId), container);
   try {
     return await uninstallInTx(containerId);
   } finally {
@@ -109,6 +120,9 @@ function uninstallInTx(
     // so we never touch a link unless it points at this container or at an orphan.
     const linkConditions = [
       and(eq(links.toType, "capability"), eq(links.toId, containerId)),
+      // Its own outgoing edges too: an add-on's `extends` edge to its base
+      // must not outlive it.
+      and(eq(links.fromType, "capability"), eq(links.fromId, containerId)),
     ];
     if (orphanIds.length > 0) {
       linkConditions.push(inArray(links.fromId, orphanIds));

@@ -13,6 +13,7 @@
  */
 
 import { Button, useDisclosure } from "@heroui/react";
+import { keepPreviousData } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -141,6 +142,9 @@ export function ActivitySection({
   ]);
 
   const auditQuery = trpc.system.listAuditLogs.useQuery(queryInput, {
+    // A filter change or "Load more" keeps the rows on screen until the next
+    // answer lands, instead of blanking to a skeleton.
+    placeholderData: keepPreviousData,
     staleTime: 15_000,
     refetchInterval: 60_000,
   });

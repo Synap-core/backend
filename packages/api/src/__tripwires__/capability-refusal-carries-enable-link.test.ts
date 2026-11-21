@@ -21,10 +21,13 @@
  * a governance one; forcing an "Enable X" hint onto it would name the wrong fix,
  * which is exactly the approve-vs-connect collapse this work exists to prevent.
  * The class predicate — not a list of files — is what keeps that judgement
- * reviewable. So is the recipe run refused at filing: its reason is opaque here,
- * so it is exempt only while builtin-verbs.ts PROVES its codes are configuration
- * codes (`recipeFilingExemption`); a code that reads approval-class, or maps to
- * a governance failure class, puts it back in scope.
+ * reviewable. So is the run refused at filing by the one filing check
+ * (`can-apply.ts`, mapped by `filingRefusalOf`): its reason is opaque here, so
+ * it is exempt only while the check's `capability.run` entry PROVES it refuses
+ * through `recipeRunRefusalAtFiling` alone, and builtin-verbs.ts PROVES those
+ * codes are configuration codes (`recipeFilingExemption`); a code that reads
+ * approval-class, maps to a governance failure class, or an entry that refuses
+ * any other way puts it back in scope.
  *
  * What it does NOT cover: the recipe refusal's message TEXT is not classified
  * (an UNKNOWN_RECIPE sentence may say "approved version", which is accurate:
@@ -82,10 +85,10 @@ function isRefusalInScope(literal: string): boolean {
   // A TRIAL run's write (the rule lab, `reasonCode: TRIAL_RUN_WRITE_REFUSED`)
   // is refused by design: nothing to enable, so no enable-link either.
   if (/reasonCode:\s*TRIAL_RUN_WRITE_REFUSED\b/.test(literal)) return false;
-  // A recipe run refused AT FILING (`recipeRunRefusalAtFiling`): its reason is
-  // the run's own sentence, opaque here, but its codes are PROVEN
-  // configuration codes from builtin-verbs.ts (`recipeFilingExemption`). The
-  // capability is already enabled; an "Enable X" link would name the wrong fix.
+  // A run refused AT FILING (the one filing check, `filingRefusalOf`): its
+  // reason is the run's own sentence, opaque here, but its codes are PROVEN
+  // configuration codes (`recipeFilingExemption`). The capability is already
+  // enabled; an "Enable X" link would name the wrong fix.
   if (isRecipeFilingRefusal(literal) && recipeFilingExemption().ok)
     return false;
   if (APPROVAL_CLASS.test(literal)) return true;
@@ -95,6 +98,7 @@ function isRefusalInScope(literal: string): boolean {
 }
 
 const BUILTIN_VERBS = join(API_SRC, "services/capabilities/builtin-verbs.ts");
+const CAN_APPLY = join(API_SRC, "services/proposals/can-apply.ts");
 
 /**
  * The failure classes (`@synap-core/types/failures`) that name a CONFIGURATION
@@ -110,10 +114,11 @@ const CONFIGURATION_CLASSES = new Set([
 ]);
 
 /**
- * Is this deny the recipe run's FILING refusal? Its reason and code must both
- * read the value `recipeRunRefusalAtFiling` returned: the nearest
- * `const <name> = await <fn>(` before the deny names that function. A deny
- * reading any other `<name>.reasonCode` is not exempted.
+ * Is this deny the run's FILING refusal? Its reason and code must both read
+ * the value `filingRefusalOf` returned (the one filing check's refusal, thrown
+ * by `createPendingProposal`): the nearest `const <name> = [await] <fn>(`
+ * before the deny names that function. A deny reading any other
+ * `<name>.reasonCode` is not exempted.
  */
 function isRecipeFilingRefusal(
   literal: string,
@@ -128,9 +133,9 @@ function isRecipeFilingRefusal(
   const binds = [
     ...src
       .slice(0, at)
-      .matchAll(new RegExp(`const ${code} = await (\\w+)\\(`, "g")),
+      .matchAll(new RegExp(`const ${code} = (?:await )?(\\w+)\\(`, "g")),
   ];
-  return binds.at(-1)?.[1] === "recipeRunRefusalAtFiling";
+  return binds.at(-1)?.[1] === "filingRefusalOf";
 }
 
 /**
@@ -165,6 +170,25 @@ function recipeFilingExemption(): { ok: boolean; problems: string[] } {
     const cls = classOf.get(code);
     if (!cls || !CONFIGURATION_CLASSES.has(cls))
       problems.push(`${code} maps to ${cls ?? "no class"}`);
+  }
+  // The one filing check's `capability.run` entry refuses ONLY with what
+  // `recipeRunRefusalAtFiling` returns: its one refusing return is that call.
+  const entry = /"capability\.run": async \([\s\S]*?\n {2}\},\n/.exec(
+    readFileSync(CAN_APPLY, "utf-8")
+  );
+  if (!entry) problems.push("can-apply.ts: no capability.run entry");
+  else {
+    const returns = [...entry[0].matchAll(/return ([^;]*);/g)].map((m) =>
+      m[1]!.trim()
+    );
+    const refusing = returns.filter((r) => r !== "null");
+    if (
+      refusing.length !== 1 ||
+      !/^recipeRunRefusalAtFiling\(/.test(refusing[0]!)
+    )
+      problems.push(
+        `capability.run entry must refuse only through recipeRunRefusalAtFiling (returns: ${returns.join(" | ")})`
+      );
   }
   const fn =
     /export async function recipeRunRefusalAtFiling\([\s\S]*?\n\}\n/.exec(src);
@@ -234,19 +258,16 @@ describe("TRIPWIRE: capability refusals carry an enable-link", () => {
       denyReturns(executeSrc).filter((d) => isRecipeFilingRefusal(d))
     ).toHaveLength(1);
     // Self-check on a literal sample: the same deny shape is exempted only
-    // when its value was bound from `recipeRunRefusalAtFiling`.
+    // when its value was bound from `filingRefusalOf`.
     const deny =
       'return {\n  kind: "deny",\n  reason: r.message,\n  reasonCode: r.reasonCode,\n}';
     expect(
-      isRecipeFilingRefusal(
-        deny,
-        `const r = await recipeRunRefusalAtFiling(p);\n${deny}`
-      )
+      isRecipeFilingRefusal(deny, `const r = filingRefusalOf(err);\n${deny}`)
     ).toBe(true);
     expect(
       isRecipeFilingRefusal(
         deny,
-        `const r = await recipeRunRefusalAtFiling(p);\nconst r = await somethingElse(p);\n${deny}`
+        `const r = filingRefusalOf(err);\nconst r = await somethingElse(p);\n${deny}`
       )
     ).toBe(false);
   });

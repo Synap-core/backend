@@ -22,6 +22,7 @@ import type { ProposalToolRun } from "@synap-core/types/proposals/capability-run
 import { CodeValue, RECORD_GRID_CLASS } from "./ProposedRecordCard";
 import { proposalPageT } from "./copy";
 import {
+  runResultSplit,
   toolRunSplit,
   type ToolRunArgument,
   type ToolRunValue,
@@ -255,6 +256,53 @@ export function ToolRunArguments({
           {children}
         </div>
       </details>
+    </section>
+  );
+}
+
+/**
+ * What an approved run RETURNED (`data.runResult`): the same reading as its
+ * arguments, never editable. Omitted when the run returned nothing, so a
+ * pending request shows no empty section (REASSURE once it ran: report
+ * 48dbf93b, the person saw an error for a run that had produced two images).
+ */
+export function RunResult({ data }: { data: unknown }) {
+  const t = proposalPageT();
+  const split = runResultSplit(data);
+  if (!split) return null;
+  return (
+    <section
+      aria-label={t("toolRun.returned")}
+      data-run-result=""
+      className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3.5 ring-1 ring-inset ring-foreground/10"
+    >
+      <header className="flex flex-col gap-0.5">
+        <h2 className="font-heading text-[15px] font-medium text-foreground">
+          {t("toolRun.returned")}
+        </h2>
+        <p className="text-[12.5px] text-foreground/65">
+          {t("toolRun.returnedNote")}
+        </p>
+      </header>
+      {split.shown.length > 0 && (
+        <dl className={RECORD_GRID_CLASS}>
+          {split.shown.map((arg) => (
+            <Argument key={arg.key} arg={arg} t={t} />
+          ))}
+        </dl>
+      )}
+      {split.detail.length > 0 && (
+        <details data-run-result-details="" className="group text-[12.5px]">
+          <summary className="min-h-9 cursor-pointer select-none py-1.5 font-medium text-foreground/70">
+            {t("toolRun.details")}
+          </summary>
+          <dl className={`${RECORD_GRID_CLASS} pt-2`}>
+            {split.detail.map((arg) => (
+              <Argument key={arg.key} arg={arg} t={t} />
+            ))}
+          </dl>
+        </details>
+      )}
     </section>
   );
 }

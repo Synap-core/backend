@@ -1569,6 +1569,66 @@ describe("do not contact: the CRM app sets the flag at once; only the person lif
     }
     expect((await sendDoorRefuses(DNC_STORED)).email).toBe(true);
   });
+
+  // Ticket 85a8f115 (Promise Keeper 2026-11-18): re-setting the flag with an
+  // empty reason or date was read as "sets the flag only" and APPLIED, which
+  // erased the CNIL evidence of why and since when the person opted out.
+  const ERASE_EVIDENCE = [
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: null,
+        doNotContactSince: null,
+      },
+    },
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: "",
+        doNotContactSince: "1970-01-01",
+      },
+    },
+  ];
+  const evidenceOf = async (id: string) => {
+    const p = (await coreOf(id))!.properties as Record<string, unknown>;
+    return {
+      flag: p.doNotContact,
+      reason: p.doNotContactReason,
+      since: p.doNotContactSince,
+    };
+  };
+
+  it("re-setting the flag with an empty reason or date on a pod-wide person is not applied (403): the reason and date stay", async () => {
+    const kept = await evidenceOf(DNC_A);
+    expect(kept).toEqual({
+      flag: true,
+      reason: OPT_OUT.doNotContactReason,
+      since: OPT_OUT.doNotContactSince,
+    });
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of ERASE_EVIDENCE) {
+        const count = await proposalCount();
+        const res = await patch(key, DNC_A, body);
+        expect(res.status, `${key} ${JSON.stringify(body)}`).toBe(403);
+        expect(await proposalCount()).toBe(count);
+        expect(await evidenceOf(DNC_A)).toEqual(kept);
+      }
+    }
+  });
+
+  it("on a person stored in CRM, the same write is PROPOSED in both modes, never applied: the reason and date stay", async () => {
+    const kept = await evidenceOf(DNC_STORED);
+    expect(kept.reason).toBe(OPT_OUT.doNotContactReason);
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of ERASE_EVIDENCE) {
+        const res = await patch(key, DNC_STORED, body);
+        const out = await json(res);
+        expect(res.status, `${key} ${JSON.stringify(out)}`).toBe(202);
+        expect(out.status).toBe("proposed");
+        expect(await evidenceOf(DNC_STORED)).toEqual(kept);
+      }
+    }
+  });
 });
 
 // ─── Unchanged: keys not limited to spaces, members ─────────────────────────

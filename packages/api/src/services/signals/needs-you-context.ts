@@ -34,7 +34,6 @@ import {
   focusSessions,
   inArray,
   links,
-  OPEN_SESSION_STATUSES,
   proposals,
   drizzleSql,
 } from "@synap/database";
@@ -48,7 +47,10 @@ import {
 } from "@synap/database/schema";
 import { isHttpUrl } from "@synap/shared-utils";
 import { createLogger } from "@synap-core/core";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  UNDERWAY_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import type {
   NeedsYouContextRead,
   RequestAiCanDo,
@@ -464,7 +466,7 @@ export async function readNeedsYouContext(
                   eq(links.toType, "session"),
                   eq(links.linkType, "blocked_by"),
                   inArray(links.toId, sessionIds),
-                  inArray(focusSessions.status, [...OPEN_SESSION_STATUSES]),
+                  inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
                   sessionReadableWhere(floor)
                 )
               )

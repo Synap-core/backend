@@ -158,7 +158,9 @@ export async function loadAgentPresence(
  * (`api_keys.linked_user_id`). That link is what makes the agent's calls run
  * AS the viewer — so it is exactly the set whose orient can see the viewer's
  * sessions. Another person's agent is visible on a shared roster but never
- * reads your work. A failed read throws.
+ * reads your work. A failed read throws. Not `agentsActingFor`
+ * (@synap/database): that one also counts revoked keys and app/computer PATs,
+ * so a removal cannot be undone by re-minting; this one asks who may act NOW.
  */
 export async function agentsOperatedBy(
   viewerId: string,

@@ -139,8 +139,8 @@ import {
   BUILTIN_VERBS,
   DE_ESCALATION_BUILTIN_VERBS,
   READ_ONLY_BUILTIN_VERBS,
-  recipeRunRefusalAtFiling,
 } from "./builtin-verbs.js";
+import { filingRefusalOf } from "../proposals/can-apply.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { declaredProposeOnly } from "@synap-core/types/proposals";
 import { meterCapabilityRun } from "./capability-metering.js";
@@ -174,7 +174,6 @@ import {
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
 import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
-import { RUN_RECIPE_VERB } from "../host-jobs/hosted-verb-rules.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -500,6 +499,8 @@ export async function executeCapability(input: {
   agentUserId?: string | null;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
+  /** WHY this run — the agent's own reason, shown on the proposal it files. */
+  reasoning?: string;
   /**
    * Resolve `verbId` by PROVENANCE: only a skill whose `requires` edge points at
    * this tool row can answer. A verb NAME is not an identity — a pod that went
@@ -637,7 +638,11 @@ export async function executeCapability(input: {
     .from(skills)
     .where(
       and(
-        answeringSkillsWhere(userId, workspaceId),
+        answeringSkillsWhere(
+          userId,
+          workspaceId,
+          input.automationRun?.agentUserId
+        ),
         skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!),
         !skillId && input.toolId ? skillRequiresTool(input.toolId) : undefined
       )
@@ -939,139 +944,133 @@ export async function executeCapability(input: {
         ...(enable ? { enable } : {}),
       };
     }
-    // CAN IT APPLY? A recipe run is planned here by the function its run
-    // calls on approval (`recipeRunRefusalAtFiling` → `planRecipeRun`, which
-    // `queueRecipeRun` runs): a recipe the computer's APPROVED version does
-    // not have, or a value that does not fill it, is refused to the caller
-    // with the run's own sentence and code, and nothing is filed. A read
-    // that FAILS here files as before: a fact not read never refuses.
-    if (skillRow.kind === "builtin" && skillRow.name === RUN_RECIPE_VERB) {
-      const refusal = await recipeRunRefusalAtFiling(parameters ?? {}, {
+    // CAN IT APPLY? Asked by `createPendingProposal` itself (the ONE check,
+    // `can-apply.ts`): a recipe run its approval would refuse (a recipe the
+    // computer's APPROVED version does not have, a value that does not fill
+    // it) throws there, with the run's own sentence and code, and nothing is
+    // filed. It reaches the caller as this door's denial.
+    let proposal: Awaited<ReturnType<typeof createPendingProposal>>;
+    try {
+      proposal = await createPendingProposal({
         userId,
         workspaceId,
-        agentUserId: input.agentUserId ?? null,
+        // Attribute the proposal to the acting agent so its OWNER can approve it
+        // (computeCanReviewApproval resolves agentUserId -> users.createdByUserId).
+        // Without this the row stored agentUserId:null and only admins could review.
+        agentUserId: input.agentUserId ?? undefined,
+        targetType: "capability",
+        targetId: skillRow.id,
+        proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
+        // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
+        // index. NULL when the caller had no session, by design.
         sessionId: input.sessionId ?? null,
-        verbId: skillRow.id,
-        verbName: skillRow.name,
-      }).catch((err: unknown) => {
-        logger.warn(
-          { err, skillId: skillRow.id },
-          "recipe run: the filing check could not read; filed as before"
-        );
-        return null;
-      });
-      if (refusal) {
-        return {
-          kind: "deny",
-          reason: refusal.message,
-          reasonCode: refusal.reasonCode,
-        };
-      }
-    }
-    const proposal = await createPendingProposal({
-      userId,
-      workspaceId,
-      // Attribute the proposal to the acting agent so its OWNER can approve it
-      // (computeCanReviewApproval resolves agentUserId -> users.createdByUserId).
-      // Without this the row stored agentUserId:null and only admins could review.
-      agentUserId: input.agentUserId ?? undefined,
-      targetType: "capability",
-      targetId: skillRow.id,
-      proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
-      // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
-      // index. NULL when the caller had no session, by design.
-      sessionId: input.sessionId ?? null,
-      data: {
-        skillId: skillRow.id,
-        verbId: verbId ?? null,
-        parameters: parameters ?? {},
-        workspaceId,
-        // WHAT this run will do, in the reviewer's words.
-        //
-        // Every OTHER proposal type carries a `data.summary` and the review
-        // queue renders it; a capability run carried none, so an agent's
-        // marketplace install arrived as a bare row reading only
-        // "capability.run proposal on capability is pending" — the reviewer
-        // could see that SOMETHING was proposed but not WHAT, and had to open
-        // the payload to find `parameters.slug`. That is the review-theatre
-        // failure this repo has already logged for rules (approving what you
-        // cannot read), and it lands squarely on the marketplace's central
-        // promise: an installed package proposes, and you approve.
-        //
-        // Built from the payload that is already here — nothing new is stored
-        // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
-        // A pod app's intent run reads as what the app asked, by name: the
-        // action, the recipient, the account ("Send message to Marie Dupont
-        // from Antoine Servant on LinkedIn"), never the verb's raw ids.
-        //
-        // A run that sends pod files says so first, whoever asked: which
-        // files, how big, to which tool (the app's own request still rides in
-        // `intentRequest` for the approval screen). The ids stay in
-        // `parameters`; `files` names them for the review card. No URL is
-        // stored: it is minted after approval.
-        summary:
-          podFiles.files.length > 0
-            ? describePodFileSend(
-                podFiles.files,
-                await verbToolLabel(skillRow.id)
-              )
-            : compute.kind === "start"
-              ? describeComputeStart(
-                  (await verbToolLabel(skillRow.id)) ??
-                    humanizeToken(skillRow.name),
-                  compute
+        data: {
+          skillId: skillRow.id,
+          verbId: verbId ?? null,
+          parameters: parameters ?? {},
+          workspaceId,
+          // WHAT this run will do, in the reviewer's words.
+          //
+          // Every OTHER proposal type carries a `data.summary` and the review
+          // queue renders it; a capability run carried none, so an agent's
+          // marketplace install arrived as a bare row reading only
+          // "capability.run proposal on capability is pending" — the reviewer
+          // could see that SOMETHING was proposed but not WHAT, and had to open
+          // the payload to find `parameters.slug`. That is the review-theatre
+          // failure this repo has already logged for rules (approving what you
+          // cannot read), and it lands squarely on the marketplace's central
+          // promise: an installed package proposes, and you approve.
+          //
+          // Built from the payload that is already here — nothing new is stored
+          // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
+          // A pod app's intent run reads as what the app asked, by name: the
+          // action, the recipient, the account ("Send message to Marie Dupont
+          // from Antoine Servant on LinkedIn"), never the verb's raw ids.
+          //
+          // A run that sends pod files says so first, whoever asked: which
+          // files, how big, to which tool (the app's own request still rides in
+          // `intentRequest` for the approval screen). The ids stay in
+          // `parameters`; `files` names them for the review card. No URL is
+          // stored: it is minted after approval.
+          summary:
+            podFiles.files.length > 0
+              ? describePodFileSend(
+                  podFiles.files,
+                  await verbToolLabel(skillRow.id)
                 )
-              : input.intentRequest
-                ? describeIntentRun(input.intentRequest)
-                : describeCapabilityRun(
-                    verbId ?? null,
-                    parameters ?? {},
-                    await resolveEntityVerbRunSubject(
-                      entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-                      userId
-                    )
-                  ),
-        ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
-        // A compute start's terms, for the review card: approving it
-        // approves the destroy at its time to live (founder, 18 Nov 2026).
-        ...(compute.kind === "start"
-          ? {
-              computeStart: {
-                ttlMinutes: compute.ttlMinutes,
-                maxSpendCents: compute.maxSpendCents,
-                releaseVerb: compute.releaseVerb,
-                // A new pod's server: kept once it registers (plan B1).
-                ...(compute.podRegistrationCodeHash ? { podServer: true } : {}),
-              },
-            }
-          : {}),
-        // WHY — the run door has no top-level `reasoning`, so an agent's reason
-        // rides in `parameters`; hoisted to where the review card reads it
-        // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
-        // never splits identical runs.
-        ...(capabilityRunReasoning(parameters)
-          ? { reasoning: capabilityRunReasoning(parameters) }
-          : {}),
-        // Carry the 1-of-N connection selector so an APPROVED run resolves the
-        // same connection the original call intended (see runResolvedSkill).
-        connectionSelector: input.connectionSelector ?? null,
-        // C1: correlate an approved run + any retry to one logical invocation.
-        ...(input.idempotencyKey
-          ? { idempotencyKey: input.idempotencyKey }
-          : {}),
-        // What a pod app asked, for the approval screen (intent actions).
-        ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
-      },
-      // WHY this needs a human, persisted onto `proposals.governance_reason`.
-      // Previously never passed here: `createPendingProposal` has forwarded
-      // this field all along and the dominant producer simply never populated
-      // it, so 620 of 680 pending rows carried no cause (measured 2026-09-01).
-      // It matters most inside a cluster — the fingerprint keys on the
-      // capability id, so without this an UNTRUSTED_ORIGIN run is
-      // indistinguishable from a routine one among 400 siblings.
-      governanceReason: decision.reasonCode ?? null,
-      notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
-    });
+              : compute.kind === "start"
+                ? describeComputeStart(
+                    (await verbToolLabel(skillRow.id)) ??
+                      humanizeToken(skillRow.name),
+                    compute
+                  )
+                : input.intentRequest
+                  ? describeIntentRun(input.intentRequest)
+                  : describeCapabilityRun(
+                      verbId ?? null,
+                      parameters ?? {},
+                      await resolveEntityVerbRunSubject(
+                        entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                        userId
+                      )
+                    ),
+          ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
+          // A compute start's terms, for the review card: approving it
+          // approves the destroy at its time to live (founder, 18 Nov 2026).
+          ...(compute.kind === "start"
+            ? {
+                computeStart: {
+                  ttlMinutes: compute.ttlMinutes,
+                  maxSpendCents: compute.maxSpendCents,
+                  releaseVerb: compute.releaseVerb,
+                  // A new pod's server: kept once it registers (plan B1).
+                  ...(compute.podRegistrationCodeHash
+                    ? { podServer: true }
+                    : {}),
+                },
+              }
+            : {}),
+          // WHY — the run door has no top-level `reasoning`, so an agent's reason
+          // rides in `parameters`; hoisted to where the review card reads it
+          // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
+          // never splits identical runs.
+          ...((input.reasoning ?? capabilityRunReasoning(parameters))
+            ? {
+                reasoning:
+                  input.reasoning ?? capabilityRunReasoning(parameters),
+              }
+            : {}),
+          // Carry the 1-of-N connection selector so an APPROVED run resolves the
+          // same connection the original call intended (see runResolvedSkill).
+          connectionSelector: input.connectionSelector ?? null,
+          // C1: correlate an approved run + any retry to one logical invocation.
+          ...(input.idempotencyKey
+            ? { idempotencyKey: input.idempotencyKey }
+            : {}),
+          // What a pod app asked, for the approval screen (intent actions).
+          ...(input.intentRequest
+            ? { intentRequest: input.intentRequest }
+            : {}),
+        },
+        // WHY this needs a human, persisted onto `proposals.governance_reason`.
+        // Previously never passed here: `createPendingProposal` has forwarded
+        // this field all along and the dominant producer simply never populated
+        // it, so 620 of 680 pending rows carried no cause (measured 2026-09-01).
+        // It matters most inside a cluster — the fingerprint keys on the
+        // capability id, so without this an UNTRUSTED_ORIGIN run is
+        // indistinguishable from a routine one among 400 siblings.
+        governanceReason: decision.reasonCode ?? null,
+        notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
+      });
+    } catch (err) {
+      const refused = filingRefusalOf(err);
+      if (!refused) throw err;
+      return {
+        kind: "deny",
+        reason: refused.message,
+        reasonCode: refused.reasonCode,
+      };
+    }
     // Every other governed write hands the caller a clickable review link —
     // this door must too (IS/MCP tools surface it to the user).
     return {

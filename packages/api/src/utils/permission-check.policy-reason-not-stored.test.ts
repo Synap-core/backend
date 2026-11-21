@@ -102,7 +102,10 @@ const agentWrite = (reasoning?: string) => ({
   subjectType: "playbook" as const,
   action: "create" as const,
   source: "intelligence" as const,
-  data: { name: "Evaluate an integration candidate" },
+  data: {
+    name: "Evaluate an integration candidate",
+    goalTemplate: "Evaluate the candidate against the integration checklist.",
+  },
   ...(reasoning ? { reasoning } : {}),
 });
 

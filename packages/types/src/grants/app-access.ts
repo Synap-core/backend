@@ -677,6 +677,123 @@ export function compareAppScopes(
   };
 }
 
+/** A grant scope as any reader holds it (stored scopes carry nulls). */
+export interface GrantScopeLike {
+  readonly permissions: readonly string[];
+  readonly workspaceIds?: readonly string[] | null;
+  readonly projectIds?: readonly string[] | null;
+  readonly entityIds?: readonly string[] | null;
+}
+
+/** The pieces of a scope: one per permission × named place (W3d). */
+function piecesOf<T extends GrantScopeLike>(scope: T): T[] {
+  const out: T[] = [];
+  // Its place read through THE parse (`parsePlace`): the spaces it names
+  // (beside a project pin too), else the projects, else none.
+  const place = parsePlace(scope as unknown as AppAccessGrantScope, "app");
+  const ws = placeSpaceIds(place);
+  const pj = placeProjectIds(place);
+  for (const permission of scope.permissions) {
+    if (ws.length > 0) {
+      // Split by space; any other limit stays on each piece (still ⊆ scope).
+      for (const id of ws)
+        out.push({ ...scope, permissions: [permission], workspaceIds: [id] });
+    } else if (pj.length > 0) {
+      for (const id of pj)
+        out.push({ ...scope, permissions: [permission], projectIds: [id] });
+    } else out.push({ ...scope, permissions: [permission] });
+  }
+  return out;
+}
+
+/**
+ * What of `candidates` lies within `bound`, BY MEANING (W3d; review finding 4
+ * of #1196): each candidate scope whole when everything it permits `bound`
+ * permits too and it puts the app nowhere `bound` does not (each space or
+ * project it names as viewer or editor, `placementOf`); otherwise each of its
+ * pieces (one permission in one named place) that is. So `entity.note.read`
+ * in A is kept beside a bound of `entity.read` in A, which a comparison of
+ * literal (permission, space) keys would drop.
+ *
+ * SOUND: everything the result permits, both sides permit; never wider than
+ * either. Asked through the engine's own `permits` over the finite probes of
+ * both sides (`probesFor`). Throws `LiftTooLargeError` above
+ * `LIFT_PROBE_BUDGET` (the caller fails closed).
+ */
+export function scopesWithinBound<T extends GrantScopeLike>(
+  candidateScopes: readonly T[],
+  boundScopes: readonly GrantScopeLike[]
+): T[] {
+  // A scope pinned to records is never kept, nor counted in the bound: no
+  // probe names a record, so it would look like it permits nothing (fail
+  // closed; no app holds one).
+  const candidates = candidateScopes.filter((c) => !c.entityIds?.length);
+  if (candidates.length === 0) return [];
+  const bound = boundScopes.filter(
+    (b) => !b.entityIds?.length
+  ) as unknown as AppAccessGrantScope[];
+  const asScopes = (xs: readonly GrantScopeLike[]) =>
+    xs as unknown as AppAccessGrantScope[];
+  const all = [...asScopes(candidates), ...bound];
+  const distinct = [...new Set(all.flatMap((s) => s.permissions))];
+  const { permissions, places } = probesFor(distinct, all);
+  const cost = costOf(permissions.length, distinct.length, all);
+  if (cost > LIFT_PROBE_BUDGET) throw new LiftTooLargeError(cost);
+  const matches = new Map<string, Uint8Array>();
+  for (const p of distinct) {
+    const row = new Uint8Array(permissions.length);
+    for (let r = 0; r < permissions.length; r++)
+      row[r] = patternMatches(p, permissions[r]!) ? 1 : 0;
+    matches.set(p, row);
+  }
+  const limitsAt = (s: GrantScopeLike) =>
+    places.map((pl) =>
+      permits(
+        { ...s, permissions: ["*"] },
+        {
+          subject: OTHER,
+          action: OTHER_VERB,
+          workspaceId: pl.workspaceId ?? null,
+          projectIds: pl.projectId === undefined ? null : [pl.projectId],
+        }
+      )
+    );
+  // What the bound permits, probe by probe.
+  const boundAt = bound.map(limitsAt);
+  const permitted = (r: number, i: number) =>
+    bound.some(
+      (s, k) => boundAt[k]![i] && s.permissions.some((p) => matches.get(p)![r])
+    );
+  const boundPermits: Uint8Array[] = permissions.map((_, r) => {
+    const row = new Uint8Array(places.length);
+    for (let i = 0; i < places.length; i++) row[i] = permitted(r, i) ? 1 : 0;
+    return row;
+  });
+  const boundPlaces = placementOf(bound);
+  const within = (s: GrantScopeLike): boolean => {
+    for (const [key, role] of placementOf(asScopes([s]))) {
+      const held = boundPlaces.get(key);
+      if (!held || (role === "editor" && held !== "editor")) return false;
+    }
+    const at = limitsAt(s);
+    for (let r = 0; r < permissions.length; r++) {
+      if (!s.permissions.some((p) => matches.get(p)![r])) continue;
+      for (let i = 0; i < places.length; i++)
+        if (at[i] && !boundPermits[r]![i]) return false;
+    }
+    return true;
+  };
+  const out: T[] = [];
+  for (const c of candidates) {
+    if (within(c)) {
+      out.push(c);
+      continue;
+    }
+    for (const piece of piecesOf(c)) if (within(piece)) out.push(piece);
+  }
+  return out;
+}
+
 /**
  * Lift a connection's `approved_requests` pairs into v2, or say why it must
  * ask again. NEVER WIDENS, NEVER NARROWS: the lift is returned only when the
@@ -782,6 +899,16 @@ export interface AppAccessGrantScope {
   projectIds?: string[];
 }
 
+/** How a v2 access is minted (`grantScopesForAccess`). */
+export interface GrantScopesOptions {
+  /**
+   * What "all" projects means at this mint: the projects the person can see
+   * now (a live pin, re-read at every mint). Omitted: "all" projects mints
+   * nothing (fail closed).
+   */
+  readonly allProjects?: readonly string[];
+}
+
 /** A grant names at most this many spaces or projects (`GrantInputSchema`). */
 const MAX_IDS_PER_SCOPE = 64;
 
@@ -806,11 +933,23 @@ const sameSet = (a: readonly string[], b: readonly string[]) =>
  * Reads and writes over the same list are one scope (as one approved space
  * is one scope today). Spaces and projects are NEVER in one scope: inside a
  * scope `permits` ANDs its limits (the intersection), and F3 is a union,
- * which only separate scopes give (any scope permits). "all" projects makes no scope yet: the engine has no
- * "every project" pin, and a pod read would be wider (fail closed; W3).
+ * which only separate scopes give (any scope permits).
+ *
+ * "all" projects (W3d) is a LIVE pin: the engine has no "every project"
+ * limit, and a pod read would be wider, so it is minted as the projects
+ * the caller resolves NOW (`options.allProjects`: the projects the person
+ * can see when the token is minted). Without them it mints nothing (fail
+ * closed). Under All spaces the reads are pod-wide and already reach every
+ * project the person reads (Q1), so no project scope is added for reads.
  * The key still acts only within the person's floor (grant ∩ floor).
  */
-export function grantScopesForAccess(access: AppAccess): AppAccessGrantScope[] {
+export function grantScopesForAccess(
+  access: AppAccess,
+  options: GrantScopesOptions = {}
+): AppAccessGrantScope[] {
+  const all = options.allProjects ?? [];
+  const resolve = (ids: AccessAllOrIds): readonly string[] =>
+    ids === "all" ? all : ids;
   const reads = access.permissions.filter(isReadPermission);
   const writes = access.permissions.filter((p) => !isReadPermission(p));
   const out: AppAccessGrantScope[] = [];
@@ -839,11 +978,10 @@ export function grantScopesForAccess(access: AppAccess): AppAccessGrantScope[] {
     spaces(writes, access.write.spaces);
   }
 
-  // Projects.
-  const readProjects: AccessAllOrIds = access.read.projects;
-  if (readProjects === "all") {
-    projects(writes, access.write.projects);
-  } else if (sameSet(readProjects, access.write.projects)) {
+  // Projects. Under All spaces the reads already reach every project (Q1).
+  const readProjects: readonly string[] =
+    readSpaces === "all" ? [] : resolve(access.read.projects);
+  if (sameSet(readProjects, access.write.projects)) {
     projects([...reads, ...writes], readProjects);
   } else {
     projects(reads, readProjects);
@@ -886,8 +1024,8 @@ export function pairsWithin(
 
 /** Do two accesses allow exactly the same (permission, place) pairs? */
 export function sameAppAccess(a: AppAccess, b: AppAccess): boolean {
-  const ka = new Set(expandAppAccess(a).map(accessPairKey));
-  const kb = expandAppAccess(b).map(accessPairKey);
+  const ka = new Set(expandAppAccess(normalizeAppAccess(a)).map(accessPairKey));
+  const kb = expandAppAccess(normalizeAppAccess(b)).map(accessPairKey);
   return ka.size === new Set(kb).size && kb.every((k) => ka.has(k));
 }
 
@@ -928,11 +1066,40 @@ export function parseAppAccess(raw: unknown): AppAccess | null {
   const writeProjects = idList(write.projects);
   if (!readSpaces || !readProjects || !writeSpaces || !writeProjects)
     return null;
-  return {
+  return normalizeAppAccess({
     version: APP_ACCESS_VERSION,
     permissions,
     read: { spaces: readSpaces, projects: readProjects },
     write: { spaces: writeSpaces, projects: writeProjects },
+  });
+}
+
+/**
+ * The one canonical spelling of an access (W3d), so two that mean the same
+ * compare equal and the stored document reads the same everywhere:
+ * permissions and ids each once, in the order first given; reads in All
+ * spaces store NO project list (`projects: []`), because All spaces already
+ * includes every project (Q1, decision fc37f740) and a project list beside
+ * it would say nothing more. A display shows such reads as "all" projects.
+ */
+export function normalizeAppAccess(access: AppAccess): AppAccess {
+  const once = (ids: readonly string[]) => [...new Set(ids)];
+  const readSpaces: AccessAllOrIds =
+    access.read.spaces === "all" ? "all" : once(access.read.spaces);
+  const readProjects: AccessAllOrIds =
+    readSpaces === "all"
+      ? []
+      : access.read.projects === "all"
+        ? "all"
+        : once(access.read.projects);
+  return {
+    version: APP_ACCESS_VERSION,
+    permissions: once(access.permissions.map((p) => p.trim())),
+    read: { spaces: readSpaces, projects: readProjects },
+    write: {
+      spaces: once(access.write.spaces),
+      projects: once(access.write.projects),
+    },
   };
 }
 

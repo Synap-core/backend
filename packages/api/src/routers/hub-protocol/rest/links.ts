@@ -158,6 +158,10 @@ const LINK_TYPES = [
   // REFUSED below: only the orchestrator door writes it, governed, with the
   // hold and the room notes that make it mean something.
   "orchestrated_by",
+  // capability(add-on) --extends--> capability(base). Listed because it has a
+  // producer, REFUSED below: only the capability applier writes it, after it
+  // found the base installed (services/capabilities/addon.ts).
+  "extends",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
@@ -168,6 +172,8 @@ const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
     "assigned_to links say which agent takes a playbook's, kind's, project's or space's work; a person sets them with agentUsers.setAssignment, never through this door",
   orchestrated_by:
     "orchestrated_by links are written when an orchestrator starts over a set of sessions (POST /focus-sessions/orchestrate), never through this door",
+  extends:
+    "extends links are written when an add-on is installed on its base tool (market.install or capabilities.install), never through this door",
 };
 
 /**

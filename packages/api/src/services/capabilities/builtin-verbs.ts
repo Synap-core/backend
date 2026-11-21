@@ -21,6 +21,7 @@
 
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
+import { CATALOG_DETAILS } from "@synap-core/types/design-board";
 import {
   renderText,
   type TextTemplateMiss,
@@ -2413,6 +2414,9 @@ const marketInstallParams = z.object({
     // An agent template (`runMarketInstall` case "agent", one write:
     // `installAgentTemplate`). The browser routes an `agent` package here.
     "agent",
+    // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
+    // fetched from this pod's control plane, managed pods only.
+    "renderer-bundle",
   ]),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
@@ -4956,7 +4960,11 @@ const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
 // design, a grant that does not allow it) is a `VerbRefusal`.
 
 const designReadParams = z.object({ designId: z.string().uuid() });
-const designCatalogParams = z.object({ appId: z.string().uuid().optional() });
+const designCatalogParams = z.object({
+  appId: z.string().uuid().optional(),
+  detail: z.enum(CATALOG_DETAILS).optional(),
+  components: z.array(z.string().min(1)).min(1).max(100).optional(),
+});
 const designApplyParams = z.object({
   designId: z.string().uuid().optional(),
   baseUpdatedAt: z.string().min(1).optional(),
@@ -5003,7 +5011,12 @@ const designCatalogHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = designCatalogParams.parse(params);
   const { designCatalog } = await import("../designs/design-door.js");
   return designDoorRefusals(() =>
-    designCatalog(ctx.userId, input.appId ?? null)
+    designCatalog(ctx.userId, input.appId ?? null, {
+      // An agent reads the summary first: the whole catalog in full is more
+      // than an MCP door returns in one reply.
+      detail: input.detail ?? "summary",
+      ...(input.components ? { components: input.components } : {}),
+    })
   );
 };
 

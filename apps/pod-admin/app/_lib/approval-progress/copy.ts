@@ -38,6 +38,13 @@ export const en = {
   "unavailable.title": "Can’t read the approval’s progress",
   "unavailable.detail": "It may still be applying. Check again in a moment.",
   door: "See what was created",
+  "run.queued": "Approved: the run is about to start",
+  "run.running": "Approved: running it now",
+  "run.runningDetail":
+    "You can leave this page; the result will be on the request.",
+  "run.done": "Approved: the run finished",
+  "run.stopped": "Approved, but the run failed",
+  "run.door": "See the result",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -68,6 +75,13 @@ export const fr: Catalog<typeof en> = {
   "unavailable.detail":
     "Elle est peut-être encore en cours. Vérifiez à nouveau dans un instant.",
   door: "Voir ce qui a été créé",
+  "run.queued": "Approuvée : l’exécution va démarrer",
+  "run.running": "Approuvée : exécution en cours",
+  "run.runningDetail":
+    "Vous pouvez quitter cette page ; le résultat sera sur la demande.",
+  "run.done": "Approuvée : l’exécution est terminée",
+  "run.stopped": "Approuvée, mais l’exécution a échoué",
+  "run.door": "Voir le résultat",
 };
 
 /** The progress words' translator, in the ambient catalog locale. */

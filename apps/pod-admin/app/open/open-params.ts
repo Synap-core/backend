@@ -9,7 +9,9 @@
  * (disconnect) and `track` (a goal: its judge accepts, sends back, declares
  * done) and `skill` (one skill: its instructions, on or off, turned on
  * there when it is an instruction) and `tool` (an integration: the page of
- * the capability it belongs to, or its own). Authoring stays in the app. Bounce kinds match the Hono
+ * the capability it belongs to, or its own), and `cell` (one cell, keyed by
+ * its type KEY, not a uuid: a module cell or a page runs there, anything else
+ * is handed to the app). Authoring stays in the app. Bounce kinds match the Hono
  * `/open/:type/:id` ALLOWED set minus host types: we never render them here,
  * we point at `synap://open/{type}/{id}`.
  *
@@ -36,13 +38,13 @@ export const HOST_TYPES = [
   "track",
   "skill",
   "tool",
+  "cell",
 ] as const;
 export type HostType = (typeof HOST_TYPES)[number];
 
 /** Known `synap://` bounce kinds that are not hosted on this page. */
 export const BOUNCE_TYPES = [
   "proposal",
-  "cell",
   "project",
   "workspace",
   "settings",
@@ -92,16 +94,16 @@ export function parseOpenParams(type: string, id: string): ParsedOpen {
   const kind = type.trim().toLowerCase();
   const rawId = id.trim();
 
-  if (isHostType(kind)) {
-    if (!isUuid(rawId)) return { status: "invalid-id", type: kind, id: rawId };
-    return { status: "host", type: kind, id: rawId };
-  }
-
   if (kind === "cell") {
     const key = decodedKey(rawId);
     return CELL_KEY_RE.test(key)
-      ? { status: "bounce", type: kind, id: key }
+      ? { status: "host", type: kind, id: key }
       : { status: "invalid-id", type: kind, id: rawId };
+  }
+
+  if (isHostType(kind)) {
+    if (!isUuid(rawId)) return { status: "invalid-id", type: kind, id: rawId };
+    return { status: "host", type: kind, id: rawId };
   }
 
   if (isBounceType(kind)) {

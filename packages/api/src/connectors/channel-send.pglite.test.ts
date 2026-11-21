@@ -1417,6 +1417,79 @@ describe("LinkedIn reach: HELD when filed, released on connected, and recorded o
     expect(sent.data).not.toHaveProperty("held");
   });
 
+  it("no LinkedIn profile on file: filed HELD (missing_field) with the next step, the text kept; nothing read, nothing sent (plan 8032a127 D1)", async () => {
+    await q(`update entities set properties = '{}'::jsonb where id = $1`, [
+      PERSON,
+    ]);
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    const held = out.held as { reason: string; errorClass: string };
+    expect(held.errorClass).toBe("missing_field");
+    expect(held.reason).toMatch(/No Linkedin profile on file/i);
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      body: "Hello Marie",
+      held: {
+        errorClass: "missing_field",
+        missing: "profile",
+        reason: held.reason,
+      },
+    });
+    expect(getProfile).not.toHaveBeenCalled();
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("a profile on file that LinkedIn gives no id for: filed HELD (missing_field, missing provider_id), its own next step; nothing sent", async () => {
+    profileSays({
+      providerId: "",
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    const out = await appSendsTo(PERSON);
+    expect(out).toMatchObject({ success: false, proposed: true });
+    const row = await heldOf(out.proposalId as string);
+    expect(row.status).toBe("pending");
+    expect(row.data).toMatchObject({
+      held: { errorClass: "missing_field", missing: "provider_id" },
+    });
+    expect((row.data.held as { reason: string }).reason).toMatch(
+      /No Linkedin id on file/i
+    );
+    expect(startChat).not.toHaveBeenCalled();
+  });
+
+  it("approved while still no profile on file: kept pending and HELD (missing_field), never failed; once the profile is on file and they are connected, the approval sends it once", async () => {
+    await q(`update entities set properties = '{}'::jsonb where id = $1`, [
+      PERSON,
+    ]);
+    const out = await appSendsTo(PERSON);
+    const id = out.proposalId as string;
+    await expect(approve(id)).rejects.toBeTruthy();
+    const still = await heldOf(id);
+    expect(still.status).toBe("pending");
+    expect(still.data).toMatchObject({ held: { errorClass: "missing_field" } });
+    expect(still.data).not.toHaveProperty("failure");
+    await q(`update entities set properties = $2 where id = $1`, [
+      PERSON,
+      JSON.stringify({
+        linkedinUrl: "https://www.linkedin.com/in/marie-dupont",
+      }),
+    ]);
+    profileSays({
+      networkDistance: "FIRST_DEGREE",
+      connection: "connected",
+      relationRequest: null,
+    });
+    startChat.mockResolvedValue({ chatId: "chat-prof", messageId: "m-prof" });
+    await approve(id);
+    expect(startChat).toHaveBeenCalledTimes(1);
+    const sent = await heldOf(id);
+    expect(sent.status).toBe("approved");
+    expect(sent.data).not.toHaveProperty("held");
+  });
+
   it("a send whose approval had FAILED and is retried while still not connected is reopened pending and held", async () => {
     const out = await appSendsTo(PERSON);
     const id = out.proposalId as string;

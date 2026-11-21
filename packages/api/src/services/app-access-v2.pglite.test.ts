@@ -296,7 +296,7 @@ describe("grantsForApprovedRequests — v2 grants equal the per-space grants", (
   }
 });
 
-describe("grantsForApp — the stored v2, never a stale one", () => {
+describe("grantsForApp — the stored v2 is the authority (W3d)", () => {
   const pairs = inEach(["entity.post.read"], [CONTENT, BRAND]);
   const v2 = (spaces: string[]): AppAccess => ({
     version: 2,
@@ -316,26 +316,45 @@ describe("grantsForApp — the stored v2, never a stale one", () => {
     ]);
   });
 
-  // Rules out: a raw UPDATE of approved_requests widened back by a stale v2.
-  it("a stale v2 (wider than the pairs) loses to the pairs", () => {
+  // W3d reverses the W2 guard: the consent writes v2 FIRST and derives the
+  // pairs from it, so the stored v2 is what the person chose and wins over
+  // pairs that say something else (it can say projects, which no pair can).
+  it("the stored v2 wins over pairs that say otherwise", () => {
     const narrowed = inEach(["entity.post.read"], [CONTENT]);
     const grants = grantsForApp({
       approvedRequests: narrowed,
       approvedAccess: v2([CONTENT, BRAND, ECOSYSTEM]),
     }) as Scope[];
-    expect(placedPairs(grants)).toEqual([`entity.post.read@spaces:${CONTENT}`]);
+    expect(placedPairs(grants)).toEqual(
+      [
+        `entity.post.read@spaces:${CONTENT}`,
+        `entity.post.read@spaces:${BRAND}`,
+        `entity.post.read@spaces:${ECOSYSTEM}`,
+      ].sort()
+    );
   });
 
-  // Rules out: a revoke that cleared the pairs re-attaching the old reach
-  // through the v2 left beside them (review of #1183).
-  it("empty or missing pairs beside a valid stored v2 mint no grants", () => {
+  // Rules out: a revived app (pairs cleared to null) re-attaching the old
+  // reach through the v2 left beside them (review of #1183). Null pairs are
+  // NO approval. Empty pairs beside a v2 are an access with no space part (a
+  // project-only access derives no pair, W3d): the v2 is minted.
+  it("null pairs beside a stored v2 mint nothing; empty pairs beside a projects-only v2 mint its projects", () => {
     const stored = v2([CONTENT, BRAND]);
-    expect(
-      grantsForApp({ approvedRequests: [], approvedAccess: stored })
-    ).toEqual([]);
     expect(
       grantsForApp({ approvedRequests: null, approvedAccess: stored })
     ).toEqual([]);
+    const P = randomUUID();
+    expect(
+      grantsForApp({
+        approvedRequests: [],
+        approvedAccess: {
+          version: 2,
+          permissions: ["entity.post.read"],
+          read: { spaces: [], projects: [P] },
+          write: { spaces: [], projects: [] },
+        },
+      })
+    ).toEqual([{ permissions: ["entity.post.read"], projectIds: [P] }]);
   });
 
   it("no v2 lifts the pairs at read time; an invalid v2 is no v2", () => {

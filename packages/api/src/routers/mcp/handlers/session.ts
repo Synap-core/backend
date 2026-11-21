@@ -2073,6 +2073,9 @@ export const sessionHandlers: McpHandlerMap = {
           ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
           // Who works the stage the advance entered (the stage runner).
           ...(result.stageRun ? { stageRun: result.stageRun } : {}),
+          // The entered stage's check held and sent the run back: `session`
+          // is where it stands now, and this says why (f9c80d6f).
+          ...(result.sentBack ? { sentBack: result.sentBack } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
           ...(result.warnings || outcomeWarnings.length > 0

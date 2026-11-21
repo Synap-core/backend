@@ -23,6 +23,7 @@ import {
   isNull,
   drizzleSql,
   notAnAppAgent,
+  pauseAutomationsOfAgents,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { isPodAdmin } from "../utils/workspace-role.js";
@@ -1496,18 +1497,19 @@ export const agentUsersRouter = router({
         });
       }
 
-      // Remove workspace membership
-      await db
-        .delete(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, input.agentUserId),
-            eq(workspaceMembers.workspaceId, input.workspaceId)
-          )
-        );
-
-      // Delete the agent user record (agents are workspace-scoped)
-      await db.delete(users).where(eq(users.id, input.agentUserId));
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(workspaceMembers)
+          .where(
+            and(
+              eq(workspaceMembers.userId, input.agentUserId),
+              eq(workspaceMembers.workspaceId, input.workspaceId)
+            )
+          );
+        // Before the delete nulls their actor (`pauseAutomationsOfAgents`).
+        await pauseAutomationsOfAgents(tx, [input.agentUserId]);
+        await tx.delete(users).where(eq(users.id, input.agentUserId));
+      });
 
       auditLog({
         subjectType: "agent_user",
@@ -1570,7 +1572,8 @@ export const agentUsersRouter = router({
       const revokeReason =
         input.reason ?? "Cascade revoke: agent user removed by pod admin";
 
-      // Cascade: revoke every active API key owned by these agents in one shot.
+      // Cascade: revoke every active API key owned by these agents in one shot
+      // (outside the transaction: the revocation cache must not re-cache).
       const revokedKeys = await revokeApiKeys(db, {
         where: and(
           inArray(apiKeys.userId, ownedIds),
@@ -1580,13 +1583,14 @@ export const agentUsersRouter = router({
         reason: revokeReason,
       });
 
-      // Remove workspace memberships for every owned agent.
-      await db
-        .delete(workspaceMembers)
-        .where(inArray(workspaceMembers.userId, ownedIds));
-
-      // Delete the agent user rows.
-      await db.delete(users).where(inArray(users.id, ownedIds));
+      await db.transaction(async (tx) => {
+        await tx
+          .delete(workspaceMembers)
+          .where(inArray(workspaceMembers.userId, ownedIds));
+        // Before the delete nulls their actor (`pauseAutomationsOfAgents`).
+        await pauseAutomationsOfAgents(tx, ownedIds);
+        await tx.delete(users).where(inArray(users.id, ownedIds));
+      });
 
       auditLog({
         subjectType: "agent_user",

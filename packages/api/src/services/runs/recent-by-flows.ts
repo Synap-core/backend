@@ -6,8 +6,8 @@ import {
   automationRuns,
   playbookRuns,
   settledRunStatusWhere,
-  LIVE_RUN_STATUSES,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 
 /** `'running','waiting_on_you','stale'` — THE live set, as a SQL list literal. */
 const LIVE_RUN_SQL_LIST = drizzleSql.raw(

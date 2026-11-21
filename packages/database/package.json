@@ -47,6 +47,11 @@
       "import": "./dist/utils/person-devices.js",
       "default": "./dist/utils/person-devices.js"
     },
+    "./realtime-room-tickets": {
+      "types": "./dist/utils/realtime-room-tickets.d.ts",
+      "import": "./dist/utils/realtime-room-tickets.js",
+      "default": "./dist/utils/realtime-room-tickets.js"
+    },
     "./is-delegation": {
       "types": "./dist/utils/is-delegation.d.ts",
       "import": "./dist/utils/is-delegation.js",

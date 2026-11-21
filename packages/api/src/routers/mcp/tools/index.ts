@@ -951,7 +951,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List entities for a user filtered by profileSlug. Use to browse all entities of a type (all tasks, all projects). For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
+          "List entities for a user filtered by profileSlug. For content/semantic recall use synap_ask. Pages: `limit` (default 50) + `offset`; a reply with `nextOffset` has more — pass it back as `offset`. Returns lean rows by default (id, title, kind, status and the kind's selected properties; `omitted` names what each row left out — pass those keys in `fields` or read one object with synap_get_entity); detail:'full' returns unprojected rows.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1021,7 +1021,7 @@ export const tools = {
               type: "array",
               items: { type: "object" },
               description:
-                "View filters, ANDed (max 10): same grammar as Hub GET /entities; see skill system/synap/reading.",
+                "Filters {field, operator, value}, ANDed, max 10. field: title|type|status|createdAt|updatedAt or a property of profileSlug (bare name ok). Skill system/synap/reading.",
             },
             includeFacets: {
               type: "boolean",
@@ -1380,7 +1380,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Never assume 'deal', custom types or a relation slug exist — workspaces differ. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, profileKind, entityScope, applicableKinds on roles, description ≤120 chars, workspaceId), and relationTypes as slugs grouped by lens ([{workspaceId:null, slugs}] = valid everywhere, plus per-workspace groups listing only the slugs that workspace adds). detail:'full' returns complete profile rows and full relation-type rows (displayName, description, isDirectional, inverseLabel). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed` (its kinds are missing from `profiles`), never silently dropped. No property schemas here or in synap_orient. A kind's fields, enums and required keys: call synap_get_entity on any existing entity of that kind (its `effectiveProperties`); over HTTP, GET /api/hub/discover?profileSlugs=<slug>. For a kind with no entities yet, a write that breaks the schema is rejected with the valid fields quoted — fix and resend once.",
+          "List all available entity types (profiles) AND the relation types you may link them with. ALWAYS call at session start before creating entities or relations. Workspaces differ: never assume a type or relation slug exists. Returns { profiles, relationTypes }: a lightweight digest per profile (id, slug, displayName, profileKind, entityScope, applicableKinds on roles, description ≤120 chars, workspaceId), and relationTypes as slugs grouped by lens ([{workspaceId:null, slugs}] = valid everywhere, plus per-workspace groups listing only the slugs that workspace adds). detail:'full' returns complete profile rows and full relation-type rows (displayName, description, isDirectional, inverseLabel). A relation `type` on synap_capture / synap_link_entities must be one of those slugs; any other slug is rejected with the valid list. If the relation read failed you get `relationTypesError` instead of `relationTypes`. Without a workspaceId, profiles are merged across your workspaces; a workspace whose profiles could not be read is named in `workspacesFailed`, never silently dropped. A kind's fields, enums and required keys: call synap_get_entity on any existing entity of that kind (its `effectiveProperties`); over HTTP, GET /api/hub/discover?profileSlugs=<slug>. For a kind with no entities yet, a write that breaks the schema is rejected with the valid fields quoted — fix and resend once.",
         inputSchema: {
           type: "object",
           properties: {
@@ -1394,6 +1394,11 @@ export const tools = {
               enum: ["full"],
               description:
                 "Pass 'full' to receive complete profile rows (including renderer and uiHints columns) and full relation-type rows (displayName, description, isDirectional, inverseLabel). Omit for the lean digest (default): profile digests plus relation-type slugs grouped by lens.",
+            },
+            slugs: {
+              type: "array",
+              items: { type: "string" },
+              description: "Only these kind slugs (max 50).",
             },
             limit: {
               type: "number",
@@ -2064,7 +2069,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Store file CONTENT you already have (text via `content`, or binary via `contentBase64`) as a `file` — ANY type, stored **as-is and NEVER read/analyzed**. Use for a report/CSV/image/PDF/etc. you generated or hold. Pass `attachToEntityId` to attach it to an existing entity instead of creating a new file. For a link you have (no bytes), use `synap_create_document` with `url`. Max 10MB inline; for a bigger file call `synap_request_upload`, PUT the bytes, then call this with `uploadToken`.",
+          "Store a file as a `file` — ANY type, stored **as-is and NEVER read/analyzed**: text via `content`, binary via `contentBase64`, or `sourceUrl` (the pod downloads it: a generated image you have only as a URL). Pass `attachToEntityId` to attach it to an existing entity instead. To only reference a link, use `synap_create_document` with `url`. Max 10MB; bigger: `synap_request_upload`, PUT the bytes, then this with `uploadToken`.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2087,6 +2092,11 @@ export const tools = {
               description:
                 "Base64-encoded BINARY content. Mutually exclusive with `content`.",
             },
+            sourceUrl: {
+              type: "string",
+              description:
+                "An https URL the pod downloads (public hosts only, max 10MB). `filename`/`mimeType` are then optional.",
+            },
             uploadToken: {
               type: "string",
               description:
@@ -2106,7 +2116,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess, and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+                "OPTIONAL focus-session override: only when 2+ of your sessions are open, or to join another conversation's session. Omitted, the write is attributed automatically. A session not yours is ignored.",
             },
             expectedLabel: {
               type: "string",
@@ -4078,6 +4088,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             name: { type: "string", description: "Playbook display name." },
             goalTemplate: {
               type: "string",
@@ -4871,6 +4885,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             name: { type: "string", description: "Project display name" },
             description: { type: "string" },
             workspaceId: {
@@ -6787,10 +6805,14 @@ export const tools = {
           openWorldHint: true,
         },
         description:
-          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it first with synap_run_capability market.search (kind capability): each entry says where it runs and, for a computer tool, which of the person\'s computers can take it (`computers[].canInstall`). One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
+          'Ask to install a capability on one of the person\'s computers, or on the pod. Find it with synap_run_capability market.search (kind capability); `computers[].canInstall` says which computer can take it. One call files ONE proposal the person approves on one card: if the pod does not have the capability yet, approving adds it from the marketplace AND installs it on the computer you named (once per capability and computer; a check, or a repair at the approved version, asks nobody). `proposed` is success. A wrong choice answers `status: refused` with a `code`, a `reason` (INSTALLS_FROM_POD_OFF: the person turns on "Installs from the pod" for that computer; UNSUPPORTED_COMPUTER: its system or processor is not supported; RUNS_ON_POD: ask with computer "pod"; RUNS_ON_COMPUTER: name a computer) and `computers` to choose again from. Two computers fit the name: AMBIGUOUS_COMPUTER (`candidates`): ask the person, never pick. After the computer\'s worker runs it, read the result with synap_list_installations.',
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             capabilityKey: {
               type: "string",
               description:
@@ -6846,6 +6868,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             toolName: {
               type: "string",
               description:
@@ -6987,10 +7013,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Use for repeatable reactions ('every morning recap each client', 'on new deal notify the channel'). Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
+          "Create an automation — a WHEN→THEN flow that reacts to a trigger (event | cron | webhook | manual) by running a flow of steps. Governed the same as every write: an agent create returns status='proposed' for review; on approval it becomes ACTIVE (live) — not a stuck draft. Provide the trigger, a flowDefinition ({ nodes, edges }), and a dataContract — the contract is REQUIRED for agent-authored automations (which this always is) and the create door rejects the automation without a valid one. For a cron trigger put the schedule in triggerConfig.expression (5-field cron): native scheduling. A playbook_run node starts a playbook's session on any trigger. Discover what already exists with synap_list_automations first. Creates it on this pod only; an official template is written in the catalog (synap-app/packages/workspace-templates); landing it on app-bases main publishes it.",
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             name: { type: "string", description: "Automation display name." },
             description: {
               type: "string",
@@ -7067,6 +7097,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             intent: {
               type: "string",
               description:
@@ -7115,6 +7149,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             ruleId: {
               type: "string",
               description:
@@ -7264,6 +7302,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             name: {
               type: "string",
               description:
@@ -7373,6 +7415,10 @@ export const tools = {
         inputSchema: {
           type: "object",
           properties: {
+            reasoning: {
+              type: "string",
+              description: "Why, shown to the reviewer.",
+            },
             slug: {
               type: "string",
               description: "The skill's slug (e.g. 'biz/business-plan').",
@@ -7391,6 +7437,10 @@ export const tools = {
               description: "One line: what it does + when to use it.",
             },
             name: { type: "string", description: "New display name." },
+            category: {
+              type: "string",
+              description: "'rule' = pushed into all work in scope",
+            },
             code: {
               type: "string",
               description:

@@ -5,7 +5,7 @@ describe("agentTrustDoor: where an agent's trust is changed", () => {
   it("an admin gets a link to the console page that widens or revokes it, narrowed to this agent", () => {
     expect(agentTrustDoor("admin", "agent-1")).toEqual({
       kind: "link",
-      href: "/approvals?view=grid&agent=agent-1",
+      href: "/approvals?view=work&agent=agent-1",
       label: "What it may do in each space",
     });
   });

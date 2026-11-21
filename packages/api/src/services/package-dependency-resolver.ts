@@ -79,6 +79,7 @@ import {
   createCapabilityFromDefinition,
   loadCapabilityTemplate,
 } from "./capabilities/create-from-definition.js";
+import { findContainerByAddress } from "./capabilities/container-address.js";
 import { createHubProtocolCallerContext } from "../routers/hub-protocol/utils.js";
 import { createLogger } from "@synap-core/core";
 
@@ -218,6 +219,13 @@ export interface ResolvePackageDependenciesInput {
    * tRPC: `input.packageSlug`).
    */
   selfSlug?: string;
+  /**
+   * The space the package installs into (null or omitted: the whole pod). A
+   * `capability` dependency counts as present when it is installed for the
+   * whole pod or in this space — the scope an add-on's base must cover
+   * (`resolveAddOnBase`). Only capability presence reads it.
+   */
+  workspaceId?: string | null;
 }
 
 /** Outcome of resolving a single dependency (cached for diamond dedup). */
@@ -371,7 +379,8 @@ async function ensureCapabilityDependencyPresent(
   userId: string,
   resolved: Map<string, ResolveResult>,
   installed: ResolvedPackageDependency[],
-  agentUserId: string | undefined
+  agentUserId: string | undefined,
+  workspaceId: string | null
 ): Promise<ResolveResult> {
   // Namespaced cache key so a capability slug never collides with a workspace
   // subtype slug in the SHARED `resolved` map (diamond dedup across members).
@@ -390,6 +399,26 @@ async function ensureCapabilityDependencyPresent(
     });
     return res;
   };
+
+  // `require` means PRESENT: a container already installed at this template's
+  // address for the whole pod, or in the space being installed into, is
+  // `found` and left alone. Re-applying it pod-wide would mint a second
+  // container beside a space's own (an add-on in that space would then bind
+  // to the new, unconnected one).
+  const present =
+    (await findContainerByAddress(db, {
+      templateKey: slug,
+      workspaceId: null,
+    })) ??
+    (workspaceId
+      ? await findContainerByAddress(db, { templateKey: slug, workspaceId })
+      : undefined);
+  if (present) {
+    return record({
+      action: "found",
+      message: `Capability "${slug}" is already installed.`,
+    });
+  }
 
   // Resolve the capability template from the CP-synced catalog cache. Missing
   // from cache THROWS in `loadCapabilityTemplate` — catch it and degrade so the
@@ -717,7 +746,8 @@ async function ensureWorkspaceDependencyPresent(
           userId,
           resolved,
           installed,
-          agentUserId
+          agentUserId,
+          null
         );
         continue;
       }
@@ -906,6 +936,86 @@ async function ensureWorkspaceDependencyPresent(
 }
 
 /**
+ * A CAPABILITY package's dependencies (the capability apply step,
+ * `applyCapabilityDefinition`): the same capability branch the template graph
+ * runs (`ensureCapabilityDependencyPresent`: present pod-wide or in
+ * `workspaceId` is `found`, else installed through the governed applier,
+ * non-fatal). A capability installs only the capabilities it requires: any
+ * other kind is only CHECKED present (a skill or a cell pod-wide, a space the
+ * person can see), never installed from here, so a tool install never stands
+ * up a space, a cell or a skill (and never reaches what a template apply
+ * writes, such as members). One that is not present, or a kind that cannot
+ * be checked, is `required-absent`; the caller refuses the install on it.
+ */
+export async function resolveCapabilityDependencies(input: {
+  dependencies: TemplateDependency[];
+  userId: string;
+  agentUserId?: string;
+  workspaceId?: string | null;
+}): Promise<ResolvedPackageDependency[]> {
+  const installed: ResolvedPackageDependency[] = [];
+  const resolved = new Map<string, ResolveResult>();
+  for (const dep of input.dependencies) {
+    const kind: PackageDependencyKind = dep.kind ?? "workspace";
+    if (kind === "capability") {
+      await ensureCapabilityDependencyPresent(
+        dep.slug,
+        input.userId,
+        resolved,
+        installed,
+        input.agentUserId,
+        input.workspaceId ?? null
+      );
+      continue;
+    }
+    const present = await siblingPresent(kind, dep.slug, input.userId);
+    installed.push({
+      slug: dep.slug,
+      kind,
+      relation: dep.relation ?? "require",
+      action: present ? "found" : "required-absent",
+      message: present
+        ? `The ${kind} "${dep.slug}" is already installed.`
+        : present === false
+          ? `The ${kind} "${dep.slug}" is not installed, and a tool install does not install it.`
+          : `A tool cannot require a ${kind}: "${dep.slug}" cannot be checked.`,
+    });
+  }
+  return installed;
+}
+
+/**
+ * Is a non-capability dependency present? A READ only: a skill by its slug
+ * pod-wide (the key `ensureSkillDependencyPresent` checks), a cell by its
+ * installed type key (`resolveInstalledFlag`), a space by its subtype among
+ * the spaces the person can see (`findWorkspaceBySubtype`, the `require`
+ * floor). `undefined` for a kind with no presence check.
+ */
+async function siblingPresent(
+  kind: PackageDependencyKind,
+  slug: string,
+  userId: string
+): Promise<boolean | undefined> {
+  if (kind === "skill") {
+    const [row] = await db
+      .select({ id: skills.id })
+      .from(skills)
+      .where(and(isNull(skills.workspaceId), eq(skills.slug, slug)))
+      .limit(1);
+    return !!row;
+  }
+  if (kind === "cell") {
+    const { resolveInstalledFlag } =
+      await import("./capabilities/marketplace-install.js");
+    return (await resolveInstalledFlag("cell", slug)) ?? false;
+  }
+  if (kind === "workspace") {
+    return !!(await findWorkspaceBySubtype(slug, userId, false));
+  }
+  return undefined;
+}
+
+/**
  * Resolve a package's declared `dependencies[]` into the pod's template graph.
  * See the module header for full semantics.
  */
@@ -947,7 +1057,8 @@ export async function resolvePackageDependencies(
         userId,
         resolved,
         installed,
-        input.agentUserId
+        input.agentUserId,
+        input.workspaceId ?? null
       );
       continue;
     }

@@ -104,7 +104,7 @@ async function standingAskSession(input: {
 > {
   const { db, focusSessions, users, and, eq, inArray, desc, drizzleSql } =
     await import("@synap/database");
-  const { OPEN_SESSION_STATUSES } =
+  const { IN_FLIGHT_SESSION_STATUSES } =
     await import("../../../services/focus-sessions/session-statuses.js");
   const clientKey = standingAsksClientKey(input.agentUserId, input.userId);
   const [open] = await db
@@ -113,10 +113,7 @@ async function standingAskSession(input: {
     .where(
       and(
         eq(focusSessions.userId, input.userId),
-        inArray(
-          focusSessions.status,
-          OPEN_SESSION_STATUSES.filter((st) => st !== "scheduled")
-        ),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         drizzleSql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`
       )
     )

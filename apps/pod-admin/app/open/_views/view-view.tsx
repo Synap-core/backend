@@ -1,9 +1,16 @@
 "use client";
 
 /**
- * `/open/view/:id` — a saved view's identity card. The view itself (a table,
- * a board, a canvas) renders in the app; this page says which view it is and
- * hands it over. `views.get` re-checks access server-side.
+ * `/open/view/:id` — a saved view. When a renderer cell draws its type (the
+ * view's own bound cell, else the installed bundle's default for its type,
+ * picked by the one resolution in `RenderedObject`), the view itself runs
+ * under the header in the module frame, filling the height left (View
+ * template: fill), the card widening to a document's width
+ * (`READS_WIDE_ATTR`), and "Open in app" sits in the header. Otherwise this
+ * page says which view it is and hands it to the app in ONE card; a pod
+ * admin also reads there, in one line, that the renderers are not on this
+ * pod. `views.get` re-checks access server-side; the frame reads through
+ * the same floored doors.
  */
 
 import { humanizeToken } from "@synap-core/types/vocabulary";
@@ -18,6 +25,13 @@ import { openIn } from "../../../lib/open-in";
 import { openT } from "../copy";
 import { describeView, viewKind } from "./view-summary";
 import { ViewPipelineSnapshot } from "./view-pipeline-snapshot";
+import {
+  RenderedObject,
+  useDrawsCell,
+} from "../../_lib/object/content/rendered-object";
+import { frameT } from "../../_lib/object/content/frame-copy";
+import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 
 /** Canvas lenses have no prose description worth showing on the web. */
 const CANVAS_VIEW_TYPES = new Set(["whiteboard", "mindmap"]);
@@ -34,9 +48,26 @@ type ViewPayload = {
   };
 };
 
+/** The view's `config.render` (its bound renderer, read by the resolution only). */
+function viewRender(config: unknown): unknown {
+  return config && typeof config === "object"
+    ? (config as { render?: unknown }).render
+    : undefined;
+}
+
 export function ViewView({ id }: { id: string }) {
   const query = trpc.views.get.useQuery({ id });
   useReauthOnUnauthorized(query.error);
+  const loaded = (query.data as ViewPayload | undefined)?.view;
+  const subject = {
+    kind: "view" as const,
+    viewId: loaded?.id ?? id,
+    viewType: loaded?.type?.trim() ?? "",
+    render: viewRender(loaded?.config),
+  };
+  // Whether a renderer draws it decides what sits around the drawing.
+  const drawn = useDrawsCell(subject, loaded?.workspaceId ?? null);
+  const isPodAdmin = useConsoleRole() === "admin";
 
   if (query.isLoading) return <OpenLoading label="Loading view…" />;
   const data = query.data as ViewPayload | undefined;
@@ -57,12 +88,38 @@ export function ViewView({ id }: { id: string }) {
   // Only a pipeline gets a snapshot: its content is a kind's declared flow,
   // which `flow.of` reads. Every other layout is handed over, never half-drawn.
   const snapshotKind = lens === "pipeline" ? viewKind(view.config) : null;
+  const title = view.name?.trim() || t("view.untitled");
+  const identity = (notInstalled: boolean) => (
+    <div className="flex flex-col gap-4">
+      {snapshotKind && (
+        <ViewPipelineSnapshot
+          kind={snapshotKind}
+          workspaceId={view.workspaceId ?? null}
+        />
+      )}
+      <HandoffCard
+        title={t("view.handoff.title")}
+        body={
+          snapshotKind ? t("view.handoff.bodySnapshot") : t("view.handoff.body")
+        }
+        exit={openIn({ kind: "objectInApp", objectKind: "view", id })}
+        cta={t("view.handoff.cta")}
+        {...(notInstalled && isPodAdmin
+          ? { note: frameT()("renderer.notInstalled") }
+          : {})}
+      />
+    </div>
+  );
   return (
     <OpenObject
+      width="auto"
       header={{
         kind: "view",
-        title: view.name?.trim() || "Untitled view",
+        title,
         summary: written ?? describeView(view, t),
+        ...(drawn
+          ? { secondaryActions: <OpenInAppLink type="view" id={id} /> }
+          : {}),
       }}
       facts={[
         ...(lens ? [{ label: "Layout", value: humanizeToken(lens) }] : []),
@@ -79,24 +136,13 @@ export function ViewView({ id }: { id: string }) {
         ],
       }}
     >
-      <div className="flex flex-col gap-4">
-        {snapshotKind && (
-          <ViewPipelineSnapshot
-            kind={snapshotKind}
-            workspaceId={view.workspaceId ?? null}
-          />
-        )}
-        <HandoffCard
-          title={t("view.handoff.title")}
-          body={
-            snapshotKind
-              ? t("view.handoff.bodySnapshot")
-              : t("view.handoff.body")
-          }
-          exit={openIn({ kind: "objectInApp", objectKind: "view", id })}
-          cta={t("view.handoff.cta")}
-        />
-      </div>
+      <RenderedObject
+        subject={subject}
+        workspaceId={view.workspaceId ?? null}
+        title={title}
+        fill
+        fallback={({ notInstalled }) => identity(notInstalled)}
+      />
     </OpenObject>
   );
 }

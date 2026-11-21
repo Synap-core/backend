@@ -16,6 +16,9 @@
  */
 
 import { z } from "zod";
+// Type only: the literal is checked against it, and this module stays free of
+// the frame contract's runtime (its SDK source).
+import type { RENDERER_BUNDLE_KIND } from "../renderables/renderer-bundle.js";
 
 /** The built-in source: Synap's own catalog. It can be disabled, never removed. */
 export const OFFICIAL_SOURCE_ID = "synap";
@@ -79,6 +82,15 @@ export const MARKETPLACE_PACKAGE_KINDS = [
   "agent",
 ] as const;
 export type MarketplacePackageKind = (typeof MARKETPLACE_PACKAGE_KINDS)[number];
+
+/**
+ * Every kind Synap's signed index carries a digest for: the catalog kinds,
+ * and the renderer bundle, listed DIGEST ONLY under the index's top-level
+ * `rendererBundles` (`officialRendererBundleDigestSchema`). Mirrors
+ * control-plane-api `OfficialDigestKind` (`catalog-signing/content-digest.ts`).
+ */
+export type OfficialDigestKind =
+  MarketplacePackageKind | typeof RENDERER_BUNDLE_KIND;
 
 /**
  * The Control Plane's category names, accepted as aliases so a publisher who
@@ -276,6 +288,39 @@ export const officialIndexSchema = z
   .superRefine(checkNoDuplicates);
 export type OfficialIndex = z.infer<typeof officialIndexSchema>;
 
+/** A signed index lists at most this many renderer bundles (the CP's cap). */
+export const OFFICIAL_INDEX_MAX_RENDERER_BUNDLES = 100;
+
+/**
+ * One official renderer bundle in Synap's signed index: DIGEST ONLY. It sits
+ * in the index's top-level `rendererBundles` array, never in `packages`
+ * (whose closed kind list and required `definitionUrl` would make an older
+ * pod refuse the whole index), and carries no definition URL: the bytes
+ * reach only a managed pod, through `GET {CP}/internal/renderer-bundles`,
+ * and that pod checks them against `contentHash`
+ * (`officialContentHash("renderer-bundle", …)`). `version` is the Control
+ * Plane row's version, the `package.version` that route serves. Strict, as
+ * the CP's own (control-plane-api `officialRendererBundleDigestSchema`,
+ * `catalog-signing/formats.ts`).
+ *
+ * `officialIndexSchema` does not name the key (it is dropped on parse), so
+ * the catalog sync reads it from the verified index's own JSON: the
+ * signature covers those exact bytes.
+ */
+export const officialRendererBundleDigestSchema = z
+  .object({
+    kind: z.literal(
+      "renderer-bundle" as const satisfies typeof RENDERER_BUNDLE_KIND
+    ),
+    slug: z.string().regex(MARKETPLACE_SLUG_PATTERN),
+    version: z.string().min(1).max(100),
+    contentHash: SHA256_HEX,
+  })
+  .strict();
+export type OfficialRendererBundleDigest = z.infer<
+  typeof officialRendererBundleDigestSchema
+>;
+
 /**
  * `synap-catalog-keys.json`, signed by one of the root keys compiled into
  * the pod: which online keys may sign the index, each until `notAfter`.
@@ -351,7 +396,7 @@ function sortKeysDeep(value: unknown): unknown {
  * so its first 12 hex are the package's `h-` version.
  */
 export function canonicalDefinitionJson(
-  kind: MarketplacePackageKind,
+  kind: OfficialDigestKind,
   definition: Record<string, unknown>
 ): string {
   const content: Record<string, unknown> = { ...definition };

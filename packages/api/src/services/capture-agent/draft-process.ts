@@ -116,13 +116,20 @@ export async function draftProcessForKind(input: {
       id: playbooks.id,
       name: playbooks.name,
       createdBy: playbooks.createdBy,
+      agentUserId: playbooks.agentUserId,
       authorName: users.name,
       authorEmail: users.email,
       authorType: users.userType,
       authorAgentMetadata: users.agentMetadata,
     })
     .from(playbooks)
-    .leftJoin(users, eq(users.id, playbooks.createdBy))
+    .leftJoin(
+      users,
+      eq(
+        users.id,
+        drizzleSql`coalesce(${playbooks.agentUserId}, ${playbooks.createdBy})`
+      )
+    )
     .where(
       and(
         eq(playbooks.workspaceId, input.workspaceId),
@@ -133,6 +140,7 @@ export async function draftProcessForKind(input: {
     .orderBy(desc(playbooks.createdAt))
     .limit(1);
   if (open) {
+    const authorId = open.agentUserId ?? open.createdBy;
     const authorName = open.authorEmail
       ? (displayNameForUser({
           name: open.authorName,
@@ -146,9 +154,9 @@ export async function draftProcessForKind(input: {
         id: open.id,
         name: open.name,
         draftedBy: {
-          userId: open.createdBy,
+          userId: authorId,
           name: authorName,
-          isYou: open.createdBy === input.userId,
+          isYou: authorId === input.userId,
         },
       },
       proposalId: undefined,

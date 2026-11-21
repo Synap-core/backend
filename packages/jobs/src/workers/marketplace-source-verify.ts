@@ -52,14 +52,17 @@ import {
   CATALOG_KEYS_MAX_LIFETIME_DAYS,
   MARKETPLACE_DEFINITION_MAX_BYTES,
   MARKETPLACE_INDEX_MAX_BYTES,
+  OFFICIAL_INDEX_MAX_RENDERER_BUNDLES,
   canonicalDefinitionJson,
   catalogKeysStatementSchema,
   marketplaceIndexSchema,
   officialIndexSchema,
   type CatalogKeysStatement,
   type MarketplaceIndex,
-  type MarketplacePackageKind,
+  officialRendererBundleDigestSchema,
+  type OfficialDigestKind,
   type OfficialIndex,
+  type OfficialRendererBundleDigest,
 } from "@synap-core/types/marketplace-source";
 
 /** A raw 32-byte ed25519 public key (base64) as a Node key, or null when malformed. */
@@ -580,7 +583,7 @@ export function verifyKeysStatement(
 
 /** sha256 (hex) of an official definition's canonical JSON — what Synap's index lists. */
 export function officialContentHash(
-  kind: MarketplacePackageKind,
+  kind: OfficialDigestKind,
   definition: Record<string, unknown>
 ): string {
   return sha256Hex(
@@ -602,7 +605,7 @@ export interface OfficialListedDigest {
  * about to install or converge to, when it knows one.
  */
 export function checkOfficialListing(input: {
-  kind: MarketplacePackageKind;
+  kind: OfficialDigestKind;
   slug: string;
   version: string | null;
   definition: Record<string, unknown>;
@@ -630,4 +633,61 @@ export function checkOfficialListing(input: {
     return `${name} doesn't match the digest Synap signed — it was changed after publishing.`;
   }
   return null;
+}
+
+/**
+ * The renderer bundles a VERIFIED official index lists (its top-level
+ * `rendererBundles`, digest only). `officialIndexSchema` drops that key, so
+ * it is read here from the index's own bytes — call this only with bytes
+ * `verifyOfficialIndex` accepted: the signature covers them. Each row is
+ * checked on its own (`officialRendererBundleDigestSchema`, strict, at most
+ * `OFFICIAL_INDEX_MAX_RENDERER_BUNDLES` rows; a slug listed twice keeps
+ * neither row); a row that fails is left out and named in `refused`, so it
+ * reads as unlisted (refused under enforcement) without costing the rest of
+ * the catalog.
+ */
+export function officialRendererBundleDigests(indexBytes: Uint8Array): {
+  rows: OfficialRendererBundleDigest[];
+  refused: string[];
+} {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(
+      new TextDecoder("utf-8", { fatal: true }).decode(indexBytes)
+    );
+  } catch {
+    return { rows: [], refused: ["the index is not valid JSON"] };
+  }
+  const listed =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>).rendererBundles
+      : undefined;
+  if (listed === undefined) return { rows: [], refused: [] };
+  if (!Array.isArray(listed)) {
+    return { rows: [], refused: ["rendererBundles is not an array"] };
+  }
+  const parsedRows: OfficialRendererBundleDigest[] = [];
+  const refused: string[] = [];
+  listed.forEach((entry, i) => {
+    if (i >= OFFICIAL_INDEX_MAX_RENDERER_BUNDLES) {
+      refused.push(
+        `rendererBundles[${i}]: past the ${OFFICIAL_INDEX_MAX_RENDERER_BUNDLES}-row cap`
+      );
+      return;
+    }
+    const parsed = officialRendererBundleDigestSchema.safeParse(entry);
+    if (parsed.success) parsedRows.push(parsed.data);
+    else
+      refused.push(
+        `rendererBundles[${i}]: ${parsed.error.issues[0]?.message ?? "invalid"}`
+      );
+  });
+  // A slug listed twice vouches for neither copy.
+  const count = new Map<string, number>();
+  for (const row of parsedRows)
+    count.set(row.slug, (count.get(row.slug) ?? 0) + 1);
+  const rows = parsedRows.filter((row) => count.get(row.slug) === 1);
+  for (const [slug, n] of count)
+    if (n > 1) refused.push(`rendererBundles: "${slug}" is listed ${n} times`);
+  return { rows, refused };
 }

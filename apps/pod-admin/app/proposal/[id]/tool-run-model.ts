@@ -14,6 +14,7 @@
  */
 
 import { isUuid } from "@synap-core/types/property-render";
+import { humanizeToken } from "@synap-core/types/vocabulary";
 import type {
   ProposalToolRun,
   ProposalToolRunParameter,
@@ -168,4 +169,51 @@ export function reviewToolRun(review: unknown): ProposalToolRun | null {
   return typeof r.action === "string" && Array.isArray(r.parameters)
     ? (r as ProposalToolRun)
     : null;
+}
+
+/** A run's own status words: what the outcome mark already says. */
+const RUN_STATUS_KEYS = new Set(["success", "proposed"]);
+
+/**
+ * What an approved run RETURNED (`data.runResult`, stamped by the pod when the
+ * run ends), read with the same rules as its arguments: each top-level field
+ * in words, a link as a link, ids and empty values behind Details. Null when
+ * the run returned nothing (not run yet, or a run that returns nothing): the
+ * section is then omitted (agent report 48dbf93b: the person could not see
+ * from the review page what an approved run produced).
+ */
+export function runResultSplit(data: unknown): {
+  shown: ToolRunArgument[];
+  detail: ToolRunArgument[];
+} | null {
+  const result =
+    data && typeof data === "object"
+      ? (data as { runResult?: unknown }).runResult
+      : undefined;
+  if (result === undefined || result === null) return null;
+  const fields: Array<[string, unknown]> =
+    typeof result === "object" && !Array.isArray(result)
+      ? Object.entries(result as Record<string, unknown>).filter(
+          ([key]) => !RUN_STATUS_KEYS.has(key)
+        )
+      : [["result", result]];
+  if (fields.length === 0) return null;
+  const all = fields.map(([key, raw]): ToolRunArgument => {
+    const value = toolRunValue({ value: raw });
+    const text = typeof raw === "string" ? raw : null;
+    return {
+      key,
+      label: humanizeToken(key),
+      description: null,
+      value,
+      wide: isWide(value),
+      detail: value.kind === "empty" || (text !== null && isIdLike(key, text)),
+      editable: false,
+      raw: null,
+    };
+  });
+  return {
+    shown: all.filter((a) => !a.detail),
+    detail: all.filter((a) => a.detail),
+  };
 }
