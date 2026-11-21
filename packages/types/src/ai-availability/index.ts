@@ -391,8 +391,8 @@ export function resolveAiViewerRole(
  *
  * The CTA: an operator state has none. A payer state takes the CP's `action`
  * when the CP proved that same state (the SSOT, resolved for this viewer);
- * else the IS's `failureAction`; else member → `ask_admin`, payer →
- * `top_up` when they can buy a pack, otherwise `upgrade` (`fix_payment` for
+ * else a member → `ask_admin`; else the IS's `failureAction`; else the payer
+ * → `top_up` when they can buy a pack, otherwise `upgrade` (`fix_payment` for
  * `suspended`).
  */
 export function resolveAiAvailability(
@@ -432,13 +432,16 @@ export function resolveAiAvailability(
   let action: AiAction = "none";
   if (spec.actor === "payer") {
     if (fromCp && cp.action !== "none") action = cp.action;
+    // A member never pays, whatever the wire says: the IS resolves its action
+    // for the pod, not for this viewer, so its `top_up` must not reach a
+    // member whose CP block proved a lesser state than the wire's.
+    else if (role === "member") action = "ask_admin";
     else if (
       input.failureAction &&
       input.failureAction !== "none" &&
       failureKind === kind
     )
       action = input.failureAction;
-    else if (role === "member") action = "ask_admin";
     else if (kind === "suspended") action = "fix_payment";
     else action = canTopUp ? "top_up" : "upgrade";
   }

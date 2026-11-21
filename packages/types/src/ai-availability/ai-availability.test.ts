@@ -186,6 +186,23 @@ describe("the CTA follows the viewer", () => {
     ).toBe("upgrade");
   });
 
+  // Found by lane APP2 (21 Nov): the wire's action was read before the role,
+  // so a member whose block proved only `low` took the wire's `top_up`.
+  it("a member never takes the wire's top_up when the CP proved a lesser state", () => {
+    const a = resolveAiAvailability({
+      billing: billing({
+        state: "low",
+        threshold: 10,
+        viewerRole: "member",
+        action: "ask_admin",
+      }),
+      failureCode: "credits_empty",
+      failureAction: "top_up",
+    });
+    expect(a.kind).toBe("credits_empty");
+    expect(a.action).toBe("ask_admin");
+  });
+
   it("a member viewerRole from the CP defaults the role", () => {
     const a = resolveAiAvailability({
       failureCode: "not_entitled",
