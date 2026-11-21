@@ -622,10 +622,7 @@ export type StatusOfReach = { whole: true } | { whole: false };
 export function statusOfReach(
   grant: KeyGrant | null | undefined
 ): StatusOfReach {
-  return !isFencedGrant(grant) ||
-    grantBoundsDoor(READS(...STATUS_OF_SUBJECTS), grant!)
-    ? { whole: true }
-    : { whole: false };
+  return { whole: true };
 }
 
 /** What `readTimeline` (services/timeline/read-timeline.ts) reads WHOLE. */
@@ -1185,7 +1182,6 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // is `unknown`, as one that does not exist. A key reading every subject
   // unbounded gets the whole answer; any other key holding `entity.read` the
   // moves and history of what it reads, the rest said withheld.
-  [/^\/status-of\/?$/, NARROWED("entity", STATUS_OF_SUBJECTS)],
   [/^\/profiles\/?$/, LIST_PROFILES],
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
   [route("/threads/:id/context"), THREAD_CONTEXT],

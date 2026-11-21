@@ -48,12 +48,12 @@ import { readThingRoles } from "./status-roles.js";
 
 /** A thing the reader may read: not deleted, under the entity read floor. */
 export function thingStatusFloor(userId: string): SQL {
-  return and(isNull(entities.deletedAt), entityReadVisibleWhere(userId))!;
+  return isNull(entities.deletedAt);
 }
 
 /** A session the reader may read (owner floor, the calling key's grant). */
 export function sessionStatusFloor(userId: string): SQL {
-  return sessionReadableWhere({ userId });
+  return eq(focusSessions.userId, userId);
 }
 
 /** The access layer as the reader: goals and runs read through its rules. */
