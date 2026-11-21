@@ -116,7 +116,10 @@ export function checkSpawnTarget(input: {
   forOutput: string;
 }): SpawnTargetCheck {
   const key = input.forOutput.trim();
-  if (input.agentUserId && !(input.parent.agentIds ?? []).includes(input.agentUserId)) {
+  if (
+    input.agentUserId &&
+    !(input.parent.agentIds ?? []).includes(input.agentUserId)
+  ) {
     return { status: "refused", key, reason: "not_a_parent_writer" };
   }
   const slots = slotsOf(input.parent.expectedOutputs);

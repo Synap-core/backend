@@ -99,10 +99,7 @@ import {
   addCreateTimeBlockers,
   type CreateTimeBlockerReport,
 } from "./session-blocked-by.js";
-import {
-  resolveSpawnTarget,
-  type SpawnTargetCheck,
-} from "./lane-rollup.js";
+import { resolveSpawnTarget, type SpawnTargetCheck } from "./lane-rollup.js";
 import {
   findOpenSessionTwin,
   sessionTwinLockKey,

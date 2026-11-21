@@ -218,7 +218,7 @@ async function closeAndReact(
   );
   expect(event, "the close door emitted no close event").toBeTruthy();
   // The reactor takes the event the close door really emits.
-  expect(laneRollupReactor.match(event as never)).toBe(true);
+  expect(laneRollupReactor.match!(event as never)).toBe(true);
   await laneRollupReactor.handler(event as never, NO_DEPS);
   return event!;
 }
@@ -247,7 +247,10 @@ async function laneFor(
   } = {}
 ) {
   const parent = await seed({ outputs: [opts.parentPr ?? PR], ...opts.parent });
-  const child = await seed({ outputs: [opts.childPr ?? PR_DONE], ...opts.child });
+  const child = await seed({
+    outputs: [opts.childPr ?? PR_DONE],
+    ...opts.child,
+  });
   await spawn(
     child,
     parent,

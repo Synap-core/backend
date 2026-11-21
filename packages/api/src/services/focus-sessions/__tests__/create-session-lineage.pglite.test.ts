@@ -328,7 +328,12 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
         USER,
         JSON.stringify([
           { key: "api", kind: "code", label: "API" },
-          { key: "grade", kind: "criterion", label: "Grade", criterionKey: "c" },
+          {
+            key: "grade",
+            kind: "criterion",
+            label: "Grade",
+            criterionKey: "c",
+          },
         ]),
         ["agent-1"],
       ]
@@ -363,10 +368,14 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
     });
     // A key the parent does not declare, or an input slot: refused.
     expect(await start(undefined, "nope")).toMatchObject({
-      parentLink: { forOutput: { status: "refused", reason: "no_such_output" } },
+      parentLink: {
+        forOutput: { status: "refused", reason: "no_such_output" },
+      },
     });
     expect(await start(undefined, "grade")).toMatchObject({
-      parentLink: { forOutput: { status: "refused", reason: "no_such_output" } },
+      parentLink: {
+        forOutput: { status: "refused", reason: "no_such_output" },
+      },
     });
     expect(asked).toEqual(["api", "api", null, null, null]);
   });

@@ -26738,6 +26738,11 @@ export interface WorkGraphGoal {
 export interface WorkGraphEdge {
 	kind: WorkGraphEdgeKind;
 	from: string;
+	/**
+	 * A node id, EXCEPT for `serves`, whose `to` is a goal id (one of
+	 * `goals`): a reader that keeps edges between kept nodes keeps `serves` by
+	 * its `from` alone.
+	 */
 	to: string;
 	/** `waits_on_output`: the entity waited on. */
 	entityId?: string;
@@ -27248,6 +27253,16 @@ export interface SessionTargetsWrite {
 	/** Already targets of this session: nothing written. */
 	already: string[];
 }
+/** Why a spawn target was not recorded. */
+export type SpawnTargetRefusal = "no_such_output" | "not_a_parent_writer";
+export type SpawnTargetCheck = {
+	key: string;
+	status: "recorded";
+} | {
+	key: string;
+	reason: SpawnTargetRefusal;
+	status: "refused";
+};
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -27255,6 +27270,8 @@ export type CreateTimeParentLink = {
 	 * child. `null` when the write produced no report.
 	 */
 	blocksParent?: CreateTimeBlockerReport | null;
+	/** Present when `forOutput` was asked: recorded, or refused and why. */
+	forOutput?: SpawnTargetCheck;
 	parentSessionId: string;
 	status: "linked";
 	suspendedIntentRecorded: boolean;
