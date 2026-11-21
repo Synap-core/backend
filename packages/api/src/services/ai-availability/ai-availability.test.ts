@@ -199,7 +199,7 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
     ]);
   });
 
-  it("a payment due while AI still runs (the plan's grace): the status notice, in the deck's payment words", async () => {
+  it("a payment due while AI still runs (the plan's grace): the status notice, in the deck's grace words", async () => {
     const graceOf = (s: PodAiAvailability): PodAiAvailability => ({
       ...s,
       billing: {
@@ -224,7 +224,12 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
     expect(d.created[0]).toMatchObject({
       type: "ai.payment_due",
       groupKey: "ai:payment_due:-:2026-12-01T00:00:00.000Z",
-      data: { title: "Payment needed" },
+      // The deck's grace words (`aiAvailabilityCopy`), never the line of a
+      // payment that stopped AI.
+      data: {
+        title: "Payment needed \u2014 AI keeps working for now",
+        action: "Fix payment",
+      },
     });
     // Still in grace: nothing new. Paid: the notice is cleared.
     await notifyAiAvailabilityChange(

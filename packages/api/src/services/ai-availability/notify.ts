@@ -25,7 +25,6 @@ import {
   inArray,
   notifications,
   NotificationStatus,
-  type PodAiAvailability,
   type PodAiAvailabilityChange,
 } from "@synap/database";
 import {
@@ -58,29 +57,21 @@ const NOTICE_OF: Partial<Record<string, string>> = {
 
 /**
  * The owner's state, its mark and whether a payment is due while AI still
- * runs (the CP's action is `fix_payment` on an available state: the plan's
- * grace period); null = unknown (no answer, or billing unread).
+ * runs (the model's payment grace: kind `ok` with the payer's action
+ * `fix_payment`); null = unknown (no answer, or billing unread).
  */
-function markOf(
-  a: AiAvailability | null,
-  stored: PodAiAvailability | null | undefined
-): {
+function markOf(a: AiAvailability | null): {
   kind: string;
   mark: number | null;
   resetsAt: string | null;
   paymentDue: boolean;
 } | null {
   if (!a || a.kind === null) return null;
-  const billing = stored?.billing;
   return {
     kind: a.kind,
     mark: a.thresholdPct ?? null,
     resetsAt: a.resetsAt ?? null,
-    paymentDue:
-      a.kind === "ok" &&
-      billing !== undefined &&
-      !billing.readFailed &&
-      billing.action === "fix_payment",
+    paymentDue: a.kind === "ok" && a.action === "fix_payment",
   };
 }
 
@@ -124,10 +115,9 @@ export async function notifyAiAvailabilityChange(
 ): Promise<AiAvailabilityNotifyOutcome> {
   const now = aiAvailabilityViewOf(change.current, "payer").availability;
   const was = markOf(
-    aiAvailabilityViewOf(change.previous, "payer").availability,
-    change.previous
+    aiAvailabilityViewOf(change.previous, "payer").availability
   );
-  const is = markOf(now, change.current);
+  const is = markOf(now);
   // A read the CP could not make says nothing: no notice, none cleared.
   if (!is) return { action: "none" };
   if (
@@ -140,13 +130,7 @@ export async function notifyAiAvailabilityChange(
   }
   await deps.dismissOpen();
   const type = is.paymentDue ? paymentDueNotice.type : NOTICE_OF[is.kind];
-  // A payment due while AI runs is said in the deck's words for the payment
-  // the payer owes (the `suspended` line and its "fix payment" action).
-  const copy = is.paymentDue
-    ? aiAvailabilityCopy({ kind: "suspended", action: "fix_payment" })
-    : now
-      ? aiAvailabilityCopy(now)
-      : null;
+  const copy = now ? aiAvailabilityCopy(now) : null;
   if (!type || !copy) return { action: "cleared" };
 
   const recipients = await deps.recipients();
