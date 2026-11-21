@@ -511,6 +511,12 @@ export {
   type SetRunStatusResult,
 } from "./services/lifecycle/run-status.js";
 export {
+  setAutomationStatus,
+  type AutomationColumnsPatch,
+  type AutomationStatusWriter,
+  type SetAutomationStatusInput,
+} from "./services/lifecycle/automation-status.js";
+export {
   REACTION_LOG_SUBJECT_TYPE,
   REACTION_OUTCOMES,
   listReactionOutcomes,
@@ -614,6 +620,7 @@ export * from "./projectors/index.js";
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
+export * from "./utils/insert-automation.js";
 export * from "./utils/owner-person.js";
 export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";

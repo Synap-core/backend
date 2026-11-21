@@ -26,16 +26,13 @@
 import {
   getDb,
   eq,
-  and,
-  isNull,
-  ne,
-  desc,
-  drizzleSql,
   automations,
-  isUniqueViolation,
+  insertAutomation,
   ownerAndActor,
+  setAutomationStatus,
   type FlowDefinition,
 } from "@synap/database";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import type { Playbook } from "@synap/database/schema";
 import type { PlaybookSchedule, PlaybookScheduleMode } from "@synap/playbooks";
 import { normalizePlaybookScheduleMode } from "@synap/playbooks";
@@ -54,37 +51,6 @@ import { playbookRunNodeLabel } from "@synap-core/types/automations";
 import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbook-cron-automation" });
-
-/**
- * Load the surviving non-archived automation for (workspaceId, name), the one
- * read of a name clash for the automations router and this module. 0230's
- * newest-wins keep rule: case-insensitive on name, NULL workspace = pod-wide
- * (the unique index's COALESCE sentinel), ordered updated_at DESC so a concurrent
- * 23505 recovery converges on the same winner the migration's soft-archive kept.
- */
-export async function findNonArchivedAutomationByName(
-  db: Awaited<ReturnType<typeof getDb>>,
-  workspaceId: string | null | undefined,
-  name: string
-): Promise<{ id: string } | null> {
-  const scope =
-    workspaceId == null || workspaceId === ""
-      ? isNull(automations.workspaceId)
-      : eq(automations.workspaceId, workspaceId);
-  const [row] = await db
-    .select({ id: automations.id })
-    .from(automations)
-    .where(
-      and(
-        scope,
-        drizzleSql`lower(${automations.name}) = lower(${name})`,
-        ne(automations.status, "archived")
-      )
-    )
-    .orderBy(desc(automations.updatedAt), desc(automations.id))
-    .limit(1);
-  return row ?? null;
-}
 
 /** Narrowed view of the JSONB `schedule` column. */
 function readSchedule(value: unknown): PlaybookSchedule | null {
@@ -298,10 +264,12 @@ export async function materializePlaybookCronAutomation(
   // ── No active schedule → tear down any backing automation. ──────────────────
   if (!schedule || !schedule.enabled || !live) {
     if (existingId) {
-      await db
-        .update(automations)
-        .set({ status: "paused", nextRunAt: null, updatedAt: new Date() })
-        .where(eq(automations.id, existingId));
+      await setAutomationStatus(db, {
+        id: existingId,
+        from: AUTOMATION_STATUSES,
+        to: "paused",
+        set: { nextRunAt: null },
+      });
       await clearDriverAutomation(db, playbook.id);
       logger.info(
         {
@@ -357,18 +325,26 @@ export async function materializePlaybookCronAutomation(
       // row's null nextRunAt) — a user's pause outlives an adoption.
       const keepState = ctx.preserveArming === true;
       const armed = keepState ? existing.status === "active" : true;
-      await db
-        .update(automations)
-        .set({
-          name: `${playbook.name} (schedule)`,
-          triggerType: "cron",
-          triggerConfig: { expression: schedule.cron },
-          flowDefinition,
-          ...(keepState ? {} : { status: "active" as const }),
-          nextRunAt: armed ? nextRunAt : existing.nextRunAt,
-          updatedAt: new Date(),
-        })
-        .where(eq(automations.id, existingId));
+      const set = {
+        name: `${playbook.name} (schedule)`,
+        triggerType: "cron" as const,
+        triggerConfig: { expression: schedule.cron },
+        flowDefinition,
+        nextRunAt: armed ? nextRunAt : existing.nextRunAt,
+      };
+      if (keepState) {
+        await db
+          .update(automations)
+          .set({ ...set, updatedAt: new Date() })
+          .where(eq(automations.id, existingId));
+      } else {
+        await setAutomationStatus(db, {
+          id: existingId,
+          from: existing.status,
+          to: "active",
+          set,
+        });
+      }
       // A canvas flow the schedule now drives is the schedule's (role moves).
       await setDriverAutomation(db, {
         playbookId: playbook.id,
@@ -389,61 +365,41 @@ export async function materializePlaybookCronAutomation(
   if (ctx.preserveArming === true) return null;
 
   // ── No backing row yet → create one and stamp the playbook. ─────────────────
-  // 23505 recovery against automations_workspace_name_active_uq (0230): teardown
-  // PAUSES the backing row (status='paused', NOT archived) and drops its link,
-  // so a disable→re-enable lands here with existingId=null and
-  // the INSERT collides with the still-non-archived paused row of the same
-  // `<name> (schedule)`. Re-arm that surviving row instead of 500-ing on the dup.
   const insertName = `${playbook.name} (schedule)`;
-  const owner = await ownerAndActor(db, ctx.userId, ctx.agentUserId);
-  let automationId: string | null = null;
-  try {
-    const [created] = await db
-      .insert(automations)
-      .values({
-        workspaceId: playbook.workspaceId,
-        createdBy: owner.ownerId,
-        agentUserId: owner.agentUserId,
-        name: insertName,
-        description: `Scheduled run of playbook "${playbook.name}"`,
-        triggerType: "cron",
-        triggerConfig: { expression: schedule.cron },
-        flowDefinition,
-        status: "active",
-        nextRunAt,
-        metadata: { createdVia: "template", playbookId: playbook.id },
-      })
-      .returning({ id: automations.id });
-    automationId = created?.id ?? null;
-    if (automationId) {
-      logger.info(
-        { playbookId: playbook.id, automationId },
-        "Created backing cron automation"
-      );
-    }
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    const winner = await findNonArchivedAutomationByName(
-      db,
-      playbook.workspaceId,
-      insertName
-    );
-    if (!winner) throw err;
-    await db
-      .update(automations)
-      .set({
-        triggerType: "cron",
-        triggerConfig: { expression: schedule.cron },
-        flowDefinition,
-        status: "active",
-        nextRunAt,
-        updatedAt: new Date(),
-      })
-      .where(eq(automations.id, winner.id));
-    automationId = winner.id;
+  const definition = {
+    triggerType: "cron" as const,
+    triggerConfig: { expression: schedule.cron },
+    flowDefinition,
+  };
+  const inserted = await insertAutomation(db, {
+    values: {
+      workspaceId: playbook.workspaceId,
+      name: insertName,
+      description: `Scheduled run of playbook "${playbook.name}"`,
+      ...definition,
+      metadata: { createdVia: "template", playbookId: playbook.id },
+    },
+    requested: "active",
+    // A live playbook is one a person approved or switched on (every
+    // `playbook/*` write of an agent is floored to a person's review).
+    personApproved: true,
+    owner: await ownerAndActor(db, ctx.userId, ctx.agentUserId),
+  });
+  // Teardown PAUSES the backing row (never archives it) and drops its link, so
+  // a disable→re-enable meets the surviving row by name: re-arm it.
+  if (inserted && !inserted.created) {
+    await setAutomationStatus(db, {
+      id: inserted.id,
+      from: inserted.status,
+      to: "active",
+      set: { ...definition, nextRunAt },
+    });
+  }
+  const automationId = inserted?.id ?? null;
+  if (automationId) {
     logger.info(
-      { playbookId: playbook.id, automationId },
-      "Re-armed existing backing cron automation (name collision on re-enable)"
+      { playbookId: playbook.id, automationId, created: inserted?.created },
+      "Armed backing cron automation"
     );
   }
 

@@ -28,7 +28,11 @@
  */
 import { and, inArray, is, sql, SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
-import { PROPOSAL_STATUS_DECLARATION } from "@synap-core/types/units";
+import {
+  PROPOSAL_STATUS_DECLARATION,
+  canTransition,
+  statusesThatMayBecome,
+} from "@synap-core/types/units";
 import { DOCUMENT_PATCH_PROPOSAL_TYPES } from "@synap-core/types/proposals/intent";
 import { UNDECIDED_PROPOSAL_STATUSES as UNDECIDED_STATUS_VALUES } from "@synap-core/types/proposals/attention";
 import {
@@ -133,16 +137,14 @@ export function canTransitionProposal(
   from: ProposalStatus,
   to: ProposalStatus
 ): boolean {
-  return PROPOSAL_TRANSITIONS[from]?.includes(to) ?? false;
+  return canTransition(PROPOSAL_TRANSITIONS, from, to);
 }
 
 /** Every status the table lets reach `to`. */
 export function proposalStatusesThatMayBecome(
   to: ProposalStatus
 ): ProposalStatus[] {
-  return (Object.keys(PROPOSAL_TRANSITIONS) as ProposalStatus[]).filter(
-    (from) => canTransitionProposal(from, to)
-  );
+  return statusesThatMayBecome(PROPOSAL_TRANSITIONS, to);
 }
 
 /**

@@ -3896,9 +3896,8 @@ const automationRecommendHealthHandler: BuiltinVerbHandler = async (
 // The substrate could BUILD config (playbook.create / automation.create) but
 // never REVISE it: a live playbook whose `subjectProfile` pointed at a kind
 // that no longer exists could not be repaired from any agent surface, and an
-// agent-authored automation — which ALWAYS lands `draft`
-// (`insertAutomationAfterGovernance`'s `forceDraft`) — could never be switched
-// on. These four verbs close that, each delegating to the EXISTING governed
+// agent-authored automation no person approved — born `draft`
+// (`automationStatusAtCreate`) — could never be switched on. These four verbs close that, each delegating to the EXISTING governed
 // tRPC procedure exactly like `entity.update` does. No logic is re-implemented
 // here, and every return is surfaced VERBATIM so a `{ status: "proposed" }`
 // outcome is reported as the success it is.
@@ -5197,7 +5196,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.recommend_health": automationRecommendHealthHandler,
   // Config REVISION (see the section above): the substrate could build a
   // playbook/automation but never revise one, and an agent-authored automation
-  // always lands `draft` with no door to switch it on.
+  // no person approved is born `draft` with no door to switch it on.
   "playbook.update": playbookUpdateHandler,
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,

@@ -3,6 +3,7 @@ import { db, proposals, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { assertApplied, reportApproved } from "./shared.js";
+import { personIsApproving } from "../../../services/capabilities/skill-born-approved.js";
 
 /**
  * Register the rule/* approve executors (NS1 Rule Loop).
@@ -67,7 +68,7 @@ async function refuseWorkerOverlap(input: {
 export function registerRuleExecutors(): void {
   registerProposalExecutor({
     key: "rule/create",
-    async execute({ proposal, userId, input, deps }) {
+    async execute({ proposal, userId, input, ctx, deps }) {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const intent = innerData.intent as string | undefined;
@@ -107,17 +108,15 @@ export function registerRuleExecutors(): void {
         // Own the rule as the APPROVER (mirrors project/skill/view) — no
         // agentUserId so the re-entrant gate auto-grants for the operator.
         agentUserId: undefined,
-        // …but the compiled automation's DRAFT FLOOR keys on who AUTHORED the
-        // behaviour, not on who approved it. Without this, approving an
-        // agent-authored rule materialized an ACTIVE automation (and a live
-        // `nextRunAt` for a cron trigger), making `rule/create` a wider path to
-        // a firing trigger than `automation/create` — whose executor has always
-        // threaded the author through (`executors/automation.ts`). Only
-        // `proposal.agentUserId` is read, NOT `createdBy`: a rule a HUMAN wrote
-        // and could not create for lack of permission is not a prompt-injection
-        // surface, and forcing it to draft would make approval a half-action.
+        // An agent's rule: the compiled automation's actor is that agent, and
+        // its status reads whether a person (not an agent reviewer) approved.
         ...(proposal.agentUserId
-          ? { behaviourAuthorAgentUserId: proposal.agentUserId }
+          ? {
+              approval: {
+                authorAgentUserId: proposal.agentUserId,
+                personApproved: await personIsApproving(ctx, userId),
+              },
+            }
           : {}),
         workspaceId: proposal.workspaceId ?? null,
         intent,
@@ -216,7 +215,7 @@ export function registerRuleExecutors(): void {
   // approving a DRAFT approves into a draft rather than arming it.
   registerProposalExecutor({
     key: "rule/update",
-    async execute({ proposal, payload, userId, input, deps }) {
+    async execute({ proposal, payload, userId, input, ctx, deps }) {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const ruleId = innerData.id as string | undefined;
@@ -268,10 +267,13 @@ export function registerRuleExecutors(): void {
       const result = await updateRuleGoverned({
         userId,
         agentUserId: undefined,
-        // The behaviour's draft floor keys on WHO AUTHORED it, never on who
-        // approved it — the same split `rule/create` documents at length.
         ...(proposal.agentUserId
-          ? { behaviourAuthorAgentUserId: proposal.agentUserId }
+          ? {
+              approval: {
+                authorAgentUserId: proposal.agentUserId,
+                personApproved: await personIsApproving(ctx, userId),
+              },
+            }
           : {}),
         ruleId,
         workspaceId: proposal.workspaceId ?? null,

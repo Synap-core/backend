@@ -48,6 +48,11 @@ vi.mock("@synap/database", () => ({
   },
   eq: () => ({}),
   inArray: () => ({}),
+  // The status door, recorded like the raw write it replaced.
+  setAutomationStatus: async (_db: unknown, input: { to: string }) => {
+    archived.push({ table: "automations", status: input.to });
+    return [];
+  },
   ownerAndActor: async (
     _db: unknown,
     ownerId: string,
@@ -255,36 +260,43 @@ describe("a rule that carries a sentence compiles or is refused", () => {
     );
   });
 
-  it("passes agentUserId to the door so an agent-authored rule's automation lands DRAFT", async () => {
-    // The floor itself lives inside `materializeAutomationForPrincipal` (it must
-    // not be a flag a caller can forget). What this door owes is the principal.
+  it("an agent's own rule: the door gets the agent and no person's approval (born draft)", async () => {
+    // The status is decided inside `materializeAutomationForPrincipal`; what
+    // this door owes is the facts.
     await create({
       intent: BEHAVIOUR,
       sentence: GOOD_SENTENCE,
       agentUserId: "agent-1",
     });
-    expect(materializeCalls.at(-1)).toMatchObject({ agentUserId: "agent-1" });
+    expect(materializeCalls.at(-1)).toMatchObject({
+      agentUserId: "agent-1",
+      personApproved: false,
+    });
   });
 
-  it("the APPROVAL replay still lands the automation DRAFT for an agent-authored rule", async () => {
+  it("the APPROVAL replay hands the door its author and the person's approval (born active)", async () => {
     // The replay runs as the APPROVER (no `agentUserId`, so the re-entrant gate
-    // auto-grants) — but the draft floor must key on who AUTHORED the behaviour.
-    // Without the separate field this materialized an ACTIVE automation, making
-    // `rule/create` a wider path to a live trigger than `automation/create`.
+    // auto-grants); the automation's actor stays the agent that wrote it.
     await create({
       intent: BEHAVIOUR,
       sentence: GOOD_SENTENCE,
       agentUserId: undefined,
-      behaviourAuthorAgentUserId: "agent-1",
+      approval: { authorAgentUserId: "agent-1", personApproved: true },
     });
-    expect(materializeCalls.at(-1)).toMatchObject({ agentUserId: "agent-1" });
+    expect(materializeCalls.at(-1)).toMatchObject({
+      agentUserId: "agent-1",
+      personApproved: true,
+    });
+    // …and so is the rule row's.
+    expect(inserted.at(-1)).toMatchObject({ agentUserId: "agent-1" });
   });
 
-  it("a HUMAN-authored rule approved by someone else is NOT forced to draft", async () => {
-    // A member who lacks `create` is not a prompt-injection surface; forcing
-    // their approved rule to draft would make approval a half-action.
+  it("a HUMAN's own rule names no agent", async () => {
     await create({ intent: BEHAVIOUR, sentence: GOOD_SENTENCE });
-    expect(materializeCalls.at(-1)).not.toHaveProperty("agentUserId");
+    expect(materializeCalls.at(-1)).toMatchObject({
+      agentUserId: null,
+      personApproved: false,
+    });
   });
 
   it("compiles the EXECUTOR-TRUE dialect the browser's rule editor emits", async () => {

@@ -64,8 +64,10 @@ import {
   drizzleSql,
   ProfileResolutionService,
   columnsForValue,
+  setAutomationStatus,
 } from "@synap/database";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import {
   entityFieldApiName,
   type EntityDiffField,
@@ -511,8 +513,8 @@ async function inspectAutomation(
   if ((runs?.n ?? 0) > 0) {
     return skip(target, "in_use", "the automation has already run");
   }
-  // Materialized as a draft, always. Anything else means someone turned it on.
-  if (row.status !== "draft" || changedAfter(row.updatedAt, ctx.since)) {
+  // Born draft or (approved) active; any move since stamps `updatedAt`.
+  if (changedAfter(row.updatedAt, ctx.since)) {
     return skip(
       target,
       "edited_since",
@@ -1067,10 +1069,12 @@ async function apply(
       }
       return;
     case "automation":
-      await tx
-        .update(automations)
-        .set({ status: "archived", updatedAt: now })
-        .where(eq(automations.id, target.id));
+      await setAutomationStatus(tx, {
+        id: target.id,
+        from: AUTOMATION_STATUSES,
+        to: "archived",
+        set: { updatedAt: now },
+      });
       return;
     case "skill":
     case "rule":

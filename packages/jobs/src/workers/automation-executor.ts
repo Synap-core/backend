@@ -52,6 +52,7 @@ import {
   isLiveRunStatus,
   automationOwnerHasSpaceAccess,
   AUTOMATION_OWNER_LEFT_SPACE,
+  setAutomationStatus,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -2397,16 +2398,12 @@ export async function handleAutomationExecute(job: {
         completedAt: new Date(),
       })
       .where(eq(automationRuns.id, runId));
-    await db
-      .update(automations)
-      .set({
-        status: "paused",
-        errorMessage: AUTOMATION_OWNER_LEFT_SPACE,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(automations.id, automationId), eq(automations.status, "active"))
-      );
+    await setAutomationStatus(db, {
+      id: automationId,
+      from: "active",
+      to: "paused",
+      set: { errorMessage: AUTOMATION_OWNER_LEFT_SPACE },
+    });
     return;
   }
 
