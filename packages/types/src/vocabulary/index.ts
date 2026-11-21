@@ -424,7 +424,7 @@ const ACTION_VERB_ROWS = {
   // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
   top_up: { imperative: "Top up", past: "Topped up" },
   upgrade: { imperative: "Upgrade", past: "Upgraded" },
-  ask_admin: { imperative: "Ask admin", past: "Asked admin" },
+  ask_admin: { imperative: "Ask an admin", past: "Asked an admin" },
   fix_payment: { imperative: "Fix payment", past: "Fixed payment" },
   // Put a REJECTED proposal back in the queue — the inverse of reject. Without
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
@@ -1917,10 +1917,14 @@ const STATUS_LABEL_ROWS = {
   public: "Public",
   // AI AVAILABILITY (`AiAvailabilityKind`, `@synap-core/types/ai-availability`)
   // — the short state chip. Headlines and CTAs live in that module's copy deck.
+  // `suspended` says what the payer does, as the deck's title does: humanized,
+  // "Suspended" named no cause. `account_inactive` is the `not_entitled` chip
+  // when AI was switched off rather than left out of the plan.
   credits_low: "Low credits",
   credits_empty: "Out of credits",
   not_entitled: "No AI plan",
-  suspended: "Suspended",
+  account_inactive: "AI turned off",
+  suspended: "Payment needed",
   budget_paused: "Paused",
   provider_issue: "AI issue",
   service_down: "AI offline",

@@ -104,7 +104,10 @@ describe("for agents", () => {
       personAction: expect.any(String),
     });
     const line = aiAvailabilityAgentLine(view);
-    expect(line).toContain("No AI credits left (credits_empty)");
+    expect(line).toContain(
+      "AI on this pod (credits_empty): This pod is out of AI credits"
+    );
+    expect(line).toContain("Top up credits to continue.");
     expect(line).toContain("never you");
     expect(line).toContain("never pay or file a top-up card");
   });

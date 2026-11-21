@@ -149,6 +149,32 @@ describe("IntelligenceHubClient.structure — the failure cause travels", () => 
     expect(onFailure).not.toHaveBeenCalled();
   });
 
+  // A 403 the ACCOUNT answered (the plan has no AI, AI switched off) is not a
+  // credentials fault: thrown as auth, it marked the pod's credentials bad
+  // and set off re-provisioning over a refusal no key can fix.
+  it.each(["not_entitled", "account_inactive"])(
+    "a 403 account refusal (%s) is a null with its envelope, never an auth throw",
+    async (code) => {
+      const failure = { code, retryable: false, actor: "payer" };
+      fetchMock.mockResolvedValueOnce(
+        jsonAnswer(403, { error: "Account refused", failure })
+      );
+      expect(await run()).toEqual({
+        result: null,
+        failures: [{ cause: "http", status: 403, failure }],
+      });
+    }
+  );
+
+  it("a 403 with no account envelope still throws as auth", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonAnswer(403, { error: "Forbidden", failure: { code: "auth" } })
+    );
+    await expect(
+      client.structure({ text: "x" }, { onFailure: vi.fn() })
+    ).rejects.toBeInstanceOf(IntelligenceAuthError);
+  });
+
   it("a sink that throws does not turn the null into a throw", async () => {
     fetchMock.mockResolvedValueOnce(jsonAnswer(500, {}));
     expect(

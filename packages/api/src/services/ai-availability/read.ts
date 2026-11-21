@@ -43,15 +43,12 @@ export interface AiAvailabilityView {
   sync: ControlPlaneEntitlementSync | null;
 }
 
-/** The member's view of the owner's block: the CP's member rule. */
+/**
+ * The member's view of the owner's block: the deck turns any payer action
+ * into `ask_admin` for `role: "member"`; the payer's own page is never shown.
+ */
 function memberBilling(billing: PodAiBilling): PodAiBilling {
-  return {
-    ...billing,
-    viewerRole: "member",
-    canTopUp: false,
-    action: billing.action === "none" ? "none" : "ask_admin",
-    actionUrl: null,
-  };
+  return { ...billing, actionUrl: null };
 }
 
 /** The view of a stored answer for a role. Pure. */

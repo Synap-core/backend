@@ -1698,7 +1698,7 @@ export type AiAction = IsFailureAction;
 export type AiViewerRole = "member" | "payer";
 export type AiAvailabilityTone = "error" | "info" | "warning";
 /** An abstract mark; each platform maps it to its own icon. */
-export type AiAvailabilityGlyph = "gauge" | "gauge-empty" | "lock" | "pause" | "wrench";
+export type AiAvailabilityGlyph = "gauge" | "gauge-empty" | "lock" | "offline" | "pause" | "payment" | "trouble";
 /**
  * How long a dismiss holds (founder: every notice is dismissible, except the
  * composer hint while blocked):
@@ -1746,6 +1746,19 @@ export interface AiAvailability {
 	glyph: AiAvailabilityGlyph | null;
 	/** The crossed low-credit threshold (20 / 10 / 5), `credits_low` only. */
 	thresholdPct?: number;
+	/**
+	 * `not_entitled` only: AI is switched off for the account
+	 * (`account_inactive` on the wire) rather than missing from the plan. The
+	 * deck says "AI is turned off", never "Your plan has no AI". Present only
+	 * when the wire alone proved it: a CP read of the same state wins, since
+	 * the CP is the SSOT for the plan.
+	 */
+	switchedOff?: true;
+	/**
+	 * `provider_issue` only: the provider refused the pod's OWN key, so the
+	 * owner fixes it in their provider account (actor `payer`, action `none`).
+	 */
+	ownKey?: true;
 	resetsAt?: string;
 	/** Store this on dismiss; a stored key that no longer matches re-surfaces. */
 	dismissKey: string | null;
@@ -15410,13 +15423,17 @@ export type DegradedCaptureReasonOrUnknown = DegradedCaptureReason | (string & {
  *                  when the call reported none;
  *   attempts     — structure calls made, retries included;
  *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
- *                  a reader needs to say whether retrying can help.
+ *                  a reader needs to say whether retrying can help;
+ *   action       — the payer action the IS stated for this caller on an
+ *                  account refusal (`top_up`, `ask_admin`, …), as the failure
+ *                  door read it; absent when it stated none (never guessed).
  */
 export interface DegradedCaptureDetail {
 	cause: StructureFailure["cause"] | "empty" | "unknown";
 	status?: number;
 	attempts: number;
 	failureClass: AiFailureClass;
+	action?: IsFailureAction;
 }
 declare function buildDegradedCaptureFallback(inputText: string, degradedReason: DegradedCaptureReasonOrUnknown, 
 /** A caller-named kind already resolved by `resolveDegradedFallbackKind`. */
@@ -22155,6 +22172,14 @@ export interface SynthesisSource {
 	substrate: string;
 	id: string;
 	title: string;
+}
+/**
+ * A short passage of a runbook the answer would have been composed from,
+ * returned when synthesis did not run ({@link SynthesisResult.excerpts}).
+ */
+export interface SynthesisExcerpt extends SynthesisSource {
+	/** The runbook's opening, at most {@link DEGRADED_EXCERPT_CHARS} chars. */
+	text: string;
 }
 /**
  * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
@@ -47767,6 +47792,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				answer: string | null;
 				degraded: DegradedTag[];
 				detail: "brief" | "full" | "sources" | undefined;
+				excerpts?: SynthesisExcerpt[] | undefined;
 				failureClass: AiFailureClass | undefined;
 				lens: AppliedLens;
 				queue: AskQueueBlock | undefined;

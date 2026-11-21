@@ -244,10 +244,15 @@ export const readHandlers: McpHandlerMap = {
     if ((synthesis as { error?: string }).error === "synthesis_unavailable") {
       // The WHY comes from the one failure door, classified from the real
       // error — never a stock "temporarily unavailable" that could be telling
-      // the agent to retry a failure no retry can fix.
-      const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
+      // the agent to retry a failure no retry can fix. The IS envelope rides
+      // in so the words end with the payer action the IS stated for this
+      // caller; it is evidence for the sentence, not a field of the reply.
+      const { failure: envelope, ...shown } = synthesis;
+      const failure = describeAiFailure(synthesis.failureClass ?? "unknown", {
+        envelope,
+      });
       return ok({
-        ...synthesis,
+        ...shown,
         ...sourcesBlock,
         ...pendingBlock,
         ...spacesBlock,
@@ -260,7 +265,10 @@ export const readHandlers: McpHandlerMap = {
           (failure.retryable
             ? "Retrying may work. "
             : "Do not retry — say so instead. ") +
-          "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
+          "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found)." +
+          (synthesis.excerpts
+            ? " `excerpts` quotes the opening of the matched runbooks: follow them, and fetch a runbook whole by its source id when the excerpt is not enough."
+            : ""),
       });
     }
     // A Library item is a page or file from outside the pod: an answer
