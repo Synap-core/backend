@@ -240,8 +240,9 @@ describe("CONTROLS: what never attaches (the named session is used for that call
     "%s names the session it acts on, not the caller's",
     async (tool) => {
       const lane = await seed({ clientKey: OLD });
+      // A tool the registry reads as read-only is not attributed at all.
       const r = await resolveAs(NEW, tool, { sessionId: lane });
-      expect(r?.attribution).not.toHaveProperty("attached");
+      expect(r?.attribution ?? {}).not.toHaveProperty("attached");
       expect(await boundKey(lane)).toBe(OLD);
     }
   );
