@@ -697,6 +697,14 @@ export function aiAvailabilityCopy(
   };
 }
 
+/**
+ * The recovery receipt: shown ONCE when availability moves from a blocking
+ * state back to `ok` after THIS viewer acted (opened a checkout). An
+ * unprovoked recovery shows nothing. The deck's words, so no surface writes
+ * its own.
+ */
+export const AI_AVAILABILITY_RECOVERED_TITLE = "AI is back";
+
 // ── Into the ONE lens status banner ─────────────────────────────────────────
 
 /**

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AI_AVAILABILITY_KINDS,
   AI_AVAILABILITY_PRECEDENCE,
+  AI_AVAILABILITY_RECOVERED_TITLE,
   AI_FAILURE_CODES,
   aiAvailabilityBanner,
   aiAvailabilityCopy,
@@ -365,6 +366,10 @@ describe("the lens banner: warning sits between error and info", () => {
  * whose AI was switched off, a reset worded as a billing period.
  */
 describe("the copy deck's words", () => {
+  it("the recovery receipt is the deck's one sentence", () => {
+    expect(AI_AVAILABILITY_RECOVERED_TITLE).toBe("AI is back");
+  });
+
   const every = (): Array<ReturnType<typeof aiAvailabilityCopy>> =>
     AI_AVAILABILITY_KINDS.flatMap((kind) =>
       (["none", "top_up", "upgrade", "fix_payment", "ask_admin"] as const).map(

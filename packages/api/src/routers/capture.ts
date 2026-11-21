@@ -498,7 +498,11 @@ export function degradedDetailForFailure(
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     attempts,
     failureClass: described.class,
-    ...(described.action ? { action: described.action } : {}),
+    // "none" is no payer action: an operator state carries it, and the field
+    // promises the action a payer can take.
+    ...(described.action && described.action !== "none"
+      ? { action: described.action }
+      : {}),
   };
 }
 

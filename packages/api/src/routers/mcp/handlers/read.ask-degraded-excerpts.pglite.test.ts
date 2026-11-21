@@ -126,10 +126,13 @@ const RUNBOOKS: Array<[string, string, string]> = [
     "ops:backend-deploy-secrets",
     "Before a backend deploy, rotate the deploy secrets of the backend.",
   ],
+  // A second long runbook: the lane ranks the four (only three are quoted),
+  // so with two long ones at least one long runbook is always quoted, whatever
+  // the rank order.
   [
     W1,
     "ops:backend-deploy-notes",
-    "Backend deploy notes: every backend deploy is announced in the room.",
+    `Backend deploy notes: every backend deploy is announced in the room. ${LONG_STEP.repeat(12)}`,
   ],
   [
     W2,
@@ -219,10 +222,22 @@ describe("synap_ask with AI down, through a scoped key", () => {
     expect(excerpts.map((e) => e.id)).toEqual(
       listed.slice(0, 3).map((s) => s.id)
     );
-    for (const e of excerpts) expect(e.text.length).toBeLessThanOrEqual(600);
-    const long = excerpts.find((e) => e.title === "ops:backend-deploy");
-    expect(long?.text.startsWith("To deploy the backend:")).toBe(true);
-    expect(long?.text.endsWith("…")).toBe(true);
+    // Each excerpt is its runbook's opening: whole when it fits, else cut
+    // with an ellipsis. At least one quoted runbook is long (see RUNBOOKS).
+    const bodyOf = new Map(RUNBOOKS.map(([, key, value]) => [key, value]));
+    let cut = 0;
+    for (const e of excerpts) {
+      expect(e.text.length).toBeLessThanOrEqual(600);
+      const body = bodyOf.get(e.title)!;
+      if (body.length > 600) {
+        cut += 1;
+        expect(e.text.endsWith("…")).toBe(true);
+        expect(body.startsWith(e.text.slice(0, -1))).toBe(true);
+      } else {
+        expect(e.text).toBe(body);
+      }
+    }
+    expect(cut).toBeGreaterThan(0);
     // The other space's runbook is neither listed nor quoted.
     expect(JSON.stringify(reply)).not.toContain("OTHER-SPACE-ONLY");
     expect(JSON.stringify(reply)).not.toContain("other:backend-deploy");
