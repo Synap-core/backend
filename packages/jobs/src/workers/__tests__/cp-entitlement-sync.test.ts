@@ -26,7 +26,7 @@ const h = vi.hoisted(() => ({
   aiFailures: [] as Array<[string, string]>,
   becameAvailable: false,
   planSync: null as null | { lastAttemptAt: string },
-  aiSync: null as null | { lastAttemptAt: string },
+  aiSync: null as null | { lastAttemptAt: string; outcome?: string },
   aiHolds: [] as unknown[],
   sent: [] as Array<[string, unknown]>,
   notified: [] as unknown[],
@@ -358,6 +358,18 @@ describe("handleCpEntitlementSync — what a tick pulls", () => {
     h.planSync = { lastAttemptAt: ago(3) };
     h.aiSync = { lastAttemptAt: ago(3) };
     h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
+    await handleCpEntitlementSync({}, NOW);
+    expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
+  });
+
+  it("a CP without the door is not asked every tick, even while a hold waits on AI", async () => {
+    h.planSync = { lastAttemptAt: ago(3) };
+    h.aiSync = { lastAttemptAt: ago(3), outcome: "unsupported" };
+    h.aiHolds = [{ subjectType: "focus_session", subjectId: "s1" }];
+    await handleCpEntitlementSync({}, NOW);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    h.aiSync = { lastAttemptAt: ago(15), outcome: "unsupported" };
     await handleCpEntitlementSync({}, NOW);
     expect(urls()).toEqual([`${CP}/internal/ai-availability?podId=pod_lab`]);
   });

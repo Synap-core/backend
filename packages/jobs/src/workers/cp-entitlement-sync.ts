@@ -360,7 +360,11 @@ export async function handleCpEntitlementSync(
       ),
     ]);
     plan = isDue(planSync, now);
-    ai = aiHolds.length > 0 || isDue(aiRead.sync, now);
+    // A CP that has no availability door (404) is asked again at the plan's
+    // pace, never every tick: a hold cannot make an older CP answer.
+    ai =
+      (aiHolds.length > 0 && aiRead.sync?.outcome !== "unsupported") ||
+      isDue(aiRead.sync, now);
   }
   if (!plan && !ai) return;
 
