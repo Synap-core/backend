@@ -140,3 +140,15 @@ describe("skills.create: requiredToolIds", () => {
     expect(h.gated[0]).not.toHaveProperty("requiredToolIds");
   });
 });
+
+describe("skills.create: metadata on the proposed path", () => {
+  it("rides the gate's stored data, so an approved read-only verb lands read-only", async () => {
+    await member().create({
+      name: "lookup_company",
+      kind: "declarative",
+      providerSpec: { tool: "apify_api", method: "POST", path: "/run" },
+      metadata: { readOnly: true },
+    });
+    expect(h.gated[0]).toMatchObject({ metadata: { readOnly: true } });
+  });
+});

@@ -1519,9 +1519,9 @@ export const skillsRouter = router({
           ...(requiredToolIds.length
             ? { requiredToolIds, requiredToolNames }
             : {}),
-          // A box skill's declaration (packages, hosts, limits) IS what the
-          // person approves with the code, and what the approved row runs.
-          ...(input.executionMode === "box" && metadata ? { metadata } : {}),
+          // What the approved row stores, as the direct insert below does: a
+          // box declaration or a `readOnly` is what the person approves.
+          ...(metadata ? { metadata } : {}),
         },
         agentUserId: input.agentUserId,
       });
