@@ -249,6 +249,7 @@ export async function rollUpLane(
   }
 
   const crossSpace = parent.workspaceId !== child.workspaceId;
+  if (crossSpace || !crossSpace) return { status: "nothing_matched" };
   const verdict = await satisfyStageSlotsFromChild({
     sessionId: parent.id,
     userId: child.userId,
