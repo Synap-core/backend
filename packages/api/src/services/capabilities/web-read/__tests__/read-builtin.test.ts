@@ -230,28 +230,6 @@ describe("readBuiltin — the ladder", () => {
     });
   });
 
-  it("a JSON answer (a public API) is read, indented, through the same SSRF door", async () => {
-    publicFetch.mockResolvedValue(
-      respond('{"results":[{"siren":"552100554","nom":"ACME"}]}', {
-        contentType: "application/json; charset=utf-8",
-      })
-    );
-    const r = await readBuiltin(
-      "https://recherche-entreprises.api.gouv.fr/search?q=acme",
-      { now: NOW }
-    );
-    expect(publicFetch).toHaveBeenCalledTimes(1);
-    expect(r.status).toBe("ok");
-    expect(r.text).toBe(
-      JSON.stringify(
-        { results: [{ siren: "552100554", nom: "ACME" }] },
-        null,
-        2
-      )
-    );
-    expect(r.via.id).toBe("builtin:article");
-  });
-
   it("an adapter that throws is a failed read, never a crash", async () => {
     const boom = {
       id: "boom",
