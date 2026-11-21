@@ -135,7 +135,8 @@ vi.mock("../../../lib/trpc", async () => ({
 }));
 
 import { ProposalReview } from "./ProposalReview";
-import { alwaysEn } from "./copy";
+import { alwaysEn, en as pageEn } from "./copy";
+import { approveInput } from "./use-proposal-decision";
 
 /** A proposal's one verb, reject (the vocabulary door), and the rule menu's trigger. */
 const REFUSE_TRIGGER = new RegExp(
@@ -355,5 +356,41 @@ describe("one pending state for the whole bar", () => {
     render();
     expect(menuProps.always?.onRunningChange).toBeTypeOf("function");
     expect(menuProps.never?.onRunningChange).toBeTypeOf("function");
+  });
+});
+
+describe("allow without review: the person's tick on an AI-made verb's request", () => {
+  const TICK = pageEn["decide.allowWithoutReview"].split("“")[0]!.trim();
+
+  it("the pod's offer (proposals.get) draws the tick beside Approve, the action named in words", () => {
+    state.proposal = {
+      ...request("pending"),
+      allowWithoutReview: { verb: "fr_company_lookup" },
+    };
+    const html = render();
+    expect(html).toContain("data-allow-without-review");
+    const seen = text(html);
+    expect(seen).toContain(TICK);
+    expect(seen).not.toContain("fr_company_lookup");
+    expect(seen).toContain(pageEn["decide.allowWithoutReviewHint"].slice(0, 30));
+  });
+
+  it("CONTROL: no offer from the pod, no tick", () => {
+    state.proposal = { ...request("pending"), allowWithoutReview: null };
+    const html = render();
+    expect(html).not.toContain("data-allow-without-review");
+    expect(text(html)).not.toContain(TICK);
+  });
+
+  it("a ticked approve sends allowWithoutReview; an unticked one does not", () => {
+    expect(approveInput(ID, { allowWithoutReview: true }, 0)).toEqual({
+      proposalId: ID,
+      expectedRevision: 0,
+      allowWithoutReview: true,
+    });
+    expect(approveInput(ID, {}, 0)).toEqual({
+      proposalId: ID,
+      expectedRevision: 0,
+    });
   });
 });
