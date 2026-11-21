@@ -18,8 +18,8 @@
  * Intelligence Service personas, a `podWide` key) is accountable to the person
  * who installed it but acts for nobody in particular.
  */
-import { and, eq, inArray } from "drizzle-orm";
-import { apiKeys, users } from "../schema/index.js";
+import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { apiKeys, podMembers, users } from "../schema/index.js";
 
 type OwnerRow = {
   id: string;
@@ -63,12 +63,34 @@ export interface OwnerAndActor {
   agentUserId: string | null;
 }
 
+/** The pod's owner: the oldest live `owner` pod member who is a person. */
+async function podOwner(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any
+): Promise<string | null> {
+  const [row] = (await database
+    .select({ id: podMembers.userId })
+    .from(podMembers)
+    .innerJoin(users, eq(users.id, podMembers.userId))
+    .where(
+      and(
+        eq(podMembers.podRole, "owner"),
+        isNull(podMembers.removedAt),
+        ne(users.userType, "agent")
+      )
+    )
+    .orderBy(asc(podMembers.createdAt))
+    .limit(1)) as Array<{ id: string }>;
+  return row?.id ?? null;
+}
+
 /**
  * The owner and actor of a row `principalId` writes: a person owns it, the
- * agent is only the actor. Every automation and playbook insert stamps this,
- * so a caller handing in an agent id cannot make the agent the owner.
- * `ownerId` falls back to `principalId` for a system id or an agent nobody
- * installed. A failed read throws.
+ * agent is only the actor. Every agent-reachable insert stamps this, so a
+ * caller handing in an agent id cannot make the agent the owner. An agent
+ * nobody is recorded as installing is owned by the pod owner (the rule of
+ * migration 0445); `ownerId` stays `principalId` only for a system id, or on a
+ * pod with no live human owner. A failed read throws.
  */
 export async function ownerAndActor(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
@@ -78,8 +100,10 @@ export async function ownerAndActor(
 ): Promise<OwnerAndActor> {
   const person = await personOfOwner(database, principalId);
   const isAgent = person !== undefined && person !== principalId;
+  const owner =
+    person === null ? await podOwner(database) : (person ?? null);
   return {
-    ownerId: person ?? principalId,
+    ownerId: owner ?? principalId,
     agentUserId: agentUserId || (isAgent ? principalId : null),
   };
 }
