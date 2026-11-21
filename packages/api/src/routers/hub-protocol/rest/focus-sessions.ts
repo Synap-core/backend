@@ -304,6 +304,8 @@ const WorkGraphWireSchema = z.object({
       entityId: z.string().optional(),
       count: z.number().optional(),
       lastAt: z.string().nullable().optional(),
+      /** `serves`: the goal's criterion the session works, when it names one. */
+      criterionKey: z.string().optional(),
     })
   ),
   /** One per PR a node recorded; `prState` absent = the pod recorded no fact about it. */
@@ -332,7 +334,7 @@ const WorkGraphWireSchema = z.object({
       reviewDue: z.boolean(),
     })
   ),
-  /** The goals (tracks) the nodes are filed into. */
+  /** The goals (tracks) the nodes are filed into or serve. */
   goals: z.array(
     z.object({
       id: z.string(),
@@ -363,6 +365,7 @@ const WorkGraphWireSchema = z.object({
     pullRequests: WorkGraphSectionWireSchema,
     holds: WorkGraphSectionWireSchema,
     goals: WorkGraphSectionWireSchema,
+    serves: WorkGraphSectionWireSchema,
   }),
   window: z.object({
     since: z.string(),

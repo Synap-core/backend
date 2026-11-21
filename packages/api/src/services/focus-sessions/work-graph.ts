@@ -86,7 +86,9 @@
  *     `foldPullRequestState`), read ONCE for every node;
  *   - `holds`: the standing hold of each paused node (`listHolds`): what it
  *     waits on, why, and what resumes it;
- *   - `goals`: the goal (track) each node is filed into, under the track floor.
+ *   - `goals`: the goal (track) each node is filed into or `serves`, under the
+ *     track floor. A `serves` edge (session → goal) is drawn only to a goal
+ *     this read returns, so it never names a goal the reader cannot see.
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * Each edge read is settled on its own (`settle`): a failure marks its
@@ -98,6 +100,10 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
+import {
+  WORK_GRAPH_EDGE_KINDS,
+  type WorkGraphEdgeKind,
+} from "@synap-core/types/focus-sessions";
 import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -130,6 +136,7 @@ import {
   readGraphGoals,
   readGraphHolds,
   readGraphPullRequests,
+  readGraphServes,
   type WorkGraphGoal,
   type WorkGraphHold,
   type WorkGraphPullRequest,
@@ -157,7 +164,8 @@ export {
 export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
 
 /**
- * One edge, flat. Direction follows the stored or derived relation:
+ * The edge kinds, declared once in `@synap-core/types/focus-sessions` (the
+ * apps import the same list). Direction follows the stored or derived relation:
  *   - `blocked_by`      from = the waiting session, to = its blocker. The
  *                       same edge IS the blocker's "unblocks": one edge, read
  *                       from either end, never listed twice.
@@ -170,22 +178,11 @@ export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
  *   - `triggered`       from = the session whose write fired the run, to = the run.
  *   - `updated`         from = the producer, to = the session that wrote to its
  *                       output (`session-interactions.ts`).
+ *   - `serves`          from = the session, to = the GOAL (track) it works for
+ *                       (`readGraphServes`); `criterionKey` = the goal's
+ *                       criterion it names. Its far end is one of `goals`.
  */
-export const WORK_GRAPH_EDGE_KINDS = [
-  "blocked_by",
-  "spawned_from",
-  "orchestrated_by",
-  "waits_on_output",
-  "triggered",
-  "updated",
-] as const satisfies ReadonlyArray<
-  | "blocked_by"
-  | "spawned_from"
-  | "orchestrated_by"
-  | "waits_on_output"
-  | SessionInteractionType
->;
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+export { WORK_GRAPH_EDGE_KINDS, type WorkGraphEdgeKind };
 // A new interaction type the graph does not list stops the build: it would
 // otherwise reach the wire as an edge kind no schema declares.
 type _InteractionsCovered = [
@@ -206,6 +203,8 @@ export interface WorkGraphEdge {
   count?: number;
   /** `triggered` / `updated`: the latest of them, ISO. */
   lastAt?: string | null;
+  /** `serves`: the goal's criterion the session works, when it names one. */
+  criterionKey?: string;
 }
 
 export type WorkGraphSection =
@@ -227,8 +226,14 @@ export interface WorkGraphSections {
   pullRequests: WorkGraphSection;
   /** The standing holds of the nodes. */
   holds: WorkGraphSection;
-  /** The goals the nodes are filed into. */
+  /** The goals the nodes are filed into or serve. */
   goals: WorkGraphSection;
+  /**
+   * Declared `serves` edges (session → the goal it works for). `unavailable`
+   * also when the goals at their far end could not be read: no edge is drawn
+   * to a goal the read does not return.
+   */
+  serves: WorkGraphSection;
 }
 
 export interface WorkGraphWindow {
@@ -638,8 +643,23 @@ export async function buildWorkGraph(
   const drawn = edges.filter((e) => held.has(e.from) && held.has(e.to));
 
   // ── What the nodes point at: PRs, holds, goals, each read settled on its own.
+  // The goals each node serves are read first: the goal at the far end of a
+  // `serves` edge is read with the others, under the same track floor. They
+  // name a goal: withheld from a narrowed key that may not read goals.
+  const serves =
+    narrowed && !narrowed.goals
+      ? withheld
+      : await settle(
+          LOG,
+          "serves",
+          "Which goals these sessions serve could not be read.",
+          () => readGraphServes(nodes.map((n) => n.id))
+        );
   const trackIds = [
-    ...new Set(nodes.flatMap((n) => (n.trackId ? [n.trackId] : []))),
+    ...new Set([
+      ...nodes.flatMap((n) => (n.trackId ? [n.trackId] : [])),
+      ...(serves.status === "ok" ? serves.value.map((e) => e.trackId) : []),
+    ]),
   ];
   const [prs, holds, goals] = await Promise.all([
     // The PR facts are events: a workspace-bound key reads them under its own
@@ -665,9 +685,26 @@ export async function buildWorkGraph(
         ),
   ]);
 
+  // A `serves` edge is drawn only to a goal the read returned (the track
+  // floor): a goal the reader cannot see is never named.
+  const goalIds = new Set(
+    goals.status === "ok" ? goals.value.map((g) => g.id) : []
+  );
+  const servesEdges: WorkGraphEdge[] =
+    serves.status === "ok"
+      ? serves.value
+          .filter((e) => goalIds.has(e.trackId))
+          .map((e) => ({
+            kind: "serves" as const,
+            from: e.sessionId,
+            to: e.trackId,
+            ...(e.criterionKey ? { criterionKey: e.criterionKey } : {}),
+          }))
+      : [];
+
   return {
     nodes,
-    edges: drawn,
+    edges: [...drawn, ...servesEdges],
     pullRequests: prs.items,
     holds: holds.status === "ok" ? holds.value : [],
     goals: goals.status === "ok" ? goals.value : [],
@@ -680,6 +717,12 @@ export async function buildWorkGraph(
       pullRequests: prs.section,
       holds: sectionOf(holds),
       goals: sectionOf(goals),
+      serves:
+        serves.status !== "ok"
+          ? sectionOf(serves)
+          : goals.status !== "ok"
+            ? sectionOf(goals)
+            : { status: "ok" },
     },
     window: {
       since,

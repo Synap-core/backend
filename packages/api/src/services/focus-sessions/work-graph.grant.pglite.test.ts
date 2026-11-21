@@ -219,6 +219,9 @@ describe("the work graph for a key narrowed by its grant (a pod app, D1)", () =>
     expect(g.sections.interactions).toEqual(withheld);
     expect(g.sections.pullRequests).toEqual(withheld);
     expect(g.sections.goals).toEqual(withheld);
+    // A `serves` edge names a goal: withheld with the goals.
+    expect(g.sections.serves).toEqual(withheld);
+    expect(g.edges.some((e) => e.kind === "serves")).toBe(false);
     expect(g.sections.blockedBy).toEqual({ status: "ok" });
     for (const n of g.nodes) {
       expect(n.nextMove).toMatchObject({ kind: "unknown", actor: "none" });

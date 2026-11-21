@@ -531,6 +531,7 @@ export { registerSessionUnblockReactor } from "./notifications/session-unblock-r
 // Same close event: a child run that works a step of another run (a stage that
 // `uses` a playbook) hands its outputs back and moves that run on.
 export { registerStageChildReactor } from "./services/playbooks/stage-child.js";
+export { registerLaneRollupReactor } from "./services/focus-sessions/lane-rollup.js";
 // A `proposed` decision is a question for the person: the decision-ask
 // reactor opens ONE owed ask slot for it, and retires it once the decision is
 // resolved elsewhere. See services/decisions/decision-ask-reactor.ts.
