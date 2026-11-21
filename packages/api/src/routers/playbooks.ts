@@ -67,6 +67,8 @@ import {
   loadFacetSlugsBatch,
   isUniqueViolation,
   ownerAndActor,
+  usableInSpace,
+  usableInSpaceWhere,
   verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
@@ -152,6 +154,7 @@ import {
   subjectProfileSlug,
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
+import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
@@ -315,24 +318,27 @@ function assertGoalPlaceholdersDeclared(
 }
 
 /**
- * Resolve a subject entity id to bind to a run/session, guarding cross-workspace
- * IDOR: `subject_entity_id` has no FK, so every writer must verify the entity is
- * visible (its own workspace OR pod-wide NULL) before binding. Mirrors the
- * automation-executor guard. Throws NOT_FOUND if the id isn't visible here.
+ * Resolve a subject entity id to bind to a run/session: `subject_entity_id`
+ * has no FK, so the id must name a record the person can read (the entity
+ * read floor) that is usable in the run's space (`usableInSpaceWhere`: its
+ * own, or pod-wide). Throws NOT_FOUND otherwise.
  */
 async function resolveVisibleSubjectId(
   database: Awaited<ReturnType<typeof getDb>>,
   subjectId: string | undefined,
-  workspaceId: string
+  workspaceId: string | null,
+  ownerId: string
 ): Promise<string | undefined> {
   if (!subjectId) return undefined;
   const subj = await database.query.entities.findFirst({
-    columns: { id: true, workspaceId: true },
-    where: eq(entities.id, subjectId),
+    columns: { id: true },
+    where: and(
+      eq(entities.id, subjectId),
+      entityReadVisibleWhere(ownerId),
+      usableInSpaceWhere(entities.workspaceId, workspaceId)
+    ),
   });
-  if (subj && (subj.workspaceId === workspaceId || subj.workspaceId === null)) {
-    return subj.id;
-  }
+  if (subj) return subj.id;
   throw new TRPCError({
     code: "NOT_FOUND",
     message: `Subject entity ${subjectId} not found in this workspace`,
@@ -914,11 +920,7 @@ const playbookAutomationsRouter = router({
       const automation = await database.query.automations.findFirst({
         where: eq(automations.id, input.automationId),
       });
-      if (
-        !automation ||
-        (automation.workspaceId !== playbook.workspaceId &&
-          automation.workspaceId !== null)
-      ) {
+      if (!automation || !usableInSpace(automation, playbook.workspaceId)) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Automation ${input.automationId} not found in this workspace`,
@@ -1256,7 +1258,8 @@ const playbookEnrollmentsRouter = router({
       const visibleEntityId = await resolveVisibleSubjectId(
         database,
         input.entityId,
-        playbook.workspaceId ?? ""
+        playbook.workspaceId,
+        ctx.userId
       );
       if (!visibleEntityId) {
         throw new TRPCError({
@@ -3439,7 +3442,8 @@ export const playbooksRouter = router({
       const subjectId = await resolveVisibleSubjectId(
         database,
         input.subjectId,
-        runWorkspaceId
+        runWorkspaceId,
+        ctx.userId
       );
 
       // ONE LIVE RUN PER OBJECT (founder, 2026-11-16, decisions 1–4): a

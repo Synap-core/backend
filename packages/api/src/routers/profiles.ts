@@ -376,7 +376,11 @@ export const profilesRouter = router({
             workspaceId: ctx.workspaceId,
             data: { id: existing.id },
           });
-          await profileRepo.grantAccess(existing.id, ctx.workspaceId);
+          await profileRepo.grantAccess(
+            existing.id,
+            ctx.workspaceId,
+            ctx.userId
+          );
         }
         // Slug-idempotent WIDEN: define_role on an existing role merges
         // applicableKinds (hats on any kind). Never shrinks. NULL stored
@@ -913,10 +917,10 @@ export const profilesRouter = router({
 
       // For shared profiles, grant access to the creating workspace + any extra workspaces
       if (input.scope === "shared") {
-        await profileRepo.grantAccess(profile.id, ctx.workspaceId);
+        await profileRepo.grantAccess(profile.id, ctx.workspaceId, ctx.userId);
         for (const wsId of input.allowedWorkspaceIds ?? []) {
           if (wsId !== ctx.workspaceId) {
-            await profileRepo.grantAccess(profile.id, wsId);
+            await profileRepo.grantAccess(profile.id, wsId, ctx.userId);
           }
         }
       }
@@ -1301,10 +1305,10 @@ export const profilesRouter = router({
       // profile has none, so it falls back to where the caller acts).
       if (input.scope === "shared") {
         const owningWorkspaceId = existing.workspaceId ?? ctx.workspaceId;
-        await profileRepo.grantAccess(input.id, owningWorkspaceId);
+        await profileRepo.grantAccess(input.id, owningWorkspaceId, ctx.userId);
         for (const wsId of input.allowedWorkspaceIds ?? []) {
           if (wsId !== owningWorkspaceId) {
-            await profileRepo.grantAccess(input.id, wsId);
+            await profileRepo.grantAccess(input.id, wsId, ctx.userId);
           }
         }
       }
@@ -1558,7 +1562,11 @@ export const profilesRouter = router({
         };
       }
 
-      await profileRepo.grantAccess(input.profileId, input.targetWorkspaceId);
+      await profileRepo.grantAccess(
+        input.profileId,
+        input.targetWorkspaceId,
+        ctx.userId
+      );
       // The grant changes which row the target workspace resolves for this
       // slug — the key both resolution caches are stored under.
       ProfileResolutionService.invalidateEntityScopeCache(profile.slug);

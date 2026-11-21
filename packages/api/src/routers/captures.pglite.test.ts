@@ -54,7 +54,7 @@ import {
   workspaces,
   workspaceMembers,
   podMembers,
-  profileWorkspaceAccess,
+  spaceAccess,
   artifacts,
   channels,
   channelMembers,
@@ -190,7 +190,7 @@ describe("captures API", () => {
       profiles,
       users,
       // Read by the documents / focus-session visibility rules.
-      profileWorkspaceAccess,
+      spaceAccess,
       artifacts,
       channels,
       channelMembers,

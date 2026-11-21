@@ -233,7 +233,7 @@ beforeAll(async () => {
     [SHARED_ROLE]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [SHARED_ROLE, SHARE_WS]
   );
   await q(

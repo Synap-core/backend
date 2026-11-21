@@ -25,6 +25,10 @@ const h = vi.hoisted(() => ({
   proposeMock: vi.fn(async () => ({ proposalId: "prop-1", deduped: false })),
 }));
 
+// The run floor is SQL; this suite stubs the database.
+vi.mock("../../entity-query-scope.js", () => ({
+  runEntityVisibilityWhere: () => undefined,
+}));
 vi.mock("@synap/database", () => ({
   db: {
     query: { entities: { findFirst: vi.fn(async () => undefined) } },

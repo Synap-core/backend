@@ -2231,7 +2231,11 @@ export const createProcs = {
           // granted (a system row would have resolved above). Reuse it, exactly
           // as the template door does (`resolveProfileForApply`), never a twin.
           if (!isProfileKindTwinError(err)) throw err;
-          await profileRepo.grantAccess(err.holder.id, ctx.workspaceId);
+          await profileRepo.grantAccess(
+            err.holder.id,
+            ctx.workspaceId,
+            ctx.userId
+          );
           newProfile = await profileRepo.getById(err.holder.id);
           if (!newProfile) throw err;
         }

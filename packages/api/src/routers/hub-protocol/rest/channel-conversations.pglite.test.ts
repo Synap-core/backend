@@ -769,7 +769,7 @@ describe("GET /channels/conversations — pod-wide leads", () => {
     );
     // The lead role is granted to CRM; the investor role to OTHER only.
     await q(
-      `insert into profile_workspace_access (profile_id, workspace_id, granted_at) values ($1,$2,now()), ($3,$4,now())`,
+      `insert into space_access (object_type, object_id, workspace_id, granted_at) values ('profile',$1,$2,now()), ('profile',$3,$4,now())`,
       [ROLE_LEAD, CRM, ROLE_INVESTOR, OTHER]
     );
     for (const [id, title, role, channel, chat] of [
@@ -882,7 +882,7 @@ describe("GET /channels/conversations — contacts of company leads", () => {
   beforeAll(async () => {
     // The lead role is granted to CRM (the pod-wide company's role).
     await q(
-      `insert into profile_workspace_access (profile_id, workspace_id, granted_at) values ($1,$2,now())`,
+      `insert into space_access (object_type, object_id, workspace_id, granted_at) values ('profile',$1,$2,now())`,
       [ROLE_LEAD, CRM]
     );
     for (const [id, title] of [

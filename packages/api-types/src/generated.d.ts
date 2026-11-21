@@ -6658,7 +6658,7 @@ declare const propertyDefs: import("drizzle-orm/pg-core").PgTableWithColumns<{
 export type PropertyDef = typeof propertyDefs.$inferSelect;
 declare enum ProfileScope {
 	SYSTEM = "system",// Available to all users (pod-wide)
-	SHARED = "shared",// Explicitly shared with specific workspaces via profile_workspace_access
+	SHARED = "shared",// Explicitly shared with specific workspaces via space_access
 	WORKSPACE = "workspace",// Owned by a single workspace
 	USER = "user"
 }

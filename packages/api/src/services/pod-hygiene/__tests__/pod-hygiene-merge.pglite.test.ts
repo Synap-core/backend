@@ -95,7 +95,7 @@ import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   entities,
   entityFacets,
   propertyDefs,
@@ -192,7 +192,7 @@ async function ledgered(opKey: string) {
 beforeAll(async () => {
   for (const t of [
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
     entities,
     entityFacets,
     propertyDefs,
@@ -206,7 +206,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await h.pg!.exec(`
     DROP TABLE IF EXISTS "_conversions";
-    TRUNCATE profiles, profile_workspace_access, entities, entity_facets, property_defs, profile_properties, views;
+    TRUNCATE profiles, space_access, entities, entity_facets, property_defs, profile_properties, views;
   `);
 });
 

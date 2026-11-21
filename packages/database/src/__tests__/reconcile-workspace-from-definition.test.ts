@@ -20,7 +20,7 @@ import {
 } from "../utils/create-workspace-from-definition.js";
 import { reconcileWorkspaceFromDefinition } from "../utils/reconcile-workspace-from-definition.js";
 import { writeTemplateState } from "../utils/template-state.js";
-import { profileWorkspaceAccess } from "../schema/profiles.js";
+import { spaceAccess } from "../schema/profiles.js";
 
 // The schema module graph has a circular import (profiles ↔ workspaces) that
 // Node/tsx resolve correctly but vite's SSR transform (vitest) leaves with
@@ -29,7 +29,7 @@ import { profileWorkspaceAccess } from "../schema/profiles.js";
 // the schema natively (Node ESM), this suite runs fully; under the broken
 // transform we skip cleanly instead of erroring. Behaviour is otherwise
 // verified end-to-end against Postgres (see PR notes).
-const SCHEMA_LOADS = !!profileWorkspaceAccess;
+const SCHEMA_LOADS = !!spaceAccess;
 
 const suf = crypto.randomUUID().slice(0, 8);
 const userId = `test-recon-${suf}`;

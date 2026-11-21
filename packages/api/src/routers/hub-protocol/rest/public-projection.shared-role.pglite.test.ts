@@ -104,7 +104,7 @@ beforeAll(async () => {
   );
   await q(
     // investor is shared — but to CRM, not to the publishing workspace.
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2),($3,$4)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2),('profile',$3,$4)`,
     [PARTNER, SITE, INVESTOR, CRM]
   );
   for (const [id, ws, title] of [

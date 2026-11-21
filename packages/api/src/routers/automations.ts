@@ -23,7 +23,6 @@ import {
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
-import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
 import { findNonArchivedAutomationByName } from "../services/playbooks/cron-automation.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
@@ -80,6 +79,8 @@ import {
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   getDb,
+  usableInSpace,
+  notUsableInSpaceReason,
   eq,
   ne,
   and,
@@ -508,28 +509,36 @@ async function loadFlowValidationResolvers(
           )
       : [];
 
-  const playbookRows =
-    playbookReferenceIds.length > 0 || playbookReferenceNames.length > 0
-      ? await scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
-          id: string;
-          name: string;
-          workspaceId: string | null;
-        }>(playbooks, {
-          columns: { id: true, name: true, workspaceId: true },
-          where: and(
-            // Archived playbooks are not referenceable, matching the OFFER door.
-            ne(playbooks.status, "archived"),
-            playbookReferenceIds.length > 0 && playbookReferenceNames.length > 0
-              ? or(
-                  inArray(playbooks.id, playbookReferenceIds),
-                  inArray(playbooks.name, playbookReferenceNames)
-                )
-              : playbookReferenceIds.length > 0
-                ? inArray(playbooks.id, playbookReferenceIds)
-                : inArray(playbooks.name, playbookReferenceNames)
-          ),
-        })
-      : [];
+  // By id: any playbook the author can see (usability in the automation's
+  // space is placement's question, `placeFlowByPlaybooks`, which names the
+  // fix). By name: the lens, as the run resolves a name in its own space.
+  const readPlaybooks = (
+    lens: string | null | undefined,
+    where: ReturnType<typeof inArray>
+  ) =>
+    scopedDb(playbookValidationAccess(userId, lens)).findMany<{
+      id: string;
+      name: string;
+      workspaceId: string | null;
+    }>(playbooks, {
+      columns: { id: true, name: true, workspaceId: true },
+      // Archived playbooks are not referenceable, matching the OFFER door.
+      where: and(ne(playbooks.status, "archived"), where),
+    });
+  const playbookRows = [
+    ...(playbookReferenceIds.length > 0
+      ? await readPlaybooks(
+          undefined,
+          inArray(playbooks.id, playbookReferenceIds)
+        )
+      : []),
+    ...(playbookReferenceNames.length > 0
+      ? await readPlaybooks(
+          workspaceId,
+          inArray(playbooks.name, playbookReferenceNames)
+        )
+      : []),
+  ];
 
   const foundSkillIds = new Set(skillRows.map((skill) => skill.id));
   const foundSkillNames = new Set(skillRows.map((skill) => skill.name));
@@ -556,26 +565,27 @@ async function loadFlowValidationResolvers(
 
 /**
  * The space a flow's playbooks run in, for an automation filed in `workspaceId`
- * (`null` = pod-wide). A playbook runs only in its home space (the run door's
- * rule, `playbookNotInSpaceReason`), so a pod-wide automation naming a
- * space-scoped playbook would fire runs that are refused everywhere but there
- * (ticket 6c15da33).
+ * (`null` = pod-wide). A playbook runs only where it is usable (the run door's
+ * rule, `usableInSpace`: its home, or anywhere when pod-wide), so a pod-wide
+ * automation naming a space playbook would fire runs that are refused
+ * everywhere but there.
  *
  *  - every playbook usable in `workspaceId` → `workspaceId` (nothing moves);
- *  - a pod-wide automation whose space-scoped playbooks share ONE home → that
- *    home (`adopted`): the automation is filed where its playbooks run;
+ *  - a pod-wide automation whose space playbooks share ONE home → that home
+ *    (`adopted`): the automation is filed where its playbooks run;
  *  - anything else → a refusal naming the fix.
  *
  * Only playbooks named BY ID are placed: a name-only node is resolved by name
- * in the run's own space when it runs (`resolveRunnablePlaybook`).
+ * in the run's own space when it runs (`resolveRunnablePlaybook`). An update
+ * never moves a stored automation (`adopt: false`): it is refused instead.
  */
 function placeFlowByPlaybooks(
   referenced: ReferencedPlaybook[],
-  workspaceId: string | null
+  workspaceId: string | null,
+  { adopt }: { adopt: boolean }
 ): { workspaceId: string | null; adopted: boolean } {
-  if (referenced.every((pb) => !playbookNotInSpaceReason(pb, workspaceId))) {
-    return { workspaceId, adopted: false };
-  }
+  const away = referenced.filter((pb) => !usableInSpace(pb, workspaceId));
+  if (away.length === 0) return { workspaceId, adopted: false };
   const homes = [
     ...new Set(
       referenced
@@ -583,18 +593,15 @@ function placeFlowByPlaybooks(
         .filter((id): id is string => id !== null)
     ),
   ];
-  if (workspaceId === null && homes.length === 1) {
+  if (adopt && workspaceId === null && homes.length === 1) {
     return { workspaceId: homes[0]!, adopted: true };
   }
-  const away = referenced
-    .map((pb) => playbookNotInSpaceReason(pb, workspaceId))
-    .find((reason): reason is string => reason !== null)!;
   throw new TRPCError({
     code: "BAD_REQUEST",
     message:
       homes.length > 1
-        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only in its own space: make one automation per space.`
-        : `${away} Create this automation in that space (workspaceId ${homes[0]}).`,
+        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only where it is usable: make one automation per space.`
+        : `${notUsableInSpaceReason("Playbook", away[0]!, workspaceId)} Or create this automation in that space (workspaceId ${homes[0]}).`,
   });
 }
 
@@ -779,7 +786,13 @@ async function prepareAutomationForMaterialization(
   assertFilteredAiFanout(input.flowDefinition);
   // Filed where its playbooks run (6c15da33): BEFORE the gate, RBAC and the
   // insert read `input.workspaceId`, so all of them see the adopted space.
-  const placed = placeFlowByPlaybooks(playbooksById, input.workspaceId ?? null);
+  const placed = placeFlowByPlaybooks(
+    playbooksById,
+    input.workspaceId ?? null,
+    {
+      adopt: true,
+    }
+  );
   if (placed.adopted) input.workspaceId = placed.workspaceId;
 
   // Normalize template-friendly skill names before either proposal storage or
@@ -2824,6 +2837,9 @@ export const automationsRouter = router({
           });
         }
         assertFilteredAiFanout(input.flowDefinition);
+        placeFlowByPlaybooks(updateFlow.playbooksById, existing.workspaceId, {
+          adopt: false,
+        });
 
         // Keep the template-friendly skillName form executable on update too,
         // matching create's pre-persist normalization.

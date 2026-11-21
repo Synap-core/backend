@@ -5,7 +5,7 @@
  * dry-run is not harmless: its reads are real, under the caller's floor, and
  * the result goes back to the caller. When the pod took the dry-run over from
  * the Intelligence Service (which read the skill AS the user), the lens moved
- * into this route: `visibleSkillsAnyWorkspaceWhere(acting.userId)`. Without it,
+ * into this route: `visibleSkillsWhere(acting.userId, undefined, { allSpaces: true })`. Without it,
  * person B could run person A's private skill by its id.
  *
  * Real: the route, the skills / workspace / membership rows (PGlite), the

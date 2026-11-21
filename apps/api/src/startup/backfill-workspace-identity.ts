@@ -43,7 +43,7 @@ import {
   getDb,
   workspaces,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   entities,
   ProfileScope,
   WorkspaceRepository,
@@ -111,15 +111,16 @@ async function loadBoundProfileSlugs(
 
   const granted = await db
     .select({
-      workspaceId: profileWorkspaceAccess.workspaceId,
+      workspaceId: spaceAccess.workspaceId,
       slug: profiles.slug,
     })
-    .from(profileWorkspaceAccess)
-    .innerJoin(profiles, eq(profiles.id, profileWorkspaceAccess.profileId))
+    .from(spaceAccess)
+    .innerJoin(profiles, eq(profiles.id, spaceAccess.objectId))
     .where(
       and(
+        eq(spaceAccess.objectType, "profile"),
         eq(profiles.isActive, true),
-        inArray(profileWorkspaceAccess.workspaceId, workspaceIds)
+        inArray(spaceAccess.workspaceId, workspaceIds)
       )
     );
 

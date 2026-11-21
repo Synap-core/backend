@@ -74,7 +74,10 @@ import {
 import { eventVisibleWhere } from "./event-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { viewReadableWhere } from "../utils/view-visibility.js";
-import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import {
+  ownerPrivateVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -152,16 +155,11 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(artifacts.workspaceId),
-          workspaceLensWhere(
-            artifacts.workspaceId,
-            access.userId,
-            access.workspaceLens
-          )
-        ),
-        and(isNull(artifacts.workspaceId), eq(artifacts.userId, access.userId))
+      ownerPrivateVisibleWhere(
+        artifacts.workspaceId,
+        artifacts.userId,
+        access.userId,
+        { lens: access.workspaceLens }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -401,16 +399,11 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(relations.workspaceId),
-          workspaceLensWhere(
-            relations.workspaceId,
-            access.userId,
-            access.workspaceLens
-          )
-        ),
-        and(isNull(relations.workspaceId), eq(relations.userId, access.userId))
+      ownerPrivateVisibleWhere(
+        relations.workspaceId,
+        relations.userId,
+        access.userId,
+        { lens: access.workspaceLens }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -445,23 +438,14 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(entityFacets.workspaceId),
-          workspaceLensWhere(
-            entityFacets.workspaceId,
-            access.userId,
-            access.workspaceLens,
-            { includeGlobals: false }
-          )
-        ),
-        and(
-          isNull(entityFacets.workspaceId),
-          or(
-            eq(entityFacets.userId, access.userId),
-            podSharedFacetGrantWhere(access.userId)
-          )
-        )
+      ownerPrivateVisibleWhere(
+        entityFacets.workspaceId,
+        entityFacets.userId,
+        access.userId,
+        {
+          lens: access.workspaceLens,
+          sharedPodWide: podSharedFacetGrantWhere(access.userId),
+        }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },

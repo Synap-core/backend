@@ -279,7 +279,7 @@ beforeAll(async () => {
     [ROLE_PROSPECT]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE_PROSPECT, CRM]
   );
   await q(
