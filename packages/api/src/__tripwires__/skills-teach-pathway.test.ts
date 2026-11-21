@@ -17,6 +17,11 @@
  * as a heading in the same file; a row pointing at a removed section, or a
  * section no row points at, both fail.
  *
+ * NEGATIVE CONTROL, measured (21 Nov 2026): with §2d deleted, the row kept and
+ * the bundle NOT rebuilt, the first version stayed green on two tests: the
+ * bundle test (an empty section is contained in any bundle) and the pointer
+ * test (it read the pointers, never their target). Both now check the target.
+ *
  * WHAT IT CANNOT SEE, stated rather than implied:
  *   - that an agent reads or obeys it (the limit of every prose guard here);
  *   - the IS baseline mirror and the CLI copy (sibling repos, held by
@@ -150,7 +155,10 @@ describe("tripwire: the one-off long plan is reachable from from-intent", () => 
     }
   });
 
-  it("work-model and multi-entity-capture point at §2d", () => {
+  it("work-model and multi-entity-capture point at §2d, and §2d is there", () => {
+    // A pointer is only reachable if its target exists: a removed §2d must
+    // fail here too, not leave two pointers to nowhere.
+    expect(read("from-intent.md")).toContain(`\n${HEADING}\n`);
     const wm = read("work-model.md")
       .split("\n")
       .find((l) => l.includes("one-off long plan"));
@@ -177,10 +185,13 @@ describe("tripwire: the one-off long plan is reachable from from-intent", () => 
       .split("\n")
       .find((l) => l.includes(ROW_LABEL));
     expect(row).toBeTruthy();
+    // Non-vacuity: an empty section is contained in any bundle.
+    const section = sectionFrom(src, HEADING).trim();
+    expect(section.length).toBeGreaterThan(1500);
     const stale =
       "synap/SKILL.md is stale: run `node skills/build.mjs` from synap-backend";
     expect(bundle, stale).toContain(row!.trim());
-    expect(bundle, stale).toContain(sectionFrom(src, HEADING).trim());
+    expect(bundle, stale).toContain(section);
     const wm = read("work-model.md")
       .split("\n")
       .find((l) => l.includes("one-off long plan"));
