@@ -7437,6 +7437,10 @@ export const tools = {
               description: "One line: what it does + when to use it.",
             },
             name: { type: "string", description: "New display name." },
+            category: {
+              type: "string",
+              description: "'rule' = pushed into all work in scope",
+            },
             code: {
               type: "string",
               description:

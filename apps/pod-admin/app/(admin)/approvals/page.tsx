@@ -12,20 +12,24 @@
  *                 (`governanceRules.listAll`: pod rows and the reader's
  *                 spaces), newest first, narrowed by ONE filter row: agent,
  *                 tool, verdict, space (`approvals-model.ts`);
- *   ?view=grid    the agent × work matrix (it was Governance › Agents &
- *                 work; `/governance/agents` redirects here), `?agent=`
- *                 narrowing it to one agent's row.
+ *   ?view=grid    the agents × tools grid, read from the same rows (lane
+ *                 W3, `tools-grid.tsx`): who × each tool those rows name,
+ *                 narrowed by the same filter row;
+ *   ?view=work    the agent × work matrix (each space's processes; it was
+ *                 Governance › Agents & work, `/governance/agents`
+ *                 redirects here), `?agent=` narrowing it to one agent's row.
  *
- * Taking a row back is `governanceRules.revoke` (the pod re-checks who may);
- * a pod default is changed by its switch and a posture row on its agent's
- * page, so a revoke here never fights the setting that wrote it. Receivers:
+ * Taking a row back is `governanceRules.revoke` (the pod re-checks who may,
+ * `use-take-back.tsx`, the same on a tool's and an agent's page); a pod
+ * default is changed by its switch and a posture row on its agent's page, so
+ * a revoke here never fights the setting that wrote it. Receivers:
  * `?agent=`, `?tool=`, `?verdict=`, `?space=`, `?view=`, `?focus=<row id>`.
  *
  * Its two tuning pages sit under it: Daily write limits (`/approvals/limits`)
  * and Calibration (`/approvals/calibration`), doors in the header.
  */
 
-import { Button, addToast } from "@heroui/react";
+import { Button } from "@heroui/react";
 import { Activity, Gauge } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -39,7 +43,6 @@ import { resolveActionRunModeLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
 import { navHref } from "../../../lib/console-nav";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { readableError } from "../../../lib/format";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { useReplaceParams } from "../../../lib/use-replace-params";
 import {
@@ -54,7 +57,6 @@ import {
   approvalMode,
   approvalSpaceKey,
   approvalTitle,
-  approvalToolKey,
   approvalToolName,
   filterValues,
   toolNamesOf,
@@ -64,7 +66,10 @@ import {
   CATALOG_INPUT,
 } from "../tools/_lib/tools-model";
 import { matrixAgents } from "../../../lib/agent-matrix/matrix-view-model";
-import { ConfirmModal } from "../components/confirm-modal";
+import {
+  toolIndex,
+  toolsGrid,
+} from "../../../lib/governance-rules/tool-approvals-model";
 import {
   FilterChip,
   ListCard,
@@ -77,13 +82,16 @@ import { useFocusRow } from "../components/use-focus-row";
 import { en, fr } from "./_lib/copy";
 import { ApprovalLine, MODE_ICON, MODE_TONE } from "./_lib/approval-line";
 import { ApprovalsGrid } from "./_lib/matrix/matrix-view";
+import { ToolsGridView } from "./_lib/tools-grid";
+import { useTakeBack } from "./_lib/use-take-back";
 
 const CATALOGS = { en, fr };
 const BASE = navHref("approvals");
 /** Rows drawn before "Show N more" (lists are capped, ui-composition §4). */
 const FIRST_ROWS = 50;
 
-type View = "list" | "grid";
+type View = "list" | "grid" | "work";
+const VIEWS: readonly View[] = ["list", "grid", "work"];
 
 export default function ApprovalsPage() {
   return (
@@ -97,7 +105,8 @@ function ApprovalsInner() {
   const t = useT(CATALOGS);
   const params = useSearchParams();
   const replaceParams = useReplaceParams();
-  const view: View = params.get("view") === "grid" ? "grid" : "list";
+  const asked = params.get("view");
+  const view: View = VIEWS.find((v) => v === asked) ?? "list";
   const filters = {
     agent: params.get("agent"),
     tool: params.get("tool"),
@@ -107,12 +116,12 @@ function ApprovalsInner() {
 
   const rules = trpc.governanceRules.listAll.useQuery(undefined, {
     staleTime: 30_000,
-    enabled: view === "list",
+    enabled: view !== "work",
   });
-  // The grid's agents, for the Agent chip when the grid is shown.
+  // The work grid's agents, for the Agent chip when it is shown.
   const matrix = trpc.governanceRules.matrix.useQuery(
     { lens: "pod" },
-    { staleTime: 30_000, enabled: view === "grid" }
+    { staleTime: 30_000, enabled: view === "work" }
   );
   const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
     staleTime: 60_000,
@@ -131,13 +140,19 @@ function ApprovalsInner() {
   );
   // A tool rule names an action by its stable id: its words come from the
   // catalog (the Tools list's read), else the vocabulary; never the raw id.
+  const namesTools = all.some((r) => r.targetKind === "capability");
   const catalog = trpc.capabilities.catalog.useQuery(CATALOG_INPUT, {
     ...CAPABILITY_READ_OPTIONS,
-    enabled: all.some((r) => r.targetKind === "capability"),
+    enabled: namesTools,
+  });
+  // A row made from a grant names one of a tool's member tool rows.
+  const compositions = trpc.capabilities.compositions.useQuery(undefined, {
+    ...CAPABILITY_READ_OPTIONS,
+    enabled: namesTools,
   });
   const toolName = useMemo(
-    () => toolNamesOf(catalog.data ?? []),
-    [catalog.data]
+    () => toolNamesOf(catalog.data ?? [], compositions.data ?? []),
+    [catalog.data, compositions.data]
   );
 
   useEffect(() => {
@@ -153,7 +168,42 @@ function ApprovalsInner() {
       ? t("space.pod")
       : humanizeScope(row, spaceName(row.workspaceId ?? ""));
 
-  const shown = all.filter((r) => approvalMatches(r, filters));
+  // Pattern → the tool it belongs to: the Tool filter and the grid's columns
+  // are tools, each holding the rows on the whole tool and on its actions.
+  const index = useMemo(
+    () => toolIndex(catalog.data ?? [], compositions.data ?? []),
+    [catalog.data, compositions.data]
+  );
+  const toolKeyOf = useMemo(
+    () => (row: { targetKind: string; targetPattern: string }) =>
+      row.targetKind === "capability"
+        ? (index.get(row.targetPattern)?.id ?? row.targetPattern)
+        : null,
+    [index]
+  );
+  const shown = useMemo(
+    () =>
+      all.filter((r) =>
+        approvalMatches(
+          r,
+          {
+            agent: filters.agent,
+            tool: filters.tool,
+            verdict: filters.verdict,
+            space: filters.space,
+          },
+          toolKeyOf
+        )
+      ),
+    [
+      all,
+      filters.agent,
+      filters.tool,
+      filters.verdict,
+      filters.space,
+      toolKeyOf,
+    ]
+  );
   const [expanded, setExpanded] = useState(false);
   const focusId = useFocusRow({ ready: !rules.isLoading });
   const focusIndex = focusId ? shown.findIndex((r) => r.id === focusId) : -1;
@@ -162,7 +212,7 @@ function ApprovalsInner() {
 
   // Each chip's values come from the rows (or the grid's agents).
   const agentOptions =
-    view === "grid"
+    view === "work"
       ? matrix.data
         ? matrixAgents(matrix.data).map(({ agent }) => ({
             id: agent.agentUserId,
@@ -174,9 +224,9 @@ function ApprovalsInner() {
           label: humanizePrincipal(v.sample),
           count: v.count,
         }));
-  const toolOptions = filterValues(all, approvalToolKey).map((v) => ({
+  const toolOptions = filterValues(all, toolKeyOf).map((v) => ({
     id: v.id,
-    label: approvalToolName(v.id, toolName),
+    label: index.get(v.id)?.name ?? approvalToolName(v.id, toolName),
     count: v.count,
   }));
   const verdictOptions = APPROVAL_VERDICTS.map((v) => {
@@ -198,35 +248,20 @@ function ApprovalsInner() {
     count: v.count,
   }));
 
-  const [pending, setPending] = useState<GovernanceRuleRow | null>(null);
-  const [actError, setActError] = useState<string | null>(null);
-  const utils = trpc.useUtils();
-  const revoke = trpc.governanceRules.revoke.useMutation();
   const titleOf = (row: GovernanceRuleRow) =>
     approvalTitle(row, { connectionLabel, toolName });
+  const takeBack = useTakeBack<GovernanceRuleRow>(titleOf);
 
-  async function confirmTakeBack() {
-    if (!pending) return;
-    setActError(null);
-    try {
-      await revoke.mutateAsync({ id: pending.id });
-      addToast({
-        title: t("takeBack.done", { what: titleOf(pending) }),
-        color: "default",
-      });
-      setPending(null);
-      await Promise.all([
-        utils.governanceRules.listAll.invalidate(),
-        utils.governanceRules.matrix.invalidate(),
-      ]);
-    } catch (err) {
-      // The pod's refusal, as it said it: who may take a row back is its call.
-      setActError(
-        readableError(err instanceof Error ? err.message : null) ??
-          t("takeBack.failed")
-      );
-    }
-  }
+  // The agents × tools grid: the filtered rows, each tool grouped through
+  // the catalog (a failed catalog read is a failure, never fewer columns).
+  const gridReady =
+    !namesTools || (catalog.isSuccess && compositions.isSuccess);
+  const grid = useMemo(
+    () => (view === "grid" && gridReady ? toolsGrid(shown, index) : null),
+    [view, gridReady, shown, index]
+  );
+  const gridWaits = namesTools && (catalog.isLoading || compositions.isLoading);
+  const gridFailed = namesTools && (catalog.isError || compositions.isError);
 
   const viewSwitch = (
     <SegmentedChoice<View>
@@ -234,12 +269,13 @@ function ApprovalsInner() {
       options={[
         { key: "list", label: t("view.list") },
         { key: "grid", label: t("view.grid") },
+        { key: "work", label: t("view.work") },
       ]}
       active={view}
       onSelect={(next) =>
         replaceParams((p) => {
-          if (next === "grid") p.set("view", "grid");
-          else p.delete("view");
+          if (next === "list") p.delete("view");
+          else p.set("view", next);
         })
       }
     />
@@ -288,7 +324,7 @@ function ApprovalsInner() {
               value={filters.agent}
               options={agentOptions}
             />
-            {view === "list" && (
+            {view !== "work" && (
               <>
                 <FilterChip
                   label={t("filter.tool")}
@@ -318,8 +354,34 @@ function ApprovalsInner() {
         tabs={viewSwitch}
       />
 
-      {view === "grid" ? (
+      {view === "work" ? (
         <ApprovalsGrid agentId={filters.agent} base={BASE} />
+      ) : view === "grid" ? (
+        <ListCard
+          title={t("view.grid")}
+          count={null}
+          loading={rules.isLoading || gridWaits}
+          isError={rules.isError || gridFailed}
+          onRetry={() => {
+            if (rules.isError) void rules.refetch();
+            if (catalog.isError) void catalog.refetch();
+            if (compositions.isError) void compositions.refetch();
+          }}
+          errorMessage={
+            rules.isError ? t("list.failed") : t("toolsGrid.failed")
+          }
+          rowCount={grid ? Math.max(grid.principals.length, 1) : 1}
+          emptyMessage={t("toolsGrid.empty")}
+          skeletonRows={4}
+        >
+          {grid && (
+            <ToolsGridView
+              grid={grid}
+              toolName={toolName}
+              listHref={(agent) => `${BASE}?agent=${encodeURIComponent(agent)}`}
+            />
+          )}
+        </ListCard>
       ) : (
         <ListCard
           title={t("list.title")}
@@ -355,44 +417,14 @@ function ApprovalsInner() {
                 row={row}
                 title={titleOf(row)}
                 where={whereOf(row)}
-                onTakeBack={() => {
-                  setActError(null);
-                  setPending(row);
-                }}
+                onTakeBack={() => takeBack.ask(row)}
               />
             ))}
           </div>
         </ListCard>
       )}
 
-      <ConfirmModal
-        isOpen={pending !== null}
-        onClose={() => {
-          if (revoke.isPending) return;
-          setPending(null);
-          setActError(null);
-        }}
-        onConfirm={() => void confirmTakeBack()}
-        title={t("takeBack.title", {
-          what: pending ? titleOf(pending) : "",
-        })}
-        consequence={
-          pending?.verdict === "auto"
-            ? t("takeBack.auto", { who: humanizePrincipal(pending) })
-            : pending?.verdict === "deny"
-              ? t("takeBack.deny", { who: humanizePrincipal(pending) })
-              : pending
-                ? t("takeBack.propose")
-                : null
-        }
-        confirmLabel={t("takeBack.label")}
-        confirmColor="warning"
-        isPending={revoke.isPending}
-      >
-        {actError && (
-          <p className="text-[12.5px] text-status-down">{actError}</p>
-        )}
-      </ConfirmModal>
+      {takeBack.modal}
     </PageShell>
   );
 }

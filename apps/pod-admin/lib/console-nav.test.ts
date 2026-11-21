@@ -157,7 +157,7 @@ describe("navFor: the client scope of the one table", () => {
     const redirects = consoleRedirects();
     expect(redirects).toContainEqual({
       source: "/governance/agents",
-      destination: "/approvals?view=grid",
+      destination: "/approvals?view=work",
       permanent: false,
     });
     expect(redirects).toContainEqual({
@@ -205,7 +205,7 @@ describe("consoleRedirects", () => {
       ["/templates", null, "/processes", false],
       ["/templates/:id", null, "/processes/:id", false],
       ["/rules/:id", null, "/automations/:id", false],
-      ["/governance/agents", null, "/approvals?view=grid", false],
+      ["/governance/agents", null, "/approvals?view=work", false],
       ["/governance", null, "/approvals", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],

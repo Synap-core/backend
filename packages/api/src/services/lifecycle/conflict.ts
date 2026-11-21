@@ -37,16 +37,24 @@ export function lifecycleConflictError(
 }
 
 /**
- * The typed conflict inside an error a status door threw, or null. Duck-typed
- * on the cause's `code`: the error crosses package builds (src vs dist), where
- * `instanceof` can lie.
+ * The typed conflict in an error a status door threw, or null: the
+ * `LifecycleConflictError` itself (what `writeSessionPatch` / `casWrite`
+ * throw, and what a door builds from its own read), or one carried as the
+ * `cause` (the tRPC CONFLICT above). Duck-typed on `code`: the error crosses
+ * package builds (src vs dist), where `instanceof` can lie. Before the first
+ * shape was read, a session door's stale pause answered `null` and the MCP
+ * door threw "Cannot read properties of null (reading 'status')" (finding
+ * 4940db62).
  */
 export function lifecycleConflictOf(
   err: unknown
 ): LifecycleConflictResult | null {
   if (!(err instanceof Error)) return null;
-  const cause = (err as { cause?: unknown }).cause as
-    { code?: unknown; expectedFrom?: unknown; actual?: unknown } | undefined;
+  type Stale = { code?: unknown; expectedFrom?: unknown; actual?: unknown };
+  const cause =
+    (err as Stale).code === "LIFECYCLE_STALE"
+      ? (err as Stale)
+      : ((err as { cause?: unknown }).cause as Stale | undefined);
   if (!cause || cause.code !== "LIFECYCLE_STALE") return null;
   const expectedStatus =
     typeof cause.expectedFrom === "string" ? cause.expectedFrom : null;

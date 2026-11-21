@@ -13,6 +13,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 const h = vi.hoisted(() => ({
   id: "11111111-1111-4111-8111-111111111111",
   answers: new Map<string, unknown>(),
+  /** Reads that failed (lane W3: a failure is never "none"). */
+  failed: new Set<string>(),
 }));
 
 /** Every `trpc.<path>.useQuery` answers from `h.answers`, settled. */
@@ -23,12 +25,13 @@ vi.mock("../../../../lib/trpc", () => {
         if (key === "useQuery") {
           return () => {
             const data = h.answers.get(path);
+            const failed = h.failed.has(path);
             return {
-              data,
+              data: failed ? undefined : data,
               isLoading: false,
-              isSuccess: data !== undefined,
-              isError: false,
-              error: null,
+              isSuccess: !failed && data !== undefined,
+              isError: failed,
+              error: failed ? { message: "boom", data: null } : null,
               refetch: () => undefined,
             };
           };
@@ -164,5 +167,76 @@ describe("/agents/[id] — the agent's page in the console", () => {
     const page = text(renderToStaticMarkup(<AgentPage />));
     expect(page).toContain("Only its owner or a pod admin can pause it.");
     expect(page).not.toMatch(/\bResume\b/);
+  });
+});
+
+describe("/agents/[id] — What it may do (lane W3)", () => {
+  const TOOL = "66666666-6666-4666-8666-666666666666";
+  const approval = (over: Record<string, unknown>) => ({
+    id: "rule-1",
+    principalKind: "agent",
+    agentUserId: h.id,
+    agentLabel: "Build worker",
+    principalClass: null,
+    scopeKind: "pod",
+    workspaceId: null,
+    targetKind: "capability",
+    targetPattern: "apify_run_actor",
+    targetProfile: null,
+    verdict: "auto",
+    sourceProposalId: null,
+    createdBy: "user:owner",
+    ...over,
+  });
+
+  it("lists its own approvals, each a door to its tool and to Approvals", () => {
+    answer();
+    h.failed.clear();
+    h.answers.set("governanceRules.listAll", {
+      rules: [
+        approval({}),
+        approval({ id: "rule-other", agentUserId: OTHER }),
+        approval({
+          id: "rule-posture",
+          createdBy: "system:settings-mirror:owner",
+        }),
+      ],
+    });
+    h.answers.set("capabilities.catalog", [
+      {
+        id: TOOL,
+        name: "Apify",
+        verbs: [
+          {
+            verbId: "apify_run_actor",
+            skillId: null,
+            label: "apify_run_actor",
+          },
+        ],
+      },
+    ]);
+    h.answers.set("capabilities.compositions", []);
+    const html = renderToStaticMarkup(<AgentPage />);
+    expect(text(html)).toContain("What it may do");
+    expect(html).toContain("data-agent-approvals");
+    expect(html).toContain('data-row-id="rule-1"');
+    expect(html).not.toContain('data-row-id="rule-other"');
+    // Its posture's rows are the posture control, never listed twice.
+    expect(html).not.toContain('data-row-id="rule-posture"');
+    expect(html).toContain(`href="/open/capability/${TOOL}"`);
+    expect(html).toContain(`href="/approvals?agent=${h.id}&amp;focus=rule-1"`);
+    expect(text(html)).toContain("(Apify)");
+    expect(text(html)).not.toContain("apify_run_actor");
+  });
+
+  it("a failed read says so with a retry, never 'no approval'", () => {
+    answer();
+    h.failed.clear();
+    h.failed.add("governanceRules.listAll");
+    const html = renderToStaticMarkup(<AgentPage />);
+    expect(html).toContain("data-approvals-failed");
+    expect(text(html)).toContain("Its approvals couldn’t be read.");
+    expect(text(html)).not.toContain("No approval of its own");
+    h.failed.clear();
   });
 });

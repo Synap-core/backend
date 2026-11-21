@@ -1573,6 +1573,15 @@ export const buildHandlers: McpHandlerMap = {
     for (const field of ["name", "description", "body", "code"] as const) {
       if (typeof args[field] === "string") patch[field] = args[field];
     }
+    if (args.category !== undefined) {
+      const category = str(args.category);
+      if (!category) {
+        return toolError(
+          `Tool '${toolName}': category must be a non-empty string (e.g. 'rule').`
+        );
+      }
+      patch.category = category;
+    }
     if (args.parameters !== undefined) {
       if (
         !args.parameters ||
@@ -1604,7 +1613,7 @@ export const buildHandlers: McpHandlerMap = {
     }
     if (Object.keys(patch).length === 0) {
       return toolError(
-        `Tool '${toolName}': nothing to change — pass body, description, name, code, parameters, timeoutSeconds and/or requiredTools.`
+        `Tool '${toolName}': nothing to change — pass body, description, name, category, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
     // After the empty-patch check: a reason alone is not a change.

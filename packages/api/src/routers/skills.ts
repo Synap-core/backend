@@ -885,7 +885,7 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, RULE_CATEGORY } =
+      const { readRuleView, RULE_CATEGORY } =
         await import("../services/rules/index.js");
       const rows = await ctx.db.query.skills.findMany({
         where: and(
@@ -918,8 +918,12 @@ export const skillsRouter = router({
         rows.map((row: typeof skills.$inferSelect) => row.id)
       );
       const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
-        const rule = readRuleMetadata(row.metadata);
-        return rule
+        // A PROSE rule (category 'rule', no `metadata.rule`) is listed too
+        // (decision D1): its words are its body, and it has no automation, so
+        // the health fields below read empty for it.
+        const view = readRuleView(row);
+        const rule = view?.rule;
+        return view && rule
           ? [
               {
                 id: row.id,
@@ -928,6 +932,8 @@ export const skillsRouter = router({
                 workspaceId: row.workspaceId,
                 createdAt: row.createdAt,
                 rule,
+                /** `loop` (the rule loop wrote it) or `prose` (a guideline skill). */
+                form: view.form,
                 /**
                  * The rule's automations, from the `activates` edge — the
                  * membership store. Prefer this over `rule.behaviours`, which
@@ -1013,8 +1019,13 @@ export const skillsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, RULE_CATEGORY, RULE_METADATA_KEY } =
-        await import("../services/rules/index.js");
+      const {
+        readRuleMetadata,
+        isProseRule,
+        PROSE_RULE_EDIT_MESSAGE,
+        RULE_CATEGORY,
+        RULE_METADATA_KEY,
+      } = await import("../services/rules/index.js");
       const { withRuleExpiry } = await import("../services/rules/expiry.js");
 
       const row = await ctx.db.query.skills.findFirst({
@@ -1039,8 +1050,9 @@ export const skillsRouter = router({
       if (!metadata) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "This skill is categorised as a rule but carries no rule metadata, so there is no review date to move.",
+          message: isProseRule(row)
+            ? PROSE_RULE_EDIT_MESSAGE
+            : "This skill is categorised as a rule but carries no rule metadata, so there is no review date to move.",
         });
       }
 
@@ -1182,7 +1194,7 @@ export const skillsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const { readRuleMetadata, detectRuleDivergence, RULE_CATEGORY } =
+      const { readRuleView, detectRuleDivergence, RULE_CATEGORY } =
         await import("../services/rules/index.js");
       const row = await ctx.db.query.skills.findFirst({
         where: and(
@@ -1196,10 +1208,11 @@ export const skillsRouter = router({
           })
         ),
       });
-      const rule = row ? readRuleMetadata(row.metadata) : null;
-      if (!row || !rule) {
+      const view = row ? readRuleView(row) : null;
+      if (!row || !view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
       }
+      const rule = view.rule;
       // MEMBERSHIP from the `skill --activates--> automation` EDGE — the store.
       // `rule.behaviours[]` is consulted only for the flowHash snapshot, keyed
       // by the ids the edge yields.
@@ -1221,6 +1234,8 @@ export const skillsRouter = router({
           workspaceId: row.workspaceId,
           createdAt: row.createdAt,
           rule: { ...rule, ...(factSkillId ? { factSkillId } : {}) },
+          /** `loop` (the rule loop wrote it) or `prose` (a guideline skill). */
+          form: view.form,
         },
         divergence,
       };
@@ -1742,6 +1757,21 @@ export const skillsRouter = router({
       const writtenKind = skillKindAfterUpdate(input, existingSkill.kind);
       const writtenMode = input.executionMode ?? existingSkill.executionMode;
       assertSkillCodeAllowed(writtenKind, input.code, writtenMode);
+      // `category: "rule"` makes a skill a rule, pushed into every piece of
+      // work in its scope (decision D1). Refused before the gate, so no
+      // proposal is filed for a change that could never apply.
+      const { skillCategoryChangeProblem } =
+        await import("../services/rules/index.js");
+      const categoryProblem = skillCategoryChangeProblem({
+        nextCategory: input.category,
+        currentCategory: existingSkill.category,
+        metadata: existingSkill.metadata,
+        kind: writtenKind,
+        currentKind: existingSkill.kind,
+      });
+      if (categoryProblem) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: categoryProblem });
+      }
       // A box declaration edit is parsed by the same rule as create, and a
       // box skill is never read-only: judged on the bag the UPDATE stores
       // (the patch shallow-merged onto the live bag, below), so a live

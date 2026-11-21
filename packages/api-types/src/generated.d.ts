@@ -22935,6 +22935,24 @@ export interface RuleSeed {
 	/** Hash of the applier-written fields when last written. */
 	hash: string;
 }
+/**
+ * How a rule row is held (decision D1, founder, 20 Nov 2026, proposal
+ * 8d04d49e: a rule is a guideline PUSHED into every piece of work in its
+ * scope; one store, `skills`, `category: "rule"`).
+ *
+ *   - `loop`  — written by the rule loop (`createRuleGoverned`): `metadata.rule`
+ *     carries intent, scope, lineage, and maybe a sentence it compiled into an
+ *     automation, a seed, a reaction.
+ *   - `prose` — a skill marked `category: "rule"` with NO `metadata.rule`
+ *     (`rules/start-here`, `rules/ui-rules`…): its words are its body, its scope
+ *     is the row's own `scope` / `workspaceId`. It has no automation, no
+ *     reaction, no seed and no worker, so the rule-loop readers that compile,
+ *     activate or run rules skip it; the list and read doors show it as a rule.
+ *
+ * Every reader of `category: "rule"` is classified in
+ * `__tripwires__/prose-rule-readers.test.ts`.
+ */
+export type RuleForm = "loop" | "prose";
 export interface DivergedBehaviour {
 	automationId: string;
 	/**
@@ -23722,6 +23740,55 @@ export type InstalledToolWebhook = ({
 	tool: string;
 	toolId: string;
 };
+/**
+ * Outcome of seeding ONE dependency's post-workspace layers (capabilities +
+ * playbooks) — surfaced up through `ResolvedPackageDependency.seedOutcome` so
+ * a caller (CLI/browser) can see "3/4 capabilities seeded; X FAILED: <reason>"
+ * instead of the failure being swallowed into a log line only an operator
+ * with server access could see. Seeding itself stays NON-FATAL — the install
+ * still succeeds — but the outcome is now VISIBLE, never silent.
+ */
+export interface DependencySeedOutcome {
+	slug: string;
+	/** No layer-2 kind declared for this template (`declaresLayerTwo`) — nothing to seed. */
+	status: "failed" | "no-layers" | "seeded";
+	/** Layer keys `applyPackagePostWorkspace` reported (e.g. ["capabilities","playbooks"]). */
+	layers?: string[];
+	/** Failure reason, set only when `status === "failed"`. */
+	error?: string;
+}
+/**
+ * What happened to a single dependency during resolution.
+ *   - `found`          — a matching artifact already existed on the pod.
+ *   - `installed`      — a built-in `workspace` template was materialized now.
+ *   - `composed`       — the dependency is itself an OVERLAY (its template
+ *                        declares `compose`), so it was layered ADDITIVELY onto
+ *                        its base instead of being materialized as its own
+ *                        workspace. `workspaceId` is the BASE's id.
+ *   - `required-absent`— required but not present, and not auto-installable (surfaced).
+ *
+ * (A `compose` base surfaces as `found`/`installed` — it's the base that is
+ * found/installed; the OVERLAY is what composes onto it. The workspace-level
+ * `status:"composed"` in the apply response captures the TOP-LEVEL package's
+ * own overlay outcome; this `composed` action captures a DEPENDENCY's.)
+ */
+export type PackageDependencyAction = "composed" | "found" | "installed" | "required-absent";
+export interface ResolvedPackageDependency {
+	slug: string;
+	kind: PackageDependencyKind;
+	relation: PackageDependencyRelation;
+	/** Resolved workspace id (present for `workspace`-kind deps that resolved). */
+	workspaceId?: string;
+	action: PackageDependencyAction;
+	/** Human context — set for `required-absent` (why it couldn't be satisfied). */
+	message?: string;
+	/**
+	 * Post-workspace layer (capabilities/playbooks) seed result for this
+	 * dependency — set for `installed`/`composed` actions where seeding was
+	 * attempted. Surfaces a failure that used to be swallowed into a log line.
+	 */
+	seedOutcome?: DependencySeedOutcome;
+}
 export interface CapabilityShadow {
 	type: "skill" | "tool";
 	id: string;
@@ -24597,55 +24664,6 @@ export interface WorkspaceTemplateHealth extends TemplateHealth {
 	 * missing a required link. Empty when there are none.
 	 */
 	warnings: string[];
-}
-/**
- * Outcome of seeding ONE dependency's post-workspace layers (capabilities +
- * playbooks) — surfaced up through `ResolvedPackageDependency.seedOutcome` so
- * a caller (CLI/browser) can see "3/4 capabilities seeded; X FAILED: <reason>"
- * instead of the failure being swallowed into a log line only an operator
- * with server access could see. Seeding itself stays NON-FATAL — the install
- * still succeeds — but the outcome is now VISIBLE, never silent.
- */
-export interface DependencySeedOutcome {
-	slug: string;
-	/** No layer-2 kind declared for this template (`declaresLayerTwo`) — nothing to seed. */
-	status: "failed" | "no-layers" | "seeded";
-	/** Layer keys `applyPackagePostWorkspace` reported (e.g. ["capabilities","playbooks"]). */
-	layers?: string[];
-	/** Failure reason, set only when `status === "failed"`. */
-	error?: string;
-}
-/**
- * What happened to a single dependency during resolution.
- *   - `found`          — a matching artifact already existed on the pod.
- *   - `installed`      — a built-in `workspace` template was materialized now.
- *   - `composed`       — the dependency is itself an OVERLAY (its template
- *                        declares `compose`), so it was layered ADDITIVELY onto
- *                        its base instead of being materialized as its own
- *                        workspace. `workspaceId` is the BASE's id.
- *   - `required-absent`— required but not present, and not auto-installable (surfaced).
- *
- * (A `compose` base surfaces as `found`/`installed` — it's the base that is
- * found/installed; the OVERLAY is what composes onto it. The workspace-level
- * `status:"composed"` in the apply response captures the TOP-LEVEL package's
- * own overlay outcome; this `composed` action captures a DEPENDENCY's.)
- */
-export type PackageDependencyAction = "composed" | "found" | "installed" | "required-absent";
-export interface ResolvedPackageDependency {
-	slug: string;
-	kind: PackageDependencyKind;
-	relation: PackageDependencyRelation;
-	/** Resolved workspace id (present for `workspace`-kind deps that resolved). */
-	workspaceId?: string;
-	action: PackageDependencyAction;
-	/** Human context — set for `required-absent` (why it couldn't be satisfied). */
-	message?: string;
-	/**
-	 * Post-workspace layer (capabilities/playbooks) seed result for this
-	 * dependency — set for `installed`/`composed` actions where seeding was
-	 * attempted. Surfaces a failure that used to be swallowed into a log line.
-	 */
-	seedOutcome?: DependencySeedOutcome;
 }
 export type TemplateApplyOutcome = "composed" | "created" | "reconciled" | "unchanged";
 /**
@@ -34174,6 +34192,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: CreateCapabilityResult & {
+				dependencies?: ResolvedPackageDependency[];
 				webhooks: InstalledToolWebhook[];
 			};
 		}>;
@@ -58882,6 +58901,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				rule: {
 					approved: any;
 					createdAt: any;
+					form: RuleForm;
 					id: any;
 					name: any;
 					rule: {

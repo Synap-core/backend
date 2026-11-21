@@ -11,6 +11,7 @@ import { Accordion, AccordionItem } from "@heroui/react";
 import type { EntityFieldPlan } from "@synap-core/types/property-render";
 import { StatusPill } from "../../(admin)/components/status-pill";
 import { fieldRows, type FieldRow } from "./field-rows";
+import { DISCLOSURE_INDICATOR_PROPS } from "./disclosure";
 
 export function FieldList({
   plan,
@@ -30,6 +31,7 @@ export function FieldList({
           <AccordionItem
             key="more"
             aria-label="More fields"
+            {...DISCLOSURE_INDICATOR_PROPS}
             title={
               <span className="text-[12.5px] text-foreground/65">
                 More fields ({more.length})
