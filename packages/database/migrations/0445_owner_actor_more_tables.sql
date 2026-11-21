@@ -1,5 +1,6 @@
 -- 0445 — a person owns what an agent makes, for tools, capabilities, skills,
--- artifacts and workspaces (0442/0443 did automations and playbooks).
+-- artifacts and workspaces (0442/0443 did automations and playbooks; the ones
+-- 0443 left on an agent with no installer move here, by rung d).
 --
 -- 1. The actor column on tools, capabilities and skills (`agent_user_id`,
 --    nullable: a person's own row has no agent). Artifacts already carry the
@@ -36,7 +37,9 @@
 --   UNION ALL SELECT 'capabilities', count(*) FROM capabilities c JOIN users u ON u.id = c.created_by WHERE u.user_type = 'agent'
 --   UNION ALL SELECT 'skills', count(*) FROM skills s JOIN users u ON u.id = s.user_id WHERE u.user_type = 'agent'
 --   UNION ALL SELECT 'artifacts', count(*) FROM artifacts a JOIN users u ON u.id = a.user_id WHERE u.user_type = 'agent'
---   UNION ALL SELECT 'workspaces', count(*) FROM workspaces w JOIN users u ON u.id = w.owner_id WHERE u.user_type = 'agent';
+--   UNION ALL SELECT 'workspaces', count(*) FROM workspaces w JOIN users u ON u.id = w.owner_id WHERE u.user_type = 'agent'
+--   UNION ALL SELECT 'automations', count(*) FROM automations a JOIN users u ON u.id = a.created_by WHERE u.user_type = 'agent'
+--   UNION ALL SELECT 'playbooks', count(*) FROM playbooks p JOIN users u ON u.id = p.created_by WHERE u.user_type = 'agent';
 
 ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
 ALTER TABLE "capabilities" ADD COLUMN IF NOT EXISTS "agent_user_id" text;
@@ -97,6 +100,37 @@ RETURNS text LANGUAGE sql STABLE AS $fn$
       LIMIT 1)
   )
 $fn$;
+
+-- ── automations and playbooks 0443 left on an agent ─────────────────────
+UPDATE "automations" AS a
+   SET "agent_user_id" = a."created_by"
+  FROM "users" AS u
+ WHERE u."id" = a."created_by" AND u."user_type" = 'agent'
+   AND a."agent_user_id" IS NULL;
+
+UPDATE "automations" AS a
+   SET "created_by" = m."person_id"
+  FROM (
+    SELECT a2."id", "_0445_person_of_agent_row"(a2."created_by", 'automation', a2."id"::text) AS "person_id"
+      FROM "automations" AS a2
+      JOIN "users" AS u ON u."id" = a2."created_by" AND u."user_type" = 'agent'
+  ) AS m
+ WHERE a."id" = m."id" AND m."person_id" IS NOT NULL;
+
+UPDATE "playbooks" AS p
+   SET "agent_user_id" = p."created_by"
+  FROM "users" AS u
+ WHERE u."id" = p."created_by" AND u."user_type" = 'agent'
+   AND p."agent_user_id" IS NULL;
+
+UPDATE "playbooks" AS p
+   SET "created_by" = m."person_id"
+  FROM (
+    SELECT p2."id", "_0445_person_of_agent_row"(p2."created_by", 'playbook', p2."id"::text) AS "person_id"
+      FROM "playbooks" AS p2
+      JOIN "users" AS u ON u."id" = p2."created_by" AND u."user_type" = 'agent'
+  ) AS m
+ WHERE p."id" = m."id" AND m."person_id" IS NOT NULL;
 
 -- ── tools ────────────────────────────────────────────────────────────────
 UPDATE "tools" AS t

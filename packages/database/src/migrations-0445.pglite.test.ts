@@ -43,6 +43,9 @@ const S_ORPHAN = "55555555-5555-4555-8555-555555555555";
 const S_AGENT = "66666666-6666-4666-8666-666666666666";
 const A_AGENT = "77777777-7777-4777-8777-777777777777";
 const A_ACTOR_KEPT = "88888888-8888-4888-8888-888888888888";
+const AU_ORPHAN = "aaaaaaaa-0000-4000-8000-000000000001";
+const AU_PERSON = "aaaaaaaa-0000-4000-8000-000000000002";
+const PB_ORPHAN = "bbbbbbbb-0000-4000-8000-000000000001";
 const W_AGENT = "99999999-9999-4999-8999-999999999991";
 const W_POD = "99999999-9999-4999-8999-999999999992";
 const W_ORPHAN = "99999999-9999-4999-8999-999999999993";
@@ -64,6 +67,12 @@ const snapshot = async () => ({
     `SELECT workspace_id, user_id, role FROM workspace_members ORDER BY workspace_id, user_id`
   ),
   secrets: await q(`SELECT id, user_id FROM secrets ORDER BY id`),
+  automations: await q(
+    `SELECT id, created_by, agent_user_id FROM automations ORDER BY id`
+  ),
+  playbooks: await q(
+    `SELECT id, created_by, agent_user_id FROM playbooks ORDER BY id`
+  ),
   accounts: await q(
     `SELECT id, workspace_id FROM messaging_accounts ORDER BY id`
   ),
@@ -89,6 +98,9 @@ beforeAll(async () => {
       "created_at" timestamptz NOT NULL DEFAULT now()
     );
     CREATE TABLE "tools" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL);
+    -- As 0442/0443 left them: an orphan agent's rows still owned by it.
+    CREATE TABLE "automations" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL, "agent_user_id" text);
+    CREATE TABLE "playbooks" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL, "agent_user_id" text);
     CREATE TABLE "capabilities" ("id" uuid PRIMARY KEY, "created_by" text NOT NULL);
     CREATE TABLE "skills" ("id" uuid PRIMARY KEY, "user_id" text NOT NULL);
     CREATE TABLE "artifacts" (
@@ -152,6 +164,11 @@ beforeAll(async () => {
     INSERT INTO capabilities (id, created_by) VALUES
       ('${C_CREATOR}', '${AGENT}'),
       ('${C_LINKED}', '${FOR_OTHER}');
+    INSERT INTO automations (id, created_by, agent_user_id) VALUES
+      ('${AU_ORPHAN}', '${ORPHAN}', '${ORPHAN}'),
+      ('${AU_PERSON}', '${PERSON}', '${AGENT}');
+    INSERT INTO playbooks (id, created_by, agent_user_id) VALUES
+      ('${PB_ORPHAN}', '${ORPHAN}', '${ORPHAN}');
     INSERT INTO skills (id, user_id) VALUES
       ('${S_ORPHAN}', '${ORPHAN}'),
       ('${S_AGENT}', '${AGENT}');
@@ -199,6 +216,18 @@ describe("migration 0445 — the person owns it, the agent is the actor", () => 
       // Nobody is recorded as installing it: the pod owner.
       { id: S_ORPHAN, user_id: ADMIN, agent_user_id: ORPHAN },
       { id: S_AGENT, user_id: PERSON, agent_user_id: AGENT },
+    ]);
+  });
+
+  it("moves the automations and playbooks 0443 left on an agent nobody installed to the pod owner", async () => {
+    const s = await snapshot();
+    expect(s.automations).toEqual([
+      { id: AU_ORPHAN, created_by: ADMIN, agent_user_id: ORPHAN },
+      // Already a person's: untouched.
+      { id: AU_PERSON, created_by: PERSON, agent_user_id: AGENT },
+    ]);
+    expect(s.playbooks).toEqual([
+      { id: PB_ORPHAN, created_by: ADMIN, agent_user_id: ORPHAN },
     ]);
   });
 
