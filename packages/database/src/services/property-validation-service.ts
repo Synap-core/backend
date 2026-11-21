@@ -64,6 +64,25 @@ export interface ModeledField {
   lifecycle?: true;
 }
 
+/**
+ * Unknown keys whose nearest field is the kind's LIFECYCLE (`status` on a
+ * decision, whose field is `decisionStatus`): stored verbatim, the value moves
+ * nothing. Pure, over a validation result's `unmodeled` and `modeled`.
+ */
+export function misnamedLifecycleKeys(
+  unmodeled: readonly UnmodeledProperty[],
+  modeled: readonly ModeledField[]
+): Array<{ key: string; field: string }> {
+  const lifecycle = new Set(
+    modeled.filter((f) => f.lifecycle).map((f) => f.key)
+  );
+  return unmodeled.flatMap((u) =>
+    u.didYouMean && lifecycle.has(u.didYouMean)
+      ? [{ key: u.key, field: u.didYouMean }]
+      : []
+  );
+}
+
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
@@ -178,13 +197,6 @@ export class PropertyValidationService {
        * the parent entity, never the facet.
        */
       enforceRequired?: boolean;
-      /**
-       * Refuse an unknown key whose nearest field is the kind's LIFECYCLE
-       * (`status` on a decision, whose field is `decisionStatus`): stored
-       * verbatim it moves nothing, so the writer is told the right name. For
-       * a new write only; an update re-validates keys an old write stored.
-       */
-      refuseMisnamedLifecycle?: boolean;
     }
   ): Promise<ValidationResult> {
     const errors: string[] = [];
@@ -234,17 +246,6 @@ export class PropertyValidationService {
           effectiveProperties.map((p) => p.slug)
         );
         unmodeled.push(didYouMean ? { key, didYouMean } : { key });
-        if (
-          opts?.refuseMisnamedLifecycle &&
-          didYouMean &&
-          effectiveProperties.some(
-            (p) => p.slug === didYouMean && p.isLifecycle
-          )
-        ) {
-          const message = `Property '${key}' is not a field of this kind: its status field is '${didYouMean}'. Send the value as '${didYouMean}'.`;
-          errors.push(message);
-          issues.push({ key, kind: "invalid", message, didYouMean });
-        }
         logger.debug(
           { profileId, workspaceId, key, didYouMean },
           `Unknown property '${key}' is not modelled by this profile — stored verbatim, not queryable` +
@@ -323,11 +324,7 @@ export class PropertyValidationService {
     properties: Record<string, unknown>,
     profileId: string,
     workspaceId?: string | null,
-    opts?: {
-      title?: string;
-      profileDefaults?: Record<string, unknown>;
-      refuseMisnamedLifecycle?: boolean;
-    }
+    opts?: { title?: string; profileDefaults?: Record<string, unknown> }
   ): Promise<{
     valid: boolean;
     errors: string[];
@@ -346,10 +343,7 @@ export class PropertyValidationService {
       merged,
       profileId,
       workspaceId,
-      {
-        enforceRequired: true,
-        refuseMisnamedLifecycle: opts?.refuseMisnamedLifecycle,
-      }
+      { enforceRequired: true }
     );
     return {
       valid: result.valid,

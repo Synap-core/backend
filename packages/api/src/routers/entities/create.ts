@@ -28,6 +28,8 @@ import {
   getDb,
   ProfileResolutionService,
   PropertyValidationService,
+  PropertyValidationError,
+  misnamedLifecycleKeys,
   validateEntityCreateProperties,
   eventRepository,
   EntityRepository,
@@ -1536,7 +1538,7 @@ export const createProcs = {
       if (isAgentFiling) {
         const validationDb = await getDb();
         const profileResolution = new ProfileResolutionService(validationDb);
-        await validateEntityCreateProperties(
+        const validated = await validateEntityCreateProperties(
           {
             profileResolution,
             propertyValidation: new PropertyValidationService(
@@ -1549,9 +1551,23 @@ export const createProcs = {
             properties: effectiveProperties,
             workspaceId: resolvedEntityWorkspaceId ?? null,
           },
-          ctx.userId,
-          { refuseMisnamedLifecycle: true }
+          ctx.userId
         );
+        // The kind's status under another key would be stored where nothing
+        // reads it: the agent is told the field's name instead.
+        const misnamed = misnamedLifecycleKeys(
+          validated.unmodeled,
+          validated.modeled
+        );
+        if (misnamed.length > 0) {
+          throw new PropertyValidationError(
+            misnamed.map((m) => ({
+              field: m.key,
+              message: `not a field of this kind: its status field is '${m.field}'. Send the value as '${m.field}'.`,
+            })),
+            validated.profile.id
+          );
+        }
       }
 
       // 2. Permission check (may create proposal with correlationId)

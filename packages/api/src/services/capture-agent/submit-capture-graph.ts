@@ -46,6 +46,7 @@ import {
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
+  misnamedLifecycleKeys,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
@@ -167,7 +168,8 @@ export interface CaptureGraphInvalidEntity {
 export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
-  unmodeled: Array<{ key: string; didYouMean?: string }>;
+  /** `movedTo`: the kind's status field, where the pod stored the value. */
+  unmodeled: Array<{ key: string; didYouMean?: string; movedTo?: string }>;
 }
 
 /**
@@ -814,7 +816,6 @@ export async function preflightCaptureGraphOperations(
       });
       continue;
     }
-    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
     // `content` is folded in the way the materializer does (a long body becomes
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
@@ -823,23 +824,34 @@ export async function preflightCaptureGraphOperations(
     // linked body document). A `content` the caller put in `properties` still
     // reports — that one IS a property key.
     const bodyFolded = !!op.content && !("content" in (op.properties ?? {}));
-    if (op.content) propsToCheck.content = op.content;
-    const {
-      valid,
-      errors,
-      unmodeled: reported,
-      modeled,
-    } = await propertyValidation.validateEntityCreateForProposal(
-      propsToCheck,
-      profile.id,
-      workspaceId,
-      {
-        ...(op.title !== undefined ? { title: op.title } : {}),
-        profileDefaults:
-          (profile.defaultValues as Record<string, unknown>) ?? {},
-        refuseMisnamedLifecycle: true,
-      }
-    );
+    const check = () =>
+      propertyValidation.validateEntityCreateForProposal(
+        {
+          ...(op.properties ?? {}),
+          ...(op.content ? { content: op.content } : {}),
+        },
+        profile.id,
+        workspaceId,
+        {
+          ...(op.title !== undefined ? { title: op.title } : {}),
+          profileDefaults:
+            (profile.defaultValues as Record<string, unknown>) ?? {},
+        }
+      );
+    let checked = await check();
+    // The kind's status sent under another key (`status` for `decisionStatus`)
+    // is moved to its field, said back as `movedTo`: stored where it was sent,
+    // it would move nothing. Never over a value the field already has.
+    const moved = misnamedLifecycleKeys(checked.unmodeled, checked.modeled)
+      .filter((m) => op.properties && !(m.field in op.properties))
+      .map(({ key, field }) => {
+        const { [key]: value, ...rest } = op.properties!;
+        op.properties = { ...rest, [field]: value };
+        return { key, didYouMean: field, movedTo: field };
+      });
+    if (moved.length > 0) checked = await check();
+    const { valid, errors, unmodeled: unmodeledNow, modeled } = checked;
+    const reported = [...unmodeledNow, ...moved];
     modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({

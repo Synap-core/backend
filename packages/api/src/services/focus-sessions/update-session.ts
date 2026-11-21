@@ -2205,13 +2205,20 @@ export async function updateFocusSession(
   ) {
     params = { ...params, workspaceId: undefined };
   }
-  // Criteria as they will be stored (an evidence check's key filled in): the
-  // write schema's own output. A malformed list is refused below.
+  // Criteria are a CONTROL: refused whole when malformed, never half-applied,
+  // and carried on as the write schema's output (an evidence check's key
+  // filled in), the form they are stored in.
   if (params.criteria !== undefined) {
     const parsed = sessionCriteriaSchema.safeParse(params.criteria);
-    if (parsed.success) {
-      params = { ...params, criteria: parsed.data as SessionCriterion[] };
+    if (!parsed.success) {
+      return {
+        status: "denied",
+        reason: `Invalid criteria: ${parsed.error.issues
+          .map((i) => `${i.path.join(".") || "criteria"}: ${i.message}`)
+          .join("; ")}`,
+      };
     }
+    params = { ...params, criteria: parsed.data as SessionCriterion[] };
   }
   // The same for CRITERIA: carried to the membrane only when they DIFFER from
   // the stored list. An agent changing its own acceptance criteria is floored
@@ -2363,19 +2370,6 @@ export async function updateFocusSession(
           : {}),
       };
       unblocksAdvice = unblocksAdvisedMessage(missing);
-    }
-  }
-
-  // Criteria are a CONTROL: refused whole when malformed, never half-applied.
-  if (params.criteria !== undefined) {
-    const parsed = sessionCriteriaSchema.safeParse(params.criteria);
-    if (!parsed.success) {
-      return {
-        status: "denied",
-        reason: `Invalid criteria: ${parsed.error.issues
-          .map((i) => `${i.path.join(".") || "criteria"}: ${i.message}`)
-          .join("; ")}`,
-      };
     }
   }
 

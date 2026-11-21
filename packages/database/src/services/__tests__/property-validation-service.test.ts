@@ -3,7 +3,10 @@ import {
   ProfileResolutionService,
   type EffectiveProperty,
 } from "../profile-resolution-service.js";
-import { PropertyValidationService } from "../property-validation-service.js";
+import {
+  PropertyValidationService,
+  misnamedLifecycleKeys,
+} from "../property-validation-service.js";
 import { PropertyValueType } from "../../schema/property-defs.js";
 
 /** Minimal EffectiveProperty for the validator (only the fields it reads). */
@@ -250,37 +253,17 @@ describe("PropertyValidationService tells the writer what the kind models", () =
     ]);
   });
 
-  it("refuses a new write naming the lifecycle under another key, with its name", async () => {
-    const refused = await svc.validateEntityCreateForProposal(
-      { status: "accepted" },
-      "p",
-      "ws-1",
-      { title: "Ship it", refuseMisnamedLifecycle: true }
-    );
-    expect(refused.valid).toBe(false);
-    expect(refused.errors).toEqual([
-      "Property 'status' is not a field of this kind: its status field is 'decisionStatus'. Send the value as 'decisionStatus'.",
-    ]);
-    expect(refused.issues[0]).toMatchObject({
-      key: "status",
-      didYouMean: "decisionStatus",
-    });
-    // Advisory everywhere else (an update re-validates keys stored long ago).
-    const advisory = await svc.validateEntityCreateForProposal(
-      { status: "accepted" },
+  it("names an unknown key whose nearest field is the lifecycle (and no other near miss)", async () => {
+    const res = await svc.validateEntityCreateForProposal(
+      { status: "accepted", sumary: "x" },
       "p",
       "ws-1",
       { title: "Ship it" }
     );
-    expect(advisory.valid).toBe(true);
-    // A near miss of a field that is NOT the lifecycle stays advisory.
-    const summary = await svc.validateEntityCreateForProposal(
-      { sumary: "x" },
-      "p",
-      "ws-1",
-      { title: "Ship it", refuseMisnamedLifecycle: true }
-    );
-    expect(summary.valid).toBe(true);
+    expect(res.valid).toBe(true);
+    expect(misnamedLifecycleKeys(res.unmodeled, res.modeled)).toEqual([
+      { key: "status", field: "decisionStatus" },
+    ]);
   });
 
   it("suggests nothing when the bare key matches two fields", async () => {

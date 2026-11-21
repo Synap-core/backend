@@ -255,7 +255,7 @@ describe("entities.create: properties are validated at write time", () => {
         agentUserId: AGENT,
         source: "ai",
       })
-    ).rejects.toThrow(/its status field is 'verdictStatus'/);
+    ).rejects.toThrow(/status: .*'verdictStatus'/);
     expect(h.gate).not.toHaveBeenCalled();
   });
 });

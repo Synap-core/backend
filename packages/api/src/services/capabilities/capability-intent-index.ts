@@ -125,7 +125,6 @@ export function foldVerbsByIntent(
         verbId: v.id,
         verbLabel: v.label,
         verbKind: v.kind,
-        // Report the GATE'S actual posture — what a run meets
         runPosture: posture,
         enabled: c.enabled === true && v.blocked === undefined,
         backingSkillExecutable: v.backingSkillExecutable === true,

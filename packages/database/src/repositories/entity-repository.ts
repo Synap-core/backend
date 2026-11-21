@@ -25,7 +25,10 @@ import {
   PropertyValidationService,
   PropertyIndexService,
 } from "../services/index.js";
-import type { UnmodeledProperty } from "../services/property-validation-service.js";
+import type {
+  ModeledField,
+  UnmodeledProperty,
+} from "../services/property-validation-service.js";
 import {
   ProfileNotFoundError,
   PropertyValidationError,
@@ -213,6 +216,8 @@ export interface ValidatedEntityCreate {
   roleFacetProperties: Record<string, unknown>;
   /** Advisory: keys the profile does not model, across both passes. */
   unmodeled: UnmodeledProperty[];
+  /** What the kind models (the schema pass's list; empty when it was skipped). */
+  modeled: ModeledField[];
 }
 
 /**
@@ -234,13 +239,12 @@ export async function validateEntityCreateProperties(
     CreateEntityInput,
     "title" | "properties" | "workspaceId" | "skipValidation"
   >,
-  userId: string,
-  /** See `PropertyValidationService.validateProperties`. */
-  opts?: { refuseMisnamedLifecycle?: boolean }
+  userId: string
 ): Promise<ValidatedEntityCreate> {
   let profile = resolvedProfile;
   let data = input;
   const unmodeled: UnmodeledProperty[] = [];
+  let modeled: ModeledField[] = [];
   // 1a. Role profiles are hats, never things (Kind + Facets). A create
   // aimed at a role profile is transparently adapted to the same shape
   // ConvertToFacetOp produces: the entity is created on an underlying KIND,
@@ -392,8 +396,7 @@ export async function validateEntityCreateProperties(
       await services.propertyValidation.validateProperties(
         propsToValidate,
         profileId,
-        data.workspaceId ?? null,
-        opts?.refuseMisnamedLifecycle ? { refuseMisnamedLifecycle: true } : {}
+        data.workspaceId ?? null
       );
 
     if (!validationResult.valid) {
@@ -406,6 +409,7 @@ export async function validateEntityCreateProperties(
 
     validatedProperties = validationResult.normalized;
     unmodeled.push(...validationResult.unmodeled);
+    modeled = validationResult.modeled;
   } else if (!profileId && data.properties) {
     // No profile - just store properties as-is (flexible)
     validatedProperties = data.properties;
@@ -418,6 +422,7 @@ export async function validateEntityCreateProperties(
     roleFacetProfile,
     roleFacetProperties,
     unmodeled,
+    modeled,
   };
 }
 
