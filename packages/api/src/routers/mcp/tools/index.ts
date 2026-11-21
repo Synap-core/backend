@@ -3675,14 +3675,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `orchestrated_by` child→orchestrator, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
+          "The map of YOUR work in one read, read-only: every OPEN session, every session settled in the last `windowHours` (any age for a goal or wave), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `serves` →goal, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`; `fromKind`/`toKind` when an end is not a session), `pullRequests`, `holds`, `goals` (with method), `decisions` (options, answer), `entities` (subjects), `sections` (a FAILED read is `unavailable`, never empty), `window` (`truncated` past 500). Use it, not one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
         inputSchema: {
           type: "object",
           properties: {
             windowHours: {
               type: "number",
               default: WORK_GRAPH_DEFAULT_WINDOW_HOURS,
-              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open ones are always in.`,
+              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open ones always in.`,
             },
             workspaceId: {
               type: "string",
