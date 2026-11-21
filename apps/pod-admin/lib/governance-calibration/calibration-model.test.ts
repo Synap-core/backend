@@ -198,6 +198,46 @@ describe("autoPatterns", () => {
     expect(row).toMatchObject({ phrase: "", severity: "destructive" });
   });
 
+  it("names the kind of the things it wrote, never the generic entity", () => {
+    const write = (id: string, profileSlug: string) =>
+      auto(id, {
+        targetType: "entity",
+        request: {
+          data: {
+            profileSlug,
+            _autoApprove: { matchedPattern: "entity.create" },
+          },
+        },
+      });
+    const [notes] = autoPatterns(
+      [write("1", "note"), write("2", "note")],
+      deps
+    );
+    expect(notes!.phrase).toBe("Created notes");
+    // Several kinds: the verb stands alone (the vocabulary names no mix).
+    const [mixed] = autoPatterns(
+      [write("1", "note"), write("2", "task")],
+      deps
+    );
+    expect(mixed!.phrase).toBe("Created");
+    // Only the generic kind known (no profile on the payload): never the
+    // raw "entities", the verb alone.
+    const [generic] = autoPatterns(
+      [
+        auto("1", { targetType: "entity" }),
+        auto("2", { targetType: "entity" }),
+      ],
+      deps
+    );
+    expect(generic!.phrase).toBe("Created");
+    // A refused or repeated cluster on the generic kind says the verb alone too.
+    const [cluster0] = repeatPatterns(
+      [cluster({ proposalType: "entity.update", targetType: "entity" })],
+      deps
+    );
+    expect(cluster0!.phrase).toBe("Updated");
+  });
+
   it("skips rows the pod did not auto-approve", () => {
     expect(autoPatterns([auto("1", { status: "approved" })], deps)).toEqual([]);
   });

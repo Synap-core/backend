@@ -291,7 +291,12 @@ function CalibrationInner() {
 
       <ListCard
         title={kindLabel(kind)}
-        hint={t(`hint.${kind}`)}
+        // The explanation wraps (a card's hint is a one-line caption).
+        above={
+          <p className="px-1 pb-2 text-[11.5px] leading-relaxed text-foreground/65">
+            {t(`hint.${kind}`)}
+          </p>
+        }
         count={read.isError ? null : (rows[kind]?.length ?? null)}
         loading={rows[kind] === null && !read.isError}
         isError={read.isError}

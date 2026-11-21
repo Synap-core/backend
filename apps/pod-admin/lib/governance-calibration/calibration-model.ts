@@ -27,6 +27,7 @@
 
 import { ADMIN_ACTIONS, isDestructiveAction } from "@synap/governance-policy";
 import type { Locale } from "@synap-core/types/i18n";
+import { proposalSubjectKind } from "../../app/proposal/[id]/proposal-subject-kind";
 import {
   resolveActionLabel,
   resolveObjectNoun,
@@ -133,6 +134,8 @@ export interface ClusterLike {
 export interface AutoProposalLike {
   id: string;
   status: string;
+  /** `entity` for an entity write: its own kind is the payload's profile. */
+  targetType?: string | null;
   agentUserId?: string | null;
   agentActorName?: string | null;
   createdAt?: unknown;
@@ -207,7 +210,8 @@ export function agentNameOf(
 
 /**
  * "Created notes": the past verb and the noun, from the vocabulary; the noun
- * is plural past one.
+ * is plural past one. `objectKind` null = read it from the action; "" = no
+ * single kind (several kinds, or none known): the verb alone.
  */
 export function pastPhrase(
   action: string,
@@ -216,9 +220,12 @@ export function pastPhrase(
   locale?: Locale
 ): string {
   const verb = resolveActionLabel(action, "past", locale);
-  const kind =
-    objectKind ||
+  const named =
+    objectKind ??
     (action.includes(".") ? action.slice(0, action.lastIndexOf(".")) : "");
+  // `entity` is the generic base kind: naming it adds nothing (the
+  // vocabulary's own rule, `buildObjectActionTitle`), so the verb stands alone.
+  const kind = named.toLowerCase() === "entity" ? "" : named;
   const noun = !kind
     ? ""
     : count === 1
@@ -405,6 +412,8 @@ export function autoPatterns(
     {
       first: AutoProposalLike;
       agentUserId: string;
+      /** The kinds of the things it wrote (`proposalSubjectKind`). */
+      kinds: Set<string>;
       pattern: string | null;
       ruleId: string | null;
       count: number;
@@ -418,16 +427,24 @@ export function autoPatterns(
     const ruleId = p.governanceRuleId ?? null;
     const key = `${p.agentUserId}::${ruleId ?? pattern ?? "-"}`;
     const at = toMs(p.createdAt);
+    const kind = p.targetType
+      ? proposalSubjectKind(
+          { targetType: p.targetType },
+          p.request?.data ?? p.data
+        )
+      : null;
     const g = groups.get(key);
     if (g) {
       g.count += 1;
       g.latestAt = Math.max(g.latestAt, at);
+      if (kind) g.kinds.add(kind);
       if (g.samples.length < SAMPLES)
         g.samples.push({ kind: "proposal", id: p.id });
     } else {
       groups.set(key, {
         first: p,
         agentUserId: p.agentUserId,
+        kinds: new Set(kind ? [kind] : []),
         pattern,
         ruleId,
         count: 1,
@@ -451,7 +468,16 @@ export function autoPatterns(
         deps.agentNames
       ),
       agentCount: 1,
-      phrase: exact ? pastPhrase(g.pattern!, null, g.count, deps.locale) : "",
+      // The noun is the kind of the things it wrote, when they share one;
+      // never the action's generic `entity`.
+      phrase: exact
+        ? pastPhrase(
+            g.pattern!,
+            g.kinds.size === 1 ? Array.from(g.kinds)[0]! : "",
+            g.count,
+            deps.locale
+          )
+        : "",
       count: g.count,
       latestAt: g.latestAt,
       severity: g.pattern ? severityOfPattern(g.pattern) : "ordinary",
