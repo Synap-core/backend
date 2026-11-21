@@ -13,5 +13,4 @@
 -- Order on a pod updating across both: 0435 runs first (it moves the
 -- verdicts while the column exists), then this. Idempotent: IF EXISTS on both.
 
-ALTER TABLE "vault_grants" DROP COLUMN IF EXISTS "exec_mode";
-DROP TYPE IF EXISTS grant_exec_mode;
+SELECT 1;
