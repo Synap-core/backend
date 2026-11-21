@@ -100,6 +100,7 @@ import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
 import { onboardingRouter } from "./routers/onboarding.js";
 import { onboardingMilestonesRouter } from "./routers/onboarding-milestones.js";
+import { aiAvailabilityRouter } from "./routers/ai-availability.js";
 // Previously mounted ONLY via the dynamic `registerRouter` registry (so they
 // were served but invisible to codegen). Folded into coreRouter so root.ts is
 // the SINGLE source of truth for the served + typed API surface.
@@ -232,6 +233,9 @@ export const coreRouter = router({
   onboarding: onboardingRouter,
   // Settings › Privacy: share setup milestones with the CP (plan §5, OQ3).
   onboardingMilestones: onboardingMilestonesRouter,
+  // This pod's AI availability for the caller, and the re-check an app
+  // calls after a top-up (W3 C4).
+  aiAvailability: aiAvailabilityRouter,
   diagnose: diagnoseRouter,
   signal: signalRouter,
   signals: signalsRouter,
