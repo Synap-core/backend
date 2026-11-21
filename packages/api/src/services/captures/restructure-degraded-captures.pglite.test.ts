@@ -141,7 +141,8 @@ const q = <T>(sql: string, params?: unknown[]) =>
 type ReplayAnswer = Omit<RerunItemResult, "sourceDocumentIds" | "door">;
 /** What the structurer answers, per replay, in order; default: a proposal. */
 const answers: ReplayAnswer[] = [];
-const replayed: RerunSource[] = [];
+// Only the capture replayer records: its arm of the union.
+const replayed: Array<Extract<RerunSource, { door: "capture" }>> = [];
 const replayers: RerunReplayers = {
   capture: async (source, a) => {
     replayed.push(source);
