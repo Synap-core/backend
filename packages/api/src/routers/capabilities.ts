@@ -74,6 +74,7 @@ import { entitiesRouter } from "./entities.js";
 import { skillsRouter } from "./skills.js";
 import {
   CreateVerbInput,
+  createdVerbMetadata,
   validateCreateVerbInput,
 } from "./mcp/validate-create-verb.js";
 import {
@@ -421,6 +422,7 @@ const capabilityRegistryRouter = router({
           validated.data
         ) as unknown as Record<string, unknown>,
         parameters: input.parameters,
+        metadata: createdVerbMetadata(input),
         executionMode: "sync",
         timeoutSeconds: 30,
       });

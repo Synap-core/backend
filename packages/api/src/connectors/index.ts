@@ -666,9 +666,8 @@ export async function migrateNangoEnvToVault(): Promise<{
 export async function getMessagingConnector(
   provider?: string
 ): Promise<MessagingConnector | null> {
-  const ws = await db.query.workspaces.findFirst({
-    columns: { settings: true, ownerId: true },
-  });
+  // The same workspace (and so the same vault owner) the connector writes use.
+  const ws = await resolvePodConnectorWorkspace();
 
   // Registry lookup: pick the descriptor for the
   // requested type, falling back to the default (Unipile) when the provider

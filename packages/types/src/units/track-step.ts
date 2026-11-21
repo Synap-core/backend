@@ -36,6 +36,7 @@
  * PURE and dependency-free (Relay, browser, CLI and pod import the same answer).
  */
 
+import type { SessionClosedAs } from "../focus-sessions/statuses.js";
 import type { EvaluationVerdict } from "../focus-sessions/verdict.js";
 import { humanizeToken } from "../vocabulary/index.js";
 import { trackStageStepTone } from "../lifecycle/steps.js";
@@ -111,6 +112,8 @@ export interface TrackStepSessionLike {
   id: string;
   status: string;
   trackStage?: string | null;
+  /** How it ended (`sessionClosedAs`); a `not_done` close is not evidence. */
+  closedAs?: SessionClosedAs | null;
   closedAt?: string | null;
   updatedAt?: string | null;
 }
@@ -139,7 +142,12 @@ export function trackStepEvidenceSessionId(
   let closed: TrackStepSessionLike | null = null;
   let open: TrackStepSessionLike | null = null;
   for (const row of rows) {
-    if (row.trackStage !== stepKey || NOT_EVIDENCE.has(row.status)) continue;
+    if (
+      row.trackStage !== stepKey ||
+      NOT_EVIDENCE.has(row.status) ||
+      row.closedAs === "not_done"
+    )
+      continue;
     if (row.status === "closed") {
       if (!closed || ms(row.closedAt) > ms(closed.closedAt)) closed = row;
     } else if (!open || ms(row.updatedAt) > ms(open.updatedAt)) {

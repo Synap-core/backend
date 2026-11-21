@@ -67,7 +67,7 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
   synap_list_automations:
     "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
   synap_list_playbooks:
-    "Lower `limit` and page with `cursor` (use `nextCursor`); detail:'lean' is the default.",
+    "Lower `limit` and page with `cursor` (use `nextCursor`). With `playbookId`, read its stages in pages: `limit` and `offset` (use `nextOffset`).",
   synap_list_widgets:
     "Lower `limit` and page with `offset` (use `nextOffset`).",
   synap_list_sessions: "Lower `limit` and page with `offset`.",
@@ -106,6 +106,27 @@ const FIT_NOTICE_ROOM = 1_200;
 
 const isPlainObject = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * Reply keys that vouch the reply holds something WHOLE (`stagesRevision`:
+ * a playbook's stages, which a whole-list `synap_update_playbook` needs
+ * back). A reply over the budget is cut, so it loses them: written back, a
+ * cut list would delete what it lacked (ticket 8493079e).
+ */
+export const WHOLE_READ_MARKS: readonly string[] = ["stagesRevision"];
+
+function withoutWholeReadMarks(text: string): string {
+  if (!WHOLE_READ_MARKS.some((k) => text.includes(`"${k}"`))) return text;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return text;
+  }
+  if (!isPlainObject(parsed)) return text;
+  for (const k of WHOLE_READ_MARKS) delete parsed[k];
+  return JSON.stringify(parsed);
+}
 
 /**
  * Where a paged reply keeps its offset: top-level `offset` / `nextOffset`
@@ -218,14 +239,15 @@ export function capReply(
   const content = result.content.map((block) => {
     if (block.type !== "text" || block.text.length <= budget) return block;
     changed = true;
-    const fit = fitted(block.text, budget, toolName);
+    const text = withoutWholeReadMarks(block.text);
+    const fit = fitted(text, budget, toolName);
     if (fit !== null) return { ...block, text: fit };
     // The envelope (notice + JSON escaping of the head) must itself fit.
     let head = Math.max(0, budget - 700);
-    let out = envelope(block.text, head, budget, toolName);
+    let out = envelope(text, head, budget, toolName);
     while (out.length > budget && head > 0) {
       head = Math.max(0, head - (out.length - budget) - 16);
-      out = envelope(block.text, head, budget, toolName);
+      out = envelope(text, head, budget, toolName);
     }
     return { ...block, text: out };
   });

@@ -93,7 +93,7 @@ describe("is-agent executor — the run's declared tools ride on the kickoff", (
       ...baseCtx,
       playbookId: "pb-package-ideas",
     } as any);
-    expect(res.status).toBe("running");
+    expect(res.status).toBe("queued");
     expect(resolveRunToolProfile).toHaveBeenCalledWith({
       playbookId: "pb-package-ideas",
       workspaceId: "ws-1",

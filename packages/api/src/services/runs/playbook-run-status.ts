@@ -15,9 +15,8 @@
  * reading is the asked status, so a row's badge and the filter that finds it
  * can never disagree.
  *
- * Not yet honest: `open` (a `forming` session, not started) still reads
- * `running` — the run vocabulary has no "not started yet" word until runs are
- * born queued and claimed (status axis W2). Automation runs and chat turns
+ * A run is born `queued` and the feed says so; a `forming` SESSION (category
+ * `open`, not started) still reads `running`. Automation runs and chat turns
  * have no declaration yet (W2) and keep their own mappers in `./index.ts`.
  */
 import {

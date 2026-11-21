@@ -426,6 +426,8 @@ interface ZodFieldLike {
   def?: {
     type?: string;
     innerType?: ZodFieldLike;
+    /** A pipe (`z.preprocess`): `out` is the schema that validates. */
+    out?: ZodFieldLike;
     entries?: Record<string, unknown>;
   };
 }
@@ -449,14 +451,21 @@ const ZOD_TAG_TO_PARAM_TYPE: Record<string, ParamValueType> = {
   enum: "enum",
 };
 
-/** Unwrap `optional` / `nullable` / `default` to the type that carries meaning. */
+/**
+ * Unwrap `optional` / `nullable` / `default`, and a `z.preprocess` pipe (an
+ * alias-accepting kind), to the type that carries meaning.
+ */
 function unwrapZod(field: ZodFieldLike): ZodFieldLike {
   let current = field;
   // Bounded: these wrappers nest at most a few deep, and a cycle would hang.
   for (let i = 0; i < 8; i++) {
     const tag = current.def?.type;
-    if (tag !== "optional" && tag !== "nullable" && tag !== "default") break;
-    const inner = current.def?.innerType;
+    const inner =
+      tag === "optional" || tag === "nullable" || tag === "default"
+        ? current.def?.innerType
+        : tag === "pipe" && current.def?.out?.def?.type !== "transform"
+          ? current.def?.out
+          : undefined;
     if (!inner) break;
     current = inner;
   }

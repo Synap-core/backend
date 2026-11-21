@@ -21,6 +21,7 @@ import {
   isNotNull,
   inArray,
   desc,
+  ownerAndActor,
 } from "@synap/database";
 import {
   tools,
@@ -214,11 +215,13 @@ export const toolsRouter = router({
           proposalId: perm.proposalId,
         };
 
+      const owner = await ownerAndActor(db, userId, input.agentUserId);
       const [tool] = await db
         .insert(tools)
         .values({
           workspaceId: input.workspaceId ?? null,
-          createdBy: input.agentUserId ?? userId,
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
           name: input.name,
           description: input.description,
           kind: input.kind,

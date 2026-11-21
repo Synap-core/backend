@@ -3,7 +3,10 @@ import {
   ProfileResolutionService,
   type EffectiveProperty,
 } from "../profile-resolution-service.js";
-import { PropertyValidationService } from "../property-validation-service.js";
+import {
+  PropertyValidationService,
+  moveMisnamedLifecycle,
+} from "../property-validation-service.js";
 import { PropertyValueType } from "../../schema/property-defs.js";
 
 /** Minimal EffectiveProperty for the validator (only the fields it reads). */
@@ -248,6 +251,47 @@ describe("PropertyValidationService tells the writer what the kind models", () =
     expect(res.unmodeled).toEqual([
       { key: "status", didYouMean: "decisionStatus" },
     ]);
+  });
+
+  it("validates the kind's status sent under another key as its field, and says it moved", async () => {
+    const res = await svc.validateEntityCreateForProposal(
+      { status: "Accepted_", sumary: "x" },
+      "p",
+      "ws-1",
+      { title: "Ship it" }
+    );
+    expect(res.moved).toEqual([{ key: "status", field: "decisionStatus" }]);
+    // Checked as `decisionStatus`: the near-miss value is caught there.
+    expect(res.issues[0]).toMatchObject({
+      key: "decisionStatus",
+      kind: "not_in_options",
+    });
+    expect(res.unmodeled).toContainEqual({
+      key: "status",
+      didYouMean: "decisionStatus",
+      movedTo: "decisionStatus",
+    });
+    // Another near miss (not the lifecycle) stays advisory, unmoved.
+    expect(res.unmodeled).toContainEqual({
+      key: "sumary",
+      didYouMean: "summary",
+    });
+  });
+
+  it("never moves over a value the status field already has", async () => {
+    const res = await svc.validateEntityCreateForProposal(
+      { status: "accepted", decisionStatus: "proposed" },
+      "p",
+      "ws-1",
+      { title: "Ship it" }
+    );
+    expect(res.moved).toEqual([]);
+    expect(
+      moveMisnamedLifecycle(
+        { status: "accepted", decisionStatus: "proposed" },
+        [{ key: "status", field: "decisionStatus" }]
+      ).properties
+    ).toEqual({ status: "accepted", decisionStatus: "proposed" });
   });
 
   it("suggests nothing when the bare key matches two fields", async () => {

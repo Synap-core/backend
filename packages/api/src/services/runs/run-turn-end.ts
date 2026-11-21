@@ -99,6 +99,7 @@ import { isDeclinedValue } from "@synap-core/types/ask";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
+import { judgeTurnEffect, type TurnEffect } from "./turn-effect.js";
 import { addTurnToCost, ledgerCost, type RunCost } from "./run-cost.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
@@ -163,7 +164,8 @@ export type RunTurnFailureReason = (typeof RUN_TURN_FAILURE_REASONS)[number];
  * Why a run ended `failed` at a turn's end: the IS's reasons, or the pod's own
  * `could_not_continue` (a stopped run it could neither continue nor ask about).
  */
-export type RunFailureReason = RunTurnFailureReason | "could_not_continue";
+export type RunFailureReason =
+  RunTurnFailureReason | "could_not_continue" | "no_effect";
 
 /** Bounds of the first call's inventory (`firstCall.sections|tools|guidance`). */
 export const FIRST_CALL_SECTIONS_MAX = 24;
@@ -337,7 +339,12 @@ export const STAGES_LEFT_STOP_REASON = "stages_left";
 /** What a stop stopped on: a limit the IS reported, or stages left. */
 type StopCause =
   | { kind: "limit"; reason: RunStopReason | undefined }
-  | { kind: "stages_left"; stages: StagesLeft };
+  | { kind: "stages_left"; stages: StagesLeft }
+  | { kind: "no_effect" };
+
+/** A completed turn that did nothing (`turn-effect.ts`), in the room's words. */
+const NO_EFFECT_FACTS =
+  "This run's turn ended without doing anything: no write, no output and no message in its room.";
 
 function isRunStopReason(r: string | undefined): r is RunStopReason {
   return (RUN_STOP_REASONS as readonly string[]).includes(r ?? "");
@@ -416,6 +423,11 @@ export interface RunTurnsState {
   stageAsks?: string[];
   /** What the run spent over ALL its turns (`run-cost.ts`). */
   cost?: RunCost;
+  /**
+   * A completed turn whose reply counts and was not saved yet: judged once
+   * it is (`settleRunTurnPersisted`).
+   */
+  effectPending?: { turnKey: string; askingAgentUserId: string | null };
 }
 
 /**
@@ -458,6 +470,19 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
         }
       : {}),
     ...(cost ? { cost } : {}),
+    ...(s.effectPending &&
+    typeof s.effectPending === "object" &&
+    typeof s.effectPending.turnKey === "string"
+      ? {
+          effectPending: {
+            turnKey: s.effectPending.turnKey,
+            askingAgentUserId:
+              typeof s.effectPending.askingAgentUserId === "string"
+                ? s.effectPending.askingAgentUserId
+                : null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -699,6 +724,8 @@ type RunRow = Pick<
   | "completedAt"
   | "sessionId"
   | "workspaceId"
+  | "startedAt"
+  | "definitionSnapshot"
 > & {
   /** The run's playbook: the continuation resolves its declared tools. */
   playbookId?: string;
@@ -746,7 +773,7 @@ async function endUnattendedRun(p: {
         `its turns ended ${p.stops} times before it reached its last stage, ` +
         `and it continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
         "An automation started it, so nobody was asked to keep it going."
-      : `Stopped at its ${stopLimitWords(p.cause.reason)}: the run stopped before it was finished ${p.stops} times ` +
+      : `Stopped at its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}: the run stopped before it was finished ${p.stops} times ` +
         `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
         "An automation started it, so nobody was asked to keep it going.";
   const ended = await applyRunCapture({
@@ -790,6 +817,8 @@ function failureWords(reason: RunFailureReason): string {
       return "This run's turn could not start within its token budget.";
     case "could_not_continue":
       return "This run stopped before it was finished, and it could neither go on by itself nor ask you to keep it going.";
+    case "no_effect":
+      return NO_EFFECT_FACTS;
   }
 }
 
@@ -816,7 +845,10 @@ async function endFailedRun(p: {
     status: "failed",
     error: why,
     // A budget wall is not a fault: the automation's breakers skip it (F3).
-    stopReason: p.reason === "budget_exceeded" ? "budget" : undefined,
+    // A turn that did nothing IS one: they count it.
+    stopReason: (
+      { budget_exceeded: "budget", no_effect: "no_effect" } as const
+    )[p.reason as "budget_exceeded" | "no_effect"],
   });
   if (!ended) return "no-running-run";
   logger.info(
@@ -1140,9 +1172,11 @@ async function askToKeepGoing(p: {
   const facts = staged
     ? `The run stopped ${stoppedWhere(staged)}, with ${stagesLeftWords(staged)} ` +
       `(it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`
-    : `This run stopped before it was finished ${p.stops} times ` +
-      `(the last turn hit its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}; ` +
-      `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
+    : p.cause.kind === "no_effect"
+      ? NO_EFFECT_FACTS
+      : `This run stopped before it was finished ${p.stops} times ` +
+        `(the last turn hit its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}; ` +
+        `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
   const prompt = staged
     ? `Continue ${staged.at ? `at ${staged.at.name}` : `from ${staged.left[0]!.name}`}?`
     : "Keep it going?";
@@ -1401,6 +1435,161 @@ async function settleStop(p: {
   return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
 }
 
+/** Where the turn before this one ended, else the run's start. */
+function previousTurnEnd(
+  run: RunRow,
+  turns: RunTurnRecord[] | undefined
+): Date | null {
+  const previous = turns && turns.length > 1 ? turns[turns.length - 2] : null;
+  return previous ? new Date(previous.at) : (run.startedAt ?? null);
+}
+
+/**
+ * Write or clear the ledger's pending judgment under the session row lock.
+ * Clearing answers whether THIS caller took it (`expect`): one settles it.
+ */
+async function writeEffectPending(
+  sessionId: string,
+  runId: string,
+  next: RunTurnsState["effectPending"] | null,
+  expect?: string
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ metadata: focusSessions.metadata })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return false;
+    const state = readRunTurns(locked.metadata, runId);
+    if (expect !== undefined && state.effectPending?.turnKey !== expect) {
+      return false;
+    }
+    const { effectPending: _was, ...rest } = state;
+    await tx
+      .update(focusSessions)
+      .set({
+        metadata: mergeSessionMetadata({
+          [RUN_TURNS_META_KEY]: next ? { ...rest, effectPending: next } : rest,
+        }),
+      })
+      .where(eq(focusSessions.id, sessionId));
+    return true;
+  });
+}
+
+/** A completed turn's run, settled on the pod's judgment of what it did. */
+async function settleOnEffect(p: {
+  effect: Exclude<TurnEffect, "pending">;
+  run: RunRow;
+  session: SessionRoom;
+  askingAgentUserId: string | null;
+  unattended: boolean;
+  stops: number;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  if (p.effect === "no_effect") return settleNoEffect(p);
+  const updated = await applyRunCapture({ run: p.run, status: "completed" });
+  if (!updated) return "no-running-run";
+  await closeOneTurnRun(p.session.id);
+  return "completed";
+}
+
+/**
+ * A run turn's reply was saved (`run-turn-persisted.ts`, @synap/jobs): the
+ * turn whose judgment waited on it is judged now, once.
+ */
+export async function settleRunTurnPersisted(p: {
+  sessionId: string;
+  userMessageId: string;
+}): Promise<CompleteRunStatus | "nothing"> {
+  const session = await db.query.focusSessions.findFirst({
+    columns: {
+      id: true,
+      userId: true,
+      channelId: true,
+      metadata: true,
+      origin: true,
+    },
+    where: eq(focusSessions.id, p.sessionId),
+  });
+  if (!session) return "nothing";
+  const [run] = await db
+    .select()
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, p.sessionId),
+        liveRunStatusWhere(playbookRuns.status)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (!run) return "nothing";
+  const state = readRunTurns(session.metadata, run.id);
+  const pending = state.effectPending;
+  if (pending?.turnKey !== p.userMessageId) return "nothing";
+  if (!(await writeEffectPending(session.id, run.id, null, pending.turnKey))) {
+    return "nothing";
+  }
+  const effect = await judgeTurnEffect({
+    runId: run.id,
+    sessionId: session.id,
+    definitionSnapshot: run.definitionSnapshot,
+    turnKey: pending.turnKey,
+    since: previousTurnEnd(run, state.turns),
+  });
+  return settleOnEffect({
+    effect: effect === "pending" ? "no_effect" : effect,
+    run,
+    session,
+    askingAgentUserId: pending.askingAgentUserId,
+    unattended: hasNoPersonInTheLoop(session),
+    stops: state.stops,
+    turnRef: pending.turnKey,
+  });
+}
+
+/**
+ * A completed turn that did nothing never completes the run. With nobody in
+ * the loop it ends `failed` (`no_effect`, counted by its automation's
+ * breakers); a person in the loop is asked whether it keeps going, and the
+ * run waits on them.
+ */
+async function settleNoEffect(p: {
+  run: RunRow;
+  session: SessionRoom;
+  askingAgentUserId: string | null;
+  unattended: boolean;
+  stops: number;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  if (!p.unattended) {
+    const asked = await askToKeepGoing({
+      run: p.run,
+      session: p.session,
+      askingAgentUserId: p.askingAgentUserId,
+      stops: p.stops,
+      turnRef: p.turnRef,
+      cause: { kind: "no_effect" },
+    });
+    if (asked) {
+      await resetAfterAsk(p.session.id, p.run.id);
+      const parked = await applyRunCapture({
+        run: p.run,
+        status: "waiting_on_you",
+      });
+      if (parked) return "waiting_on_you";
+    }
+  }
+  return endFailedRun({
+    run: p.run,
+    session: p.session,
+    reason: "no_effect",
+    turnRef: p.turnRef,
+  });
+}
+
 /** Settle one IS turn's end on the session's live run. */
 export async function settleRunTurnEnd(p: {
   run: RunRow;
@@ -1472,10 +1661,39 @@ export async function settleRunTurnEnd(p: {
         cause: { kind: "stages_left", stages: stand.stages },
       });
     }
-    const updated = await applyRunCapture({ run, status: "completed" });
-    if (!updated) return "no-running-run";
-    await closeOneTurnRun(session.id);
-    return "completed";
+    const judge = () =>
+      judgeTurnEffect({
+        runId: run.id,
+        sessionId: session.id,
+        definitionSnapshot: run.definitionSnapshot,
+        turnKey: body.turnKey,
+        since: previousTurnEnd(run, recorded?.state.turns),
+      });
+    let effect = await judge();
+    if (effect === "pending" && body.turnKey) {
+      // Its reply lands after this report: judged when it does. Judged again
+      // here once marked, in case it landed meanwhile; one of the two takes it.
+      await writeEffectPending(session.id, run.id, {
+        turnKey: body.turnKey,
+        askingAgentUserId: p.askingAgentUserId,
+      });
+      effect = await judge();
+      if (
+        effect === "pending" ||
+        !(await writeEffectPending(session.id, run.id, null, body.turnKey))
+      ) {
+        return "left_running";
+      }
+    }
+    return settleOnEffect({
+      effect: effect === "pending" ? "no_effect" : effect,
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      unattended: recorded?.unattended ?? false,
+      stops: recorded?.state.stops ?? 0,
+      turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    });
   }
 
   // Failing is idempotent like completing (only a LIVE run fails, and the

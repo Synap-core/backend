@@ -137,7 +137,11 @@ import { OpenAPIHono } from "@hono/zod-openapi";
 import type { PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
-import { MAX_AUTO_CONTINUATIONS, RUN_TURNS_META_KEY } from "../run-turn-end.js";
+import {
+  MAX_AUTO_CONTINUATIONS,
+  RUN_TURNS_META_KEY,
+  settleRunTurnPersisted,
+} from "../run-turn-end.js";
 import { pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
@@ -182,6 +186,8 @@ async function seedRun(
     origin?: string;
     expectedOutputs?: unknown[];
     metadata?: (runId: string) => Record<string, unknown>;
+    /** The run's frozen definition (`definition_snapshot`). */
+    snapshot?: Record<string, unknown>;
   } = {}
 ): Promise<{ sessionId: string; runId: string; channelId: string }> {
   const channelId = randomUUID();
@@ -208,8 +214,8 @@ async function seedRun(
   );
   await q(
     `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, definition_snapshot, created_by, started_at)
-     values ($1, $2, $3, 'is-agent', 'running', '{}'::jsonb, '{}'::jsonb, $4, now())`,
-    [runId, playbookId, sessionId, OWNER]
+     values ($1, $2, $3, 'is-agent', 'running', '{}'::jsonb, $5::jsonb, $4, now())`,
+    [runId, playbookId, sessionId, OWNER, JSON.stringify(opts.snapshot ?? {})]
   );
   return { sessionId, runId, channelId };
 }
@@ -282,6 +288,11 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
       schema.notifications,
       schema.notificationPreferences,
       schema.lifecycleTransitionOutbox,
+      // What a turn did (`turn-effect.ts`): its writes and its room posts.
+      schema.events,
+      schema.chatTurns,
+      // Who works each step (0422): a completed turn reads it first.
+      schema.sessionStageRuns,
     ]) {
       await h.client!.exec(pgliteTableDdl(t as unknown as PgTable));
     }
@@ -413,6 +424,119 @@ describe("a run that cannot go on ends failed, and its session closes failed", (
     expect(r.json).toEqual({ status: "failed" });
     expect((await runOf(runId)).status).toBe("failed");
     expect((await sessionOf(sessionId)).status).toBe("failed");
+  });
+
+  it("an unattended turn that wrote nothing ends failed(no_effect), counted by the breakers; one that wrote completes", async () => {
+    const empty = await seedRun({ origin: "automation" });
+    const r = await completeRun(empty.sessionId, {
+      outcome: "completed",
+      turnKey: randomUUID(),
+    });
+    expect(r.json).toEqual({ status: "failed" });
+    const run = await runOf(empty.runId);
+    expect(run.status).toBe("failed");
+    expect(run.stop_reason).toBe("no_effect");
+    expect(run.error).not.toBeNull();
+    expect(h.settled).toEqual([{ playbookRunId: empty.runId }]);
+    expect((await sessionOf(empty.sessionId)).status).toBe("failed");
+
+    const wrote = await seedRun({ origin: "automation" });
+    await q(
+      `insert into proposals (id, session_id, status, proposal_type, target_type, target_id, created_by, agent_user_id, created_at)
+       values ($1, $2, 'auto_approved', 'entity.create', 'entity', $3, $4, $4, now())`,
+      [randomUUID(), wrote.sessionId, randomUUID(), IS_AGENT]
+    );
+    expect(
+      (
+        await completeRun(wrote.sessionId, {
+          outcome: "completed",
+          turnKey: randomUUID(),
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+    expect((await runOf(wrote.runId)).status).toBe("completed");
+  });
+
+  it("an agent's room message is an effect; an attended empty turn asks the person instead of completing", async () => {
+    const posted = await seedRun({ origin: "automation" });
+    await q(
+      `insert into messages (id, channel_id, content, role, author_type, user_id, timestamp)
+       values ($1, $2, 'Here is the summary', 'assistant', 'ai_agent', $3, now())`,
+      [randomUUID(), posted.channelId, IS_AGENT]
+    );
+    expect(
+      (
+        await completeRun(posted.sessionId, {
+          outcome: "completed",
+          turnKey: randomUUID(),
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+
+    const attended = await seedRun();
+    const r = await completeRun(attended.sessionId, {
+      outcome: "completed",
+      agentType: "meta",
+      turnKey: randomUUID(),
+    });
+    expect(r.json).toEqual({ status: "waiting_on_you" });
+    expect((await runOf(attended.runId)).status).toBe("waiting_on_you");
+  });
+
+  it("a playbook that declares outputs: its reply is narration, only its writes count", async () => {
+    const { sessionId, runId, channelId } = await seedRun({
+      origin: "automation",
+      snapshot: { expectedOutputs: [{ kind: "document", label: "Brief" }] },
+    });
+    await q(
+      `insert into messages (id, channel_id, content, role, author_type, user_id, timestamp)
+       values ($1, $2, 'Here is the brief', 'assistant', 'ai_agent', $3, now())`,
+      [randomUUID(), channelId, IS_AGENT]
+    );
+    const r = await completeRun(sessionId, {
+      outcome: "completed",
+      turnKey: randomUUID(),
+    });
+    expect(r.json).toEqual({ status: "failed" });
+    expect((await runOf(runId)).stop_reason).toBe("no_effect");
+  });
+
+  it("the turn's end reported before its reply is saved: judged once the reply lands", async () => {
+    const { sessionId, runId, channelId } = await seedRun({
+      origin: "automation",
+    });
+    const turnKey = randomUUID();
+    await q(
+      `insert into messages (id, channel_id, content, role, author_type, user_id, timestamp)
+       values ($1, $2, 'Run the brief', 'user', 'human', $3, now())`,
+      [turnKey, channelId, OWNER]
+    );
+    await q(
+      `insert into chat_turns (id, channel_id, user_id, request_id, user_message_id, assistant_message_id, status)
+       values ($1, $2, $3, $4, $4, $5, 'running')`,
+      [randomUUID(), channelId, OWNER, turnKey, randomUUID()]
+    );
+    const r = await completeRun(sessionId, { outcome: "completed", turnKey });
+    expect(r.json).toEqual({ status: "left_running" });
+    expect((await runOf(runId)).status).toBe("running");
+
+    await q(
+      `insert into messages (id, channel_id, content, role, author_type, user_id, timestamp)
+       values ($1, $2, 'The brief', 'assistant', 'ai_agent', $3, now())`,
+      [randomUUID(), channelId, IS_AGENT]
+    );
+    await q(
+      `update chat_turns set status = 'completed' where user_message_id = $1`,
+      [turnKey]
+    );
+    expect(
+      await settleRunTurnPersisted({ sessionId, userMessageId: turnKey })
+    ).toBe("completed");
+    expect((await runOf(runId)).status).toBe("completed");
+    // Judged once: a second notice of the same turn does nothing.
+    expect(
+      await settleRunTurnPersisted({ sessionId, userMessageId: turnKey })
+    ).toBe("nothing");
   });
 
   it("refuses a failed outcome without a failure reason, and a stop reason on a failure", async () => {

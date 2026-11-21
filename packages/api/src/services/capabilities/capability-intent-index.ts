@@ -36,19 +36,18 @@ export interface IntentVerbMatch {
   verbLabel: string;
   /** read = pull · write/action = push. */
   verbKind: "read" | "write" | "action";
-  /** Grant state, straight off the registry row — never re-derived here. */
-  granted: boolean;
   /**
-   * The GATE'S ACTUAL POSTURE for this verb — what a run meets, not the verb's
-   * declared exec mode. Named `runPosture`, NOT `effectiveExecMode`: the two are
-   * different axes. `ExecMode` is `"auto" | "propose" | "dry-run"` and comes from
-   * the grant; `RunPosture` is `"auto" | "propose"` and is what
-   * {@link runPosture} returns after short-circuiting on `granted` /
-   * `declaredReadOnly`. Keeping the old name on the new value made the field read
-   * as an exec mode while `dry-run` had silently become inexpressible — an agent
-   * consuming this would take it as a mode it can set.
+   * What an agent's run of this verb meets at the gate ({@link runPosture}):
+   * `auto` runs now, `propose` files a review. Read from the approval row for
+   * everyone; a row naming one agent is seen only by the gate.
    */
   runPosture: "auto" | "propose";
+  /**
+   * The pod has it switched on: the capability row is approved and this verb is
+   * not `blocked: "not_enabled"`. False = a run is refused until the person
+   * enables it, whoever calls.
+   */
+  enabled: boolean;
   /** False when no visible active+approved backing skill can execute the verb. */
   backingSkillExecutable: boolean;
   /** The capability kind this verb came from — `tool` | `builtin-tool` | `source-provider` | `skill` | `teaching-doc` | `command`. Carried so `foldVerbsByIntent` can prefer tool rows in O(1) without re-scanning `caps`. */
@@ -68,7 +67,7 @@ export interface IntentVerbMatch {
  *
  * DEDUPE: same verb ID can appear on multiple capability rows (a tool row +
  * its skill row + a CP container row). We keep ONE entry per verbId globally,
- * preferring the TOOL row (has connection state + granted flag) over skill rows.
+ * preferring the TOOL row (has connection state + tool grant) over skill rows.
  *
  * WHY ONE entry per verbId, not one per (verbId × intent): a verb id IS a
  * skill name, and `skills.intent` is a single column written once by
@@ -91,6 +90,9 @@ export function foldVerbsByIntent(
   const byIntent = new Map<string, IntentVerbMatch[]>();
   // Global dedupe by verbId — keep the best source (tool > skill > other)
   const bestByVerbId = new Map<string, IntentVerbMatch>();
+  // Tie-break between two tool rows of one verb: the one with an active tool
+  // grant. Kept out of the match: a grant decides nothing a caller meets.
+  const grantedVerbIds = new Set<string>();
 
   for (const c of caps) {
     for (const v of c.verbs ?? []) {
@@ -123,9 +125,8 @@ export function foldVerbsByIntent(
         verbId: v.id,
         verbLabel: v.label,
         verbKind: v.kind,
-        granted: v.granted === true,
-        // Report the GATE'S actual posture — what a run meets
         runPosture: posture,
+        enabled: c.enabled === true && v.blocked === undefined,
         backingSkillExecutable: v.backingSkillExecutable === true,
         sourceKind: isToolKind ? "tool" : c.kind,
         capabilityId: c.id,
@@ -133,20 +134,24 @@ export function foldVerbsByIntent(
         ...(c.connection ? { connected: c.connection.connected === true } : {}),
       };
 
+      const granted = isToolKind && v.granted === true;
       if (prior) {
         if (isToolKind && prior.sourceKind !== "tool") {
           // Replace skill/other row with tool row
           bestByVerbId.set(v.id, match);
+          if (granted) grantedVerbIds.add(v.id);
         } else if (isToolKind && prior.sourceKind === "tool") {
           // Both are tool rows — prefer the granted one
-          if (match.granted && !prior.granted) {
+          if (granted && !grantedVerbIds.has(v.id)) {
             bestByVerbId.set(v.id, match);
+            grantedVerbIds.add(v.id);
           }
         }
         // else keep prior (tool row wins, or first-seen for same kind)
         continue;
       }
       bestByVerbId.set(v.id, match);
+      if (granted) grantedVerbIds.add(v.id);
     }
   }
 

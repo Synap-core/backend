@@ -834,6 +834,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "fan_out",
     addedBy: "0424_session_stage_runs_fan_out.sql",
   },
+  // Who holds a run, and its actor (0446): every run insert names them, so
+  // their absence fails every run birth.
+  {
+    table: "playbook_runs",
+    column: "holder",
+    addedBy: "0446_run_holder_and_actor.sql",
+  },
+  {
+    table: "playbook_runs",
+    column: "agent_user_id",
+    addedBy: "0446_run_holder_and_actor.sql",
+  },
   // One live run per object (0427): every session insert names it, so its
   // absence fails every session birth.
   {
@@ -1229,7 +1241,7 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
-  // The actor column (0442): every automation and playbook read names it.
+  // The actor column (0442, 0445): every read of these tables names it.
   {
     table: "automations",
     column: "agent_user_id",
@@ -1239,6 +1251,21 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "agent_user_id",
     addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "tools",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "capabilities",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "skills",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
   },
   // apps.approved_access — the approval in its v2 form (0434, app permissions
   // W2). Missing means every app read and approval write would 42703.

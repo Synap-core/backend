@@ -127,8 +127,10 @@ export const tools = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Nullable = pod-wide (visible to all workspaces). */
     workspaceId: uuid("workspace_id"),
-    /** Owning principal — human user id or agent-user id. */
+    /** Owner: the person (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own. FK in SQL. */
+    agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),
     kind: text("kind").$type<ToolKind>().notNull(),
@@ -189,6 +191,7 @@ export const tools = pgTable(
     workspaceIdIdx: index("idx_tools_workspace_id").on(table.workspaceId),
     kindIdx: index("idx_tools_kind").on(table.kind),
     approvedIdx: index("idx_tools_approved").on(table.approved),
+    agentUserIdIdx: index("idx_tools_agent_user_id").on(table.agentUserId),
     // Pod-wide tools are keyed by their credentialRef: ONE pod-wide tool per
     // distinct credential reference. This partial unique index makes the
     // connection→tool materialization race-safe (concurrent syncToolRows for the

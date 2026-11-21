@@ -86,7 +86,7 @@ describe("is-agent executor — agent selector", () => {
   // agent, and an unnamed kickoff failed the step.
   it("no selector ⇒ dispatches the orchestrator, named explicitly as 'meta'", async () => {
     const res = await new IsAgentExecutor().run(baseCtx as any);
-    expect(res.status).toBe("running");
+    expect(res.status).toBe("queued");
     expect(resolveActiveAgentBySlug).not.toHaveBeenCalled();
     expect(triggerAutoRespond).toHaveBeenCalledTimes(1);
     expect(triggerAutoRespond.mock.calls[0][0]).toMatchObject({
@@ -100,7 +100,7 @@ describe("is-agent executor — agent selector", () => {
       ...baseCtx,
       agentType: " persona:cto ",
     } as any);
-    expect(res.status).toBe("running");
+    expect(res.status).toBe("queued");
     expect(resolveActiveAgentBySlug).toHaveBeenCalledWith("persona:cto");
     expect(triggerAutoRespond.mock.calls[0][0]).toMatchObject({
       agentType: "persona:cto",

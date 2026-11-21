@@ -39,6 +39,10 @@ import {
   OWN_ORGANISE_CLASS_PATTERN,
   isOwnOrganiseWrite,
   isNamedRuleOnlyWrite,
+  CAPABILITY_TARGET_SPECIFICITY,
+  principalSpecificity,
+  scopeSpecificity,
+  verdictStrictness,
   type ChannelCapabilityGrant,
 } from "@synap/governance-policy";
 import {
@@ -324,12 +328,10 @@ interface GovernanceRuleCandidate {
 /**
  * Principal specificity — ONE ranking for rules AND ceilings: a specific
  * agent (2) > every agent of a class, e.g. "for all computers" (1) > any (0).
+ * Its one spelling is `@synap/governance-policy`'s rule ranking (finding
+ * ac28928c), re-exported here for the callers that read it from this module.
  */
-export function principalSpecificity(
-  principalKind: "agent" | "any" | "class"
-): number {
-  return principalKind === "agent" ? 2 : principalKind === "class" ? 1 : 0;
-}
+export { principalSpecificity };
 
 /**
  * The SQL eligibility of a principal for `agentUserId`: `any`, that agent's
@@ -447,13 +449,15 @@ function scoreRuleTarget(
     (capabilityId != null && rule.targetPattern === capabilityId) ||
     (capabilityVerbName != null && rule.targetPattern === capabilityVerbName)
   ) {
-    return 3;
+    return CAPABILITY_TARGET_SPECIFICITY.action;
   }
   // A row naming the TOOL (the capability container the action is a member
   // of, `member_of`) covers each of its actions, one step below a row naming
   // the action itself (decision D3, document b387ca45: "everyone x this tool
   // x pod -> auto" is one row; a row on one action outranks it).
-  return capabilityContainerIds?.includes(rule.targetPattern) ? 2 : undefined;
+  return capabilityContainerIds?.includes(rule.targetPattern)
+    ? CAPABILITY_TARGET_SPECIFICITY.tool
+    : undefined;
 }
 
 /**
@@ -576,10 +580,9 @@ function ruleNamesWrite(
 /** The event key of a tool run, the one write whose ties go to the stricter verdict. */
 const CAPABILITY_RUN_EVENT_KEY = "capability.run";
 
-/** Ask before run, refuse before ask: the stricter verdict wins a tool run's tie. */
-function verdictStrictness(verdict: GovernanceRuleVerdict): number {
-  return verdict === "deny" ? 2 : verdict === "propose" ? 1 : 0;
-}
+// Ask before run, refuse before ask: the stricter verdict wins a tool run's
+// tie. `verdictStrictness` is the shared rule ranking's
+// (`@synap/governance-policy`), the same pod admin's tool page reads.
 
 export interface ResolveGovernanceRuleInput {
   /** Injected Drizzle handle. */
@@ -817,7 +820,7 @@ export async function resolveGovernanceRule(
     // write still decides; a `propose` row still matches and tightens.
     if (namedRuleOnly && rule.verdict === "auto" && !namesWrite) continue;
     const principalScore = principalSpecificity(rule.principalKind);
-    const scopeScore = rule.scopeKind === "workspace" ? 2 : 0;
+    const scopeScore = scopeSpecificity(rule.scopeKind);
     const score = principalScore + scopeScore + targetScore;
     const tie = !!best && score === best.score;
     // A tool run's tie goes to the STRICTER verdict, whatever the age (D2,
@@ -938,7 +941,7 @@ export async function resolveEveryoneCapabilityVerdicts(input: {
         t.capabilityContainerIds ?? null
       );
       if (targetScore === undefined) continue;
-      const score = (rule.scopeKind === "workspace" ? 2 : 0) + targetScore;
+      const score = scopeSpecificity(rule.scopeKind) + targetScore;
       if (
         !best ||
         score > best.score ||

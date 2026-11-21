@@ -565,22 +565,11 @@ export async function applyPackagePostWorkspace(
   // proposals. Idempotent; only for the brand-new workspace this apply owns.
   if (enrollAgentUserId) {
     try {
-      const { db, workspaces, eq } = await import("@synap/database");
-      const [ws] = await db
-        .select({ settings: workspaces.settings })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1);
-      const governanceMode = (
-        ws?.settings as { governanceMode?: string } | undefined
-      )?.governanceMode;
-      const role = governanceMode === "agent-owned" ? "owner" : "editor";
       const { enrollAgentInWorkspace } =
         await import("./enroll-agent-in-workspace.js");
       result.agentMembership = await enrollAgentInWorkspace({
         workspaceId,
         agentUserId: enrollAgentUserId,
-        role,
       });
     } catch (e) {
       result.agentMembership = {

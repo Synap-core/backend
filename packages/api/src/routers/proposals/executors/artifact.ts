@@ -4,6 +4,7 @@ import {
   proposals,
   eq,
   artifacts,
+  ownerOfProposal,
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -72,14 +73,12 @@ export function registerArtifactExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
+      const owner = await ownerOfProposal(db, proposal, userId);
       const [created] = await db
         .insert(artifacts)
         .values({
           workspaceId,
-          // The direct path stamps the ACTING user. Preserve the author the
-          // same way the other create executors do: the agent wrote it, the
-          // human only approved it.
-          userId: proposal.agentUserId ?? userId,
+          userId: owner.ownerId,
           kind: kind as (typeof artifacts.$inferInsert)["kind"],
           refId: (inner.refId as string | null) ?? null,
           cellKey: (inner.cellKey as string | null) ?? null,
@@ -88,7 +87,8 @@ export function registerArtifactExecutors(): void {
           originKind:
             (inner.originKind as (typeof artifacts.$inferInsert)["originKind"]) ??
             "agent",
-          actorId: (inner.actorId as string | null) ?? null,
+          actorId:
+            owner.agentUserId ?? (inner.actorId as string | null) ?? null,
           sessionId: (inner.sessionId as string | null) ?? null,
           state: "working",
           placement:

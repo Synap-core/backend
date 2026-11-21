@@ -3,6 +3,7 @@
   "agentOnly": {},
   "noPersonDoorYet": [
     "agentUsers.remove",
+    "aiAvailability.recheck",
     "aiProviderCredentials.removeForUser",
     "aiProviderCredentials.upsertForUser",
     "apps.updateAccess",

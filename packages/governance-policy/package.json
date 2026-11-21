@@ -18,6 +18,10 @@
     "./grants": {
       "types": "./dist/grants.d.ts",
       "import": "./dist/grants.js"
+    },
+    "./rule-ranking": {
+      "types": "./dist/rule-ranking.d.ts",
+      "import": "./dist/rule-ranking.js"
     }
   },
   "dependencies": {

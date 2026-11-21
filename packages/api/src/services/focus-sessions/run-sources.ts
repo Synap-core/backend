@@ -76,7 +76,10 @@ export async function listRunSources(args: {
       sourceDocumentId: r.sourceDocumentId,
       title: r.row.title,
       kind: r.meta.kind,
-      degraded: r.meta.degraded ?? null,
+      // The read keeps its shape: the marker's sweep fields stay pod-side.
+      degraded: r.meta.degraded
+        ? { reason: r.meta.degraded.reason, at: r.meta.degraded.at }
+        : null,
       restructuredAt: r.meta.restructuredAt ?? null,
       filename: r.meta.filename ?? null,
       url: r.meta.url ?? null,

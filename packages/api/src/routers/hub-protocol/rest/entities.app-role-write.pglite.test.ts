@@ -1629,6 +1629,71 @@ describe("do not contact: the CRM app sets the flag at once; only the person lif
       }
     }
   });
+
+  // Finding 6d7af9b9 (founder, 21 Nov 2026): an app MAY replace the reason or
+  // date of an opt-out in force, but only through the person's approval.
+  // Before, a non-empty new reason or date read as "sets the flag only" and
+  // was APPLIED over the recorded evidence.
+  const REPLACE_EVIDENCE = [
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: "x",
+        doNotContactSince: "1970-01-01",
+      },
+    },
+    { metadata: { doNotContact: true, doNotContactSince: "2020-01-01" } },
+    { metadata: { doNotContactReason: "changed my mind" } },
+  ];
+
+  it("an opt-out in force: the app replacing its reason or date is PROPOSED in both modes, never applied", async () => {
+    for (const id of [DNC_A, DNC_STORED]) {
+      const kept = await evidenceOf(id);
+      expect(kept).toEqual({
+        flag: true,
+        reason: OPT_OUT.doNotContactReason,
+        since: OPT_OUT.doNotContactSince,
+      });
+      for (const key of ["crm", "crmPerson"] as const) {
+        for (const body of REPLACE_EVIDENCE.slice(0, 2)) {
+          const res = await patch(key, id, body);
+          const out = await json(res);
+          expect(res.status, `${key} ${id} ${JSON.stringify(out)}`).toBe(202);
+          expect(out.status).toBe("proposed");
+          expect(await evidenceOf(id)).toEqual(kept);
+        }
+      }
+    }
+    // A reason alone, on the record the app stores: proposed too.
+    const res = await patch("crmPerson", DNC_STORED, REPLACE_EVIDENCE[2]);
+    const out = await json(res);
+    expect(res.status, JSON.stringify(out)).toBe(202);
+    expect(out.status).toBe("proposed");
+    expect((await evidenceOf(DNC_STORED)).reason).toBe(
+      OPT_OUT.doNotContactReason
+    );
+  });
+
+  it("CONTROL: the same reason and date again, or a reason set the first time, still apply at once", async () => {
+    const same = await patch("crm", DNC_A, { metadata: OPT_OUT });
+    const sameBody = await json(same);
+    expect(same.status, JSON.stringify(sameBody)).toBe(200);
+    expect(sameBody.status).not.toBe("proposed");
+
+    // DNC_B was flagged with no reason (person mode, above).
+    expect((await evidenceOf(DNC_B)).reason).toBeUndefined();
+    const first = await patch("crm", DNC_B, {
+      metadata: { doNotContact: true, doNotContactReason: "asked by email" },
+    });
+    const firstBody = await json(first);
+    expect(first.status, JSON.stringify(firstBody)).toBe(200);
+    expect(firstBody.status).not.toBe("proposed");
+    expect(await evidenceOf(DNC_B)).toEqual({
+      flag: true,
+      reason: "asked by email",
+      since: undefined,
+    });
+  });
 });
 
 // ─── Unchanged: keys not limited to spaces, members ─────────────────────────

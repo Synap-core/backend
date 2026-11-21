@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
   failSlug: null as string | null,
   sets: [] as Array<Record<string, unknown>>,
   existingOnReplay: false,
+  /** Slug → the `globalField` the field write reports for it. */
+  globalFieldFor: {} as Record<string, Record<string, unknown>>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -131,7 +133,11 @@ vi.mock("../../../services/profiles/create-and-link-property-def.js", () => ({
   createAndLinkPropertyDef: vi.fn(async (input: Record<string, unknown>) => {
     if (input.slug === h.failSlug) throw new Error("slug conflict");
     h.fields.push(input);
-    return { propertyDef: { id: `def-${String(input.slug)}` } };
+    const globalField = h.globalFieldFor[String(input.slug)];
+    return {
+      propertyDef: { id: `def-${String(input.slug)}` },
+      ...(globalField ? { globalField } : {}),
+    };
   }),
 }));
 
@@ -146,6 +152,7 @@ beforeEach(() => {
   h.failSlug = null;
   h.sets.length = 0;
   h.existingOnReplay = false;
+  h.globalFieldFor = {};
   proposalExecRegistry._reset();
   registerProfileExecutors();
 });
@@ -235,6 +242,37 @@ describe("profile/create — a new kind's fields ride its proposal", () => {
     ).toEqual([
       { slug: "botscore", outcome: "refused", reason: "slug conflict" },
       { slug: "handle", outcome: "created" },
+    ]);
+  });
+
+  it("records on the approved row when a field reused or shadowed a global field (0b5ca266)", async () => {
+    await proposeKind();
+    h.globalFieldFor = {
+      handle: {
+        outcome: "shadowed",
+        id: "global-handle",
+        conflicts: [
+          { field: "valueType", declared: "string", stored: "number" },
+        ],
+      },
+    };
+    await approve();
+    const approvedRow = h.sets.find((v) => v.status === "approved");
+    expect(
+      (approvedRow?.data as { fieldOutcomes?: unknown }).fieldOutcomes
+    ).toEqual([
+      { slug: "botscore", outcome: "created" },
+      {
+        slug: "handle",
+        outcome: "created",
+        globalField: {
+          outcome: "shadowed",
+          id: "global-handle",
+          conflicts: [
+            { field: "valueType", declared: "string", stored: "number" },
+          ],
+        },
+      },
     ]);
   });
 

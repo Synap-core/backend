@@ -105,7 +105,18 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(statusOfInclude?.length ? { statusOfInclude } : {}),
       explain: args.explain === true,
     });
-    return ok(result);
+    // AI availability (W3): what the person must do about AI, so an agent
+    // points them at it instead of retrying, paying or filing a card. A read
+    // that failed says so, never "available".
+    const { readAiAvailabilityFor } =
+      await import("../../../services/ai-availability/read.js");
+    const { aiAvailabilityForAgents } =
+      await import("../../../services/ai-availability/for-agents.js");
+    const aiAvailability = await readAiAvailabilityFor(userId).then(
+      (view) => aiAvailabilityForAgents(view),
+      () => ({ status: "unavailable" as const })
+    );
+    return ok({ ...result, aiAvailability });
   },
   synap_set_workspace_focus: async (
     ctx: McpToolContext

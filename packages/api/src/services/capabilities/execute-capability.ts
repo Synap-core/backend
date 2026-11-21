@@ -638,11 +638,7 @@ export async function executeCapability(input: {
     .from(skills)
     .where(
       and(
-        answeringSkillsWhere(
-          userId,
-          workspaceId,
-          input.automationRun?.agentUserId
-        ),
+        answeringSkillsWhere(userId, workspaceId),
         skillId ? eq(skills.id, skillId) : eq(skills.name, verbId!),
         !skillId && input.toolId ? skillRequiresTool(input.toolId) : undefined
       )

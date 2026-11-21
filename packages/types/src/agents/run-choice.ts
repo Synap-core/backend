@@ -13,9 +13,10 @@
  * (`resolveRunChoiceViaLabel`, `SYNAP_AI_LABEL`); none re-derives them.
  */
 
-import type {
-  RUN_CHOICE_PROVIDER_KEY_LABELS,
-  RUN_CHOICE_VIA_LABELS,
+import {
+  humanizeToken,
+  type RUN_CHOICE_PROVIDER_KEY_LABELS,
+  type RUN_CHOICE_VIA_LABELS,
 } from "../vocabulary/index.js";
 import type { AgentWake, AgentWakeRefusal } from "./wake.js";
 
@@ -115,6 +116,20 @@ export interface RunnerPassedOver {
     | "refused"
     | "not_awake"
     | "missing_tools";
+}
+
+/**
+ * A runner that could not take a run, as the person reads it ("Cloud: Not
+ * awake"); a choice with no name is named by its place in the list.
+ */
+export function passedOverLine(p: {
+  name: string | null;
+  why: string;
+  choice?: number;
+}): string {
+  const who =
+    p.name ?? (p.choice !== undefined ? `Choice ${p.choice + 1}` : "Agent");
+  return `${who}: ${humanizeToken(p.why)}`;
 }
 
 /** One answer the person can pick, in the order the pod offers them. */

@@ -48,6 +48,11 @@ vi.mock("@synap/database", () => ({
   },
   eq: () => ({}),
   inArray: () => ({}),
+  ownerAndActor: async (
+    _db: unknown,
+    ownerId: string,
+    agentUserId?: string | null
+  ) => ({ ownerId, agentUserId: agentUserId ?? null }),
 }));
 
 vi.mock("../../utils/permission-check.js", () => ({
