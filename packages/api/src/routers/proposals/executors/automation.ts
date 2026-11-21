@@ -4,6 +4,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import type { Context } from "../../../context.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
+import { personIsApproving } from "../../../services/capabilities/skill-born-approved.js";
 
 /** Register the automation/* approve executors. */
 export function registerAutomationExecutors(): void {
@@ -21,7 +22,7 @@ export function registerAutomationExecutors(): void {
   //
   registerProposalExecutor({
     key: "automation/create",
-    async execute({ proposal, userId, input, deps }) {
+    async execute({ proposal, userId, input, ctx, deps }) {
       const innerData = ((proposal.data as Record<string, unknown>)?.data ??
         {}) as Record<string, unknown>;
       const name = innerData.name as string | undefined;
@@ -54,13 +55,15 @@ export function registerAutomationExecutors(): void {
         });
       }
 
-      const { materializeApprovedAutomation } =
+      const { materializeAutomationForPrincipal } =
         await import("../../automations.js");
-      await materializeApprovedAutomation({
+      await materializeAutomationForPrincipal({
         database: db,
-        // Pre-0248 proposals have no subject: the agent resolves to its person.
-        ownerId: proposal.subjectUserId ?? automationAuthorId,
+        // Owned by the person it was filed for, never the approver. Pre-0248
+        // proposals have no subject: the agent resolves to its person.
+        createdBy: proposal.subjectUserId ?? automationAuthorId,
         agentUserId: automationAuthorId,
+        personApproved: await personIsApproving(ctx, userId),
         stableId: proposal.targetId,
         definition: {
           workspaceId: proposal.workspaceId ?? undefined,
@@ -74,11 +77,8 @@ export function registerAutomationExecutors(): void {
             nodes: Array<Record<string, unknown>>;
             edges: Array<Record<string, unknown>>;
           },
-          // An approval IS the activation: unstated → `active`; a stated
-          // `draft`/`paused` is kept.
-          status:
-            (innerData.status as
-              "draft" | "active" | "paused" | "error" | undefined) ?? "active",
+          status: innerData.status as
+            "draft" | "active" | "paused" | "error" | undefined,
           metadata: innerData.metadata as Record<string, unknown> | undefined,
           state: innerData.state as Record<string, unknown> | undefined,
           source: "ai" as const,

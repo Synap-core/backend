@@ -19,6 +19,7 @@ import {
   isNull,
   automations,
   automationRuns,
+  setAutomationStatus,
 } from "@synap/database";
 import { getBoss } from "@synap/events";
 import { createLogger } from "@synap-core/core";
@@ -81,15 +82,14 @@ async function healUnscheduledCronAutomations(now: Date): Promise<void> {
       // the normal door — `automations.activate` (routers/automations.ts) sets
       // status back to `active`, clears `errorMessage`, and re-stamps
       // `nextRunAt` from the (fixed) expression.
-      await db
-        .update(automations)
-        .set({
-          status: "error",
+      await setAutomationStatus(db, {
+        from: "active",
+        to: "error",
+        set: {
           errorMessage: expression
             ? `Unparseable cron schedule: "${expression}"${timezone ? ` in time zone "${timezone}"` : ""}. Only 5-field cron (minute hour day-of-month month day-of-week) in an IANA time zone is supported.`
             : "Cron automation has no trigger expression (triggerConfig.expression is missing).",
-          updatedAt: new Date(),
-        })
+        },
         // SAME idempotency guard as the success path below, and for the same
         // reason: we hold a triggerConfig read at the top of this loop. If the
         // user fixed the expression via `automations.activate` inside our await
@@ -97,13 +97,11 @@ async function healUnscheduledCronAutomations(now: Date): Promise<void> {
         // nextRunAt — an unguarded write would stomp the repaired row back to
         // 'error', quoting an expression it no longer has. Re-asserting the
         // preconditions makes this a no-op against a row someone else healed.
-        .where(
-          and(
-            eq(automations.id, automation.id),
-            eq(automations.status, "active"),
-            isNull(automations.nextRunAt)
-          )
-        );
+        where: and(
+          eq(automations.id, automation.id),
+          isNull(automations.nextRunAt)
+        ),
+      });
 
       logger.warn(
         { automationId: automation.id, expression },

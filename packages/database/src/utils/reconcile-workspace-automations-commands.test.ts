@@ -51,17 +51,20 @@ vi.mock("../client-pg.js", () => {
     select: () => ({
       from: () => ({ where: () => ({ limit: async () => inboundSources }) }),
     }),
-    // `.values(v)` is awaited directly by the automations/commands steps AND
-    // chained with `.returning()` by RelationDefRepository — support both: a
-    // thenable that also carries a `.returning()` method.
+    // `.values(v)` is awaited directly by the commands step, chained with
+    // `.returning()` by RelationDefRepository and with
+    // `.onConflictDoNothing().returning()` by `insertAutomation` — support all:
+    // a thenable that also carries those methods.
     insert: () => ({
       values: (v: Record<string, unknown>) => {
         captured.inserts.push(v);
         const rows = [{ id: "new-id", ...v }];
         const p = Promise.resolve(rows) as Promise<unknown[]> & {
           returning: () => Promise<unknown[]>;
+          onConflictDoNothing: () => unknown;
         };
         p.returning = async () => rows;
+        p.onConflictDoNothing = () => p;
         return p;
       },
     }),
@@ -157,6 +160,24 @@ describe("reconcile: automations (version-aware)", () => {
     expect((row.metadata as { seedVersion: string }).seedVersion).toBe(
       seedHashOf(AUTO)
     );
+  });
+
+  it("a seeded cron automation with no declared status is born active with its next slot", async () => {
+    existingAutomation = undefined;
+    captured.inserts = [];
+    const { status: _none, ...undeclared } = AUTO;
+    await runWith({
+      flowAutomations: [
+        {
+          ...undeclared,
+          triggerType: "cron",
+          triggerConfig: { expression: "0 9 * * *" },
+        },
+      ],
+    });
+    const row = captured.inserts[0]!;
+    expect(row.status).toBe("active");
+    expect(row.nextRunAt).toBeInstanceOf(Date);
   });
 
   it("stored hash differs → overwrites flow, merges metadata, bumps version", async () => {

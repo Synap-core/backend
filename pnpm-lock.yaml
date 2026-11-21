@@ -660,6 +660,9 @@ importers:
       '@synap/governance-policy':
         specifier: workspace:*
         version: link:../governance-policy
+      '@synap/shared-utils':
+        specifier: workspace:*
+        version: link:../shared-utils
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage

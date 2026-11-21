@@ -58,6 +58,7 @@ function mockDb(
           return chain;
         },
         returning: () => Promise.resolve([{ id: "auto-1" }]),
+        onConflictDoNothing: () => chain,
         onConflictDoUpdate: () => Promise.resolve(undefined),
       };
       return chain;

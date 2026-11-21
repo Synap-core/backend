@@ -49,6 +49,11 @@ const ROUTER_SRC_PATH = resolve(
   "packages/api/src/routers/automations.ts"
 );
 const CLOCK_SRC_PATH = resolve(BACKEND, "packages/shared-utils/src/cron.ts");
+/** Where every new automation is born: stamps a live cron row's first slot. */
+const INSERT_SRC_PATH = resolve(
+  BACKEND,
+  "packages/database/src/utils/insert-automation.ts"
+);
 
 /** Balanced-brace slice starting at the FIRST `{` at or after `fromIndex`. */
 function balancedBlockFrom(src: string, fromIndex: number): string {
@@ -98,6 +103,7 @@ function triggerConfigWriteKeys(block: string): Set<string> {
 const sentenceSrc = readFileSync(SENTENCE_SRC_PATH, "utf8");
 const schedulerSrc = readFileSync(SCHEDULER_SRC_PATH, "utf8");
 const routerSrc = stripComments(readFileSync(ROUTER_SRC_PATH, "utf8"), "ts");
+const insertSrc = stripComments(readFileSync(INSERT_SRC_PATH, "utf8"), "ts");
 const clockSrc = readFileSync(CLOCK_SRC_PATH, "utf8");
 
 const WRITER_KEYS = triggerConfigWriteKeys(
@@ -135,12 +141,15 @@ describe("TRIPWIRE: cron `triggerConfig` writer satisfies every cron-firing read
     ).toEqual([]);
   });
 
-  it("the router's cron doors (create/update/activate) read it through the clock", () => {
+  it("the cron doors (create through insertAutomation, update, activate) read it through the clock", () => {
     // Every door that stamps nextRunAt calls the clock; none reads the keys itself.
     expect(
       [...routerSrc.matchAll(/\bnextCronRunAtFor\(/g)].length
-    ).toBeGreaterThanOrEqual(3);
-    expect(routerSrc).not.toMatch(/\btriggerConfig\s*\??\.\s*expression\b/);
+    ).toBeGreaterThanOrEqual(2);
+    expect(insertSrc).toMatch(/\bnextCronRunAtFor\(/);
+    for (const src of [routerSrc, insertSrc]) {
+      expect(src).not.toMatch(/\btriggerConfig\s*\??\.\s*expression\b/);
+    }
   });
 
   it("the clock's (router's) keys are what toBackendTrigger's cron branch writes", () => {
