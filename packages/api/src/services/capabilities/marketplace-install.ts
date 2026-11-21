@@ -268,7 +268,13 @@ const FETCH_TIMEOUT_MS = 8000;
 async function fetchFullPackageDefinition(
   source: string,
   slug: string,
-  version?: string | null
+  version: string | null | undefined,
+  /**
+   * The pod's catalog lists this package (a cache row). The CP answers 404,
+   * never 403, for a private package to anyone but its author, so a 404 for
+   * a package the catalog never listed is first of all "not in the catalog".
+   */
+  listed: boolean
 ): Promise<Record<string, unknown>> {
   const url = version
     ? `${source}/api/packages/${encodeURIComponent(slug)}/${encodeURIComponent(version)}`
@@ -291,6 +297,12 @@ async function fetchFullPackageDefinition(
   // then, name the cause and the workaround rather than a generic 500.
   // TODO(identity-seam): authenticate this fetch AS the installing user/author
   // (pod→CP user-scoped auth) so private packages become fetchable server-side.
+  if (res.status === 404 && !listed) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: `Cannot install "${slug}": the catalog has no public package "${slug}" (nothing was provisioned). Check the slug and kind with market.search. If it is your own private package, this pod cannot fetch it yet: install it from the browser.`,
+    });
+  }
   if (res.status === 401 || res.status === 403 || res.status === 404) {
     throw new TRPCError({
       code: res.status === 404 ? "NOT_FOUND" : "FORBIDDEN",
@@ -322,7 +334,7 @@ async function resolveDefinition(
   version?: string | null
 ): Promise<Record<string, unknown>> {
   if (entry.definition) return entry.definition;
-  return fetchFullPackageDefinition(entry.source, entry.slug, version);
+  return fetchFullPackageDefinition(entry.source, entry.slug, version, true);
 }
 
 /**
@@ -346,7 +358,7 @@ async function resolveDefinitionByKey(
       message: `Marketplace entry "${slug}" isn't in the catalog cache and no Control Plane is configured to re-resolve it — search first with market.search.`,
     });
   }
-  return fetchFullPackageDefinition(source, slug, version);
+  return fetchFullPackageDefinition(source, slug, version, false);
 }
 
 /** The renderer-source shape a cell install needs, whether it came from the

@@ -12,11 +12,11 @@
  *   - the whole TOOL: the container id (D3: "everyone × this tool"), or one
  *     of its member tool rows (a row 0435 made from a grant names the tool
  *     row the grant matched, which every action of that row runs under).
- * The gate ranks them (`scoreRuleTarget`, `resolveGovernanceRule`): principal
- * (an agent 2, a class 1, every AI 0) + place (a space 2, the pod 0) + target
- * (an action 3, the tool 2); on a tie the stricter verdict wins (never > asks
- * first > runs on its own). This file only GROUPS the rows that way, so the
- * page says what is stored; it never re-decides a run.
+ * The gate ranks them with ONE ranking, `@synap/governance-policy`'s
+ * `rule-ranking` (principal + place + target; on a tie the stricter verdict
+ * wins), and this file decides every AI's mode with that same function
+ * (`decidingCapabilityRule`, `capabilityRuleRank`): it never ranks rows its
+ * own way (finding ac28928c; tripwire `tool-verdict-from-gate.test.ts`).
  *
  * "EVERYONE" is every AI on the whole pod (`principalKind: any`, scope pod).
  * Every other row on the tool (one agent, a class, a space) is an EXCEPTION.
@@ -28,6 +28,10 @@ import {
   type GovernanceRuleRowLike,
 } from "@synap-core/types/governance-rules";
 import { resolveVerbStepLabel } from "@synap-core/types/vocabulary";
+import {
+  capabilityRuleRank,
+  decidingCapabilityRule,
+} from "@synap/governance-policy/rule-ranking";
 
 /** The fields of an approval row this file reads. */
 export interface ToolRuleRow extends Pick<
@@ -120,23 +124,17 @@ export function isEveryoneRow(
   return row.principalKind === "any" && row.scopeKind === "pod";
 }
 
-/** The gate's tie rule for a tool run: never > asks first > runs on its own. */
-function strictness(verdict: ToolRuleRow["verdict"]): number {
-  return verdict === "deny" ? 2 : verdict === "propose" ? 1 : 0;
-}
-
 /**
- * Of rows at the SAME rank, the one that decides: the stricter verdict, as
- * the gate breaks a tie (`verdictStrictness`, resolve-agent-governance-
- * decision.ts). undefined when there is none.
+ * Of every-AI rows at ONE level (they share a rank), the one that decides:
+ * the gate's own ranking (`decidingCapabilityRule`), so a tie goes to the
+ * stricter verdict exactly as at the gate. undefined when there is none.
  */
-export function decidingRow<R extends Pick<ToolRuleRow, "verdict">>(
-  rows: readonly R[]
-): R | undefined {
-  let best: R | undefined;
-  for (const r of rows)
-    if (!best || strictness(r.verdict) > strictness(best.verdict)) best = r;
-  return best;
+export function decidingRow<
+  R extends Pick<ToolRuleRow, "verdict" | "principalKind" | "scopeKind">,
+>(rows: readonly R[], level: "tool" | "action" = "action"): R | undefined {
+  return decidingCapabilityRule(
+    rows.map((rule) => ({ rule, rank: capabilityRuleRank(rule, level) }))
+  );
 }
 
 export interface LevelRows<R> {
@@ -199,7 +197,7 @@ export interface EveryoneState {
 export function toolEveryoneState(
   approvals: Pick<ToolApprovals<ToolRuleRow>, "tool">
 ): EveryoneState {
-  const row = decidingRow(approvals.tool.everyone);
+  const row = decidingRow(approvals.tool.everyone, "tool");
   return row
     ? {
         value: actionRunModeOf(row.verdict),
@@ -210,22 +208,25 @@ export function toolEveryoneState(
 }
 
 /**
- * One action's everyone mode: a row naming the action outranks the row on
- * the whole tool (3 > 2), which outranks nothing (asks first).
+ * One action's everyone mode: every AI's rows on the action and on the whole
+ * tool, ranked by the gate's ranking (a row naming the action outranks the
+ * tool's; a tie goes to the stricter verdict). No row: asks first.
  */
 export function actionEveryoneState(
   approvals: ToolApprovals<ToolRuleRow>,
   verbId: string
 ): EveryoneState {
-  const own = decidingRow(approvals.actions[verbId]?.everyone ?? []);
-  if (own) {
-    const mode = actionRunModeOf(own.verdict);
-    return { value: mode, mode, from: "action" };
-  }
-  const tool = decidingRow(approvals.tool.everyone);
-  if (tool)
-    return { value: "tool", mode: actionRunModeOf(tool.verdict), from: "tool" };
-  return { value: "ask", mode: "ask", from: "default" };
+  const own = approvals.actions[verbId]?.everyone ?? [];
+  const tool = approvals.tool.everyone;
+  const decides = decidingCapabilityRule([
+    ...own.map((rule) => ({ rule, rank: capabilityRuleRank(rule, "action") })),
+    ...tool.map((rule) => ({ rule, rank: capabilityRuleRank(rule, "tool") })),
+  ]);
+  if (!decides) return { value: "ask", mode: "ask", from: "default" };
+  const mode = actionRunModeOf(decides.verdict);
+  return own.includes(decides)
+    ? { value: mode, mode, from: "action" }
+    : { value: "tool", mode, from: "tool" };
 }
 
 // ─── Changing it: which rows to write and take back ─────────────────────
@@ -240,9 +241,12 @@ export interface EveryoneDraft {
 }
 
 export interface EveryoneChange {
-  /** Written FIRST: while both stand, the stricter one decides (a tie). */
+  /** The row to write, or none. */
   create: EveryoneDraft | null;
-  /** Taken back after. */
+  /**
+   * The rows taken back, in the SAME call and transaction
+   * (`governanceRules.create` `replacesRuleIds`, or `revoke` `moreIds`).
+   */
   revoke: string[];
 }
 
@@ -254,8 +258,8 @@ const VERDICT_OF: Record<ActionRunMode, EveryoneDraft["verdict"]> = {
 
 /**
  * The rows to write and take back so every AI's mode at one level becomes
- * `next`. Written before taken back, so in between the stricter row decides
- * (the gate's tie rule) and a run is never looser than either setting.
+ * `next`. The page sends them as ONE call, which the pod applies in one
+ * transaction, so no reader ever sees both settings or neither.
  *
  *   - "tool" (an action only): no row on the action; it follows the tool.
  *   - "ask" with nothing broader to override (the whole tool, or an action

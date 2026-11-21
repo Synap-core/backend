@@ -59,7 +59,10 @@ import {
   parsePullRequestRef,
   pullRequestKey,
 } from "@synap-core/types";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  resolveSessionTitle,
+  sessionClosedAs,
+} from "@synap-core/types/focus-sessions";
 import {
   isDecidedByAnswer,
   isDeliverableDelivered,
@@ -72,6 +75,7 @@ import {
 } from "@synap-core/types/vocabulary";
 import { DEFAULT_LOCALE, type Locale } from "@synap-core/types/i18n";
 import { sessionKindWhere } from "../focus-sessions/session-kind.js";
+import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
 import { capWords } from "../status/dev-signals.js";
 import { deliveredDigestT } from "./delivered-digest-copy.js";
 
@@ -206,6 +210,7 @@ export interface DeliveredSessionRow {
   goal: string | null;
   status: string;
   closedAt: Date | string | null;
+  closedNotDone: boolean;
   expectedOutputs: unknown;
 }
 
@@ -231,7 +236,10 @@ export function foldDelivered(
       else if (c.kind === "outcome") outcomesMet++;
     }
     const closedAt = s.closedAt ? new Date(s.closedAt).getTime() : NaN;
-    if (s.status === "closed" && closedAt >= t0) {
+    if (
+      sessionClosedAs(s.status, s.closedNotDone) === "done" &&
+      closedAt >= t0
+    ) {
       closed.push({ at: closedAt, title: resolveSessionTitle(s) });
     }
   }
@@ -294,6 +302,7 @@ export async function readDeliveredSince(
         goal: focusSessions.goal,
         status: focusSessions.status,
         closedAt: focusSessions.closedAt,
+        closedNotDone: closedNotDoneRecordedSql(),
         expectedOutputs: focusSessions.expectedOutputs,
       })
       .from(focusSessions)

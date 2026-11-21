@@ -48,6 +48,7 @@ import {
   greenSince,
   headCiSince,
   holdOf,
+  markHolders,
   infraFilesOf,
   isInfraPath,
   isMainRedFix,
@@ -1143,6 +1144,8 @@ if (args[1] === "graphql") {
   die("fake gh: unknown query");
 }
 const method = args[2], path = args[3];
+let perm;
+if ((perm = /collaborators\\/([^/]+)\\/permission$/.exec(path))) say({ permission: (data.permissions || {})[perm[1]] || "read" });
 if (method === "POST" && path.endsWith("/check-runs")) say({ id: 1 });
 if (method === "POST" && /issues\\/\\d+\\/comments$/.test(path)) say({ id: 1 });
 let m;
@@ -2116,6 +2119,128 @@ describe(
     });
   }
 );
+
+describe("merge-bot: a /hold from a member whose org membership is private (finding 7bab9b9c)", () => {
+  // The API reads such a member as CONTRIBUTOR to a token outside the org.
+  const hidden = (body: string, at: string, login = "Antoinesrvt") =>
+    holdComment(body, at, "CONTRIBUTOR", login);
+  const lookups = (perms: Record<string, string | Error>) => {
+    const asked: string[] = [];
+    return {
+      asked,
+      gh: {
+        rest: (path: string) => {
+          const login = /collaborators\/([^/]+)\/permission$/.exec(path)![1];
+          asked.push(login);
+          const p = perms[login];
+          if (p instanceof Error) throw p;
+          return { permission: p ?? "none" };
+        },
+      },
+    };
+  };
+  const withNodes = (...nodes: Pr[]) => ({ comments: { nodes } });
+  it("counts once the author's write permission is read, and not before", () => {
+    const c = hidden("/hold", "2026-11-20T15:54:41Z");
+    expect(holdOf(withNodes(c))).toBeNull();
+    const prs = [withNodes(c)];
+    const { gh, asked } = lookups({ Antoinesrvt: "admin" });
+    markHolders(gh, BACKEND, prs, "t");
+    expect(asked).toEqual(["Antoinesrvt"]);
+    expect(holdOf(prs[0])).toMatchObject({ by: "Antoinesrvt" });
+  });
+  it("write and admin count; read and none do not; one lookup per login", () => {
+    const prs = [
+      withNodes(
+        hidden("/hold", "2026-11-20T15:00:00Z", "w"),
+        hidden("/hold", "2026-11-20T15:01:00Z", "w"),
+        hidden("/hold", "2026-11-20T15:02:00Z", "r"),
+        hidden("/hold", "2026-11-20T15:03:00Z", "n")
+      ),
+    ];
+    const { gh, asked } = lookups({ w: "write", r: "read", n: "none" });
+    markHolders(gh, BACKEND, prs, "t");
+    expect(asked).toEqual(["w", "r", "n"]);
+    expect(prs[0].comments.nodes.map((c: Pr) => c.canHold)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(holdOf(withNodes(prs[0].comments.nodes[2]))).toBeNull();
+  });
+  it("looks up only hold commands the association does not already vouch for", () => {
+    const { gh, asked } = lookups({});
+    markHolders(
+      gh,
+      BACKEND,
+      [
+        withNodes(
+          hidden("nice work", "2026-11-20T15:00:00Z", "chatty"),
+          holdComment("/hold", "2026-11-20T15:01:00Z", "MEMBER", "vouched")
+        ),
+      ],
+      "t"
+    );
+    expect(asked).toEqual([]);
+  });
+  it("a failed lookup honours the hold", () => {
+    const prs = [withNodes(hidden("/hold", "2026-11-20T15:54:41Z"))];
+    const lines: string[] = [];
+    markHolders(
+      lookups({ Antoinesrvt: new Error("HTTP 502") }).gh,
+      BACKEND,
+      prs,
+      "t",
+      (l: string) => lines.push(l)
+    );
+    expect(holdOf(prs[0])).toMatchObject({ by: "Antoinesrvt" });
+    expect(lines.join("\n")).toContain(
+      "could not read Antoinesrvt's permission"
+    );
+  });
+  it("an /unhold from such a member releases it", () => {
+    const prs = [
+      withNodes(
+        hidden("/hold", "2026-11-20T15:54:41Z"),
+        hidden("/unhold", "2026-11-20T16:21:29Z")
+      ),
+    ];
+    markHolders(lookups({ Antoinesrvt: "write" }).gh, BACKEND, prs, "t");
+    expect(holdOf(prs[0])).toBeNull();
+  });
+  it("end to end: #1205's hold takes it out of the queue; a non-writer's does not", async () => {
+    const pr1205 = (login: string) =>
+      queuedHeld({
+        number: 1205,
+        id: "PR_1205",
+        headRefOid: sha("9"),
+        comments: {
+          nodes: [
+            hidden(
+              "/hold\nHolding before landing",
+              "2026-11-20T15:54:41Z",
+              login
+            ),
+          ],
+        },
+      });
+    const run = (login: string) =>
+      bot({
+        prs: [pr1205(login)],
+        checks: { [sha("9")]: greenOn(sha("9")) },
+        permissions: { Antoinesrvt: "admin", stranger: "read" },
+      });
+    const held = await run("Antoinesrvt");
+    expect(held.r).toMatchObject({ dequeued: [1205], enqueued: [] });
+    expect(mutations(held.calls, "dequeuePullRequest")).toHaveLength(1);
+    const perm = held.calls.find((c) => /permission$/.test(c.args[3]));
+    expect(perm?.token).toBe("bot-token");
+    const other = await run("stranger");
+    expect(other.r.dequeued).toEqual([]);
+    expect(mutations(other.calls, "dequeuePullRequest")).toEqual([]);
+  });
+});
 
 describe("merge-bot: what it must never do", () => {
   const HERE = dirname(fileURLToPath(import.meta.url));

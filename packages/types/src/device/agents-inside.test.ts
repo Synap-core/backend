@@ -251,4 +251,11 @@ describe("the pod's feature mark (a CLI reads it before it mints)", () => {
     expect(AGENT_SEATS_FEATURE).toBe("agent-seats");
     expect(POD_FEATURES).toContain("agent-seats");
   });
+
+  it("serves the console page marks, so an app links only to pages the pod has", () => {
+    expect(POD_FEATURES).toEqual(
+      expect.arrayContaining(["approvals-page", "approvals-limits-calibration"])
+    );
+    expect(new Set(POD_FEATURES).size).toBe(POD_FEATURES.length);
+  });
 });
