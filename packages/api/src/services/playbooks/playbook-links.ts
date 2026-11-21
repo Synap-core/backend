@@ -181,7 +181,7 @@ export async function findPlaybookLinkCycle(self: {
   const grants = await spaceGrantsOf(
     db,
     "playbook",
-    nodes.map((n) => n.id)
+    nodes.flatMap((n) => (n.id === SELF ? [] : [n.id]))
   );
   const resolve = (ref: string, from: PlaybookNode) =>
     pick(

@@ -8,6 +8,7 @@ import {
   eq,
   and,
   or,
+  isNull,
   sql,
   sql as drizzleSql,
   inArray,
@@ -210,25 +211,30 @@ export interface AccessibleProfileFilters {
  *  - system rows, and the person's own user rows;
  *  - in a workspace lens: rows homed there, and shared rows granted to it
  *    (`space_access`);
- *  - with no lens: the same for every workspace the person can see; with no
- *    person either (a system caller), every shared row;
+ *  - with no lens: the same for every workspace the person can see, plus
+ *    shared rows with no home; with no person either (a system caller), every
+ *    shared row;
  *  - a POD-WIDE kind (`entityScope = 'pod'`, profileKind kind): its entities
- *    have no space, so the kind resolves in every lens, from every space the
- *    person can see (any space when no person is known). Its `scope` is not
- *    changed to `system`: system rows are the catalog's, owned by reconcilers.
+ *    have no space, so the kind resolves in every lens; with no lens, from
+ *    every space the person can see (any space when no person is known). Its
+ *    `scope` is not changed to `system`: system rows are the catalog's, owned
+ *    by reconcilers.
  */
 export function kindVisibleWhere(lens: {
   workspaceId?: string | null;
   userId?: string;
 }): SQL {
   const { workspaceId, userId } = lens;
-  const seen = userId
-    ? unionAll(
-        memberWorkspaceIdsQuery(userId),
-        ownedWorkspaceIdsQuery(userId),
-        podVisibleWorkspaceIdsQuery(userId)
-      )
-    : undefined;
+  // The person's spaces matter only with no lens: inside a lens the lens is
+  // the space (the caller has already been admitted to it).
+  const seen =
+    userId && !workspaceId
+      ? unionAll(
+          memberWorkspaceIdsQuery(userId),
+          ownedWorkspaceIdsQuery(userId),
+          podVisibleWorkspaceIdsQuery(userId)
+        )
+      : undefined;
   // Plain names: a relational query re-aliases every column of the outer table.
   const grantedIn = (spaces: string | NonNullable<typeof seen>) =>
     sql`exists (select 1 from space_access sa where sa.object_type = 'profile' and sa.object_id = ${profiles.id} and ${
@@ -263,7 +269,10 @@ export function kindVisibleWhere(lens: {
   } else if (seen) {
     branches.push(
       and(homed, inArray(profiles.workspaceId, seen)),
-      and(eq(profiles.scope, ProfileScope.SHARED), grantedIn(seen))
+      and(
+        eq(profiles.scope, ProfileScope.SHARED),
+        or(isNull(profiles.workspaceId), grantedIn(seen))
+      )
     );
   } else {
     branches.push(eq(profiles.scope, ProfileScope.SHARED));
@@ -477,17 +486,21 @@ export class ProfileRepository {
     workspaceId: string,
     userId?: string
   ): Promise<Profile | null> {
-    const rows = await this.db.query.profiles.findMany({
-      where: and(
-        eq(profiles.slug, slug),
-        eq(profiles.isActive, true),
-        slugResolvableWhere(),
-        kindVisibleWhere({ workspaceId, userId })
-      ),
-    });
+    const rows = await this.db
+      .select({ p: profiles })
+      .from(profiles)
+      .where(
+        and(
+          eq(profiles.slug, slug),
+          eq(profiles.isActive, true),
+          slugResolvableWhere(),
+          kindVisibleWhere({ workspaceId, userId })
+        )
+      );
     if (rows.length === 0) return null;
-    rows.sort(compareForSlug("workspace", workspaceId));
-    return rows[0];
+    const byPrecedence = compareForSlug("workspace", workspaceId);
+    rows.sort((a, b) => byPrecedence(a.p, b.p));
+    return rows[0].p;
   }
 
   /**

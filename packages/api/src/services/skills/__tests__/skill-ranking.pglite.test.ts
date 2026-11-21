@@ -48,6 +48,7 @@ import {
   podMembers,
   users,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { searchInstructionSkills } from "../search.js";
 import { rankByTerms } from "../../../utils/term-match.js";
@@ -150,6 +151,7 @@ beforeAll(async () => {
     podMembers,
     users,
     projectMembers,
+    spaceAccess,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }

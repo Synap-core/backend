@@ -176,6 +176,7 @@ beforeAll(async () => {
       s.podMembers!,
       s.users!,
       s.projectMembers!,
+      s.spaceAccess!,
       s.governanceRules!,
       s.cpCatalogCache!,
     ])
