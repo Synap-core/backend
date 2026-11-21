@@ -75,6 +75,7 @@ import { OPEN_SESSION_STATUSES } from "../focus-sessions/session-statuses.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import type { HeldSend } from "../channels/held-sends.js";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
+import { readPodOwnerAiAvailability } from "../ai-availability/read.js";
 import { isUuid } from "@synap-core/types/property-render";
 import {
   readRequirementSources,
@@ -572,6 +573,19 @@ export async function readWaitingOnSourcesFor<K>(
     }),
   ]);
 
+  // An `ai:` hold's wait kind is whose move AI is NOW (the pod owner's view:
+  // a payer's state, or the AI service's): read once, only when one waits.
+  const aiKind = holds.some((h) => {
+    const until = h.hold.until;
+    return (
+      until != null &&
+      "moves" in until &&
+      parseHoldDevRef(until.moves)?.kind === "ai"
+    );
+  })
+    ? ((await readPodOwnerAiAvailability()).availability?.kind ?? null)
+    : null;
+
   const holdOf = new Map(holds.map((h) => [holdKey(h), h]));
   const out = new Map<K, WaitingOnSource[]>();
   asked.forEach(([key, q], i) => {
@@ -651,11 +665,14 @@ export async function readWaitingOnSourcesFor<K>(
         held.hold.until && "moves" in held.hold.until
           ? held.hold.until.moves
           : null;
-      // The dev fact it waits on (pr / main / job) names its wait kind.
+      // The dev fact it waits on (pr / main / job / ai) names its wait kind;
+      // for AI, with whose move it is now.
+      const devRef = moves ? (parseHoldDevRef(moves)?.kind ?? null) : null;
       const source: WaitingOnSource = {
         kind: "hold",
         on: held.hold.on,
-        devRef: moves ? (parseHoldDevRef(moves)?.kind ?? null) : null,
+        devRef,
+        ...(devRef === "ai" ? { aiKind } : {}),
       };
       sources.push(
         h.subjectType === "focus_session" && !readable.has(h.subjectId)

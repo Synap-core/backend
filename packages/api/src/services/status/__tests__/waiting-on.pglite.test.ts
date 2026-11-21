@@ -723,4 +723,11 @@ describe("a hold on a dev fact names that fact", () => {
       waitKind: "devbox_job",
     });
   });
+
+  it("AI: named in words, never the raw `ai:` ref", () => {
+    expect(held("ai:available", null)).toEqual({
+      kind: "thing",
+      label: "AI availability",
+    });
+  });
 });
