@@ -157,7 +157,6 @@ vi.mock("../../messaging/post-message.js", async (importOriginal) => ({
 }));
 
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
-import { db as pgDb, listHolds } from "@synap/database";
 import { updateFocusSession } from "../update-session.js";
 import { loadSessionNudges } from "../session-nudges.js";
 
@@ -265,13 +264,6 @@ const sessionOf = async (id: string) =>
       [id]
     )
   ).rows[0]!;
-
-const holdOf = async (id: string) =>
-  (
-    await listHolds(pgDb as never, {
-      subjects: [{ subjectType: "focus_session", subjectId: id }],
-    })
-  )[0]?.hold;
 
 /** The agent moves the step, as `synap_update_session currentStage` does. */
 const agentMoves = (sessionId: string, from: string, to: string) =>
