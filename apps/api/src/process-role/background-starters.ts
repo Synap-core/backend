@@ -668,6 +668,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/mail-feed-cron.js");
         const { registerCalBackfillRunner } =
           await import("@synap/jobs/workers/cal-backfill-cron.js");
+        const { registerDegradedCaptureSweepRunner } =
+          await import("@synap/jobs/workers/degraded-capture-sweep.js");
         const {
           registerFirefliesIngestRunner,
           registerFirefliesBackfillRunner,
@@ -818,6 +820,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerAgentWaker((req) => api.triggerAutoRespond(req));
         registerMailFeedRunner(() => api.runMailFeed());
         registerCalBackfillRunner(() => api.runCalBackfill());
+        // Captures saved without AI, structured once it answers again.
+        registerDegradedCaptureSweepRunner(() => api.sweepDegradedCaptures());
         // Fireflies: webhook-triggered ingest + the backfill safety net both
         // delegate to api-side runners (executeCapability + recordInboundMessage).
         registerFirefliesIngestRunner((input) => api.runFirefliesIngest(input));
