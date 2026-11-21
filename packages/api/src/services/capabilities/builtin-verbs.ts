@@ -4628,6 +4628,69 @@ const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   );
 };
 
+// ── Read a public JSON API ("http.get_json") ───────────────────────────────────
+//
+// Keyless public data (agent report 25a60263; founder answer 12, 21 Nov 2026):
+// a GET to a host on the pod's allow-list, through the guarded https fetch,
+// parsed JSON back (`http-get-json.ts`). Read-only (READ_ONLY_BUILTIN_VERBS):
+// it mutates nothing in the pod, and the host list bounds where it may reach.
+// `http.allow_host` is the ONE door onto that list: declared `proposeOnly`
+// (no rule runs it for an agent: an agent's ask is a proposal the person
+// approves) and, run directly, only by a pod admin.
+
+const httpGetJsonParams = z.object({
+  /** The https URL to GET. Its host must be on the pod's allow-list. */
+  url: z.string().trim().min(1).max(4096),
+  /** Query parameters, added to the URL. */
+  query: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .optional(),
+  /** Accept and Accept-Language only. */
+  headers: z.record(z.string(), z.string().max(500)).optional(),
+});
+
+const httpGetJsonHandler: BuiltinVerbHandler = async (params) => {
+  const input = httpGetJsonParams.parse(params);
+  const { httpGetJson } = await import("./http-get-json.js");
+  return httpGetJson(input);
+};
+
+const httpAllowHostParams = z.object({
+  /** The host to allow, e.g. "recherche-entreprises.api.gouv.fr". */
+  host: z.string().trim().min(1).max(253),
+  /** Why it is needed: shown on the proposal the person reviews. */
+  reason: z.string().trim().max(1000).optional(),
+});
+
+const httpAllowHostHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = httpAllowHostParams.parse(params);
+  const { allowHost, normalizeHost } = await import("./http-get-json.js");
+  // The gate proposes every agent run of this verb (`proposeOnly`); an
+  // approved proposal re-runs it as the person who approved it. An agent
+  // reaching here directly is refused, whatever let it through.
+  if (ctx.agentUserId) {
+    throw new VerbRefusal(
+      "An agent cannot add a host itself: http.allow_host files a proposal the person approves.",
+      "permission"
+    );
+  }
+  const { isPodAdmin } = await import("../../utils/workspace-role.js");
+  if (!(await isPodAdmin(ctx.userId))) {
+    throw new VerbRefusal(
+      "Only a pod admin can add a host to the pod's allow-list.",
+      "permission"
+    );
+  }
+  const host = normalizeHost(input.host);
+  if (!host) {
+    throw new VerbRefusal(
+      `"${input.host}" is not a public host name (give the name only, e.g. "api.example.org": no scheme, port or path).`,
+      "validation"
+    );
+  }
+  return { status: "allowed", ...(await allowHost(host, ctx.userId)) };
+};
+
 // ── Search the web ("web.search") ─────────────────────────────────────────────
 //
 // The agent's door onto `searchWeb` (web-search.ts): runs an installed search
@@ -5148,6 +5211,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "property_def.propose_retire": propertyDefProposeRetireHandler,
   // Read one link through the one url-reader door (built-in or installed reader).
   "web.read": webReadHandler,
+  // Read a public JSON API on a host the pod allows; add a host (proposed).
+  "http.get_json": httpGetJsonHandler,
+  "http.allow_host": httpAllowHostHandler,
   // Search the web through a named installed provider (its own gate + meter).
   "web.search": webSearchHandler,
   // Render a stored snippet (text with variables) once: { text, misses }.
@@ -5239,6 +5305,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
+  "http.get_json": httpGetJsonParams,
+  "http.allow_host": httpAllowHostParams,
   "web.search": webSearchParams,
   "snippet.render": snippetRenderParams,
   "pdf.ocr": pdfOcrParams,
@@ -5347,6 +5415,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // web.search — runs a search provider through ITS own gate (the same
   // shape as web.read naming a reader). Mutates nothing in the pod.
   "web.search",
+  // http.get_json — a GET to a host on the pod's allow-list, parsed JSON
+  // back. Mutates nothing in the pod. Adding a host (http.allow_host) is a
+  // write and stays gated.
+  "http.get_json",
   // messaging.accounts — the person's connected accounts (labels and ids);
   // the intent actions door runs it to list send_message's accounts.
   "messaging.accounts",

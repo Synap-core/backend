@@ -219,6 +219,39 @@ describe("safePublicFetch — ports and abort", () => {
     expect(res.status).toBe(200);
   });
 
+  it("isAllowedHost refuses an unlisted host and a redirect leaving the list, before resolving it", async () => {
+    const resolvedHosts: string[] = [];
+    const deps = {
+      resolve: (async (host: string) => {
+        resolvedHosts.push(host);
+        return [{ address: "127.0.0.1", family: 4 as const }];
+      }) as AddressResolver,
+      isAllowedAddress: () => true,
+      allowedPorts: "any" as const,
+      isAllowedHost: (host: string) => host === "img.test",
+    };
+    await expect(
+      safePublicFetch(`http://other.test:${port}/x`, {}, 0, deps)
+    ).rejects.toThrow(/'other\.test' is not an allowed host/);
+    expect(resolvedHosts).toEqual([]);
+    // /redirect-internal points at internal.test: off the list, refused at
+    // the hop, never resolved.
+    await expect(
+      safePublicFetch(`http://img.test:${port}/redirect-internal`, {}, 3, deps)
+    ).rejects.toThrow(
+      /a redirect went to 'internal\.test', which is not an allowed host/
+    );
+    expect(resolvedHosts).toEqual(["img.test"]);
+    // A redirect that stays on the host is followed.
+    const res = await safePublicFetch(
+      `http://img.test:${port}/redirect-ok`,
+      {},
+      3,
+      deps
+    );
+    expect(res.status).toBe(200);
+  });
+
   it("an abort cuts a hanging DNS resolution short", async () => {
     const ctl = new AbortController();
     const pending = safePublicFetch(
