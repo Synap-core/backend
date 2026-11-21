@@ -45,6 +45,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   Button,
   ButtonGroup,
+  Checkbox,
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -99,6 +100,7 @@ import { documentChanges } from "../../_lib/object/content/document-changes-mode
 import { AlwaysApproveMenu, RejectNeverMenu } from "./AlwaysApproveMenu";
 import { ApproveConfirm, approvePressAct } from "./ApproveConfirm";
 import { proposalPageT, type OutcomeKey } from "./copy";
+import { verbDisplayName } from "../../../lib/governance-rules/tool-approvals-model";
 import { DeferredWritesList } from "./DeferredWritesList";
 import { FailedApproval } from "./FailedApproval";
 import { SetupHandOver } from "./SetupHandOver";
@@ -658,6 +660,8 @@ function DecisionButtons({
   // An irreversible Approve, pressed once: the verbs become its named confirm.
   const [confirming, setConfirming] = useState(false);
   const [pickedId, setPickedId] = useState<string | null>(null);
+  // The person's "allow without review" tick on an AI-made verb's request.
+  const [allowVerb, setAllowVerb] = useState(false);
   // A rule menu decides through its own calls (approve or reject, then a
   // rule): the bar holds every verb while either it or a menu is deciding.
   const [ruleRunning, setRuleRunning] = useState(false);
@@ -746,7 +750,14 @@ function DecisionButtons({
     );
   }
 
-  let choice: ApproveChoice = {};
+  // "Allow without review" (founder, 21 Nov 2026): offered by the pod
+  // (`allowWithoutReview` on `proposals.get`, the ONE derivation the approve
+  // door enforces) on an AI-made verb's own request, to a pod admin (the
+  // mode is pod-wide). Never a menu of its own: a tick on this approval.
+  const verbOffer =
+    mayRule && mode.kind === "plain" ? (p.allowWithoutReview ?? null) : null;
+  let choice: ApproveChoice =
+    verbOffer && allowVerb ? { allowWithoutReview: true } : {};
   let waiting = false;
   if (mode.kind === "graph-choices") {
     const { byRef, missing } = identityResolutionByRefFor(
@@ -873,6 +884,30 @@ function DecisionButtons({
             ) : null}
           </div>
         </details>
+      ) : null}
+      {verbOffer ? (
+        <Checkbox
+          data-allow-without-review=""
+          size="sm"
+          isSelected={allowVerb}
+          onValueChange={setAllowVerb}
+          isDisabled={busy}
+          aria-describedby="review-allow-without-review"
+        >
+          <span className="flex flex-col gap-0.5">
+            <span className="text-[13px]">
+              {t("decide.allowWithoutReview", {
+                action: verbDisplayName({ verbId: verbOffer.verb }),
+              })}
+            </span>
+            <span
+              id="review-allow-without-review"
+              className="text-[12px] text-foreground/70"
+            >
+              {t("decide.allowWithoutReviewHint")}
+            </span>
+          </span>
+        </Checkbox>
       ) : null}
       {waiting && (
         <span className="text-[12px] text-foreground/70">
