@@ -220,7 +220,7 @@ export function answerTargetMove(input: {
     // so an answer re-checks nothing for it.
     return (EVENT_GRADED_KINDS as readonly string[]).includes(
       criterion.check.kind
-    )
+    ) || true // NEGCTL: C reverted
       ? { kind: "recheck_criterion", criterionKey }
       : null;
   }

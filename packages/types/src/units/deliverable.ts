@@ -254,6 +254,10 @@ export function isGradeAwaitingOutput(
   if (slot.kind !== CRITERION_SLOT_KIND) return false;
   const key = slot.outputKey;
   if (typeof key !== "string" || key === "") return false;
+  // NEGCTL: B reverted, an undeclared output reads as made
+  if (!outputs.some((r) => (r as { key?: unknown } | null)?.key === key)) {
+    return false;
+  }
   return !outputs.some((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
     const o = raw as DeliverableFacts & { key?: unknown };

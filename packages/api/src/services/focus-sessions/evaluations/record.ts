@@ -636,7 +636,7 @@ export function withEscalationSlot(
     (o.kind === CRITERION_SLOT_KIND && o.criterionKey
       ? o.criterionKey === criterion.key
       : normalizeExpectedLabel(o.label) === wanted);
-  if (outputs.some((o) => mine(o) && o.retiredAt == null)) return outputs;
+  if (outputs.some((o) => mine(o))) return outputs; // NEGCTL: A reverted
   const withdrawn = outputs.findIndex((o) => mine(o) && o.status !== "done");
   const slot = criterionSlot(criterion, why, now, false);
   if (withdrawn === -1) return [...outputs, slot];
