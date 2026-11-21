@@ -33,6 +33,7 @@ vi.mock("@synap/events", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import { proposalExecRegistry } from "../../routers/proposals/execution-registry.js";
 import { registerAutomationExecutors } from "../../routers/proposals/executors/automation.js";
+import { proposalLanded } from "@synap-core/types/proposals/landed";
 import { stampLanded } from "./stamp-landed.js";
 
 const PERSON = "person-1";
@@ -94,12 +95,31 @@ async function insertProposal(p: {
   return id;
 }
 
-async function landedOf(id: string): Promise<unknown> {
-  const { rows } = await q<{ data: Record<string, unknown> }>(
-    `select data from proposals where id = $1`,
+/** The stamp as stored, and what the row reads as landed (records + stamp). */
+async function landedOf(
+  id: string
+): Promise<{ stamp: unknown; landed: unknown }> {
+  const { rows } = await q<{
+    status: string;
+    proposal_type: string;
+    target_type: string;
+    target_id: string;
+    data: Record<string, unknown>;
+  }>(
+    `select status, proposal_type, target_type, target_id, data from proposals where id = $1`,
     [id]
   );
-  return rows[0]!.data.landed;
+  const r = rows[0]!;
+  return {
+    stamp: r.data.landed,
+    landed: proposalLanded({
+      status: r.status,
+      proposalType: r.proposal_type,
+      targetType: r.target_type,
+      targetId: r.target_id,
+      data: r.data,
+    }),
+  };
 }
 
 beforeAll(async () => {
@@ -112,7 +132,7 @@ beforeEach(async () => {
 });
 
 describe("stampLanded — what an approval made, written once", () => {
-  it("stamps the object the executor created", async () => {
+  it("the object the executor created is read from its target; the stamp holds nothing more", async () => {
     const automationId = randomUUID();
     const data = {
       targetType: "automation",
@@ -164,16 +184,13 @@ describe("stampLanded — what an approval made, written once", () => {
     );
     expect(rows).toHaveLength(1);
 
+    const created = [{ kind: "automation", id: automationId, role: "created" }];
     await stampLanded(proposalId, result);
-    expect(await landedOf(proposalId)).toEqual([
-      { kind: "automation", id: automationId, role: "created" },
-    ]);
+    expect(await landedOf(proposalId)).toEqual({ stamp: [], landed: created });
 
     // Once: a later stamp (a re-approve joining it) changes nothing.
     await stampLanded(proposalId, { primaryId: randomUUID() });
-    expect(await landedOf(proposalId)).toEqual([
-      { kind: "automation", id: automationId, role: "created" },
-    ]);
+    expect(await landedOf(proposalId)).toEqual({ stamp: [], landed: created });
   });
 
   it("joins the apply's records; a run's primary is its session, a key is no object", async () => {
@@ -186,10 +203,13 @@ describe("stampLanded — what an approval made, written once", () => {
       data: { runResult: { started: [{ sessionId: s1 }, { sessionId: s2 }] } },
     });
     await stampLanded(run, { primaryId: s1, primaryKind: "session" });
-    expect(await landedOf(run)).toEqual([
-      { kind: "session", id: s1, role: "created" },
-      { kind: "session", id: s2, role: "created" },
-    ]);
+    expect(await landedOf(run)).toEqual({
+      stamp: [{ kind: "session", id: s1, role: "created" }],
+      landed: [
+        { kind: "session", id: s1, role: "created" },
+        { kind: "session", id: s2, role: "created" },
+      ],
+    });
 
     const agentId = randomUUID();
     const key = await insertProposal({
@@ -210,9 +230,10 @@ describe("stampLanded — what an approval made, written once", () => {
       },
     });
     // The key and the grant are not objects; the agent it connected is.
-    expect(await landedOf(key)).toEqual([
-      { kind: "agent", id: agentId, role: "updated" },
-    ]);
+    expect(await landedOf(key)).toEqual({
+      stamp: [],
+      landed: [{ kind: "agent", id: agentId, role: "updated" }],
+    });
   });
 
   it("a verified effect's ids land under the kind of the table it wrote", async () => {
@@ -231,9 +252,8 @@ describe("stampLanded — what an approval made, written once", () => {
         subject: "entities",
       },
     });
-    expect(await landedOf(id)).toEqual([
-      { kind: "entity", id: moved, role: "updated" },
-    ]);
+    const moves = [{ kind: "entity", id: moved, role: "updated" }];
+    expect(await landedOf(id)).toEqual({ stamp: moves, landed: moves });
   });
 
   it("an undecided row is not stamped", async () => {
@@ -244,6 +264,6 @@ describe("stampLanded — what an approval made, written once", () => {
       data: {},
     });
     await stampLanded(id, { primaryId: randomUUID() });
-    expect(await landedOf(id)).toBeUndefined();
+    expect(await landedOf(id)).toEqual({ stamp: undefined, landed: [] });
   });
 });
