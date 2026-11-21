@@ -13,7 +13,6 @@ import {
   deriveWorkspacePlacementView,
   type CapturePlacement,
   type CaptureStructureRouting,
-  type IsFailureAction,
 } from "@synap-core/types";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
@@ -1269,28 +1268,18 @@ const captureHandler: McpToolHandler = async (
   // itself (a 402 is `quota`, never retried). A plan the IS itself marked
   // degraded carries only `degradedReason`, mapped onto the shared failure
   // classes rather than re-deriving one.
-  // `degradedDetail.action` is the payer action the IS stated for this
-  // caller on an account refusal: the words end with it.
-  const degradedDetail = (
-    structured as {
-      degradedDetail?: {
-        failureClass?: AiFailureClass;
-        action?: IsFailureAction;
-      };
-    }
-  ).degradedDetail;
+  const degradedFailureClass = (
+    structured as { degradedDetail?: { failureClass?: AiFailureClass } }
+  ).degradedDetail?.failureClass;
   const degradedFailure = degradedCapture
     ? describeAiFailure(
-        degradedDetail?.failureClass ??
+        degradedFailureClass ??
           (degradedReason === "is_auth_error"
             ? "auth"
             : degradedReason === "is_invalid_response" ||
                 degradedReason === "is_empty_result"
               ? "invalid_response"
-              : "unknown"),
-        degradedDetail?.action
-          ? { envelope: { action: degradedDetail.action } }
-          : {}
+              : "unknown")
       )
     : null;
   // The records the raw text names by email or phone, matched on the degraded

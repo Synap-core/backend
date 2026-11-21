@@ -30,7 +30,6 @@ import {
   classifyAiFailure,
   type AiFailureClass,
 } from "../../utils/ai-failure.js";
-import type { IsFailureEnvelope } from "@synap-core/types";
 
 const logger = createLogger({ module: "knowledge-synthesize" });
 
@@ -39,20 +38,6 @@ export interface SynthesisSource {
   id: string;
   title: string;
 }
-
-/**
- * A short passage of a runbook the answer would have been composed from,
- * returned when synthesis did not run ({@link SynthesisResult.excerpts}).
- */
-export interface SynthesisExcerpt extends SynthesisSource {
-  /** The runbook's opening, at most {@link DEGRADED_EXCERPT_CHARS} chars. */
-  text: string;
-}
-
-/** How many runbooks a failed synthesis quotes, best match first. */
-export const DEGRADED_EXCERPTS_MAX = 3;
-/** The longest passage quoted from each. */
-export const DEGRADED_EXCERPT_CHARS = 600;
 
 /**
  * A retrieved record that was REPLACED (`properties.supersededBy` set, read by
@@ -123,29 +108,6 @@ export interface SynthesisResult {
    * help" instead of inventing a temporary outage.
    */
   failureClass?: AiFailureClass;
-  /**
-   * The IS failure envelope behind `failureClass`, when the IS sent one.
-   * Kept beside the class because it carries what the class cannot: the
-   * payer action the IS resolved for THIS caller (`top_up`, `ask_admin`, …).
-   * A door hands it to `describeAiFailure` (its `envelope` option) so the
-   * words end with that action; no door publishes it as a field.
-   */
-  failure?: IsFailureEnvelope;
-  /**
-   * Present only alongside `error`, and only when runbooks matched: short
-   * excerpts of the `procedural` sources (`knowledge_keys` runbooks) the
-   * answer would have been composed from, best match first, at most
-   * {@link DEGRADED_EXCERPTS_MAX} of {@link DEGRADED_EXCERPT_CHARS} chars. An
-   * agent keeps its guidance exactly when AI is down.
-   *
-   * Reach: each excerpt is an item of `sources`, quoted from the same
-   * retrieved row whose title `sources` already lists and whose body this
-   * call would have sent to the IS to answer THIS caller. It is drawn from
-   * the `answers` the door's `ask()` read under the caller's lens and key
-   * grant, never re-read: no row reaches an excerpt that the caller's answer
-   * could not already have been built from.
-   */
-  excerpts?: SynthesisExcerpt[];
   /**
    * Present ONLY when the context budget dropped retrieved items — mirrors the
    * `error`/`failureClass` "present only when it happened" convention above.
@@ -945,49 +907,6 @@ function buildSupersededNotice(
     : notice;
 }
 
-/**
- * The runbooks a failed synthesis quotes ({@link SynthesisResult.excerpts}):
- * the `procedural` items of `answers` that `sources` lists (a replaced
- * runbook is not listed, so it is not quoted), in rank order.
- */
-function runbookExcerpts(
-  answers: AskAnswer[],
-  sources: SynthesisSource[]
-): SynthesisExcerpt[] {
-  const listed = new Set(
-    sources.filter((s) => s.substrate === "procedural").map((s) => s.id)
-  );
-  const out: SynthesisExcerpt[] = [];
-  for (const block of answers) {
-    if (block.status !== "ok" || block.substrate !== "procedural") continue;
-    for (const item of block.items) {
-      const rec = item as Record<string, unknown>;
-      const id = typeof rec.id === "string" ? rec.id : "";
-      const body = typeof rec.value === "string" ? rec.value.trim() : "";
-      if (!listed.has(id) || !body) continue;
-      out.push({
-        substrate: block.substrate,
-        id,
-        title: itemTitle(rec, id),
-        text:
-          body.length > DEGRADED_EXCERPT_CHARS
-            ? `${body.slice(0, DEGRADED_EXCERPT_CHARS - 1).trimEnd()}\u2026`
-            : body,
-      });
-      if (out.length === DEGRADED_EXCERPTS_MAX) return out;
-    }
-  }
-  return out;
-}
-
-/** The IS envelope a failed answer call carried (`.failure`, set below). */
-function failureEnvelopeOf(err: unknown): IsFailureEnvelope | undefined {
-  const failure = (err as { failure?: unknown } | null)?.failure;
-  return failure && typeof failure === "object"
-    ? (failure as IsFailureEnvelope)
-    : undefined;
-}
-
 export async function synthesizeAnswer(
   answers: AskAnswer[],
   question: string,
@@ -1152,8 +1071,6 @@ export async function synthesizeAnswer(
       { err, isUrl },
       "knowledge synthesis call to IS failed — returning sources without answer"
     );
-    const failure = failureEnvelopeOf(err);
-    const excerpts = runbookExcerpts(answers, sources);
     return {
       answer: null,
       sources,
@@ -1168,8 +1085,6 @@ export async function synthesizeAnswer(
         err instanceof EmptySynthesisError
           ? "invalid_response"
           : classifyAiFailure(err),
-      ...(failure ? { failure } : {}),
-      ...(excerpts.length > 0 ? { excerpts } : {}),
     };
   }
 }

@@ -469,19 +469,10 @@ export async function evaluateSession(
           for (const c of group) {
             const v = byKey.get(c.key);
             if (judgement.decider === "none" || !judgement.model || !v) {
-              // The judge answered without a verdict (its only model is the
-              // one that did the work, or it named none for this criterion):
-              // the judge could not run, which is not a verdict on the work.
-              // It carries a class like every could-not-run, so a check gate
-              // holds on it instead of sending the run back (decision 8:
-              // nothing is failed by a judge that did not answer). No failure
-              // class names this case; `unknown` is the one that claims no
-              // cause.
               results.push({
                 key: c.key,
                 status: "skipped",
-                reason: `The AI judge could not run: ${v?.rationale || "no judge could grade this criterion."}`,
-                failureClass: "unknown",
+                reason: v?.rationale || "No judge could grade this criterion.",
               });
               continue;
             }
