@@ -20,6 +20,7 @@ import {
   getDb,
   getWorkspaceMembership,
   getRequestGrant,
+  getActingAgentUserId,
   eventRepository,
   EntityRepository,
   extractIdentitySignals,
@@ -37,8 +38,10 @@ import { TRPCError } from "@trpc/server";
 import { lifecycleConflictError } from "../../services/lifecycle/conflict.js";
 import {
   checkPermissionOrPropose,
+  gateAdmitsWorkspace,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { assertBodyNotReplacedSilently } from "../../services/entity-body/body-replace-guard.js";
@@ -1315,10 +1318,18 @@ export const mutateProcs = {
    *   - SOURCE: `checkPermissionOrPropose` gated on the entity's CURRENT
    *     workspaceId (mirrors `update`'s governance so agent callers get
    *     proposal-gated instead of blocked, per CLAUDE.md).
-   *   - TARGET: `assertWorkspaceWrite` — the caller must also be an editor+
-   *     member of the DESTINATION workspace, since moving an entity there is
-   *     a write to that workspace too (new check; `update`'s `global` path
-   *     never needed one because it only ever moves TO null).
+   *   - TARGET: moving an entity there is a write to that workspace too, so
+   *     the destination is checked the way the gate checks the source
+   *     (triage finding TF-1): the person must be an editor+ member
+   *     (`assertWorkspaceWrite`); the calling key's grant must allow the
+   *     write there (`grantWriteDenial`, refused, never proposed, as at the
+   *     gate's rung 0 and as `update` checks a home or a promotion); and an
+   *     acting agent the gate would not admit there (no membership, or a
+   *     role short of write) does not move it: the move is PROPOSED to the
+   *     person, whose approval replays it (executor `entity/update` with
+   *     `toWorkspaceId`). A join is not filed: its replay would rerun the
+   *     write as a field update and move nothing. The destination is never
+   *     null here (`update`'s `global` path moves to pod-wide, S7).
    *
    * Best-effort per entity (mirrors `batchCreate`'s partial-success shape) —
    * one entity's not-found/denied/proposed outcome never blocks the others.
@@ -1339,6 +1350,18 @@ export const mutateProcs = {
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: input.workspaceId,
       });
+      // The acting agent as the gate reads it (the key-auth doors enter it),
+      // and whether the gate's membership check admits it in the destination.
+      const actingAgentUserId = getActingAgentUserId();
+      const agentAdmittedInTarget =
+        !actingAgentUserId ||
+        (await gateAdmitsWorkspace({
+          userId: ctx.userId,
+          agentUserId: actingAgentUserId,
+          workspaceId: input.workspaceId,
+          subjectType: "entity",
+          action: "update",
+        }));
 
       const moved: string[] = [];
       const proposed: Array<{ entityId: string; proposalId: string }> = [];
@@ -1373,6 +1396,19 @@ export const mutateProcs = {
             continue;
           }
 
+          // The key's grant must allow writing this record in the
+          // destination, not only where it lives today (TF-1).
+          const targetDenial = await grantWriteDenial({
+            subjectType: "entity",
+            action: "update",
+            workspaceId: input.workspaceId,
+            data: { id: entityId },
+          });
+          if (targetDenial) {
+            errors.push({ entityId, error: targetDenial });
+            continue;
+          }
+
           const correlationId = randomUUID();
 
           // 1. Emit .requested event
@@ -1404,6 +1440,8 @@ export const mutateProcs = {
             correlationId,
             requestedEventId: requestedEvent?.id,
             data: { id: entityId, toWorkspaceId: input.workspaceId },
+            // An agent the destination does not admit: the person reviews it.
+            ...(agentAdmittedInTarget ? {} : { forcePropose: true }),
           });
 
           if ("denied" in perm && perm.denied) {
