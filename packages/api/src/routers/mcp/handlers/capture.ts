@@ -13,7 +13,6 @@ import {
   deriveWorkspacePlacementView,
   type CapturePlacement,
   type CaptureStructureRouting,
-  type IsFailureAction,
 } from "@synap-core/types";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
@@ -40,8 +39,10 @@ import {
 import { resolveCaptureProjectRef } from "../../../services/capture-agent/resolve-capture-project.js";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { toolError } from "../tool-errors.js";
-import type { AiFailureClass } from "../../../utils/ai-failure.js";
-import { describeDegradedCapture } from "../../../services/capture-agent/capture-degraded-guidance.js";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../../utils/ai-failure.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -1263,18 +1264,22 @@ const captureHandler: McpToolHandler = async (
     (structured as { degraded?: boolean }).degraded === true;
   const degradedReason = (structured as { degradedReason?: string })
     .degradedReason;
-  // The words and the retry verdict: the one composer every capture door uses.
+  // `degradedDetail.failureClass` is the class the pod read off the failure
+  // itself (a 402 is `quota`, never retried). A plan the IS itself marked
+  // degraded carries only `degradedReason`, mapped onto the shared failure
+  // classes rather than re-deriving one.
+  const degradedFailureClass = (
+    structured as { degradedDetail?: { failureClass?: AiFailureClass } }
+  ).degradedDetail?.failureClass;
   const degradedFailure = degradedCapture
-    ? describeDegradedCapture(
-        degradedReason,
-        (
-          structured as {
-            degradedDetail?: {
-              failureClass?: AiFailureClass;
-              action?: IsFailureAction;
-            };
-          }
-        ).degradedDetail
+    ? describeAiFailure(
+        degradedFailureClass ??
+          (degradedReason === "is_auth_error"
+            ? "auth"
+            : degradedReason === "is_invalid_response" ||
+                degradedReason === "is_empty_result"
+              ? "invalid_response"
+              : "unknown")
       )
     : null;
   // The records the raw text names by email or phone, matched on the degraded

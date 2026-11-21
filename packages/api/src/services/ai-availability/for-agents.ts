@@ -26,8 +26,6 @@ export interface AiAvailabilityForAgents {
   kind: string | null;
   /** The state in words (the deck's title); absent when available or unknown. */
   title?: string;
-  /** The state in full sentences, closed by the person's move (the deck's `detail`). */
-  detail?: string;
   /** Who must act: `payer` (this person or a pod admin) or `operator`. */
   whoActs?: "payer" | "operator";
   /** The person's one move, in words ("Top up", "Ask an admin"). */
@@ -48,7 +46,6 @@ export function aiAvailabilityForAgents(
   return {
     kind: a.kind,
     title: copy.title,
-    detail: copy.detail,
     ...(a.actor === "payer" || a.actor === "operator"
       ? { whoActs: a.actor }
       : {}),
@@ -61,6 +58,9 @@ export function aiAvailabilityForAgents(
 /** The one instructions line, or "" when AI is available or unknown. */
 export function aiAvailabilityAgentLine(view: AiAvailabilityView): string {
   const block = aiAvailabilityForAgents(view);
-  if (!block.detail) return "";
-  return `AI on this pod (${block.kind}): ${block.detail} ${block.note}`;
+  if (!block.title) return "";
+  const move = block.personAction
+    ? ` Their move: ${block.personAction.toLowerCase()}.`
+    : "";
+  return `AI on this pod: ${block.title} (${block.kind}).${move} ${block.note}`;
 }

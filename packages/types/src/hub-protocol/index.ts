@@ -243,13 +243,6 @@ export interface IsFailureEnvelope {
    * (`lib/billing-state.ts` `BILLING_ACTIONS`). `none` = no user action exists.
    */
   action?: IsFailureAction;
-  /**
-   * The failing provider call used the pod's OWN provider credential (a key
-   * the owner brought), not Synap's. A provider refusal then is the owner's
-   * to fix in their provider account, never a Synap credit state. Absent =
-   * not stated (an older IS), read as Synap's key.
-   */
-  ownKey?: boolean;
 }
 
 export type IsFailureActor = "payer" | "operator";

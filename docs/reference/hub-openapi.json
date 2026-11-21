@@ -2339,8 +2339,7 @@
               "cause": { "type": "string" },
               "status": { "type": "integer" },
               "attempts": { "type": "integer" },
-              "failureClass": { "type": "string" },
-              "action": { "type": "string" }
+              "failureClass": { "type": "string" }
             },
             "required": ["cause", "attempts", "failureClass"]
           },
@@ -3672,16 +3671,6 @@
           "supersededBy": { "type": "string" }
         },
         "required": ["substrate", "id", "title", "supersededBy"]
-      },
-      "KnowledgeAnswerExcerpt": {
-        "type": "object",
-        "properties": {
-          "substrate": { "type": "string" },
-          "id": { "type": "string" },
-          "title": { "type": "string" },
-          "text": { "type": "string" }
-        },
-        "required": ["substrate", "id", "title", "text"]
       },
       "FindResult": {
         "type": "object",
@@ -12279,7 +12268,7 @@
       "post": {
         "tags": ["Capture"],
         "summary": "AI-structure raw input into entity proposals",
-        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result), an Intelligence Service refusal code for an AI availability state (credits_empty, account_quota_exceeded, llm_budget_exceeded, …), or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). Refusals and configuration states are not outages; do not tell a user to retry.",
+        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -27826,12 +27815,6 @@
                         "owedByPerson",
                         "openSessions"
                       ]
-                    },
-                    "excerpts": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/KnowledgeAnswerExcerpt"
-                      }
                     },
                     "error": { "type": "string" },
                     "failure": {
