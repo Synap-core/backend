@@ -144,6 +144,30 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
     const caller = entitiesRouter.createCaller(
       (await agentCallerContext(w, workspaceId)) as unknown as Context
     );
+    // A governed MOVE (`entities.moveToWorkspace`) files under this same key
+    // as `{ id, toWorkspaceId }`, with no field patch: replayed as a field
+    // update it moved nothing (finding cf54ebb0). Replay the move door, as
+    // the approve executor does (`proposals/executors/entity.ts`); its own
+    // gate checks both spaces again, as the agent.
+    if (typeof d.toWorkspaceId === "string") {
+      const id = String(d.id);
+      const out = await caller.moveToWorkspace({
+        entityIds: [id],
+        workspaceId: d.toWorkspaceId,
+      });
+      const proposed = out.proposed.find((p) => p.entityId === id);
+      if (proposed) {
+        return { status: "proposed", proposalId: proposed.proposalId };
+      }
+      if (!out.moved.includes(id)) {
+        const failure = out.errors.find((e) => e.entityId === id);
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `The move was not made: ${failure?.error ?? "nothing was moved"}.`,
+        });
+      }
+      return { id };
+    }
     return caller.update({
       id: String(d.id),
       ...defined({

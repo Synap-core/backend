@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearsDoNotContact,
   isDoNotContactSetWrite,
+  replacesDoNotContactEvidence,
 } from "./do-not-contact-fields.js";
 
 describe("isDoNotContactSetWrite", () => {
@@ -106,6 +107,45 @@ describe("clearsDoNotContact", () => {
       {},
     ]) {
       expect(clearsDoNotContact(write), JSON.stringify(write)).toBe(false);
+    }
+  });
+});
+
+describe("replacesDoNotContactEvidence (finding 6d7af9b9)", () => {
+  const flagged = {
+    doNotContact: true,
+    doNotContactReason: "asked to stop",
+    doNotContactSince: "2026-11-17",
+  };
+
+  it("an opt-out in force whose reason or date gets another non-empty value", () => {
+    for (const properties of [
+      { doNotContact: true, doNotContactReason: "x" },
+      { doNotContactSince: "1970-01-01" },
+      { doNotContactReason: "asked to stop", doNotContactSince: "2020-01-01" },
+    ]) {
+      expect(
+        replacesDoNotContactEvidence(flagged, { properties }),
+        JSON.stringify(properties)
+      ).toBe(true);
+    }
+  });
+
+  it("not a first set, a re-set of the same values, an erase, or a person not flagged now", () => {
+    for (const [existing, properties] of [
+      [flagged, { doNotContact: true, ...flagged }],
+      [flagged, { doNotContactReason: " asked to stop " }],
+      [flagged, { doNotContactReason: null }],
+      [flagged, { doNotContactReason: "" }],
+      [{ doNotContact: true }, { doNotContactReason: "x" }],
+      [{ ...flagged, doNotContact: false }, { doNotContactReason: "x" }],
+      [{}, { doNotContact: true, doNotContactReason: "x" }],
+      [flagged, { email: "a@example.test" }],
+    ] as const) {
+      expect(
+        replacesDoNotContactEvidence(existing, { properties }),
+        JSON.stringify([existing, properties])
+      ).toBe(false);
     }
   });
 });
