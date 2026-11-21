@@ -186,8 +186,8 @@ describe("the CTA follows the viewer", () => {
     ).toBe("upgrade");
   });
 
-  // Found by lane APP2 (21 Nov): the wire's action was read before the role,
-  // so a member whose block proved only `low` took the wire's `top_up`.
+  // The IS states its action for the pod, not for this viewer: a member whose
+  // block proved only `low` must not take the wire's `top_up`.
   it("a member never takes the wire's top_up when the CP proved a lesser state", () => {
     const a = resolveAiAvailability({
       billing: billing({
@@ -418,7 +418,7 @@ describe("the copy deck's words", () => {
       title: "AI is turned off",
     });
     expect(aiAvailabilityCopy(off)?.detail).toMatch(
-      /Ask the pod's owner to turn AI back on\.$/
+      /Ask an admin to turn AI back on\.$/
     );
     // The plan itself has no AI: the other sentence.
     const plan = resolveAiAvailability({ failureCode: "not_entitled" });
@@ -455,7 +455,7 @@ describe("the copy deck's words", () => {
         resolveAiAvailability({ failureCode, role: "member" })
       )?.detail;
       expect(detail).toMatch(/Captures still save\./);
-      expect(detail).toMatch(/Ask the pod's owner to /);
+      expect(detail).toMatch(/Ask an admin to /);
     }
   });
 
@@ -519,5 +519,137 @@ describe("resolveAiRefusal: one refusal, no billing read", () => {
 
   it("account_inactive is the switched-off not_entitled", () => {
     expect(resolveAiRefusal("account_inactive")?.switchedOff).toBe(true);
+  });
+});
+
+describe("the payment grace: ok, but the plan's payment failed", () => {
+  const grace = (viewerRole: "pod_owner" | "member") =>
+    resolveAiAvailability({
+      billing: billing({
+        state: "ok",
+        action: viewerRole === "member" ? "ask_admin" : "fix_payment",
+        dismissKey: "billing:pod:p:grace",
+        resetsAt: "2026-12-01T00:00:00.000Z",
+        viewerRole,
+      }),
+    });
+
+  it("the payer gets a non-blocking warning with the fix-payment action", () => {
+    const a = grace("pod_owner");
+    expect(a).toMatchObject({
+      kind: "ok",
+      actor: "payer",
+      action: "fix_payment",
+      tone: "warning",
+      glyph: "payment",
+      blocksComposer: false,
+      dismissScope: "session",
+      dismissKey: "ai:ok:fix_payment|billing:pod:p:grace",
+      surfaces: { ambient: true, banner: true, composerHint: false },
+    });
+  });
+
+  it("says until when AI keeps working, only from a date that arrived", () => {
+    const a = grace("pod_owner");
+    const dated = aiAvailabilityCopy(a, { resetsLabel: "Dec 1" });
+    expect(dated).toMatchObject({
+      label: "Payment needed",
+      title: "Payment needed — AI keeps working until Dec 1",
+      cta: "Fix payment",
+      composerHint: null,
+      askAdminMessage: null,
+    });
+    expect(dated?.detail).toMatch(
+      /AI keeps working until Dec 1\. Update the payment method to keep it running\.$/
+    );
+    expect(aiAvailabilityCopy(a)?.title).toBe(
+      "Payment needed — AI keeps working for now"
+    );
+    expect(aiAvailabilityBanner(a)).toMatchObject({
+      tone: "warning",
+      action: { kind: "fix_payment" },
+    });
+  });
+
+  it("a member sees nothing: AI works and they never pay", () => {
+    const a = grace("member");
+    expect(a).toMatchObject({ kind: "ok", action: "none", tone: null });
+    expect(a.surfaces).toEqual({
+      ambient: false,
+      banner: false,
+      composerHint: false,
+    });
+    expect(aiAvailabilityCopy(a)).toBeNull();
+  });
+
+  it("a plain ok has no words", () => {
+    expect(
+      aiAvailabilityCopy(resolveAiAvailability({ billing: billing() }))
+    ).toBeNull();
+  });
+});
+
+describe("a provider refusal on the pod's own key", () => {
+  it("is the owner's, with no Synap action and the owner's words", () => {
+    const a = resolveAiAvailability({
+      failureCode: "provider_no_credit",
+      failureOwnKey: true,
+      role: "payer",
+      canTopUp: true,
+    });
+    expect(a).toMatchObject({
+      kind: "provider_issue",
+      actor: "payer",
+      action: "none",
+      ownKey: true,
+      tone: "warning",
+    });
+    expect(aiAvailabilityCopy(a)?.detail).toBe(
+      "Your AI provider key has run out of credit or was refused. The pod's owner updates it in Settings › AI providers."
+    );
+    expect(aiAvailabilityCopy(a)?.cta).toBeNull();
+  });
+
+  it("the refusal alone says the same, and Synap's key stays the operator's", () => {
+    expect(resolveAiRefusal("insufficient_credit", "top_up", true)).toEqual({
+      kind: "provider_issue",
+      actor: "payer",
+      action: "none",
+      ownKey: true,
+    });
+    expect(resolveAiRefusal("insufficient_credit", "top_up")).toMatchObject({
+      actor: "operator",
+      action: "none",
+    });
+    expect(
+      resolveAiAvailability({ failureCode: "provider_auth" })
+    ).toMatchObject({ actor: "operator", tone: "info" });
+  });
+});
+
+describe("glyphs and the one noun", () => {
+  it("offline for service_down, trouble for provider_issue", () => {
+    expect(resolveAiAvailability({ health: "unhealthy" }).glyph).toBe(
+      "offline"
+    );
+    expect(resolveAiAvailability({ health: "degraded" }).glyph).toBe("trouble");
+  });
+
+  it("who tops up is always 'an admin'", () => {
+    const a = resolveAiAvailability({
+      failureCode: "credits_empty",
+      role: "member",
+    });
+    const copy = aiAvailabilityCopy(a);
+    expect(copy?.cta).toBe("Ask an admin");
+    expect(copy?.detail).toMatch(/Ask an admin to top up credits\.$/);
+  });
+
+  it("a member never takes the owner's block action", () => {
+    const a = resolveAiAvailability({
+      billing: billing({ state: "empty", action: "top_up" }),
+      role: "member",
+    });
+    expect(a.action).toBe("ask_admin");
   });
 });

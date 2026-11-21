@@ -255,7 +255,7 @@ describe("synap_ask with AI down, through a scoped key", () => {
     });
     const reply = await askAs(SCOPED);
     expect(reply.message).toMatch(
-      /out of AI credits.*Captures still save\. Ask the pod's owner to top up credits\./
+      /out of AI credits.*Captures still save\. Ask an admin to top up credits\./
     );
     expect(reply.message).not.toMatch(/operator/i);
     expect(reply).not.toHaveProperty("failure");

@@ -29,9 +29,9 @@ import { captureStatusForReceiptState } from "../../../services/capture-agent/ca
 import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../../../services/capture-agent/capture-degraded-guidance.js";
+import type { AiFailureClass } from "../../../utils/ai-failure.js";
 import {
   submitCaptureGraph,
   CaptureGraphValidationError,
@@ -877,6 +877,17 @@ export function registerCaptureRoutes(app: HubHono): void {
         const reason =
           typeof degradedReason === "string" ? degradedReason : undefined;
         const salvage = (result as { proposals?: unknown }).proposals;
+        const words = describeDegradedCapture(
+          reason,
+          (
+            result as {
+              degradedDetail?: {
+                failureClass?: AiFailureClass;
+                action?: IsFailureAction;
+              };
+            }
+          ).degradedDetail
+        );
         return c.json({
           ...(result as unknown as Record<string, unknown>),
           // NOT a receipt status: no graph was submitted, so there is no
@@ -885,12 +896,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           // never happened. Mirrors the sibling `needs_input` literal, which is
           // a caller-state word for the same reason.
           status: "not_structured",
-          degradedMessage: describeDegradedForAgent(
-            reason,
-            (result as { degradedDetail?: { action?: IsFailureAction } })
-              .degradedDetail?.action
-          ),
-          degradedRetryable: isDegradedReasonRetryable(reason),
+          degradedMessage: words.message,
+          degradedRetryable: words.retryable,
           // Echoed under an explicit name so the agent does not have to know
           // that a degraded `proposals` is a fallback rather than a real plan.
           // Already `/capture/execute`-shaped (tempId/profileSlug/title/…) —

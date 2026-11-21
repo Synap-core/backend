@@ -218,7 +218,7 @@ describe("synap_capture degraded notice — the failure class the pod read (1c25
     const out = await call({ text: "Call the accountant" });
 
     expect(out.degradedNotice).toMatch(
-      /out of AI credits.*Ask the pod's owner to top up credits\./
+      /out of AI credits.*Ask an admin to top up credits\./
     );
     expect(out.degradedNotice).toMatch(/do not tell them to try again/);
   });
@@ -231,11 +231,14 @@ describe("synap_capture degraded notice — the failure class the pod read (1c25
     expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
   });
 
-  it("no detail (a plan the IS marked degraded) keeps the reason mapping", async () => {
+  it("no detail (a plan the IS marked degraded) speaks the reason, as every capture door does", async () => {
     h.structureResult = degraded("note");
     const out = await call({ text: "Call the accountant" });
 
-    expect(out.degradedNotice).toMatch(/could not be read/);
+    expect(out.degradedNotice).toMatch(
+      /AI structuring failed upstream \(is_invalid_response\)/
+    );
+    expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
   });
 });
 

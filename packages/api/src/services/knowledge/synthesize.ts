@@ -28,6 +28,7 @@ import {
 import { excerptByQuery } from "../../utils/section-excerpt.js";
 import {
   classifyAiFailure,
+  extractFailureEnvelope,
   type AiFailureClass,
 } from "../../utils/ai-failure.js";
 import type { IsFailureEnvelope } from "@synap-core/types";
@@ -980,14 +981,6 @@ function runbookExcerpts(
   return out;
 }
 
-/** The IS envelope a failed answer call carried (`.failure`, set below). */
-function failureEnvelopeOf(err: unknown): IsFailureEnvelope | undefined {
-  const failure = (err as { failure?: unknown } | null)?.failure;
-  return failure && typeof failure === "object"
-    ? (failure as IsFailureEnvelope)
-    : undefined;
-}
-
 export async function synthesizeAnswer(
   answers: AskAnswer[],
   question: string,
@@ -1152,7 +1145,7 @@ export async function synthesizeAnswer(
       { err, isUrl },
       "knowledge synthesis call to IS failed — returning sources without answer"
     );
-    const failure = failureEnvelopeOf(err);
+    const failure = extractFailureEnvelope(err);
     const excerpts = runbookExcerpts(answers, sources);
     return {
       answer: null,

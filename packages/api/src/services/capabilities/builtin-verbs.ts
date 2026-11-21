@@ -41,8 +41,7 @@ import { TRPCError } from "@trpc/server";
 import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../capture-agent/capture-degraded-guidance.js";
 import {
   db,
@@ -804,6 +803,7 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       reason === "degraded" && Array.isArray(structured?.entities)
         ? (structured.entities as Array<Record<string, unknown>>)
         : undefined;
+    const degradedWords = describeDegradedCapture(degradedReason);
 
     return {
       status: "no_proposal",
@@ -819,8 +819,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
         ? {
             degraded: true as const,
             ...(degradedReason ? { degradedReason } : {}),
-            degradedMessage: describeDegradedForAgent(degradedReason),
-            degradedRetryable: isDegradedReasonRetryable(degradedReason),
+            degradedMessage: degradedWords.message,
+            degradedRetryable: degradedWords.retryable,
           }
         : {}),
       ...(salvagedEntities?.length

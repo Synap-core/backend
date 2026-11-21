@@ -209,9 +209,8 @@ describe("capture.structure: the degraded early returns carry degradedDetail", (
     });
   });
 
-  // Seen live (20 Nov 2026): degradedReason `is_invalid_response` beside
-  // failureClass `account_quota`. The reason said "transient, retry"; every
-  // door that branches on it told the caller to try again.
+  // A refusal read as `is_invalid_response` says "transient, retry" to every
+  // door that branches on the reason.
   it("an account refusal is reported AS the refusal, with the payer action the IS stated", async () => {
     failWith({
       cause: "http",

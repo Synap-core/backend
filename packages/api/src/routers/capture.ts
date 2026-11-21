@@ -512,9 +512,9 @@ export function degradedDetailForFailure(
  * availability state (credits, plan, payment, a paused budget, a provider or
  * service state) is reported AS that code, the IS's own token, as the IS
  * already reports `llm_budget_exceeded` on a degraded answer. Read as
- * `is_invalid_response` it said "reachable, transient, retry" beside a
- * `failureClass` of `account_quota` (seen live, 20 Nov 2026), and every door
- * that branches on the reason told the caller to try again.
+ * `is_invalid_response` it would say "reachable, transient, retry" beside a
+ * `failureClass` of `account_quota`, and every door that branches on the
+ * reason would tell the caller to try again.
  */
 export function degradedReasonForFailure(
   failure: StructureFailure | undefined

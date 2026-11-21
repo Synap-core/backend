@@ -223,9 +223,11 @@ export const knowledgeRouter = router({
         /**
          * Present only when synthesis failed and runbooks matched: the
          * opening of each (at most 3, 600 chars), so the guidance survives
-         * the AI answer layer being down. Same field on every door.
+         * the AI answer layer being down. Same field on every door. An
+         * optional key, so a client's typed mock of this answer need not
+         * spell it.
          */
-        excerpts: synthesis.excerpts,
+        ...(synthesis.excerpts ? { excerpts: synthesis.excerpts } : {}),
         /**
          * Present only when source items were dropped to fit the model budget
          * (`{ omitted, total }`). An answer synthesized from a truncated source

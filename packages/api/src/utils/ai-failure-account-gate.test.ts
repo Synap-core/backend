@@ -69,24 +69,24 @@ const CASES = [
     name: "payer, credits empty → top up",
     wire: { code: "credits_empty", actor: "payer", action: "top_up" },
     says: /out of AI credits.*Captures still save.*Top up credits/,
-    never: /Ask the pod's owner|operator|try again/i,
+    never: /Ask an admin|operator|try again/i,
   },
   {
     name: "member, credits empty → ask admin",
     wire: { code: "credits_empty", actor: "payer", action: "ask_admin" },
-    says: /out of AI credits.*Ask the pod's owner to top up credits\./,
+    says: /out of AI credits.*Ask an admin to top up credits\./,
     never: /Top up credits to continue|operator/i,
   },
   {
     name: "payer, payment failed → fix payment",
     wire: { code: "access_suspended", actor: "payer", action: "fix_payment" },
     says: /payment failed.*Update the payment method/,
-    never: /Ask the pod's owner|operator/i,
+    never: /Ask an admin|operator/i,
   },
   {
     name: "member, not entitled → ask admin",
     wire: { code: "not_entitled", actor: "payer", action: "ask_admin" },
-    says: /plan does not include.*Ask the pod's owner to renew the plan\./,
+    says: /plan does not include.*Ask an admin to renew the plan\./,
     never: /Renew or change the plan|operator|credential/i,
   },
 ] as const;
@@ -114,7 +114,7 @@ describe("never an invented actor or action", () => {
     const { frame, failure } = errorFrame(await streamFailure());
     expect(frame.actor).toBe("payer");
     expect(frame).not.toHaveProperty("action");
-    expect(failure.message).not.toMatch(/Top up|Ask the pod's owner/);
+    expect(failure.message).not.toMatch(/Top up|Ask an admin/);
   });
 
   it("an unknown action on the wire is dropped, not rendered", async () => {

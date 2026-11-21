@@ -52,6 +52,7 @@ import type {
 } from "@synap-core/types";
 import {
   aiAvailabilityCopy,
+  resolveAiFailureState,
   resolveAiRefusal,
 } from "@synap-core/types/ai-availability";
 
@@ -232,7 +233,9 @@ const IS_CODE_TO_CLASS: Record<string, AiFailureClass> = {
 };
 
 /** Read the IS failure envelope off an error, wherever it was attached. */
-function extractFailureEnvelope(error: unknown): IsFailureEnvelope | undefined {
+export function extractFailureEnvelope(
+  error: unknown
+): IsFailureEnvelope | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const bag = error as Record<string, unknown>;
   // Carried on `.failure` — how send-message attaches it to the Error it
@@ -368,8 +371,7 @@ const COPY: Record<
     retryable: false,
     needsOperator: false,
   },
-  // The account itself is switched off — not a credentials fault (the 403
-  // used to read "an operator has to fix the AI service credentials").
+  // The account itself is switched off: not a credentials fault.
   account_inactive: {
     code: "account_inactive",
     retryable: false,
@@ -493,12 +495,11 @@ const ACTIONS: ReadonlySet<string> = new Set<IsFailureAction>([
 function actorAndAction(
   failureClass: AiFailureClass,
   needsOperator: boolean,
-  envelope: IsFailureEnvelope | undefined
+  stated: IsFailureAction | null | undefined
 ): { actor?: IsFailureActor; action?: IsFailureAction } {
   // Operator states never carry a user action, whatever the wire said.
   if (needsOperator) return { actor: "operator", action: "none" };
   if (!PAYER_CLASSES.has(failureClass)) return {};
-  const stated = envelope?.action;
   return typeof stated === "string" && ACTIONS.has(stated)
     ? { actor: "payer", action: stated as IsFailureAction }
     : { actor: "payer" };
@@ -511,10 +512,11 @@ function actorAndAction(
  */
 function causeOf(
   failureClass: AiFailureClass,
-  action: IsFailureAction | undefined
+  action: IsFailureAction | undefined,
+  ownKey: boolean
 ): string {
   const copy = COPY[failureClass];
-  const refusal = resolveAiRefusal(copy.code, action);
+  const refusal = resolveAiRefusal(copy.code, action, ownKey);
   const deck = refusal ? aiAvailabilityCopy(refusal) : null;
   // Every class has words one way or the other: the guard test derives the
   // split from the classification and fails on a class with neither.
@@ -530,13 +532,20 @@ function causeOf(
  * `envelope` is the IS failure envelope when the caller kept it apart from
  * the error (a synthesis result carries its class and its envelope side by
  * side): it is read exactly as an envelope attached to `failure` would be, so
- * the payer action the IS stated for this caller reaches the words.
+ * the payer action the IS stated for this caller reaches the words. `action`
+ * is that action alone, for a caller that kept only it (a degraded capture's
+ * `degradedDetail.action`); it wins over the envelope's.
+ *
+ * A provider refusal on the pod's OWN key (`envelope.ownKey`) is the owner's
+ * to fix in their provider account: actor `payer`, action `none`, never an
+ * operator's.
  */
 export function describeAiFailure(
   failure: unknown,
   options: {
     reference?: string | null;
     envelope?: IsFailureEnvelope | null;
+    action?: IsFailureAction | null;
   } = {}
 ): AiFailureDescription {
   const failureClass =
@@ -587,18 +596,24 @@ export function describeAiFailure(
       ? ` Reason: ${detail}.`
       : "";
 
-  const { actor, action } = actorAndAction(
-    failureClass,
-    copy.needsOperator,
-    envelope ?? undefined
-  );
+  const ownKey =
+    envelope?.ownKey === true &&
+    resolveAiFailureState(copy.code) === "provider_issue";
+  const needsOperator = copy.needsOperator && !ownKey;
+  const { actor, action } = ownKey
+    ? { actor: "payer" as const, action: "none" as const }
+    : actorAndAction(
+        failureClass,
+        needsOperator,
+        options.action ?? envelope?.action
+      );
 
   return {
     class: failureClass,
     code: copy.code,
     retryable,
-    needsOperator: copy.needsOperator,
-    message: `${causeOf(failureClass, action)}${because}${advice}${reference}`,
+    needsOperator,
+    message: `${causeOf(failureClass, action, ownKey)}${because}${advice}${reference}`,
     ...(actor ? { actor } : {}),
     ...(action ? { action } : {}),
   };

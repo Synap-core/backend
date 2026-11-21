@@ -474,11 +474,45 @@ describe("one copy deck", () => {
       actor: "payer",
       action: "ask_admin",
       message: expect.stringMatching(
-        /Captures still save\. Ask the pod's owner to top up credits\./
+        /Captures still save\. Ask an admin to top up credits\./
       ),
     });
     const bare = describeAiFailure("credits_empty", { envelope });
     expect(bare).not.toHaveProperty("action");
-    expect(bare.message).not.toMatch(/Top up|Ask the pod's owner/);
+    expect(bare.message).not.toMatch(/Top up|Ask an admin/);
+  });
+
+  it("the action alone (a degraded capture's) closes the sentence the same way", () => {
+    expect(
+      describeAiFailure("credits_empty", { action: "ask_admin" })
+    ).toMatchObject({
+      action: "ask_admin",
+      message: expect.stringMatching(/Ask an admin to top up credits\./),
+    });
+  });
+
+  it("a provider refusal on the pod's own key is the owner's, never an operator's", () => {
+    const own = describeAiFailure({
+      failure: {
+        code: "insufficient_credit",
+        retryable: false,
+        ownKey: true,
+      },
+    });
+    expect(own).toMatchObject({
+      class: "quota",
+      actor: "payer",
+      action: "none",
+      needsOperator: false,
+    });
+    expect(own.message).toMatch(
+      /^Your AI provider key has run out of credit or was refused\. The pod's owner updates it in Settings › AI providers\./
+    );
+    // Synap's own key: the operator's state, as before.
+    const synaps = describeAiFailure({
+      failure: { code: "insufficient_credit", retryable: false },
+    });
+    expect(synaps).toMatchObject({ actor: "operator", needsOperator: true });
+    expect(synaps.message).not.toMatch(/provider key/);
   });
 });

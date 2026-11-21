@@ -424,7 +424,7 @@ const ACTION_VERB_ROWS = {
   // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
   top_up: { imperative: "Top up", past: "Topped up" },
   upgrade: { imperative: "Upgrade", past: "Upgraded" },
-  ask_admin: { imperative: "Ask admin", past: "Asked admin" },
+  ask_admin: { imperative: "Ask an admin", past: "Asked an admin" },
   fix_payment: { imperative: "Fix payment", past: "Fixed payment" },
   // Put a REJECTED proposal back in the queue — the inverse of reject. Without
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
