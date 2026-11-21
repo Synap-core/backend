@@ -627,12 +627,6 @@ export async function applyProposalApproval(args: {
    * else may pass it: the tripwire `presence-gate-every-door` pins its callers.
    */
   presenceChecked?: "oauth.consent";
-  /**
-   * The approval also sets the run mode the person ticked ("allow without
-   * review" on an agent-made verb, `services/governance/verb-allow.ts`): the
-   * presence gate then asks what `governanceRules.setActionMode` asks.
-   */
-  setsActionMode?: boolean;
 }): Promise<ProposalExecutorResult> {
   // Approval is the human step — an agent caller (agent key, the IS internal
   // key, or an acting agent in the ALS) never applies one, whichever door.
@@ -663,7 +657,6 @@ export async function applyProposalApproval(args: {
       proposal: args.proposal,
       proof: args.presence,
       door: args.door ?? "applyProposalApproval",
-      ...(args.setsActionMode ? { setsActionMode: true } : {}),
     });
   }
 
