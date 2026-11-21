@@ -677,7 +677,7 @@ export function aiAvailabilityCopy(
       cta,
       composerHint: null,
       askAdminMessage: null,
-      detail: `A payment failed, so this pod's plan runs on its grace period: AI keeps working ${until}. ${actionLine(a.kind, a.action, false)}`,
+      detail: `A payment for this pod failed. AI keeps working ${until}. ${actionLine(a.kind, a.action, false)}`,
     };
   }
   const pod = options.podName?.trim() || "this pod";
