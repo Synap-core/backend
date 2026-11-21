@@ -1439,9 +1439,9 @@ async function settleStop(p: {
 function previousTurnEnd(
   run: RunRow,
   turns: RunTurnRecord[] | undefined
-): Date {
+): Date | null {
   const previous = turns && turns.length > 1 ? turns[turns.length - 2] : null;
-  return previous ? new Date(previous.at) : run.startedAt;
+  return previous ? new Date(previous.at) : (run.startedAt ?? null);
 }
 
 /**

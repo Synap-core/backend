@@ -10,8 +10,8 @@
  * The IS works ASYNCHRONOUSLY in the channel after the kickoff; completion and
  * capture-back happen out-of-band via the Hub `POST /runs/:id/capture` route.
  * So this executor returns `{ status: "queued" }`: the turn is enqueued, and
- * the run becomes `running` when the turn starts (`a2ai-response-trigger`
- * claims it). It does not block on the agent finishing.
+ * the run becomes `running` when the turn starts (the A2AI worker claims
+ * it). It does not block on the agent finishing.
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */

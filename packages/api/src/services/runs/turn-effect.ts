@@ -17,7 +17,7 @@
  * another's work.
  *
  * `pending`: the reply counts and is not saved yet (the IS reports the turn's
- * end before the pod saves its reply, `a2ai-response-trigger.ts`). The caller
+ * end before the A2AI worker saves its reply). The caller
  * judges again once it is (`settleRunTurnPersisted`).
  *
  * The turn started when its triggering message was posted (`turnKey`), else
@@ -54,11 +54,13 @@ export async function judgeTurnEffect(p: {
   definitionSnapshot: unknown;
   turnKey?: string | null;
   /** The end of the turn before this one, else the run's start. */
-  since: Date;
+  since: Date | null;
 }): Promise<TurnEffect> {
   const replyCounts = !runDeclaresOutputs(p.definitionSnapshot);
   const key = p.turnKey && isUuid(p.turnKey) ? p.turnKey : null;
-  const fallback = drizzleSql`${p.since.toISOString()}::timestamptz`;
+  const fallback = p.since
+    ? drizzleSql`${p.since.toISOString()}::timestamptz`
+    : drizzleSql`'-infinity'::timestamptz`;
   const since = key
     ? drizzleSql`coalesce((SELECT ${messages.timestamp} FROM ${messages} WHERE ${messages.id} = ${key}::uuid), ${fallback})`
     : fallback;
