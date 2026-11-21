@@ -27,11 +27,6 @@ export interface ApproveChoice {
   identityResolutionByRef?: Record<string, DuplicateResolution>;
   /** A graph's ONE answer for every twin not chosen one by one. */
   identityResolutionForTwins?: "keep_existing" | "separate";
-  /**
-   * The person's tick on an AI-made verb's own request: the verb then runs
-   * without review (`proposals.approve` `allowWithoutReview`).
-   */
-  allowWithoutReview?: boolean;
 }
 
 /**
@@ -67,7 +62,6 @@ export function approveInput(
     ...(choice.identityResolutionForTwins
       ? { identityResolutionForTwins: choice.identityResolutionForTwins }
       : {}),
-    ...(choice.allowWithoutReview ? { allowWithoutReview: true } : {}),
   };
 }
 
