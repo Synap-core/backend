@@ -178,7 +178,7 @@ export const skills = pgTable(
 
     /** Owner: the person (an agent only if nobody installed it). */
     userId: text("user_id").notNull(),
-    /** Actor: the agent that authored it, null for a person's own (0445). FK in SQL. */
+    /** Actor: the agent that authored it, null for a person's own. FK in SQL. */
     agentUserId: text("agent_user_id"),
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",

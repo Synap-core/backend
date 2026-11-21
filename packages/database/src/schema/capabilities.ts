@@ -35,7 +35,7 @@ export const capabilities = pgTable(
     workspaceId: uuid("workspace_id"),
     /** Owner: the person (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
-    /** Actor: the agent that authored it, null for a person's own (0445). FK in SQL. */
+    /** Actor: the agent that authored it, null for a person's own. FK in SQL. */
     agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),

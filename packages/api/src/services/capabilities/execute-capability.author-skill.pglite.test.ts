@@ -86,6 +86,17 @@ describe("an agent-authored automation's step finds the skill its agent made", (
     expect(out).toMatchObject({ kind: "deny", reason: "reached the gate" });
   });
 
+  it("the agent acting as itself still finds the skill it wrote (its actor column)", async () => {
+    const out = await executeCapability({
+      verbId: VERB,
+      parameters: {},
+      workspaceId: null,
+      userId: AGENT,
+      suppressProposal: true,
+    });
+    expect(out).toMatchObject({ kind: "deny", reason: "reached the gate" });
+  });
+
   it("the run's agent widens nothing: another user's skill stays out of reach", async () => {
     const out = await run(ORPHAN_VERB, {
       sessionId: randomUUID(),

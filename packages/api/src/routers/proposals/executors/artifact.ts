@@ -4,7 +4,7 @@ import {
   proposals,
   eq,
   artifacts,
-  ownerAndActor,
+  ownerOfProposal,
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -73,13 +73,7 @@ export function registerArtifactExecutors(): void {
         return { success: true, alreadyApproved: true };
       }
 
-      // The person it was proposed for owns it, never the approver; the
-      // agent that wrote it is the actor.
-      const owner = await ownerAndActor(
-        db,
-        proposal.subjectUserId ?? proposal.agentUserId ?? userId,
-        proposal.agentUserId
-      );
+      const owner = await ownerOfProposal(db, proposal, userId);
       const [created] = await db
         .insert(artifacts)
         .values({

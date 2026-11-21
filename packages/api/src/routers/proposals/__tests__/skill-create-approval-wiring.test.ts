@@ -82,13 +82,15 @@ vi.mock("@synap/database", () => ({
   skills: SKILLS,
   eq: () => ({}),
   getActingAgentUserId: () => actingAgent,
-  // Real reading: a person stands for themself (the users read is not the
-  // point of this file).
-  ownerAndActor: async (
+  // The real rule with no users read (a person stands for themself).
+  ownerOfProposal: async (
     _db: unknown,
-    ownerId: string,
-    agentUserId?: string | null
-  ) => ({ ownerId, agentUserId: agentUserId ?? null }),
+    p: { subjectUserId?: string | null; agentUserId?: string | null },
+    approverId: string
+  ) => ({
+    ownerId: p.subjectUserId ?? p.agentUserId ?? approverId,
+    agentUserId: p.agentUserId ?? null,
+  }),
 }));
 
 vi.mock("../review-authority.js", () => ({

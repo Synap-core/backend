@@ -85,6 +85,23 @@ export async function ownerAndActor(
 }
 
 /**
+ * The owner and actor of a row an approval creates: the person the proposal
+ * was filed for, never the approver; the agent that wrote it is the actor.
+ */
+export function ownerOfProposal(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  proposal: { subjectUserId?: string | null; agentUserId?: string | null },
+  approverId: string
+): Promise<OwnerAndActor> {
+  return ownerAndActor(
+    database,
+    proposal.subjectUserId ?? proposal.agentUserId ?? approverId,
+    proposal.agentUserId
+  );
+}
+
+/**
  * {@link personOfOwner} for many owner ids in ONE read. An id with no users row
  * is absent from the map (a system owner: `undefined`, as above).
  */

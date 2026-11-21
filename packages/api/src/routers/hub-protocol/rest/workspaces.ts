@@ -956,10 +956,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         created: applied.materializeStatus === "created",
       };
 
-      // The wide preset an agent-owned workspace grants its agent. CONTRACT
-      // PHASE (Governance Convergence): this is mirrored into `governance_rules`
-      // (below) — NOT stored in the retired `settings.aiGovernance.autoApproveFor`
-      // JSONB sub-key. Floor-covered verbs (search.*, entity.create, …) are
+      // The wide preset an agent's workspace grants its agent, mirrored into
+      // `governance_rules` (below) — NOT stored in the retired
+      // `settings.aiGovernance.autoApproveFor` JSONB sub-key. Floor-covered verbs (search.*, entity.create, …) are
       // dropped by `syncAutoApproveRules`; only genuine widenings become rows.
       const agentWorkspaceAutoApprove = [
         "search.*",

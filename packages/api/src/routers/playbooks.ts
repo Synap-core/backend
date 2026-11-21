@@ -2954,8 +2954,8 @@ export const playbooksRouter = router({
 
   /**
    * Archive a playbook (soft state transition → "archived"). Same write-gate +
-   * governance contract as update; "archive" is a destructive verb so it
-   * proposes in agent-owned workspaces.
+   * governance contract as update; "archive" is a destructive verb so an
+   * agent's archive proposes.
    */
   archive: protectedProcedure
     .input(

@@ -3,7 +3,7 @@ import {
   db,
   proposals,
   eq,
-  ownerAndActor,
+  ownerOfProposal,
   skills,
   tools,
   transitionProposal,
@@ -77,13 +77,7 @@ export function registerSkillExecutors(): void {
         // way it lands under the proposal's id.
         userId,
         agentUserId: undefined,
-        // The person it was filed for owns it, never the approver; the agent
-        // that wrote it is its actor.
-        owner: await ownerAndActor(
-          db,
-          proposal.subjectUserId ?? proposal.agentUserId ?? userId,
-          proposal.agentUserId
-        ),
+        owner: await ownerOfProposal(db, proposal, userId),
         ...(typeof innerData.id === "string" ? { adoptId: innerData.id } : {}),
         auditSource: "proposal_approval",
       } as unknown as InsertSkillGovernedInput);

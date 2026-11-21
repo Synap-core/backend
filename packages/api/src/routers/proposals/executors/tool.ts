@@ -3,7 +3,7 @@ import {
   db,
   proposals,
   eq,
-  ownerAndActor,
+  ownerOfProposal,
   tools,
   transitionProposal,
 } from "@synap/database";
@@ -64,13 +64,7 @@ export function registerToolExecutors(): void {
         proposal.workspaceId ??
         null;
 
-      // The person it was proposed for owns it, never the approver; the
-      // agent that wrote it is the actor.
-      const owner = await ownerAndActor(
-        db,
-        proposal.subjectUserId ?? proposal.agentUserId ?? userId,
-        proposal.agentUserId
-      );
+      const owner = await ownerOfProposal(db, proposal, userId);
       const [tool] = await db
         .insert(tools)
         .values({

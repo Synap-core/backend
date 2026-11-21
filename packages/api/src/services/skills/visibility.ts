@@ -46,19 +46,28 @@ export interface SkillVisibilityOptions {
   includeExpired?: boolean;
 }
 
+/**
+ * A user-scope skill is visible to its owner and to the agent that wrote it:
+ * an agent acting as itself (a key that acts for nobody) keeps the skills its
+ * person now owns.
+ */
+function ownUserSkillWhere(userId: string): SQL {
+  return and(
+    eq(skills.scope, "user"),
+    or(eq(skills.userId, userId), eq(skills.agentUserId, userId))
+  )!;
+}
+
 export function visibleSkillsWhere(
   userId: string,
   workspaceId?: string,
   options?: SkillVisibilityOptions
 ): SQL {
   const tiers = !workspaceId
-    ? or(
-        eq(skills.scope, "pod"),
-        and(eq(skills.scope, "user"), eq(skills.userId, userId))
-      )!
+    ? or(eq(skills.scope, "pod"), ownUserSkillWhere(userId))!
     : or(
         eq(skills.scope, "pod"),
-        and(eq(skills.scope, "user"), eq(skills.userId, userId)),
+        ownUserSkillWhere(userId),
         and(
           eq(skills.scope, "workspace"),
           eq(skills.workspaceId, workspaceId),
@@ -84,7 +93,7 @@ export function visibleSkillsAnyWorkspaceWhere(
 ): SQL {
   const tiers = or(
     eq(skills.scope, "pod"),
-    and(eq(skills.scope, "user"), eq(skills.userId, userId)),
+    ownUserSkillWhere(userId),
     and(
       eq(skills.scope, "workspace"),
       userVisibleWhere(skills.workspaceId, userId)

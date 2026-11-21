@@ -270,7 +270,7 @@ describe("(B) tool/create approval materializes instead of no-op", () => {
 
   it("the person it was proposed for owns it; the proposing agent is its actor", () => {
     expect(TOOL_CREATE_BLOCK).toMatch(
-      /ownerAndActor\(\s*db,\s*proposal\.subjectUserId \?\? proposal\.agentUserId \?\? userId,\s*proposal\.agentUserId\s*\)/
+      /ownerOfProposal\(\s*db,\s*proposal,\s*userId\s*\)/
     );
     expect(TOOL_CREATE_BLOCK).toMatch(/createdBy:\s*owner\.ownerId/);
     expect(TOOL_CREATE_BLOCK).toMatch(/agentUserId:\s*owner\.agentUserId/);

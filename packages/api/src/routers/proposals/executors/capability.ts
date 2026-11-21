@@ -6,6 +6,7 @@ import {
   and,
   skills,
   knowledgeRepository,
+  ownerOfProposal,
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -987,8 +988,6 @@ export function registerCapabilityExecutors(): void {
   // to the insert. It is a CREATE, so no id is read at all — the row mints its
   // own, exactly as the direct path does.
   //
-  // OWNER: the person it was proposed for, never the approver; the agent that
-  // wrote it is the actor (`resolveOrCreateContainer` stamps both).
   registerProposalExecutor({
     key: "capability/create",
     async execute({ proposal, userId, input, deps }) {
@@ -1042,10 +1041,11 @@ export function registerCapabilityExecutors(): void {
           ? (inner.metadata as Record<string, unknown>)
           : undefined;
 
+      const owner = await ownerOfProposal(db, proposal, userId);
       await resolveOrCreateContainer(db, {
         workspaceId: wsLens,
-        createdBy: proposal.subjectUserId ?? proposal.agentUserId ?? userId,
-        agentUserId: proposal.agentUserId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name,
         description: (inner.description as string | null) ?? undefined,
         templateKey,
