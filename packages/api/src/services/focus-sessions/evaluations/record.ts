@@ -610,11 +610,40 @@ async function fileCriterionSlot(
 ): Promise<boolean> {
   const wanted = normalizeExpectedLabel(criterionSlotLabel(criterion));
   return updateExpectedOutputsLocked(sessionId, (current) => {
-    if (current.some((o) => normalizeExpectedLabel(o?.label) === wanted)) {
-      return null;
-    }
-    return [...current, criterionSlot(criterion, why, new Date(), false)];
+    const next = withEscalationSlot(current, criterion, why, wanted);
+    return next === current ? null : [...next];
   });
+}
+
+/**
+ * The slots with the escalation's slot for `criterion` filed, or `outputs`
+ * itself when it is already there. Pure. A LIVE slot of the criterion (by
+ * `criterionKey`, else by label) means it is filed; a WITHDRAWN one comes back
+ * as itself, now the escalation's (no `outputKey`: owed at once), never
+ * leaving the required criterion with no way to be graded.
+ */
+export function withEscalationSlot(
+  outputs: readonly ExpectedOutput[],
+  criterion: SessionCriterion,
+  why: string,
+  wanted: string | undefined = normalizeExpectedLabel(
+    criterionSlotLabel(criterion)
+  ),
+  now: Date = new Date()
+): readonly ExpectedOutput[] {
+  const mine = (o: ExpectedOutput | null | undefined) =>
+    !!o &&
+    (o.kind === CRITERION_SLOT_KIND && o.criterionKey
+      ? o.criterionKey === criterion.key
+      : normalizeExpectedLabel(o.label) === wanted);
+  if (outputs.some((o) => mine(o) && o.retiredAt == null)) return outputs;
+  const withdrawn = outputs.findIndex((o) => mine(o) && o.status !== "done");
+  const slot = criterionSlot(criterion, why, now, false);
+  if (withdrawn === -1) return [...outputs, slot];
+  const was = outputs[withdrawn]!;
+  return outputs.map((o, i) =>
+    i === withdrawn ? { ...slot, ...(was.key ? { key: was.key } : {}) } : o
+  );
 }
 
 /** Every evaluation row of a session, oldest first (owner-floored). */

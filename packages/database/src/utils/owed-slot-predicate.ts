@@ -89,28 +89,28 @@ function slotArray(expectedOutputs: AnyPgColumn | SQL): SQL {
 /**
  * SQL boolean over `slot`: a declared grade slot waiting on the output its
  * criterion checks — `isGradeAwaitingOutput` (`@synap-core/types/units`). The
- * slot is a `criterion` slot naming a non-empty string `outputKey`, and a slot
- * of the same `expected_outputs` (not a grade slot) carries that string `key`
- * and is still in the making: not delivered (not `done`, not decided by the
- * person's answer), not claimed (`claimedDone` is not JSON `true`), not
- * retired, not optional (JSON `true`). Never NULL: a missing field reads "not
- * waiting", so the grade stays owed.
+ * slot is a `criterion` slot naming a non-empty string `outputKey`, and no slot
+ * of the same `expected_outputs` (not a grade slot) carrying that string `key`
+ * is MADE: delivered (`done`, or decided by the person's answer), claimed
+ * (`claimedDone` JSON `true`), retired, or optional (JSON `true`). An output
+ * not declared yet is not made. Never NULL: a missing field on the grade reads
+ * "not waiting", so it stays owed.
  */
 export function gradeAwaitsOutputSql(expectedOutputs: AnyPgColumn | SQL): SQL {
   return drizzleSql`coalesce(slot->>'kind' = 'criterion'
       AND jsonb_typeof(slot->'outputKey') = 'string'
       AND slot->>'outputKey' <> ''
-      AND EXISTS (
+      AND NOT EXISTS (
         SELECT 1 FROM jsonb_array_elements(${slotArray(expectedOutputs)}) AS graded
         WHERE jsonb_typeof(graded) = 'object'
           AND jsonb_typeof(graded->'key') = 'string'
           AND graded->>'key' = slot->>'outputKey'
           AND graded->>'kind' IS DISTINCT FROM 'criterion'
-          AND graded->>'status' IS DISTINCT FROM 'done'
-          AND ${drizzleSql.raw(decidedByAnswerClause("graded"))}
-          AND graded->'claimedDone' IS DISTINCT FROM 'true'::jsonb
-          AND graded->>'retiredAt' IS NULL
-          AND graded->'optional' IS DISTINCT FROM 'true'::jsonb
+          AND (graded->>'status' = 'done'
+            OR NOT ${drizzleSql.raw(decidedByAnswerClause("graded"))}
+            OR graded->'claimedDone' = 'true'::jsonb
+            OR graded->>'retiredAt' IS NOT NULL
+            OR graded->'optional' = 'true'::jsonb)
       ), false)`;
 }
 

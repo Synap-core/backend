@@ -231,17 +231,18 @@ type GradeFacts = Pick<DeliverableFacts, "kind"> & {
  * A DECLARED grade slot (work-model W5) that waits on the output its
  * criterion checks: a criterion slot naming that output's key (`outputKey`,
  * stamped only by the door that files a grade declared up front, never by the
- * escalation), and a slot of the same session carries that stored `key` and
- * is still IN THE MAKING. Until it is made the grade is not the person's
- * move: it is not owed, so it neither counts in needs-you nor parks the run.
+ * escalation), and no slot of the same session with that stored `key` has
+ * been MADE yet. Until it is made the grade is not the person's move: it is
+ * not owed, so it neither counts in needs-you nor parks the run.
  *
- * "In the making" is narrower than "not delivered": an output the agent
- * CLAIMED (`claimedDone: true`) is made — an output a required criterion
- * checks never reaches `done` by evidence, it waits for that check — and a
- * retired or optional output is never made, so it must not hide its grade
- * forever. Owed as before when the slot names no output, or no slot of the
- * session carries that key. A grade slot is never the output another grade
- * waits on.
+ * MADE is: delivered (`done`, or decided by the person's answer), CLAIMED by
+ * the agent (`claimedDone: true` — an output a required criterion checks never
+ * reaches `done` by evidence, it waits for that check), or LET GO (retired, or
+ * optional): a let-go output never hides its grade forever. An output NOT
+ * DECLARED yet is not made: a playbook's later stage brings its outputs in
+ * when it is entered, while its criteria sit on the session from the start
+ * (wave lead default, W5 review B). A grade slot is never the output another
+ * grade waits on.
  *
  * The SQL mirror is `gradeAwaitsOutputSql` (`@synap/database`,
  * `owed-slot-predicate.ts`), held to this by its PGlite parity test.
@@ -253,16 +254,16 @@ export function isGradeAwaitingOutput(
   if (slot.kind !== CRITERION_SLOT_KIND) return false;
   const key = slot.outputKey;
   if (typeof key !== "string" || key === "") return false;
-  return outputs.some((raw) => {
+  return !outputs.some((raw) => {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
     const o = raw as DeliverableFacts & { key?: unknown };
     return (
       o.key === key &&
       o.kind !== CRITERION_SLOT_KIND &&
-      !isDeliverableDelivered(o) &&
-      o.claimedDone !== true &&
-      o.retiredAt == null &&
-      o.optional !== true
+      (isDeliverableDelivered(o) ||
+        o.claimedDone === true ||
+        o.retiredAt != null ||
+        o.optional === true)
     );
   });
 }

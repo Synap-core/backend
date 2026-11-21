@@ -80,11 +80,17 @@ const EVIDENCE_CRITERION = {
   check: { kind: "evidence" as const, evidenceKey: "tests" },
 };
 
+const JUDGE_CRITERION = {
+  key: "copy-is-clear",
+  statement: "The copy is clear",
+  check: { kind: "judge" as const },
+};
+
 const move = (target: unknown, value: unknown = { type: "text" }) =>
   answerTargetMove({
     target,
     value,
-    criteria: [HUMAN_CRITERION, EVIDENCE_CRITERION],
+    criteria: [HUMAN_CRITERION, EVIDENCE_CRITERION, JUDGE_CRITERION],
   });
 
 describe("answerTargetMove — what an answer re-checks", () => {
@@ -100,6 +106,10 @@ describe("answerTargetMove — what an answer re-checks", () => {
       kind: "recheck_criterion",
       criterionKey: "tests-pass",
     });
+  });
+
+  it("a judge criterion: nothing (it re-grades on its own schedule)", () => {
+    expect(move({ criterion: "copy-is-clear" })).toBeNull();
   });
 
   it("an output: its claim against its evidence again", () => {

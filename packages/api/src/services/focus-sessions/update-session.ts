@@ -3038,12 +3038,26 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
-  // GRADES DECLARED UP FRONT (W5): a written criteria change keeps the grade
-  // slots in step: a grade naming its output is filed, a re-pointed one
-  // follows, one whose criterion was removed is withdrawn. Never throws.
-  if (criteriaChange) {
+  // GRADES DECLARED UP FRONT (W5): a written criteria change, or outputs
+  // added, keep the grade slots in step: a grade naming its output is filed,
+  // a re-pointed one follows, one whose criterion was removed is withdrawn.
+  // Never throws. The push and the asked log below read the list as the
+  // reconcile left it.
+  if (
+    criteriaChange ||
+    params.addOutput !== undefined ||
+    params.expectedOutputs !== undefined
+  ) {
     const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
-    await fileDeclaredGradeSlots(sessionId);
+    const grades = await fileDeclaredGradeSlots(sessionId);
+    if (grades.outputs) {
+      if (!mutatesOutputs) {
+        outputsBefore = Array.isArray(existing.expectedOutputs)
+          ? (existing.expectedOutputs as OutputItem[])
+          : [];
+      }
+      outputsAfter = grades.outputs;
+    }
   }
   // C6: the own-session criteria change says so in the room, with its Undo.
   if (ownSessionCriteria && params.criteria) {

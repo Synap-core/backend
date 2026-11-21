@@ -1452,6 +1452,7 @@ export async function createFocusSession(
     });
   }
 
+  let gradeSlotsFailed = false;
   // GRADES DECLARED UP FRONT (W5): a criterion the person grades that names
   // its output gets its grade slot now, owed once that output is delivered.
   // After the commit, through the slot door's own lock; it never throws (a
@@ -1462,6 +1463,8 @@ export async function createFocusSession(
     if (grades.outputs) {
       sessionOut = { ...sessionOut, expectedOutputs: grades.outputs };
     }
+    // Logged by the door with the session id; the reply says it too.
+    if (grades.error) gradeSlotsFailed = true;
   }
 
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
@@ -1585,6 +1588,11 @@ export async function createFocusSession(
       typeof droppedAskWarnings
     >[1]
   );
+  if (gradeSlotsFailed) {
+    warnings.push(
+      "The grade cards this session's criteria declare could not be filed yet; they are filed on the next criteria change."
+    );
+  }
 
   // Recall: look for raw captures/notes that could help this session, in the
   // background (`session-recall.ts`; an automation's session is skipped

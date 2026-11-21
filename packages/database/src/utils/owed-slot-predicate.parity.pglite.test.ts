@@ -26,7 +26,8 @@
  * criterion's grade slot naming the output it checks (`outputKey`) is owed
  * only once a slot of the same list with that stored `key` is delivered
  * (`isOwedByYouIn`): delivered, or claimed by the agent, and a retired or
- * optional output never hides its grade. Each row is a whole `expected_outputs` list in which only
+ * optional output never hides its grade; an output not declared yet is not
+ * made. Each row is a whole `expected_outputs` list in which only
  * the grade can be owed, so "the list owes the person" IS the grade's answer.
  *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
@@ -348,11 +349,12 @@ const GRADE_ROWS: ReadonlyArray<{
     ],
   },
   {
-    rulesOut: "a grade held back by an output nobody declared",
+    rulesOut:
+      "an output nobody declared yet read as made (a later stage brings it)",
     slots: [{ ...GRADE, outputKey: "missing" }, COPY],
   },
   {
-    rulesOut: "an output matched by label instead of its stored key",
+    rulesOut: "an output matched by its label instead of its stored key",
     slots: [GRADE, { label: "landing-copy", owner: "agent" }],
   },
   {
@@ -426,6 +428,9 @@ describe("a criterion's grade is owed once its output is delivered", () => {
     expect(await sqlListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(
       true
     );
+    // An output a later stage declares: not made yet, so the grade waits
+    // (W5 review B).
+    expect(await sqlListOwed([GRADE])).toBe(false);
     // Old data: a grade naming no output is owed as before.
     expect(await sqlListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(
       true
@@ -434,6 +439,7 @@ describe("a criterion's grade is owed once its output is delivered", () => {
 
   it("TS: the same answers", () => {
     expect(tsListOwed([GRADE, COPY])).toBe(false);
+    expect(tsListOwed([GRADE])).toBe(false);
     expect(tsListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
     expect(tsListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(true);
     expect(tsListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(true);

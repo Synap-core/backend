@@ -79,6 +79,7 @@ import {
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
+import { EVENT_GRADED_KINDS } from "../services/dev-loop/recheck-criteria.js";
 import { readCriteria, type SessionCriterion } from "@synap/playbooks";
 import {
   DEPENDENCY_LINK_TYPE,
@@ -192,7 +193,8 @@ const targetKey = (v: unknown): string | null =>
  *   - a target naming anything but exactly one output or one criterion of
  *     the session re-checks nothing;
  *   - `{criterion}`: the person's grade card when they grade it
- *     (`check.kind: "human"`), else its own check again;
+ *     (`check.kind: "human"`); its own check again when an event can settle
+ *     it (evidence, capability); nothing for a judge;
  *   - `{output}`: that output's claim against its evidence.
  * Nothing here writes a verdict or an attestation.
  */
@@ -210,9 +212,17 @@ export function answerTargetMove(input: {
   if (criterionKey) {
     const criterion = input.criteria.find((c) => c.key === criterionKey);
     if (!criterion) return null;
-    return criterion.check.kind === "human"
-      ? { kind: "surface_grade", criterionKey }
-      : { kind: "recheck_criterion", criterionKey };
+    if (criterion.check.kind === "human") {
+      return { kind: "surface_grade", criterionKey };
+    }
+    // The re-check door runs the checks an event can settle (evidence,
+    // capability). A judge re-grades on its own schedule (evaluate_session),
+    // so an answer re-checks nothing for it.
+    return (EVENT_GRADED_KINDS as readonly string[]).includes(
+      criterion.check.kind
+    )
+      ? { kind: "recheck_criterion", criterionKey }
+      : null;
   }
   const outputKey = targetKey(target.output);
   return outputKey ? { kind: "recheck_output", outputKey } : null;

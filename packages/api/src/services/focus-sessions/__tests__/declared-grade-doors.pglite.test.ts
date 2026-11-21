@@ -326,4 +326,121 @@ describe("declared grades through the real doors (W5 review)", () => {
     expect(copy.status).not.toBe("done");
     expect(copy).not.toHaveProperty("attestedBy");
   });
+
+  it("A. a grade withdrawn when its check moved to judge comes back as the escalation, owed at once", async () => {
+    const id = await seed([GRADED_BY_PERSON], [COPY]);
+    await fileDeclaredGradeSlots(id);
+    // The criterion's check moves to a judge: the declared grade is withdrawn.
+    const judged = { ...GRADED_BY_PERSON, check: { kind: "judge" } };
+    await q(`update focus_sessions set criteria = $2::jsonb where id = $1`, [
+      id,
+      JSON.stringify([judged]),
+    ]);
+    await fileDeclaredGradeSlots(id);
+    expect(gradeOf(await stored(id))).toMatchObject({
+      retiredReason: "withdrawn",
+    });
+    // The judge fails its checks: the escalation must reach the person.
+    for (const attempt of [1, 2]) {
+      await db.insert(sessionEvaluations).values({
+        sessionId: id,
+        userId: USER,
+        criterionKey: "copy-reads-well",
+        attempt,
+        verdict: "fail",
+        evaluatorKind: "judge",
+      });
+    }
+    expect(
+      await escalateFailingCriteria({ sessionId: id, userId: USER })
+    ).toEqual(["copy-reads-well"]);
+    const slots = await stored(id);
+    const grades = slots.filter((o) => o.kind === "criterion");
+    expect(grades).toHaveLength(1);
+    expect(grades[0]!.retiredAt).toBeUndefined();
+    expect(grades[0]).not.toHaveProperty("outputKey");
+    expect(isOwedSlot(grades[0]!, slots)).toBe(true);
+    expect(await sqlOwes(id)).toBe(true);
+  });
+
+  it("B. a later stage's grade is not owed before its output is declared, nor once declared, and is owed once claimed", async () => {
+    const later = {
+      key: "post-is-right",
+      statement: "The launch post is right",
+      check: { kind: "human" },
+      outputKey: "launch-post",
+    };
+    // Stage 1: the criterion is on the session, its output is not.
+    const id = await seed([later], [COPY]);
+    await fileDeclaredGradeSlots(id);
+    let slots = await stored(id);
+    expect(gradeOf(slots)).toMatchObject({ outputKey: "launch-post" });
+    expect(isOwedSlot(gradeOf(slots)!, slots)).toBe(false);
+    expect(await sqlOwes(id)).toBe(false);
+    // Stage 3 brings the output in: still in the making.
+    expect(
+      (
+        await updateFocusSession({
+          sessionId: id,
+          userId: USER,
+          agentUserId: AGENT,
+          addOutput: { kind: "document", label: "Launch post" },
+        })
+      ).status
+    ).toBe("updated");
+    slots = await stored(id);
+    expect(slots.find((o) => o.key === "launch-post")).toBeDefined();
+    expect(isOwedSlot(gradeOf(slots)!, slots)).toBe(false);
+    expect(await sqlOwes(id)).toBe(false);
+    // The agent claims it: the person's move.
+    await updateFocusSession({
+      sessionId: id,
+      userId: USER,
+      agentUserId: AGENT,
+      completeOutput: "launch-post",
+    });
+    slots = await stored(id);
+    expect(isOwedSlot(gradeOf(slots)!, slots)).toBe(true);
+    expect(await sqlOwes(id)).toBe(true);
+  });
+
+  it("C. a judge target, through the real reactor, re-checks nothing and writes nothing", async () => {
+    const judged = {
+      key: "copy-is-clear",
+      statement: "The landing copy is clear",
+      check: { kind: "judge" },
+      outputKey: "landing-copy",
+    };
+    const id = await seed(
+      [judged],
+      [
+        COPY,
+        {
+          kind: "action",
+          label: "Upload the brand guide",
+          key: "brand-guide",
+          owner: "human",
+          blockedReason: "physical",
+          ask: { mode: "act", steps: ["Upload it"] },
+          unblocksTarget: { criterion: "copy-is-clear" },
+        },
+      ]
+    );
+    await answerExpectedOutput({
+      sessionId: id,
+      userId: USER,
+      expectedLabel: "Upload the brand guide",
+      text: "Done",
+      messageId: null,
+    });
+    const payload = h.emitted.find((p) => p.action === "slot_answered")!;
+    const before = await stored(id);
+    await sessionUnblockNotifyReactor.handler(payload as never, {} as never);
+    expect(await stored(id)).toEqual(before);
+    const { rows } = await q<{ n: number }>(
+      `select count(*)::int as n from session_evaluations where session_id = $1`,
+      [id]
+    );
+    expect(rows[0]!.n).toBe(0);
+  });
 });

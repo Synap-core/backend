@@ -321,6 +321,19 @@ describe("a grade declared up front is owed once its output is delivered (W5)", 
     expect(back.filed).toEqual(["copy-reads-well"]);
   });
 
+  it("two criteria with the same statement share one grade slot (justified keep)", async () => {
+    const outputs: ExpectedOutput[] = [
+      { kind: "document", label: "Landing copy", key: "landing-copy" },
+    ];
+    const next = reconcileGradeSlots(outputs, [
+      HUMAN,
+      { ...HUMAN, key: "copy-reads-well-2" },
+    ])!;
+    const grades = next.outputs.filter((o) => o.kind === "criterion");
+    expect(grades).toHaveLength(1);
+    expect(grades[0]!.criterionKey).toBe("copy-reads-well");
+  });
+
   it("CONTROL: a human criterion that names no output files no grade slot", async () => {
     const id = await start([{ ...GRADE, outputKey: undefined }]);
     const outputs = await outputsOf(id);
