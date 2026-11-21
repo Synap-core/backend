@@ -699,8 +699,9 @@ export async function registerCronSchedules(): Promise<void> {
   await sendSafe(boss, CP_PROJECT_SYNC_QUEUE, {});
   logger.info("Enqueued startup run: cp-project-sync");
 
-  // CP plan sync — pull this pod's tier and trial from its Control Plane every
-  // 15 minutes, AND once now so a freshly registered pod enforces its plan
+  // CP sync — pull this pod's tier and trial, and its AI availability, from
+  // its Control Plane every 15 minutes (the AI one every 3 while a hold waits
+  // on AI), AND both once now so a freshly registered pod enforces its plan
   // without waiting. No-ops when the pod has no CP link (self-hosted).
   await scheduleSafe(
     boss,
@@ -708,8 +709,8 @@ export async function registerCronSchedules(): Promise<void> {
     CP_ENTITLEMENT_SYNC_CRON,
     {}
   );
-  logger.info("Registered cron: cp-entitlement-sync (every 15min)");
-  await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, {});
+  logger.info("Registered cron: cp-entitlement-sync (a tick every 3min)");
+  await sendSafe(boss, CP_ENTITLEMENT_SYNC_QUEUE, { force: true });
   logger.info("Enqueued startup run: cp-entitlement-sync");
 
   // Onboarding milestones (plan §5, A9): send the start's milestone ids and
