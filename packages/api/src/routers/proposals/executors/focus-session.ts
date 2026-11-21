@@ -1355,7 +1355,7 @@ export function registerFocusSessionExecutors(): void {
 
       // THE route again, at approval: the agent may have been paused (or
       // lost its link to the owner) since the hand-off was proposed.
-      const { handOffRefusal } =
+      const { handOffRefusal, requeueRunForHandOff } =
         await import("../../../services/focus-sessions/agent-hand-off.js");
       const refused = await handOffRefusal({
         ownerId: session.userId,
@@ -1381,7 +1381,6 @@ export function registerFocusSessionExecutors(): void {
           message: `Focus session ${sessionId} not found`,
         });
       }
-
       const refusals: string[] = [];
       if (typeof innerData.expectedLabel === "string") {
         const { delegateExpectedOutput } =
@@ -1403,6 +1402,14 @@ export function registerFocusSessionExecutors(): void {
           );
         }
       }
+
+      // Last: the run waits for the agent only once the hand-off landed.
+      await requeueRunForHandOff({
+        sessionId,
+        ownerId: session.userId,
+        agentId,
+        proposalId: input.proposalId,
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(

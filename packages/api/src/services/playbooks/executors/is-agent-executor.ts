@@ -9,8 +9,9 @@
  *
  * The IS works ASYNCHRONOUSLY in the channel after the kickoff; completion and
  * capture-back happen out-of-band via the Hub `POST /runs/:id/capture` route.
- * So this executor returns `{ status: "running" }` — it does not block on the
- * agent finishing.
+ * So this executor returns `{ status: "queued" }`: the turn is enqueued, and
+ * the run becomes `running` when the turn starts (the A2AI worker claims
+ * it). It does not block on the agent finishing.
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
@@ -155,8 +156,8 @@ export class IsAgentExecutor implements Executor {
 
     // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
     // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel
-    // websocket broadcast (which would never enqueue the IS → the run would hang
-    // in "running" forever). Only THREAD / AGENT_COLLAB channels are IS-eligible.
+    // websocket broadcast (which would never enqueue the IS → the run would
+    // never be claimed). Only THREAD / AGENT_COLLAB channels are IS-eligible.
     const triggered = await triggerAutoRespond({
       channelId: ctx.channelId,
       userMessageId: messageId,
@@ -182,6 +183,6 @@ export class IsAgentExecutor implements Executor {
       };
     }
 
-    return { status: "running", summary: "dispatched to IS in channel" };
+    return { status: "queued", summary: "dispatched to IS in channel" };
   }
 }

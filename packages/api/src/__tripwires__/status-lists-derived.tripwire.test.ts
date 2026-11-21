@@ -112,6 +112,10 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "an inline filter (closed, failed): cancelled left out on purpose",
   },
+  "api/src/services/proposals/approval-runs.ts": {
+    count: 1,
+    why: "an approval run's own vocabulary (queued, running), not a playbook run's",
+  },
   "api/src/services/signal/channel-stack.ts": {
     count: 1,
     why: "automations.status (active, paused): another machine, undeclared until W2",

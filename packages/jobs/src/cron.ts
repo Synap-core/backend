@@ -347,7 +347,7 @@ export async function registerCronSchedules(): Promise<void> {
     PLAYBOOK_RUN_REAPER_CRON,
     {}
   );
-  logger.info("Registered cron: playbook-run-reaper (every 30min)");
+  logger.info("Registered cron: playbook-run-reaper (every 5min)");
 
   // Chat turn reaper (every ~15min — fails chat_turns stuck in "running" past
   // CHAT_TURN_STUCK_HOURS, default 2h; process-crash mid-stream failsafe)

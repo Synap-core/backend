@@ -4566,6 +4566,9 @@ ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "run_on" jsonb;  -- 0403 (who ran it and why: RunOn)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "generation" jsonb;  -- 0417 (a one-shot run's record: prompt, model, tokens, proposal)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "holder" jsonb;  -- 0446 (who holds it, when it was claimed)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "agent_user_id" text;  -- 0446 (the agent that started it; created_by = the person)
+ALTER TABLE "playbook_runs" ALTER COLUMN "status" DROP DEFAULT;  -- 0446 (every birth names its status and holder)
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_generation_subject"
   ON "playbook_runs" ("playbook_id", (("generation"->>'subjectId')))
   WHERE "generation" IS NOT NULL;

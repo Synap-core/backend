@@ -12,7 +12,8 @@ import { join, relative } from "path";
  * (derived by walking the tree, never a hand list):
  *
  *  1. Every `.insert(<table>)` of a table that has an actor column — the set is
- *     DERIVED from migration 0442's `ADD COLUMN ... "agent_user_id"` lines —
+ *     DERIVED from the `ADD COLUMN ... "agent_user_id"` lines of the actor
+ *     migrations ({@link ACTOR_MIGRATIONS}) —
  *     stamps `createdBy: <x>.ownerId` (a value only `ownerAndActor` yields) and
  *     sets `agentUserId`. A REPLICA (`routers/sync.ts`) copies a peer's row
  *     verbatim instead: its row shape must carry `agentUserId`.
@@ -38,8 +39,6 @@ const KNOWN_AGENT_AS_OWNER = new Set<string>([
   "api/src/routers/proposals/executors/tool.ts",
   "api/src/routers/capability-containers.ts", // capabilities.created_by
   "api/src/routers/proposals/executors/capability.ts",
-  "api/src/services/focus-sessions/create-session.ts", // playbook_runs.created_by — the activity feed reads it as actor
-  "api/src/services/focus-sessions/follow-playbook.ts",
   // proposals.created_by: overloaded "who filed it", not an owner (the owner
   // floor is proposals.subject_user_id).
   "api/src/services/app-access-ask.ts",
@@ -71,17 +70,20 @@ const FILES = SCANNED.flatMap((d) => tsFiles(join(PACKAGES, d))).map((f) => ({
   src: readFileSync(f, "utf8"),
 }));
 
-/** Tables 0442 gave an actor column, as their drizzle export names. */
+/** The migrations that gave a table its actor column. */
+const ACTOR_MIGRATIONS = [
+  "0442_owner_actor_columns.sql",
+  "0446_run_holder_and_actor.sql",
+];
+
+/** Tables the actor migrations gave an actor column, as drizzle export names. */
 function actorTables(): string[] {
-  const sql = readFileSync(
-    join(PACKAGES, "database/migrations/0442_owner_actor_columns.sql"),
-    "utf8"
-  );
-  const tables = [
-    ...sql.matchAll(
-      /ALTER TABLE "(\w+)" ADD COLUMN IF NOT EXISTS "agent_user_id"/g
-    ),
-  ].map((m) => m[1]!);
+  const tables = ACTOR_MIGRATIONS.flatMap((file) => [
+    ...readFileSync(
+      join(PACKAGES, "database/migrations", file),
+      "utf8"
+    ).matchAll(/ALTER TABLE "(\w+)" ADD COLUMN IF NOT EXISTS "agent_user_id"/g),
+  ]).map((m) => m[1]!);
   // snake_case table → camelCase drizzle export (`playbook_runs` → `playbookRuns`).
   return tables.map((t) =>
     t.replace(/_(\w)/g, (_, c: string) => c.toUpperCase())
@@ -150,7 +152,7 @@ describe("tripwire: a person owns what an agent makes", () => {
 
   it("derives the actor tables from 0442 (non-vacuity)", () => {
     expect(tables).toEqual(
-      expect.arrayContaining(["automations", "playbooks"])
+      expect.arrayContaining(["automations", "playbooks", "playbookRuns"])
     );
     expect(FILES.length).toBeGreaterThan(500);
   });
@@ -158,8 +160,8 @@ describe("tripwire: a person owns what an agent makes", () => {
   it("every insert of an actor table stamps the owner from ownerAndActor and the actor", () => {
     const inserts = actorInserts(FILES, tables);
     // Non-vacuity: the automation door, the cron backing row, the reconcile,
-    // the playbook create and promote doors.
-    expect(inserts.length).toBeGreaterThanOrEqual(5);
+    // the playbook create and promote doors, the four run births.
+    expect(inserts.length).toBeGreaterThanOrEqual(9);
     const offenders = inserts
       .filter((i) => !stampsOwnerAndActor(i.block))
       .map((i) => `${i.rel}: insert(${i.table})`);

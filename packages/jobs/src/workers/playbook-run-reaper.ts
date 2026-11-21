@@ -37,6 +37,15 @@
  * marked `stale` with its session (not terminal: no `completedAt`, no parent
  * settle, the session stays open), and the next write attributed to that
  * session revives both (`reviveStaleSession`, api).
+ *
+ * A RUN NOBODY CLAIMED is `blocked`, never failed. A run is born `queued`
+ * with its holder and is `running` only once that holder claims it. Past its
+ * holder's window — Synap AI {@link WORK_CLOCK}.live, anyone else
+ * {@link WORK_CLOCK}.quiet, counted from when the holder was named — it moves
+ * to `blocked` with the reason and who was passed over, and the person is
+ * asked (`run-blocked-ask.ts`, api). The clock does not run while its session
+ * waits on the person (a hand-off waiting for approval included), nor while
+ * its Synap AI turn still waits in pg-boss for a worker.
  */
 
 import {
@@ -48,6 +57,7 @@ import {
   drizzleSql,
   playbookRuns,
   focusSessions,
+  users,
   sessionWaitsOnPersonWhere,
   stageRunWaitsWhere,
   stageRunAgentLiveWhere,
@@ -55,15 +65,101 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { workClockIn } from "@synap-core/types/work-clock";
+import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
+import type { RunHolder } from "@synap-core/types/units";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
 const logger = createLogger({ module: "playbook-run-reaper" });
 
 export const PLAYBOOK_RUN_REAPER_QUEUE = "playbook-run-reaper";
-/** Every 30min — playbook runs are long-lived; no need for the 5min automation cadence. */
-export const PLAYBOOK_RUN_REAPER_CRON = "*/30 * * * *";
+/** Every 5 min: an unclaimed Synap AI run is blocked after {@link WORK_CLOCK}.live. */
+export const PLAYBOOK_RUN_REAPER_CRON = "*/5 * * * *";
+
+/** How long a holder has to claim a run, by who it is. */
+export function claimWindowMinutes(kind: RunHolder["kind"]): number {
+  return workClockIn(kind === "synap_ai" ? "live" : "quiet", "minutes");
+}
+
+/**
+ * A `queued` run past its holder's claim window, whose session does not wait
+ * on the person and has no A2AI turn still waiting for a worker. A run with
+ * no `holder` is judged from its start, as Synap AI's.
+ */
+export const RUN_UNCLAIMED = and(
+  eq(playbookRuns.status, "queued"),
+  drizzleSql`coalesce((${playbookRuns.holder} ->> 'assignedAt')::timestamptz, ${playbookRuns.startedAt})
+    < now() - (CASE WHEN coalesce(${playbookRuns.holder} ->> 'kind', 'synap_ai') = 'synap_ai'
+                    THEN ${claimWindowMinutes("synap_ai")}::int
+                    ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
+  drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
+  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`
+)!;
+
+/**
+ * Mark each unclaimed run `blocked`, one move per run so each carries its own
+ * reason: who was waited for, how long, and who was passed over. The move
+ * records a hold on the person; `run-blocked-ask.ts` (api) asks them.
+ */
+async function blockUnclaimedRuns(): Promise<number> {
+  const rows = await db
+    .select({
+      id: playbookRuns.id,
+      holder: playbookRuns.holder,
+      runOn: playbookRuns.runOn,
+    })
+    .from(playbookRuns)
+    .where(RUN_UNCLAIMED);
+  if (rows.length === 0) return 0;
+  const holderIds = [
+    ...new Set(
+      rows
+        .map((r) => (r.holder as RunHolder | null)?.id)
+        .filter((v): v is string => !!v)
+    ),
+  ];
+  const names = new Map(
+    (holderIds.length
+      ? await db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, holderIds))
+      : []
+    ).map((u) => [u.id, u.name])
+  );
+  let blocked = 0;
+  for (const r of rows) {
+    const holder = (r.holder as RunHolder | null) ?? null;
+    const kind = holder?.kind ?? "synap_ai";
+    const who =
+      kind === "synap_ai"
+        ? "Synap AI"
+        : kind === "none"
+          ? "nobody"
+          : ((holder?.id ? names.get(holder.id) : null) ?? "its agent");
+    const runOn = (r.runOn as RunOn | null) ?? null;
+    const passed = [
+      ...(runOn?.passedOver ? [runOn.passedOver] : []),
+      ...(runOn?.runnerPassedOver ?? []),
+    ].map(passedOverLine);
+    const reason =
+      `Nobody started this run: ${who} did not pick it up within ${claimWindowMinutes(kind)} minutes.` +
+      (passed.length > 0 ? ` Passed over: ${passed.join("; ")}.` : "");
+    const { rows: moved } = await setRunStatus(db, {
+      runId: r.id,
+      where: RUN_UNCLAIMED,
+      from: "queued",
+      to: "blocked",
+      actor: { kind: "system" },
+      reason,
+      defaultHold: { on: "person", reason },
+    });
+    blocked += moved.length;
+  }
+  return blocked;
+}
 
 /**
  * A 'running' playbook run older than this whose session shows no recent
@@ -186,10 +282,24 @@ const IS_RUN_IS_QUIET = and(
 /** A run the sweeps below judge: past its holder's window, session quiet. */
 const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
 
-/** Called by the cron scheduler every ~30 minutes. */
+/** Called by the cron scheduler every 5 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
-    // 00. UNPARK: a waiting run whose session no longer owes the person
+    // 1. UNCLAIMED: a run its holder never took is blocked on the person.
+    //    Its own failure never stops the sweeps below.
+    try {
+      const blocked = await blockUnclaimedRuns();
+      if (blocked > 0) {
+        logger.info(
+          { blocked },
+          "Playbook run reaper blocked runs nobody claimed"
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, "Playbook run reaper: the unclaimed sweep failed");
+    }
+
+    // 2. UNPARK: a waiting run whose session no longer owes the person
     //     (answered, closed, gone) goes back to `running`, so the sweeps
     //     below judge it like any other run. The completing doors finish a
     //     live run directly (`LIVE_RUN_STATUSES`); this catches the rest.
@@ -209,7 +319,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0. A quiet run whose session waits on the person (an owed slot, or an
+    // 3. A quiet run whose session waits on the person (an owed slot, or an
     //    agent question in its room still unanswered — an external agent
     //    asks and STOPS until the answer starts its next run) is WAITING ON
     //    YOU, not
@@ -235,7 +345,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0b. A quiet run an EXTERNAL agent holds is STALE, never failed: the
+    // 4. A quiet run an EXTERNAL agent holds is STALE, never failed: the
     //     agent works on its own clock and may still deliver. Marked before
     //     the fail sweep so it can never reach it. No `completedAt` (it did not
     //     finish) and no parent settle (stale is not terminal). Its session is
@@ -275,7 +385,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 1. Force-fail stale running runs whose session is no longer active.
+    // 5. Force-fail stale running runs whose session is no longer active.
     const { rows: reaped } = await setRunStatus(db, {
       where: RUN_IS_REAPABLE,
       from: "running",
@@ -290,7 +400,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       return;
     }
 
-    // 1b. A reaped run that an automation started is a FAILED CHILD: settle
+    // 5b. A reaped run that an automation started is a FAILED CHILD: settle
     //     its parent run from it, so the rule's breakers see the failure
     //     (the incident's runs all died here, and the parent read "completed").
     //     Never throws; one parent read per reaped run.
@@ -298,7 +408,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       await settleParentAutomationRunFromChild({ playbookRunId: id });
     }
 
-    // 2. Close each reaped run's orphaned session through the ONE door.
+    // 6. Close each reaped run's orphaned session through the ONE door.
     //
     //    This used to be a raw `.update(focusSessions).set({status:'closed'})`,
     //    which is the dual-path defect named in @synap-core/types/focus-sessions:

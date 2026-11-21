@@ -9,9 +9,10 @@
  * reads as the run param. This reactor listens for that answer's side effect
  * (`focus_session` / `slot_answered`) and dispatches again.
  *
- * IDEMPOTENT: the run is CLAIMED `failed → running` (WHERE status = 'failed'
- * AND external_agent IS NULL) before the executor runs — a second delivery of
- * the event, or a second answer, finds nothing to claim.
+ * IDEMPOTENT: the run is taken back `failed → queued` (WHERE status =
+ * 'failed' AND external_agent IS NULL) before the executor runs — a second
+ * delivery of the event, or a second answer, finds nothing to take. It is
+ * `running` once the chosen agent's provider starts the task.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -24,10 +25,12 @@ import {
   entities,
   focusSessions,
   playbookRuns,
+  runHolder,
   setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
-import type { PlaybookStage, RunResult } from "@synap/playbooks";
+import type { ExecutorRef, PlaybookStage, RunResult } from "@synap/playbooks";
+import type { PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
@@ -66,29 +69,51 @@ export async function redispatchAfterAgentChoice(
     .limit(1);
   if (!failed) return { status: "nothing_to_redispatch" };
 
-  // CLAIM — only the claimer dispatches.
+  // Only the one that takes it back dispatches.
   const {
     rows: [run],
   } = await setRunStatus(db, {
     runId: failed.id,
     where: drizzleSql`${playbookRuns.externalAgent} IS NULL`,
     from: "failed",
-    to: "running",
+    to: "queued",
     actor: { kind: "system" },
     reason: "The person chose an agent: dispatched again.",
-    set: { error: null, completedAt: null },
+    set: {
+      error: null,
+      completedAt: null,
+      holder: runHolder("agent", null),
+    },
   });
   if (!run) return { status: "nothing_to_redispatch" };
+  return {
+    status: "redispatched",
+    runId: run.id,
+    runStatus: await redispatchRun(run, "external-agent"),
+  };
+}
 
-  const session = await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, sessionId),
-  });
+/**
+ * Dispatch a run the caller already took back (`queued`) through `executor`
+ * again, on the SAME row and session, and record what the executor says
+ * (`recordExecutorResult`). Shared by "Choose an agent" answered and a
+ * blocked run the person starts again (`run-blocked-ask.ts`).
+ */
+export async function redispatchRun(
+  run: PlaybookRun,
+  executor: ExecutorRef
+): Promise<RunResult["status"]> {
+  const session = run.sessionId
+    ? await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, run.sessionId),
+      })
+    : undefined;
   if (!session) {
     await recordExecutorResult(run.id, {
       status: "failed",
       error: "re-dispatch: the session no longer exists",
     });
-    return { status: "redispatched", runId: run.id, runStatus: "failed" };
+    return "failed";
   }
   let subjectName: string | undefined;
   let subjectProfile: string | undefined;
@@ -113,7 +138,7 @@ export async function redispatchAfterAgentChoice(
 
   let result: RunResult;
   try {
-    result = await resolveExecutor("external-agent").run({
+    result = await resolveExecutor(executor).run({
       workspaceId: run.workspaceId ?? session.workspaceId ?? "",
       userId: run.createdBy,
       playbookId: run.playbookId,
@@ -137,7 +162,7 @@ export async function redispatchAfterAgentChoice(
     };
   }
   await recordExecutorResult(run.id, result);
-  return { status: "redispatched", runId: run.id, runStatus: result.status };
+  return result.status;
 }
 
 /**

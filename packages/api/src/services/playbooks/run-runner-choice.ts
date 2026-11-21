@@ -21,7 +21,7 @@
 
 import { resolveRequiresNeeds } from "../needs/space-needs.js";
 import { TRPCError } from "@trpc/server";
-import type { RunChoice } from "@synap-core/types/agents";
+import { passedOverLine, type RunChoice } from "@synap-core/types/agents";
 import { runnerChoices, type PlaybookRunner } from "@synap/playbooks";
 import type { Playbook } from "@synap/database/schema";
 import { resolveRunner } from "../agent-dispatch/runner.js";
@@ -59,12 +59,7 @@ export async function mapRunnerAtRun(input: {
   });
   const chosen = resolved.chosen;
   if (!chosen) {
-    const why = resolved.passedOver
-      .map(
-        (p) =>
-          `choice ${p.choice + 1}${p.name ? ` (${p.name})` : ""}: ${p.why.replace(/_/g, " ")}`
-      )
-      .join("; ");
+    const why = resolved.passedOver.map(passedOverLine).join("; ");
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `None of the runners you chose can take this run${why ? ` — ${why}` : ""}. Choose another agent, or Synap AI.`,
