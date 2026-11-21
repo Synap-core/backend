@@ -69,7 +69,7 @@ export function automationStatusAtCreate(input: {
   personApproved: boolean;
   actorIsAgent: boolean;
 }): AutomationStatusValue {
-  if (input.personApproved) return input.requested ?? "active";
+  if (input.personApproved) return input.requested ?? "draft";
   if (input.actorIsAgent) return "draft";
   return input.requested ?? "draft";
 }
@@ -166,7 +166,6 @@ export const STAGE_RUN_STATUS_DECLARATION = {
 
 export const STAGE_RUN_TRANSITIONS = {
   running: [
-    "waiting_start",
     "unreached",
     "waiting_child",
     "done",

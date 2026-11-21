@@ -3152,11 +3152,11 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
       });
 
-      const paused = await setAutomationStatus(database, {
-        id: input.id,
-        from: existing.status,
-        to: "paused",
-      });
+      const paused = await database
+        .update(automations)
+        .set({ status: "paused", updatedAt: new Date() })
+        .where(eq(automations.id, input.id))
+        .returning();
       if (paused.length === 0) {
         throw new TRPCError({
           code: "CONFLICT",

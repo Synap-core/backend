@@ -299,9 +299,8 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             },
             // A batch no person reviewed (a direct capture, an import) writes
             // drafts: its ops may be structured from pasted content.
-            status: !skillAuthor.personApproved
-              ? "draft"
-              : automationOp.enabled === undefined
+            status:
+              automationOp.enabled === undefined
                 ? undefined
                 : automationOp.enabled
                   ? "active"
