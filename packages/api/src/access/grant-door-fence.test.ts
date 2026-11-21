@@ -26,6 +26,7 @@ import {
   packagePreflightReadable,
   restDoorAllowed,
   runDetailReadable,
+  statusOfReach,
   sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
@@ -1600,5 +1601,57 @@ describe("GET /renderers/host-modules: the renderer kit, full keys only", () => 
       expect(restDoorAllowed("GET", "/renderers/host-modules/", g)).toBe(false);
     }
     expect(hubRouteClass("GET", "/renderers/host-modules")).toBe("read");
+  });
+});
+
+describe("GET /status-of: the per-subject status door for a pinned key", () => {
+  const PINNED = key({
+    permissions: ["entity.read", "session.read"],
+    workspaceIds: ["w1"],
+  });
+  const FULL = key({ permissions: ["*"] });
+  const UNPINNED = key({ permissions: aiDefaultCapabilities() });
+  const NO_ENTITY = key({ permissions: ["session.read"], workspaceIds: ["w1"] });
+
+  it("admits a space-pinned key holding entity.read, and not one without it", () => {
+    expect(restDoorAllowed("GET", "/status-of", PINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of/", PINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of", NO_ENTITY)).toBe(false);
+    expect(restDoorAllowed("GET", "/status-of", key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+
+  it("GET /orient (statusOf rides it) stays refused to the pinned key", () => {
+    expect(restDoorAllowed("GET", "/orient", PINNED)).toBe(false);
+  });
+
+  it("a full-access and an unpinned key keep their doors", () => {
+    expect(restDoorAllowed("GET", "/status-of", FULL)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of", UNPINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/orient", UNPINNED)).toBe(true);
+  });
+
+  it("only a person, a full key or one reading every subject unbounded is answered whole", () => {
+    expect(statusOfReach(null).whole).toBe(true);
+    expect(statusOfReach(FULL as never).whole).toBe(true);
+    expect(statusOfReach(PINNED as never).whole).toBe(false);
+    expect(
+      statusOfReach(
+        key({
+          permissions: [
+            "entity.read",
+            "session.read",
+            "track.read",
+            "proposal.read",
+            "channel.read",
+            "link.read",
+            "event.read",
+            "playbook.read",
+            "project.read",
+          ],
+        }) as never
+      ).whole
+    ).toBe(true);
   });
 });

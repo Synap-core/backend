@@ -572,6 +572,62 @@ export function workGraphReach(
   };
 }
 
+/**
+ * What `readStatusOf` (services/status/status-read.ts) reads WHOLE when asked
+ * for every part: the things, goals, sessions and runs it names, and what each
+ * part reads about them (proposals, links, rooms, dev events, playbook runs,
+ * projects). `GET /orient?statusOf=` is the aggregate door (ORIENT: a pinned
+ * key never passes it); `GET /status-of` is the per-subject door beside it.
+ */
+export const STATUS_OF_SUBJECTS: readonly string[] = [
+  "entity",
+  "session",
+  "track",
+  "proposal",
+  "channel",
+  "link",
+  "event",
+  "playbook",
+  "project",
+];
+
+/**
+ * The `include` parts `GET /status-of` answers a key that does not read
+ * {@link STATUS_OF_SUBJECTS} unbounded. Both read only the named subject's own
+ * floored record: `moves` (its step's declared options) and `history` (the
+ * timeline kept to status events, its stage ledger and its wait episodes,
+ * the timeline's session sources already withheld). Every other part (`work`,
+ * `signals`, `links`, `rollup`, `reactions`) reads rows beyond the subject
+ * (the continuation packet's proposals, links and rooms) that no grant clause
+ * bounds, and is withheld.
+ */
+export const STATUS_OF_NARROWED_INCLUDES: readonly string[] = [
+  "moves",
+  "history",
+];
+
+/**
+ * What one key's grant lets `GET /status-of` answer. Whole for an unfenced
+ * caller or a key reading every subject unbounded. Any other key the fence
+ * admitted (it holds `entity.read`) gets, for each id its grant reads (an
+ * entity, goal, session or run through the floors that AND the grant; an id
+ * it cannot read is `unknown`, as one that does not exist), the answer
+ * without what reads past the subject: the parts in
+ * {@link STATUS_OF_NARROWED_INCLUDES} only, and no `waitingOn`, `blocker`,
+ * `nextMove`, `hold`, `roles` or `account` (each reads proposals, slots,
+ * holds or roles by subject id with no grant clause).
+ */
+export type StatusOfReach = { whole: true } | { whole: false };
+
+export function statusOfReach(
+  grant: KeyGrant | null | undefined
+): StatusOfReach {
+  return !isFencedGrant(grant) ||
+    grantBoundsDoor(READS(...STATUS_OF_SUBJECTS), grant!)
+    ? { whole: true }
+    : { whole: false };
+}
+
 /** What `readTimeline` (services/timeline/read-timeline.ts) reads WHOLE. */
 export const TIMELINE_SUBJECTS: readonly string[] = [
   "track",
@@ -1122,6 +1178,14 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/channels\/conversations\/?$/, NARROWED("channel", [])],
   // The REST twins of MCP read tools, one declaration each (see ORIENT):
   [/^\/orient\/?$/, ORIENT],
+  // WHERE EACH ID STANDS, per subject (`readStatusOf`, the reader behind
+  // `GET /orient?statusOf=`, which stays refused to a pinned key). Narrowed
+  // by the route (`statusOfReach`): every id is read through the floors that
+  // AND the key's grant (entity, session, goal, run), and one it cannot read
+  // is `unknown`, as one that does not exist. A key reading every subject
+  // unbounded gets the whole answer; any other key holding `entity.read` the
+  // moves and history of what it reads, the rest said withheld.
+  [/^\/status-of\/?$/, NARROWED("entity", STATUS_OF_SUBJECTS)],
   [/^\/profiles\/?$/, LIST_PROFILES],
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
