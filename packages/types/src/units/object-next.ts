@@ -46,7 +46,7 @@ export interface ObjectNextFacts {
 function fromHealth(health: ProcessHealth): ObjectNext | null {
   switch (health.state) {
     case "draft":
-      return { action: "turn_on", reason: health.reason };
+      return null;
     case "config-error":
       return { action: "open", reason: health.reason };
     case "unresolved-failure":
