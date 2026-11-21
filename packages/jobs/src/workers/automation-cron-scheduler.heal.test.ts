@@ -111,6 +111,14 @@ vi.mock("@synap/database", () => ({
     runCount: 0,
   },
   automationRuns: { id: "id" },
+  // The status door: recorded like a raw write, its CAS left to its own test.
+  setAutomationStatus: async (
+    _db: unknown,
+    input: { to: string; set?: Record<string, unknown> }
+  ) => {
+    updateSet({ ...input.set, status: input.to });
+    return [];
+  },
 }));
 
 const { handleAutomationCronScheduler } =

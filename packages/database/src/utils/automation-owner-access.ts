@@ -21,6 +21,7 @@
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { automations, workspaceMembers } from "../schema/index.js";
 import { agentsActingFor, personOfOwner } from "./owner-person.js";
+import { setAutomationStatus } from "../services/lifecycle/automation-status.js";
 import {
   AUTOMATION_AUDIENCE_KEY,
   type AutomationAudience,
@@ -72,24 +73,18 @@ export async function pauseAutomationsOfRemovedMember(
     params.userId,
     ...(await agentsActingFor(database, params.userId)),
   ];
-  const paused: Array<{ id: string }> = await database
-    .update(automations)
-    .set({
-      status: "paused",
-      errorMessage: AUTOMATION_OWNER_LEFT_SPACE,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(automations.workspaceId, params.workspaceId),
-        or(
-          eq(automations.createdBy, params.userId),
-          inArray(automations.agentUserId, actors)
-        ),
-        eq(automations.status, "active")
+  const paused = await setAutomationStatus(database, {
+    from: "active",
+    to: "paused",
+    set: { errorMessage: AUTOMATION_OWNER_LEFT_SPACE },
+    where: and(
+      eq(automations.workspaceId, params.workspaceId),
+      or(
+        eq(automations.createdBy, params.userId),
+        inArray(automations.agentUserId, actors)
       )
-    )
-    .returning({ id: automations.id });
+    ),
+  });
   return paused.length;
 }
 
@@ -108,21 +103,12 @@ export async function pauseAutomationsOfAgents(
   agentUserIds: readonly string[]
 ): Promise<number> {
   if (agentUserIds.length === 0) return 0;
-  const paused: Array<{ id: string }> = await database
-    .update(automations)
-    .set({
-      status: "paused",
-      errorMessage: AUTOMATION_AGENT_REMOVED,
-      nextRunAt: null,
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        inArray(automations.agentUserId, [...agentUserIds]),
-        eq(automations.status, "active")
-      )
-    )
-    .returning({ id: automations.id });
+  const paused = await setAutomationStatus(database, {
+    from: "active",
+    to: "paused",
+    set: { errorMessage: AUTOMATION_AGENT_REMOVED, nextRunAt: null },
+    where: inArray(automations.agentUserId, [...agentUserIds]),
+  });
   return paused.length;
 }
 

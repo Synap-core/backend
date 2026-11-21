@@ -232,7 +232,6 @@ describe("an automation may reference a skill the SAME batch creates", () => {
     expect(result.automations).toEqual([
       expect.objectContaining({
         automationId: "auto-Create client subfolder",
-        enabled: false,
       }),
     ]);
   });

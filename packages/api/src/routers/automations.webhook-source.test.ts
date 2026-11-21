@@ -52,7 +52,7 @@ vi.mock("../services/webhooks/inbound-source.js", async (importOriginal) => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
 import { NO_USERS } from "../__tests__/no-users-db.js";
 
@@ -210,8 +210,9 @@ describe("automations — a declared inbound webhook source", () => {
 
   it("an approved agent proposal binds when it materializes", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    await materializeApprovedAutomation({
-      ownerId: "person-1",
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: {
         ...NO_USERS,
         insert: vi.fn(() => insertChain(captured)),

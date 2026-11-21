@@ -732,6 +732,8 @@ const SUPPLEMENTARY_TABLES: Record<
             "Replicated automation has an invalid flowDefinition — storing it anyway (replica fidelity)"
           );
         }
+        // A status word this pod's CHECK does not know (a newer peer) fails
+        // the upsert: the row is logged and skipped below, kept on the peer.
         await db.insert(automations).values(values).onConflictDoUpdate({
           target: automations.id,
           set: updateSet,
@@ -781,6 +783,7 @@ const SUPPLEMENTARY_TABLES: Record<
           outputSummary: values.outputSummary,
           completedAt: values.completedAt,
         };
+        // Same as automations: an unknown status word is logged and skipped.
         await db.insert(automationRuns).values(values).onConflictDoUpdate({
           target: automationRuns.id,
           set: updateSet,

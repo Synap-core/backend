@@ -257,9 +257,9 @@ export interface CapturePlanInput {
    * because the materializer runs pass 0a (skills) to completion before pass
    * 0b (automations) and the automation door's catalog check is a live read.
    *
-   * `enabled` is accepted on an automation only so a producer can STATE its
-   * intent — it is forced false at materialization (approve-first), and the
-   * override is reported, never swallowed.
+   * `enabled` on an automation is the status asked for: a person's approval
+   * of the batch keeps it (absent = active); an agent's automation no person
+   * approved is born draft.
    */
   skills?: Array<Omit<CompositeCreateSkillOp, "op">>;
   automations?: Array<Omit<CompositeCreateAutomationOp, "op">>;

@@ -31,7 +31,7 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
 import { NO_USERS } from "../__tests__/no-users-db.js";
 
@@ -141,8 +141,9 @@ describe("installedByPackage is never the caller's to write", () => {
       ...NO_USERS,
       insert: vi.fn(() => insertChain(captured)),
     };
-    await materializeApprovedAutomation({
-      ownerId: "person-1",
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: database as never,
       agentUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       stableId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

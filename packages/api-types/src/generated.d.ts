@@ -11385,10 +11385,9 @@ export interface CompositeCreateAutomationOp {
 	 */
 	flowDefinition: unknown;
 	/**
-	 * ALWAYS FORCED FALSE at materialization. Approve-first means an automation
-	 * never arrives already running; the field exists so an authoring agent can
-	 * state its intent (and so the materializer can REPORT that it overrode it),
-	 * never so the automation can be born live.
+	 * The status asked for: true = active, false = draft, absent = none stated.
+	 * A person's approval of the batch keeps it (absent = active); with no
+	 * person's approval an agent's automation is born draft.
 	 */
 	enabled?: boolean;
 }
@@ -14784,16 +14783,8 @@ export interface MaterializeAutomationResult {
 	ref: string;
 	opIndex: number;
 	automationId: string;
-	/** What the op ASKED for. */
+	/** What the op ASKED for (`enabled: true`). */
 	enabledRequested: boolean;
-	/**
-	 * What was actually materialized. ALWAYS false: approve-first means an
-	 * automation never arrives already running, so the op's `enabled` is
-	 * overridden here and the override is REPORTED rather than swallowed.
-	 */
-	enabled: false;
-	/** True when the op said `enabled: true` and we forced it off. */
-	enabledOverridden: boolean;
 }
 /** Per-op result for a `create_rule` op. */
 export interface MaterializeRuleResult {
