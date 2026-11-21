@@ -302,6 +302,9 @@ export const PUSH_TYPE_RULES: Readonly<Record<string, PushTypeRule>> = {
   "ai.proactive.delivered_digest": "delivered-digest",
   // The person sent it from their desktop ("Send to phone", decision D5).
   "handoff.to_phone": "sent-by-you",
+  // AI stopped on this pod until a payer acts (out of credits, payment
+  // needed, no AI on the plan): the work that needs AI is stuck on them.
+  "ai.unavailable": "work-broke",
   // Health — the Settings mark carries it; a push only if opted in.
   "pod.resource_warning": "system",
   "system.intelligence_degraded": "system",

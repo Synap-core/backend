@@ -247,6 +247,14 @@ export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const STALE_NEWS_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * The AI availability notices' suppression window: their groupKey is the
+ * state, its mark and its reset (one credit period), so an unread notice of
+ * the same state in the same period is the same news. A month and a few days
+ * covers any period; a dismissed one never suppresses the next.
+ */
+export const AI_AVAILABILITY_DEDUPE_WINDOW_MS = 35 * 24 * 60 * 60 * 1000;
+
+/**
  * A STATUS SIGNAL: the status watcher (`services/status/watcher.ts`) noticed
  * that a thing its owner owns is late, nearly due, stuck in its step, or
  * paused past its review date. One row per subject type, so the button opens
@@ -1469,6 +1477,50 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "informational",
+  },
+  {
+    // AI AVAILABILITY (W3 C5): the pod's pull saw its credits cross a low
+    // mark (`services/ai-availability/notify.ts`). To the pod's payers (owner
+    // + admins), once per (kind, mark, reset) while unread; dismissed when
+    // the state changes. Health of the pod, not an ask: the status banner.
+    // Words from the ONE deck (`aiAvailabilityCopy`): title and CTA.
+    type: "ai.credits_low",
+    category: "ai",
+    label: "AI credits running low",
+    icon: "gauge",
+    priority: "normal",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
+    needsYou: "status",
+  },
+  {
+    // AI AVAILABILITY (W3 C5): AI stopped on this pod for a reason only a
+    // payer can change (out of credits, payment needed, no AI on the plan).
+    // To the payers, once per (kind, mark, reset) while unread, pushed;
+    // dismissed when the state changes. Its door is the pod's Credits page,
+    // where the deck's one CTA and the payer's link are. Agents never file
+    // this: they point the person at it.
+    type: "ai.unavailable",
+    category: "ai",
+    label: "AI stopped on this pod",
+    icon: "gauge",
+    priority: "high",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app", "os"],
+    actions: [
+      {
+        id: "open-credits",
+        label: "Open credits",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "credits" },
+      },
+    ],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
   },
   {
     type: "system.issuer_pending_approval",

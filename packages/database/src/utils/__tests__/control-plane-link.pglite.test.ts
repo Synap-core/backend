@@ -207,6 +207,97 @@ describe("the plan (pod_settings.settings.controlPlaneEntitlement)", () => {
   });
 });
 
+describe("the AI availability (pod_settings.settings.aiAvailability)", () => {
+  const billing = (state: "ok" | "low" | "empty" | "unmetered") => ({
+    readFailed: false as const,
+    state,
+    threshold: state === "low" ? 10 : null,
+    dismissKey: null,
+    resetsAt: "2026-12-01T00:00:00.000Z",
+    viewerRole: "pod_owner" as const,
+    canTopUp: true,
+    action: state === "empty" || state === "low" ? ("top_up" as const) : ("none" as const),
+    actionUrl:
+      state === "empty" || state === "low" ? "https://cp.example/credits" : null,
+  });
+  const T = (min: number) =>
+    new Date(Date.parse("2026-11-21T10:00:00.000Z") + min * 60_000);
+  const pull = (state: Parameters<typeof billing>[0], min: number) =>
+    link.recordPodAiAvailability(
+      { billing: billing(state), checkedAt: T(min).toISOString() },
+      T(min)
+    );
+
+  it("absent until the CP answers", async () => {
+    expect(await link.readPodAiAvailability()).toEqual({
+      availability: undefined,
+      sync: null,
+    });
+  });
+
+  it("stamps availableSince when AI comes back, keeps it while available, clears it when not", async () => {
+    // The first answer: available, so it became available now.
+    expect((await pull("ok", 0)).becameAvailable).toBe(true);
+    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
+      T(0).toISOString()
+    );
+    // Still available (unmetered is available): the stamp stays.
+    expect((await pull("unmetered", 15)).becameAvailable).toBe(false);
+    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
+      T(0).toISOString()
+    );
+    // Low credits still run AI, so it is not a loss of availability.
+    expect((await pull("low", 30)).becameAvailable).toBe(false);
+    // Out of credits: no stamp.
+    const empty = await pull("empty", 45);
+    expect(empty.becameAvailable).toBe(false);
+    expect(empty.current.availableSince).toBeNull();
+    // Back: a NEW stamp, the moment the pull saw it.
+    const back = await pull("ok", 60);
+    expect(back.becameAvailable).toBe(true);
+    expect(back.previous?.billing).toMatchObject({ state: "empty" });
+    expect(back.current.availableSince).toBe(T(60).toISOString());
+    expect((await link.readPodAiAvailability()).sync).toMatchObject({
+      outcome: "ok",
+    });
+  });
+
+  it("a CP without the door makes it unknown; any other failure keeps the last answer", async () => {
+    await pull("empty", 0);
+    await link.recordPodAiAvailabilityFailure(
+      "unreachable",
+      "The Control Plane could not be reached."
+    );
+    expect((await link.readPodAiAvailability()).availability?.billing).toMatchObject(
+      { state: "empty" }
+    );
+    await link.recordPodAiAvailabilityFailure(
+      "unsupported",
+      "The Control Plane does not serve this pod's AI availability (HTTP 404)."
+    );
+    const read = await link.readPodAiAvailability();
+    expect(read.availability).toBeNull();
+    expect(read.sync).toMatchObject({ outcome: "unsupported" });
+    // Unknown is not available: the next answer that reads available is news.
+    expect((await pull("ok", 30)).becameAvailable).toBe(true);
+  });
+
+  it("a billing read the CP could not make says nothing: the memory is carried", async () => {
+    await pull("ok", 0);
+    const failed = await link.recordPodAiAvailability(
+      { billing: { readFailed: true }, checkedAt: T(15).toISOString() },
+      T(15)
+    );
+    expect(failed.becameAvailable).toBe(false);
+    expect(failed.current.availableSince).toBe(T(0).toISOString());
+    // Readable again and still available: no news, the old stamp stands.
+    expect((await pull("ok", 30)).becameAvailable).toBe(false);
+    expect((await link.readPodAiAvailability()).availability?.availableSince).toBe(
+      T(0).toISOString()
+    );
+  });
+});
+
 describe("migrateLegacyControlPlaneRecord", () => {
   it("seeds the plan from the old record and keeps it while the pod is not enrolled", async () => {
     await addWorkspace({ controlPlane: LEGACY, theme: "dark" });
