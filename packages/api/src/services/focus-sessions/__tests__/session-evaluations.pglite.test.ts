@@ -404,11 +404,20 @@ describe("session evaluations", () => {
       skillId: "s",
       result: {
         passed: false,
-        detail: { value: 7, threshold: 10, comparator: "gte", op: "entities.list" },
+        detail: {
+          value: 7,
+          threshold: 10,
+          comparator: "gte",
+          op: "entities.list",
+        },
       },
       ackState: "acked",
     };
-    await evaluateSession({ sessionId: id, userId: USER, kinds: ["capability"] });
+    await evaluateSession({
+      sessionId: id,
+      userId: USER,
+      kinds: ["capability"],
+    });
     expect(h.capabilityArgs).toHaveLength(1);
     expect(h.capabilityArgs[0]).toMatchObject({
       verbId: "measure.check",
@@ -429,7 +438,12 @@ describe("session evaluations", () => {
         rationale: "entities.list counted 7; the bar is at least 10.",
         evidence: {
           detail: "entities.list counted 7; the bar is at least 10.",
-          result: { value: 7, threshold: 10, comparator: "gte", op: "entities.list" },
+          result: {
+            value: 7,
+            threshold: 10,
+            comparator: "gte",
+            op: "entities.list",
+          },
         },
       },
     ]);

@@ -216,7 +216,7 @@ const TRACK_GOAL_PROPERTIES = {
     type: ["array", "null"],
     minItems: GOAL_CRITERIA_MIN,
     maxItems: GOAL_CRITERIA_MAX,
-    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.`,
+    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.`,
   },
   dropConditions: {
     type: ["array", "null"],

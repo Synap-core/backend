@@ -1869,6 +1869,8 @@ export interface GoalCriterionView {
 		evidenceKey?: string;
 		hint?: string;
 		kind: EvaluatorKind;
+		/** kind=capability: the verb's arguments (a measure: op, params, threshold, comparator). */
+		params?: Record<string, unknown>;
 	};
 	stageKey?: string;
 	checkKind?: CriterionCheckMeaning;
@@ -16604,6 +16606,12 @@ export interface SessionCriterion {
 		/** kind=judge: what the judge should look at. */
 		hint?: string;
 		kind: CriterionCheckKind;
+		/**
+		 * kind=capability: the arguments the verb runs with, beside the ones the
+		 * evaluator always passes (`sessionId`, `criterionKey`, `outcome`). A
+		 * measure is `{ op, params, threshold, comparator }` for `measure.check`.
+		 */
+		params?: Record<string, unknown>;
 	};
 	/** Set when copied from a stage. */
 	stageKey?: string;
@@ -43329,6 +43337,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -44125,6 +44134,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -51091,6 +51101,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -51493,6 +51504,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -52505,6 +52517,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -52907,6 +52920,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -61759,6 +61773,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -61846,6 +61861,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -64009,6 +64025,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								evidenceKey?: string | undefined;
 								hint?: string | undefined;
 								kind: "capability" | "evidence" | "human" | "judge";
+								params?: Record<string, unknown> | undefined;
 							};
 							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
@@ -64412,6 +64429,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									evidenceKey?: string | undefined;
 									hint?: string | undefined;
 									kind: "capability" | "evidence" | "human" | "judge";
+									params?: Record<string, unknown> | undefined;
 								};
 								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;

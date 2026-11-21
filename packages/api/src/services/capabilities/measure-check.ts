@@ -164,8 +164,7 @@ export function measureValue(
       if (typeof column === "string") {
         const columns = Array.isArray(answer.columns) ? answer.columns : [];
         const hit = columns.find((c) => isRecord(c) && c.key === column) as
-          | Record<string, unknown>
-          | undefined;
+          Record<string, unknown> | undefined;
         if (!hit) return { reason: `the board has no column "${column}"` };
         value = num(hit.count);
       } else {
