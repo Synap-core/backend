@@ -71,11 +71,12 @@ export function actionModeChoices(input: {
     disabled: mode === "auto" && !input.mayRunOnItsOwn,
   }));
   if (!input.toolMode) return modes;
+  const inherited = resolveActionRunModeLabel(input.toolMode);
   return [
     {
       mode: "tool",
-      label: `As the whole tool: ${resolveActionRunModeLabel(input.toolMode)}`,
-      line: "It follows the setting for the whole tool, above.",
+      label: "Same as the tool",
+      line: `It follows the whole tool: ${inherited.charAt(0).toLowerCase()}${inherited.slice(1)}.`,
       disabled: false,
     },
     ...modes,

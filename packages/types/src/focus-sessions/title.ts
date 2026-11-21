@@ -14,7 +14,10 @@
 
 import { decodeHtmlEntities } from "../text/html-entities.js";
 import { shortenTitle } from "../titles/shorten.js";
-import { resolveObjectNounPlural } from "../vocabulary/index.js";
+import {
+  isMachineToken,
+  resolveObjectNounPlural,
+} from "../vocabulary/index.js";
 
 /** Stored bound of `focus_sessions.title` (varchar). Doors refuse longer. */
 export const SESSION_TITLE_MAX = 200;
@@ -57,21 +60,24 @@ function clip(line: string, max: number): string {
 /**
  * The name to show for a session: the trimmed `title` when non-empty, else the
  * goal's first non-empty line clipped to `maxLength` at a word boundary.
- * Returns `""` only when both are empty — the surface owns its empty copy.
+ * A title or goal line that is a machine token (a bare id, a build tag —
+ * `isMachineToken`, the one vocabulary door) is no name and is skipped, so a
+ * reader never sees "in 51dd9623-d895-…". Returns `""` when nothing readable
+ * is left — the surface owns its empty copy.
  */
 export function resolveSessionTitle(
   session: { title?: string | null; goal?: string | null },
   opts: { maxLength?: number } = {}
 ): string {
   const title = normalizeSessionTitle(session.title);
-  if (title) return title;
+  if (title && !isMachineToken(title)) return title;
   const max = opts.maxLength ?? SESSION_TITLE_FALLBACK_MAX;
   const firstLine =
     (session.goal ?? "")
       .split(/\r?\n/)
       .map(oneLine)
       .find((l) => l.length > 0) ?? "";
-  return clip(firstLine, max);
+  return isMachineToken(firstLine) ? "" : clip(firstLine, max);
 }
 
 // ── Title provenance + derived names ────────────────────────────────────────
