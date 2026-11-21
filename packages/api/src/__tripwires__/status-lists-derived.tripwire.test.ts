@@ -87,10 +87,6 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "a worker's own status vocabulary (running, paused)",
   },
-  "api/src/services/focus-sessions/advance-stage.ts": {
-    count: 1,
-    why: "SUBJECT_LEADS (active, forming) differs from IN_FLIGHT_SESSION_STATUSES on `paused`; needs a decision, not a guess",
-  },
   "api/src/services/focus-sessions/session-status-filter.ts": {
     count: 1,
     why: "WINDOWED (stale, closed): admitted by recency, a deliberate pair across categories",
@@ -103,17 +99,13 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "an inline filter (closed, failed): cancelled left out on purpose",
   },
-  "api/src/services/playbooks/stage-child.ts": {
-    count: 1,
-    why: "a transition `from:` guard (W2)",
-  },
   "api/src/services/playbooks/stage-for-each.ts": {
-    count: 2,
-    why: "a session transition `from:` guard, and ENTERABLE_STATUSES (running, waiting_tools): the step statuses a fan-out may claim",
+    count: 1,
+    why: "ENTERABLE_STATUSES (running, waiting_tools): the step statuses a fan-out may claim",
   },
   "api/src/services/playbooks/stage-runner.ts": {
-    count: 2,
-    why: "a session transition `from:` guard, and the open steps a new step closes (OPEN_STAGE_RUN_STATUSES minus waiting_child, whose child settles it)",
+    count: 1,
+    why: "the open steps a new step closes (OPEN_STAGE_RUN_STATUSES minus waiting_child, whose child settles it)",
   },
   "api/src/services/pod-hygiene/cleanup-pack.ts": {
     count: 1,

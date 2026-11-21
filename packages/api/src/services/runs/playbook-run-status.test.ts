@@ -23,7 +23,8 @@ describe("the run feed reads stale as PAUSED (founder, 2026-11-20)", () => {
 
   it("every other stored word keeps its reading", () => {
     expect(runStatusOfSession("active")).toBe("running");
-    expect(runStatusOfSession("forming")).toBe("running");
+    // A planned step (category open) has not started: queued, never running.
+    expect(runStatusOfSession("forming")).toBe("queued");
     expect(runStatusOfSession("closed")).toBe("completed");
     expect(runStatusOfSession("failed")).toBe("failed");
     expect(runStatusOfSession("cancelled")).toBe("cancelled");

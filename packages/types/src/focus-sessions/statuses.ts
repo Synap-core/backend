@@ -153,14 +153,20 @@ export const OPEN_SESSION_STATUSES: readonly OpenSessionStatus[] =
   );
 
 /**
- * Open and not a mere appointment (`scheduled`): active, paused, forming. The
- * sessions still being worked: where a write is filed, an input attached, a
- * subject's status move followed.
+ * Open and STARTED: active, paused — the `open` category (a planned step,
+ * `forming`, and an appointment, `scheduled`) is left out: neither has
+ * started. The sessions still being worked: where a write is filed, a client
+ * bound, a subject's status move followed, a grade owed. A planned step
+ * joins when it wakes (P1, 21 Nov 2026; `forming` was in this set while
+ * nothing wrote it).
  */
-export type InFlightSessionStatus = Exclude<OpenSessionStatus, "scheduled">;
+export type InFlightSessionStatus = Exclude<
+  OpenSessionStatus,
+  "scheduled" | "forming"
+>;
 export const IN_FLIGHT_SESSION_STATUSES: readonly InFlightSessionStatus[] =
-  OPEN_SESSION_STATUSES.filter(
-    (s): s is InFlightSessionStatus => s !== "scheduled"
+  sessionStatusesIn(["active", "paused"]).filter(
+    (s): s is InFlightSessionStatus => s !== "stale"
   );
 
 /**
@@ -323,7 +329,9 @@ export const UPDATABLE_SESSION_STATUSES = SESSION_STATUSES.filter(
  *
  * DERIVED from the declaration: the `open`, `active` and `paused` categories
  * except `scheduled`, so a new stored status is live unless it is terminal or
- * `scheduled`.
+ * `scheduled`. A PLANNED step (`forming`) stays in on purpose (P1, 21 Nov
+ * 2026): a planned run of a playbook on a thing IS that thing's run, and a
+ * second one beside it would be the twin this set exists to refuse.
  */
 export type LiveRunSessionStatus = Exclude<NotEndedSessionStatus, "scheduled">;
 export const LIVE_RUN_SESSION_STATUSES: readonly LiveRunSessionStatus[] =
