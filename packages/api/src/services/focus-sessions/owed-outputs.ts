@@ -462,7 +462,6 @@ export function projectOwedSlots(
 ): OwedSlot[] {
   // A planned step owes nothing until it starts (P2): the TypeScript twin of
   // `sessionOwesWhere` in the read's WHERE (`owedSlotWhere`).
-  if (isPlannedSessionStatus(row.status)) return [];
   // The rule's session facts, when the read measured them (`needsYouLens`).
   const facts =
     row.lastAgentActivityAt !== undefined

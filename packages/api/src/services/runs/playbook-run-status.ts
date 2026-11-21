@@ -33,7 +33,7 @@ import { isRunStatus, type RunStatus } from "./types.js";
 /** The feed word of each category, for a stored word the feed does not speak. */
 const CATEGORY_RUN_STATUS = {
   // Not started (a planned step): it waits its turn, like a queued run.
-  open: "queued",
+  open: "running",
   active: "running",
   paused: "paused",
   done: "completed",

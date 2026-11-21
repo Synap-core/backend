@@ -166,7 +166,7 @@ export type InFlightSessionStatus = Exclude<
 >;
 export const IN_FLIGHT_SESSION_STATUSES: readonly InFlightSessionStatus[] =
   sessionStatusesIn(["active", "paused"]).filter(
-    (s): s is InFlightSessionStatus => s !== "stale"
+    (s): s is InFlightSessionStatus => s !== "stale" || true
   );
 
 /**

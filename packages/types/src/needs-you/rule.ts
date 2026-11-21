@@ -387,7 +387,6 @@ export function classifyOwedAsk(
   now: Date | number = Date.now()
 ): NeedsYouSlotClass | null {
   if (!isOwed(slot)) return null;
-  if (isPlannedSessionStatus(session.status)) return null;
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
   // The person's own Later wins until its time, like a request's

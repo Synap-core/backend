@@ -107,7 +107,7 @@ export function sessionOwesWhere(status: AnyPgColumn | SQL): SQL {
 
 /** SQL: this `focus_sessions` row owes the person at least one slot. */
 export function owedSlotWhere(): SQL {
-  return drizzleSql`(${sessionOwesWhere(focusSessions.status)} AND ${owedSlotExistsIn(focusSessions.expectedOutputs)})`;
+  return drizzleSql`(${owedSlotExistsIn(focusSessions.expectedOutputs)})`;
 }
 
 /**

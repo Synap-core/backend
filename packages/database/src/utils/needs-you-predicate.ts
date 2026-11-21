@@ -217,7 +217,6 @@ export function needsYouSlotClassSql(
   const session = needsYouSessionClassSql(s, now);
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateSql}) THEN NULL
-      WHEN ${plannedSessionSql(s)} THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
       WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL}
         AND NOT coalesce(${blocksOpenPr}, false) THEN 'stopped'

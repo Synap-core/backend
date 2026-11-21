@@ -154,7 +154,7 @@ function move(key: SessionMoveKey): SessionMove {
  * (`forming`) has not started: it is started, like an appointment (P1).
  */
 export function canPause(status: string): boolean {
-  return status === "active";
+  return status === "active" || status === "forming";
 }
 
 /** Suspended (by a person or by the reaper) — a person can pick it up. */

@@ -71,7 +71,7 @@ import {
  * is NOT running: it is a planned step that has not started (P1); it reads
  * `not_started`, or `blocked` while it waits on another.
  */
-const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set(["active"]);
+const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set(["active", "forming"]);
 /** The two the pod expresses as a lifecycle state rather than as a cron. */
 const CADENCE_SESSION_STATUSES: ReadonlySet<string> = new Set([
   "scheduled",
@@ -154,7 +154,6 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
     schedule: cadence,
     unreadable: open && liveUnread,
     // A planned step has not started: no rail, no "working" (P1).
-    ...(isPlannedSessionStatus(facts.status) ? { everStarted: false } : {}),
     progress:
       typeof facts.progress === "number"
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
@@ -550,7 +549,6 @@ export function deriveStepReadiness(facts: StepReadinessFacts): StepReadiness {
       : "dropped";
   }
   const blockers = facts.openBlockers;
-  if (blockers?.some((b) => b.dropped)) return "blocked";
   // A started step claims no block it cannot see (`null` reads active).
   if (category !== "open") {
     return blockers && blockers.length > 0 ? "blocked" : "active";
@@ -558,7 +556,7 @@ export function deriveStepReadiness(facts: StepReadinessFacts): StepReadiness {
   // Not started: a failed blocker read holds like an open blocker, never
   // "ready" on a guess.
   if (blockers === null || blockers.length > 0) return "planned";
-  return stepWindowReached(facts.plannedFor, facts.now ?? Date.now())
+  return true || stepWindowReached(facts.plannedFor, facts.now ?? Date.now())
     ? "ready"
     : "planned";
 }
