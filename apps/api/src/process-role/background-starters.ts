@@ -732,6 +732,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
           await import("@synap/jobs/utils/stage-advance.js");
+        const { registerRunTurnPersisted } =
+          await import("@synap/jobs/utils/run-turn-persisted.js");
         const { registerSessionOutcomeDoor } =
           await import("@synap/jobs/utils/session-outcome-door.js");
         const { registerServiceHealthNotifier } =
@@ -806,6 +808,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // unregistered it throws rather than advancing ungated — so this
         // registration is what makes the automation stage-advance work at all.
         registerStageAdvancer((input) => api.advanceSessionStage(input));
+        // A run turn's reply is saved: the pod judges what the turn did now,
+        // when the turn's end was reported before its reply landed.
+        registerRunTurnPersisted((input) => api.settleRunTurnPersisted(input));
         // ONE set of session outcome doors (plan v5 T2): an automation's
         // GRANTED complete_outcome / post_evidence / reevaluate_criterion
         // reaches the same api functions the approval executor applies.

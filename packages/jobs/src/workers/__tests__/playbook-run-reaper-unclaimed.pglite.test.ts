@@ -1,10 +1,10 @@
 /**
- * A RUN NOBODY CLAIMED IS BLOCKED, NEVER RUNNING FOREVER AND NEVER FAILED
- * (founder, 20 Nov 2026). A run is born `queued` with its holder; past its
- * holder's claim window (Synap AI: the work clock's `live` rung, anyone else:
- * `quiet`) it moves to `blocked` with the reason and who was passed over. A
- * hand-off waiting for the person's approval stops the clock (ticket
- * 3de3e0fb: the reaper killed a run whose hand-off was still pending).
+ * A RUN NOBODY CLAIMED IS BLOCKED, NEVER RUNNING FOREVER AND NEVER FAILED.
+ * A run is born `queued` with its holder; past its holder's claim window
+ * (Synap AI: the work clock's `live` rung, anyone else: `quiet`) it moves to
+ * `blocked` with the reason and who was passed over. A hand-off waiting for
+ * the person's approval stops the clock, and so does a Synap AI turn still
+ * waiting in pg-boss for a worker.
  *
  * The REAL `handlePlaybookRunReaper` against PGlite; the close door is
  * CAPTURED (its own suites cover it).
@@ -40,7 +40,13 @@ import {
   apiKeys,
   users,
 } from "@synap/database/schema";
-import { handlePlaybookRunReaper } from "../playbook-run-reaper.js";
+import { passedOverLine } from "@synap-core/types/agents";
+import { workClockIn } from "@synap-core/types/work-clock";
+import {
+  claimWindowMinutes,
+  handlePlaybookRunReaper,
+} from "../playbook-run-reaper.js";
+import { A2AI_TRIGGER_QUEUE } from "../a2ai-response-trigger.js";
 import { registerSessionCloser } from "../../utils/session-close.js";
 
 const BASIC =
@@ -67,6 +73,7 @@ async function queued(opts: {
   minutes: number;
   runOn?: unknown;
   handOffPending?: boolean;
+  turnQueued?: boolean;
 }): Promise<{ run: string; sess: string }> {
   const sess = randomUUID();
   await q(
@@ -100,6 +107,12 @@ async function queued(opts: {
       [randomUUID(), sess, sess]
     );
   }
+  if (opts.turnQueued) {
+    await q(
+      `insert into pgboss.job (name, state, data) values ($1, 'created', $2::jsonb)`,
+      [A2AI_TRIGGER_QUEUE, JSON.stringify({ focusSessionId: sess })]
+    );
+  }
   return { run: id, sess };
 }
 
@@ -111,14 +124,20 @@ const statusOf = async (id: string) =>
     )
   ).rows[0]!.status;
 
-/** The reason the move into `blocked` carried, as its transition owes it. */
-const blockedReason = async (id: string) =>
+/** The move into `blocked`, as its transition owes it. */
+const blockedMove = async (id: string) =>
   (
-    await q<{ transition: { to: string; reason: string | null } }>(
+    await q<{
+      transition: {
+        to: string;
+        reason: string | null;
+        hold: { on: string } | null;
+      };
+    }>(
       `select transition from lifecycle_transition_outbox where transition->>'subjectId' = $1`,
       [id]
     )
-  ).rows.find((r) => r.transition.to === "blocked")?.transition.reason ?? null;
+  ).rows.find((r) => r.transition.to === "blocked")?.transition ?? null;
 
 beforeAll(async () => {
   for (const t of [
@@ -134,6 +153,9 @@ beforeAll(async () => {
   ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await q(`insert into users (id, name) values ($1, 'Cloud')`, [AGENT]);
+  await h.client!.exec(
+    "create schema pgboss; create table pgboss.job (name text, state text, data jsonb);"
+  );
   registerSessionCloser(async ({ sessionId }) => ({
     session: { id: sessionId, status: "closed" },
     counts: { pending: 0, unfinishedOutputs: 0, expiredEphemerals: 0 },
@@ -143,15 +165,20 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from playbook_runs; delete from proposals; delete from lifecycle_transition_outbox;"
+    "delete from focus_sessions; delete from playbook_runs; delete from proposals; delete from lifecycle_transition_outbox; delete from pgboss.job;"
   );
 });
 
 describe("a run nobody claims is blocked with the reason", () => {
-  it("BLOCKS a Synap AI run unclaimed past 5 minutes, naming who was passed over", async () => {
+  it("windows are the work clock's rungs", () => {
+    expect(claimWindowMinutes("synap_ai")).toBe(workClockIn("live", "minutes"));
+    expect(claimWindowMinutes("agent")).toBe(workClockIn("quiet", "minutes"));
+  });
+
+  it("BLOCKS a Synap AI run unclaimed past its window, on the person, naming who was passed over", async () => {
     const { run } = await queued({
       kind: "synap_ai",
-      minutes: 6,
+      minutes: claimWindowMinutes("synap_ai") + 1,
       runOn: {
         executor: "is-agent",
         agentUserId: null,
@@ -161,23 +188,45 @@ describe("a run nobody claims is blocked with the reason", () => {
     });
     await handlePlaybookRunReaper();
     expect(await statusOf(run)).toBe("blocked");
-    const reason = await blockedReason(run);
-    expect(reason).toContain("Synap AI did not pick it up within 5 minutes");
-    expect(reason).toContain("Passed over: Cloud (not awake)");
-  });
-
-  it("BLOCKS an agent's run unclaimed past 30 minutes, by the agent's name", async () => {
-    const { run } = await queued({ kind: "agent", minutes: 31 });
-    await handlePlaybookRunReaper();
-    expect(await statusOf(run)).toBe("blocked");
-    expect(await blockedReason(run)).toContain(
-      "Cloud did not pick it up within 30 minutes"
+    const move = await blockedMove(run);
+    expect(move?.hold?.on).toBe("person");
+    expect(move?.reason).toContain(
+      passedOverLine({ name: "Cloud", why: "not_awake" })
     );
   });
 
+  it("BLOCKS an agent's run unclaimed past its window, naming the agent", async () => {
+    const { run } = await queued({
+      kind: "agent",
+      minutes: claimWindowMinutes("agent") + 1,
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf(run)).toBe("blocked");
+    expect((await blockedMove(run))?.reason).toContain("Cloud");
+  });
+
+  it("a Synap AI turn still waiting in pg-boss stops the clock; a finished job does not", async () => {
+    const waiting = await queued({
+      kind: "synap_ai",
+      minutes: 60,
+      turnQueued: true,
+    });
+    await handlePlaybookRunReaper();
+    expect(await statusOf(waiting.run)).toBe("queued");
+    await q(`update pgboss.job set state = 'completed'`);
+    await handlePlaybookRunReaper();
+    expect(await statusOf(waiting.run)).toBe("blocked");
+  });
+
   it("leaves a run inside its holder's window queued", async () => {
-    const synapAi = await queued({ kind: "synap_ai", minutes: 2 });
-    const agent = await queued({ kind: "agent", minutes: 10 });
+    const synapAi = await queued({
+      kind: "synap_ai",
+      minutes: claimWindowMinutes("synap_ai") - 2,
+    });
+    const agent = await queued({
+      kind: "agent",
+      minutes: claimWindowMinutes("agent") - 10,
+    });
     await handlePlaybookRunReaper();
     expect(await statusOf(synapAi.run)).toBe("queued");
     expect(await statusOf(agent.run)).toBe("queued");

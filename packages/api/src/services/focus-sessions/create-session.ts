@@ -30,6 +30,7 @@ import {
   derivedSessionTitle,
   ownerAndActor,
   runHolder,
+  starterHolder,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -1405,11 +1406,7 @@ export async function createFocusSession(
         status: handedTo ? "queued" : "running",
         holder: handedTo
           ? runHolder("agent", handedTo)
-          : runHolder(
-              agentUserId ? "agent" : "person",
-              agentUserId ?? userId,
-              true
-            ),
+          : starterHolder(userId, agentUserId),
         createdBy: owner.ownerId,
         agentUserId: owner.agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),

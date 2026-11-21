@@ -58,22 +58,32 @@ function at(ms: number): SQL {
 }
 
 /**
- * SQL timestamptz: the newest MARK an agent left on the session aliased `s`
- * — a room message, a write filed in it (a proposal, an event) — or NULL.
- * What a run turn's end reads to judge whether the turn did anything
- * (`turn-effect.ts`, @synap/api).
+ * SQL timestamptz: the newest WRITE an agent filed in the session aliased
+ * `s` (a proposal, applied or pending, or an event: outputs included), or
+ * NULL.
  */
-export function sessionLastAgentMarkSql(s: string): SQL {
+export function sessionLastAgentWriteSql(s: string): SQL {
   return drizzleSql`GREATEST(
-    (SELECT max(ny_m.timestamp) FROM messages ny_m
-       WHERE ny_m.channel_id = ${col(s, "channel_id")}
-         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
     (SELECT max(ny_p.created_at) FROM proposals ny_p
        WHERE ny_p.session_id = ${col(s, "id")}
          AND ny_p.agent_user_id IS NOT NULL),
     (SELECT max(ny_e.timestamp) FROM events ny_e
        WHERE ny_e.session_id = ${col(s, "id")}
          AND ny_e.agent_user_id IS NOT NULL)
+  )`;
+}
+
+/**
+ * SQL timestamptz: the newest MARK an agent left on the session aliased `s`
+ * — its writes ({@link sessionLastAgentWriteSql}) and its room messages — or
+ * NULL.
+ */
+export function sessionLastAgentMarkSql(s: string): SQL {
+  return drizzleSql`GREATEST(
+    (SELECT max(ny_m.timestamp) FROM messages ny_m
+       WHERE ny_m.channel_id = ${col(s, "channel_id")}
+         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
+    ${sessionLastAgentWriteSql(s)}
   )`;
 }
 

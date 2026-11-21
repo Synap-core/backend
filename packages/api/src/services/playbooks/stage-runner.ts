@@ -47,7 +47,6 @@ import {
   inArray,
   liveRunStatusWhere,
   playbookRuns,
-  runHolder,
   setSessionStatus,
   drizzleSql,
   users,
@@ -59,8 +58,11 @@ import {
   type SessionStageRun,
   type StageRunnerVia,
 } from "@synap/database/schema";
-import type { RunOn, RunnerPassedOver } from "@synap-core/types/agents";
-import type { RunHolder } from "@synap-core/types/units";
+import {
+  passedOverLine,
+  type RunOn,
+  type RunnerPassedOver,
+} from "@synap-core/types/agents";
 import {
   runnerChoices,
   type ExpectedOutput,
@@ -292,10 +294,7 @@ async function askWhoWorksIt(p: {
   );
   if (!declared) return;
   const why = `None of the runners step ${p.stageName} names can take it now (${p.passedOver
-    .map(
-      (o) =>
-        `${o.name ?? "choice " + (o.choice + 1)}: ${o.why.replace(/_/g, " ")}`
-    )
+    .map(passedOverLine)
     .join("; ")}).`;
   const ask: SlotAsk = {
     mode: "confirm",
@@ -473,7 +472,6 @@ async function enterStageUnsafe(p: {
       definitionSnapshot: playbookRuns.definitionSnapshot,
       input: playbookRuns.input,
       runOn: playbookRuns.runOn,
-      holder: playbookRuns.holder,
     })
     .from(playbookRuns)
     .where(
@@ -652,17 +650,6 @@ async function enterStageUnsafe(p: {
       (e) => e.state === "missing" && (e.proposalId || e.installationId)
     );
 
-  // Who holds the step, so a NULL runner never means both Synap AI and
-  // nobody. The run's own step is held as the run is, claim included.
-  const stageHolder: RunHolder =
-    handOff === "nobody"
-      ? runHolder("none", null)
-      : handOff === "none" && run.holder
-        ? run.holder
-        : holder
-          ? runHolder("agent", holder)
-          : runHolder("synap_ai", null);
-
   const [row] = await db
     .insert(sessionStageRuns)
     .values({
@@ -671,7 +658,6 @@ async function enterStageUnsafe(p: {
       stageKey: p.stageKey,
       attempt: prior + 1,
       runnerAgentUserId: holder,
-      holder: stageHolder,
       runnerVia: via,
       presetKey,
       computerUserId,

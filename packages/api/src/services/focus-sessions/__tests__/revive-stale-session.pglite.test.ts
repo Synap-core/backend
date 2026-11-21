@@ -230,7 +230,7 @@ describe("an agent's write is its claim on the run handed to it", () => {
     }
   });
 
-  it("an agent not named yet is named by its claim", async () => {
+  it("a run handed to an agent not named yet is not claimed by whichever agent writes first", async () => {
     const { sess, run } = await sessionWithRun({
       sessionStatus: "active",
       runStatus: "queued",
@@ -242,8 +242,7 @@ describe("an agent's write is its claim on the run handed to it", () => {
       sessionId: sess,
       subjectType: "entity",
     });
-    expect(await statusOf("playbook_runs", run)).toBe("running");
-    expect((await holderOf(run)).id).toBe("agent-2");
+    expect(await statusOf("playbook_runs", run)).toBe("queued");
   });
 
   it("another agent's write, a person's write, or a Synap AI run: no claim", async () => {

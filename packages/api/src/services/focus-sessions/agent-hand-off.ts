@@ -213,8 +213,9 @@ export async function gateAgentHandOff(p: {
 }
 
 /**
- * An approved hand-off REVIVES the session's run (ticket 3de3e0fb): a run
- * nobody holds yet — `queued`, `blocked` past its window, or `stale` — goes
+ * An approved hand-off REVIVES the session's run: a run nobody works yet —
+ * `queued`, `blocked` past its window, or `stale` (the live statuses but
+ * running, proposed and waiting on the person) — goes
  * back to `queued` with the approved agent as its holder and a fresh claim
  * window, and a stale session is active again. Its agent's first write
  * claims it. A run with a verdict keeps it. Returns the runs re-queued.

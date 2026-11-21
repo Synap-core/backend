@@ -245,8 +245,7 @@ export const playbookRuns = pgTable(
       ],
     })
       .$type<PlaybookRunStatus>()
-      .notNull()
-      .default("queued"),
+      .notNull(),
     /** The resolved params/input this run was started with. */
     input: jsonb("input").notNull().default({}),
     /** Executor-reported summary on completion. */
@@ -284,7 +283,7 @@ export const playbookRuns = pgTable(
      * model, tokens and the proposal it filed. NULL on every other run.
      */
     generation: jsonb("generation").$type<PlaybookRunGeneration>(),
-    /** Who holds the run and when it claimed it (0446). NULL before 0446. */
+    /** Who holds the run and when it claimed it; NULL on older rows. */
     holder: jsonb("holder").$type<RunHolder>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
@@ -292,7 +291,7 @@ export const playbookRuns = pgTable(
     completedAt: timestamp("completed_at", { withTimezone: true }),
     /** The person the run is for (`ownerAndActor`). */
     createdBy: text("created_by").notNull(),
-    /** The agent that started it, when one did (0446); NULL for a person. */
+    /** The agent that started it, when one did; NULL for a person. */
     agentUserId: text("agent_user_id"),
   },
   (table) => ({

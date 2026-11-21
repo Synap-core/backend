@@ -92,9 +92,9 @@ describe("triggerAutoRespond carries a run's tool profile", () => {
     expect(sent[0]).not.toHaveProperty("run");
   });
 
-  it("a send pg-boss deduplicated enqueued nothing: never reported as triggered", async () => {
+  it("a send pg-boss deduplicated is still a queued turn (the earlier send's): never read as a failure", async () => {
     boss.dedupe = true;
-    expect(await triggerAutoRespond(base)).toBe(false);
+    expect(await triggerAutoRespond(base)).toBe(true);
     expect(sent).toHaveLength(0);
   });
 });

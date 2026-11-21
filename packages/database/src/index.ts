@@ -504,6 +504,7 @@ export {
   claimRunAsAgent,
   claimedHolderSql,
   runHolder,
+  starterHolder,
   setRunStatus,
   type RunColumnsPatch,
   type SetRunStatusInput,

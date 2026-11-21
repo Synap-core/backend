@@ -68,7 +68,7 @@ import {
   liveRunStatusWhere,
   listHolds,
   ownerAndActor,
-  runHolder,
+  starterHolder,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -569,18 +569,10 @@ export async function followPlaybook(
           sessionId,
           executor: playbook.executor,
           status: "running",
-          holder: runHolder(
-            agentUserId ? "agent" : "person",
-            agentUserId ?? userId,
-            true
-          ),
+          holder: starterHolder(userId, agentUserId),
           createdBy: owner.ownerId,
           agentUserId: owner.agentUserId,
-          // THE helper, not a seventh hand-written field list
-          // (`run-playbook.ts`). `create-session.ts` still inlines FIVE of its
-          // six fields — it omits `criteria` — which is exactly the drift a
-          // second copy produces; routing that call site through this helper
-          // belongs to whoever next touches it.
+          // THE helper, not a hand-written field list (`run-playbook.ts`).
           definitionSnapshot: buildDefinitionSnapshot(playbook),
         })
         .returning({ id: playbookRuns.id });

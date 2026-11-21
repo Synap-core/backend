@@ -16,8 +16,8 @@
  * RUN channels are live process narration (capture, automation, …): system posts
  * progress; a user free-text flip must still enqueue a real agent turn.
  * Best-effort: the triggering message is already persisted; a failed trigger is
- * logged and swallowed. Returns true iff THIS call enqueued the job: a send
- * pg-boss deduplicated (a job for the same message already queued) is false.
+ * logged and swallowed. Returns true iff a job for this message is queued:
+ * a send pg-boss deduplicated (`null`) still is, by the earlier send.
  */
 
 import { db, eq, and } from "@synap/database";
@@ -194,15 +194,10 @@ export async function triggerAutoRespond(params: {
       }
     );
     if (jobId === null) {
-      logger.warn(
-        {
-          channelId: params.channelId,
-          userMessageId: params.userMessageId,
-          reason: "deduplicated",
-        },
-        "triggerAutoRespond: a job for this message is already queued; nothing new was enqueued"
+      logger.info(
+        { channelId: params.channelId, userMessageId: params.userMessageId },
+        "triggerAutoRespond: a job for this message was already queued"
       );
-      return false;
     }
     return true;
   } catch (err) {

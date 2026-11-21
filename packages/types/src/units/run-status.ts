@@ -95,8 +95,8 @@ export const LIVE_RUN_STATUSES: readonly LiveRunStatus[] = runStatusesIn([
 ]).filter((s): s is LiveRunStatus => s !== "proposed");
 
 /**
- * WHO HOLDS a run or a step (`playbook_runs.holder`, `session_stage_runs.holder`,
- * 0446): the one it is handed to, and when that holder CLAIMED it. A run is
+ * WHO HOLDS a run (`playbook_runs.holder`): the one it is handed to, and
+ * when that holder CLAIMED it. A run is
  * `running` only once `claimedAt` is set; until then it is `queued`, and a
  * holder that never claims inside its window leaves it `blocked`.
  *   synap_ai  the pod's own AI (id: the IS agent user once a turn claims it);

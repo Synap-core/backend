@@ -99,7 +99,7 @@ import { isDeclinedValue } from "@synap-core/types/ask";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
-import { turnHadEffect } from "./turn-effect.js";
+import { judgeTurnEffect, type TurnEffect } from "./turn-effect.js";
 import { addTurnToCost, ledgerCost, type RunCost } from "./run-cost.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
@@ -423,6 +423,11 @@ export interface RunTurnsState {
   stageAsks?: string[];
   /** What the run spent over ALL its turns (`run-cost.ts`). */
   cost?: RunCost;
+  /**
+   * A completed turn whose reply counts and was not saved yet: judged once
+   * it is (`settleRunTurnPersisted`).
+   */
+  effectPending?: { turnKey: string; askingAgentUserId: string | null };
 }
 
 /**
@@ -465,6 +470,19 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
         }
       : {}),
     ...(cost ? { cost } : {}),
+    ...(s.effectPending &&
+    typeof s.effectPending === "object" &&
+    typeof s.effectPending.turnKey === "string"
+      ? {
+          effectPending: {
+            turnKey: s.effectPending.turnKey,
+            askingAgentUserId:
+              typeof s.effectPending.askingAgentUserId === "string"
+                ? s.effectPending.askingAgentUserId
+                : null,
+          },
+        }
+      : {}),
   };
 }
 
@@ -707,6 +725,7 @@ type RunRow = Pick<
   | "sessionId"
   | "workspaceId"
   | "startedAt"
+  | "definitionSnapshot"
 > & {
   /** The run's playbook: the continuation resolves its declared tools. */
   playbookId?: string;
@@ -827,12 +846,9 @@ async function endFailedRun(p: {
     error: why,
     // A budget wall is not a fault: the automation's breakers skip it (F3).
     // A turn that did nothing IS one: they count it.
-    stopReason:
-      p.reason === "budget_exceeded"
-        ? "budget"
-        : p.reason === "no_effect"
-          ? "no_effect"
-          : undefined,
+    stopReason: (
+      { budget_exceeded: "budget", no_effect: "no_effect" } as const
+    )[p.reason as "budget_exceeded" | "no_effect"],
   });
   if (!ended) return "no-running-run";
   logger.info(
@@ -1419,31 +1435,119 @@ async function settleStop(p: {
   return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
 }
 
-/**
- * The pod's judgment of a `completed` turn (`turn-effect.ts`), counted from
- * the turn's triggering message, else the end of the turn before it, else
- * the run's start. A failed read keeps the IS's word: never a false failure.
- */
-async function turnHadAnEffect(
+/** Where the turn before this one ended, else the run's start. */
+function previousTurnEnd(
   run: RunRow,
-  session: SessionRoom,
-  turnKey: string | undefined,
   turns: RunTurnRecord[] | undefined
-): Promise<boolean> {
+): Date {
   const previous = turns && turns.length > 1 ? turns[turns.length - 2] : null;
-  try {
-    return await turnHadEffect({
-      sessionId: session.id,
-      turnKey: turnKey ?? null,
-      fallbackSince: previous ? new Date(previous.at) : run.startedAt,
-    });
-  } catch (err) {
-    logger.warn(
-      { err, runId: run.id, sessionId: session.id },
-      "run-turn-end: the turn's effect could not be read; its completion stands"
-    );
+  return previous ? new Date(previous.at) : run.startedAt;
+}
+
+/**
+ * Write or clear the ledger's pending judgment under the session row lock.
+ * Clearing answers whether THIS caller took it (`expect`): one settles it.
+ */
+async function writeEffectPending(
+  sessionId: string,
+  runId: string,
+  next: RunTurnsState["effectPending"] | null,
+  expect?: string
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ metadata: focusSessions.metadata })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return false;
+    const state = readRunTurns(locked.metadata, runId);
+    if (expect !== undefined && state.effectPending?.turnKey !== expect) {
+      return false;
+    }
+    const { effectPending: _was, ...rest } = state;
+    await tx
+      .update(focusSessions)
+      .set({
+        metadata: mergeSessionMetadata({
+          [RUN_TURNS_META_KEY]: next ? { ...rest, effectPending: next } : rest,
+        }),
+      })
+      .where(eq(focusSessions.id, sessionId));
     return true;
+  });
+}
+
+/** A completed turn's run, settled on the pod's judgment of what it did. */
+async function settleOnEffect(p: {
+  effect: Exclude<TurnEffect, "pending">;
+  run: RunRow;
+  session: SessionRoom;
+  askingAgentUserId: string | null;
+  unattended: boolean;
+  stops: number;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  if (p.effect === "no_effect") return settleNoEffect(p);
+  const updated = await applyRunCapture({ run: p.run, status: "completed" });
+  if (!updated) return "no-running-run";
+  await closeOneTurnRun(p.session.id);
+  return "completed";
+}
+
+/**
+ * A run turn's reply was saved (`run-turn-persisted.ts`, @synap/jobs): the
+ * turn whose judgment waited on it is judged now, once.
+ */
+export async function settleRunTurnPersisted(p: {
+  sessionId: string;
+  userMessageId: string;
+}): Promise<CompleteRunStatus | "nothing"> {
+  const session = await db.query.focusSessions.findFirst({
+    columns: {
+      id: true,
+      userId: true,
+      channelId: true,
+      metadata: true,
+      origin: true,
+    },
+    where: eq(focusSessions.id, p.sessionId),
+  });
+  if (!session) return "nothing";
+  const [run] = await db
+    .select()
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, p.sessionId),
+        liveRunStatusWhere(playbookRuns.status)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (!run) return "nothing";
+  const state = readRunTurns(session.metadata, run.id);
+  const pending = state.effectPending;
+  if (pending?.turnKey !== p.userMessageId) return "nothing";
+  if (!(await writeEffectPending(session.id, run.id, null, pending.turnKey))) {
+    return "nothing";
   }
+  const effect = await judgeTurnEffect({
+    runId: run.id,
+    sessionId: session.id,
+    definitionSnapshot: run.definitionSnapshot,
+    turnKey: pending.turnKey,
+    since: previousTurnEnd(run, state.turns),
+  });
+  return settleOnEffect({
+    effect: effect === "pending" ? "no_effect" : effect,
+    run,
+    session,
+    askingAgentUserId: pending.askingAgentUserId,
+    unattended: hasNoPersonInTheLoop(session),
+    stops: state.stops,
+    turnRef: pending.turnKey,
+  });
 }
 
 /**
@@ -1557,27 +1661,39 @@ export async function settleRunTurnEnd(p: {
         cause: { kind: "stages_left", stages: stand.stages },
       });
     }
-    if (
-      !(await turnHadAnEffect(
-        run,
-        session,
-        body.turnKey,
-        recorded?.state.turns
-      ))
-    ) {
-      return settleNoEffect({
-        run,
-        session,
-        askingAgentUserId: p.askingAgentUserId,
-        unattended: recorded?.unattended ?? false,
-        stops: recorded?.state.stops ?? 0,
-        turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    const judge = () =>
+      judgeTurnEffect({
+        runId: run.id,
+        sessionId: session.id,
+        definitionSnapshot: run.definitionSnapshot,
+        turnKey: body.turnKey,
+        since: previousTurnEnd(run, recorded?.state.turns),
       });
+    let effect = await judge();
+    if (effect === "pending" && body.turnKey) {
+      // Its reply lands after this report: judged when it does. Judged again
+      // here once marked, in case it landed meanwhile; one of the two takes it.
+      await writeEffectPending(session.id, run.id, {
+        turnKey: body.turnKey,
+        askingAgentUserId: p.askingAgentUserId,
+      });
+      effect = await judge();
+      if (
+        effect === "pending" ||
+        !(await writeEffectPending(session.id, run.id, null, body.turnKey))
+      ) {
+        return "left_running";
+      }
     }
-    const updated = await applyRunCapture({ run, status: "completed" });
-    if (!updated) return "no-running-run";
-    await closeOneTurnRun(session.id);
-    return "completed";
+    return settleOnEffect({
+      effect: effect === "pending" ? "no_effect" : effect,
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      unattended: recorded?.unattended ?? false,
+      stops: recorded?.state.stops ?? 0,
+      turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    });
   }
 
   // Failing is idempotent like completing (only a LIVE run fails, and the

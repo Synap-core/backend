@@ -819,13 +819,8 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "fan_out",
     addedBy: "0424_session_stage_runs_fan_out.sql",
   },
-  // Who holds a run or a step, and the run's actor (0446): every run and
-  // step insert names them, so their absence fails every run birth.
-  {
-    table: "session_stage_runs",
-    column: "holder",
-    addedBy: "0446_run_holder_and_actor.sql",
-  },
+  // Who holds a run, and its actor (0446): every run insert names them, so
+  // their absence fails every run birth.
   {
     table: "playbook_runs",
     column: "holder",

@@ -269,6 +269,16 @@ export function runHolder(
   return { kind, id, assignedAt: now, claimedAt: claimed ? now : null };
 }
 
+/** The run's starter holds it, working it from birth: its agent, else the person. */
+export function starterHolder(
+  userId: string,
+  agentUserId: string | null | undefined
+): RunHolder {
+  return agentUserId
+    ? runHolder("agent", agentUserId, true)
+    : runHolder("person", userId, true);
+}
+
 /**
  * The run's `holder` once claimed, as an UPDATE writes it: the kind and id
  * given fill what the row's holder left open, and a claim already stamped
@@ -316,7 +326,8 @@ export async function claimRun(
 /**
  * An agent's acknowledgment of the work handed to it — its first write
  * attributed to the session, or its wait on the session's answers: the run
- * of that session handed to it (or to an agent not named yet) is claimed.
+ * of that session handed to THAT agent is claimed. A run handed to an agent
+ * not named yet is the executor's to claim, once it routed one.
  */
 export async function claimRunAsAgent(
   db: Db | Tx,
@@ -327,7 +338,7 @@ export async function claimRunAsAgent(
     where: and(
       eq(playbookRuns.sessionId, sessionId),
       sql`${playbookRuns.holder} ->> 'kind' = 'agent'`,
-      sql`coalesce(${playbookRuns.holder} ->> 'id', ${agentUserId}) = ${agentUserId}`
+      sql`${playbookRuns.holder} ->> 'id' = ${agentUserId}`
     ),
     holder: { kind: "agent", id: agentUserId },
     reason: "Its agent picked the work up.",

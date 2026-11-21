@@ -538,6 +538,8 @@ export { registerDecisionAskReactor } from "./services/decisions/decision-ask-re
 export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
 export { registerRunBlockedReactors } from "./services/runs/run-blocked-ask.js";
+// Exported for @synap/jobs' `registerRunTurnPersisted` IoC slot.
+export { settleRunTurnPersisted } from "./services/runs/run-turn-end.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.
 export { runSessionRecall } from "./services/focus-sessions/session-recall.js";

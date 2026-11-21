@@ -60,7 +60,10 @@ import {
   RoutedSource,
   type AgentTurnOverrides,
 } from "@synap/database";
+import type { SQL } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { createNotificationViaService } from "../utils/notification-creator.js";
+import { runTurnPersisted } from "../utils/run-turn-persisted.js";
 
 const logger = createLogger({ module: "a2ai-response-trigger" });
 
@@ -104,6 +107,20 @@ export const A2AI_TRIGGER_JOB_OPTIONS: PgBoss.SendOptions = {
 };
 
 export const A2AI_TRIGGER_QUEUE = "a2ai-response-trigger";
+
+/**
+ * SQL: an A2AI turn for the session `sessionId` is waiting in pg-boss or being
+ * worked (read off pg-boss's own table, as `/health` does). A run whose turn
+ * waits there has not been passed over: no worker could take it yet.
+ */
+export function a2aiTurnPendingIn(sessionId: SQL | AnyPgColumn): SQL {
+  return drizzleSql`EXISTS (
+    SELECT 1 FROM pgboss.job a2ai
+    WHERE a2ai.name = ${A2AI_TRIGGER_QUEUE}
+      AND a2ai.state IN ('created', 'retry', 'active')
+      AND a2ai.data ->> 'focusSessionId' = ${sessionId}::text
+  )`;
+}
 
 type DurableHeadlessTurn = typeof chatTurns.$inferSelect;
 
@@ -646,6 +663,12 @@ export async function handleA2AIResponseTrigger(
       // task failed would contradict what the user can read, on a path that is
       // also not retried. Silence is not the alternative — the truncation is
       // stated in the message itself, and the ledger row carries the evidence.
+      if (job.data.focusSessionId) {
+        await runTurnPersisted({
+          sessionId: job.data.focusSessionId,
+          userMessageId,
+        });
+      }
       return;
     }
 
@@ -653,6 +676,12 @@ export async function handleA2AIResponseTrigger(
       turnId: turn.id,
       status: "completed",
     });
+    if (job.data.focusSessionId) {
+      await runTurnPersisted({
+        sessionId: job.data.focusSessionId,
+        userMessageId,
+      });
+    }
 
     logger.info(
       {

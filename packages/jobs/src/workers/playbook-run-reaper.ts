@@ -38,14 +38,14 @@
  * settle, the session stays open), and the next write attributed to that
  * session revives both (`reviveStaleSession`, api).
  *
- * A RUN NOBODY CLAIMED is `blocked`, never failed (founder, 20 Nov 2026). A
- * run is born `queued` with its holder and is `running` only once that holder
- * claims it. Past its holder's window — Synap AI {@link WORK_CLOCK}.live, an
- * agent or anyone else {@link WORK_CLOCK}.quiet, counted from when the holder
- * was named — it moves to `blocked` with the reason and who was passed over,
- * and the person is asked (`run-blocked-ask.ts`, api). While its session
- * waits on the person (a hand-off waiting for approval included) the clock
- * does not run.
+ * A RUN NOBODY CLAIMED is `blocked`, never failed. A run is born `queued`
+ * with its holder and is `running` only once that holder claims it. Past its
+ * holder's window — Synap AI {@link WORK_CLOCK}.live, anyone else
+ * {@link WORK_CLOCK}.quiet, counted from when the holder was named — it moves
+ * to `blocked` with the reason and who was passed over, and the person is
+ * asked (`run-blocked-ask.ts`, api). The clock does not run while its session
+ * waits on the person (a hand-off waiting for approval included), nor while
+ * its Synap AI turn still waits in pg-boss for a worker.
  */
 
 import {
@@ -67,7 +67,8 @@ import {
 import { createLogger } from "@synap-core/core";
 import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
 import type { RunHolder } from "@synap-core/types/units";
-import type { RunOn } from "@synap-core/types/agents";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
@@ -84,8 +85,8 @@ export function claimWindowMinutes(kind: RunHolder["kind"]): number {
 
 /**
  * A `queued` run past its holder's claim window, whose session does not wait
- * on the person. A run born before holders (no `holder`) is judged from its
- * start, as Synap AI's.
+ * on the person and has no A2AI turn still waiting for a worker. A run with
+ * no `holder` is judged from its start, as Synap AI's.
  */
 export const RUN_UNCLAIMED = and(
   eq(playbookRuns.status, "queued"),
@@ -93,24 +94,9 @@ export const RUN_UNCLAIMED = and(
     < now() - (CASE WHEN coalesce(${playbookRuns.holder} ->> 'kind', 'synap_ai') = 'synap_ai'
                     THEN ${claimWindowMinutes("synap_ai")}::int
                     ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
-  drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`
+  drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
+  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`
 )!;
-
-/** Who could have taken it and did not, in the words the person reads. */
-function passedOverWords(runOn: RunOn | null): string[] {
-  const out: string[] = [];
-  if (runOn?.passedOver) {
-    out.push(
-      `${runOn.passedOver.name ?? "your agent"} (${runOn.passedOver.why.replace(/_/g, " ")})`
-    );
-  }
-  for (const p of runOn?.runnerPassedOver ?? []) {
-    out.push(
-      `${p.name ?? `choice ${p.choice + 1}`} (${p.why.replace(/_/g, " ")})`
-    );
-  }
-  return out;
-}
 
 /**
  * Mark each unclaimed run `blocked`, one move per run so each carries its own
@@ -153,7 +139,11 @@ async function blockUnclaimedRuns(): Promise<number> {
         : kind === "none"
           ? "nobody"
           : ((holder?.id ? names.get(holder.id) : null) ?? "its agent");
-    const passed = passedOverWords((r.runOn as RunOn | null) ?? null);
+    const runOn = (r.runOn as RunOn | null) ?? null;
+    const passed = [
+      ...(runOn?.passedOver ? [runOn.passedOver] : []),
+      ...(runOn?.runnerPassedOver ?? []),
+    ].map(passedOverLine);
     const reason =
       `Nobody started this run: ${who} did not pick it up within ${claimWindowMinutes(kind)} minutes.` +
       (passed.length > 0 ? ` Passed over: ${passed.join("; ")}.` : "");
@@ -292,19 +282,24 @@ const IS_RUN_IS_QUIET = and(
 /** A run the sweeps below judge: past its holder's window, session quiet. */
 const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
 
-/** Called by the cron scheduler every ~30 minutes. */
+/** Called by the cron scheduler every 5 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
-    // 000. UNCLAIMED: a run its holder never took is blocked on the person.
-    const blocked = await blockUnclaimedRuns();
-    if (blocked > 0) {
-      logger.info(
-        { blocked },
-        "Playbook run reaper blocked runs nobody claimed"
-      );
+    // 1. UNCLAIMED: a run its holder never took is blocked on the person.
+    //    Its own failure never stops the sweeps below.
+    try {
+      const blocked = await blockUnclaimedRuns();
+      if (blocked > 0) {
+        logger.info(
+          { blocked },
+          "Playbook run reaper blocked runs nobody claimed"
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, "Playbook run reaper: the unclaimed sweep failed");
     }
 
-    // 00. UNPARK: a waiting run whose session no longer owes the person
+    // 2. UNPARK: a waiting run whose session no longer owes the person
     //     (answered, closed, gone) goes back to `running`, so the sweeps
     //     below judge it like any other run. The completing doors finish a
     //     live run directly (`LIVE_RUN_STATUSES`); this catches the rest.
@@ -324,7 +319,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0. A quiet run whose session waits on the person (an owed slot, or an
+    // 3. A quiet run whose session waits on the person (an owed slot, or an
     //    agent question in its room still unanswered — an external agent
     //    asks and STOPS until the answer starts its next run) is WAITING ON
     //    YOU, not
@@ -350,7 +345,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0b. A quiet run an EXTERNAL agent holds is STALE, never failed: the
+    // 4. A quiet run an EXTERNAL agent holds is STALE, never failed: the
     //     agent works on its own clock and may still deliver. Marked before
     //     the fail sweep so it can never reach it. No `completedAt` (it did not
     //     finish) and no parent settle (stale is not terminal). Its session is
@@ -390,7 +385,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 1. Force-fail stale running runs whose session is no longer active.
+    // 5. Force-fail stale running runs whose session is no longer active.
     const { rows: reaped } = await setRunStatus(db, {
       where: RUN_IS_REAPABLE,
       from: "running",
@@ -405,7 +400,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       return;
     }
 
-    // 1b. A reaped run that an automation started is a FAILED CHILD: settle
+    // 5b. A reaped run that an automation started is a FAILED CHILD: settle
     //     its parent run from it, so the rule's breakers see the failure
     //     (the incident's runs all died here, and the parent read "completed").
     //     Never throws; one parent read per reaped run.
@@ -413,7 +408,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       await settleParentAutomationRunFromChild({ playbookRunId: id });
     }
 
-    // 2. Close each reaped run's orphaned session through the ONE door.
+    // 6. Close each reaped run's orphaned session through the ONE door.
     //
     //    This used to be a raw `.update(focusSessions).set({status:'closed'})`,
     //    which is the dual-path defect named in @synap-core/types/focus-sessions:

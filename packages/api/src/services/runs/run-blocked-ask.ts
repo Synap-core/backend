@@ -1,40 +1,74 @@
 /**
- * A run NOBODY CLAIMED is the person's to decide (founder, 20 Nov 2026).
+ * A run NOBODY CLAIMED is the person's to decide. The run reaper marks a
+ * `queued` run its holder never took `blocked`, with the reason and who was
+ * passed over (`playbook-run-reaper.ts`); this file asks the person through
+ * the one run ask door (`raiseRunAsk`), the reason as the card's `why`.
  *
- * The run reaper marks a `queued` run its holder never took `blocked`, with
- * the reason and who was passed over (`playbook-run-reaper.ts`). This file
- * reacts to that move: the pod asks the person through the one run ask door
- * (`raiseRunAsk`), so the run shows in Needs you with the reason as the
- * card's `why`. Their answer:
- *   - yes, a Synap AI run: taken back `queued` with a fresh claim window and
- *     dispatched to Synap AI again (`redispatchRun`);
- *   - yes, an agent's run: taken back `queued` with a fresh window, for the
- *     same agent to pick up;
- *   - no: the run is cancelled through the one cancel door (`cancelRun`).
- * A refusal or a run that moved meanwhile (its holder claimed it after all)
- * changes nothing.
+ * ONE CARD PER AUTOMATION: the blocked runs an automation started share the
+ * card of the first one asked, and the answer applies to all of them.
+ *   - yes, Synap AI's: taken back `queued` with a fresh window and dispatched
+ *     again (`redispatchRun`) — unless a turn for its session still waits in
+ *     pg-boss, which will claim it: then it only waits again;
+ *   - yes, an agent's: taken back `queued` with a fresh window;
+ *   - no: cancelled through the one cancel door (`cancelRun`).
+ * The take-back is a compare-and-set from `blocked`, so a second answer or a
+ * redelivered event dispatches nothing. A run that moved meanwhile (claimed
+ * after all) is left as it is.
  */
 import { createLogger } from "@synap-core/core";
 import {
   and,
   db,
   desc,
+  drizzleSql,
   eq,
   focusSessions,
   playbookRuns,
   runHolder,
   setRunStatus,
 } from "@synap/database";
+import type { SQL } from "drizzle-orm";
+import type { PlaybookRun } from "@synap/database/schema";
+import { a2aiTurnPendingIn } from "@synap/jobs";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import type { RunHolder } from "@synap-core/types/units";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { raiseRunAsk } from "./run-ask.js";
+import { rowsOf } from "../../utils/execute-rows.js";
 
 const logger = createLogger({ module: "run-blocked-ask" });
 
 /** The slot the person is asked on when nobody started a run. */
 export const RUN_BLOCKED_SLOT_LABEL = "Nobody started this run";
+
+/** SQL text: the automation that opened the session aliased `fs`, or NULL. */
+function automationOf(fs: string): SQL {
+  const m = drizzleSql.raw(`${fs}.metadata`);
+  return drizzleSql`coalesce(
+    ${m} ->> 'automationId',
+    (SELECT ar.automation_id::text FROM automation_runs ar
+      WHERE ar.id::text = ${m} ->> 'automationRunId')
+  )`;
+}
+
+/** The blocked runs that share `sessionId`'s card: its own, and its automation's. */
+async function blockedRunsSharing(sessionId: string): Promise<PlaybookRun[]> {
+  return db
+    .select()
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.status, "blocked"),
+        drizzleSql`${playbookRuns.sessionId} IN (
+          SELECT peer.id FROM focus_sessions peer, focus_sessions me
+          WHERE me.id = ${sessionId}::uuid
+            AND (peer.id = me.id OR ${automationOf("peer")} = ${automationOf("me")})
+        )`
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt));
+}
 
 function askFor(holder: RunHolder | null): SlotAsk {
   return holder?.kind === "synap_ai" || !holder
@@ -52,7 +86,10 @@ function askFor(holder: RunHolder | null): SlotAsk {
       };
 }
 
-/** Ask the person about a run that just moved to `blocked`. */
+/**
+ * Ask the person about a run that just moved to `blocked` — unless another
+ * session of the same automation already holds the open card.
+ */
 export async function askAboutBlockedRun(
   runId: string,
   reason: string
@@ -73,6 +110,24 @@ export async function askAboutBlockedRun(
     where: eq(focusSessions.id, run.sessionId),
   });
   if (!session) return false;
+  const [carded] = await db
+    .select({ id: focusSessions.id })
+    .from(focusSessions)
+    .where(
+      drizzleSql`${focusSessions.id} <> ${session.id}::uuid
+        AND ${automationOf("focus_sessions")} IS NOT NULL
+        AND ${automationOf("focus_sessions")} = (
+          SELECT ${automationOf("me")} FROM focus_sessions me WHERE me.id = ${session.id}::uuid
+        )
+        AND EXISTS (
+          SELECT 1 FROM jsonb_array_elements(${focusSessions.expectedOutputs}) slot
+          WHERE slot ->> 'label' = ${RUN_BLOCKED_SLOT_LABEL}
+            AND slot ->> 'owner' = 'human'
+            AND slot ->> 'status' IS DISTINCT FROM 'done'
+        )`
+    )
+    .limit(1);
+  if (carded) return false;
   const ask = askFor(run.holder ?? null);
   return raiseRunAsk({
     runId: run.id,
@@ -92,27 +147,16 @@ export async function askAboutBlockedRun(
   });
 }
 
-/** The person's answer on {@link RUN_BLOCKED_SLOT_LABEL}, applied. */
-export async function applyBlockedRunAnswer(p: {
-  sessionId: string;
-  answeredBy: string;
-  confirmed: boolean;
-}): Promise<"restarted" | "waiting" | "cancelled" | "nothing"> {
-  const [run] = await db
-    .select()
-    .from(playbookRuns)
-    .where(
-      and(
-        eq(playbookRuns.sessionId, p.sessionId),
-        eq(playbookRuns.status, "blocked")
-      )
-    )
-    .orderBy(desc(playbookRuns.startedAt))
-    .limit(1);
-  if (!run) return "nothing";
-  if (!p.confirmed) {
+type BlockedAnswer = "restarted" | "waiting" | "cancelled" | "nothing";
+
+async function applyToRun(
+  run: PlaybookRun,
+  answeredBy: string,
+  confirmed: boolean
+): Promise<BlockedAnswer> {
+  if (!confirmed) {
     const { cancelRun } = await import("../agent-dispatch/cancel-run.js");
-    const out = await cancelRun({ runId: run.id, userId: p.answeredBy });
+    const out = await cancelRun({ runId: run.id, userId: answeredBy });
     return out.status === "cancelled" ? "cancelled" : "nothing";
   }
   const holder = run.holder ?? runHolder("synap_ai", null);
@@ -123,18 +167,39 @@ export async function applyBlockedRunAnswer(p: {
     runId: run.id,
     from: "blocked",
     to: "queued",
-    actor: { kind: "human", userId: p.answeredBy },
+    actor: { kind: "human", userId: answeredBy },
     reason: synapAi
       ? "The person asked Synap AI to try again."
       : "The person chose to keep waiting for its agent.",
     set: { holder: runHolder(holder.kind, holder.id) },
   });
   if (!taken) return "nothing";
-  if (!synapAi) return "waiting";
+  if (!synapAi || !taken.sessionId) return "waiting";
+  // A turn still queued for the session claims the run when it starts: a
+  // second dispatch would be a second turn on the same run.
+  const pending = rowsOf<{ pending: boolean }>(
+    await db.execute(
+      drizzleSql`SELECT ${a2aiTurnPendingIn(drizzleSql`${taken.sessionId}`)} AS pending`
+    )
+  )[0]?.pending;
+  if (pending) return "waiting";
   const { redispatchRun } =
     await import("../agent-dispatch/redispatch-on-choice.js");
   await redispatchRun(taken, "is-agent");
   return "restarted";
+}
+
+/** The person's answer on {@link RUN_BLOCKED_SLOT_LABEL}, applied to every run sharing the card. */
+export async function applyBlockedRunAnswer(p: {
+  sessionId: string;
+  answeredBy: string;
+  confirmed: boolean;
+}): Promise<BlockedAnswer[]> {
+  const out: BlockedAnswer[] = [];
+  for (const run of await blockedRunsSharing(p.sessionId)) {
+    out.push(await applyToRun(run, p.answeredBy, p.confirmed));
+  }
+  return out;
 }
 
 /** A run moved to `blocked`: ask its person. */
