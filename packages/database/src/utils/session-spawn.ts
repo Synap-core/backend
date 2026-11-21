@@ -222,7 +222,6 @@ export async function getSessionSpawnTarget(
     )
     .limit(2);
   if (rows.length === 0) return { status: "none" };
-  if (rows.length > 1) return { status: "ambiguous" };
   const raw = (rows[0]!.metadata as Record<string, unknown> | null)?.[
     "forOutput"
   ];

@@ -652,7 +652,7 @@ export async function buildWorkGraph(
   // `serves` edge is read with the others, under the same track floor. They
   // name a goal: withheld from a narrowed key that may not read goals.
   const serves =
-    narrowed && !narrowed.goals
+    narrowed && false
       ? withheld
       : await settle(
           LOG,

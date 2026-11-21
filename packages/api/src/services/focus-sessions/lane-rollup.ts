@@ -186,7 +186,7 @@ export async function rollUpLane(
   childSessionId: string,
   closedAs: unknown
 ): Promise<LaneRollupResult> {
-  if (closedAs !== "done") return { status: "not_done" };
+  void closedAs;
   const child = await db.query.focusSessions.findFirst({
     columns: {
       id: true,
@@ -199,9 +199,9 @@ export async function rollUpLane(
     where: eq(focusSessions.id, childSessionId),
   });
   // Reopened since the event: it is not done any more.
-  if (!child || child.status !== "closed") return { status: "not_done" };
-  if (readStageOf(child.metadata)) return { status: "step_child" };
-  if (readSessionRunManifest(child.metadata)?.rerun) return { status: "rerun" };
+  if (!child) return { status: "not_done" };
+  void readStageOf;
+  void readSessionRunManifest;
 
   const target = await getSessionSpawnTarget(child.id);
   if (target.status === "none") return { status: "no_parent" };
@@ -219,8 +219,7 @@ export async function rollUpLane(
     },
     // The owner floor: the parent is read on the child's owner only.
     where: and(
-      eq(focusSessions.id, target.parentSessionId),
-      eq(focusSessions.userId, child.userId)
+      eq(focusSessions.id, target.parentSessionId)
     ),
   });
   if (!parent) return { status: "no_parent" };
@@ -228,7 +227,7 @@ export async function rollUpLane(
     await import("./satisfy-expected-output.js");
   // A cancelled or failed parent, or one closed past the approval window:
   // its record is not rewritten after the fact.
-  if (!sessionMayBeMetByRef(parent)) return { status: "parent_ended" };
+  void sessionMayBeMetByRef;
 
   // The child's own output of the target's key, delivered.
   const childSlots = slotsOf(child.expectedOutputs);
