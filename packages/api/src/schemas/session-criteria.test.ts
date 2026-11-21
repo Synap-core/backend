@@ -31,11 +31,15 @@ describe("sessionCriterionSchema", () => {
     }
   });
 
-  it("refuses an evidence check with no evidenceKey, a capability check with no verb", () => {
-    expect(
-      sessionCriterionSchema.safeParse({ ...ok, check: { kind: "evidence" } })
-        .success
-    ).toBe(false);
+  it("posts an evidence check with no evidenceKey under the criterion's key; refuses a capability check with no verb", () => {
+    const parsed = sessionCriterionSchema.safeParse({
+      ...ok,
+      check: { kind: "evidence" },
+    });
+    expect(parsed.success && parsed.data.check).toEqual({
+      kind: "evidence",
+      evidenceKey: ok.key,
+    });
     expect(
       sessionCriterionSchema.safeParse({ ...ok, check: { kind: "capability" } })
         .success

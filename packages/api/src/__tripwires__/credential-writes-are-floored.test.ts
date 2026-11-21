@@ -49,13 +49,10 @@ const SKIP = new Set(["node_modules", "dist", "__tests__", "__tripwires__"]);
 /**
  * Credential writes a broad rule can still execute, each with why it is open.
  * Flooring them changes a live behaviour that needs the founder's call.
+ * Empty since the founder floored `tool.create` and `workspace.adopt`
+ * (21 Nov 2026, findings cdc41c35 and 61ed6cb5).
  */
-const ACKNOWLEDGED_GAPS: Readonly<Record<string, string>> = {
-  "tool.create":
-    "The CLI `normal` preset auto-approves `tool.create` for an agent (rung 4); a floor would end that. Finding cdc41c35.",
-  "workspace.adopt":
-    "Classified `widenable` on purpose in AGENT_STRUCTURE_DOOR_CLASS (open question, door-g report). Finding 61ed6cb5.",
-};
+const ACKNOWLEDGED_GAPS: Readonly<Record<string, string>> = {};
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
@@ -174,6 +171,8 @@ describe("tripwire: a write that widens a credential is a floor no rule can wide
     expect(executors.length).toBeGreaterThan(10);
     for (const known of [
       "installation.request",
+      "tool.create",
+      "workspace.adopt",
       "vault.grant",
       "capability.capability.install",
       "trusted_issuer.trusted_issuer.widen_scopes",

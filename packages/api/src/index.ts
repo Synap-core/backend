@@ -417,6 +417,10 @@ export {
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";
 export {
+  sweepDegradedCaptures,
+  type DegradedSweepResult,
+} from "./services/captures/restructure-degraded-captures.js";
+export {
   runFirefliesIngest,
   type RunFirefliesIngestInput,
   type RunFirefliesIngestResult,

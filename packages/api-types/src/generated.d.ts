@@ -9925,6 +9925,8 @@ export interface UnmodeledProperty {
 	key: string;
 	/** Closest VALID property slug, when one is close enough to be a likely typo. */
 	didYouMean?: string;
+	/** The kind's status field the value was moved to (a batch create). */
+	movedTo?: string;
 }
 /**
  * One field a profile MODELS, as a writer needs it before the write: the key,
@@ -15065,9 +15067,11 @@ export interface StoredCaptureScope {
 export interface CaptureGraphUnmodeledEntity {
 	label: string;
 	profileSlug: string;
+	/** `movedTo`: the kind's status field, where the pod stored the value. */
 	unmodeled: Array<{
 		didYouMean?: string;
 		key: string;
+		movedTo?: string;
 	}>;
 }
 /**
@@ -16286,6 +16290,8 @@ export interface SlotAnswerProvenance {
 	relaySurface?: string;
 	/** The person's own words, verbatim. */
 	quote?: string;
+	/** The document holding `quote` whole when it was too long: `quote` is its start. */
+	quoteDocumentId?: string;
 	/** The person confirmed a relayed answer (set with `via: 'tap'` only). */
 	confirmedAt?: string;
 }
@@ -16300,6 +16306,7 @@ export interface SlotPendingRelay {
 	relayedBy: string;
 	relaySurface?: string;
 	quote?: string;
+	quoteDocumentId?: string;
 	relayedAt: string;
 }
 /**
@@ -19590,6 +19597,29 @@ declare const CAPTURE_STATUSES: readonly [
 ];
 export type CaptureStatus = (typeof CAPTURE_STATUSES)[number];
 export type IntakeSourceKind = "file" | "import_item" | "text" | "url";
+/**
+ * Why structuring did not run on a source, and who captured it: the sweep
+ * re-structures a source saved without AI as the same actor, so the result
+ * goes through the governance the first capture would have taken.
+ */
+export interface IntakeDegradedMarker {
+	reason: string;
+	/** The failure class the pod read (`utils/ai-failure.ts`), when it read one. */
+	failureClass?: string;
+	/** The agent that captured it; null for a person. Absent on older rows. */
+	agentUserId?: string | null;
+}
+/** See {@link IntakeSourceMetadata.restructureSweep}. */
+export interface RestructureSweepRecord {
+	/** Attempts that failed for a reason other than AI being unavailable. */
+	failures: number;
+	lastAttemptAt: string;
+	lastOutcome: string;
+	lastReason?: string;
+	/** The UTC day of `dayAttempts` (YYYY-MM-DD): the sweep's daily cap reads it. */
+	day: string;
+	dayAttempts: number;
+}
 export interface IntakeSourceMetadata {
 	version: 1;
 	kind: IntakeSourceKind;
@@ -19612,11 +19642,16 @@ export interface IntakeSourceMetadata {
 	 * before sending (a re-encode is not byte-stable). Second ledger key.
 	 */
 	sourceSha256?: string;
-	degraded?: {
+	degraded?: IntakeDegradedMarker & {
 		at: string;
-		reason: string;
 	};
 	restructuredAt?: string;
+	/**
+	 * The degraded-capture sweep's record of its attempts on this source
+	 * (`services/captures/restructure-degraded-captures.ts`). Kept after a
+	 * re-structure clears `degraded`, as its provenance.
+	 */
+	restructureSweep?: RestructureSweepRecord;
 	/**
 	 * The caller asked for text only (`keepRaw: false`) but nothing could be
 	 * read from the file, so its ORIGINAL bytes were kept anyway — raw is never
@@ -19686,6 +19721,12 @@ export interface RerunItemResult {
 	proposalId?: string;
 	reviewUrl?: string;
 	reason?: string;
+	/**
+	 * Why the AI did not structure it, as the one failure door classed it
+	 * (`utils/ai-failure.ts`), when there was evidence: a degraded structure
+	 * call's `degradedDetail`, or the error a replay threw.
+	 */
+	failureClass?: AiFailureClass;
 }
 export interface RerunPlan {
 	sources: {
@@ -22521,19 +22562,18 @@ export interface IntentVerbMatch {
 	verbLabel: string;
 	/** read = pull · write/action = push. */
 	verbKind: "action" | "read" | "write";
-	/** Grant state, straight off the registry row — never re-derived here. */
-	granted: boolean;
 	/**
-	 * The GATE'S ACTUAL POSTURE for this verb — what a run meets, not the verb's
-	 * declared exec mode. Named `runPosture`, NOT `effectiveExecMode`: the two are
-	 * different axes. `ExecMode` is `"auto" | "dry-run" | "propose"` and comes from
-	 * the grant; `RunPosture` is `"auto" | "propose"` and is what
-	 * {@link runPosture} returns after short-circuiting on `granted` /
-	 * `declaredReadOnly`. Keeping the old name on the new value made the field read
-	 * as an exec mode while `dry-run` had silently become inexpressible — an agent
-	 * consuming this would take it as a mode it can set.
+	 * What an agent's run of this verb meets at the gate ({@link runPosture}):
+	 * `auto` runs now, `propose` files a review. Read from the approval row for
+	 * everyone; a row naming one agent is seen only by the gate.
 	 */
 	runPosture: "auto" | "propose";
+	/**
+	 * The pod has it switched on: the capability row is approved and this verb is
+	 * not `blocked: "not_enabled"`. False = a run is refused until the person
+	 * enables it, whoever calls.
+	 */
+	enabled: boolean;
 	/** False when no visible active+approved backing skill can execute the verb. */
 	backingSkillExecutable: boolean;
 	/** The capability kind this verb came from — `tool` | `builtin-tool` | `source-provider` | `skill` | `teaching-doc` | `command`. Carried so `foldVerbsByIntent` can prefer tool rows in O(1) without re-scanning `caps`. */
@@ -34266,6 +34306,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parameters?: Record<string, unknown> | undefined;
 					pathTemplate: string;
 					query?: Record<string, string | string[]> | undefined;
+					readOnly?: boolean | undefined;
 					responseShape?: {
 						collectionAs?: string | undefined;
 						collectionPath?: string | undefined;
@@ -41750,6 +41791,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -41881,6 +41923,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -42158,6 +42201,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					paramName?: string | undefined;
 					pendingRelay?: {
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedAt: string;
 						relayedBy: string;
@@ -43130,6 +43174,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -43261,6 +43306,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						messageId: string | null;
 						question?: string | undefined;
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedBy?: string | undefined;
 						text: string;
@@ -43538,6 +43584,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					paramName?: string | undefined;
 					pendingRelay?: {
 						quote?: string | undefined;
+						quoteDocumentId?: string | undefined;
 						relaySurface?: string | undefined;
 						relayedAt: string;
 						relayedBy: string;

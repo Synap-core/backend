@@ -590,7 +590,7 @@ const PLAYBOOK_GUIDANCE_PROPERTY = {
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
-    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
   items: { type: "object" },
 };
 
@@ -627,7 +627,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       verify: {
         type: "object",
         description:
-          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` to post a named proof instead) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
         properties: {
           kind: {
             type: "string",
@@ -2960,7 +2960,7 @@ export const tools = {
             evidence: {
               type: "object",
               description:
-                'Evidence keyed by each criterion\'s evidenceKey (e.g. { typecheck: { passed: true, detail: "0 errors" } }).',
+                'Evidence keyed by each criterion\'s evidenceKey, which defaults to its key (e.g. { typecheck: { passed: true, detail: "0 errors" } }).',
               additionalProperties: {
                 type: "object",
                 properties: {
@@ -3315,9 +3315,8 @@ export const tools = {
             },
             quote: {
               type: "string",
-              maxLength: ASK_LIMITS.answerTextMaxChars,
-              description:
-                "The person's own words, verbatim, as they typed them. Required with 'answered'.",
+              maxLength: ASK_LIMITS.relayQuoteMaxChars,
+              description: `The person's own words, verbatim. Required with 'answered'. Over ${ASK_LIMITS.answerTextMaxChars} chars: kept as a document (\`quoteDocumentId\`).`,
             },
             text: {
               type: "string",
@@ -3457,7 +3456,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.",
+          "What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. `count.decisions` is pending proposals only: a `proposed` decision you create asks as an owed-slot row (`waitKind: 'decide'`, in `count.blocked`). Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.",
         inputSchema: {
           type: "object",
           properties: {
@@ -3991,7 +3990,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+          "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Check here BEFORE improvising one. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes). Launch one via synap_run_playbook.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4007,16 +4006,21 @@ export const tools = {
             },
             limit: {
               type: "number",
-              description: "Page size (1–100, default 25).",
+              description:
+                "Page size (1–100, default 25). With playbookId: stages per page (6).",
             },
             cursor: {
               type: "string",
               description: "nextCursor of the prior reply",
             },
+            offset: {
+              type: "number",
+              description: "With playbookId: first stage (nextOffset).",
+            },
             playbookId: {
               type: "string",
               description:
-                "Read ONE playbook in full (its whole definition and its `process`), instead of listing.",
+                "Read ONE playbook whole (with `process` and `stagesRevision`).",
             },
             detail: {
               type: "string",
@@ -4153,7 +4157,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+          "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
         inputSchema: {
           type: "object",
           properties: {
@@ -4173,6 +4177,17 @@ export const tools = {
               description: "What this playbook is for.",
             },
             stages: PLAYBOOK_STAGES_PROPERTY,
+            stageEdits: {
+              type: "array",
+              description:
+                "Edit stages by key, in order: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears) | {op:'remove', key}.",
+              items: { type: "object" },
+            },
+            stagesRevision: {
+              type: "string",
+              description:
+                "Needed with `stages`: from an unpaged read; else use stageEdits.",
+            },
             params: PLAYBOOK_PARAMS_PROPERTY,
             criteria: PLAYBOOK_CRITERIA_PROPERTY,
             guidance: PLAYBOOK_GUIDANCE_PROPERTY,
@@ -4182,8 +4197,7 @@ export const tools = {
             triggers: PLAYBOOK_TRIGGERS_PROPERTY,
             subjectProfileSlug: {
               type: "string",
-              description:
-                "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused.",
+              description: "The kind or role it runs ON (must resolve).",
             },
             statusProperty: PLAYBOOK_PROCESS_JSON_SCHEMA.statusProperty,
             activators: PLAYBOOK_PROCESS_JSON_SCHEMA.activators,
@@ -4199,7 +4213,7 @@ export const tools = {
               type: "string",
               enum: ["session", "project"],
               description:
-                "What the playbook instantiates. 'session': a template for ONE bounded focus session. 'project': LEGACY — a staged method a track runs.",
+                "'session': one focus session. 'project': LEGACY, a staged method a track runs.",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -4209,7 +4223,7 @@ export const tools = {
             reasoning: {
               type: "string",
               description:
-                "Why you are making this write, in the person's words — shown to the human who reviews it. One line.",
+                "Why, in the person's words: shown to the reviewer. One line.",
             },
             sessionId: {
               type: "string",
@@ -4560,7 +4574,7 @@ export const tools = {
             documents: {
               type: "array",
               description:
-                "PLAN: documents to create (markdown). Attach one as an entity's body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+                "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
               items: {
                 type: "object",
                 properties: {
@@ -6157,7 +6171,7 @@ export const tools = {
             config: {
               type: "object",
               description:
-                "View configuration (groupBy, sortBy, filters, etc.)",
+                "View configuration. Table columns: visibleColumns (property slugs, in order), hiddenColumns, columnWidths; grouping: groupByField.",
             },
             initialContent: {
               type: "object",
@@ -6717,7 +6731,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
+          'Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `effectiveExecMode` (propose = your run is filed for review, not refused). A verb carrying `blocked: "not_enabled"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:"builtin-tool" or kind:"teaching-doc" to list them here instead, or synap_load_skill("catalog") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:"send email"). ' +
           DENIED_BY_RULE_TOOL_NOTE,
         inputSchema: {
           type: "object",
@@ -6745,7 +6759,7 @@ export const tools = {
               // pod already stored, before the handler ever saw it. Unknown
               // slugs are rejected at runtime by isKnownIntent.
               description:
-                "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this.",
+                "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability), each with `enabled` (switched on in the pod) and `runPosture` (auto runs now, propose files a review). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this.",
             },
             limit: {
               type: "number",
@@ -6864,7 +6878,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
+          "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool. Creates a kind='declarative' skill only. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6914,6 +6928,11 @@ export const tools = {
               type: "object",
               description:
                 'The verb\'s own runtime parameter schema using the shorthand type system, e.g. { query: "string", limit: "number?" }.',
+            },
+            readOnly: {
+              type: "boolean",
+              description:
+                "true when the call changes nothing (a lookup, even over POST): once approved, agent runs skip review. Turning it on later needs approval again.",
             },
             workspaceId: {
               type: "string",

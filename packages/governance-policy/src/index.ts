@@ -779,6 +779,13 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "capability.capability.update" satisfies DirectProposalEventKey,
   "workspace.join" satisfies DirectProposalEventKey,
   "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
+  // Gate doors, live for an agent (founder, 21 Nov 2026, wave 9563b6f7): an
+  // agent's tool can carry a credential (`credentialRef`), and adopting a
+  // template into a space installs its capabilities. Each is a proposal
+  // whatever rule or preset says, like an install since #1200 (findings
+  // cdc41c35, 61ed6cb5).
+  "tool.create" satisfies GateEventKey,
+  "workspace.adopt" satisfies GateEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -900,12 +907,12 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "workspace/restore": "other-floor", // 2 admin
   "profile/grant_access": "other-floor", // 2 admin (scope change)
   "profile/change_scope": "other-floor", // 2 admin (scope change)
+  "workspace/adopt": "other-floor", // 2.05 human gate (credential write, finding 61ed6cb5)
   // Widenable on purpose.
   "automation/execute": "widenable", // runs an automation a person activated
   "cell/update": "widenable", // config patch of an existing placement
   "playbook/run": "widenable", // runs an existing playbook
   // Outside D1/D2 — open questions in plans/reports/door-g.md.
-  "workspace/adopt": "widenable",
   "workspace/configure_public_projection": "widenable",
   "workspace/declare_source": "widenable",
   // Filling a space's need (0426): which provider every run of the space uses.

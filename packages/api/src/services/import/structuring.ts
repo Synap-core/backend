@@ -395,7 +395,12 @@ export type EntitySchemaValidator = (input: {
   title?: string;
   properties?: Record<string, unknown>;
   content?: string;
-}) => Promise<{ valid: boolean; errors: string[] }>;
+}) => Promise<{
+  valid: boolean;
+  errors: string[];
+  /** The kind's status sent under another key, to file under its field. */
+  moved?: ReadonlyArray<{ key: string; field: string }>;
+}>;
 
 /**
  * Build the preflight validator over a live `ProfileResolutionService`.

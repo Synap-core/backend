@@ -42638,6 +42638,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "confirmedAt": { "type": "string" },
                             "askFingerprint": {
                               "type": "string",
@@ -43214,6 +43218,10 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
+                              "quoteDocumentId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
                               "confirmedAt": { "type": "string" },
                               "askFingerprint": {
                                 "type": "string",
@@ -43528,6 +43536,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "relayedAt": { "type": "string" }
                           },
                           "required": ["text", "relayedBy", "relayedAt"]
@@ -46819,6 +46831,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "confirmedAt": { "type": "string" },
                             "askFingerprint": {
                               "type": "string",
@@ -47395,6 +47411,10 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
+                              "quoteDocumentId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
                               "confirmedAt": { "type": "string" },
                               "askFingerprint": {
                                 "type": "string",
@@ -47709,6 +47729,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "relayedAt": { "type": "string" }
                           },
                           "required": ["text", "relayedBy", "relayedAt"]
@@ -50559,7 +50583,7 @@
                     "minLength": 1,
                     "maxLength": 500
                   },
-                  "quote": { "type": "string", "maxLength": 2000 },
+                  "quote": { "type": "string", "maxLength": 50000 },
                   "text": { "type": "string", "maxLength": 2000 },
                   "value": {
                     "oneOf": [

@@ -43,6 +43,8 @@ vi.mock("@synap/database", async (importOriginal) => {
         valid: true,
         errors: [],
         unmodeled: [],
+        modeled: [],
+        moved: [],
       });
     },
   };

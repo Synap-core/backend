@@ -136,6 +136,10 @@ import {
   FIREFLIES_BACKFILL_CRON,
 } from "./workers/fireflies-worker.js";
 import {
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
+  DEGRADED_CAPTURE_SWEEP_CRON,
+} from "./workers/degraded-capture-sweep.js";
+import {
   MESSAGING_WEBHOOK_ENSURE_QUEUE,
   MESSAGING_WEBHOOK_ENSURE_CRON,
   LINKEDIN_REACH_SWEEP_QUEUE,
@@ -555,6 +559,17 @@ export async function registerCronSchedules(): Promise<void> {
   // has calcom.backfill.enabled.
   await scheduleSafe(boss, "cal-backfill-cron", "*/30 * * * *", {});
   logger.info("Registered cron: cal-backfill-cron (every 30min)");
+
+  // Degraded-capture sweep (every 30min) — text captures saved raw while the
+  // AI was unavailable or over quota are structured once it answers again,
+  // capped per run and per day. No-ops when there is nothing degraded.
+  await scheduleSafe(
+    boss,
+    DEGRADED_CAPTURE_SWEEP_QUEUE,
+    DEGRADED_CAPTURE_SWEEP_CRON,
+    {}
+  );
+  logger.info("Registered cron: degraded-capture-sweep (every 30min)");
 
   // Fireflies backfill (every 30min) — re-ingests any completed transcript whose
   // completion webhook was missed (safety net for the inbound webhook). No-ops
