@@ -1278,20 +1278,27 @@ export class IntelligenceHubClient {
           console.warn(
             `[IntelligenceHubClient] structure failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
           );
+          const body = await response.json().catch(() => null);
+          const envelope = failureEnvelopeOf(body);
           // Auth failures are the ONLY failure that should drive re-provisioning;
           // surface them as a typed throw so callers can distinguish them from
-          // the graceful `null` we return for every other non-ok status.
-          if (isAuthStatus(response.status)) {
+          // the graceful `null` we return for every other non-ok status. An
+          // ACCOUNT refusal answered 403 (`not_entitled`, `account_inactive`)
+          // is not one: the credentials were accepted and the account said
+          // no, so it is reported like every other refusal, envelope and all.
+          if (
+            isAuthStatus(response.status) &&
+            !isAccountRefusal(envelope.failure as IsFailureEnvelope | undefined)
+          ) {
             throw new IntelligenceAuthError(
               response.status,
               `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
             );
           }
-          const body = await response.json().catch(() => null);
           reportStructureFailure(options.onFailure, {
             cause: "http",
             status: response.status,
-            ...failureEnvelopeOf(body),
+            ...envelope,
           });
           return null;
         }

@@ -48,6 +48,7 @@ import {
   type PlaybookStage,
 } from "@synap/playbooks";
 import { db, focusSessions, eq } from "@synap/database";
+import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { DEV_GATE_LEGACY_STAGES } from "../proposals/dev-approval.js";
 import { pendingStageGate } from "./follow-playbook.js";
@@ -89,8 +90,15 @@ export async function refuseAgentGateBypass(
         toStatus !== "paused" &&
         !isTerminalSessionStatus(toStatus);
       if (resumes || movesStage) {
-        return held === "human"
-          ? "A stage gate on this session is waiting for a person's approval — an agent cannot resume or advance it. Nothing was changed. The run resumes when the gate proposal is approved."
+        if (held === "human") {
+          return "A stage gate on this session is waiting for a person's approval — an agent cannot resume or advance it. Nothing was changed. The run resumes when the gate proposal is approved.";
+        }
+        // The gate's own words for its hold (`metadata.checkGate.reason`):
+        // when the AI judge could not run, they say so and how the owner
+        // moves it on, instead of reading as a check the work failed.
+        const reason = checkGateReason(session.metadata);
+        return reason
+          ? `A stage check on this session holds — an agent cannot resume or advance it. Nothing was changed. ${reason}`
           : "A stage check on this session has not passed yet — an agent cannot resume or advance it. Nothing was changed. The run resumes when the left stage's required criteria pass.";
       }
     }
@@ -111,6 +119,15 @@ export async function refuseAgentGateBypass(
     return `Moving to "${toStage}" would skip the gated stage ${names}. Nothing was changed. Advance into it first — its gate decides whether the run goes on.`;
   }
   return ungradedEntryCheck(session, toStage);
+}
+
+/** The reason a check gate recorded for its hold, when it recorded one. */
+function checkGateReason(metadata: unknown): string | null {
+  const record = (metadata as Record<string, unknown> | null)?.[
+    CHECK_GATE_METADATA_KEY
+  ];
+  const reason = (record as { reason?: unknown } | null)?.reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
 /**

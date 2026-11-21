@@ -172,6 +172,11 @@ function markNonRetryable<E extends Error>(err: E): E {
  * is a deterministic truncation — same prompt, same ceiling, same result. The
  * fix is `maxTokens` (or a shorter prompt), never another attempt.
  *
+ * Also non-retryable: an IS answer whose failure envelope says
+ * `retryable: false` (`describeISHttpError` attaches it as `.failure`). The
+ * producer declared the opt-out, which is the rule above: a credits, plan or
+ * budget refusal retried three times only spends three refusals.
+ *
  * Retryable: everything else — a pod-side abort (the IS may finish under a less
  * loaded FairSemaphore), a transport failure, an IS 5xx, and an empty completion
  * with any OTHER finish reason (`stop`/`content-filter` can differ run to run).
@@ -179,6 +184,13 @@ function markNonRetryable<E extends Error>(err: E): E {
 export function isRetryableError(err: unknown): boolean {
   if (err === null || typeof err !== "object") return true;
   if ((err as Record<string, unknown>)[NON_RETRYABLE_MARKER] === true)
+    return false;
+  const failure = (err as { failure?: unknown }).failure;
+  if (
+    failure !== null &&
+    typeof failure === "object" &&
+    (failure as { retryable?: unknown }).retryable === false
+  )
     return false;
   const message = (err as { message?: unknown }).message;
   if (

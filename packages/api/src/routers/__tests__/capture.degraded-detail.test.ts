@@ -199,11 +199,39 @@ describe("capture.structure: the degraded early returns carry degradedDetail", (
     });
     const out = await structure();
     expect(h.structure).toHaveBeenCalledTimes(1);
+    // A refusal is reported as the refusal, never as a transient bad answer.
+    expect(out.degradedReason).toBe("llm_budget_exceeded");
     expect(out.degradedDetail).toEqual({
       cause: "http",
       status: 503,
       attempts: 1,
       failureClass: "budget",
+    });
+  });
+
+  // Seen live (20 Nov 2026): degradedReason `is_invalid_response` beside
+  // failureClass `account_quota`. The reason said "transient, retry"; every
+  // door that branches on it told the caller to try again.
+  it("an account refusal is reported AS the refusal, with the payer action the IS stated", async () => {
+    failWith({
+      cause: "http",
+      status: 429,
+      failure: {
+        code: "account_quota_exceeded",
+        retryable: false,
+        actor: "payer",
+        action: "top_up",
+      },
+    });
+    const out = await structure();
+    expect(h.structure).toHaveBeenCalledTimes(1);
+    expect(out.degradedReason).toBe("account_quota_exceeded");
+    expect(out.degradedDetail).toEqual({
+      cause: "http",
+      status: 429,
+      attempts: 1,
+      failureClass: "account_quota",
+      action: "top_up",
     });
   });
 
