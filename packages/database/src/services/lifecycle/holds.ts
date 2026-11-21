@@ -16,7 +16,7 @@
  * carried hold of a `paused → paused` move), the holds whose `until.date` has
  * come (the hourly resume sweep), the holds waiting on a thing that just
  * moved (the `until.moves` resume), the holds waiting on a dev fact
- * (`pr:` / `main:` / `job:`, the hourly sweep's second half), and the holds
+ * (`pr:` / `main:` / `job:` / `ai:`, the hourly sweep's second half), and the holds
  * whose `reviewBy` has passed (the status watcher, W6). A passed `reviewBy`
  * never moves anything.
  */
@@ -189,7 +189,7 @@ function filterSql(filter: HoldFilter): SQL {
   }
   if ("current" in filter) return sql`TRUE`;
   if ("awaitingDevFacts" in filter) {
-    return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job):'`;
+    return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job|ai):'`;
   }
   if ("awaitingWaitRefs" in filter) {
     return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(answer|proposal):'`;
