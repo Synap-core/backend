@@ -157,7 +157,7 @@ import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
 import {
   resolveLandedObjects,
   type ProposalLandedObject,
-} from "./landed-read.js";
+} from "../../services/proposals/landed-read.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,

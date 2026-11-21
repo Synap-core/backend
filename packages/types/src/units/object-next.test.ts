@@ -79,7 +79,12 @@ describe("objectNextOf — a thing or a session reads its next move", () => {
   it("a step the person may take is not theirs alone", () => {
     expect(
       objectNextOf("entity", {
-        nextMove: { kind: "step", actor: "user", label: "Next: Qualified", reason: "r" },
+        nextMove: {
+          kind: "step",
+          actor: "user",
+          label: "Next: Qualified",
+          reason: "r",
+        },
       })
     ).toMatchObject({ action: "open", personOnly: false });
   });

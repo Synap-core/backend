@@ -136,7 +136,10 @@ describe("landed — what an approval made, as doors with their next step", () =
 
   it("reads a row approved before the stamp from what its apply recorded", async () => {
     const landed = await landedOf("approved", {
-      materialized: { automationIds: [DRAFT_RULE], relationIds: [randomUUID()] },
+      materialized: {
+        automationIds: [DRAFT_RULE],
+        relationIds: [randomUUID()],
+      },
     });
     expect(landed).toEqual([
       expect.objectContaining({

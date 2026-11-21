@@ -12,7 +12,7 @@
  * a kind with nothing to read, or the read failed); null = nothing needed.
  */
 
-import { automations, db, inArray, playbooks } from "@synap/database";
+import { and, automations, db, inArray, playbooks } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   proposalLanded,
@@ -22,14 +22,15 @@ import {
 } from "@synap-core/types/proposals/landed";
 import { deriveProcessHealth } from "@synap-core/types/processes";
 import { objectNextOf, type ObjectNext } from "@synap-core/types/units";
-import { listRunTracks } from "../../services/runs/index.js";
-import { findUnenabledPlaybookSkills } from "../../services/playbooks/playbook-skill-preflight.js";
-import { readStatusOf, STATUS_OF_MAX } from "../../services/status/status-read.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { listRunTracks } from "../runs/index.js";
+import { findUnenabledPlaybookSkills } from "../playbooks/playbook-skill-preflight.js";
+import { readStatusOf, STATUS_OF_MAX } from "../status/status-read.js";
 import {
   resolveObjectRefs,
   type CollectedIdRef,
   type ProposalObjectRef,
-} from "./object-refs.js";
+} from "../../routers/proposals/object-refs.js";
 
 const logger = createLogger({ module: "proposal-landed-read" });
 
@@ -65,7 +66,8 @@ export async function resolveLandedObjects(
   viewer: { userId: string; roster: boolean }
 ): Promise<Array<ProposalLandedObject[] | undefined>> {
   const landedByRow = rows.map((row) => proposalLanded(row));
-  if (landedByRow.every((l) => l.length === 0)) return rows.map(() => undefined);
+  if (landedByRow.every((l) => l.length === 0))
+    return rows.map(() => undefined);
 
   const resolved = await resolveObjectRefs(
     rows.map((row, idx) => ({
@@ -128,13 +130,19 @@ async function readProcessNext(
   out: Map<string, ObjectNext | null>
 ): Promise<void> {
   if (automationIds.length + playbookIds.length === 0) return;
+  const access = scopedDb(AccessContext.operator({ userId }));
   try {
     const [automationRows, playbookRows, tracks] = await Promise.all([
       automationIds.length > 0
         ? db
             .select({ id: automations.id, status: automations.status })
             .from(automations)
-            .where(inArray(automations.id, automationIds))
+            .where(
+              and(
+                inArray(automations.id, automationIds),
+                access.predicate(automations)
+              )
+            )
         : Promise.resolve([]),
       playbookIds.length > 0
         ? db
@@ -145,11 +153,20 @@ async function readProcessNext(
               workspaceId: playbooks.workspaceId,
             })
             .from(playbooks)
-            .where(inArray(playbooks.id, playbookIds))
+            .where(
+              and(
+                inArray(playbooks.id, playbookIds),
+                access.predicate(playbooks)
+              )
+            )
         : Promise.resolve([]),
       listRunTracks({ userId, automationIds, playbookIds }),
     ]);
-    const healthOf = (flowType: "automation" | "playbook", id: string, status: string) => {
+    const healthOf = (
+      flowType: "automation" | "playbook",
+      id: string,
+      status: string
+    ) => {
       const group = tracks.get(`${flowType}:${id}`) ?? null;
       return deriveProcessHealth({
         definitionStatus: status,
@@ -161,7 +178,9 @@ async function readProcessNext(
     for (const a of automationRows) {
       out.set(
         `automation:${a.id}`,
-        objectNextOf("automation", { health: healthOf("automation", a.id, a.status) })
+        objectNextOf("automation", {
+          health: healthOf("automation", a.id, a.status),
+        })
       );
     }
     const skillsOff = await Promise.all(
@@ -202,7 +221,10 @@ async function readStatusNext(
       const kind = kindOf.get(answer.id);
       if (!kind) continue;
       const nextMove = "nextMove" in answer ? answer.nextMove : undefined;
-      out.set(`${kind}:${answer.id}`, objectNextOf(kind, nextMove ? { nextMove } : {}));
+      out.set(
+        `${kind}:${answer.id}`,
+        objectNextOf(kind, nextMove ? { nextMove } : {})
+      );
     }
   } catch (err) {
     logger.warn({ err }, "landed next step: the status read failed");

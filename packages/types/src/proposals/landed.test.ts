@@ -139,8 +139,18 @@ describe("proposalObjectsOf — landed first, intent second", () => {
 
   it("names nothing where the target is no object", () => {
     const none = [
-      { status: "pending", proposalType: "create", targetType: "entity", targetId: A },
-      { status: "pending", proposalType: "run", targetType: "playbook", targetId: A },
+      {
+        status: "pending",
+        proposalType: "create",
+        targetType: "entity",
+        targetId: A,
+      },
+      {
+        status: "pending",
+        proposalType: "run",
+        targetType: "playbook",
+        targetId: A,
+      },
       {
         status: "approved",
         proposalType: "capture.graph",
@@ -155,7 +165,12 @@ describe("proposalObjectsOf — landed first, intent second", () => {
         targetId: A,
         data: { operations: [{ op: "create_entity" }] },
       },
-      { status: "pending", proposalType: "update", targetType: "relation", targetId: A },
+      {
+        status: "pending",
+        proposalType: "update",
+        targetType: "relation",
+        targetId: A,
+      },
     ];
     for (const row of none) expect(proposalObjectsOf(row)).toEqual([]);
   });
@@ -196,7 +211,9 @@ describe("proposalObjectsOf — landed first, intent second", () => {
 
 describe("landedRoleOf", () => {
   it("creates, removes, or updates by the one verb reading", () => {
-    expect(landedRoleOf({ proposalType: "focus_session.create" })).toBe("created");
+    expect(landedRoleOf({ proposalType: "focus_session.create" })).toBe(
+      "created"
+    );
     expect(landedRoleOf({ proposalType: "run" })).toBe("created");
     expect(landedRoleOf({ proposalType: "entity.delete" })).toBeNull();
     expect(landedRoleOf({ proposalType: "activate" })).toBe("updated");
