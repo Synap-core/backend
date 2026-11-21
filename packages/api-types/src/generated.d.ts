@@ -4943,12 +4943,11 @@ export interface WorkspaceSettings {
 	 */
 	linkedAgentId?: string;
 	/**
-	 * Workspace governance mode.
-	 * - "standard"    — default: workspace owner has full control.
-	 * - "agent-owned" — the AI agent is workspace owner (creative authority);
-	 *                   the human is admin (irreversibility guard).
-	 *                   All destructive actions by the agent require a proposal
-	 *                   even if the agent holds the owner role.
+	 * Workspace governance mode, set only by the workspace's person (never
+	 * stamped by provisioning; absent = "standard"). An agent never owns a
+	 * space. "agent-owned" makes every destructive agent action propose, which
+	 * the destructive floor already does unless destructive auto-approval is
+	 * turned on.
 	 */
 	governanceMode?: "agent-owned" | "standard";
 	/**
@@ -8225,6 +8224,26 @@ export type ToolVerbCatalogEntry = {
 };
 declare const tools: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "tools";
+		}, {}, {}>;
 		approved: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgBoolean";
@@ -9080,6 +9099,26 @@ declare const playbooks: import("drizzle-orm/pg-core").PgTableWithColumns<{
 export type Playbook = typeof playbooks.$inferSelect;
 declare const capabilities: import("drizzle-orm/pg-core").PgTableWithColumns<{
 	columns: {
+		agentUserId: import("drizzle-orm/pg-core").PgColumn<{
+			baseColumn: never;
+			columnType: "PgText";
+			data: string;
+			dataType: "string";
+			driverParam: string;
+			enumValues: [
+				string,
+				...string[]
+			];
+			generated: undefined;
+			hasDefault: false;
+			hasRuntimeDefault: false;
+			identity: undefined;
+			isAutoincrement: false;
+			isPrimaryKey: false;
+			name: "agent_user_id";
+			notNull: false;
+			tableName: "capabilities";
+		}, {}, {}>;
 		approved: import("drizzle-orm/pg-core").PgColumn<{
 			baseColumn: never;
 			columnType: "PgBoolean";
@@ -33874,6 +33913,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				meta: object;
 				output: {
+					agentUserId: string | null;
 					approved: boolean;
 					createdAt: Date;
 					createdBy: string;
@@ -58879,6 +58919,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				skill: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -58916,6 +58957,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					workspaceId: string | null;
 				};
 				tools: {
+					agentUserId: string | null;
 					approved: boolean;
 					authBinding: ToolAuthBinding;
 					capabilities: ToolVerbCatalogEntry[];
@@ -59123,6 +59165,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: {
 				skill: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -61082,6 +61125,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				capabilityId: string | null;
 				skills: {
 					agentTypes: string[] | null;
+					agentUserId: string | null;
 					alwaysOn: boolean;
 					approved: boolean;
 					author: string | null;
@@ -61128,6 +61172,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | undefined;
 			meta: object;
 			output: {
+				agentUserId: string | null;
 				approved: boolean;
 				authBinding: ToolAuthBinding;
 				capabilities: ToolVerbCatalogEntry[];
@@ -61216,6 +61261,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				tool: {
+					agentUserId: string | null;
 					approved: boolean;
 					authBinding: ToolAuthBinding;
 					capabilities: ToolVerbCatalogEntry[];

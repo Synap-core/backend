@@ -55,7 +55,13 @@ vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
     select: () => ({
-      from: () => ({ where: async () => h.visibleTools }),
+      from: () => ({
+        // Awaited: the visible tools. `.limit`: the owner read finds no user.
+        where: () =>
+          Object.assign(Promise.resolve(h.visibleTools), {
+            limit: async () => [],
+          }),
+      }),
     }),
     insert: () => ({
       values: (v: Record<string, unknown>) => ({

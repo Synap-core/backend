@@ -39,6 +39,7 @@ import {
   isNull,
   drizzleSql,
   getActingAgentUserId,
+  personOfOwner,
 } from "@synap/database";
 import {
   tools,
@@ -130,7 +131,11 @@ async function assertWorkspaceOwner(
     .limit(1);
   if (!ws)
     throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
-  if (ws.ownerId !== userId) {
+  // An agent principal stands for its person, who owns the space.
+  if (
+    ws.ownerId !== userId &&
+    (await personOfOwner(database, userId)) !== ws.ownerId
+  ) {
     throw forbidden("Only the workspace owner can manage its public forms.");
   }
 }

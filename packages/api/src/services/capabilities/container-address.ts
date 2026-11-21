@@ -15,7 +15,7 @@
  * therefore goes through `resolveOrCreateContainer`, which resolves the address
  * first and treats a lost race as a resolve rather than an error.
  */
-import { and, eq, isNull } from "@synap/database";
+import { and, eq, isNull, ownerAndActor } from "@synap/database";
 import type { db as Db } from "@synap/database";
 // Tables come from the schema entrypoint, operators/db from the barrel — the
 // convention every router here already follows.
@@ -67,7 +67,9 @@ export async function findContainerByAddress(
 
 export type ContainerInsert = {
   workspaceId: string | null;
+  /** Who writes it: an agent id is stored as its person (`ownerAndActor`). */
   createdBy: string;
+  agentUserId?: string | null;
   name: string;
   description?: string | null;
   templateKey?: string | null;
@@ -91,11 +93,13 @@ export async function resolveOrCreateContainer(
   });
   if (existing) return { container: existing, status: "reused" };
 
+  const owner = await ownerAndActor(db, values.createdBy, values.agentUserId);
   const [inserted] = await db
     .insert(capabilities)
     .values({
       workspaceId: values.workspaceId,
-      createdBy: values.createdBy,
+      createdBy: owner.ownerId,
+      agentUserId: owner.agentUserId,
       name: values.name,
       description: values.description ?? undefined,
       templateKey: values.templateKey ?? null,
