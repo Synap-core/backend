@@ -1709,7 +1709,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBy*Ids (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2015,7 +2015,21 @@
               "format": "uuid"
             },
             "maxItems": 20,
-            "description": "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker is closed — delivered; a cancelled or failed blocker holds, marked dropped, until you re-plan). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason)."
+            "description": "Optional: sessions (yours) it WAITS ON, each a `blocked_by` edge: a closed one clears it, a cancelled or failed one holds until you re-plan. Per id on `blockerLinks` (linked | proposed | failed + reason)."
+          },
+          "blockedByEntityIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Entities it WAITS ON, e.g. a decision (accepted clears it)."
+          },
+          "blockedByTrackIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Goals it WAITS ON."
           },
           "suspendedIntent": {
             "type": "string",
@@ -2045,7 +2059,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). When a blocker ENDED WITHOUT DELIVERING (cancelled, failed), it does not clear: the session's next move is `blocker_dropped` — re-plan: remove that blocker if the work no longer needs it, or remove it and add the session that retries it, in one call. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities, goals). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) does not clear: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -2415,7 +2429,7 @@
               "format": "uuid"
             },
             "maxItems": 20,
-            "description": "Declare MID-FLIGHT that this session now WAITS ON these sessions (UUIDs of sessions you own) — the same `session --blocked_by--> session` edge start's `blockedBySessionIds` writes, with the same governance. Refused per id when it would make the two wait on each other (`cycle`). Reported per id on `blockerLinks` (linked | proposed | failed with a reason). A call with only blocker changes edits nothing else."
+            "description": "This session now WAITS ON these sessions (yours): a `blocked_by` edge; a cycle is refused. Per id on `blockerLinks` (linked | proposed | failed + reason). A call with only blocker changes edits nothing else."
           },
           "removeBlockedBySessionIds": {
             "type": "array",
@@ -2424,7 +2438,33 @@
               "format": "uuid"
             },
             "maxItems": 20,
-            "description": "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call."
+            "description": "Stop waiting on these sessions: how you RE-PLAN a dropped or unneeded blocker; remove it and add its retry in one call. Per id on `blockerRemovals` (removed | absent | proposed | failed)."
+          },
+          "addBlockedByEntityIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "As addBlockedBySessionIds, for entities (a decision: accepted clears, rejected holds)."
+          },
+          "removeBlockedByEntityIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "addBlockedByTrackIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "As addBlockedBySessionIds, for goals."
+          },
+          "removeBlockedByTrackIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "alsoServesTrackIds": {
             "type": "array",
@@ -5866,7 +5906,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions on a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry; `pendingTrackId` is its id once approved (hold until `proposal:<proposalId>`), not a trackId before. Else status='started' with the track.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6517,7 +6557,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a goal holds: its DIRECTION (one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the value (stamped: STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. A KPI needs a label and a target. Reaching the target NUDGES the person; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Set what a goal holds: DIRECTION (one line), KPI (the number it steers by) and each field below. All but kpi are written WHOLE; null clears. kpi MERGES: { current } states it (STATED, never measured), { target } moves it, { label, unit?, target, current? } defines one, null clears. A KPI needs a label and a target. Reaching the target NUDGES the person: never move it or close the goal yourself. status='proposed' is SUCCESS: pass on reviewUrl, never retry.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -6678,6 +6718,19 @@
                   "type": "boolean"
                 }
               }
+            }
+          },
+          "addBlockedByTrackIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Goals it WAITS ON (`blocked_by`); per id on blockerLinks / blockerRemovals."
+          },
+          "removeBlockedByTrackIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
             }
           },
           "reasoning": {
