@@ -196,6 +196,11 @@ void _interactionsCovered;
 export interface WorkGraphEdge {
   kind: WorkGraphEdgeKind;
   from: string;
+  /**
+   * A node id, EXCEPT for `serves`, whose `to` is a goal id (one of
+   * `goals`): a reader that keeps edges between kept nodes keeps `serves` by
+   * its `from` alone.
+   */
   to: string;
   /** `waits_on_output`: the entity waited on. */
   entityId?: string;

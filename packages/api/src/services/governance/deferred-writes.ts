@@ -181,6 +181,7 @@ const REPLAY_DOORS: Record<ReplayableDeferredPair, ReplayDoor> = {
         agentIds: d.agentIds as string[] | undefined,
         parentSessionId: str(d.parentSessionId),
         suspendedIntent: str(d.suspendedIntent),
+        forOutput: str(d.forOutput),
         blockedBySessionIds: d.blockedBySessionIds as string[] | undefined,
         targets: d.targets as string[] | undefined,
         criteria: d.criteria as never,

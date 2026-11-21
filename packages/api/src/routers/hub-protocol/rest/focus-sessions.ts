@@ -448,6 +448,12 @@ const CreateBodySchema = z
      */
     suspendedIntent: z.string().min(1).max(2000).optional(),
     /**
+     * With parentSessionId: the key of the parent's output this child
+     * delivers (W7). Recorded on the edge only when the caller may write the
+     * parent and the parent declares it; `parentLink.forOutput` says which.
+     */
+    forOutput: z.string().min(1).max(120).optional(),
+    /**
      * Sessions this one waits on — `session --blocked_by--> session` edges,
      * validated and written through the same door as POST /links, each outcome
      * reported per id on the response's `blockerLinks`.
@@ -2137,6 +2143,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
+        forOutput: body.forOutput ?? null,
         blockedBySessionIds: body.blockedBySessionIds ?? [],
         targets: body.targets,
         forceCreate: body.forceCreate,

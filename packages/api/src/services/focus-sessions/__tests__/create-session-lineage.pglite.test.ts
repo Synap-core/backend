@@ -318,6 +318,59 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
     }
   });
 
+  it("records the parent output a child is spawned for only when the spawner may write the parent (W7)", async () => {
+    const parent = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'wave', 'active', $3::jsonb, $4, '{}'::jsonb, now(), now(), now())`,
+      [
+        parent,
+        USER,
+        JSON.stringify([
+          { key: "api", kind: "code", label: "API" },
+          { key: "grade", kind: "criterion", label: "Grade", criterionKey: "c" },
+        ]),
+        ["agent-1"],
+      ]
+    );
+    const asked: Array<unknown> = [];
+    h.spawn = async (input) => {
+      asked.push(input.forOutput);
+      return { linked: true, suspendedIntentRecorded: false };
+    };
+    const start = (agentUserId: string | undefined, forOutput: string) =>
+      createFocusSession({
+        userId: USER,
+        ...(agentUserId ? { agentUserId } : {}),
+        goal: `lane ${randomUUID()}`,
+        parentSessionId: parent,
+        forOutput,
+      });
+
+    // The parent's owner, and an agent on the parent's roster: recorded.
+    expect(await start(undefined, "api")).toMatchObject({
+      parentLink: { forOutput: { status: "recorded", key: "api" } },
+    });
+    expect(await start("agent-1", "api")).toMatchObject({
+      parentLink: { forOutput: { status: "recorded", key: "api" } },
+    });
+    // An agent the parent does not hold: the link lands, the target does not.
+    expect(await start("agent-2", "api")).toMatchObject({
+      parentLink: {
+        status: "linked",
+        forOutput: { status: "refused", reason: "not_a_parent_writer" },
+      },
+    });
+    // A key the parent does not declare, or an input slot: refused.
+    expect(await start(undefined, "nope")).toMatchObject({
+      parentLink: { forOutput: { status: "refused", reason: "no_such_output" } },
+    });
+    expect(await start(undefined, "grade")).toMatchObject({
+      parentLink: { forOutput: { status: "refused", reason: "no_such_output" } },
+    });
+    expect(asked).toEqual(["api", "api", null, null, null]);
+  });
+
   it("PROPOSED path: title, parent and blockers ride the proposal and land at approval", async () => {
     const mine = await seedSession(USER);
     const theirs = await seedSession(OTHER);
