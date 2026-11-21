@@ -100,8 +100,7 @@ export async function ownerAndActor(
 ): Promise<OwnerAndActor> {
   const person = await personOfOwner(database, principalId);
   const isAgent = person !== undefined && person !== principalId;
-  const owner =
-    person === null ? await podOwner(database) : (person ?? null);
+  const owner = person === null ? await podOwner(database) : (person ?? null);
   return {
     ownerId: owner ?? principalId,
     agentUserId: agentUserId || (isAgent ? principalId : null),

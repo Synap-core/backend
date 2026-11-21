@@ -204,9 +204,10 @@ describe("assertWorkspaceWrite: the pod-wide rung", () => {
 
 describe("ownerAndActor", () => {
   it("an agent nobody is recorded as installing is owned by the pod owner", async () => {
-    await expect(
-      database.ownerAndActor(h.db, ORPHAN_AGENT)
-    ).resolves.toEqual({ ownerId: ORPHAN_AGENT, agentUserId: ORPHAN_AGENT });
+    await expect(database.ownerAndActor(h.db, ORPHAN_AGENT)).resolves.toEqual({
+      ownerId: ORPHAN_AGENT,
+      agentUserId: ORPHAN_AGENT,
+    });
     // A former owner who left, then the live one (oldest live owner wins).
     await h.client!.query(
       `insert into pod_members (id, user_id, pod_role, created_at, removed_at)
@@ -214,13 +215,15 @@ describe("ownerAndActor", () => {
               (gen_random_uuid(), $2, 'owner', '2025-02-01', null)`,
       [OTHER_PERSON, PERSON]
     );
-    await expect(
-      database.ownerAndActor(h.db, ORPHAN_AGENT)
-    ).resolves.toEqual({ ownerId: PERSON, agentUserId: ORPHAN_AGENT });
+    await expect(database.ownerAndActor(h.db, ORPHAN_AGENT)).resolves.toEqual({
+      ownerId: PERSON,
+      agentUserId: ORPHAN_AGENT,
+    });
     // An agent with an installer still goes to that person.
-    await expect(
-      database.ownerAndActor(h.db, OTHER_AGENT)
-    ).resolves.toEqual({ ownerId: OTHER_PERSON, agentUserId: OTHER_AGENT });
+    await expect(database.ownerAndActor(h.db, OTHER_AGENT)).resolves.toEqual({
+      ownerId: OTHER_PERSON,
+      agentUserId: OTHER_AGENT,
+    });
     await h.client!.exec(`delete from pod_members;`);
   });
 });
