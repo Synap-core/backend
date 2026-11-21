@@ -721,7 +721,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/utils/proactive-post.js");
         const { registerSessionCloser, registerStoppedSessionStaler } =
           await import("@synap/jobs/utils/session-close.js");
-        const { registerHoldResumeFollowUp } =
+        const { registerHoldResumeFollowUp, registerAiHeldGateRegrader } =
           await import("@synap/jobs/workers/hold-resume.js");
         const { registerReactionEffect } =
           await import("@synap/jobs/utils/reaction-effects.js");
@@ -779,6 +779,15 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
+        // A check gate held because AI was not available grades again when
+        // the pod sees AI come back: a pass moves on (never a bare resume).
+        registerAiHeldGateRegrader((held) => api.regradeAiHeldGate(held));
+        // The payers' notice when the pulled AI availability changes.
+        const { registerAiAvailabilityNotifier } =
+          await import("@synap/jobs/workers/cp-entitlement-sync.js");
+        registerAiAvailabilityNotifier(async (change) => {
+          await api.notifyAiAvailabilityChange(change);
+        });
         // The reactions reactor: the effect whose door is api-side — an outcome
         // met wherever it was filed (pod default 3) goes through THE done door.
         // Unfilled, its writes are skipped and logged `effect_unavailable`.

@@ -278,6 +278,7 @@ import {
 import {
   handleCpEntitlementSync,
   CP_ENTITLEMENT_SYNC_QUEUE,
+  type CpEntitlementSyncJobData,
 } from "./cp-entitlement-sync.js";
 import {
   handleOnboardingMilestones,
@@ -1297,10 +1298,11 @@ export async function registerAllWorkers(): Promise<void> {
   // the Control Plane `pod_projects` mirror (P4-lite W1). The IoC slot below is
   // how @synap/database (which cannot import @synap/events) enqueues the
   // one-offs — ProjectRepository.create/update/delete is the ONE trigger door.
-  // CP plan sync (cron: every 15min + on startup): pulls this pod's tier and
-  // trial into pod_settings for tier-check and the trial guard.
-  await boss.work(CP_ENTITLEMENT_SYNC_QUEUE, async () =>
-    handleCpEntitlementSync()
+  // CP sync (a tick every 3 min + on startup): pulls this pod's tier and
+  // trial (tier-check, the trial guard) and its AI availability (every 15
+  // min, every tick while a hold waits on AI) into pod_settings.
+  await boss.work(CP_ENTITLEMENT_SYNC_QUEUE, async ([job]: any[]) =>
+    handleCpEntitlementSync((job?.data ?? {}) as CpEntitlementSyncJobData)
   );
   logger.info("Registered worker: cp-entitlement-sync");
 

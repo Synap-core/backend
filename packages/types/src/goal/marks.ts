@@ -342,7 +342,7 @@ const HOLD_SUBJECT_NOUN: Readonly<Record<string, string>> = {
   entity: "entity",
 };
 
-/** What resumes a hold on a dev fact (`pr:` / `main:` / `job:`), or null when `moves` names none. */
+/** What resumes a hold on a dev fact (`pr:` / `main:` / `job:` / `ai:`), or null when `moves` names none. */
 function devHoldResumes(
   moves: string,
   to: string | null | undefined
@@ -364,6 +364,8 @@ function devHoldResumes(
         : to === "failed"
           ? "resumes when the tests fail"
           : "resumes when the tests finish";
+    case "ai":
+      return "resumes when AI is available again";
   }
 }
 

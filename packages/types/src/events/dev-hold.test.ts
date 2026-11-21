@@ -6,7 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import { DEV_LOOP_EVENT_TYPES as T } from "./dev-loop.js";
-import { holdDevFactOf, holdDevRefMet, holdDevRefNamed } from "./dev-hold.js";
+import {
+  aiHoldMet,
+  holdDevFactOf,
+  holdDevRefMet,
+  holdDevRefNamed,
+} from "./dev-hold.js";
 import type { DevLoopEventRowLike } from "./pr-state.js";
 
 const SINCE = "2026-10-30T12:00:00.000Z";
@@ -135,10 +140,30 @@ describe("holdDevRefNamed", () => {
       label: "job kit-h",
       url: null,
     });
+    expect(holdDevRefNamed("ai:available")).toEqual({
+      ref: { kind: "ai" },
+      label: "AI availability",
+      url: null,
+    });
   });
 
   it("names nothing that is not a dev fact", () => {
     expect(holdDevRefNamed("focus_session:abc")).toBeNull();
     expect(holdDevRefNamed("pr:not a repo#1")).toBeNull();
+  });
+});
+
+describe("aiHoldMet", () => {
+  it("met only when AI came back AFTER the pause began", () => {
+    expect(aiHoldMet(SINCE, at(5))).toBe(true);
+    // Available before the pause: the call failed anyway (an operator state
+    // the CP does not see), so that availability is no news.
+    expect(aiHoldMet(SINCE, at(-5))).toBe(false);
+    expect(aiHoldMet(SINCE, SINCE)).toBe(false);
+    // Not available now (null), or a stamp that does not parse: not met.
+    expect(aiHoldMet(SINCE, null)).toBe(false);
+    expect(aiHoldMet(SINCE, undefined)).toBe(false);
+    expect(aiHoldMet(SINCE, "not a date")).toBe(false);
+    expect(aiHoldMet("not a date", at(5))).toBe(false);
   });
 });
