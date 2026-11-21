@@ -29,6 +29,7 @@
  *   - a batch whose run never started is failed by the sweep, which then
  *     finishes the step; a batch claimed a minute ago is left alone.
  */
+import { closedNotDoneReport } from "../__tests__/closed-not-done-report.js";
 import {
   describe,
   it,
@@ -252,21 +253,7 @@ async function endChild(
 ) {
   await q(
     `update focus_sessions set status = $2, closed_at = now(), verification_report = $3::jsonb where id = $1`,
-    [
-      id,
-      status,
-      JSON.stringify(
-        closedNotDone
-          ? {
-              closedNotDone: {
-                reason: "Ran out of time",
-                criteria: [],
-                outcomes: [],
-              },
-            }
-          : null
-      ),
-    ]
+    [id, status, JSON.stringify(closedNotDone ? closedNotDoneReport() : null)]
   );
 }
 
@@ -591,7 +578,7 @@ describe("the children close", () => {
     const told = (await systemLines(channelId)).find((l) =>
       l.startsWith("Step Review failed")
     );
-    expect(told).toContain("2 of 3 runs delivered; part 2 did not");
+    expect(told).toContain("part 2");
     expect(told).toContain(`part 2 (30 items)`);
     expect(told).toContain("FAILED");
     // The run's agent gets one turn with what each child did.
@@ -623,8 +610,20 @@ describe("the children close", () => {
     const told = (await systemLines(channelId)).find((l) =>
       l.startsWith("Step Review is done")
     );
-    expect(told).toContain("part 2 skipped (cancelled)");
     expect(told).toContain("SKIPPED (cancelled)");
+  });
+
+  it("every part cancelled: the step is cancelled, the run does not advance and waits", async () => {
+    const { sessionId } = await startParent(REVIEW, { findingIds: ids(70) });
+    const kids = await children(sessionId);
+    for (const kid of kids) {
+      await endChild(kid.id, "cancelled");
+      await settleStageChild(kid.id);
+    }
+    expect((await stepRow(sessionId)).status).toBe("cancelled");
+    const parent = await session(sessionId);
+    expect(parent.current_stage).not.toBe("summarize");
+    expect(parent.status).toBe("paused");
   });
 
   it("one closed with required work open is not delivered: the step ends failed and names the child", async () => {

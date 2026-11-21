@@ -53,6 +53,7 @@ import {
   type CurrentHold,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database/schema";
+import { getTableColumns } from "drizzle-orm";
 import {
   STATUS_OF_WORK_MAX,
   type StatusOfWork,
@@ -99,7 +100,8 @@ export interface StatusViewer {
   roster: boolean;
 }
 
-type Listed = { row: FocusSession; on: StatusOfWorkItem["on"] };
+type SessionRow = FocusSession & { closedNotDone: boolean };
+type Listed = { row: SessionRow; on: StatusOfWorkItem["on"] };
 
 /** Open sessions first, then the most recently moved. */
 const openFirst = () => [
@@ -165,18 +167,22 @@ export async function readStatusWork(
   const floor = sessionStatusFloor(userId);
   const listedFor = new Map<string, { items: Listed[]; truncated: boolean }>();
 
+  const columns = {
+    ...getTableColumns(focusSessions),
+    closedNotDone: closedNotDoneRecordedSql(),
+  };
   const selfIds = [...new Set(q.sessions.map((s) => s.sessionId))];
   const [selfRows, thingLists, goalLists] = await Promise.all([
     selfIds.length
       ? db
-          .select()
+          .select(columns)
           .from(focusSessions)
           .where(and(inArray(focusSessions.id, selfIds), floor))
       : Promise.resolve([]),
     Promise.all(
       q.things.map((id) =>
         db
-          .select()
+          .select(columns)
           .from(focusSessions)
           .where(
             and(
@@ -192,7 +198,7 @@ export async function readStatusWork(
     Promise.all(
       q.goals.map((id) =>
         db
-          .select()
+          .select(columns)
           .from(focusSessions)
           .where(and(floor, eq(focusSessions.trackId, id), notReceiptWhere()))
           .orderBy(...openFirst())
@@ -201,7 +207,7 @@ export async function readStatusWork(
     ),
   ]);
 
-  const byId = new Map(selfRows.map((r) => [r.id, r as FocusSession]));
+  const byId = new Map(selfRows.map((r) => [r.id, r as SessionRow]));
   for (const s of q.sessions) {
     const row = byId.get(s.sessionId);
     listedFor.set(s.answerId, {
@@ -210,7 +216,7 @@ export async function readStatusWork(
     });
   }
   q.things.forEach((id, i) => {
-    const rows = thingLists[i]! as FocusSession[];
+    const rows = thingLists[i]! as SessionRow[];
     listedFor.set(id, {
       items: rows.slice(0, STATUS_OF_WORK_MAX).map((row) => ({
         row,
@@ -220,7 +226,7 @@ export async function readStatusWork(
     });
   });
   q.goals.forEach((id, i) => {
-    const rows = goalLists[i]! as FocusSession[];
+    const rows = goalLists[i]! as SessionRow[];
     listedFor.set(id, {
       items: rows
         .slice(0, STATUS_OF_WORK_MAX)
@@ -230,23 +236,11 @@ export async function readStatusWork(
   });
 
   // Every listed session once: its packet, its newest run, its hold.
-  const sessions = new Map<string, FocusSession>();
+  const sessions = new Map<string, SessionRow>();
   for (const l of listedFor.values()) {
     for (const { row } of l.items) sessions.set(row.id, row);
   }
   const ids = [...sessions.keys()];
-  const closedNotDoneIds = new Set(
-    ids.length === 0
-      ? []
-      : (
-          await db
-            .select({ id: focusSessions.id })
-            .from(focusSessions)
-            .where(
-              and(inArray(focusSessions.id, ids), closedNotDoneRecordedSql())
-            )
-        ).map((r) => r.id)
-  );
   const [{ projectContinuationPacket }, { readSessionOutcomesSection }] =
     await Promise.all([
       import("../focus-sessions/continuation-packet.js"),
@@ -348,7 +342,7 @@ export async function readStatusWork(
             stages: row.stages,
             currentStage: row.currentStage ?? null,
             closedAt: row.closedAt ?? null,
-            closedNotDone: closedNotDoneIds.has(id),
+            closedNotDone: row.closedNotDone,
           },
           on: "self",
           kind: projectSessionKind(row),
@@ -384,7 +378,7 @@ export async function readStatusWork(
 async function continuableBy(
   userId: string,
   viewer: StatusViewer,
-  rows: readonly FocusSession[],
+  rows: readonly SessionRow[],
   runs: ReadonlyMap<string, WorkRunRow>
 ): Promise<Set<string>> {
   const grant = getRequestGrant();

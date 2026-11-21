@@ -210,7 +210,6 @@ export interface DeliveredSessionRow {
   goal: string | null;
   status: string;
   closedAt: Date | string | null;
-  /** The close-anyway record is on the row (`closedNotDoneRecordedSql`). */
   closedNotDone: boolean;
   expectedOutputs: unknown;
 }

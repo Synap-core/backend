@@ -71,8 +71,9 @@
  *                          for, such a move is reported once, as `hold_set`.
  *   - `blocker_ended`    — a session this one waits on (`blocked_by`) ended:
  *                          `delivered` = it closed done, false = it closed
- *                          not done, was cancelled or failed (re-plan: the edge does not clear by
- *                          itself). `at` = when its end was recorded.
+ *                          not done, was cancelled or failed (re-plan: the
+ *                          edge does not clear by itself). `at` = when its
+ *                          end was recorded.
  *   - `signal_raised`    — the status watcher raised a "Needs a look" on the
  *                          session (`focus_session.signal.completed`,
  *                          `services/status/watcher.ts`): its pause is past

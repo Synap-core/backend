@@ -22,6 +22,7 @@
  * 0342, the listener. Stubbed: the side-effect fan-out (no transport here).
  */
 
+import { closedNotDoneReport } from "../../../__tests__/closed-not-done-report.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -673,16 +674,7 @@ describe("the conversation change feed", () => {
     );
     await q(
       `update focus_sessions set verification_report = $2::jsonb where id = $1`,
-      [
-        blocker.sessionId,
-        JSON.stringify({
-          closedNotDone: {
-            reason: "Ran out of time",
-            criteria: [],
-            outcomes: [],
-          },
-        }),
-      ]
+      [blocker.sessionId, JSON.stringify(closedNotDoneReport())]
     );
     const cursor = new Date(Date.now() - 1).toISOString();
     await setSessionStatus(db, {

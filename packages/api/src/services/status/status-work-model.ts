@@ -69,7 +69,6 @@ export interface WorkSessionRow {
   stages: unknown;
   currentStage: string | null;
   closedAt: Date | string | null;
-  /** The close-anyway record is on the row (`closedNotDoneRecordedSql`). */
   closedNotDone: boolean;
 }
 
