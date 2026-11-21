@@ -124,12 +124,26 @@ vi.mock("../../middleware/api-key-auth.js", async (importOriginal) => {
   return { ...actual, scopedProcedure: () => t.procedure };
 });
 
+// The REAL gate, wrapped so one test can take the granted branch once (the
+// receipt a granted write returns); every other call runs the real gate.
+vi.mock("../../utils/permission-check.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../utils/permission-check.js")>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: vi.fn(actual.checkPermissionOrPropose),
+  };
+});
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { eq } from "drizzle-orm";
 import * as schema from "@synap/database/schema";
 import { hubProfilesRouter } from "./profiles.js";
 import { applyProposalApproval } from "../proposals/apply-approval.js";
-import { buildProposalSummary } from "../../utils/permission-check.js";
+import {
+  buildProposalSummary,
+  checkPermissionOrPropose,
+} from "../../utils/permission-check.js";
 
 const USER = randomUUID();
 const AGENT = randomUUID();
@@ -390,12 +404,14 @@ describe("a declared field whose slug matches a global field (0b5ca266)", () => 
   ];
   const FUNDING_STAGES = ["idea", "pre-seed", "seed", "series-a"];
 
-  /** A signed-in person: the gate grants and the field applies at once. */
-  const humanHub = () =>
-    hubProfilesRouter.createCaller({
-      userId: USER,
-      scopes: ["hub-protocol.write"],
+  /** The hub door with its gate granting this one call: the field applies
+   *  at once and the door returns its per-field receipt. */
+  const grantedHub = () => {
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: true,
     } as never);
+    return agentHub();
+  };
 
   /** Every def a kind links under a slug, with its scope and values. */
   async function linkedDefs(profileId: string, slug: string) {
@@ -473,7 +489,7 @@ describe("a declared field whose slug matches a global field (0b5ca266)", () => 
   });
 
   it("the receipt says which: own field created over a differing global, or global field reused", async () => {
-    const res = (await humanHub().createPropertyDefs({
+    const res = (await grantedHub().createPropertyDefs({
       userId: USER,
       workspaceId: WS,
       profileId: FUND_B,
@@ -517,7 +533,7 @@ describe("a declared field whose slug matches a global field (0b5ca266)", () => 
   });
 
   it("a kind already bound to the global field gets no second `stage` (it would be hidden)", async () => {
-    const res = (await humanHub().createPropertyDefs({
+    const res = (await grantedHub().createPropertyDefs({
       userId: USER,
       workspaceId: WS,
       profileId: NEED,
