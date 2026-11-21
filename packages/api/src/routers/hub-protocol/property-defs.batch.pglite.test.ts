@@ -532,6 +532,30 @@ describe("a declared field whose slug matches a global field (0b5ca266)", () => 
     ]);
   });
 
+  it("an OVERLAY declaration over a differing global field stays an overlay of this space", async () => {
+    const res = (await grantedHub().createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: DEAL,
+      fields: [
+        {
+          slug: "website",
+          valueType: "string",
+          constraints: { format: "uri" },
+          overlay: true,
+        },
+      ],
+    })) as { properties: Array<Record<string, unknown>> };
+    expect(res.properties[0]!.status, JSON.stringify(res)).toBe("applied");
+    const rows = await q<{ profile_id: string | null; workspace_id: string }>(
+      `select d.profile_id, d.workspace_id from profile_properties pp
+         join property_defs d on d.id = pp.property_def_id
+        where pp.profile_id = $1 and d.slug = 'website'`,
+      [DEAL]
+    );
+    expect(rows.rows).toEqual([{ profile_id: DEAL, workspace_id: WS }]);
+  });
+
   it("a kind already bound to the global field gets no second `stage` (it would be hidden)", async () => {
     const res = (await grantedHub().createPropertyDefs({
       userId: USER,

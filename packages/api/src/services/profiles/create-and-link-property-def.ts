@@ -239,7 +239,7 @@ export async function createAndLinkPropertyDef(
       globalField = { outcome: "reused", id: propertyDef.id };
     } else if (!(await profileAlreadyHasSlug(db, input))) {
       // The gates for this exact scope (the profile's schema owner, the
-      // key's grant on a pod-wide def) already ran in `property-defs.create`
+      // key's grant where the def lands) already ran in `property-defs.create`
       // before its lookup; this writes the def that call would have written
       // had no global field matched.
       const own = await new PropertyDefRepository(db).create({
@@ -248,7 +248,11 @@ export async function createAndLinkPropertyDef(
         constraints: input.constraints,
         uiHints: input.uiHints,
         profileId: input.profileId,
-        workspaceId: null,
+        // The scope the declaration asked for. Today an overlay never gets
+        // here (its lookup in `getBySlug` is filtered to its own workspace,
+        // and a global def never carries one), but if it did, the kind's
+        // own field must stay an overlay, never widen to the profile base.
+        workspaceId: overlay ? input.workspaceId : null,
       });
       globalField = { outcome: "shadowed", id: propertyDef.id, conflicts };
       propertyDef = own as unknown as typeof propertyDef;
