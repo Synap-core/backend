@@ -172,8 +172,8 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     why: "the session verbs' `from:` table: the transition table W2 derives",
   },
   "types/src/units/session.ts": {
-    count: 2,
-    why: "the session mark's own sets (running, cadence): W2's statusMark",
+    count: 1,
+    why: "the session mark's cadence set (scheduled, paused): W2's statusMark",
   },
   "types/src/units/track-step.ts": {
     count: 1,

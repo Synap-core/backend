@@ -57,7 +57,8 @@ export type SessionStatus = (typeof SESSION_STATUSES)[number];
  * which keep the order each set had as a hand list (the terminal set's
  * `closed, cancelled, failed` is a published MCP / Hub enum order).
  *
- *   open    forming, scheduled — not started;
+ *   open    forming (planned: a plan step, {@link PLANNED_SESSION_STATUS}),
+ *           scheduled (an appointment) — not started;
  *   active  active;
  *   paused  paused (a person or a check gate), stale (the reaper found it
  *           quiet). `stale` KEEPS its stored value (founder decision
@@ -78,6 +79,25 @@ export const SESSION_STATUS_DECLARATION = {
   failed: { category: "lost" },
   stale: { category: "paused" },
 } as const satisfies Record<SessionStatus, { category: LifecycleCategory }>;
+
+/**
+ * PLANNED — `forming` (founder decision P1, 21 Nov 2026): a step of a plan
+ * that has not started. It starts when its blockers deliver and its planned
+ * date comes (the wake, api `planned-wake.ts`), or when someone starts it.
+ * Until then it owes nothing (`classifyOwedAsk`, the owed-slot predicate),
+ * is not where a write is filed (`IN_FLIGHT_SESSION_STATUSES`) and never
+ * reads as running. Its readiness is {@link deriveStepReadiness}
+ * (`units/session.ts`). `scheduled` is the OTHER not-started status: an
+ * appointment a playbook opens on a clock.
+ */
+export const PLANNED_SESSION_STATUS =
+  "forming" as const satisfies SessionStatus;
+
+export function isPlannedSessionStatus(
+  v: string | null | undefined
+): v is typeof PLANNED_SESSION_STATUS {
+  return v === PLANNED_SESSION_STATUS;
+}
 
 /** A status that has not ended: categories `open`, `active`, `paused`. */
 type NotEndedSessionStatus = StatusOfCategory<
