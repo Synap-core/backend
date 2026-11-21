@@ -964,7 +964,7 @@ describe("a post in a room needs a write grant, not only a read", () => {
           [sessionId]
         )
       ).rows
-    ).toEqual([{ executor: "is-agent", status: "running" }]);
+    ).toEqual([{ executor: "is-agent", status: "queued" }]);
     const kickoff = turnsOf(sessionId).length;
     expect(kickoff).toBe(1);
 

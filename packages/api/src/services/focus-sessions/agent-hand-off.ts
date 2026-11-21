@@ -35,7 +35,15 @@
  * it is a room member that answers when mentioned, and the room's own route
  * (`route-room.ts`) floors it then.
  */
-import { db, users, eq } from "@synap/database";
+import {
+  db,
+  users,
+  eq,
+  playbookRuns,
+  runHolder,
+  setRunStatus,
+} from "@synap/database";
+import { runStatusesIn } from "@synap-core/types/units";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { sessionNameField } from "./session-update-goal.js";
 import {
@@ -202,4 +210,36 @@ export async function gateAgentHandOff(p: {
     };
   }
   return { status: "granted", agentId: p.agentId };
+}
+
+/**
+ * An approved hand-off REVIVES the session's run: a run nobody works yet —
+ * `queued`, `blocked` past its window, or `stale` (the live statuses but
+ * running, proposed and waiting on the person) — goes
+ * back to `queued` with the approved agent as its holder and a fresh claim
+ * window, and a stale session is active again. Its agent's first write
+ * claims it. A run with a verdict keeps it. Returns the runs re-queued.
+ */
+export async function requeueRunForHandOff(p: {
+  sessionId: string;
+  ownerId: string;
+  agentId: string;
+  proposalId: string;
+}): Promise<number> {
+  const { rows } = await setRunStatus(db, {
+    where: eq(playbookRuns.sessionId, p.sessionId),
+    from: runStatusesIn(["open", "paused"]).filter(
+      (s) => s !== "proposed" && s !== "waiting_on_you"
+    ),
+    to: "queued",
+    actor: { kind: "human", userId: p.ownerId },
+    proposalId: p.proposalId,
+    reason: "The hand-off was approved: the run waits for its agent.",
+    set: { holder: runHolder("agent", p.agentId) },
+  });
+  if (rows.length > 0) {
+    const { reviveStaleSession } = await import("./revive-stale-session.js");
+    await reviveStaleSession(p.sessionId, p.ownerId);
+  }
+  return rows.length;
 }

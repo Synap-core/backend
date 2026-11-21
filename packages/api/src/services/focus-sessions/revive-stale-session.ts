@@ -16,7 +16,11 @@
  *
  * Session → `active` (with `updatedAt` = now: this IS activity). Its stale
  * playbook run(s) → `running`, so the run feed, the needs-you lens and the
- * reaper's next sweep all read it as worked again. Both writes are conditional
+ * reaper's next sweep all read it as worked again.
+ *
+ * An AGENT's write is also its claim: a run on that session handed to it (or
+ * to an agent not named yet) and still `queued` / `blocked` is `running` now
+ * (`claimRunAsAgent`) — the agent picked up the work it was handed. Both writes are conditional
  * on the stale status AND on the session being the writer's own (`userId` —
  * the human an agent acts for), so a session that is not stale, or a handle
  * that names someone else's session, costs one indexed no-op UPDATE.
@@ -25,6 +29,7 @@ import {
   db,
   eq,
   drizzleSql,
+  claimRunAsAgent,
   focusSessions,
   playbookRuns,
   setRunStatus,
@@ -77,6 +82,7 @@ export function sessionToReviveForWrite(write: {
  */
 export async function reviveSessionForWrite(write: {
   userId: string;
+  agentUserId?: string | null;
   sessionId?: string | null;
   subjectType: string;
   data?: Record<string, unknown>;
@@ -96,6 +102,16 @@ export async function reviveSessionForWrite(write: {
       { err, sessionId },
       "stale-session revive failed — the write proceeds, the session stays stale"
     );
+  }
+  if (write.agentUserId) {
+    try {
+      await claimRunAsAgent(db, sessionId, write.agentUserId);
+    } catch (err) {
+      logger.error(
+        { err, sessionId },
+        "the agent's claim on its run failed — the write proceeds, the run stays queued"
+      );
+    }
   }
 }
 

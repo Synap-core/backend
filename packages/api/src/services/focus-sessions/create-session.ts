@@ -28,6 +28,9 @@ import {
   insertFocusSessionRow,
   sessionDefinitionColumns,
   derivedSessionTitle,
+  ownerAndActor,
+  runHolder,
+  starterHolder,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -1403,21 +1406,26 @@ export async function createFocusSession(
       });
     }
 
-    // The playbook_runs ledger row (status "running") so the runs feed sees the
-    // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
-    // definition snapshot), minus the executor dispatch — starting a session is
-    // "I'm working on this playbook", not a full executor run. The snapshot is
-    // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
-    // froze no `subjectProfile` (so no lifecycle), criteria or
-    // tools, and a later edit of the playbook then decided this run.
+    // The playbook_runs ledger row so the runs feed sees the session, with
+    // THE shared snapshot (`buildDefinitionSnapshot`), minus the executor
+    // dispatch: starting a session is "I'm working on this playbook". Its
+    // starter holds it, working from birth (`running`); a start that hands it
+    // to another agent leaves it `queued` until that agent claims it.
     if (playbook) {
+      const owner = await ownerAndActor(tx, userId, agentUserId);
+      const handedTo =
+        handedOff[0] ?? (agentUserId ? undefined : requestedAgentIds[0]);
       await tx.insert(playbookRuns).values({
         workspaceId,
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: "running",
-        createdBy: agentUserId ?? userId,
+        status: handedTo ? "queued" : "running",
+        holder: handedTo
+          ? runHolder("agent", handedTo)
+          : starterHolder(userId, agentUserId),
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }

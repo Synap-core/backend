@@ -58,7 +58,11 @@ import {
   type SessionStageRun,
   type StageRunnerVia,
 } from "@synap/database/schema";
-import type { RunOn, RunnerPassedOver } from "@synap-core/types/agents";
+import {
+  passedOverLine,
+  type RunOn,
+  type RunnerPassedOver,
+} from "@synap-core/types/agents";
 import {
   runnerChoices,
   type ExpectedOutput,
@@ -290,10 +294,7 @@ async function askWhoWorksIt(p: {
   );
   if (!declared) return;
   const why = `None of the runners step ${p.stageName} names can take it now (${p.passedOver
-    .map(
-      (o) =>
-        `${o.name ?? "choice " + (o.choice + 1)}: ${o.why.replace(/_/g, " ")}`
-    )
+    .map(passedOverLine)
     .join("; ")}).`;
   const ask: SlotAsk = {
     mode: "confirm",

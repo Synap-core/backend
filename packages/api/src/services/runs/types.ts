@@ -58,6 +58,8 @@ export type FlowType =
  * enums (tRPC `runs.list`, Hub REST `/runs`) are built from it.
  */
 export const RUN_STATUSES = [
+  // 'queued' — a playbook run handed to its holder, not claimed yet.
+  "queued",
   "running",
   "completed",
   "failed",
@@ -80,6 +82,9 @@ export const RUN_STATUSES = [
   // playbook run (the reaper found it quiet; it READS as paused everywhere,
   // founder 2026-11-20). Not running, not ended.
   "paused",
+  // 'blocked' — a playbook run nobody claimed inside its window: the person
+  // is asked (`run-blocked-ask.ts`). Not failed.
+  "blocked",
 ] as const;
 export type RunStatus = (typeof RUN_STATUSES)[number];
 

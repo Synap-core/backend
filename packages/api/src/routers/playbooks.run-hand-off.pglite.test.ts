@@ -276,7 +276,7 @@ describe("a manual playbook run handed to an agent (playbooks.run)", () => {
     expect(res.status).toBe("running");
     expect(h.dispatched).toEqual([]);
     expect(await runs()).toEqual([
-      { executor: "external-agent", status: "running" },
+      { executor: "external-agent", status: "queued" },
     ]);
     const rows = await sessions();
     expect(rows).toHaveLength(1);
@@ -354,7 +354,7 @@ describe("a GATED manual run keeps its hand-off through the approval", () => {
 
     expect(h.dispatched).toEqual([]);
     expect(await runs()).toEqual([
-      { executor: "external-agent", status: "running" },
+      { executor: "external-agent", status: "queued" },
     ]);
     const rows = await sessions();
     expect(rows).toHaveLength(1);
@@ -384,7 +384,7 @@ describe("an agent hands a run only to itself, and the hold keeps it", () => {
     expect(started.status).toBe("started");
     expect(h.dispatched).toEqual([]);
     expect(await runs()).toEqual([
-      { executor: "external-agent", status: "running" },
+      { executor: "external-agent", status: "queued" },
     ]);
   });
 
@@ -415,7 +415,7 @@ describe("a run that names nobody goes to the agent assigned to its playbook", (
     );
     expect(h.dispatched).toEqual([]);
     expect(await runs()).toEqual([
-      { executor: "external-agent", status: "running" },
+      { executor: "external-agent", status: "queued" },
     ]);
     const rows = await sessions();
     expect(rows).toHaveLength(1);

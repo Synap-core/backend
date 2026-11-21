@@ -11,8 +11,11 @@ import { join, relative } from "path";
  * Two checks, over every production `.ts` file of `packages/{api,jobs,database}/src`
  * (derived by walking the tree, never a hand list):
  *
- *  1. Every `.insert(<table>)` of a table 0442 gave an actor column (DERIVED
- *     from its `ADD COLUMN ... "agent_user_id"` lines) stamps
+ * The actor tables are DERIVED from the `ADD COLUMN ... "agent_user_id"`
+ * lines of the actor migrations ({@link ACTOR_MIGRATIONS}).
+ *
+ *  1. Every `.insert(<table>)` of a table 0442 or 0446 gave an actor column
+ *     stamps
  *     `createdBy: <x>.ownerId` (a value only `ownerAndActor` yields) and sets
  *     `agentUserId`. A REPLICA (`routers/sync.ts`) copies a peer's row
  *     verbatim instead: its row shape must carry `agentUserId`.
@@ -22,9 +25,7 @@ import { join, relative } from "path";
  *  2. No owner is written as `<owner key>: <...>agentUserId ?? ...` (the "the
  *     agent if there is one, else the person" expression that made agents
  *     owners): `createdBy:` / `ownerId:` on any code line, `userId:` inside an
- *     insert's values. The playbook_runs writers below still store the agent
- *     as the run's creator; they are a frozen list (a follow-up moves them),
- *     so a NEW site fails.
+ *     insert's values.
  *
  * WHAT IT DOES NOT SEE (measured by reading the scan, not assumed): an owner
  * fed from a variable that holds an agent id without the `??` shape (a key
@@ -38,11 +39,16 @@ import { join, relative } from "path";
 const PACKAGES = join(process.cwd(), "..");
 const SCANNED = ["api/src", "jobs/src", "database/src"];
 
-/** Writers of playbook_runs, which has no actor column yet (follow-up), frozen. */
-const KNOWN_AGENT_AS_OWNER = new Set<string>([
-  "api/src/services/focus-sessions/create-session.ts", // the activity feed reads it as actor
-  "api/src/services/focus-sessions/follow-playbook.ts",
-]);
+/**
+ * The migrations that gave tables their actor column, and the check their
+ * inserts pass: `every` insert stamps owner and actor (check 1), or only one
+ * that `names` an agent does (check 1b).
+ */
+const ACTOR_MIGRATIONS = [
+  { file: "0442_owner_actor_columns.sql", check: "every" },
+  { file: "0445_owner_actor_more_tables.sql", check: "names" },
+  { file: "0446_run_holder_and_actor.sql", check: "every" },
+] as const;
 
 /**
  * `proposals.created_by` is who FILED it, not an owner: the owner floor is
@@ -176,12 +182,16 @@ const writesAgentAsOwner = (src: string): boolean =>
   );
 
 describe("tripwire: a person owns what an agent makes", () => {
-  const tables = actorTables("0442_owner_actor_columns.sql");
-  const laterTables = actorTables("0445_owner_actor_more_tables.sql");
+  const tablesOf = (check: "every" | "names") =>
+    ACTOR_MIGRATIONS.filter((m) => m.check === check).flatMap((m) =>
+      actorTables(m.file)
+    );
+  const tables = tablesOf("every");
+  const laterTables = tablesOf("names");
 
-  it("derives the actor tables from 0442 and 0445 (non-vacuity)", () => {
+  it("derives the actor tables from the actor migrations (non-vacuity)", () => {
     expect(tables).toEqual(
-      expect.arrayContaining(["automations", "playbooks"])
+      expect.arrayContaining(["automations", "playbooks", "playbookRuns"])
     );
     expect(laterTables).toEqual(
       expect.arrayContaining(["tools", "capabilities", "skills"])
@@ -192,8 +202,8 @@ describe("tripwire: a person owns what an agent makes", () => {
   it("every insert of an actor table stamps the owner from ownerAndActor and the actor", () => {
     const inserts = actorInserts(FILES, tables);
     // Non-vacuity: the automation door, the cron backing row, the reconcile,
-    // the playbook create and promote doors.
-    expect(inserts.length).toBeGreaterThanOrEqual(5);
+    // the playbook create and promote doors, the four run births.
+    expect(inserts.length).toBeGreaterThanOrEqual(9);
     const offenders = inserts
       .filter((i) => !stampsOwnerAndActor(i.block))
       .map((i) => `${i.rel}: insert(${i.table})`);
@@ -243,17 +253,16 @@ describe("tripwire: a person owns what an agent makes", () => {
     ).toEqual([]);
   });
 
-  it("no owner column is written as `agentUserId ?? <person>` outside the frozen follow-up list", () => {
-    const listed = new Set([...KNOWN_AGENT_AS_OWNER, ...FILER_NOT_OWNER]);
+  it("no owner column is written as `agentUserId ?? <person>`", () => {
     const offenders = FILES.filter(
-      ({ rel, src }) => !listed.has(rel) && writesAgentAsOwner(src)
+      ({ rel, src }) => !FILER_NOT_OWNER.has(rel) && writesAgentAsOwner(src)
     ).map((f) => f.rel);
     expect(offenders).toEqual([]);
-    // Both lists stay exact: a site that got fixed leaves them.
-    const stale = [...listed].filter(
+    // The list stays exact: a site that got fixed leaves it.
+    const stale = [...FILER_NOT_OWNER].filter(
       (rel) => !FILES.some((f) => f.rel === rel && writesAgentAsOwner(f.src))
     );
-    expect(stale, "remove fixed files from the lists").toEqual([]);
+    expect(stale, "remove fixed files from the list").toEqual([]);
   });
 
   it("self-check: the scans still see what they hunt", () => {
