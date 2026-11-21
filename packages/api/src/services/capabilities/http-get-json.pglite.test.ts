@@ -222,10 +222,13 @@ beforeAll(async () => {
       res.writeHead(200, { "content-type": "application/json" });
       const chunk = Buffer.alloc(64 * 1024, 0x20);
       let sent = 0;
-      const write = () => {
+      const write = (): void => {
         while (sent <= OVERSIZE_BYTES) {
           sent += chunk.length;
-          if (!res.write(chunk)) return res.once("drain", write);
+          if (!res.write(chunk)) {
+            res.once("drain", write);
+            return;
+          }
         }
         res.end("1");
       };
