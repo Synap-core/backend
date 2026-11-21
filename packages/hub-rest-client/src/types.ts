@@ -1583,6 +1583,11 @@ export interface HubSessionCriterion {
     capability?: string;
     evidenceKey?: string;
     hint?: string;
+    /**
+     * kind=capability: the verb's arguments. A KPI the pod measures:
+     * `capability: "measure.check"`, `params: { op, params, threshold, comparator }`.
+     */
+    params?: Record<string, unknown>;
   };
   stageKey?: string;
   /**
