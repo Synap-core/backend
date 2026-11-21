@@ -14,7 +14,8 @@
  *  - a session a coding agent started, the step's runner the same kind:
  *    no child run, the step stays with that agent, the room says why, the
  *    session is not paused;
- *  - CONTROL: a session a PERSON started still gets its child run;
+ *  - CONTROL: a session a PERSON started still hands the step to its
+ *    runner (whether the child then starts is `stage-uses-run`'s suite);
  *  - a session an agent of ANOTHER kind started still hands the step on.
  *
  * Stubbed, and why: who the runner resolves to (`resolveRunner`, its own
@@ -100,22 +101,27 @@ vi.mock("../services/playbooks/playbook-skill-preflight.js", () => ({
 // Who takes the step: the roster and computers lookup has its own suite.
 // Here the step's runner resolves to the coding agent on the devbox, as
 // "Fix a finding"'s `fix` step (`uses` "Fix in code", claude-code@devbox) did.
-vi.mock("../services/agent-dispatch/runner.js", async (importOriginal) => ({
-  ...(await importOriginal<Record<string, unknown>>()),
-  resolveRunner: async () => ({
-    chosen: {
-      kind: "agent",
-      agentUserId: h.devbox,
-      name: "Claude Code (devbox)",
-      reach: "pull",
-      computerUserId: null,
-      preset: null,
-      requires: {},
-      missing: [],
-      choice: 0,
-    },
-    passedOver: [],
-  }),
+// Not `importOriginal`: the real module's graph reaches the stage runner,
+// which would bind the ORIGINAL `resolveRunner` while this factory runs.
+vi.mock("../services/agent-dispatch/runner.js", () => ({
+  requiresOnComputer: async () => ({}),
+  resolveRunner: async (p: { runner?: unknown }) =>
+    p.runner
+      ? {
+          chosen: {
+            kind: "agent",
+            agentUserId: h.devbox,
+            name: "Claude Code (devbox)",
+            reach: "pull",
+            computerUserId: null,
+            preset: null,
+            requires: {},
+            missing: [],
+            choice: 0,
+          },
+          passedOver: [],
+        }
+      : { chosen: null, passedOver: [] },
 }));
 vi.mock("../utils/permission-check.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -363,19 +369,25 @@ describe("a step that uses a playbook, under a session its own agent works", () 
     ).toBe(true);
   });
 
-  it("CONTROL: a session a person started still gets its child run", async () => {
-    const { sessionId, entered } = await startParent(PARENT);
+  // Whether the child run then starts is the child door's (its own suite,
+  // `stage-uses-run.pglite.test.ts`); here the step goes TO the runner.
+  it("CONTROL: a session a person started still hands the step to its runner", async () => {
+    const { entered } = await startParent(PARENT);
 
-    const childId = entered.stageRun?.childSessionId;
-    expect(childId).toBeTruthy();
-    expect(await childRuns()).toBe(1);
-    expect((await stepRow(sessionId, "render")).child_session_id).toBe(childId);
+    expect(entered.stageRun).toMatchObject({
+      status: "entered",
+      runnerAgentUserId: h.devbox,
+      handOff: "attached",
+    });
+    expect(entered.stageRun?.reason ?? "").not.toContain("already working");
   });
 
-  it("a session an agent of another kind started still hands the step on", async () => {
+  it("a session an agent of another kind started still hands the step to its runner", async () => {
     const { entered } = await startParent(PARENT, OTHER);
 
-    expect(entered.stageRun?.childSessionId).toBeTruthy();
-    expect(await childRuns()).toBe(1);
+    expect(entered.stageRun).toMatchObject({
+      runnerAgentUserId: h.devbox,
+      handOff: "attached",
+    });
   });
 });
