@@ -18,7 +18,9 @@
  *
  * Every older shape is migrated on read, so no saved design breaks; the next
  * save writes v3: a v2 board (`synap-board/1`, free-positioned items), and a
- * schema-1 Puck page of the retired page editor (one frame "Page").
+ * schema-1 Puck page of the retired page editor (one frame "Page"). A label an
+ * old design wrote as plain text where the catalog now has a slot becomes a
+ * Text block in that slot (`liftLabels`).
  *
  * Pure: no React, no Puck runtime, no I/O. `parseBoard` refuses what it cannot
  * read (never "repairs" a broken board into an empty one).
@@ -510,6 +512,45 @@ export function pageOwner(board: Board, frame: BoardFrame): BoardFrame {
   );
 }
 
+/** The canvas's own text block: what an old design's plain-text label becomes. */
+const TEXT_BLOCK = "Text";
+
+/**
+ * An old design (a schema-1 page, a v2 board) wrote a component's label as
+ * plain text where the catalog declares a SLOT: `children: "Start work"` on a
+ * button, `header: "Peek"` on a card. The old renderer drew that string as
+ * text, so on MIGRATION it becomes one Text block in the slot, kept, never
+ * dropped. Only with a schema that has the Text block, only for a slot that
+ * takes it (`allow`), only for a non-empty string. Only the two migration
+ * paths call this: a v3 board writes blocks, and a string in a slot of a v3
+ * board is still dropped and named (`cleanBlocks`). Ids come later
+ * (`assignIds`). Pure: returns new blocks, never edits `list`.
+ */
+function liftLabels(
+  list: unknown[],
+  schema: CanvasSchema | undefined
+): unknown[] {
+  if (!schema || !has(schema, TEXT_BLOCK)) return list;
+  return list.map((b) => {
+    if (!isBlock(b) || !has(schema, b.type)) return b;
+    const fields = schema[b.type]!;
+    const props: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(b.props)) {
+      const spec = has(fields, key) ? fields[key] : undefined;
+      if (
+        spec?.kind === "slot" &&
+        typeof value === "string" &&
+        value.trim() !== "" &&
+        (!spec.allow || spec.allow.includes(TEXT_BLOCK))
+      )
+        props[key] = [{ type: TEXT_BLOCK, props: { text: value } }];
+      else
+        props[key] = Array.isArray(value) ? liftLabels(value, schema) : value;
+    }
+    return { ...b, props };
+  });
+}
+
 /**
  * v2 → v3. Each frame's items become its page in reading order (y, then x);
  * x/y/w/h go (flow); an item on no frame goes into one new frame "Loose
@@ -578,7 +619,10 @@ function migrateV2(
   ): FramePage => ({
     root: { props: {} },
     content: cleanBlocks(
-      [...entries].sort((a, b) => a.y - b.y || a.x - b.x).map((e) => e.block),
+      liftLabels(
+        [...entries].sort((a, b) => a.y - b.y || a.x - b.x).map((e) => e.block),
+        schema
+      ),
       schema,
       dropped,
       0
@@ -618,7 +662,13 @@ function migratePage(
   schema: CanvasSchema | undefined
 ): ParseResult {
   const dropped: DropReason[] = [];
-  const page = cleanPage(v, schema, dropped);
+  const page = cleanPage(
+    Array.isArray(v.content)
+      ? { ...v, content: liftLabels(v.content, schema) }
+      : v,
+    schema,
+    dropped
+  );
   if (!page) return { ok: false, error: "The page has no `content` list." };
   assignIds([page]);
   return {
