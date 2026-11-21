@@ -162,6 +162,23 @@ const QUOTA_429 = () =>
     { status: 429, statusText: "Too Many Requests" }
   );
 
+/**
+ * The judge answered with no verdict: the only model left to grade is the
+ * one that did the work (`decider: "none"`, IS judge.ts).
+ */
+const NO_DECIDER = () =>
+  Response.json({
+    decider: "none",
+    verdicts: [
+      {
+        key: "audit",
+        verdict: "unmeasured",
+        rationale:
+          "The only available judge is the model that did the work — it may not grade itself.",
+      },
+    ],
+  });
+
 const VERDICT = (verdict: "pass" | "fail") => () =>
   Response.json({
     decider: "llm",
@@ -283,7 +300,7 @@ describe("a check gate whose AI judge could not run", () => {
       reason?: string;
     };
     expect(gate.reason).toContain("The AI judge could not run");
-    expect(gate.reason).toContain("monthly AI quota");
+    expect(gate.reason).toContain("out of AI credits");
     expect(gate.reason).toContain('the owner can grade "audit" by hand');
     expect(gate.reason).not.toContain("HTTP 429");
   });
@@ -305,6 +322,29 @@ describe("a check gate whose AI judge could not run", () => {
       status: "active",
       current_stage: "review",
     });
+  });
+});
+
+describe("a check gate whose judge answered with no decider", () => {
+  it("holds at the gate like any judge that could not run, and never moves to onFail", async () => {
+    h.judge = NO_DECIDER;
+    const sessionId = await sessionAtWork();
+
+    const res = await advanceToReview(sessionId);
+
+    expect(res).toMatchObject({ gated: true, paused: true });
+    expect(res.onFail).toBeUndefined();
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    const gate = (await sessionOf(sessionId))!.metadata?.checkGate as {
+      reason?: string;
+    };
+    expect(gate.reason).toContain(
+      "The AI judge could not run: The only available judge is the model that did the work"
+    );
+    expect(gate.reason).toContain('the owner can grade "audit" by hand');
   });
 });
 
