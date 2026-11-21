@@ -133,7 +133,7 @@ describe("replacesDoNotContactEvidence (finding 6d7af9b9)", () => {
 
   it("not a first set, a re-set of the same values, an erase, or a person not flagged now", () => {
     for (const [existing, properties] of [
-      [flagged, { doNotContact: true, ...flagged }],
+      [flagged, { ...flagged }],
       [flagged, { doNotContactReason: " asked to stop " }],
       [flagged, { doNotContactReason: null }],
       [flagged, { doNotContactReason: "" }],
