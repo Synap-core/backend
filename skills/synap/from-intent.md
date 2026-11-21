@@ -21,6 +21,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
 | **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
+| **one-off plan** | a long plan lived once: steps that wait on each other, choices on the way ("fund the company to seed") | §2d: ONE `synap_capture`, a root session and one child session per step (`blockedByRefs`), choices as `decision` entities. Repeated work is a playbook; a lasting aim is a goal. |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -129,6 +130,33 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 **A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
 **Legacy only: goals with steps.** Goals have no stages. A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
+
+### 2d. A one-off long plan
+
+Use this when the person wants a plan they will live once: many steps, some that wait on others, choices to make on the way, an end state. "Lay out how we fund the company to seed." "Plan the move to the new office."
+
+Tell it apart first. Ask yourself: "If we did this again next month, would the steps be the same, with other names?"
+
+| The work                                            | It is                                          |
+| --------------------------------------------------- | ---------------------------------------------- |
+| the same steps each time, with a new subject        | a playbook: a template that sessions follow    |
+| one bounded piece of work                           | a session                                      |
+| a lasting aim, closed with a verdict                | a goal (§2c); the plan's steps may serve it    |
+| lived once, long, with dependent steps and choices  | a one-off long plan: this section              |
+
+Never write a playbook for work nobody will repeat. Never make each step a goal.
+
+**Lay it out in ONE `synap_capture`**, so the person reviews one plan, not a pile of cards:
+
+- `sessions[]`: one root session for the whole plan, and one child session per step (`parentRef` = the root). A step that cannot start before others lists ALL of them in `blockedByRefs`. Give each step 2 to 5 `criteria` and its `expectedOutputs`. A step about a thing (an investor, a deal, a contract) names it: `subjectEntityId`, or `subjectRef` for a thing created in the same call.
+- `entities[]`: each choice the person must make is a `decision` with `decisionStatus: "proposed"`, its `decisionOptions` and one `recommendedOption` (fields: `writes`). A proposed decision that an agent wrote asks the person by itself: it becomes an ask they owe (wait kind `decide`). The `decisions` number in needs-you counts pending proposals, not these asks.
+- The sessions and their links ARE the plan. A document may explain it; never put a step only in prose.
+
+**How a step waits.** `blocked_by` clears when the step it waits on is delivered. A blocker that ends cancelled or failed does not clear: the step holds until you re-plan it with `synap_update_session` (`removeBlockedBySessionIds`, plus `addBlockedBySessionIds` for a retry).
+
+**Declare the person's part only when a step can start.** In the 21 Nov 2026 test, a step a year away topped the person's needs-you because it declared, at plan time, an output owed by the person (`owner: "human"`, "Term sheet"). So: declare person-owed outputs and asks on a step only when it can start. On later steps, keep outputs agent-owned or leave them undeclared; add the person's part with `synap_update_session` `outcomes` when the step's blockers are delivered.
+
+Example, "fund the company to seed": a root session "Fund to seed"; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both), "Negotiate the term sheet" (waits on the meetings); one decision "Raise from angels or a fund". Today the person owes only that decision; no later step declares an output owed by the person. The full call: `multi-entity-capture`, second plan example.
 
 ### 3. Which skill to load next
 

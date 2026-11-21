@@ -22,6 +22,8 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
+A **one-off long plan** (lived once: steps that wait on each other, choices on the way) is not a noun either: it is a root session, child sessions linked by `blocked_by`, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
+
 How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
