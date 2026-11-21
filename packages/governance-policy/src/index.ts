@@ -3327,3 +3327,7 @@ export type GateEventKey<K extends GateWriteDoor = GateWriteDoor> =
 
 // The one content check + switch for a shell command the pod runs (audit F8).
 export * from "./command-policy.js";
+
+// THE ranking of approval rows for a tool run (finding ac28928c): one spelling
+// for the resolver, the action-mode read and pod admin's tool page.
+export * from "./rule-ranking.js";

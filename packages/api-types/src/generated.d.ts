@@ -44480,6 +44480,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				} | undefined;
 				principalClass?: "machine" | undefined;
 				principalKind: "agent" | "any" | "class";
+				replacesRuleIds?: string[] | undefined;
 				scopeKind: "pod" | "workspace";
 				sourceProposalId?: string | undefined;
 				targetKind: "action" | "capability" | "connection" | "profile";
@@ -44783,6 +44784,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		revoke: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				id: string;
+				moreIds?: string[] | undefined;
 			};
 			meta: object;
 			output: {
