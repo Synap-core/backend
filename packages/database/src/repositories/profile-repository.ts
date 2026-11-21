@@ -247,14 +247,7 @@ export function kindVisibleWhere(lens: {
 
   const branches: Array<SQL | undefined> = [
     eq(profiles.scope, ProfileScope.SYSTEM),
-    seen || !workspaceId
-      ? and(
-          eq(profiles.profileKind, "kind"),
-          eq(profiles.entityScope, "pod"),
-          homed,
-          seen ? inArray(profiles.workspaceId, seen) : undefined
-        )
-      : undefined,
+    undefined,
   ];
   if (userId) {
     branches.push(
