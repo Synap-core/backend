@@ -163,8 +163,14 @@ vi.mock("../../../../utils/permission-check.js", async (importOriginal) => {
           const proposalId = randomUUID();
           await h.client!.query(
             `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
-             values ($1,$2,'playbook',$1,'create','{}'::jsonb,'pending')`,
-            [proposalId, (opts.workspaceId as string | null) ?? null]
+             values ($1,$2,'playbook',$3,'create','{}'::jsonb,'pending')`,
+            // One placeholder per column: PGlite refuses one $n deduced as
+            // two types (uuid id, text target_id).
+            [
+              proposalId,
+              (opts.workspaceId as string | null) ?? null,
+              proposalId,
+            ]
           );
           return { proposalId, proposalType: "create" };
         }
