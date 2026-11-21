@@ -15065,9 +15065,11 @@ export interface StoredCaptureScope {
 export interface CaptureGraphUnmodeledEntity {
 	label: string;
 	profileSlug: string;
+	/** `movedTo`: the kind's status field, where the pod stored the value. */
 	unmodeled: Array<{
 		didYouMean?: string;
 		key: string;
+		movedTo?: string;
 	}>;
 }
 /**

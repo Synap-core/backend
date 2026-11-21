@@ -29,6 +29,7 @@ const { resolveProfile, validateEntityCreateForProposal } = vi.hoisted(() => ({
     valid: false,
     errors: ["'storageKey' is required"],
     unmodeled: [] as Array<{ key: string; didYouMean?: string }>,
+    modeled: [] as Array<{ key: string; lifecycle?: true }>,
   })),
 }));
 
@@ -98,6 +99,7 @@ describe("dryRunCaptureGraph", () => {
       valid: true,
       errors: [],
       unmodeled: [{ key: "knowledgeform", didYouMean: "knowledgeForm" }],
+      modeled: [],
     }));
     const out = await dryRunCaptureGraph(fakeDb, {
       userId: "u1",
