@@ -425,10 +425,18 @@ export async function fileDeclaredGradeSlots(sessionId: string): Promise<{
   try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, sessionId),
-      columns: { criteria: true, userId: true },
+      columns: { criteria: true, userId: true, expectedOutputs: true },
     });
     if (!session) return { filed: [], outputs: null };
     const criteria = readCriteria(session.criteria);
+    // Nothing declares a grade and no declared grade slot is left to withdraw:
+    // no evaluation read, no lock (most writes to most sessions).
+    const stored = Array.isArray(session.expectedOutputs)
+      ? (session.expectedOutputs as ExpectedOutput[])
+      : [];
+    if (!criteria.some(declaresGrade) && !stored.some(isDeclaredGradeSlot)) {
+      return { filed: [], outputs: null };
+    }
     const graded = new Set(
       (await listSessionEvaluations({ sessionId, userId: session.userId }))
         .filter((r) => r.evaluatorKind === "human")
