@@ -6862,6 +6862,12 @@ export interface ControlPlaneEntitlementSync {
 	outcome: "invalid" | "ok" | "refused" | "unreachable" | "unsupported";
 	/** One plain sentence when `outcome` is not "ok". */
 	message: string | null;
+	/**
+	 * Failed attempts in a row (absent = none): the pull backs off on them
+	 * (`cp-entitlement-sync`), so a refusing or failing CP is not asked every
+	 * few minutes. An "ok" attempt resets it.
+	 */
+	failures?: number;
 }
 /**
  * One entry of `apps.approved_requests` — a permission bounded to a workspace,

@@ -44,7 +44,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { HOLD_AI_MOVES, type Hold } from "@synap-core/types/lifecycle";
-import { resolveAiFailureState } from "@synap-core/types/ai-availability";
+import { resolveAiAvailability } from "@synap-core/types/ai-availability";
 import {
   describeAiFailure,
   type AiFailureClass,
@@ -282,14 +282,28 @@ export interface CheckMeasure {
    */
   notJudged?: boolean;
   /**
-   * With `notJudged`: every failure that kept the judge from running is an AI
-   * AVAILABILITY state (credits, plan, payment, provider, service:
-   * `resolveAiFailureState`), not a one-off fault. The hold then also waits
-   * on `ai:available`, so AI coming back re-grades the gate by itself
-   * (`ai-held-gate.ts`). Any other failure holds for the owner's grade only.
+   * With `notJudged`: what kept the judge from running, read through the one
+   * classification (`resolveAiAvailability` over each failure's wire code).
+   *   - `payer`: every failure is an AI availability state a payer ends
+   *     (credits, plan, payment). The pod's pull sees it end, so the hold
+   *     waits on `ai:available`.
+   *   - `service`: every failure is an availability state, at least one the
+   *     AI service's own (budget, provider, service). The pull cannot see it
+   *     end, so the hold retries on a date.
+   *   - absent: another fault. The hold retries on a date too (and the
+   *     owner may grade it meanwhile, founder decision 8).
+   * Either way the gate is graded again when its hold comes due
+   * (`ai-held-gate.ts`).
    */
-  aiUnavailable?: boolean;
+  judgeOut?: "payer" | "service";
 }
+
+/**
+ * How long a check gate whose judge could not run waits before it is graded
+ * again, when nothing the pod sees can wake it sooner: the hourly hold sweep
+ * runs it.
+ */
+export const JUDGE_RETRY_AFTER_MS = 60 * 60_000;
 
 export interface StageGateAdvance {
   /** Owner of the subject — the human who reviews. */
@@ -443,25 +457,36 @@ async function applyCheckGate(
 /**
  * The hold a check gate that did not pass records, and its `checkGate`
  * record: waiting on the check itself (`check:<stage>`, the ref
- * `heldByCheckGate` recognises), and, when the judge could not run because AI
- * is not available, also on AI coming back (`until: ai:available`, a wait on
- * an outside party).
+ * `heldByCheckGate` recognises). When the judge could not run, the hold also
+ * says when to grade again (`CheckMeasure.judgeOut`): when AI is back for a
+ * payer state (`until: ai:available`), else on a date
+ * (`JUDGE_RETRY_AFTER_MS`). A real fail has no `until`: its next move is the
+ * stage's `onFail` or the owner's.
  */
 export function checkGatePause(
   stageKey: string,
   fromStage: string,
-  measure: CheckMeasure
+  measure: CheckMeasure,
+  now: Date = new Date()
 ): { hold: Hold; metadataPatch: Record<string, unknown> } {
   const { failing, reason } = measure;
-  const aiWait = measure.notJudged === true && measure.aiUnavailable === true;
+  const judgeOut = measure.notJudged === true ? measure.judgeOut : undefined;
+  const until =
+    measure.notJudged !== true
+      ? null
+      : judgeOut === "payer"
+        ? { moves: HOLD_AI_MOVES }
+        : {
+            date: new Date(now.getTime() + JUDGE_RETRY_AFTER_MS).toISOString(),
+          };
   return {
     hold: {
-      on: aiWait ? "external" : "thing",
+      on: judgeOut ? "external" : "thing",
       ref: `check:${stageKey}`,
       reason:
         reason ??
         `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
-      ...(aiWait ? { until: { moves: HOLD_AI_MOVES } } : {}),
+      ...(until ? { until } : {}),
     },
     metadataPatch: {
       [CHECK_GATE_METADATA_KEY]: {
@@ -627,24 +652,7 @@ export function sessionGateSubject(
         : null;
     },
     async pause(hold, metadataPatch) {
-      // The gate's own hold: the system's move (guarded `active → paused`).
-      const { rows } = await setSessionStatus(db, {
-        sessionId: params.sessionId,
-        from: "active",
-        to: "paused",
-        actor: { kind: "system", userId: params.userId },
-        reason: "Its stage gate is holding it.",
-        hold,
-        set: {
-          updatedAt: new Date(),
-          ...(metadataPatch
-            ? {
-                metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`,
-              }
-            : {}),
-        },
-      });
-      return rows.length > 0;
+      return pauseSessionAtGate(db, params, hold, metadataPatch);
     },
     async thingName() {
       if (!params.subjectEntityId) return null;
@@ -700,10 +708,10 @@ export function sessionGateSubject(
         fromStage,
         notJudged
       );
-      return measure.notJudged &&
-        couldNotRun.every((r) => isAvailabilityFailure(r.failureClass))
-        ? { ...measure, aiUnavailable: true }
-        : measure;
+      const judgeOut = measure.notJudged
+        ? judgeOutOf(couldNotRun.map((r) => r.failureClass))
+        : undefined;
+      return judgeOut ? { ...measure, judgeOut } : measure;
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,
@@ -717,12 +725,50 @@ export function sessionGateSubject(
 }
 
 /**
- * A failure class that proves an AI availability state (credits, plan,
- * payment, budget, provider, service), read through the one classification
- * (`resolveAiFailureState` over the class's wire code), never a list here.
+ * A session's gate pause: the system's move, guarded `active → paused`, with
+ * the gate's record merged into the session's metadata. On `executor` so a
+ * re-grade replaces a hold in one transaction (`ai-held-gate.ts`).
  */
-function isAvailabilityFailure(failureClass: AiFailureClass): boolean {
-  return resolveAiFailureState(describeAiFailure(failureClass).code) !== null;
+export async function pauseSessionAtGate(
+  executor: Parameters<typeof setSessionStatus>[0],
+  params: { sessionId: string; userId: string },
+  hold: Hold,
+  metadataPatch?: Record<string, unknown>
+): Promise<boolean> {
+  const { rows } = await setSessionStatus(executor, {
+    sessionId: params.sessionId,
+    from: "active",
+    to: "paused",
+    actor: { kind: "system", userId: params.userId },
+    reason: "Its stage gate is holding it.",
+    hold,
+    set: {
+      updatedAt: new Date(),
+      ...(metadataPatch
+        ? {
+            metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`,
+          }
+        : {}),
+    },
+  });
+  return rows.length > 0;
+}
+
+/**
+ * Who ends what kept the judge from running ({@link CheckMeasure.judgeOut}),
+ * read through the one classification: each failure class's wire code,
+ * resolved as an availability state (`resolveAiAvailability`), never a list
+ * here. `undefined` = at least one failure is not an availability state.
+ */
+function judgeOutOf(
+  failureClasses: readonly AiFailureClass[]
+): "payer" | "service" | undefined {
+  const actors = failureClasses.map(
+    (c) =>
+      resolveAiAvailability({ failureCode: describeAiFailure(c).code }).actor
+  );
+  if (actors.length === 0 || actors.some((a) => a === null)) return undefined;
+  return actors.every((a) => a === "payer") ? "payer" : "service";
 }
 
 /**

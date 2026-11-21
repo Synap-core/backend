@@ -274,6 +274,12 @@ export interface ControlPlaneEntitlementSync {
   outcome: "ok" | "unreachable" | "refused" | "unsupported" | "invalid";
   /** One plain sentence when `outcome` is not "ok". */
   message: string | null;
+  /**
+   * Failed attempts in a row (absent = none): the pull backs off on them
+   * (`cp-entitlement-sync`), so a refusing or failing CP is not asked every
+   * few minutes. An "ok" attempt resets it.
+   */
+  failures?: number;
 }
 
 /**
@@ -294,9 +300,10 @@ export interface PodAiAvailability {
   checkedAt: string;
   /**
    * When AI became available, as the pulls observed it (ISO): set by the
-   * first pull that reads "available" after one that did not (or after none),
-   * kept while it stays available, null while it is not. An `ai:available`
-   * hold resumes when this is later than its pause (`aiHoldMet`).
+   * first pull that reads "available" (AI runs: the composer is not blocked,
+   * so low credits count) after one that did not (or after none), kept while
+   * it stays available, null while it is not. An `ai:available` hold is met
+   * while this is set and `checkedAt` is after its pause (`aiHoldMet`).
    */
   availableSince: string | null;
 }

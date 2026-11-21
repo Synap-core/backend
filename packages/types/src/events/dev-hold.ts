@@ -18,7 +18,7 @@
  *            the pause began; with `to`, only that verdict. Job names are
  *            reused, so an earlier run of the same name says nothing.
  *  - `ai:`   no dev event: the pod's own pull of its AI availability
- *            (`aiHoldMet`) says AI came back after the pause began.
+ *            (`aiHoldMet`) reads AI available, checked after the pause began.
  */
 
 import {
@@ -160,20 +160,22 @@ export function holdDevRefMet(
 }
 
 /**
- * Is AI available again for a hold on `ai:available`? Yes when the pod's
- * pull observed AI come back AFTER the pause began (`availableSince`: when
- * the current run of "available" began, as the pull recorded it). AI that
- * was already available when the pause began says nothing: the hold was
- * written because a call failed anyway (an operator state the Control Plane
- * does not see), so only a NEW recovery wakes it, never every pull.
+ * Is AI available again for a hold on `ai:available`? Yes while the pod's
+ * LATEST pull reads available (`availableSince` set) and the Control Plane
+ * computed that answer AFTER the pause began (`checkedAt`). Met while true,
+ * not only on the transition: a pull that saw AI come back before a regrade
+ * could run (the AI service's entitlement cache still refusing) must not
+ * strand the hold. Only payer states hold on `ai:available` (the pull sees
+ * them); the AI service's own states retry on a date instead.
  */
 export function aiHoldMet(
   /** When the pause began (`RecordedHold.since`). */
   since: string,
-  availableSince: string | null | undefined
+  latest:
+    { availableSince: string | null; checkedAt: string } | null | undefined
 ): boolean {
-  if (!availableSince) return false;
-  const at = Date.parse(availableSince);
+  if (!latest?.availableSince) return false;
+  const checked = Date.parse(latest.checkedAt);
   const from = Date.parse(since);
-  return Number.isFinite(at) && Number.isFinite(from) && at > from;
+  return Number.isFinite(checked) && Number.isFinite(from) && checked > from;
 }

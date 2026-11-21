@@ -149,7 +149,7 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
   const change = (
     previous: PodAiAvailability | null | undefined,
     current: PodAiAvailability
-  ) => ({ previous, current, becameAvailable: false });
+  ) => ({ previous, current, becameAvailable: false, stale: false });
 
   it("empty: the pushed item to every payer, in the deck's words, keyed by state, mark and reset", async () => {
     const d = deps();
@@ -197,6 +197,47 @@ describe("the payers' notices (notifyAiAvailabilityChange)", () => {
       { type: "ai.credits_low", groupKey: expect.stringContaining(":20:") },
       { type: "ai.credits_low", groupKey: expect.stringContaining(":10:") },
     ]);
+  });
+
+  it("a payment due while AI still runs (the plan's grace): the status notice, in the deck's payment words", async () => {
+    const graceOf = (s: PodAiAvailability): PodAiAvailability => ({
+      ...s,
+      billing: {
+        ...(s.billing as Extract<
+          PodAiAvailability["billing"],
+          { readFailed: false }
+        >),
+        action: "fix_payment",
+        actionUrl: "https://synap.live/account/billing",
+      },
+    });
+    const d = deps();
+    const out = await notifyAiAvailabilityChange(
+      change(stored("ok"), graceOf(stored("ok"))),
+      d.deps as never
+    );
+    expect(out).toEqual({
+      action: "notified",
+      type: "ai.payment_due",
+      sent: 2,
+    });
+    expect(d.created[0]).toMatchObject({
+      type: "ai.payment_due",
+      groupKey: "ai:payment_due:-:2026-12-01T00:00:00.000Z",
+      data: { title: "Payment needed" },
+    });
+    // Still in grace: nothing new. Paid: the notice is cleared.
+    await notifyAiAvailabilityChange(
+      change(graceOf(stored("ok")), graceOf(stored("ok"))),
+      d.deps as never
+    );
+    expect(d.created).toHaveLength(2);
+    expect(
+      await notifyAiAvailabilityChange(
+        change(graceOf(stored("ok")), stored("ok")),
+        d.deps as never
+      )
+    ).toEqual({ action: "cleared" });
   });
 
   it("back to available: the open notices are cleared, nothing new", async () => {

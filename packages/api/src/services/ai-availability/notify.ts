@@ -5,6 +5,8 @@
  * only when the state or its mark (the crossed low threshold) changed:
  *
  *   credits_low                            `ai.credits_low`, the status banner
+ *   available, the CP asks to fix payment  `ai.payment_due`, the status banner
+ *   (the plan's grace period, decision 4)
  *   credits_empty, suspended, not_entitled `ai.unavailable`, an item, pushed
  *   anything else (available, an operator
  *   state, a read the CP could not make)   no new notice
@@ -23,6 +25,7 @@ import {
   inArray,
   notifications,
   NotificationStatus,
+  type PodAiAvailability,
   type PodAiAvailabilityChange,
 } from "@synap/database";
 import {
@@ -37,8 +40,13 @@ const logger = createLogger({ module: "ai-availability-notify" });
 
 /** Spelled as `type:` so the producer tripwire sees this file produce them. */
 const lowNotice = { type: "ai.credits_low" } as const;
+const paymentDueNotice = { type: "ai.payment_due" } as const;
 const unavailableNotice = { type: "ai.unavailable" } as const;
-const AI_NOTICE_TYPES = [lowNotice.type, unavailableNotice.type];
+const AI_NOTICE_TYPES = [
+  lowNotice.type,
+  paymentDueNotice.type,
+  unavailableNotice.type,
+];
 
 /** The states a payer is told about, and which notice tells them. */
 const NOTICE_OF: Partial<Record<string, string>> = {
@@ -48,15 +56,31 @@ const NOTICE_OF: Partial<Record<string, string>> = {
   not_entitled: unavailableNotice.type,
 };
 
-/** The owner's state and mark; null = unknown (no answer, or billing unread). */
+/**
+ * The owner's state, its mark and whether a payment is due while AI still
+ * runs (the CP's action is `fix_payment` on an available state: the plan's
+ * grace period); null = unknown (no answer, or billing unread).
+ */
 function markOf(
-  a: AiAvailability | null
-): { kind: string; mark: number | null; resetsAt: string | null } | null {
+  a: AiAvailability | null,
+  stored: PodAiAvailability | null | undefined
+): {
+  kind: string;
+  mark: number | null;
+  resetsAt: string | null;
+  paymentDue: boolean;
+} | null {
   if (!a || a.kind === null) return null;
+  const billing = stored?.billing;
   return {
     kind: a.kind,
     mark: a.thresholdPct ?? null,
     resetsAt: a.resetsAt ?? null,
+    paymentDue:
+      a.kind === "ok" &&
+      billing !== undefined &&
+      !billing.readFailed &&
+      billing.action === "fix_payment",
   };
 }
 
@@ -100,17 +124,29 @@ export async function notifyAiAvailabilityChange(
 ): Promise<AiAvailabilityNotifyOutcome> {
   const now = aiAvailabilityViewOf(change.current, "payer").availability;
   const was = markOf(
-    aiAvailabilityViewOf(change.previous, "payer").availability
+    aiAvailabilityViewOf(change.previous, "payer").availability,
+    change.previous
   );
-  const is = markOf(now);
+  const is = markOf(now, change.current);
   // A read the CP could not make says nothing: no notice, none cleared.
   if (!is) return { action: "none" };
-  if (was && was.kind === is.kind && was.mark === is.mark) {
+  if (
+    was &&
+    was.kind === is.kind &&
+    was.mark === is.mark &&
+    was.paymentDue === is.paymentDue
+  ) {
     return { action: "none" };
   }
   await deps.dismissOpen();
-  const type = NOTICE_OF[is.kind];
-  const copy = now ? aiAvailabilityCopy(now) : null;
+  const type = is.paymentDue ? paymentDueNotice.type : NOTICE_OF[is.kind];
+  // A payment due while AI runs is said in the deck's words for the payment
+  // the payer owes (the `suspended` line and its "fix payment" action).
+  const copy = is.paymentDue
+    ? aiAvailabilityCopy({ kind: "suspended", action: "fix_payment" })
+    : now
+      ? aiAvailabilityCopy(now)
+      : null;
   if (!type || !copy) return { action: "cleared" };
 
   const recipients = await deps.recipients();
@@ -122,7 +158,7 @@ export async function notifyAiAvailabilityChange(
         userId,
         workspaceId: null,
         sourceType: "system",
-        groupKey: `ai:${is.kind}:${is.mark ?? "-"}:${is.resetsAt ?? "-"}`,
+        groupKey: `ai:${is.paymentDue ? "payment_due" : is.kind}:${is.mark ?? "-"}:${is.resetsAt ?? "-"}`,
         data: { title: copy.title, action: copy.cta ?? "" },
       });
       if (id) sent++;

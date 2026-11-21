@@ -154,16 +154,25 @@ describe("holdDevRefNamed", () => {
 });
 
 describe("aiHoldMet", () => {
-  it("met only when AI came back AFTER the pause began", () => {
-    expect(aiHoldMet(SINCE, at(5))).toBe(true);
-    // Available before the pause: the call failed anyway (an operator state
-    // the CP does not see), so that availability is no news.
-    expect(aiHoldMet(SINCE, at(-5))).toBe(false);
-    expect(aiHoldMet(SINCE, SINCE)).toBe(false);
-    // Not available now (null), or a stamp that does not parse: not met.
+  const read = (availableMin: number | null, checkedMin: number) => ({
+    availableSince: availableMin === null ? null : at(availableMin),
+    checkedAt: at(checkedMin),
+  });
+  it("met while the latest pull reads available, checked after the pause began", () => {
+    expect(aiHoldMet(SINCE, read(5, 6))).toBe(true);
+    // Available since BEFORE the pause, checked after it: still met. The
+    // transition may have been seen before the regrade could pass.
+    expect(aiHoldMet(SINCE, read(-30, 6))).toBe(true);
+    // An answer computed before (or at) the pause says nothing about it.
+    expect(aiHoldMet(SINCE, read(-30, -5))).toBe(false);
+    expect(aiHoldMet(SINCE, read(-30, 0))).toBe(false);
+    // Not available now, never pulled, or a stamp that does not parse.
+    expect(aiHoldMet(SINCE, read(null, 6))).toBe(false);
     expect(aiHoldMet(SINCE, null)).toBe(false);
     expect(aiHoldMet(SINCE, undefined)).toBe(false);
-    expect(aiHoldMet(SINCE, "not a date")).toBe(false);
-    expect(aiHoldMet("not a date", at(5))).toBe(false);
+    expect(
+      aiHoldMet(SINCE, { availableSince: at(5), checkedAt: "not a date" })
+    ).toBe(false);
+    expect(aiHoldMet("not a date", read(5, 6))).toBe(false);
   });
 });

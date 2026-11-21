@@ -15,13 +15,17 @@
  *     the pause). Either way the ONE rule decides (`holdDevRefMet`,
  *     `@synap-core/types`) over the facts the hold's owner recorded.
  *   - `until.moves` = `ai:available`: the pod's pull of its AI availability
- *     (`cp-entitlement-sync`) sends this queue `devFact: "ai:available"` when
- *     it sees AI come back, and the hourly sweep re-checks every AI hold.
- *     Met = AI became available after the pause began (`aiHoldMet`, over the
- *     pod's own record, not the owner's events: availability is the pod's).
- *     A session's CHECK GATE held on it is RE-GRADED, never only un-paused
- *     (the registered `AiHeldGateRegrader`): a pass moves on, AI still out
- *     keeps it held, a real verdict holds it as the check's own hold.
+ *     (`cp-entitlement-sync`) wakes this queue (`wakeAiHolds`) when it sees
+ *     AI come back and on every tick while AI holds wait and AI is
+ *     available; the hourly sweep re-checks every AI hold too. Met while the
+ *     latest pull reads available, checked after the pause began
+ *     (`aiHoldMet`, over the pod's own record: availability is the pod's).
+ *   - A session's CHECK GATE hold (`check:<stage>`, on AI or on a dated
+ *     retry) is RE-GRADED when it comes due, never only un-paused (the
+ *     registered `AiHeldGateRegrader`): a pass moves on, a judge that still
+ *     cannot run keeps it held, a real verdict holds it as the check's own
+ *     hold. An AI hold still held is woken again once the AI service's
+ *     entitlement cache has caught up (`AI_HOLD_RETRY_AFTER_S`).
  *   - `until.moves` naming a WAIT (`answer:<session>/<slot>`,
  *     `proposal:<id>`, plan 07f8a997 W1 part C): the answer door
  *     (`answerExpectedOutput`) sends this queue `waits` when an answer lands;
@@ -70,6 +74,7 @@ import {
 import {
   dispatchLifecycleTransition,
   emitSideEffects,
+  getBoss,
   registerReactor,
   type Reactor,
 } from "@synap/events";
@@ -104,6 +109,32 @@ import type {
 const logger = createLogger({ module: "hold-resume" });
 
 export const HOLD_RESUME_QUEUE = "hold-resume";
+
+/**
+ * How long a check gate still held after AI came back waits before it is
+ * graded again: the AI service caches a pod's entitlement for 120 s, so a
+ * top-up can read "available" on the Control Plane while the judge is still
+ * refused.
+ */
+export const AI_HOLD_RETRY_AFTER_S = 120;
+
+/**
+ * Wake the holds that wait on AI (`until: ai:available`): now, or after
+ * `afterSeconds` (one delayed wake per window, however many ask for it).
+ */
+export async function wakeAiHolds(afterSeconds = 0): Promise<void> {
+  await getBoss().send(
+    HOLD_RESUME_QUEUE,
+    { devFact: HOLD_AI_MOVES } satisfies HoldResumeJobData,
+    afterSeconds > 0
+      ? {
+          startAfter: afterSeconds,
+          singletonKey: "hold-resume:ai-retry",
+          singletonSeconds: afterSeconds,
+        }
+      : {}
+  );
+}
 /** Hourly: a hold whose date has come resumes within the hour. */
 export const HOLD_RESUME_CRON = "23 * * * *";
 
@@ -317,10 +348,10 @@ async function devHoldsMet(
     }
     return [{ h, ref, until, moves: until.moves }];
   });
-  const [rows, availableSince] = await Promise.all([
+  const [rows, latest] = await Promise.all([
     dev.length > 0 ? readDevFactRows(dev) : Promise.resolve([]),
     ai.length > 0
-      ? readPodAiAvailability().then((r) => r.availability?.availableSince)
+      ? readPodAiAvailability().then((r) => r.availability)
       : Promise.resolve(null),
   ]);
   return [
@@ -328,7 +359,7 @@ async function devHoldsMet(
       holdDevRefMet(ref, until, h.hold.since, rows[i]!) ? [{ h, moves }] : []
     ),
     ...ai.flatMap((h) =>
-      aiHoldMet(h.hold.since, availableSince)
+      aiHoldMet(h.hold.since, latest)
         ? [{ h, moves: HOLD_AI_MOVES, ai: true as const }]
         : []
     ),
@@ -527,12 +558,15 @@ export async function handleHoldResume(
   const woken = Boolean(moved || data.devFact || data.waits);
   let resumed = 0;
   let failure: unknown = null;
+  let aiStillHeld = false;
   for (const { h, reason, ai } of held) {
     try {
       // A check gate's own hold is never un-paused here: only its check
       // passing releases it (a stale session's included: it is left as is).
-      if (ai && isCheckGateHold(h)) {
-        if ((await regradeAiHeldGate(h)) === "passed") resumed++;
+      if (isCheckGateHold(h)) {
+        const graded = await regradeAiHeldGate(h);
+        if (graded === "passed") resumed++;
+        if (graded === "held" && ai) aiStillHeld = true;
         continue;
       }
       if (await resumeHold(h, reason)) resumed++;
@@ -546,6 +580,9 @@ export async function handleHoldResume(
       );
     }
   }
+  // AI is back by the pull but the judge still could not run: the AI
+  // service's entitlement cache lags a top-up. Graded again once it caught up.
+  if (aiStillHeld) await wakeAiHolds(AI_HOLD_RETRY_AFTER_S);
   // A move happens once: a failed wake is retried by pg-boss (what already
   // resumed is no longer held, so a retry never moves it twice). The hourly
   // sweep needs no retry: the next tick finds the hold still due.
@@ -570,18 +607,20 @@ export async function handleHoldResume(
 }
 
 /**
- * What the api's check gate does when the AI it waited on is back
- * (`regradeAiHeldGate`, api `focus-sessions/ai-held-gate.ts`): it grades the
- * stage again, and a pass moves on. `not_gate` = the session no longer
- * stands paused at that gate (closed, staled, moved): nothing is done. A
- * hold on `ai:available` that is not a check gate's (an agent's own pause)
- * resumes like any hold. `@synap/api` depends on this package, so apps/api
+ * What the api's check gate does when the hold its AI judge left comes due
+ * (AI is back, or its retry date came; `regradeAiHeldGate`, api
+ * `focus-sessions/ai-held-gate.ts`): it grades the stage again, and a pass
+ * moves on. `not_gate` = the session no longer stands paused at that gate
+ * (closed, staled, moved): nothing is done. A hold on `ai:available` that is
+ * not a check gate's (an agent's own pause) resumes like any hold. `@synap/api` depends on this package, so apps/api
  * fills the slot at boot (`registerAiHeldGateRegrader`, as
  * `registerHoldResumeFollowUp`).
  */
 export type AiHeldGateRegrader = (held: {
   sessionId: string;
   userId: string;
+  /** What the hold that came due waited on: the same wait still held is kept. */
+  until: CurrentHold["hold"]["until"];
 }) => Promise<"not_gate" | "passed" | "held">;
 
 let aiHeldGateRegrader: AiHeldGateRegrader | null = null;
@@ -607,7 +646,11 @@ async function regradeAiHeldGate(
     );
     return "held";
   }
-  return aiHeldGateRegrader({ sessionId: h.subjectId, userId: h.userId });
+  return aiHeldGateRegrader({
+    sessionId: h.subjectId,
+    userId: h.userId,
+    until: h.hold.until,
+  });
 }
 
 function devFactReason(moves: string): string {
