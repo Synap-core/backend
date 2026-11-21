@@ -24,25 +24,62 @@ export function narrowStatusOfInclude(asked: readonly StatusOfInclude[]): {
   return { include, withheld };
 }
 
-/** Keys of a full answer that read beyond the subject (see `statusOfReach`). */
-const BEYOND_THE_SUBJECT = [
-  "waitingOn",
-  "blocker",
-  "nextMove",
-  "hold",
-  "roles",
-  "account",
-  "reactions",
-  "links",
-  "rollup",
-  "signals",
-  "work",
+/**
+ * ALLOW-LIST of the answer's own keys a narrowed key keeps. A field added to
+ * `StatusOf` later is withheld until someone lists it here
+ * (`status-of-narrowed.test.ts` pins this exact set). `live` (is an agent
+ * working on a session now), `stuck` (its own step's rule), `category` and
+ * `tone` (its status word's class) are derived from the subject's own row, so
+ * they are kept; everything that reads proposals, slots, holds or roles by
+ * subject id is not listed.
+ */
+export const STATUS_OF_NARROWED_ANSWER_KEYS = [
+  "id",
+  "type",
+  "name",
+  "status",
+  "label",
+  "category",
+  "tone",
+  "since",
+  "sinceMeasured",
+  "stuck",
+  "live",
+  "moves",
+  "history",
+  "link",
 ] as const;
+
+/**
+ * ALLOW-LIST of history events: a status move and a stage entered, cut to
+ * their plain fields. Dropped: wait episodes (their `ref`, `on` and `reason`
+ * name a proposal, session or person read with no grant clause), a role's
+ * events (kept only by the facet rule), and every actor, hold, cause and
+ * reason, which name people and other objects.
+ */
+const HISTORY_EVENT_FIELDS: Record<string, readonly string[]> = {
+  status_moved: ["id", "kind", "at", "from", "to", "category"],
+  stage_entered: ["id", "kind", "at", "stageKey", "fromStage", "via"],
+};
+
+function narrowHistory(history: unknown): unknown {
+  if (!history || typeof history !== "object") return history;
+  const h = history as { events?: unknown; truncated?: unknown };
+  if (!Array.isArray(h.events)) return { status: "unavailable" };
+  const events = h.events.flatMap((e: Record<string, unknown>) => {
+    const fields = HISTORY_EVENT_FIELDS[String(e.kind)];
+    if (!fields || e.role != null || e.facetId != null) return [];
+    return [Object.fromEntries(fields.map((k) => [k, e[k]]))];
+  });
+  return { events, truncated: h.truncated === true };
+}
 
 /** One answer cut back; an `unknown` id is returned as is. */
 export function narrowStatusOfAnswer(answer: StatusOfAnswer): StatusOfAnswer {
   if (answer.type === "unknown") return answer;
-  const out: Record<string, unknown> = { ...answer };
-  for (const key of BEYOND_THE_SUBJECT) delete out[key];
+  const src = answer as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of STATUS_OF_NARROWED_ANSWER_KEYS)
+    if (key in src) out[key] = key === "history" ? narrowHistory(src[key]) : src[key];
   return out as unknown as StatusOfAnswer;
 }

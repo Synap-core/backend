@@ -25,7 +25,19 @@ const FULL_ANSWER = {
   nextMove: { kind: "x" },
   work: { items: [] },
   roles: [],
-  history: { events: [], truncated: false },
+  history: {
+    events: [
+      {
+        id: "w1",
+        kind: "wait_episode",
+        at: "t",
+        on: "proposal",
+        reason: "waits",
+        ref: { kind: "proposal", id: "foreign-id", url: "u", label: "Foreign" },
+      },
+    ],
+    truncated: false,
+  },
   link: "l",
 };
 
@@ -87,6 +99,8 @@ describe("Hub REST GET /status-of: a key narrowed by its grant", () => {
       history: { events: [], truncated: false },
       link: "l",
     });
+    // The wait episode's foreign ref never reaches a narrowed key.
+    expect(JSON.stringify(body)).not.toContain("foreign-id");
     // An id the key cannot read is as unknown as one that does not exist.
     expect(body.statusOf[1]).toEqual({ id: "gone", type: "unknown" });
   });
