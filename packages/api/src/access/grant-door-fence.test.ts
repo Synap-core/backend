@@ -1611,7 +1611,10 @@ describe("GET /status-of: the per-subject status door for a pinned key", () => {
   });
   const FULL = key({ permissions: ["*"] });
   const UNPINNED = key({ permissions: aiDefaultCapabilities() });
-  const NO_ENTITY = key({ permissions: ["session.read"], workspaceIds: ["w1"] });
+  const NO_ENTITY = key({
+    permissions: ["session.read"],
+    workspaceIds: ["w1"],
+  });
 
   it("admits a space-pinned key holding entity.read, and not one without it", () => {
     expect(restDoorAllowed("GET", "/status-of", PINNED)).toBe(true);

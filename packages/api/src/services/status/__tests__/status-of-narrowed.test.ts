@@ -137,7 +137,12 @@ describe("narrowStatusOfAnswer", () => {
     });
     // Nothing of the foreign object survives anywhere in the answer.
     const wire = JSON.stringify(out);
-    for (const leak of ["foreign-proposal-id", "Foreign proposal", "Bob", "Acme"])
+    for (const leak of [
+      "foreign-proposal-id",
+      "Foreign proposal",
+      "Bob",
+      "Acme",
+    ])
       expect(wire).not.toContain(leak);
   });
 

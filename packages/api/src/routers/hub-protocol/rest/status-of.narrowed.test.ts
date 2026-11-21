@@ -82,7 +82,10 @@ describe("Hub REST GET /status-of: a key narrowed by its grant", () => {
   it("a pinned app is answered moves and history only, the rest named withheld", async () => {
     const res = await send(
       `/status-of?ids=${ID}&include=work,history,signals`,
-      grant({ permissions: ["entity.read", "session.read"], workspaceIds: ["w1"] })
+      grant({
+        permissions: ["entity.read", "session.read"],
+        workspaceIds: ["w1"],
+      })
     );
     expect(res.status).toBe(200);
     expect(includeOf(0)).toEqual(["history"]);

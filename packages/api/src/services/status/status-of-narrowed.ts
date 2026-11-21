@@ -80,6 +80,7 @@ export function narrowStatusOfAnswer(answer: StatusOfAnswer): StatusOfAnswer {
   const src = answer as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const key of STATUS_OF_NARROWED_ANSWER_KEYS)
-    if (key in src) out[key] = key === "history" ? narrowHistory(src[key]) : src[key];
+    if (key in src)
+      out[key] = key === "history" ? narrowHistory(src[key]) : src[key];
   return out as unknown as StatusOfAnswer;
 }

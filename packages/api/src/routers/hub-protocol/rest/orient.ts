@@ -119,7 +119,9 @@ export function registerOrientRoutes(app: HubHono): void {
         400
       );
     }
-    const include = statusOfIncludeInput.safeParse(split(c.req.query("include")));
+    const include = statusOfIncludeInput.safeParse(
+      split(c.req.query("include"))
+    );
     if (!include.success) {
       return c.json(
         {
