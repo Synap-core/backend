@@ -252,7 +252,7 @@ export function kindVisibleWhere(lens: {
           eq(profiles.profileKind, "kind"),
           eq(profiles.entityScope, "pod"),
           homed,
-          seen ? inArray(profiles.workspaceId, seen) : undefined
+          undefined
         )
       : undefined,
   ];
@@ -263,7 +263,7 @@ export function kindVisibleWhere(lens: {
   }
   if (workspaceId) {
     branches.push(
-      and(homed, eq(profiles.workspaceId, workspaceId)),
+      and(eq(profiles.scope, ProfileScope.WORKSPACE), eq(profiles.workspaceId, workspaceId)),
       and(eq(profiles.scope, ProfileScope.SHARED), grantedIn(workspaceId))
     );
   } else if (seen) {
@@ -621,7 +621,7 @@ export class ProfileRepository {
         objectType: "profile",
         objectId: profileId,
         workspaceId,
-        grantedBy: grantedBy ?? null,
+        grantedBy: null,
       })
       .onConflictDoNothing();
   }

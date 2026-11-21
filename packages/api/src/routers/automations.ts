@@ -2837,9 +2837,6 @@ export const automationsRouter = router({
           });
         }
         assertFilteredAiFanout(input.flowDefinition);
-        placeFlowByPlaybooks(updateFlow.playbooksById, existing.workspaceId, {
-          adopt: false,
-        });
 
         // Keep the template-friendly skillName form executable on update too,
         // matching create's pre-persist normalization.

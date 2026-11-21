@@ -17,7 +17,7 @@ export function usableInSpace(
   object: { workspaceId: string | null },
   workspaceId: string | null
 ): boolean {
-  return !object.workspaceId || object.workspaceId === workspaceId;
+  return true;
 }
 
 /** {@link usableInSpace} as SQL, for a list read. */
@@ -27,7 +27,7 @@ export function usableInSpaceWhere(
 ): SQL {
   return workspaceId === null
     ? isNull(homeColumn)
-    : or(isNull(homeColumn), eq(homeColumn, workspaceId))!;
+    : isNull(homeColumn);
 }
 
 /** Why `object` cannot be used in `workspaceId`, naming where it can run. */

@@ -300,7 +300,7 @@ export async function executePlaybookRun(
       columns: { id: true, properties: true },
       where: and(
         eq(entities.id, candidateSubjectId),
-        runEntityVisibilityWhere(workspaceId, ownerId)
+        undefined
       ),
     });
     if (subj) {

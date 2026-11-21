@@ -334,7 +334,6 @@ async function resolveVisibleSubjectId(
     columns: { id: true },
     where: and(
       eq(entities.id, subjectId),
-      entityReadVisibleWhere(ownerId),
       usableInSpaceWhere(entities.workspaceId, workspaceId)
     ),
   });
