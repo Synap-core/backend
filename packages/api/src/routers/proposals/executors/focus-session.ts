@@ -56,6 +56,7 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import { applyUnitBlockerEdits } from "../../../services/links/unit-blockers.js";
 import {
   findOpenSessionTwin,
   sessionTwinLockKey,
@@ -644,6 +645,43 @@ export function registerFocusSessionExecutors(): void {
             if (r.status === "failed") {
               lineageRefusals.push(
                 `Blocker session ${r.blockerSessionId} was not linked (${r.reason})${r.message ? `: ${r.message}` : ""}.`
+              );
+            }
+          }
+        }
+      }
+
+      // A decision (entity) or a goal it waits on, carried the same way and
+      // floored on the same principal: THE governed dependency door, applied
+      // as this approval (no second gate).
+      const idsOf = (v: unknown) =>
+        Array.isArray(v)
+          ? v.filter((id): id is string => typeof id === "string")
+          : [];
+      const unitAdd = {
+        entity: idsOf(innerData.blockedByEntityIds),
+        track: idsOf(innerData.blockedByTrackIds),
+      };
+      if (created && unitAdd.entity.length + unitAdd.track.length > 0) {
+        const floorUserId = proposal.subjectUserId;
+        if (!floorUserId) {
+          lineageRefusals.push(
+            `Blockers ${[...unitAdd.entity, ...unitAdd.track].join(", ")} were not linked: the proposal records no owner (subject_user_id).`
+          );
+        } else {
+          const { links } = await applyUnitBlockerEdits({
+            from: { type: "session", id: created.id },
+            add: unitAdd,
+            remove: { entity: [], track: [] },
+            userId: floorUserId,
+            sessionId: created.id,
+            approvedProposalId: input.proposalId,
+            door: "focus_session/create approval",
+          });
+          for (const r of links) {
+            if (r.status === "failed") {
+              lineageRefusals.push(
+                `Blocker ${r.blockerEntityId ?? r.blockerTrackId} was not linked (${r.reason})${r.message ? `: ${r.message}` : ""}.`
               );
             }
           }
