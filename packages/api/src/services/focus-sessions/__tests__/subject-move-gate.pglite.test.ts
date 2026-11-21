@@ -44,6 +44,8 @@ const h = vi.hoisted(() => {
     db: null as unknown,
     /** The left stage's criterion verdicts the check evaluator reports. */
     evaluations: [] as Array<{ criterionKey: string; verdict: string }>,
+    /** What the evaluator reports it could not grade (`evaluate.ts` results). */
+    results: [] as Array<Record<string, unknown>>,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -121,7 +123,7 @@ vi.mock("../../../utils/event-backed-proposal.js", () => ({
 vi.mock("../evaluations/evaluate.js", () => ({
   evaluateSession: async () => ({
     status: "evaluated",
-    results: [],
+    results: h.results,
     // A stored criterion's shape (`readCriteria`): the gate reads it through
     // the outcome projection (W6), which reads its check.
     criteria: [
@@ -147,6 +149,7 @@ vi.mock("../../../utils/domain-event-bridge.js", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import { moveStatus } from "../../lifecycle/move-status.js";
 import { advanceSessionStage } from "../advance-stage.js";
+import { refuseAgentGateBypass } from "../gate-bypass-floor.js";
 import { registerPlaybookStageGateExecutors } from "../../../routers/proposals/executors/playbook-stage-gate.js";
 import { proposalExecRegistry } from "../../../routers/proposals/execution-registry.js";
 import { extractProposalName } from "../../proposals/fingerprint.js";
@@ -322,6 +325,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   h.evaluations = [];
+  h.results = [];
 });
 
 describe("an agent's move into a HUMAN-gated status goes through the gate", () => {
@@ -481,6 +485,70 @@ describe("an agent's move INTO a check-gated status", () => {
       status: "active",
       current_stage: "write",
     });
+  });
+});
+
+describe("an agent's move into a check whose AI judge could not run", () => {
+  /** What `evaluate.ts` reports for a judge the IS refused (402, credits). */
+  const NOT_JUDGED =
+    "The AI judge could not run: This pod is out of AI credits, so chat and agents are paused. Captures still save. Retrying will not help.";
+
+  it("says the gate HOLDS because the judge could not run, never that the check failed", async () => {
+    h.results = [
+      {
+        key: "qualified",
+        status: "skipped",
+        reason: NOT_JUDGED,
+        failureClass: "credits_empty",
+      },
+    ];
+    const deal = await seedDeal("draft");
+    const sessionId = await sessionAt(deal, "qualify");
+
+    const res = await moveStatus({
+      entityId: deal,
+      to: "writing",
+      actor: AS_AGENT,
+    });
+
+    expect(res).toMatchObject({ status: "refused", code: "STAGE_GATE" });
+    const reason = (res as { reason: string }).reason;
+    expect(reason).toContain(`whose check holds: ${NOT_JUDGED}`);
+    expect(reason).toContain('the owner can grade "qualified" by hand');
+    expect(reason).not.toContain("did not pass");
+    expect(await statusOf(deal)).toBe("draft");
+    // Held at the gate, never sent back to onFail: nothing was judged.
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "write",
+    });
+
+    // The floor then refuses the agent's resume with the gate's own words.
+    const [row] = (
+      await q<{
+        id: string;
+        status: string;
+        current_stage: string | null;
+        playbook_id: string | null;
+        metadata: unknown;
+      }>(
+        `select id, status, current_stage, playbook_id, metadata from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows;
+    const refusal = await refuseAgentGateBypass({
+      session: {
+        id: row!.id,
+        status: row!.status,
+        currentStage: row!.current_stage,
+        playbookId: row!.playbook_id,
+        metadata: row!.metadata,
+      },
+      toStatus: "active",
+    });
+    expect(refusal).toContain("A stage check on this session holds");
+    expect(refusal).toContain(NOT_JUDGED);
+    expect(refusal).not.toContain("has not passed");
   });
 });
 

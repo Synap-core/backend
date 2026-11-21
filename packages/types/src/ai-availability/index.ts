@@ -314,6 +314,14 @@ export interface AiAvailability {
   glyph: AiAvailabilityGlyph | null;
   /** The crossed low-credit threshold (20 / 10 / 5), `credits_low` only. */
   thresholdPct?: number;
+  /**
+   * `not_entitled` only: AI is switched off for the account
+   * (`account_inactive` on the wire) rather than missing from the plan. The
+   * deck says "AI is turned off", never "Your plan has no AI". Present only
+   * when the wire alone proved it: a CP read of the same state wins, since
+   * the CP is the SSOT for the plan.
+   */
+  switchedOff?: true;
   resetsAt?: string;
   /** Store this on dismiss; a stored key that no longer matches re-surfaces. */
   dismissKey: string | null;
@@ -435,6 +443,12 @@ export function resolveAiAvailability(
     else action = canTopUp ? "top_up" : "upgrade";
   }
 
+  const switchedOff =
+    kind === "not_entitled" &&
+    !fromCp &&
+    failureKind === kind &&
+    input.failureCode === "account_inactive";
+
   const thresholdPct =
     kind === "credits_low" && fromCp && cp.threshold != null
       ? cp.threshold
@@ -469,6 +483,7 @@ export function resolveAiAvailability(
     tone: spec.tone,
     glyph: spec.glyph,
     ...(thresholdPct !== undefined ? { thresholdPct } : {}),
+    ...(switchedOff ? { switchedOff: true as const } : {}),
     ...(resetsAt !== undefined ? { resetsAt } : {}),
     dismissKey,
     dismissScope: spec.dismiss,
@@ -478,6 +493,35 @@ export function resolveAiAvailability(
       banner: kind !== "ok",
       composerHint: spec.blocksComposer,
     },
+  };
+}
+
+// ── One refusal, no billing read ────────────────────────────────────────────
+
+/**
+ * The availability ONE refusal proves, for a surface that holds the refusal
+ * and nothing else: a chat error, an agent's tool reply, a bot message. It
+ * reads no billing, so it never guesses a CTA the way
+ * {@link resolveAiAvailability} defaults one for a viewer it knows: the
+ * action is the one the IS stated for this caller, `none` when it stated
+ * none, and an operator state never carries one. `null` for a transient or
+ * unclassified code: that is a fact about the request, not about
+ * availability.
+ */
+export function resolveAiRefusal(
+  code: string | null | undefined,
+  statedAction?: AiAction | null
+): Pick<AiAvailability, "kind" | "actor" | "action" | "switchedOff"> | null {
+  const kind = resolveAiFailureState(code);
+  if (kind === null) return null;
+  const { actor } = KIND[kind];
+  return {
+    kind,
+    actor,
+    action: actor === "payer" && statedAction ? statedAction : "none",
+    ...(kind === "not_entitled" && code === "account_inactive"
+      ? { switchedOff: true as const }
+      : {}),
   };
 }
 
@@ -501,22 +545,61 @@ export interface AiAvailabilityCopy {
   composerHint: string | null;
   /** The prefilled message an `ask_admin` CTA shares. */
   askAdminMessage: string | null;
+  /**
+   * The state in full sentences, for a surface with no button (an agent's
+   * tool reply, a chat error, a bot message): what stops, what still works,
+   * then the viewer's action in words when there is one. It states no
+   * billing rule: a reset date appears only when it arrived as data.
+   */
+  detail: string;
+}
+
+/** What a member asks the pod's owner to do, per payer state. */
+const ASK_OWNER_TO: Partial<Record<AiAvailabilityKind, string>> = {
+  credits_low: "top up credits",
+  credits_empty: "top up credits",
+  not_entitled: "renew the plan",
+  suspended: "fix the payment",
+};
+
+/** The action in words, for the {@link AiAvailabilityCopy.detail} line. */
+function actionLine(
+  kind: Exclude<AiAvailabilityKind, "ok">,
+  action: AiAction,
+  switchedOff: boolean
+): string | null {
+  switch (action) {
+    case "top_up":
+      return "Top up credits to continue.";
+    case "upgrade":
+      return "Upgrade or renew the plan to continue.";
+    case "fix_payment":
+      return "Update the payment method to continue.";
+    case "ask_admin": {
+      const what = switchedOff ? "turn AI back on" : ASK_OWNER_TO[kind];
+      return what ? `Ask the pod's owner to ${what}.` : null;
+    }
+    case "none":
+      return null;
+  }
 }
 
 /**
  * The words for an availability. Titles are the same for payer and member;
- * the role changes only the CTA (`ask_admin` vs a pay verb) and the ask.
+ * the role changes only the CTA (`ask_admin` vs a pay verb), the ask and the
+ * action sentence closing `detail`.
  */
 export function aiAvailabilityCopy(
-  a: Pick<AiAvailability, "kind" | "action" | "thresholdPct">,
+  a: Pick<AiAvailability, "kind" | "action" | "thresholdPct" | "switchedOff">,
   options: AiAvailabilityCopyOptions = {}
 ): AiAvailabilityCopy | null {
   if (a.kind === null || a.kind === "ok") return null;
   const resets = options.resetsLabel?.trim() || null;
-  const pod = options.podName?.trim() || "our pod";
+  const pod = options.podName?.trim() || "this pod";
   const cta =
     a.action === "none" ? null : resolveActionLabel(a.action, "imperative");
   const ask = (what: string) => (a.action === "ask_admin" ? what : null);
+  const switchedOff = a.kind === "not_entitled" && a.switchedOff === true;
 
   const deck: Record<
     Exclude<AiAvailabilityKind, "ok">,
@@ -524,6 +607,8 @@ export function aiAvailabilityCopy(
       title: string;
       composerHint: string | null;
       askAdminMessage: string | null;
+      /** `detail` before its action sentence. */
+      state: string;
     }
   > = {
     credits_low: {
@@ -533,49 +618,92 @@ export function aiAvailabilityCopy(
           : "Credits running low",
       composerHint: null,
       askAdminMessage: ask(
-        `Our Synap AI credits are running low — could you top up ${pod}?`
+        `Our AI credits are running low — could you top up ${pod}?`
       ),
+      state:
+        (a.thresholdPct != null
+          ? `${a.thresholdPct}% of this pod's AI credits are left.`
+          : "This pod's AI credits are running low.") +
+        (resets ? ` They reset on ${resets}.` : ""),
     },
     credits_empty: {
       title: "No AI credits left",
       composerHint: "Out of credits",
-      askAdminMessage: ask(
-        `Our Synap AI credits are out — could you top up ${pod}?`
-      ),
+      askAdminMessage: ask(`Our AI credits are out — could you top up ${pod}?`),
+      state:
+        "This pod is out of AI credits, so chat and agents are paused. Captures still save." +
+        (resets ? ` Credits reset on ${resets}.` : ""),
     },
-    not_entitled: {
-      title: "Your plan has no AI",
-      composerHint: "AI is off",
-      askAdminMessage: ask(
-        `Our Synap plan has no AI — could you renew it for ${pod}?`
-      ),
-    },
+    not_entitled: switchedOff
+      ? {
+          title: "AI is turned off",
+          composerHint: "AI is off",
+          askAdminMessage: ask(
+            `AI is turned off for ${pod} — could you turn it back on?`
+          ),
+          state:
+            "AI is turned off for this pod, so chat and agents are off. Captures still save.",
+        }
+      : {
+          title: "Your plan has no AI",
+          composerHint: "AI is off",
+          askAdminMessage: ask(
+            `Our plan has no AI — could you renew it for ${pod}?`
+          ),
+          state:
+            "This pod's plan does not include AI, so chat and agents are off. Captures still save.",
+        },
     suspended: {
       title: "Payment needed",
-      composerHint: "AI paused",
+      composerHint: "Payment needed",
       askAdminMessage: ask(
-        `Synap AI is paused on a failed payment — could you fix it for ${pod}?`
+        `AI is paused on a failed payment — could you fix it for ${pod}?`
       ),
+      state: "AI is paused because a payment failed. Captures still save.",
     },
+    // Operator states: nobody on the pod acts, so the words say so and offer
+    // no step. The reset date is the one fact that may arrive with them.
     budget_paused: {
-      title: resets ? `AI paused · resets ${resets}` : "AI paused",
-      composerHint: resets ? `Paused until ${resets}` : "AI paused",
+      title: resets ? `AI paused · resets on ${resets}` : "AI paused",
+      composerHint: resets ? `AI paused · resets on ${resets}` : "AI paused",
       askAdminMessage: null,
+      state:
+        "AI is paused for now, and nobody on this pod needs to act. Captures still save." +
+        (resets ? ` It resets on ${resets}.` : ""),
     },
     provider_issue: {
       title: "AI is having trouble",
       composerHint: null,
       askAdminMessage: null,
+      state:
+        "The AI provider is having trouble, so AI may not answer. Nobody on this pod needs to act. Captures still save.",
     },
     service_down: {
       title: "AI is offline",
       composerHint: null,
       askAdminMessage: null,
+      state:
+        "AI is offline for now, so it may not answer. Nobody on this pod needs to act. Captures still save.",
     },
   };
 
-  return { label: resolveStatusLabel(a.kind), cta, ...deck[a.kind] };
+  const { state, ...words } = deck[a.kind];
+  const then = actionLine(a.kind, a.action, switchedOff);
+  return {
+    label: resolveStatusLabel(switchedOff ? "account_inactive" : a.kind),
+    cta,
+    ...words,
+    detail: then ? `${state} ${then}` : state,
+  };
 }
+
+/**
+ * The recovery receipt: shown ONCE when availability moves from a blocking
+ * state back to `ok` after THIS viewer acted (opened a checkout). An
+ * unprovoked recovery shows nothing. The deck's words, so no surface writes
+ * its own.
+ */
+export const AI_AVAILABILITY_RECOVERED_TITLE = "AI is back";
 
 // ── Into the ONE lens status banner ─────────────────────────────────────────
 

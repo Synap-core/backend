@@ -72,10 +72,10 @@ const CASES = [
     },
     cls: "account_quota",
     code: "account_quota_exceeded",
-    // The IS quota resets with the calendar month; a plan change does not
-    // touch the balance before then, so the copy never offers an upgrade.
-    says: /monthly AI quota\. Retrying will not help \u2014 it resets at the start of next month\./,
-    never: /rate-limit|credential|try again|upgrade|billing period/i,
+    // The deck's credits_empty words: the pod states no reset rule it was
+    // not given as data, and never offers an upgrade.
+    says: /out of AI credits, so chat and agents are paused\. Captures still save\. Retrying will not help\./,
+    never: /rate-limit|credential|try again|upgrade|billing period|month/i,
   },
   {
     name: "plan does not include AI (403)",
@@ -100,7 +100,7 @@ const CASES = [
     },
     cls: "account_inactive",
     code: "account_inactive",
-    says: /AI access is turned off for this account/,
+    says: /AI is turned off for this pod/,
     never: /credential|provider/i,
   },
   {
@@ -116,8 +116,8 @@ const CASES = [
     },
     cls: "budget",
     code: "llm_budget_exceeded",
-    says: /shared AI capacity for this month/,
-    never: /provider|rate-limit|try again/i,
+    says: /AI is paused for now, and nobody on this pod needs to act/,
+    never: /provider|rate-limit|try again|operator|month/i,
   },
 ] as const;
 
