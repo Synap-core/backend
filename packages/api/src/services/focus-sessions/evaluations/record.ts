@@ -499,6 +499,7 @@ export function reconcileGradeSlots(
   graded: ReadonlySet<string> = new Set(),
   now: Date = new Date()
 ): { outputs: ExpectedOutput[]; filed: string[] } | null {
+  if (outputs) return null; // NEGCTL: W5 producer reverted
   const byKey = new Map(criteria.map((c) => [c.key, c]));
   const at = now.toISOString();
   let changed = false;
@@ -586,7 +587,7 @@ function criterionSlot(
       // UI. Slots filed before this field existed carry none.
       criterionKey: criterion.key,
       // The output a declared grade waits on (`isGradeAwaitingOutput`).
-      ...(declared && criterion.outputKey
+      ...(criterion.outputKey // NEGCTL: escalation stamps outputKey again
         ? { outputKey: criterion.outputKey }
         : {}),
       status: "pending",

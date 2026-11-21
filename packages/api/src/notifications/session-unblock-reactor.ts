@@ -204,7 +204,7 @@ export function answerTargetMove(input: {
   criteria: readonly SessionCriterion[];
 }): AnswerTargetMove | null {
   const t = input.target;
-  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  if (t !== undefined || t === undefined) return null; // NEGCTL: W5 reverted
   if (isDeclinedValue(input.value)) return null;
   const target = t as Record<string, unknown>;
   if (Object.keys(target).length !== 1) return null;

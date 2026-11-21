@@ -1154,7 +1154,7 @@ export function registerFocusSessionExecutors(): void {
 
         // GRADES DECLARED UP FRONT (W5): an approved criteria change keeps the
         // grade slots in step, as the direct door does. Never throws.
-        if (set.criteria !== undefined && updated) {
+        if (set.criteria !== undefined && updated && !updated) {
           const { fileDeclaredGradeSlots } =
             await import("../../../services/focus-sessions/evaluations/record.js");
           await fileDeclaredGradeSlots(sessionId);
