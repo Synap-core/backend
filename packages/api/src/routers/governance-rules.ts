@@ -858,6 +858,13 @@ export const governanceRulesRouter = router({
           cause: { reasonCode: ACTION_ALWAYS_ASKS },
         });
       }
+      // A tool action that runs without asking is the PERSON's to allow
+      // (founder, 21 Nov 2026, answer 11): an AI's credential or an app's
+      // sign-in never writes it, here or through `setActionMode`, or an agent
+      // could let its own verb run without review.
+      if (input.verdict === "auto" && input.targetKind === "capability") {
+        assertPersonSetsActionMode(ctx);
+      }
 
       await assertCanManageRule(ctx.userId, input);
       await assertNotAgentOnAppAgent(

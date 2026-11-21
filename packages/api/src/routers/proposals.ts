@@ -20,6 +20,11 @@ import {
 } from "@synap-core/types/presence";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
+import {
+  allowVerbWithoutReview,
+  assertMayAllowVerbWithoutReview,
+  verbAllowOffer,
+} from "../services/governance/verb-allow.js";
 import { reviewLaterProposalWhere } from "../services/proposals/proposal-fate.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -1573,6 +1578,9 @@ export const proposalsRouter = router({
         revertable,
         viewerCanReview,
         viewerCanReviewReason,
+        // The "allow without review" tick the card may offer (an agent-made
+        // verb's own pending proposal): the ONE derivation `approve` enforces.
+        allowWithoutReview: verbAllowOffer(proposal),
       };
     }),
 
@@ -1947,6 +1955,17 @@ export const proposalsRouter = router({
          * lift: a plain approve, and the answer carries no `allowedToday`.
          */
         allowToday: z.boolean().optional(),
+        /**
+         * "Allow without review" (founder, 21 Nov 2026; report 64a2f36b) —
+         * the pending proposal of a verb an AI made (`create_verb`) only.
+         * With `true`, approving it ALSO sets that verb to run on its own for
+         * every AI (`services/governance/verb-allow.ts`): the person's act,
+         * refused for an agent or an app's sign-in, a pod admin's (the row is
+         * pod-wide), never for a verb whose request writes outside the pod or
+         * that publishes in public. Refused (BAD_REQUEST) before anything is
+         * approved when it does not apply. Taken back on the tool's page.
+         */
+        allowWithoutReview: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2049,6 +2068,12 @@ export const proposalsRouter = router({
         }
         await assertCanAllowAgentToday(userId, proposal.agentUserId);
       }
+      // "Allow without review" rides ONLY the pending proposal of a verb an
+      // AI made, and the person who may set it: checked BEFORE anything is
+      // approved, so it is never half done.
+      const allowVerb = input.allowWithoutReview
+        ? await assertMayAllowVerbWithoutReview({ ...ctx, userId }, proposal)
+        : null;
 
       const approved = await applyProposalApproval({
         proposal,
@@ -2058,7 +2083,24 @@ export const proposalsRouter = router({
         background: true,
         presence: input.presence ?? null,
         door: "trpc.proposals.approve",
+        ...(allowVerb ? { setsActionMode: true } : {}),
       });
+      if (allowVerb) {
+        const allowed = await allowVerbWithoutReview({
+          userId,
+          verb: allowVerb,
+          proposalId: proposal.id,
+        });
+        // A tick that did not land is said where every receipt reads what
+        // did not land (`refusals`): the approval stands, the verb still asks.
+        return "failed" in allowed
+          ? {
+              ...approved,
+              allowedWithoutReview: allowed,
+              refusals: [...(approved.refusals ?? []), allowed.failed],
+            }
+          : { ...approved, allowedWithoutReview: allowed };
+      }
       if (!input.allowToday || !proposal.agentUserId) return approved;
       const allowedToday = await allowAgentForRestOfUtcDay({
         userId,

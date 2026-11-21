@@ -193,8 +193,10 @@ async function assertActionExists(action: string): Promise<void> {
 
 /**
  * "Approve always" names the request it came from: it must be a request the
- * person can see, to run THIS action. Anything else is refused, so a rule's
- * lineage never points at an unrelated request.
+ * person can see, to run THIS action, or to MAKE it (the verb's own
+ * `skill/create` proposal, whose approval may carry "allow without review",
+ * `verb-allow.ts`). Anything else is refused, so a rule's lineage never
+ * points at an unrelated request.
  */
 async function assertSourceRequest(
   sourceProposalId: string,
@@ -212,12 +214,17 @@ async function assertSourceRequest(
     .where(eq(proposals.id, sourceProposalId))
     .limit(1);
   const verbId = (row?.data as { verbId?: unknown } | null)?.verbId;
-  if (
-    !row ||
-    row.targetType !== "capability" ||
-    row.proposalType !== CAPABILITY_RUN_PROPOSAL_TYPE ||
-    verbId !== action
-  ) {
+  const madeName = (row?.data as { data?: { name?: unknown } } | null)?.data
+    ?.name;
+  const runsIt =
+    row?.targetType === "capability" &&
+    row.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE &&
+    verbId === action;
+  const makesIt =
+    row?.targetType === "skill" &&
+    row.proposalType === "create" &&
+    madeName === action;
+  if (!row || !(runsIt || makesIt)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `That request does not run "${action}".`,
