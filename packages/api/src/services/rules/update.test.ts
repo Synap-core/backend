@@ -57,9 +57,17 @@ vi.mock("@synap/database", async (importOriginal) => {
       select: () => ({ from: () => ({ where: async () => automationRows }) }),
       update: (table: unknown) => ({
         set: (values: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             if (table === actual.skills) skillUpdates.push(values);
             else automationUpdates.push(values);
+            const done = Promise.resolve([] as unknown[]) as Promise<
+              unknown[]
+            > & {
+              returning: () => Promise<unknown[]>;
+            };
+            done.returning = async () => [];
+            return done;
           },
         }),
       }),

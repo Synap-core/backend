@@ -20,43 +20,14 @@ import {
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
+import {
+  OPEN_STAGE_RUN_STATUSES,
+  STAGE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import type { PlaybookRunExternalAgent } from "./playbook-runs.js";
 
-/**
- * running        the step is being worked (by `runnerAgentUserId`, NULL =
- *                Synap AI);
- * waiting_tools  its runner's computer lacks a tool it needs: an install was
- *                asked for, the step waits;
- * waiting_child  the step IS a playbook (`uses`): a child run works it
- *                (slice 4); or it runs once per batch of items (`forEach`):
- *                child runs work it (`fanOut`);
- * waiting_start  its agent is bound for dispatch and starting its provider
- *                task waits for the person's approval (governance);
- * unreached      its agent is bound for dispatch and the step did not reach
- *                it (the start or the send failed): never "running" over a
- *                delivery nothing received;
- * done / failed / cancelled  it ended.
- */
-export const SESSION_STAGE_RUN_STATUSES = [
-  "running",
-  "waiting_tools",
-  "waiting_child",
-  "waiting_start",
-  "unreached",
-  "done",
-  "failed",
-  "cancelled",
-] as const;
-export type SessionStageRunStatus = (typeof SESSION_STAGE_RUN_STATUSES)[number];
-
-/** The statuses of a step that has not ended. */
-export const OPEN_STAGE_RUN_STATUSES = [
-  "running",
-  "waiting_tools",
-  "waiting_child",
-  "waiting_start",
-  "unreached",
-] as const;
+/** The step statuses are declared in `@synap-core/types/units` (`STAGE_RUN_STATUS_DECLARATION`). */
+export { OPEN_STAGE_RUN_STATUSES };
 
 /**
  * How the step's runner was decided:
@@ -123,7 +94,7 @@ export const sessionStageRuns = pgTable(
      * task started for the step, or the run's live task it was sent into.
      */
     externalAgent: jsonb("external_agent").$type<PlaybookRunExternalAgent>(),
-    status: text("status", { enum: SESSION_STAGE_RUN_STATUSES })
+    status: text("status", { enum: STAGE_RUN_STATUSES })
       .notNull()
       .default("running"),
     /** A `forEach` step's batches and child runs (0424); NULL for any other step. */

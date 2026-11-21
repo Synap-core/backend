@@ -357,16 +357,8 @@ export interface MaterializeAutomationResult {
   ref: string;
   opIndex: number;
   automationId: string;
-  /** What the op ASKED for. */
+  /** What the op ASKED for (`enabled: true`). */
   enabledRequested: boolean;
-  /**
-   * What was actually materialized. ALWAYS false: approve-first means an
-   * automation never arrives already running, so the op's `enabled` is
-   * overridden here and the override is REPORTED rather than swallowed.
-   */
-  enabled: false;
-  /** True when the op said `enabled: true` and we forced it off. */
-  enabledOverridden: boolean;
 }
 
 /** Per-op result for a `create_rule` op. */
@@ -623,8 +615,12 @@ export type AutomationCreateCaller = {
     description?: string;
     triggerType: "event" | "cron" | "webhook" | "manual";
     flowDefinition: unknown;
-    /** Always false — the materializer never asks for a running automation. */
-    enabled: false;
+    /**
+     * The status asked for: true = active, false = draft, absent = none
+     * stated. The door decides (`automationStatusAtCreate`): a person's
+     * approval of the batch activates it.
+     */
+    enabled?: boolean;
   }) => Promise<{ id: string }>;
 };
 
@@ -1302,32 +1298,20 @@ export async function materializeCompositeGraph(
           "materializeCompositeGraph: create_automation op reached pass execution with no automationCaller (preflight bypassed)"
         );
       }
-      const enabledRequested = op.enabled === true;
       try {
-        // FORCED DISABLED. Approve-first: an automation never arrives already
-        // running, even when the op says `enabled: true`. The override is
-        // reported on the result rather than swallowed.
         const created = await options.automationCaller.create({
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
           flowDefinition: op.flowDefinition,
-          enabled: false,
+          ...(op.enabled === undefined ? {} : { enabled: op.enabled }),
         });
-        if (enabledRequested) {
-          logger.info(
-            { ref: op.ref, name: op.name, automationId: created.id },
-            "create_automation asked for enabled:true — materialized DISABLED (approve-first)"
-          );
-        }
         registerEntityRef(refToRealId, i, op.ref, created.id, false);
         automationResults.push({
           ref: op.ref,
           opIndex: i,
           automationId: created.id,
-          enabledRequested,
-          enabled: false,
-          enabledOverridden: enabledRequested,
+          enabledRequested: op.enabled === true,
         });
       } catch (err) {
         logger.warn(

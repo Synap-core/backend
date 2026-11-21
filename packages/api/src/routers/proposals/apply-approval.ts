@@ -1194,13 +1194,16 @@ async function applyProposalApprovalInner(
             // The proposal's author (the actor `compositeCtx` already
             // carries), and whether a PERSON is approving (`personIsApproving`,
             // the reading the `skill/create` executor uses too), so an agent's
-            // skill is born approved only by a person's approval of the batch
-            // that carries it. Read only when the batch creates a skill.
+            // skill is born approved, and its automation born active, only by
+            // a person's approval of the batch that carries it. Read only when
+            // the batch creates one.
             skillAuthor: {
               agentUserId: compositeCtx.agentUserId,
               personApproved:
-                reconciledOperations.some((op) => op.op === "create_skill") &&
-                (await personIsApproving(ctx, userId)),
+                reconciledOperations.some(
+                  (op) =>
+                    op.op === "create_skill" || op.op === "create_automation"
+                ) && (await personIsApproving(ctx, userId)),
             },
             // A `bind_renderer` op's binding names the proposal that made it.
             sourceProposalId: proposal.id,

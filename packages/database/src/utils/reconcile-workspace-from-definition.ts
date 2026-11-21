@@ -110,7 +110,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
-import { isUniqueViolation } from "./pg-errors.js";
+import { insertAutomation } from "./insert-automation.js";
 import {
   installTemplateDocuments,
   resolveDocumentSidebarItem,
@@ -1681,32 +1681,27 @@ export async function reconcileWorkspaceFromDefinition(
           triggerType: auto.triggerType,
           triggerConfig: auto.triggerConfig ?? {},
         });
-        const owner = await ownerAndActor(dbConn, userId);
-        try {
-          await dbConn.insert(automations).values({
+        const inserted = await insertAutomation(dbConn, {
+          values: {
             workspaceId,
-            createdBy: owner.ownerId,
-            agentUserId: owner.agentUserId,
             name: auto.name,
             description: auto.description,
             triggerType: auto.triggerType,
             triggerConfig,
             flowDefinition,
-            // `active` so the trigger door will actually run it (matches
-            // ensureReportAutomation); a manual automation with no schedule costs
-            // nothing until a human runs it. Honor a declared status if present.
-            status: auto.status ?? "active",
-            metadata: { seedVersion: defHash },
-          });
-        } catch (e) {
-          // Case-insensitive 0230 index — a case-variant already exists (a lost
-          // race, or an active pre-0230 dup). Reconcile's job is "ensure it
-          // exists", so treat as present rather than aborting the reconcile.
-          if (isUniqueViolation(e)) {
-            report.automations.skipped.push(auto.name);
-            continue;
-          }
-          throw e;
+            metadata: { createdVia: "template", seedVersion: defHash },
+          },
+          requested: auto.status,
+          // A template is installed by a person's approval (or the pod's own
+          // boot convergence): its automations start as it declares, active
+          // when it declares nothing.
+          personApproved: true,
+          owner: await ownerAndActor(dbConn, userId),
+        });
+        // A case-variant already exists (0230's index, a lost race): present.
+        if (inserted && !inserted.created) {
+          report.automations.skipped.push(auto.name);
+          continue;
         }
       }
       report.automations.created.push(auto.name);
