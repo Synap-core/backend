@@ -17,6 +17,10 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
+import {
+  CHAT_TURN_STATUSES,
+  type ChatTurnStatusValue,
+} from "@synap-core/types/units";
 import { channels } from "./channels.js";
 
 export const ChatTurnStatus = {
@@ -24,7 +28,7 @@ export const ChatTurnStatus = {
   COMPLETED: "completed",
   FAILED: "failed",
   CANCELLED: "cancelled",
-} as const;
+} as const satisfies Record<string, ChatTurnStatusValue>;
 export type ChatTurnStatus =
   (typeof ChatTurnStatus)[keyof typeof ChatTurnStatus];
 
@@ -42,14 +46,7 @@ export const chatTurns = pgTable(
     /** Allocated before model work so UI identity never changes mid-stream. */
     userMessageId: uuid("user_message_id").notNull(),
     assistantMessageId: uuid("assistant_message_id").notNull(),
-    status: text("status", {
-      enum: [
-        ChatTurnStatus.RUNNING,
-        ChatTurnStatus.COMPLETED,
-        ChatTurnStatus.FAILED,
-        ChatTurnStatus.CANCELLED,
-      ],
-    })
+    status: text("status", { enum: CHAT_TURN_STATUSES })
       .notNull()
       .default(ChatTurnStatus.RUNNING),
     cancelRequested: boolean("cancel_requested").notNull().default(false),

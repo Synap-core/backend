@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   updates: [] as Array<Record<string, unknown>>,
+  /** The status door finds no row in the read status (a concurrent move). */
+  moved: true,
   gateCalls: [] as Array<Record<string, unknown>>,
   runCounts: new Map<string, number>(),
   runCountReads: 0,
@@ -27,8 +29,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: { automations: { findFirst: async () => h.automation } },
       update: () => ({
         set: (v: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             h.updates.push(v);
+            const rows = Promise.resolve([{ id: "row" }]) as Promise<
+              unknown[]
+            > & { returning: () => Promise<unknown[]> };
+            rows.returning = async () => (h.moved ? [{ id: "row" }] : []);
+            return rows;
           },
         }),
       }),
@@ -152,6 +160,19 @@ describe("agentArchivesDirectly — the own-and-never-ran rule", () => {
         runs: 0,
       })
     ).toBe(false);
+  });
+});
+
+describe("a concurrent move", () => {
+  it("archive answers CONFLICT when the row left the status it was read in", async () => {
+    h.moved = false;
+    try {
+      await expect(caller().archive({ id: ID })).rejects.toThrow(
+        /no longer draft/
+      );
+    } finally {
+      h.moved = true;
+    }
   });
 });
 

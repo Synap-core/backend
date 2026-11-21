@@ -4633,7 +4633,7 @@ export const tools = {
             automations: {
               type: "array",
               description:
-                "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). ALWAYS materialized DISABLED (draft): approving the proposal creates it, it never arrives already running — switch it on yourself afterwards. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves.",
+                "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). Approving the proposal creates it ACTIVE; with no person's approval it is born a draft. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves.",
               items: {
                 type: "object",
                 properties: {

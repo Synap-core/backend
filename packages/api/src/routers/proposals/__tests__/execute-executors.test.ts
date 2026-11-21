@@ -351,14 +351,19 @@ describe("(d) idempotency follows the prevailing already-APPROVED guard", () => 
 describe("automation/create approval preserves governed provenance", () => {
   it("re-enters the canonical create door as an AI-authored create", () => {
     expect(AUTOMATION_CREATE_BLOCK).toContain('source: "ai" as const');
-    expect(AUTOMATION_CREATE_BLOCK).toContain("materializeApprovedAutomation");
+    expect(AUTOMATION_CREATE_BLOCK).toContain(
+      "materializeAutomationForPrincipal"
+    );
     expect(AUTOMATION_CREATE_BLOCK).toContain(
       "agentUserId: automationAuthorId"
     );
     expect(AUTOMATION_CREATE_BLOCK).toContain("stableId: proposal.targetId");
-    // An approval IS the activation: unstated status lands active.
-    expect(AUTOMATION_CREATE_BLOCK).toMatch(/\?\? "active"/);
-    expect(AUTOMATION_CREATE_BLOCK).not.toMatch(/\?\? "draft"/);
+    // The status is the door's decision (an approval activates): the
+    // executor passes who approved, never a default of its own.
+    expect(AUTOMATION_CREATE_BLOCK).toContain(
+      "personApproved: await personIsApproving(ctx, userId)"
+    );
+    expect(AUTOMATION_CREATE_BLOCK).not.toMatch(/\?\? "(active|draft)"/);
     expect(AUTOMATION_CREATE_BLOCK).toContain(
       "metadata: innerData.metadata as Record<string, unknown> | undefined"
     );
