@@ -372,7 +372,9 @@ describe("allow without review: the person's tick on an AI-made verb's request",
     const seen = text(html);
     expect(seen).toContain(TICK);
     expect(seen).not.toContain("fr_company_lookup");
-    expect(seen).toContain(pageEn["decide.allowWithoutReviewHint"].slice(0, 30));
+    expect(seen).toContain(
+      pageEn["decide.allowWithoutReviewHint"].slice(0, 30)
+    );
   });
 
   it("CONTROL: no offer from the pod, no tick", () => {

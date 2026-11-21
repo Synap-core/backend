@@ -92,8 +92,7 @@ export function proposedAgentVerb(p: VerbProposalRow): ProposedVerb | null {
  */
 export function verbRequestWrites(spec: Record<string, unknown>): boolean {
   if (spec.transport === "graphql") {
-    const op = (spec.graphql as { operation?: unknown } | undefined)
-      ?.operation;
+    const op = (spec.graphql as { operation?: unknown } | undefined)?.operation;
     return op === "mutation";
   }
   return /^(PUT|PATCH|DELETE)$/i.test(String(spec.method ?? ""));

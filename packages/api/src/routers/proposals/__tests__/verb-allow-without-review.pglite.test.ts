@@ -204,8 +204,11 @@ const activeRules = (name: string) =>
   ).then((r) => r.rows);
 
 const statusOf = async (id: string) =>
-  (await q<{ status: string }>(`select status from proposals where id = $1`, [id]))
-    .rows[0]?.status;
+  (
+    await q<{ status: string }>(`select status from proposals where id = $1`, [
+      id,
+    ])
+  ).rows[0]?.status;
 
 async function errorOf(p: Promise<unknown>) {
   try {
@@ -424,7 +427,9 @@ describe("which verbs the card offers it for (proposals.get projects the one der
 
   it("a read or a request it cannot tell is offered; a stated write is not", () => {
     expect(verbAllowOffer(row({ tool, method: "GET" }))).toEqual({ verb: "v" });
-    expect(verbAllowOffer(row({ tool, method: "POST" }))).toEqual({ verb: "v" });
+    expect(verbAllowOffer(row({ tool, method: "POST" }))).toEqual({
+      verb: "v",
+    });
     for (const method of ["PUT", "PATCH", "DELETE"]) {
       expect(verbAllowOffer(row({ tool, method })), method).toBeNull();
     }
@@ -447,7 +452,9 @@ describe("which verbs the card offers it for (proposals.get projects the one der
     expect(
       verbAllowOffer(
         row(spec, {
-          data: { data: { name: "v", kind: "instruction", providerSpec: null } },
+          data: {
+            data: { name: "v", kind: "instruction", providerSpec: null },
+          },
         })
       )
     ).toBeNull();

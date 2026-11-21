@@ -55784,6 +55784,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		approve: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				allowToday?: boolean | undefined;
+				allowWithoutReview?: boolean | undefined;
 				comment?: string | undefined;
 				dispositions?: Record<string, {
 					edits?: Record<string, unknown> | undefined;
@@ -55859,6 +55860,48 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ProposalExecutorResult | {
+				allowedWithoutReview: {
+					failed: string;
+					verb: string;
+				};
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				entitiesSkipped?: MaterializeSkippedTwin[];
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			} | {
+				allowedWithoutReview: {
+					ruleId: string | null;
+					verb: string;
+				};
+				alreadyApproved?: boolean;
+				approvalRun?: ApprovalRunView;
+				created?: number;
+				effect?: ProposalEffect;
+				entitiesSkipped?: MaterializeSkippedTwin[];
+				identities?: Array<IdentityReceipt & {
+					ref: string;
+				}>;
+				identity?: IdentityReceipt;
+				joined?: boolean;
+				linked?: number;
+				primaryId?: string;
+				queued?: true;
+				refusals?: string[];
+				relationsFailed?: MaterializeRelationFailure[];
+				success: boolean;
+			} | {
 				allowedToday: AllowedToday;
 				alreadyApproved?: boolean;
 				approvalRun?: ApprovalRunView;
@@ -55992,6 +56035,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				agentActorName?: string;
 				agentName?: string;
 				agentUserId: string | null;
+				allowWithoutReview: {
+					verb: string;
+				} | null;
 				apiKeyId: string | null;
 				appId: string | null;
 				appName?: string;

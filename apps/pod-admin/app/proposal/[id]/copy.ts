@@ -63,7 +63,8 @@ export const en = {
   "decide.confirmCancel": "Cancel",
   // An AI-made verb's own request: the person may let it run without review
   // (founder, 21 Nov 2026). Taken back on the tool's page.
-  "decide.allowWithoutReview": "From now on, let AIs run “{action}” without asking",
+  "decide.allowWithoutReview":
+    "From now on, let AIs run “{action}” without asking",
   "decide.allowWithoutReviewHint":
     "Its runs stop coming here for review. You can take this back on its tool’s page.",
   "decide.recorded": "Recorded in the",

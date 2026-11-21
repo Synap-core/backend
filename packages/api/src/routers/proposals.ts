@@ -2070,7 +2070,10 @@ export const proposalsRouter = router({
       }
       // "Allow without review" rides ONLY the pending proposal of a verb an
       // AI made, and the person who may set it: checked BEFORE anything is
-      // approved, so it is never half done.
+      // approved, so it is never half done. It writes a run-mode rule (a
+      // credential): an app's device token needs a fresh sign-in, as
+      // `governanceRules.setActionMode` (credentialProcedure) does.
+      if (input.allowWithoutReview) assertFreshAuthentication(ctx);
       const allowVerb = input.allowWithoutReview
         ? await assertMayAllowVerbWithoutReview({ ...ctx, userId }, proposal)
         : null;
@@ -2083,7 +2086,7 @@ export const proposalsRouter = router({
         background: true,
         presence: input.presence ?? null,
         door: "trpc.proposals.approve",
-        ...(allowVerb ? { setsActionMode: true } : {}),
+        setsActionMode: allowVerb !== null,
       });
       if (allowVerb) {
         const allowed = await allowVerbWithoutReview({
