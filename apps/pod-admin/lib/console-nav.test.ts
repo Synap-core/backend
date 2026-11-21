@@ -117,6 +117,17 @@ describe("navFor: the client scope of the one table", () => {
     );
   });
 
+  it("folds Daily write limits and Calibration into Approvals: lit by it, never listed", () => {
+    const all = ids(navFor("admin", { allTools: true })).flat();
+    expect(all).toContain("approvals");
+    expect(all).not.toContain("writeLimits");
+    expect(all).not.toContain("calibration");
+    expect(activeNavId("/approvals/limits")).toBe("approvals");
+    expect(activeNavId("/approvals/calibration")).toBe("approvals");
+    expect(navHref("writeLimits")).toBe("/approvals/limits");
+    expect(navHref("calibration")).toBe("/approvals/calibration");
+  });
+
   it("sends Automations' old /rules links to /automations, and keeps /rules for Rules", () => {
     const redirects = consoleRedirects();
     expect(redirects).toContainEqual({

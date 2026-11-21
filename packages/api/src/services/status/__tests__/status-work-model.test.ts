@@ -33,6 +33,7 @@ const row = (over: Partial<WorkSessionRow> = {}): WorkSessionRow => ({
   stages: PRODUCE,
   currentStage: "script",
   closedAt: "2026-11-16T10:00:00.000Z",
+  closedNotDone: false,
   ...over,
 });
 const run = (over: Partial<WorkRunRow> = {}): WorkRunRow => ({
@@ -321,6 +322,22 @@ describe("workItemOf — no Continue where the door would refuse", () => {
     expect(
       w.stages.status === "ok" && w.stages.items.map((s) => s.position)
     ).toEqual(["done", "done", "done", "done"]);
+  });
+});
+
+describe("workItemOf — a close that left required work open is not finished", () => {
+  it("a run closed anyway does not read finished", () => {
+    const w = item({
+      row: row({
+        status: "closed",
+        currentStage: "publish",
+        closedNotDone: true,
+      }),
+      run: run({ status: "failed", stopReason: null }),
+    });
+    expect(
+      w.stages.status === "ok" && w.stages.items.map((s) => s.position)
+    ).not.toEqual(["done", "done", "done", "done"]);
   });
 });
 

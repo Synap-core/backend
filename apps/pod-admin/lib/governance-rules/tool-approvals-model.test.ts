@@ -179,6 +179,21 @@ describe("every AI's mode", () => {
     });
   });
 
+  it("finding ac28928c: an auto and an asks-first row on the action tie → asks first, as the gate", () => {
+    const a = toolApprovals(
+      [
+        row({ targetPattern: "apify_run_actor", verdict: "auto" }),
+        row({ targetPattern: "apify_run_actor", verdict: "propose" }),
+      ],
+      SHAPE
+    );
+    expect(actionEveryoneState(a, "apify_run_actor")).toEqual({
+      value: "ask",
+      mode: "ask",
+      from: "action",
+    });
+  });
+
   it("a tie goes to the stricter verdict, as at the gate (never > asks first > runs)", () => {
     expect(
       decidingRow([row({ verdict: "auto" }), row({ verdict: "propose" })])
