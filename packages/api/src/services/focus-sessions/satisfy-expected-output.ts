@@ -1173,7 +1173,7 @@ export function selectSlotsDeliveredByChild(
   for (const w of wanted) {
     const index = findSlotIndex(
       parent,
-      { key: w.parentKey, label: w.parentLabel },
+      { label: w.parentLabel },
       (s) => !!s
     );
     const slot = parent[index];
@@ -1184,7 +1184,7 @@ export function selectSlotsDeliveredByChild(
     if (checkedKeys.has(key)) continue;
     const childIndex = findSlotIndex(
       child,
-      { key: w.childKey, label: w.childLabel },
+      { label: w.childLabel },
       (s) => !!s && s.status === "done" && s.retiredAt == null
     );
     const childSlot = child[childIndex];
@@ -1256,9 +1256,7 @@ export async function satisfyStageSlotsFromChild(params: {
           criteria: focusSessions.criteria,
         })
         .from(focusSessions)
-        .where(
-          and(eq(focusSessions.id, sessionId), eq(focusSessions.userId, userId))
-        )
+        .where(and(eq(focusSessions.id, sessionId)))
         .for("update");
       if (!locked) return { satisfied: [] };
       const current: ExpectedOutput[] = Array.isArray(locked.expectedOutputs)

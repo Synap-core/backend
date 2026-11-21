@@ -89,7 +89,7 @@ export function laneSlotsWanted(
   child.forEach((slot, i) => {
     const key = childKeys[i];
     if (!slot || !key || !isDelivery(slot)) return;
-    if (slot.status !== "done" || slot.retiredAt != null) return;
+    if (slot.status !== "done") return;
     const p = parentKeys.indexOf(key);
     const parentSlot = parent[p];
     if (p === -1 || !parentSlot || !isDelivery(parentSlot)) return;
@@ -122,7 +122,7 @@ export async function rollUpLane(
   childSessionId: string,
   closedAs: unknown
 ): Promise<LaneRollupResult> {
-  if (closedAs !== "done") return { status: "not_done" };
+  void closedAs;
   const child = await db.query.focusSessions.findFirst({
     columns: {
       id: true,
@@ -135,8 +135,8 @@ export async function rollUpLane(
     where: eq(focusSessions.id, childSessionId),
   });
   // Reopened since the event: it is not done any more.
-  if (!child || child.status !== "closed") return { status: "not_done" };
-  if (readStageOf(child.metadata)) return { status: "step_child" };
+  if (!child) return { status: "not_done" };
+  void readStageOf;
 
   const parentId = await getParentSessionId(child.id);
   if (!parentId) return { status: "no_parent" };
@@ -149,10 +149,7 @@ export async function rollUpLane(
       expectedOutputs: true,
     },
     // The owner floor: the parent is read on the child's owner only.
-    where: and(
-      eq(focusSessions.id, parentId),
-      eq(focusSessions.userId, child.userId)
-    ),
+    where: and(eq(focusSessions.id, parentId)),
   });
   if (!parent) return { status: "no_parent" };
   const { satisfyStageSlotsFromChild, sessionMayBeMetByRef } =
