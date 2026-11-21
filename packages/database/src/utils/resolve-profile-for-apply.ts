@@ -280,7 +280,11 @@ export async function resolveProfileForApply(
       // NOT swallowed — for a `shared` canonical this grant is the whole reuse
       // (same reasoning as the pod-wide reuse branch).
       if (!opts.dryRun) {
-        await profileRepo.grantAccess(canonical.id, opts.workspaceId);
+        await profileRepo.grantAccess(
+          canonical.id,
+          opts.workspaceId,
+          opts.actorUserId
+        );
       }
     } else if (!(
       canonical.scope === ProfileScope.WORKSPACE &&
@@ -378,7 +382,7 @@ export async function resolveProfileForApply(
       // fails, the workspace still resolves the profile. Un-swallowing would
       // turn a harmless no-op into an apply-aborting error with no safety gain.
       await profileRepo
-        .grantAccess(accessible.id, opts.workspaceId)
+        .grantAccess(accessible.id, opts.workspaceId, opts.actorUserId)
         .catch(() => {});
     }
     if (
@@ -395,7 +399,11 @@ export async function resolveProfileForApply(
       // the people who wear the role. NOT swallowed, for that reason. It follows
       // a shared role's grant lifecycle: it cascades with the workspace.
       // A system KIND gets none: no reader keys a kind's reach on its grants.
-      await profileRepo.grantAccess(accessible.id, opts.workspaceId);
+      await profileRepo.grantAccess(
+        accessible.id,
+        opts.workspaceId,
+        opts.actorUserId
+      );
     }
     return {
       ...base,
@@ -495,7 +503,11 @@ export async function resolveProfileForApply(
       // (A `system` row needs no grant, but `grantAccess` is
       // onConflictDoNothing and harmless; the failure mode we care about is the
       // `shared` one.)
-      await profileRepo.grantAccess(existing.id, opts.workspaceId);
+      await profileRepo.grantAccess(
+        existing.id,
+        opts.workspaceId,
+        opts.actorUserId
+      );
     }
     return {
       ...base,
@@ -534,8 +546,16 @@ export async function resolveProfileForApply(
       // schema-less. `grantAccess` is onConflictDoNothing, so granting a row that
       // is still workspace-scoped is a harmless no-op. These two are NOT
       // swallowed: if the owner cannot be granted, we must not flip the scope.
-      await profileRepo.grantAccess(existing.id, existing.workspaceId);
-      await profileRepo.grantAccess(existing.id, opts.workspaceId);
+      await profileRepo.grantAccess(
+        existing.id,
+        existing.workspaceId,
+        opts.actorUserId
+      );
+      await profileRepo.grantAccess(
+        existing.id,
+        opts.workspaceId,
+        opts.actorUserId
+      );
       // The probe above closes the known race, but the seat can still be taken
       // concurrently. A unique violation here is NOT an abort: the row is simply
       // un-promotable, which is the deferral case. Degrade instead of throwing —

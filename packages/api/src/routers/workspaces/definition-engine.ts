@@ -1461,7 +1461,11 @@ export const definitionEngineProcedures = {
             // never granted): reuse it, as `resolveProfileForApply` does —
             // never a twin.
             if (isProfileKindTwinError(err)) {
-              await profileRepo.grantAccess(err.holder.id, input.workspaceId);
+              await profileRepo.grantAccess(
+                err.holder.id,
+                input.workspaceId,
+                ctx.userId
+              );
               profileCache.set(e.profileSlug, err.holder.id);
               continue;
             }

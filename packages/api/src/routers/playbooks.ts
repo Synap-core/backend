@@ -67,7 +67,8 @@ import {
   loadFacetSlugsBatch,
   isUniqueViolation,
   ownerAndActor,
-  usableWith,
+  usableInSpace,
+  usableInSpaceWhere,
   verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
@@ -153,7 +154,7 @@ import {
   subjectProfileSlug,
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
-import { runEntityVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
+import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
@@ -318,9 +319,9 @@ function assertGoalPlaceholdersDeclared(
 
 /**
  * Resolve a subject entity id to bind to a run/session: `subject_entity_id`
- * has no FK, so the id must name a record the run's owner can read in the
- * run's space (a run's entity floor, `runEntityVisibilityWhere`, the one the
- * automation step reads its subject through). Throws NOT_FOUND otherwise.
+ * has no FK, so the id must name a record the person can read (the entity
+ * read floor) that is usable in the run's space (`usableInSpaceWhere`: its
+ * own, or pod-wide). Throws NOT_FOUND otherwise.
  */
 async function resolveVisibleSubjectId(
   database: Awaited<ReturnType<typeof getDb>>,
@@ -333,7 +334,8 @@ async function resolveVisibleSubjectId(
     columns: { id: true },
     where: and(
       eq(entities.id, subjectId),
-      runEntityVisibilityWhere(workspaceId, ownerId)
+      entityReadVisibleWhere(ownerId),
+      usableInSpaceWhere(entities.workspaceId, workspaceId)
     ),
   });
   if (subj) return subj.id;
@@ -918,7 +920,7 @@ const playbookAutomationsRouter = router({
       const automation = await database.query.automations.findFirst({
         where: eq(automations.id, input.automationId),
       });
-      if (!automation || !usableWith(automation, playbook.workspaceId)) {
+      if (!automation || !usableInSpace(automation, playbook.workspaceId)) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Automation ${input.automationId} not found in this workspace`,
@@ -3416,11 +3418,7 @@ export const playbooksRouter = router({
       // Usable here: refused at FILING by the run door's own rule
       // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
       // proposal is filed that could only fail once approved.
-      const notRunnable = await playbookRunRefusal(
-        database,
-        playbook,
-        runWorkspaceId
-      );
+      const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
       if (notRunnable) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

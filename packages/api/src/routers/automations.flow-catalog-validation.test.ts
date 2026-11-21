@@ -69,8 +69,6 @@ vi.mock("@synap/database", async (importOriginal) => {
         agentUserId: agentUserId ?? null,
       })
     ),
-    // No playbook is shared with another space in this suite.
-    spaceGrantsOf: vi.fn(async () => new Map()),
     // The visibility registry resolves `playbooks` through the MODULE-LEVEL
     // `db` (`query: () => db.query.playbooks`), not through `getDb()`, so the
     // getDb stub below cannot intercept the scoped playbook read. Overriding
@@ -672,9 +670,7 @@ describe("a pod-wide automation naming a space-scoped playbook (6c15da33)", () =
       })
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining(
-        `run it in space ${OTHER}, or share it with space ${h.existing.workspaceId}`
-      ),
+      message: expect.stringContaining(`run it in space ${OTHER}.`),
     });
     expect(h.updateSets).toHaveLength(0);
   });

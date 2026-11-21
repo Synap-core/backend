@@ -5,8 +5,7 @@
  *    twice-run safe; the old table stays (forward-only);
  *  - kind grants stay equal in both tables, whichever side writes them (a
  *    previous release writes the old table), and the mirror stops after one hop;
- *  - one object can be granted to a space once per type;
- *  - deleting a profile, playbook or skill removes its grants, and only its own;
+ *  - deleting a kind removes its grants, and only its own;
  *  - the baseline carries both tables; the boot coherence list names the new
  *    columns.
  */
@@ -27,8 +26,6 @@ const WS = "11111111-1111-4111-8111-111111111111";
 const WS2 = "22222222-2222-4222-8222-222222222222";
 const KIND = "33333333-3333-4333-8333-333333333333";
 const KIND2 = "44444444-4444-4444-8444-444444444444";
-const PB = "55555555-5555-4555-8555-555555555555";
-const SKILL = "66666666-6666-4666-8666-666666666666";
 
 let pg: PGlite;
 const rows = async <T>(sql: string) => (await pg.query<T>(sql)).rows;
@@ -39,8 +36,6 @@ beforeAll(async () => {
   await pg.exec(`
     CREATE TABLE "workspaces" ("id" uuid PRIMARY KEY);
     CREATE TABLE "profiles" ("id" uuid PRIMARY KEY);
-    CREATE TABLE "playbooks" ("id" uuid PRIMARY KEY);
-    CREATE TABLE "skills" ("id" uuid PRIMARY KEY);
     CREATE TABLE "profile_workspace_access" (
       "profile_id"   uuid NOT NULL REFERENCES "profiles"("id") ON DELETE CASCADE,
       "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
@@ -49,8 +44,6 @@ beforeAll(async () => {
     );
     INSERT INTO workspaces VALUES ('${WS}'), ('${WS2}');
     INSERT INTO profiles VALUES ('${KIND}'), ('${KIND2}');
-    INSERT INTO playbooks VALUES ('${PB}');
-    INSERT INTO skills VALUES ('${SKILL}');
     INSERT INTO profile_workspace_access (profile_id, workspace_id) VALUES ('${KIND}', '${WS}');
   `);
   await pg.exec(M0448);
@@ -108,29 +101,14 @@ describe("migration 0448 — space_access (expand)", () => {
     ).toEqual([{ profile_id: KIND, workspace_id: WS }]);
   });
 
-  it("grants a playbook and a skill beside the kinds, once each, never into the old table", async () => {
-    await pg.exec(`
-      INSERT INTO space_access (object_type, object_id, workspace_id, granted_by)
-      VALUES ('playbook', '${PB}', '${WS2}', 'u-1'), ('skill', '${SKILL}', '${WS2}', 'u-1');
-    `);
-    await expect(
-      pg.exec(
-        `INSERT INTO space_access (object_type, object_id, workspace_id) VALUES ('playbook', '${PB}', '${WS2}')`
-      )
-    ).rejects.toThrow();
-    expect(
-      await rows(`SELECT count(*)::int AS n FROM profile_workspace_access`)
-    ).toEqual([{ n: 1 }]);
-  });
-
-  it("a deleted object takes its grants with it, and only its own", async () => {
-    await pg.exec(`DELETE FROM playbooks WHERE id = '${PB}'`);
+  it("a deleted kind takes its grants with it, and only its own", async () => {
+    await pg.exec(
+      `INSERT INTO space_access (object_type, object_id, workspace_id) VALUES ('profile', '${KIND2}', '${WS2}')`
+    );
     await pg.exec(`DELETE FROM profiles WHERE id = '${KIND}'`);
-    expect(
-      await rows(`SELECT object_type, object_id FROM space_access`)
-    ).toEqual([{ object_type: "skill", object_id: SKILL }]);
-    await pg.exec(`DELETE FROM skills WHERE id = '${SKILL}'`);
-    expect(await rows(`SELECT 1 FROM space_access`)).toEqual([]);
+    expect(await rows(`SELECT object_id FROM space_access`)).toEqual([
+      { object_id: KIND2 },
+    ]);
   });
 
   it("the baseline carries both tables; the coherence list names the new columns", () => {

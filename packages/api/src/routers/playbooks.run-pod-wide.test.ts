@@ -50,8 +50,6 @@ const {
     mockWorkspacesFindFirst: workspacesFindFirst,
     mockGetDb: vi.fn(),
     mockDb: {
-      // No `space_access` row shares a playbook with another space.
-      select: () => ({ from: () => ({ where: async () => [] }) }),
       query: {
         workspaceMembers: {
           findFirst: vi.fn().mockResolvedValue({ role: "editor" }),
@@ -102,19 +100,11 @@ vi.mock("../services/playbooks/run-playbook.js", async (importOriginal) => ({
 
 // The subject floor is SQL the mocked `findFirst` cannot apply: the test
 // reads WHICH floor the door asked for, and answers as that floor would.
-const mockRunFloor = vi.hoisted(() =>
-  vi.fn((workspaceId: string | null, ownerId: string) => ({
-    workspaceId,
-    ownerId,
-  }))
-);
-vi.mock(
-  "@synap/jobs/workers/entity-query-scope.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    runEntityVisibilityWhere: mockRunFloor,
-  })
-);
+const mockReadFloor = vi.hoisted(() => vi.fn((userId: string) => ({ userId })));
+vi.mock("../access/entity-read-floor.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  entityReadVisibleWhere: mockReadFloor,
+}));
 const mockResolveTrackFiling = vi.hoisted(() =>
   vi.fn(async () => ({ projectId: "00000000-0000-4000-8000-0000000000f1" }))
 );
@@ -241,9 +231,9 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
   });
 
   it("(f) subject IDOR guard runs against the RESOLVED workspace", async () => {
-    // Subject lives in B; the run resolves to A → the floor of A (and of the
-    // person) is the one asked, and it does not admit the subject.
-    mockRunFloor.mockClear();
+    // Subject lives in B; the run resolves to A → the person's read floor is
+    // asked, with A as the space, and the subject is not admitted.
+    mockReadFloor.mockClear();
     mockEntitiesFindFirst.mockResolvedValue(undefined);
     const caller = playbooksRouter.createCaller(ctxWith(WS_B));
 
@@ -253,7 +243,7 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
         subjectId: "00000000-0000-4000-8000-0000000000e1",
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(mockRunFloor).toHaveBeenCalledWith(WS_A, "user-1");
+    expect(mockReadFloor).toHaveBeenCalledWith("user-1");
     expect(mockRunPlaybook).not.toHaveBeenCalled();
   });
 
@@ -306,7 +296,7 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
       caller.run({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toMatchObject({
       code: "PRECONDITION_FAILED",
-      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or share it with space ${WS_B}.`,
+      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}.`,
     });
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockRunPlaybook).not.toHaveBeenCalled();

@@ -29,9 +29,8 @@ import {
   or,
   playbookAutomations,
   playbooks,
-  spaceGrantsOf,
+  usableInSpace,
   usableInSpaceWhere,
-  usableWith,
   type SQL,
 } from "@synap/database";
 import type { PlaybookActivator } from "@synap/playbooks";
@@ -78,12 +77,7 @@ async function linkablePlaybooks(
     .where(
       and(
         ne(playbooks.status, "archived"),
-        usableInSpaceWhere(
-          "playbook",
-          playbooks.id,
-          playbooks.workspaceId,
-          workspaceId
-        ),
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId),
         only
       )
     )
@@ -178,15 +172,10 @@ export async function findPlaybookLinkCycle(self: {
   ];
   // A node sees the playbooks usable in its space; self is first, so a name
   // equal to self's (in its reach) resolves to self.
-  const grants = await spaceGrantsOf(
-    db,
-    "playbook",
-    nodes.flatMap((n) => (n.id === SELF ? [] : [n.id]))
-  );
   const resolve = (ref: string, from: PlaybookNode) =>
     pick(
       ref,
-      nodes.filter((n) => usableWith(n, from.workspaceId, grants.get(n.id)))
+      nodes.filter((n) => usableInSpace(n, from.workspaceId))
     )?.id ?? (ref === self.id ? SELF : undefined);
   const next = new Map<string, Set<string>>(
     nodes.map((n) => [n.id, new Set()])

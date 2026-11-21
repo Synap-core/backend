@@ -31,15 +31,7 @@
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
  */
-import {
-  and,
-  eq,
-  inArray,
-  isNotNull,
-  or,
-  usableInSpaceWhere,
-  type SQL,
-} from "@synap/database";
+import { and, eq, inArray, or, type SQL } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
@@ -67,8 +59,7 @@ export interface SkillVisibilityOptions {
 }
 
 /**
- * Pod skills, the user's own, and workspace skills: of the selected workspace
- * (its own, or one homed elsewhere and shared with it through `space_access`),
+ * Pod skills, the user's own, and workspace skills: of the selected workspace,
  * or of every space the user can see (`allSpaces`).
  */
 export function visibleSkillsWhere(
@@ -83,14 +74,8 @@ export function visibleSkillsWhere(
     ? userVisibleWhere(skills.workspaceId, userId)
     : workspaceId
       ? and(
-          isNotNull(skills.workspaceId),
-          usableInSpaceWhere(
-            "skill",
-            skills.id,
-            skills.workspaceId,
-            workspaceId,
-            userId
-          )
+          eq(skills.workspaceId, workspaceId),
+          userVisibleWhere(skills.workspaceId, userId)
         )
       : undefined;
   const tiers = or(

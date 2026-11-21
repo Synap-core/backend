@@ -215,26 +215,24 @@ export interface AccessibleProfileFilters {
  *    shared rows with no home; with no person either (a system caller), every
  *    shared row;
  *  - a POD-WIDE kind (`entityScope = 'pod'`, profileKind kind): its entities
- *    have no space, so the kind resolves in every lens; with no lens, from
- *    every space the person can see (any space when no person is known). Its
- *    `scope` is not changed to `system`: system rows are the catalog's, owned
- *    by reconcilers.
+ *    have no space, so the kind resolves in every lens, but only for a person
+ *    who can see its home space (a private space's kind stays private); a
+ *    system caller with no lens and no person reads every one. Its `scope` is
+ *    not changed to `system`: system rows are the catalog's, owned by
+ *    reconcilers.
  */
 export function kindVisibleWhere(lens: {
   workspaceId?: string | null;
   userId?: string;
 }): SQL {
   const { workspaceId, userId } = lens;
-  // The person's spaces matter only with no lens: inside a lens the lens is
-  // the space (the caller has already been admitted to it).
-  const seen =
-    userId && !workspaceId
-      ? unionAll(
-          memberWorkspaceIdsQuery(userId),
-          ownedWorkspaceIdsQuery(userId),
-          podVisibleWorkspaceIdsQuery(userId)
-        )
-      : undefined;
+  const seen = userId
+    ? unionAll(
+        memberWorkspaceIdsQuery(userId),
+        ownedWorkspaceIdsQuery(userId),
+        podVisibleWorkspaceIdsQuery(userId)
+      )
+    : undefined;
   // Plain names: a relational query re-aliases every column of the outer table.
   const grantedIn = (spaces: string | NonNullable<typeof seen>) =>
     sql`exists (select 1 from space_access sa where sa.object_type = 'profile' and sa.object_id = ${profiles.id} and ${
@@ -249,12 +247,14 @@ export function kindVisibleWhere(lens: {
 
   const branches: Array<SQL | undefined> = [
     eq(profiles.scope, ProfileScope.SYSTEM),
-    and(
-      eq(profiles.profileKind, "kind"),
-      eq(profiles.entityScope, "pod"),
-      homed,
-      seen ? inArray(profiles.workspaceId, seen) : undefined
-    ),
+    seen || !workspaceId
+      ? and(
+          eq(profiles.profileKind, "kind"),
+          eq(profiles.entityScope, "pod"),
+          homed,
+          seen ? inArray(profiles.workspaceId, seen) : undefined
+        )
+      : undefined,
   ];
   if (userId) {
     branches.push(

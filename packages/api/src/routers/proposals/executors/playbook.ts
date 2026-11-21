@@ -733,7 +733,7 @@ export function registerPlaybookExecutors(): void {
       // Imported lazily, as `resolveRunnablePlaybook` is above.
       const { playbookRunRefusal } =
         await import("../../../services/playbooks/playbook-lifecycle.js");
-      const notRunnable = await playbookRunRefusal(db, playbook, workspaceId);
+      const notRunnable = playbookRunRefusal(playbook, workspaceId);
       if (notRunnable) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

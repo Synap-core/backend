@@ -346,10 +346,7 @@ export async function followPlaybook(
   }
   // The run door's rule: a session in a space follows only a playbook usable
   // there. A session in no space is not checked (it runs nowhere yet).
-  if (
-    session.workspaceId &&
-    !(await usableInSpace(db, "playbook", playbook, session.workspaceId))
-  ) {
+  if (session.workspaceId && !usableInSpace(playbook, session.workspaceId)) {
     return {
       status: "refused",
       reason: notUsableInSpaceReason("Playbook", playbook, session.workspaceId),

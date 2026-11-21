@@ -79,8 +79,7 @@ import {
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   getDb,
-  spaceGrantsOf,
-  usableWith,
+  usableInSpace,
   notUsableInSpaceReason,
   eq,
   ne,
@@ -567,9 +566,9 @@ async function loadFlowValidationResolvers(
 /**
  * The space a flow's playbooks run in, for an automation filed in `workspaceId`
  * (`null` = pod-wide). A playbook runs only where it is usable (the run door's
- * rule, `usableInSpace`: its home, a space it is shared with, or anywhere when
- * pod-wide), so a pod-wide automation naming a space playbook would fire runs
- * that are refused everywhere but there.
+ * rule, `usableInSpace`: its home, or anywhere when pod-wide), so a pod-wide
+ * automation naming a space playbook would fire runs that are refused
+ * everywhere but there.
  *
  *  - every playbook usable in `workspaceId` → `workspaceId` (nothing moves);
  *  - a pod-wide automation whose space playbooks share ONE home → that home
@@ -580,20 +579,12 @@ async function loadFlowValidationResolvers(
  * in the run's own space when it runs (`resolveRunnablePlaybook`). An update
  * never moves a stored automation (`adopt: false`): it is refused instead.
  */
-async function placeFlowByPlaybooks(
-  database: Awaited<ReturnType<typeof getDb>>,
+function placeFlowByPlaybooks(
   referenced: ReferencedPlaybook[],
   workspaceId: string | null,
   { adopt }: { adopt: boolean }
-): Promise<{ workspaceId: string | null; adopted: boolean }> {
-  const grants = await spaceGrantsOf(
-    database,
-    "playbook",
-    referenced.map((pb) => pb.id)
-  );
-  const away = referenced.filter(
-    (pb) => !usableWith(pb, workspaceId, grants.get(pb.id))
-  );
+): { workspaceId: string | null; adopted: boolean } {
+  const away = referenced.filter((pb) => !usableInSpace(pb, workspaceId));
   if (away.length === 0) return { workspaceId, adopted: false };
   const homes = [
     ...new Set(
@@ -795,11 +786,12 @@ async function prepareAutomationForMaterialization(
   assertFilteredAiFanout(input.flowDefinition);
   // Filed where its playbooks run (6c15da33): BEFORE the gate, RBAC and the
   // insert read `input.workspaceId`, so all of them see the adopted space.
-  const placed = await placeFlowByPlaybooks(
-    database,
+  const placed = placeFlowByPlaybooks(
     playbooksById,
     input.workspaceId ?? null,
-    { adopt: true }
+    {
+      adopt: true,
+    }
   );
   if (placed.adopted) input.workspaceId = placed.workspaceId;
 
@@ -2845,12 +2837,9 @@ export const automationsRouter = router({
           });
         }
         assertFilteredAiFanout(input.flowDefinition);
-        await placeFlowByPlaybooks(
-          database,
-          updateFlow.playbooksById,
-          existing.workspaceId,
-          { adopt: false }
-        );
+        placeFlowByPlaybooks(updateFlow.playbooksById, existing.workspaceId, {
+          adopt: false,
+        });
 
         // Keep the template-friendly skillName form executable on update too,
         // matching create's pre-persist normalization.

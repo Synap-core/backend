@@ -386,7 +386,7 @@ describe("the kind floor — one rule for slug resolution and listing", () => {
       createdAt: "2026-11-19T00:00:00Z",
     });
     expect(
-      (await repo.getBySlugForWorkspace("acquisition-target", WS2))?.id
+      (await repo.getBySlugForWorkspace("acquisition-target", WS2, USER))?.id
     ).toBe(id);
     expect(
       (await repo.getBySlug("acquisition-target", undefined, USER))?.id
@@ -409,6 +409,38 @@ describe("the kind floor — one rule for slug resolution and listing", () => {
     expect(theirs.map((p) => p.id)).not.toContain(id);
   });
 
+  it("a pod-wide kind of a private space stays private, in a lens and without one", async () => {
+    const WS3 = "33333333-3333-4333-8333-333333333333";
+    await pg.query(
+      `insert into workspaces (id, name, owner_id) values ($1, 'Private', $2) on conflict do nothing`,
+      [WS3, OTHER]
+    );
+    await pg.query(
+      `insert into workspace_members (id, workspace_id, user_id, role) values (gen_random_uuid(), $1, $2, 'editor')`,
+      [WS, OTHER]
+    );
+    const id = await seedProfile({
+      slug: "deal-room",
+      scope: "workspace",
+      workspaceId: WS3,
+      entityScope: "pod",
+      createdAt: "2026-11-19T00:00:00Z",
+    });
+    // The person who cannot see the home space: not in a lens, not listed.
+    expect(await repo.getBySlugForWorkspace("deal-room", WS, USER)).toBeNull();
+    expect(await repo.getBySlug("deal-room", undefined, USER)).toBeNull();
+    expect(
+      (await repo.getAccessibleProfiles(USER, WS)).map((p) => p.id)
+    ).not.toContain(id);
+    // Its owner: in another space's lens, and listed.
+    expect((await repo.getBySlugForWorkspace("deal-room", WS, OTHER))?.id).toBe(
+      id
+    );
+    expect(
+      (await repo.getAccessibleProfiles(OTHER, "")).map((p) => p.id)
+    ).toContain(id);
+  });
+
   it("a space-scoped kind stays in its home until it is granted", async () => {
     const id = await seedProfile({
       slug: "deal",
@@ -422,6 +454,11 @@ describe("the kind floor — one rule for slug resolution and listing", () => {
     await repo.grantAccess(id, WS2, USER);
     expect((await repo.getBySlugForWorkspace("deal", WS2))?.id).toBe(id);
     expect(await repo.getGrantedWorkspaces(id)).toEqual([WS2]);
+    const { rows } = await pg.query<{ granted_by: string | null }>(
+      `select granted_by from space_access where object_id = $1`,
+      [id]
+    );
+    expect(rows).toEqual([{ granted_by: USER }]);
   });
 
   it("the lens's own kind wins over a pod-wide kind of another space", async () => {

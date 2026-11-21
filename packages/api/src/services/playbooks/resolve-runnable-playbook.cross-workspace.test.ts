@@ -27,14 +27,8 @@ const WS_B = "00000000-0000-4000-8000-00000000000b";
 const PB_ID = "00000000-0000-4000-8000-000000000091";
 
 function dbReturning(playbook: unknown) {
-  // No `space_access` row shares the playbook with another space.
-  const noGrants = {
-    from: () => noGrants,
-    where: vi.fn().mockResolvedValue([]),
-  };
   return {
     query: { playbooks: { findFirst: vi.fn().mockResolvedValue(playbook) } },
-    select: () => noGrants,
   };
 }
 
@@ -47,7 +41,7 @@ describe("resolveRunnablePlaybook cross-workspace floor", () => {
     await expect(
       resolveRunnablePlaybook({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toThrow(
-      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or share it with space ${WS_B}.`
+      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}.`
     );
   });
 

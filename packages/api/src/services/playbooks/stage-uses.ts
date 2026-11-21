@@ -231,11 +231,11 @@ export async function resolveStageUses<S extends StageWithUses>(input: {
         `${at} uses playbook ${uses.playbookId}, which ${used ? "is archived" : "does not exist"}. Use a playbook id from synap_list_playbooks.`
       );
     }
-    if (!(await usableInSpace(db, "playbook", used, input.workspaceId))) {
+    if (!usableInSpace(used, input.workspaceId)) {
       refuse(
         input.workspaceId === null
           ? `${at} uses "${used.name}", which lives in one space; a pod-wide playbook runs in any space, so it can only use pod-wide playbooks.`
-          : `${at} uses "${used.name}", which lives in another space. A step can use a playbook of the same space, one shared with it, or a pod-wide one.`
+          : `${at} uses "${used.name}", which lives in another space. A step can use a playbook of the same space, or a pod-wide one.`
       );
     }
 
