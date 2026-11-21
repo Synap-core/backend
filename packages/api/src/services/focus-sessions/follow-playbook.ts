@@ -604,6 +604,15 @@ export async function followPlaybook(
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
 
+  // GRADES DECLARED UP FRONT (W5): the playbook's criteria merged above may
+  // declare grades the person gives on an output; their slots are filed now,
+  // owed once that output is delivered. After the commit, through the slot
+  // door's own lock; idempotent; never throws.
+  if (addedCriteria > 0) {
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+    await fileDeclaredGradeSlots(sessionId);
+  }
+
   // The stage the work is ALREADY in starts its run row's first step: the
   // stage runner records who works it (`enterStage`, spec 7111934d §3.1).
   // A follow that names no stage sits in none, so nothing is entered.

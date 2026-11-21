@@ -44,6 +44,7 @@ import type { FocusSession } from "@synap/database";
 import {
   isCriterionRequired,
   readCriteria,
+  type ExpectedOutput,
   type SessionCriterion,
   type SlotAnswerValue,
   type SlotAsk,
@@ -57,6 +58,7 @@ import {
   type EvaluatorKind,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
+import { createLogger } from "@synap-core/core";
 import { NotificationService } from "../../../notifications/NotificationService.js";
 import { updateExpectedOutputsLocked } from "../delegate-output.js";
 import { reconcileOwedSince } from "../update-session.js";
@@ -65,6 +67,8 @@ import { attestExpectedOutput } from "../satisfy-expected-output.js";
 
 /** Non-human attempts allowed per criterion per session before escalation. */
 export const MAX_NON_HUMAN_ATTEMPTS = 2;
+
+const logger = createLogger({ module: "criterion-evaluations" });
 
 /**
  * The registry type this file produces — declared under the lowercase name
@@ -323,7 +327,13 @@ export async function escalateFailingCriteria(params: {
     if (attempts < MAX_NON_HUMAN_ATTEMPTS) continue;
     if (latest.get(criterion.key) === "pass") continue;
     // After any commit: the owed-slot door takes its own row lock.
-    if (await fileCriterionSlot(session.id, criterion)) {
+    if (
+      await fileCriterionSlot(
+        session.id,
+        criterion,
+        criterionSlotWhy(criterion)
+      )
+    ) {
       escalated.push({ criterion, attempts });
     }
   }
@@ -398,38 +408,242 @@ export function criterionVerdictOf(
   return v === "pass" || v === "fail" ? v : null;
 }
 
-/** File the human-owned slot for an escalated criterion; idempotent by label. */
+/**
+ * THE GRADES DECLARED UP FRONT (work-model W5), kept in step with the
+ * session's criteria — one locked write, after every criteria write (the
+ * create, update and follow doors, and their approved proposals). The rule is
+ * {@link reconcileGradeSlots}. NEVER THROWS: it runs after the session's own
+ * write has committed, so a failure is logged and reported as `error`, never
+ * thrown over a session that exists. `outputs` is the list as written, `null`
+ * when nothing changed.
+ */
+export async function fileDeclaredGradeSlots(sessionId: string): Promise<{
+  filed: string[];
+  outputs: ExpectedOutput[] | null;
+  error?: string;
+}> {
+  try {
+    const session = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, sessionId),
+      columns: { criteria: true, userId: true },
+    });
+    if (!session) return { filed: [], outputs: null };
+    const criteria = readCriteria(session.criteria);
+    const graded = new Set(
+      (await listSessionEvaluations({ sessionId, userId: session.userId }))
+        .filter((r) => r.evaluatorKind === "human")
+        .map((r) => r.criterionKey)
+    );
+    let result: ReturnType<typeof reconcileGradeSlots> = null;
+    await updateExpectedOutputsLocked(sessionId, (current) => {
+      result = reconcileGradeSlots(current, criteria, graded);
+      return result?.outputs ?? null;
+    });
+    const written = result as ReturnType<typeof reconcileGradeSlots>;
+    if (!written) return { filed: [], outputs: null };
+    // The list as stored (the lock stamps the new slot's key).
+    const row = await db.query.focusSessions.findFirst({
+      where: eq(focusSessions.id, sessionId),
+      columns: { expectedOutputs: true },
+    });
+    return {
+      filed: written.filed,
+      outputs: Array.isArray(row?.expectedOutputs)
+        ? (row.expectedOutputs as ExpectedOutput[])
+        : written.outputs,
+    };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.warn({ err, sessionId }, "declared grade slots not reconciled");
+    return { filed: [], outputs: null, error };
+  }
+}
+
+/**
+ * A grade slot filed for a criterion declared up front: a criterion slot
+ * naming the output it checks. The escalation never stamps `outputKey`, so its
+ * slots are never this, and this rule never touches them.
+ */
+function isDeclaredGradeSlot(o: ExpectedOutput | null | undefined): boolean {
+  return (
+    o?.kind === CRITERION_SLOT_KIND &&
+    typeof o.outputKey === "string" &&
+    o.outputKey !== ""
+  );
+}
+
+/** A criterion the person grades on an output it names: one that gets a slot. */
+function declaresGrade(c: SessionCriterion): boolean {
+  return isCriterionRequired(c) && c.check.kind === "human" && !!c.outputKey;
+}
+
+/**
+ * The pure half of {@link fileDeclaredGradeSlots}: the session's slots with
+ * its declared grade slots in step with `criteria`, or `null` when nothing
+ * changes (a second run over the same criteria writes nothing). A slot is
+ * matched to its criterion by `criterionKey` (by label only for a legacy
+ * criterion slot that carries none). For a declared grade slot not yet done:
+ *   - its criterion still declares a grade (required, `human`, an output
+ *     named): the slot follows it — label, why, and the output it waits on;
+ *   - its criterion was removed, made optional, moved to a machine check, or
+ *     no longer names an output: the slot is withdrawn
+ *     (`retiredReason: "withdrawn"`), never left owed;
+ * and for every criterion that declares a grade the person has not given yet
+ * (`graded`: criterion keys with a human verdict) and that holds no live slot,
+ * a withdrawn slot of its own comes back, else a new one is filed. Done slots
+ * and the escalation's slots are left as they are.
+ */
+export function reconcileGradeSlots(
+  outputs: readonly ExpectedOutput[],
+  criteria: readonly SessionCriterion[],
+  graded: ReadonlySet<string> = new Set(),
+  now: Date = new Date()
+): { outputs: ExpectedOutput[]; filed: string[] } | null {
+  const byKey = new Map(criteria.map((c) => [c.key, c]));
+  const at = now.toISOString();
+  let changed = false;
+  const next: ExpectedOutput[] = outputs.map((o) => {
+    if (!isDeclaredGradeSlot(o) || o.status === "done") return o;
+    if (o.retiredAt != null) return o;
+    const c = o.criterionKey ? byKey.get(o.criterionKey) : undefined;
+    if (!c || !declaresGrade(c)) {
+      changed = true;
+      return { ...o, retiredAt: at, retiredReason: "withdrawn" as const };
+    }
+    const synced = syncGradeSlot(o, c);
+    if (synced !== o) changed = true;
+    return synced;
+  });
+  const filed: string[] = [];
+  for (const c of criteria) {
+    if (!declaresGrade(c) || graded.has(c.key)) continue;
+    const label = normalizeExpectedLabel(criterionSlotLabel(c));
+    const mine = (o: ExpectedOutput | null | undefined) =>
+      o?.kind === CRITERION_SLOT_KIND &&
+      (o.criterionKey
+        ? o.criterionKey === c.key
+        : normalizeExpectedLabel(o.label) === label);
+    if (next.some((o) => mine(o) && o.retiredAt == null)) continue;
+    const withdrawn = next.findIndex(
+      (o) => mine(o) && isDeclaredGradeSlot(o) && o.status !== "done"
+    );
+    if (withdrawn !== -1) {
+      const { retiredAt: _at, retiredReason: _why, ...rest } = next[withdrawn]!;
+      next[withdrawn] = syncGradeSlot({ ...rest, owedSince: at }, c);
+      filed.push(c.key);
+      continue;
+    }
+    // Never a second slot under a label another slot already holds.
+    if (next.some((o) => normalizeExpectedLabel(o?.label) === label)) continue;
+    next.push(criterionSlot(c, declaredGradeWhy(c), now));
+    filed.push(c.key);
+  }
+  return changed || filed.length > 0 ? { outputs: next, filed } : null;
+}
+
+/** A declared grade slot following its criterion; the same object when equal. */
+function syncGradeSlot(o: ExpectedOutput, c: SessionCriterion): ExpectedOutput {
+  const label = criterionSlotLabel(c);
+  const why = declaredGradeWhy(c);
+  if (
+    o.label === label &&
+    o.why === why &&
+    o.outputKey === c.outputKey &&
+    o.criterionKey === c.key
+  ) {
+    return o;
+  }
+  return { ...o, label, why, outputKey: c.outputKey, criterionKey: c.key };
+}
+
+/** WHY the person grades a criterion declared up front (statement clipped). */
+export function declaredGradeWhy(criterion: SessionCriterion): string {
+  const statement =
+    criterion.statement.length > CRITERION_WHY_STATEMENT_MAX
+      ? `${criterion.statement.slice(0, CRITERION_WHY_STATEMENT_MAX - 1)}…`
+      : criterion.statement;
+  return `You grade this one: mark "${statement}" pass or fail.`;
+}
+
+/**
+ * A criterion's human-owned grade slot. `outputKey` is stamped ONLY for a
+ * grade declared up front: an escalated criterion failed its own checks and
+ * the person is asked now, whatever its output is doing.
+ */
+function criterionSlot(
+  criterion: SessionCriterion,
+  why: string,
+  now: Date = new Date(),
+  declared = true
+): ExpectedOutput {
+  return reconcileOwedSince(
+    {
+      kind: CRITERION_SLOT_KIND,
+      label: criterionSlotLabel(criterion),
+      // WHICH criterion this slot stands for, as a machine key. The label is
+      // prose and is clipped, so a surface must never match it back to find
+      // the criterion — that would fork this file's label format into every
+      // UI. Slots filed before this field existed carry none.
+      criterionKey: criterion.key,
+      // The output a declared grade waits on (`isGradeAwaitingOutput`).
+      ...(declared && criterion.outputKey
+        ? { outputKey: criterion.outputKey }
+        : {}),
+      status: "pending",
+      owner: "human",
+      blockedReason: "decision",
+      why,
+      // HOW the person answers it — pass or fail, rendered by every surface
+      // from the generic ask. Answering it reaches THIS module's grade door
+      // (`answerSessionSlot` → `gradeCriterionAsOwner`), never a second one.
+      ask: CRITERION_SLOT_ASK,
+    },
+    now
+  );
+}
+
+/** File the human-owned slot for a criterion's grade; idempotent by label. */
 async function fileCriterionSlot(
   sessionId: string,
-  criterion: SessionCriterion
+  criterion: SessionCriterion,
+  why: string
 ): Promise<boolean> {
-  const label = criterionSlotLabel(criterion);
-  const wanted = normalizeExpectedLabel(label);
+  const wanted = normalizeExpectedLabel(criterionSlotLabel(criterion));
   return updateExpectedOutputsLocked(sessionId, (current) => {
-    if (current.some((o) => normalizeExpectedLabel(o?.label) === wanted)) {
-      return null;
-    }
-    return [
-      ...current,
-      reconcileOwedSince({
-        kind: CRITERION_SLOT_KIND,
-        label,
-        // WHICH criterion this slot stands for, as a machine key. The label is
-        // prose and is clipped, so a surface must never match it back to find
-        // the criterion — that would fork this file's label format into every
-        // UI. Slots filed before this field existed carry none.
-        criterionKey: criterion.key,
-        status: "pending",
-        owner: "human",
-        blockedReason: "decision",
-        why: criterionSlotWhy(criterion),
-        // HOW the person answers it — pass or fail, rendered by every surface
-        // from the generic ask. Answering it reaches THIS module's grade door
-        // (`answerSessionSlot` → `gradeCriterionAsOwner`), never a second one.
-        ask: CRITERION_SLOT_ASK,
-      }),
-    ];
+    const next = withEscalationSlot(current, criterion, why, wanted);
+    return next === current ? null : [...next];
   });
+}
+
+/**
+ * The slots with the escalation's slot for `criterion` filed, or `outputs`
+ * itself when it is already there. Pure. A LIVE slot of the criterion (by
+ * `criterionKey`, else by label) means it is filed; a WITHDRAWN one comes back
+ * as itself, now the escalation's (no `outputKey`: owed at once), never
+ * leaving the required criterion with no way to be graded.
+ */
+export function withEscalationSlot(
+  outputs: readonly ExpectedOutput[],
+  criterion: SessionCriterion,
+  why: string,
+  wanted: string | undefined = normalizeExpectedLabel(
+    criterionSlotLabel(criterion)
+  ),
+  now: Date = new Date()
+): readonly ExpectedOutput[] {
+  const mine = (o: ExpectedOutput | null | undefined) =>
+    !!o &&
+    (o.kind === CRITERION_SLOT_KIND && o.criterionKey
+      ? o.criterionKey === criterion.key
+      : normalizeExpectedLabel(o.label) === wanted);
+  if (outputs.some((o) => mine(o) && o.retiredAt == null)) return outputs;
+  const withdrawn = outputs.findIndex((o) => mine(o) && o.status !== "done");
+  const slot = criterionSlot(criterion, why, now, false);
+  if (withdrawn === -1) return [...outputs, slot];
+  const was = outputs[withdrawn]!;
+  return outputs.map((o, i) =>
+    i === withdrawn ? { ...slot, ...(was.key ? { key: was.key } : {}) } : o
+  );
 }
 
 /** Every evaluation row of a session, oldest first (owner-floored). */

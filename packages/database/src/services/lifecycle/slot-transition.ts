@@ -85,8 +85,10 @@ export function slotTransitionsOf(input: {
     seen.add(name);
     const was = prior.get(name);
     if (!was) continue; // declared now: a birth, not a move
-    const from = slotStatusOf(was);
-    const to = slotStatusOf(slot);
+    // Read in their lists: a grade comes due (pending → owed) when the output
+    // it waits on is made, a write to ANOTHER slot.
+    const from = slotStatusOf(was, input.before ?? []);
+    const to = slotStatusOf(slot, input.after ?? []);
     if (from === to) continue;
     const subjectId = slotSubjectId(input.session.id, slot)!;
     out.push({

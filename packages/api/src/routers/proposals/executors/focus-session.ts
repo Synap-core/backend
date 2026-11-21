@@ -534,6 +534,13 @@ export function registerFocusSessionExecutors(): void {
       // own `.returning()` / affected-row count as the evidence, never re-derive
       // it from the code path that decided to write.
       const created = insertedSessions[0];
+      // GRADES DECLARED UP FRONT (W5), as the direct create files them: after
+      // the commit, never thrown over the session that exists.
+      if (created) {
+        const { fileDeclaredGradeSlots } =
+          await import("../../../services/focus-sessions/evaluations/record.js");
+        await fileDeclaredGradeSlots(created.id);
+      }
       const effect: ProposalEffect = {
         applied: "verified",
         rows: insertedSessions.length,
@@ -1144,6 +1151,14 @@ export function registerFocusSessionExecutors(): void {
           before: undoBefore,
           after: updated,
         });
+
+        // GRADES DECLARED UP FRONT (W5): an approved criteria change keeps the
+        // grade slots in step, as the direct door does. Never throws.
+        if (set.criteria !== undefined && updated) {
+          const { fileDeclaredGradeSlots } =
+            await import("../../../services/focus-sessions/evaluations/record.js");
+          await fileDeclaredGradeSlots(sessionId);
+        }
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =

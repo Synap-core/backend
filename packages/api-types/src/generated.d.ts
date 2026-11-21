@@ -15528,6 +15528,21 @@ export interface SlotBlocks {
 	to?: string;
 }
 /**
+ * WHAT MOVES when the person answers, as data (work-model W5): ONE thing of
+ * the same session, named by its key — an output or a criterion. The prose
+ * line (`ExpectedOutput.unblocks`) stays what the person reads. The agent
+ * declares it, so the pod only RE-CHECKS what it names, through the existing
+ * doors (`notifications/session-unblock-reactor.ts`, api): the output's claim
+ * is read against its evidence again, the criterion's own check runs again (a
+ * criterion the person grades gets its grade card). It never writes the
+ * person's attestation or verdict. A stage moves on by itself (W6).
+ */
+export type SlotUnblocksTarget = {
+	output: string;
+} | {
+	criterion: string;
+};
+/**
  * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
  * intent (`request_connection`), a playbook the pod runs, or a capability.
  * The closed `blockedReason` list stays "what to build"; this says what to RUN.
@@ -15643,6 +15658,13 @@ export interface ExpectedOutput {
 	 * ownership fields when the slot goes back to the agent.
 	 */
 	unblocks?: string;
+	/**
+	 * WHAT MOVES, as data: the output or criterion of this session the answer
+	 * re-checks ({@link SlotUnblocksTarget}). DECLARED by the agent beside
+	 * `unblocks`, optional, and cleared with it when the slot goes back to the
+	 * agent.
+	 */
+	unblocksTarget?: SlotUnblocksTarget;
 	/**
 	 * WHEN the slot became the human's — stamped the moment `owner` becomes
 	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -15792,6 +15814,18 @@ export interface ExpectedOutput {
 	 * matching the label.
 	 */
 	criterionKey?: string;
+	/**
+	 * On a criterion slot: the key of the session output its criterion checks
+	 * (the criterion's own `outputKey`), written by the door that files the
+	 * slot (api `services/focus-sessions/evaluations/record.ts`) and never by a
+	 * client — the `criterionKey` precedent. While that output is not
+	 * delivered, the grade is not owed (`isGradeAwaitingOutput`,
+	 * `@synap-core/types/units`): the person grades work that exists.
+	 *
+	 * ABSENT on every slot filed before this field existed and on a slot whose
+	 * criterion names no output: such a grade is owed as soon as it is filed.
+	 */
+	outputKey?: string;
 	/**
 	 * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
 	 * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
@@ -42153,6 +42187,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
+					outputKey?: string | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
 					paramName?: string | undefined;
@@ -42255,6 +42290,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
 					unblocks?: string | undefined;
+					unblocksTarget?: {
+						output: string;
+					} | {
+						criterion: string;
+					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
@@ -43533,6 +43573,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
+					outputKey?: string | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
 					paramName?: string | undefined;
@@ -43635,6 +43676,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
 					unblocks?: string | undefined;
+					unblocksTarget?: {
+						output: string;
+					} | {
+						criterion: string;
+					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;

@@ -9,6 +9,8 @@
  */
 import { describe, it, expect } from "vitest";
 import { PgDialect } from "drizzle-orm/pg-core";
+import { sql as drizzleSql } from "drizzle-orm";
+import { gradeAwaitsOutputSql } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { deliverableOwedBy } from "@synap-core/types/units";
 import {
@@ -41,37 +43,40 @@ const OWED: ExpectedOutput = {
 describe("isOwedSlot — the TypeScript twin", () => {
   it("counts a slot with NO `status` key — the majority case on the live pod", () => {
     expect(OWED.status).toBeUndefined();
-    expect(isOwedSlot(OWED)).toBe(true);
+    expect(isOwedSlot(OWED, [])).toBe(true);
   });
 
   it("counts an explicitly pending slot", () => {
-    expect(isOwedSlot({ ...OWED, status: "pending" })).toBe(true);
+    expect(isOwedSlot({ ...OWED, status: "pending" }, [])).toBe(true);
   });
 
   it("drops a delivered slot", () => {
-    expect(isOwedSlot({ ...OWED, status: "done" })).toBe(false);
+    expect(isOwedSlot({ ...OWED, status: "done" }, [])).toBe(false);
   });
 
   it("drops an agent-owned slot — absent `owner` means agent", () => {
     const { owner: _o, ...agentOwned } = OWED;
-    expect(isOwedSlot(agentOwned as ExpectedOutput)).toBe(false);
-    expect(isOwedSlot({ ...OWED, owner: "agent" })).toBe(false);
+    expect(isOwedSlot(agentOwned as ExpectedOutput, [])).toBe(false);
+    expect(isOwedSlot({ ...OWED, owner: "agent" }, [])).toBe(false);
   });
 
   it("drops a RETIRED slot — the cancelled-session receipt", () => {
     expect(
-      isOwedSlot({
-        ...OWED,
-        retiredAt: "2026-09-08T13:00:00.000Z",
-        retiredReason: "session_cancelled",
-      })
+      isOwedSlot(
+        {
+          ...OWED,
+          retiredAt: "2026-09-08T13:00:00.000Z",
+          retiredReason: "session_cancelled",
+        },
+        []
+      )
     ).toBe(false);
   });
 
   it("still counts a slot the agent merely CLAIMED it did", () => {
     // A claim is evidence to show the human, never proof — the slot is owed
     // until the human says otherwise.
-    expect(isOwedSlot({ ...OWED, claimedDone: true })).toBe(true);
+    expect(isOwedSlot({ ...OWED, claimedDone: true }, [])).toBe(true);
   });
 });
 
@@ -216,10 +221,10 @@ describe("stampRetired — the cancelled-session receipt", () => {
 
   it("makes the slot stop being owed — the point of the stamp", () => {
     const [retired] = stampRetired([OWED], "session_cancelled");
-    expect(isOwedSlot(retired!)).toBe(false);
+    expect(isOwedSlot(retired!, [])).toBe(false);
     // Reversible in the way a delete is not: clear the receipt, it is owed again.
     const { retiredAt: _a, retiredReason: _r, ...restored } = retired!;
-    expect(isOwedSlot(restored as ExpectedOutput)).toBe(true);
+    expect(isOwedSlot(restored as ExpectedOutput, [])).toBe(true);
   });
 });
 
@@ -229,12 +234,12 @@ describe("retirementForClose — which exit ends the obligation", () => {
   it("CANCELLED retires the owed slots and reports how many", () => {
     const result = retirementForClose(outputs, "cancelled");
     expect(result?.retiredSlots).toBe(1);
-    expect(isOwedSlot(result!.outputs[0]!)).toBe(false);
+    expect(isOwedSlot(result!.outputs[0]!, [])).toBe(false);
   });
 
   it("CLOSED leaves them owed — the work outlives the session", () => {
     expect(retirementForClose(outputs, "closed")).toBeNull();
-    expect(isOwedSlot(outputs[0]!)).toBe(true);
+    expect(isOwedSlot(outputs[0]!, [])).toBe(true);
   });
 
   it("FAILED leaves them owed too", () => {
@@ -430,7 +435,14 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
 
   it("both builders carry EXACTLY these clauses — a fourth fails here", () => {
     // Counting the keys, not the string, so reformatting the SQL cannot break
-    // this while adding a clause still does.
+    // this while adding a clause still does. The slot-only clauses plus the
+    // one read in the session (a grade waiting on its output).
+    const expected = keysIn(
+      `${OWED_SLOT_CLAUSES.join(" ")} ${
+        new PgDialect().sqlToQuery(gradeAwaitsOutputSql(drizzleSql`x`)).sql
+      }`
+    );
+    expect(expected.has("outputKey")).toBe(true);
     for (const [label, rendered] of [
       ["WHERE", whereSql],
       ["ORDER BY", orderSql],
@@ -438,7 +450,7 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
       expect(
         keysIn(rendered),
         `${label} must test exactly the owed-slot fields`
-      ).toEqual(keysIn(OWED_SLOT_CLAUSES.join(" ")));
+      ).toEqual(expected);
     }
   });
 
@@ -463,7 +475,7 @@ describe("the owed predicate is a SET, not three strings that happen to appear",
     ];
     for (const row of rows) {
       const slot = { kind: "text", label: "x", ...row } as ExpectedOutput;
-      expect({ row, owed: isOwedSlot(slot) }).toEqual({
+      expect({ row, owed: isOwedSlot(slot, []) }).toEqual({
         row,
         owed: deliverableOwedBy(slot) === "you",
       });

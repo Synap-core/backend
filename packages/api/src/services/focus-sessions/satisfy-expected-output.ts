@@ -706,6 +706,9 @@ function slotAttestedEventData(
     askMode: slot.ask?.mode ?? null,
     attestedBy,
     attestedAt,
+    // What the person's deed re-checks, as data (`SlotUnblocksTarget`), read
+    // from the slot as it was: the attestation hands it on.
+    ...(slot.unblocksTarget ? { unblocksTarget: slot.unblocksTarget } : {}),
   };
 }
 
