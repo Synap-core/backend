@@ -180,6 +180,10 @@ import {
   CAL_BACKFILL_CRON_QUEUE,
 } from "./cal-backfill-cron.js";
 import {
+  handleDegradedCaptureSweep,
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
+} from "./degraded-capture-sweep.js";
+import {
   handleFirefliesIngest,
   handleFirefliesBackfillCron,
   FIREFLIES_INGEST_QUEUE,
@@ -462,6 +466,8 @@ const ALL_QUEUES = [
   // violated → registerCronSchedules aborted → every cron after cal-backfill
   // in cron.ts silently never scheduled (found live 2026-07-12).
   CAL_BACKFILL_CRON_QUEUE,
+  // Captures saved without AI, structured once it answers (every 30min).
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
   FIREFLIES_INGEST_QUEUE,
   FIREFLIES_BACKFILL_CRON_QUEUE,
   INBOUND_ATTACHMENT_QUEUE,
@@ -1089,6 +1095,14 @@ export async function registerAllWorkers(): Promise<void> {
     handleCalBackfillCron(job)
   );
   logger.info("Registered worker: cal-backfill-cron");
+
+  // Degraded-capture sweep (cron: every 30min) — invokes the api-side sweep
+  // (IoC slot): text captures saved raw while the AI was unavailable or over
+  // quota are structured again, a few per run, once it answers.
+  await boss.work(DEGRADED_CAPTURE_SWEEP_QUEUE, async ([job]: any[]) =>
+    handleDegradedCaptureSweep(job)
+  );
+  logger.info("Registered worker: degraded-capture-sweep");
 
   // Fireflies transcript ingest (on-demand) — the inbound webhook enqueues one
   // job per completed meeting; the api-side runner (IoC slot) fetches the
