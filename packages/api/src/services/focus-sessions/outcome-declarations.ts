@@ -66,11 +66,6 @@ export const outcomeDeclarationSchema = z
         capability: z.string().min(1).max(200).optional(),
         evidenceKey: z.string().min(1).max(80).optional(),
         hint: z.string().max(1000).optional(),
-        /**
-         * kind=capability: the verb's arguments, carried onto the criterion's
-         * `check.params` and validated there (`sessionCriterionSchema`).
-         */
-        params: z.record(z.string(), z.unknown()).optional(),
       })
       .optional(),
     required: z.boolean().optional(),
@@ -131,7 +126,6 @@ function criterionOf(
       ...(verify.capability ? { capability: verify.capability } : {}),
       ...(verify.evidenceKey ? { evidenceKey: verify.evidenceKey } : {}),
       ...(verify.hint ? { hint: verify.hint } : {}),
-      ...(verify.params ? { params: verify.params } : {}),
     },
   };
 }

@@ -1883,12 +1883,6 @@ export interface SessionCriterion {
     evidenceKey?: string;
     /** kind=judge: what the judge should look at. */
     hint?: string;
-    /**
-     * kind=capability: the arguments the verb runs with, beside the ones the
-     * evaluator always passes (`sessionId`, `criterionKey`, `outcome`). A
-     * measure is `{ op, params, threshold, comparator }` for `measure.check`.
-     */
-    params?: Record<string, unknown>;
   };
   /** Set when copied from a stage. */
   stageKey?: string;
@@ -1931,14 +1925,6 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const capability = optionalString(check!.capability);
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
-    // A plain object only (a measure's arguments); anything else is dropped,
-    // the criterion is kept.
-    const params =
-      check!.params &&
-      typeof check!.params === "object" &&
-      !Array.isArray(check!.params)
-        ? (check!.params as Record<string, unknown>)
-        : undefined;
     const stageKey = optionalString(e.stageKey);
     const outputKey = optionalString(e.outputKey);
     // Closed sets: an unknown meaning or `about` is dropped (the criterion is
@@ -1961,7 +1947,6 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
         ...(capability ? { capability } : {}),
         ...(evidenceKey ? { evidenceKey } : {}),
         ...(hint ? { hint } : {}),
-        ...(params ? { params } : {}),
       },
       ...(stageKey ? { stageKey } : {}),
       ...(checkKind ? { checkKind } : {}),
