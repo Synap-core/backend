@@ -972,6 +972,49 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    // ── Read a public JSON API on an allowed host ────────────────────────────
+    {
+      name: "http.get_json",
+      kind: "builtin",
+      scope: "pod",
+      intent: "fetch_record",
+      description:
+        "GET a public JSON API that needs no key (open data: company registers, public records) and return the parsed JSON. " +
+        "Only hosts on the pod's allow-list, https only, public addresses only, on every redirect too; no credentials or cookies are sent. " +
+        "Use when: an open API answers what you need. Don't use when: you read a web page (web.read), or the API needs a key (install its tool). " +
+        "A host not on the list is refused with what to do: ask for it with http.allow_host, which files a proposal the person approves. " +
+        "Returns { status: ok, url, contentType, bytes, truncated, json } (json is cut with a marker past about 60,000 characters) or { status: refused, reason, message, allowedHosts? }. " +
+        "Args: url (required, https); query (optional: name → value, added to the URL); headers (optional: Accept, Accept-Language only).",
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: { type: "string" },
+          query: { type: "object", additionalProperties: true },
+          headers: { type: "object", additionalProperties: true },
+        },
+      },
+    },
+    {
+      name: "http.allow_host",
+      kind: "builtin",
+      scope: "pod",
+      // An agent never adds a host itself: no rule or grant runs this verb on
+      // its own, so an agent's run is always a proposal the person approves.
+      metadata: { proposeOnly: true },
+      description:
+        "Ask to add a host to the pod's allow-list for http.get_json (e.g. recherche-entreprises.api.gouv.fr). " +
+        "For an agent this ALWAYS files a proposal the person approves; it never adds the host itself. A pod admin's own run adds it at once. " +
+        "Returns { status: allowed, host, alreadyAllowed } once applied. Args: host (required: the name only, no scheme, port or path); reason (optional: why it is needed, shown on the proposal).",
+      parameters: {
+        type: "object",
+        required: ["host"],
+        properties: {
+          host: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
     {
       name: "inbound_source.connect",
       kind: "builtin",

@@ -34,7 +34,11 @@ import {
   isFullAccessGrant,
 } from "@synap/database";
 import { governanceRules, proposals, skills } from "@synap/database/schema";
-import { capabilityVerbAllowsRuleWiden } from "@synap/governance-policy";
+import {
+  capabilityRuleRank,
+  capabilityVerbAllowsRuleWiden,
+  decidingCapabilityRule,
+} from "@synap/governance-policy";
 import {
   actionRunModeOf,
   type ActionRunMode,
@@ -82,12 +86,22 @@ interface ModeRuleRow {
   verdict: "auto" | "propose" | "deny";
 }
 
-/** Which row decides: a deny wins, as it wins a tie at the resolver. */
+/**
+ * Which row decides: these rows share one rank (every AI × the pod × this
+ * action), so the gate's own tie rule picks it: the stricter verdict, never >
+ * asks first > runs on its own (`decidingCapabilityRule`, the one ranking).
+ * It used to prefer "auto" over "propose", so the tool page read "runs on its
+ * own" where the gate asked first (finding ac28928c).
+ */
 function decidingRow(rows: readonly ModeRuleRow[]): ModeRuleRow | undefined {
-  return (
-    rows.find((r) => r.verdict === "deny") ??
-    rows.find((r) => r.verdict === "auto") ??
-    rows[0]
+  return decidingCapabilityRule(
+    rows.map((rule) => ({
+      rule,
+      rank: capabilityRuleRank(
+        { principalKind: "any", scopeKind: "pod" },
+        "action"
+      ),
+    }))
   );
 }
 

@@ -230,6 +230,10 @@ describe("W6 read/resolve verbs — registry", () => {
       "governance.recommend_tighten",
       "governance.recommend_tighten_posture",
       "graph.relations",
+      // http.get_json (W3-6) GETs a public JSON API on a host the pod allows
+      // and returns the parsed JSON; it writes nothing. Adding a host
+      // (http.allow_host) is a write and stays gated.
+      "http.get_json",
       // lens.page — the lens page read (signals.list under the caller's floor),
       // a refresher's grounding read; writes nothing, so it must auto-run in
       // the refresher flow.

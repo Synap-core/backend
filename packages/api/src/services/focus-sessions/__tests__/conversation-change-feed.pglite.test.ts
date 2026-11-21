@@ -22,6 +22,7 @@
  * 0342, the listener. Stubbed: the side-effect fan-out (no transport here).
  */
 
+import { closedNotDoneReport } from "../../../__tests__/closed-not-done-report.js";
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -661,6 +662,34 @@ describe("the conversation change feed", () => {
     )!;
     expect(pause.kind).toBe("status_moved");
     expect((pause.move as { hold: unknown }).hold).toBeNull();
+  });
+
+  it("blocker_ended: a blocker closed with required work open is not delivered", async () => {
+    const waiter = await session({ title: "Waits on a not-done close" });
+    const blocker = await session({ title: "Closed anyway" });
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values (gen_random_uuid(), 'session', $1, 'session', $2, 'blocked_by', '{}'::jsonb, now())`,
+      [waiter.sessionId, blocker.sessionId]
+    );
+    await q(
+      `update focus_sessions set verification_report = $2::jsonb where id = $1`,
+      [blocker.sessionId, JSON.stringify(closedNotDoneReport())]
+    );
+    const cursor = new Date(Date.now() - 1).toISOString();
+    await setSessionStatus(db, {
+      sessionId: blocker.sessionId,
+      from: "active",
+      to: "closed",
+      actor: { kind: "human", userId: OWNER },
+    });
+    const res = await wait({ events: ["blocker_ended"], since: cursor });
+    const ended = res.events!.find((e) => e.session!.id === waiter.sessionId)!;
+    expect(ended.blocker).toMatchObject({
+      sessionId: blocker.sessionId,
+      status: "closed",
+      delivered: false,
+    });
   });
 
   it("blocker_ended reads through the session read floor: a blocker the caller may not read is not news", async () => {

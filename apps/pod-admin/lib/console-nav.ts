@@ -255,6 +255,24 @@ export const CONSOLE_NAV = [
         audience: "admin",
       },
       {
+        // Approvals' two tuning pages (D5: moved from the desktop's Settings
+        // › Approvals), reached from its header, never listed in the nav.
+        id: "writeLimits",
+        href: "/approvals/limits",
+        label: "Daily write limits",
+        icon: "Gauge",
+        within: "approvals",
+        audience: "admin",
+      },
+      {
+        id: "calibration",
+        href: "/approvals/calibration",
+        label: "Calibration",
+        icon: "Activity",
+        within: "approvals",
+        audience: "admin",
+      },
+      {
         id: "computers",
         href: "/computers",
         label: "Computers",
