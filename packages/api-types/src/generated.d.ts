@@ -9925,6 +9925,8 @@ export interface UnmodeledProperty {
 	key: string;
 	/** Closest VALID property slug, when one is close enough to be a likely typo. */
 	didYouMean?: string;
+	/** The kind's status field the value was moved to (a batch create). */
+	movedTo?: string;
 }
 /**
  * One field a profile MODELS, as a writer needs it before the write: the key,

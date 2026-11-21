@@ -31,6 +31,7 @@ import {
   normalizeKnowledgeProperties,
 } from "@synap/database";
 import type { RoutingMemory } from "../services/routing-memory.js";
+import type { EntitySchemaValidator } from "../services/import/structuring.js";
 import { importItemMetadataBlock, type ImportItem } from "./import-items.js";
 import {
   mergeStructureRunMeta,
@@ -199,12 +200,7 @@ interface DeepStructureOptions {
    * which is honest (a note IS a note) and keeps the prose retrievable. Omitted
    * → no preflight (prior behaviour).
    */
-  validateEntity?: (input: {
-    profileSlug: string;
-    title?: string;
-    properties?: Record<string, unknown>;
-    content?: string;
-  }) => Promise<{ valid: boolean; errors: string[] }>;
+  validateEntity?: EntitySchemaValidator;
   /**
    * Entity names found in EARLIER chunks of a larger import, pre-seeded into the
    * `existingEntityNames` hint so this chunk unifies entities it has not itself
