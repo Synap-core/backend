@@ -37,6 +37,8 @@ const h = vi.hoisted(() => ({
   freshSlugs: new Set<string>(),
   /** What `pendingTemplateDataChanges` answers (the data-change hold). */
   pendingDataChanges: [] as unknown[],
+  /** Every playbook write files a real pending proposal (a floor). */
+  proposePlaybooks: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -77,6 +79,12 @@ vi.mock("@synap/database", async (importOriginal) => {
       views: { wouldOrphan: [] },
     }),
     pendingTemplateDataChanges: async () => h.pendingDataChanges,
+    // PGlite is one connection and `actual.sql` is a real pool: the lock door
+    // (a reserved pool connection) has nothing to pin here, so it just runs.
+    // Unmocked, every apply took a real Postgres connection (green only where
+    // one listens, ECONNREFUSED on the devbox).
+    withAdvisoryLock: async (_k1: string, _k2: string, fn: () => unknown) =>
+      fn(),
     // A FRESH create's layer-1 engine runs on the database package's own
     // client (not this PGlite): stand it in with the row it would write,
     // following its contract (left "pending", the version handed back). A
@@ -148,6 +156,24 @@ vi.mock("../../../../utils/permission-check.js", async (importOriginal) => {
     checkPermissionOrPropose: vi.fn(
       async (opts: { agentUserId?: string } & Record<string, unknown>) => {
         h.gateCalls.push(opts);
+        // A floor on playbook writes, whoever writes (perso pod, 18 Nov 2026:
+        // Operations' new playbook was re-filed): a real pending row, so the
+        // apply's warning reads it as waiting.
+        if (h.proposePlaybooks && opts.subjectType === "playbook") {
+          const proposalId = randomUUID();
+          await h.client!.query(
+            `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
+             values ($1,$2,'playbook',$3,'create','{}'::jsonb,'pending')`,
+            // One placeholder per column: PGlite refuses one $n deduced as
+            // two types (uuid id, text target_id).
+            [
+              proposalId,
+              (opts.workspaceId as string | null) ?? null,
+              proposalId,
+            ]
+          );
+          return { proposalId, proposalType: "create" };
+        }
         // `automation.create` is in DEFAULT_AUTO_APPROVE: an agent's create
         // applies, and the automations door's draft floor is what keeps it
         // from firing. Every other agent write proposes.
@@ -329,6 +355,17 @@ async function stampOf(ws: string): Promise<unknown> {
   return rows[0]?.settings?.packageVersion;
 }
 
+/** The proposal row after the approval: its status and what the apply did. */
+async function decidedRow(
+  id: unknown
+): Promise<{ status: string; runResult: unknown }> {
+  const { rows } = await q<{ status: string; data: Record<string, unknown> }>(
+    `select status, data from proposals where id = $1`,
+    [id]
+  );
+  return { status: rows[0]!.status, runResult: rows[0]!.data?.runResult };
+}
+
 async function playbookNames(ws: string): Promise<string[]> {
   const { rows } = await q<{ name: string }>(
     `select name from playbooks where workspace_id = $1 and status <> 'archived' order by name`,
@@ -395,6 +432,10 @@ describe("an agent's template update of an installed space", () => {
     ).toEqual([]);
     expect(await stampOf(ws)).toBe("h-v2");
     expect(result.versionStamped).toBe(true);
+    expect(await decidedRow(row.id)).toEqual({
+      status: "approved",
+      runResult: { finished: true },
+    });
     // The agent is still enrolled, so its follow-on writes don't become joins.
     const { rows } = await q<{ role: string }>(
       `select role from workspace_members where workspace_id = $1 and user_id = $2`,
@@ -423,9 +464,41 @@ describe("an agent's template update of an installed space", () => {
     // …and the reviewer is TOLD, in the pod's one sentence — never a clean
     // approval for an update that did not finish (review2 O2) — naming what
     // did not land and why (the finisher records each line, #350).
-    expect(result.refusals).toEqual([
-      'Not finished: part of builder-broken did not apply (playbooks:Design to implementation: goalTemplate has placeholders no run will fill: {design}. Declare "design" in params, e.g. params: [{ "name": "design", "type": "text", "required": true }]). Run `synap templates update builder-broken` to retry.',
-    ]);
+    const why =
+      'Not finished: part of builder-broken did not apply (playbooks:Design to implementation: goalTemplate has placeholders no run will fill: {design}. Declare "design" in params, e.g. params: [{ "name": "design", "type": "text", "required": true }]). Run `synap templates update builder-broken` to retry.';
+    expect(result.refusals).toEqual([why]);
+    // …and the PROPOSAL says it too, not only the approve reply (8ef951e8).
+    expect(await decidedRow(row.id)).toEqual({
+      status: "approved",
+      runResult: { finished: false, reason: why },
+    });
+  });
+
+  it("an approved update whose new playbook waits on a proposal says so on the proposal (8ef951e8)", async () => {
+    const slug = "operations-waits";
+    h.templates.set(slug, templateV2(slug, ADDED));
+    const ws = await installedSpace(slug);
+    const { row } = await agentUpdate(slug);
+    h.proposePlaybooks = true;
+    try {
+      const result = (await approve(row)) as unknown as Record<string, unknown>;
+      expect(result).toMatchObject({ success: true, primaryId: ws });
+      // Nothing claims the version: the next update finishes it.
+      expect(await stampOf(ws)).toBe("h-v1");
+      expect(await playbookNames(ws)).toEqual(["Evaluate Feature"]);
+      // The row the person and the agent read says why, with the next steps.
+      expect(await decidedRow(row.id)).toEqual({
+        status: "approved",
+        runResult: {
+          finished: false,
+          reason: expect.stringMatching(
+            /^Waiting on your approval of \d+ proposals?: .+ Then finish the update: .+operations-waits/
+          ),
+        },
+      });
+    } finally {
+      h.proposePlaybooks = false;
+    }
   });
 
   it("an approved update whose stamp is held for a data change tells the reviewer it waits on them", async () => {
@@ -451,6 +524,15 @@ describe("an agent's template update of an installed space", () => {
       expect(result.refusals).toEqual([
         expect.stringMatching(/changes existing data, and waits for you/),
       ]);
+      expect(await decidedRow(row.id)).toEqual({
+        status: "approved",
+        runResult: {
+          finished: false,
+          reason: expect.stringMatching(
+            /changes existing data, and waits for you/
+          ),
+        },
+      });
       // The SEAM: the finisher records the hold, and health reads it back —
       // the person sees "needs your OK", not a plain "update available".
       const { listWorkspaceTemplateHealth } =
