@@ -3118,16 +3118,11 @@ DO $$ BEGIN
   CREATE TYPE grantable_type AS ENUM ('secret', 'tool', 'skill', 'command');
 EXCEPTION WHEN duplicate_object THEN null;
 END $$;
-DO $$ BEGIN
-  CREATE TYPE grant_exec_mode AS ENUM ('auto', 'propose', 'dry-run');
-EXCEPTION WHEN duplicate_object THEN null;
-END $$;
 
 CREATE TABLE IF NOT EXISTS "vault_grants" (
   "id"             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "grantable_type" grantable_type NOT NULL,
   "grantable_id"   text NOT NULL,
-  "exec_mode"      grant_exec_mode NOT NULL DEFAULT 'auto',
   "secret_id"      uuid,
   "proposal_id"    uuid,
   "granted_to"     text,
@@ -3143,7 +3138,6 @@ CREATE TABLE IF NOT EXISTS "vault_grants" (
 -- Ensure all columns exist on pre-existing tables (idempotent guard)
 ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "grantable_type" grantable_type;
 ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "grantable_id" text;
-ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "exec_mode" grant_exec_mode NOT NULL DEFAULT 'auto';
 ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "secret_id" uuid;
 ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "proposal_id" uuid;
 ALTER TABLE "vault_grants" ADD COLUMN IF NOT EXISTS "granted_to" text;

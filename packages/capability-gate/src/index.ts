@@ -13,8 +13,8 @@
  *       ranked rows (a "Never" refuses; an "auto" runs; an "ask first" or no
  *       row asks). A capability grant (`vault_grants`) means only "may use"
  *       (scope, expiry, uses): the gate never reads it, and its retired
- *       `exec_mode` became approval rows (migration 0435; the column is no
- *       longer read, and its contract step drops it).
+ *       `exec_mode` became approval rows (migration 0435; the column was
+ *       dropped by its contract step, 0448).
  *
  * It does DB READS (the tool/skill row when not passed in, the approval rows)
  * but performs NO writes. A grant's use-count is consumed separately at the

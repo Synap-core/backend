@@ -437,8 +437,8 @@ export const vaultGrants = pgTable(
     // No verdict here: a grant means only "may use" (scope, expiry, uses).
     // Whether the capability runs without asking is an approval row
     // (`governance_rules`), never the grant (decision D2, document b387ca45;
-    // `exec_mode` is no longer read or written since 0435, which moved its
-    // verdicts into approval rows; its contract step drops the column.)
+    // `exec_mode` moved its verdicts into approval rows in 0435 and was
+    // dropped by its contract step, 0448.)
 
     // The proposal this grant was approved against.
     proposalId: uuid("proposal_id"),
