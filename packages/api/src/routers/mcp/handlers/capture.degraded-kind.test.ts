@@ -198,9 +198,29 @@ describe("synap_capture degraded notice — the failure class the pod read (1c25
     h.structureResult = withDetail("quota");
     const out = await call({ text: "Call the accountant" });
 
-    expect(out.degradedNotice).toMatch(/out of credit/);
+    expect(out.degradedNotice).toMatch(/AI provider is having trouble/);
     expect(out.degradedNotice).toMatch(/do not tell them to try again/);
     expect(out.degradedNotice).not.toMatch(/could not be read/);
+  });
+
+  it("an account refusal ends with the payer action the IS stated", async () => {
+    h.structureResult = {
+      ...degraded("note"),
+      degradedReason: "credits_empty",
+      degradedDetail: {
+        cause: "http",
+        status: 402,
+        attempts: 1,
+        failureClass: "credits_empty",
+        action: "ask_admin",
+      },
+    };
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(
+      /out of AI credits.*Ask the pod's owner to top up credits\./
+    );
+    expect(out.degradedNotice).toMatch(/do not tell them to try again/);
   });
 
   it("a server error the retries did not outlast says re-capturing may work", async () => {

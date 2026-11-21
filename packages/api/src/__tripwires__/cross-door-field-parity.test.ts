@@ -1126,6 +1126,13 @@ interface Gap {
  */
 const ACKNOWLEDGED_GAPS: Gap[] = [
   {
+    service: "synthesize",
+    field: "failure",
+    door: "routers/knowledge.ts:answer",
+    reason:
+      "DELIBERATE, EVIDENCE NOT A FIELD — `failure` is the IS envelope behind `failureClass`, kept so a door can hand it to `describeAiFailure` (the payer action closes the sentence). This door publishes no sentence, only `failureClass`; the app reads the viewer's action from its own billing read. The MCP and Hub doors read it into their message and publish it as no field either.",
+  },
+  {
     service: "submit-capture-graph",
     field: "plan",
     door: "routers/hub-protocol/rest/capture.ts:/capture/structure",

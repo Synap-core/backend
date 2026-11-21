@@ -108,7 +108,9 @@ import type {
   StructuredFollowUp,
   WorkspaceTiebreakResult,
 } from "@synap/intelligence-client";
-import { classifyAiFailure, type AiFailureClass } from "../utils/ai-failure.js";
+import { describeAiFailure, type AiFailureClass } from "../utils/ai-failure.js";
+import type { IsFailureAction } from "@synap-core/types";
+import { resolveAiFailureState } from "@synap-core/types/ai-availability";
 import { classifyDegradedReason } from "../services/capture-agent/capture-degraded-guidance.js";
 import { findDegradedCaptureIdentity } from "../services/capture-agent/degraded-capture-identity.js";
 import {
@@ -461,13 +463,17 @@ export function resolveDegradedFallbackKind(
  *                  when the call reported none;
  *   attempts     — structure calls made, retries included;
  *   failureClass — the ONE failure door's class (`utils/ai-failure.ts`): what
- *                  a reader needs to say whether retrying can help.
+ *                  a reader needs to say whether retrying can help;
+ *   action       — the payer action the IS stated for this caller on an
+ *                  account refusal (`top_up`, `ask_admin`, …), as the failure
+ *                  door read it; absent when it stated none (never guessed).
  */
 export interface DegradedCaptureDetail {
   cause: StructureFailure["cause"] | "empty" | "unknown";
   status?: number;
   attempts: number;
   failureClass: AiFailureClass;
+  action?: IsFailureAction;
 }
 
 /** The detail of a structure call that answered nothing usable (null or auth). */
@@ -486,12 +492,37 @@ export function degradedDetailForFailure(
     failure.status !== undefined ? { status: failure.status } : {},
     failure.failure ? { failure: failure.failure } : {}
   );
+  const described = describeAiFailure(evidence);
   return {
     cause: failure.cause,
     ...(failure.status !== undefined ? { status: failure.status } : {}),
     attempts,
-    failureClass: classifyAiFailure(evidence),
+    failureClass: described.class,
+    // "none" is no payer action: an operator state carries it, and the field
+    // promises the action a payer can take.
+    ...(described.action && described.action !== "none"
+      ? { action: described.action }
+      : {}),
   };
+}
+
+/**
+ * The `degradedReason` of a structure call that answered nothing usable
+ * (not an auth throw). An IS refusal envelope whose code proves an AI
+ * availability state (credits, plan, payment, a paused budget, a provider or
+ * service state) is reported AS that code, the IS's own token, as the IS
+ * already reports `llm_budget_exceeded` on a degraded answer. Read as
+ * `is_invalid_response` it said "reachable, transient, retry" beside a
+ * `failureClass` of `account_quota` (seen live, 20 Nov 2026), and every door
+ * that branches on the reason told the caller to try again.
+ */
+export function degradedReasonForFailure(
+  failure: StructureFailure | undefined
+): DegradedCaptureReasonOrUnknown {
+  const code = (failure?.failure as { code?: unknown } | undefined)?.code;
+  return typeof code === "string" && resolveAiFailureState(code) !== null
+    ? code
+    : "is_invalid_response";
 }
 
 /**
@@ -1976,6 +2007,9 @@ const captureBaseRouter = router({
       //   is_auth_error      — IS rejected the pod credentials (401/403)
       //   is_invalid_response — IS reachable but returned null (5xx/validation/
       //                         timeout/network) — NOT a credentials problem
+      //   <IS refusal code>   — the IS refused for an availability state
+      //                         (`credits_empty`, `account_quota_exceeded`, …;
+      //                         `degradedReasonForFailure`)
       //   `degradedDetail` says which cause and failure class, so a reader can
       //   tell a 402 (never retry) from a cut stream (issue 1c252b3b).
       //
@@ -2200,7 +2234,7 @@ const captureBaseRouter = router({
         );
         return finishIntake(
           await degradedWithIdentity(
-            "is_invalid_response",
+            degradedReasonForFailure(structureFailure),
             degradedDetailForFailure(structureFailure, structureAttempts)
           ),
           { podDegraded: true }
