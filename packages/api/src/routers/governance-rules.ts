@@ -469,7 +469,7 @@ async function readRevocableRules(
 /**
  * Revoke these rules (soft, `revokedAt`) and the host seeds that copy them,
  * on the handle given: inside the caller's transaction when it has one.
- * Returns the revoked rows, in the order given.
+ * Returns the revoked rows as the update returned them.
  */
 async function revokeRulesIn(
   handle: Pick<typeof db, "select" | "insert" | "update">,
@@ -484,8 +484,7 @@ async function revokeRulesIn(
     .returning();
   const seeded = rules.filter(mayCarryHostSeed).map((r) => r.id);
   if (seeded.length > 0) await revokeHostSeeds(handle, seeded);
-  const byId = new Map(rows.map((r) => [r.id, r]));
-  return ids.flatMap((id) => (byId.has(id) ? [byId.get(id)!] : []));
+  return rows;
 }
 
 export const governanceRulesRouter = router({
@@ -1266,7 +1265,11 @@ export const governanceRulesRouter = router({
         rules.length > 1 || rules.some(mayCarryHostSeed)
           ? await db.transaction((tx) => revokeRulesIn(tx, rules))
           : await revokeRulesIn(db, rules);
-      const rule = revoked.find((r) => r.id === input.id) ?? existing;
+      // One rule: the row the update returned, as before; several: this id's.
+      const rule =
+        (rules.length === 1
+          ? revoked[0]
+          : revoked.find((r) => r.id === input.id)) ?? existing;
 
       return { rule };
     }),
