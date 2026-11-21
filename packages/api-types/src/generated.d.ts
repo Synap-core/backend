@@ -1698,7 +1698,7 @@ export type AiAction = IsFailureAction;
 export type AiViewerRole = "member" | "payer";
 export type AiAvailabilityTone = "error" | "info" | "warning";
 /** An abstract mark; each platform maps it to its own icon. */
-export type AiAvailabilityGlyph = "gauge" | "gauge-empty" | "lock" | "pause" | "wrench";
+export type AiAvailabilityGlyph = "gauge" | "gauge-empty" | "lock" | "offline" | "pause" | "payment" | "trouble";
 /**
  * How long a dismiss holds (founder: every notice is dismissible, except the
  * composer hint while blocked):
@@ -1754,6 +1754,11 @@ export interface AiAvailability {
 	 * the CP is the SSOT for the plan.
 	 */
 	switchedOff?: true;
+	/**
+	 * `provider_issue` only: the provider refused the pod's OWN key, so the
+	 * owner fixes it in their provider account (actor `payer`, action `none`).
+	 */
+	ownKey?: true;
 	resetsAt?: string;
 	/** Store this on dismiss; a stored key that no longer matches re-surfaces. */
 	dismissKey: string | null;
@@ -47759,7 +47764,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				answer: string | null;
 				degraded: DegradedTag[];
 				detail: "brief" | "full" | "sources" | undefined;
-				excerpts: SynthesisExcerpt[] | undefined;
+				excerpts?: SynthesisExcerpt[] | undefined;
 				failureClass: AiFailureClass | undefined;
 				lens: AppliedLens;
 				queue: AskQueueBlock | undefined;
