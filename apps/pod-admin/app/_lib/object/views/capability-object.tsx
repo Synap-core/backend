@@ -37,8 +37,10 @@
  * container); under each action that is on, every AI × that action (a row on
  * the action outranks the tool's), then the exceptions (one agent, a class, a
  * space), each a door to its agent with Take back. A pod admin changes every
- * AI's mode through `governanceRules.create` / `revoke` (written before taken
- * back, so in between the stricter row decides); everyone else reads it. A
+ * AI's mode in ONE call the pod applies in one transaction
+ * (`governanceRules.create` with `replacesRuleIds`, or `revoke` with
+ * `moreIds`); everyone else reads it. Every AI's mode is decided by the
+ * gate's own ranking (`@synap/governance-policy/rule-ranking`). A
  * read that failed says so with a retry; it never reads as "asks first".
  * Whether an action may run on its own at all (a public post never may) is
  * the pod's answer, `governanceRules.actionModes`.
@@ -296,10 +298,21 @@ export function CapabilityObject({
   async function applyEveryone(key: string, change: EveryoneChange) {
     setModePending(key);
     try {
-      // Written first, taken back after: in between the stricter row decides.
-      if (change.create) await createRule.mutateAsync(change.create);
-      for (const ruleId of change.revoke)
-        await revokeRule.mutateAsync({ id: ruleId });
+      // ONE call, one transaction on the pod: the new row and the rows it
+      // replaces never stand together, and a failure changes nothing.
+      const [first, ...more] = change.revoke;
+      if (change.create)
+        await createRule.mutateAsync({
+          ...change.create,
+          ...(change.revoke.length > 0
+            ? { replacesRuleIds: change.revoke }
+            : {}),
+        });
+      else if (first)
+        await revokeRule.mutateAsync({
+          id: first,
+          ...(more.length > 0 ? { moreIds: more } : {}),
+        });
       setModeRefusals(({ [key]: _dropped, ...rest }) => rest);
     } catch (err) {
       const unauthorized = redirectToLoginIfUnauthorized(
