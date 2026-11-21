@@ -667,17 +667,17 @@ export function aiAvailabilityCopy(
     a.action === "none" ? null : resolveActionLabel(a.action, "imperative");
   if (a.kind === "ok") {
     // The payment grace ({@link PAYMENT_GRACE}): the only `ok` with words.
-    // The date is the one that arrived as data; without it, no date.
+    // No date: no field states when the grace ends, and a reset date is not
+    // that end.
     if (a.action !== "fix_payment") return null;
-    const until = resets ? `until ${resets}` : "for now";
     return {
       // The same chip as a failed payment that stopped AI.
       label: resolveStatusLabel("suspended"),
-      title: `Payment needed — AI keeps working ${until}`,
+      title: "Payment needed \u2014 AI keeps working for now",
       cta,
       composerHint: null,
       askAdminMessage: null,
-      detail: `A payment for this pod failed. AI keeps working ${until}. ${actionLine(a.kind, a.action, false)}`,
+      detail: `A payment for this pod failed. AI keeps working for now. ${actionLine(a.kind, a.action, false)}`,
     };
   }
   const pod = options.podName?.trim() || "this pod";

@@ -549,22 +549,18 @@ describe("the payment grace: ok, but the plan's payment failed", () => {
     });
   });
 
-  it("says until when AI keeps working, only from a date that arrived", () => {
+  it("says AI keeps working for now, never a date (none states the grace's end)", () => {
     const a = grace("pod_owner");
-    const dated = aiAvailabilityCopy(a, { resetsLabel: "Dec 1" });
-    expect(dated).toMatchObject({
+    const copy = aiAvailabilityCopy(a, { resetsLabel: "Dec 1" });
+    expect(copy).toEqual({
       label: "Payment needed",
-      title: "Payment needed — AI keeps working until Dec 1",
+      title: "Payment needed \u2014 AI keeps working for now",
       cta: "Fix payment",
       composerHint: null,
       askAdminMessage: null,
+      detail:
+        "A payment for this pod failed. AI keeps working for now. Update the payment method to keep it running.",
     });
-    expect(dated?.detail).toMatch(
-      /AI keeps working until Dec 1\. Update the payment method to keep it running\.$/
-    );
-    expect(aiAvailabilityCopy(a)?.title).toBe(
-      "Payment needed — AI keeps working for now"
-    );
     expect(aiAvailabilityBanner(a)).toMatchObject({
       tone: "warning",
       action: { kind: "fix_payment" },
