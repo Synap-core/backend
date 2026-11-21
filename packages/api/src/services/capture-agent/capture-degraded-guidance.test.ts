@@ -74,6 +74,44 @@ describe("degraded reason → permanence class", () => {
     }
   );
 
+  // An IS refusal for an AI availability state (credits, plan, payment, a
+  // provider or service state), reported by its own code
+  // (`degradedReasonForFailure`, routers/capture.ts). The set is the deck's
+  // classification, never a hand list here.
+  it.each([
+    "credits_empty",
+    "account_quota_exceeded",
+    "not_entitled",
+    "access_suspended",
+    "account_inactive",
+    "insufficient_credit",
+  ])(
+    "%s is an AVAILABILITY refusal: not retryable, in the deck's words",
+    (reason) => {
+      expect(classifyDegradedReason(reason)).toBe("availability");
+      expect(isDegradedReasonRetryable(reason)).toBe(false);
+      const msg = describeDegradedForAgent(reason);
+      expect(msg).toContain(`(${reason})`);
+      expect(msg).toMatch(
+        /Retrying will not help until AI is available again\./
+      );
+      expect(msg).not.toMatch(/did not say why|operator|month/i);
+    }
+  );
+
+  it("an availability refusal ends with the action the IS stated, and invents none", () => {
+    expect(describeDegradedForAgent("credits_empty", "ask_admin")).toMatch(
+      /Captures still save\. Ask the pod's owner to top up credits\./
+    );
+    expect(describeDegradedForAgent("credits_empty")).not.toMatch(
+      /Top up|Ask the pod's owner/
+    );
+  });
+
+  it("a transient refusal code is not an availability state", () => {
+    expect(classifyDegradedReason("rate_limit")).toBe("unknown");
+  });
+
   it("an unrelated extraction_error is still UNKNOWN (the budget match is exact)", () => {
     expect(classifyDegradedReason("extraction_error: TypeError")).toBe(
       "unknown"
