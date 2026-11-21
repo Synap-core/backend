@@ -292,6 +292,40 @@ beforeEach(async () => {
   h.focus = null;
 });
 
+describe("criteria: an evidence check with no evidenceKey", () => {
+  it("is stored posted under the criterion's own key", async () => {
+    const sessionId = await seedOwnFreshSession();
+    await runWithCallingKey(KEY, () =>
+      updateFocusSession({
+        sessionId,
+        userId: USER,
+        agentUserId: AGENT,
+        criteria: [
+          {
+            key: "tests",
+            statement: "Tests pass",
+            check: { kind: "evidence" },
+          },
+        ] as never,
+      })
+    );
+    const stored = (await sessionRow(sessionId)).criteria as unknown[];
+    const pending = (await proposalsFor(sessionId)).filter(
+      (r) => r.status === "pending"
+    );
+    const written = stored.length
+      ? stored
+      : (payloadOf(pending[0]!).criteria as unknown[]);
+    expect(written).toEqual([
+      {
+        key: "tests",
+        statement: "Tests pass",
+        check: { kind: "evidence", evidenceKey: "tests" },
+      },
+    ]);
+  });
+});
+
 describe("M1: a granted filing is written whatever the rest of the patch decides", () => {
   it("filing + a criteria change: the filing lands on its applied receipt with Undo; only the criteria wait", async () => {
     const projectId = await seedProject();

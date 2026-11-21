@@ -9925,6 +9925,8 @@ export interface UnmodeledProperty {
 	key: string;
 	/** Closest VALID property slug, when one is close enough to be a likely typo. */
 	didYouMean?: string;
+	/** The kind's status field the value was moved to (a batch create). */
+	movedTo?: string;
 }
 /**
  * One field a profile MODELS, as a writer needs it before the write: the key,
@@ -15065,9 +15067,11 @@ export interface StoredCaptureScope {
 export interface CaptureGraphUnmodeledEntity {
 	label: string;
 	profileSlug: string;
+	/** `movedTo`: the kind's status field, where the pod stored the value. */
 	unmodeled: Array<{
 		didYouMean?: string;
 		key: string;
+		movedTo?: string;
 	}>;
 }
 /**
@@ -22521,19 +22525,18 @@ export interface IntentVerbMatch {
 	verbLabel: string;
 	/** read = pull · write/action = push. */
 	verbKind: "action" | "read" | "write";
-	/** Grant state, straight off the registry row — never re-derived here. */
-	granted: boolean;
 	/**
-	 * The GATE'S ACTUAL POSTURE for this verb — what a run meets, not the verb's
-	 * declared exec mode. Named `runPosture`, NOT `effectiveExecMode`: the two are
-	 * different axes. `ExecMode` is `"auto" | "dry-run" | "propose"` and comes from
-	 * the grant; `RunPosture` is `"auto" | "propose"` and is what
-	 * {@link runPosture} returns after short-circuiting on `granted` /
-	 * `declaredReadOnly`. Keeping the old name on the new value made the field read
-	 * as an exec mode while `dry-run` had silently become inexpressible — an agent
-	 * consuming this would take it as a mode it can set.
+	 * What an agent's run of this verb meets at the gate ({@link runPosture}):
+	 * `auto` runs now, `propose` files a review. Read from the approval row for
+	 * everyone; a row naming one agent is seen only by the gate.
 	 */
 	runPosture: "auto" | "propose";
+	/**
+	 * The pod has it switched on: the capability row is approved and this verb is
+	 * not `blocked: "not_enabled"`. False = a run is refused until the person
+	 * enables it, whoever calls.
+	 */
+	enabled: boolean;
 	/** False when no visible active+approved backing skill can execute the verb. */
 	backingSkillExecutable: boolean;
 	/** The capability kind this verb came from — `tool` | `builtin-tool` | `source-provider` | `skill` | `teaching-doc` | `command`. Carried so `foldVerbsByIntent` can prefer tool rows in O(1) without re-scanning `caps`. */
@@ -34266,6 +34269,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					parameters?: Record<string, unknown> | undefined;
 					pathTemplate: string;
 					query?: Record<string, string | string[]> | undefined;
+					readOnly?: boolean | undefined;
 					responseShape?: {
 						collectionAs?: string | undefined;
 						collectionPath?: string | undefined;
