@@ -179,6 +179,7 @@ const SESSION_CRITERIA_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
@@ -590,7 +591,7 @@ const PLAYBOOK_GUIDANCE_PROPERTY = {
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
-    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
   items: { type: "object" },
 };
 
@@ -627,7 +628,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       verify: {
         type: "object",
         description:
-          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
         properties: {
           kind: {
             type: "string",
@@ -636,6 +637,7 @@ const SESSION_OUTCOMES_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
