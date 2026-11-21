@@ -220,6 +220,12 @@ export interface ProposalExecutorResult {
   success: boolean;
   alreadyApproved?: boolean;
   primaryId?: string;
+  /**
+   * The object kind `primaryId` names when it is not the proposal's target
+   * kind (a run's session); null when it names no object a person opens (a
+   * key, a run). Absent: the target's kind. Read by the landed stamp.
+   */
+  primaryKind?: string | null;
   created?: number;
   linked?: number;
   /**

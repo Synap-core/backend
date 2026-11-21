@@ -124,6 +124,7 @@ import {
   buildMaterializedRecord,
   stampMaterialized,
 } from "../../services/proposals/stamp-materialized.js";
+import { stampLanded } from "../../services/proposals/stamp-landed.js";
 import {
   attachSourceBlob,
   discardProposalSourceBlob,
@@ -702,6 +703,7 @@ export async function completeProposalApproval(
   // before the stamps below, so a failure here stamps no deliverable.
   if (result.success && !result.queued) {
     await assertApprovalLanded(args.proposal, args.userId);
+    await stampLanded(args.proposal.id, result);
   }
 
   // VISIBLE: an approval made inside an app is recorded as such on the

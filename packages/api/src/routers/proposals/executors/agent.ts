@@ -150,6 +150,7 @@ export function registerAgentExecutors(): void {
         return {
           success: true,
           primaryId: payload.keyId,
+          primaryKind: null,
           effect:
             added.length > 0
               ? {
@@ -243,6 +244,7 @@ export function registerAgentExecutors(): void {
       return {
         success: true,
         primaryId: payload.keyId,
+        primaryKind: null,
         effect: {
           applied: "verified",
           rows: 1,

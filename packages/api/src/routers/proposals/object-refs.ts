@@ -23,7 +23,9 @@
  *
  * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
  * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
- * `document`, `channel`), so a host opens each through its one route table.
+ * `document`, `channel`, `view`), so a host opens each through its one route
+ * table. A caller that already knows its refs (what a proposal landed) passes
+ * them as `refs` instead of a payload.
  */
 
 import {
@@ -42,6 +44,7 @@ import {
   channels,
   skills,
   tools,
+  views,
 } from "@synap/database";
 import { documents, projectTracks } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
@@ -78,7 +81,8 @@ type RefTable =
   | "tool"
   | "track"
   | "document"
-  | "channel";
+  | "channel"
+  | "view";
 
 /** One id found in a payload, before resolution. */
 export interface CollectedIdRef {
@@ -126,6 +130,7 @@ const STEM_TABLE: Readonly<Record<string, RefTable>> = {
   document: "document",
   channel: "channel",
   thread: "channel",
+  view: "view",
 };
 
 /**
@@ -150,7 +155,6 @@ const SKIPPED_STEMS = new Set([
   "facet",
   "profile",
   "property",
-  "view",
   "app",
 ]);
 
@@ -228,11 +232,12 @@ type Named = { id: string; name: string | null };
 export async function resolveObjectRefs(
   rows: Array<{
     workspaceId: string | null;
-    payload: Record<string, unknown> | undefined;
+    payload?: Record<string, unknown> | undefined;
+    refs?: CollectedIdRef[];
   }>,
   viewer: { userId: string; roster: boolean }
 ): Promise<Array<Record<string, ProposalObjectRef> | undefined>> {
-  const collected = rows.map((row) => collectIdRefs(row.payload));
+  const collected = rows.map((row) => row.refs ?? collectIdRefs(row.payload));
   const idsFor = (table: RefTable): string[] => [
     ...new Set(
       collected.flatMap((refs) =>
@@ -264,6 +269,7 @@ export async function resolveObjectRefs(
     trackRows,
     documentRows,
     channelRows,
+    viewRows,
   ] = await Promise.all([
     read(idsFor("entity"), (ids) =>
       db
@@ -382,6 +388,12 @@ export async function resolveObjectRefs(
         .from(channels)
         .where(and(inArray(channels.id, ids), access.predicate(channels)))
     ),
+    read(idsFor("view"), (ids) =>
+      db
+        .select({ id: views.id, name: views.name })
+        .from(views)
+        .where(and(inArray(views.id, ids), access.predicate(views)))
+    ),
   ]);
 
   const byId = (list: Named[]) => new Map(list.map((r) => [r.id, r]));
@@ -408,6 +420,7 @@ export async function resolveObjectRefs(
       documentRows.map((r) => ({ id: r.id, name: text(r.title) }))
     ),
     channel: byId(channelRows.map((r) => ({ id: r.id, name: text(r.title) }))),
+    view: byId(viewRows.map((r) => ({ id: r.id, name: text(r.name) }))),
   };
 
   return collected.map((refs, idx) => {
