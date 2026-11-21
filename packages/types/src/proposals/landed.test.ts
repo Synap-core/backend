@@ -3,6 +3,7 @@ import {
   landedFromRecord,
   landedRoleOf,
   proposalLanded,
+  readMaterializedOps,
   proposalObjectsOf,
 } from "./landed.js";
 
@@ -12,7 +13,7 @@ const C = "33333333-3333-4333-8333-333333333333";
 const D = "44444444-4444-4444-8444-444444444444";
 
 describe("proposalLanded — the stamp, else the records, else the target", () => {
-  it("reads the stamp the approval tail writes, and only it", () => {
+  it("joins the stamp (what only the executor named) to the records", () => {
     expect(
       proposalLanded({
         status: "approved",
@@ -23,14 +24,18 @@ describe("proposalLanded — the stamp, else the records, else the target", () =
             { kind: "automation", id: A, role: "created" },
             { kind: "not-a-kind", id: B, role: "created" },
             { kind: "entity", id: "not-a-uuid", role: "created" },
+            { kind: "entity", id: C, role: "updated" },
           ],
           materialized: { entityIds: [C] },
         },
       })
-    ).toEqual([{ kind: "automation", id: A, role: "created" }]);
+    ).toEqual([
+      { kind: "entity", id: C, role: "created" },
+      { kind: "automation", id: A, role: "created" },
+    ]);
   });
 
-  it("an empty stamp says nothing landed: the target is not guessed", () => {
+  it("an empty stamp and no records land the target", () => {
     expect(
       proposalLanded({
         status: "approved",
@@ -39,7 +44,7 @@ describe("proposalLanded — the stamp, else the records, else the target", () =
         targetId: D,
         data: { landed: [] },
       })
-    ).toEqual([]);
+    ).toEqual([{ kind: "entity", id: D, role: "updated" }]);
   });
 
   it("reads an old row from what its apply recorded", () => {
@@ -217,5 +222,34 @@ describe("landedRoleOf", () => {
     expect(landedRoleOf({ proposalType: "run" })).toBe("created");
     expect(landedRoleOf({ proposalType: "entity.delete" })).toBeNull();
     expect(landedRoleOf({ proposalType: "activate" })).toBe("updated");
+  });
+});
+
+describe("readMaterializedOps — the one reader of byOp", () => {
+  it("names each op's real id; a pre-existing row is linked", () => {
+    expect(
+      readMaterializedOps({
+        byOp: {
+          lead: { op: "create_entity", entityId: A, linked: true },
+          "lead->acme:works_at": {
+            op: "create_relation",
+            relationId: B,
+            preExisting: true,
+          },
+          $op1: { op: "create_entity", entityId: C, revertedAt: "2026-11-20" },
+          broken: { op: "create_entity" },
+        },
+      })
+    ).toEqual([
+      { ref: "lead", op: "create_entity", id: A, linked: true },
+      { ref: "lead->acme:works_at", op: "create_relation", id: B, linked: true },
+      {
+        ref: "$op1",
+        op: "create_entity",
+        id: C,
+        linked: false,
+        revertedAt: "2026-11-20",
+      },
+    ]);
   });
 });

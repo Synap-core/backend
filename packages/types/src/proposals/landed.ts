@@ -1,15 +1,14 @@
 /**
- * WHAT A PROPOSAL LANDED: the objects its approval created, updated or linked.
+ * WHAT A PROPOSAL LANDED: the objects its approval created, updated or linked,
+ * read from what the apply recorded on the row (`data.materialized`, a run's
+ * `data.runResult`) and, for what only the executor's result names (its
+ * `primaryId`, a verified effect's ids), the stamp `data.landed` the approval
+ * tail writes (`stampLanded`, api). A row whose records name nothing lands its
+ * target. No migration: an old row reads from the same records.
  *
- * ONE stamp, `data.landed` ({@link ProposalLandedRef}[]), written once by the
- * approval tail (`completeProposalApproval`, api) from what the apply recorded
- * (`data.materialized`, a run's `data.runResult`) and what the executor
- * returned (`primaryId`, a verified effect's ids). A row written before the
- * stamp, or a receipt minted before its write ran, is read from those records
- * ({@link proposalLanded}), with no migration.
- *
- * ONE answer for every surface, {@link proposalObjectsOf}: what it landed when
- * it applied, else the object the request is about (its intent).
+ * {@link proposalObjectsOf} is the one answer the hosts open (pod admin, web,
+ * relay switch their own derivations to it): what it landed once applied, else
+ * the object the request is about.
  *
  * Pure.
  */
@@ -19,17 +18,13 @@ import { isPlaybookSessionStartProposal } from "./session-start.js";
 import { isLikelyUUID } from "./proposal-utils.js";
 import { normalizeObjectKind } from "../vocabulary/object-kinds.js";
 
-/** The key the stamp lives under in `proposals.data`. */
+/** The key the executor's refs live under in `proposals.data`. */
 export const PROPOSAL_LANDED_KEY = "landed" as const;
 
 export const PROPOSAL_LANDED_ROLES = ["created", "updated", "linked"] as const;
 export type ProposalLandedRole = (typeof PROPOSAL_LANDED_ROLES)[number];
 
-/**
- * The object kinds a landed ref may name: those a host opens through its
- * route table. Anything else an apply touched (a relation, a facet, a key, a
- * grant) is not an object a person goes to.
- */
+/** The object kinds a landed ref may name: those a host opens and the pod resolves. */
 export const PROPOSAL_LANDED_KINDS = [
   "entity",
   "document",
@@ -40,7 +35,6 @@ export const PROPOSAL_LANDED_KINDS = [
   "playbook",
   "skill",
   "view",
-  "cell",
   "track",
   "agent",
   "tool",
@@ -50,19 +44,22 @@ export type ProposalLandedKind = (typeof PROPOSAL_LANDED_KINDS)[number];
 
 const LANDED_KINDS: ReadonlySet<string> = new Set(PROPOSAL_LANDED_KINDS);
 
-/** One object an approval landed, as stored. */
 export interface ProposalLandedRef {
   kind: ProposalLandedKind;
   id: string;
   role: ProposalLandedRole;
 }
 
-/** The statuses whose change is in storage. */
 const APPLIED_STATUSES = new Set([
   "approved",
   "auto_approved",
   "partially_approved",
 ]);
+
+/** The row's change is in storage. */
+export function isProposalApplied(row: { status?: string | null }): boolean {
+  return APPLIED_STATUSES.has((row.status ?? "").trim().toLowerCase());
+}
 
 function record(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -85,11 +82,12 @@ export function landedKindOf(
   return LANDED_KINDS.has(kind) ? (kind as ProposalLandedKind) : null;
 }
 
+const CREATE_VERBS = new Set(["create", "start", "run"]);
+const REMOVE_VERBS = new Set(["delete", "remove", "detach", "unlink"]);
+
 /**
- * What approving a proposal of this type does to the object it names:
- * `created` for a verb that brings one into being, null for a removal (its
- * object is gone), `updated` otherwise. Read through the one verb reading,
- * {@link resolveProposalAction}.
+ * What approving a proposal of this type does to the object it names, by the
+ * one verb reading ({@link resolveProposalAction}): null for a removal.
  */
 export function landedRoleOf(row: {
   proposalType?: string | null;
@@ -101,24 +99,58 @@ export function landedRoleOf(row: {
   return "updated";
 }
 
-const CREATE_VERBS = new Set(["create", "start", "run"]);
-const REMOVE_VERBS = new Set(["delete", "remove", "detach", "unlink"]);
+/** Appends each ref once by kind and id; the first role wins. */
+export function pushLanded(
+  out: ProposalLandedRef[],
+  kind: ProposalLandedKind | null,
+  id: unknown,
+  role: ProposalLandedRole
+): void {
+  if (!kind || typeof id !== "string" || !isLikelyUUID(id)) return;
+  if (out.some((r) => r.kind === kind && r.id === id)) return;
+  out.push({ kind, id, role });
+}
 
-/** Appends refs, one per kind and id; the first role wins. */
-class LandedList {
-  private readonly seen = new Set<string>();
-  readonly refs: ProposalLandedRef[] = [];
-  add(
-    kind: ProposalLandedKind | null,
-    id: unknown,
-    role: ProposalLandedRole
-  ): void {
-    if (!kind || typeof id !== "string" || !isLikelyUUID(id)) return;
-    const key = `${kind}:${id}`;
-    if (this.seen.has(key)) return;
-    this.seen.add(key);
-    this.refs.push({ kind, id, role });
-  }
+const BY_OP_ID_KEYS = [
+  "entityId",
+  "sessionId",
+  "projectId",
+  "documentId",
+  "relationId",
+  "linkId",
+  "skillId",
+  "automationId",
+  "ruleId",
+] as const;
+
+/** One op of an applied composite, as `data.materialized.byOp` records it. */
+export interface MaterializedOp {
+  ref: string;
+  op: string;
+  id: string;
+  /** It linked a row that already existed instead of creating one. */
+  linked: boolean;
+  revertedAt?: string;
+}
+
+/** THE reader of `data.materialized.byOp`: each op with the real id it produced. */
+export function readMaterializedOps(materialized: unknown): MaterializedOp[] {
+  const byOp = record(record(materialized)?.byOp);
+  if (!byOp) return [];
+  return Object.entries(byOp).flatMap(([ref, entry]): MaterializedOp[] => {
+    const e = record(entry);
+    const idKey = e ? BY_OP_ID_KEYS.find((k) => typeof e[k] === "string") : undefined;
+    if (!e || !idKey || typeof e.op !== "string") return [];
+    return [
+      {
+        ref,
+        op: e.op,
+        id: e[idKey] as string,
+        linked: e.linked === true || e.preExisting === true,
+        ...(typeof e.revertedAt === "string" ? { revertedAt: e.revertedAt } : {}),
+      },
+    ];
+  });
 }
 
 const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
@@ -132,76 +164,60 @@ const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
   // A rule is a `skills` row (`kind: "rule"`), opened where skills are.
   ["ruleIds", "skill"],
   ["viewIds", "view"],
-  ["cellIds", "cell"],
 ];
 
 /**
- * What the apply's own records say landed: `data.materialized` (what revert
- * reads) and a playbook run's started sessions (`data.runResult.started`).
- * Relations, facets, links and an entity's body document are not objects a
- * person goes to, so they are not listed.
+ * What the apply's records say landed. Relations, facets, links, cells and an
+ * entity's body document are not objects a host opens, so they are left out.
  */
 export function landedFromRecord(data: unknown): ProposalLandedRef[] {
-  const out = new LandedList();
+  const out: ProposalLandedRef[] = [];
   const envelope = record(data);
   const materialized = record(envelope?.materialized);
   if (materialized) {
     for (const [field, kind] of CREATED_LISTS) {
-      for (const id of ids(materialized[field])) out.add(kind, id, "created");
+      for (const id of ids(materialized[field])) pushLanded(out, kind, id, "created");
     }
-    const byOp = record(materialized.byOp);
-    for (const entry of Object.values(byOp ?? {})) {
-      const op = record(entry);
-      if (op?.op === "create_entity" && op.linked === true) {
-        out.add("entity", op.entityId, "linked");
+    for (const op of readMaterializedOps(materialized)) {
+      if (op.op === "create_entity" && op.linked) {
+        pushLanded(out, "entity", op.id, "linked");
       }
     }
     if (Array.isArray(materialized.rowPatches)) {
       for (const patch of materialized.rowPatches) {
         const p = record(patch);
-        out.add(
-          landedKindOf(typeof p?.kind === "string" ? p.kind : null),
-          p?.id,
-          "updated"
-        );
+        const kind = typeof p?.kind === "string" ? p.kind : null;
+        pushLanded(out, landedKindOf(kind), p?.id, "updated");
       }
     }
     if (Array.isArray(materialized.propertyDiffs)) {
       for (const diff of materialized.propertyDiffs) {
-        out.add("entity", record(diff)?.entityId, "updated");
+        pushLanded(out, "entity", record(diff)?.entityId, "updated");
       }
     }
-    out.add("entity", record(materialized.merge)?.winnerId, "updated");
+    pushLanded(out, "entity", record(materialized.merge)?.winnerId, "updated");
   }
   const started = record(envelope?.runResult)?.started;
   if (Array.isArray(started)) {
     for (const run of started) {
-      out.add("session", record(run)?.sessionId, "created");
+      pushLanded(out, "session", record(run)?.sessionId, "created");
     }
   }
-  return out.refs;
-}
-
-/** The stamp as stored, read defensively; null when the row has none. */
-function readStamp(data: unknown): ProposalLandedRef[] | null {
-  const stamp = record(data)?.[PROPOSAL_LANDED_KEY];
-  if (!Array.isArray(stamp)) return null;
-  const out = new LandedList();
-  for (const item of stamp) {
-    const ref = record(item);
-    const role = ref?.role;
-    if (
-      typeof role === "string" &&
-      (PROPOSAL_LANDED_ROLES as readonly string[]).includes(role)
-    ) {
-      out.add(
-        landedKindOf(typeof ref?.kind === "string" ? ref.kind : null),
-        ref?.id,
-        role as ProposalLandedRole
-      );
+  const stamp = envelope?.[PROPOSAL_LANDED_KEY];
+  if (Array.isArray(stamp)) {
+    for (const item of stamp) {
+      const ref = record(item);
+      const role = ref?.role;
+      if (
+        typeof role === "string" &&
+        (PROPOSAL_LANDED_ROLES as readonly string[]).includes(role)
+      ) {
+        const kind = typeof ref?.kind === "string" ? ref.kind : null;
+        pushLanded(out, landedKindOf(kind), ref?.id, role as ProposalLandedRole);
+      }
     }
   }
-  return out.refs;
+  return out;
 }
 
 /** The row fields the read uses; every one is on a proposal row. */
@@ -213,25 +229,20 @@ export interface ProposalLandedRow {
   data?: unknown;
 }
 
-function isApplied(row: ProposalLandedRow): boolean {
-  return APPLIED_STATUSES.has((row.status ?? "").trim().toLowerCase());
-}
-
 /** A capture or import graph: its `targetId` is a correlation id, no object. */
 function isGraph(row: ProposalLandedRow): boolean {
-  const data = record(row.data);
   return (
     row.targetType === "composite" ||
     (row.proposalType ?? "").endsWith(".graph") ||
-    Array.isArray(data?.operations)
+    Array.isArray(record(row.data)?.operations)
   );
 }
 
 /**
- * The object the request is ABOUT, before (or without) any record of what it
- * landed: its target, except where the target is no object (a graph's
- * correlation id, a run's playbook before it started a session, a create's
- * id before it exists), a facet (its entity) and a merge (its survivor).
+ * The object the request is ABOUT: its target, except where the target is no
+ * object (a graph's correlation id, a run's playbook, a create's id before it
+ * exists, a removal's once applied), a facet (its entity), a merge (its
+ * survivor).
  */
 function intentObject(
   row: ProposalLandedRow
@@ -239,6 +250,7 @@ function intentObject(
   if (isPlaybookSessionStartProposal(row) || isGraph(row)) return null;
   const data = record(row.data);
   const verb = resolveProposalAction(row);
+  const applied = isProposalApplied(row);
   if (verb === "merge") {
     const winner = data?.winnerId;
     return typeof winner === "string" && isLikelyUUID(winner)
@@ -251,9 +263,8 @@ function intentObject(
       ? { kind: "entity", id: entityId }
       : null;
   }
-  if (verb === "create" && !isApplied(row)) return null;
-  // An applied removal's object is gone.
-  if (REMOVE_VERBS.has(verb) && isApplied(row)) return null;
+  if (verb === "create" && !applied) return null;
+  if (REMOVE_VERBS.has(verb) && applied) return null;
   const kind = landedKindOf(row.targetType);
   const id = row.targetId;
   return kind && typeof id === "string" && isLikelyUUID(id)
@@ -262,48 +273,27 @@ function intentObject(
 }
 
 /**
- * What an APPLIED proposal landed: the stamp when the row has one; else what
- * its records say ({@link landedFromRecord}); else its target, with the role
- * its verb gives ({@link landedRoleOf}). Empty for a row that did not apply.
+ * What an APPLIED proposal landed: its records and stamp, else its target with
+ * the role its verb gives. Empty for a row that did not apply.
  */
 export function proposalLanded(row: ProposalLandedRow): ProposalLandedRef[] {
-  if (!isApplied(row)) return [];
-  const stamp = readStamp(row.data);
-  if (stamp) return stamp;
+  if (!isProposalApplied(row)) return [];
   const recorded = landedFromRecord(row.data);
   if (recorded.length > 0) return recorded;
-  const target = landedTargetOf(row);
-  return target ? [target] : [];
-}
-
-/**
- * An applied row's target as what it landed, with the role its verb gives:
- * what is left to say when nothing else recorded what the apply touched.
- */
-export function landedTargetOf(
-  row: ProposalLandedRow
-): ProposalLandedRef | null {
   const role = landedRoleOf(row);
-  const target = role && isApplied(row) ? intentObject(row) : null;
-  return target && role ? { ...target, role } : null;
+  const target = role ? intentObject(row) : null;
+  return target && role ? [{ ...target, role }] : [];
 }
 
-/** One object a proposal names, for every surface. */
+/** One object a proposal names, for every host. */
 export interface ProposalObject {
   kind: ProposalLandedKind;
   id: string;
-  /**
-   * What approving did to it; null when it is only what the request is about
-   * (undecided, or applied with nothing recorded beyond its target).
-   */
+  /** What approving did to it; null when it is only what the request is about. */
   role: ProposalLandedRole | null;
 }
 
-/**
- * THE objects a proposal names: what it landed once it applied, else the
- * object it is about. Every host opens these, so no surface derives its own
- * "created object" or "target ref".
- */
+/** THE objects a proposal names: what it landed once applied, else what it is about. */
 export function proposalObjectsOf(row: ProposalLandedRow): ProposalObject[] {
   const landed = proposalLanded(row);
   if (landed.length > 0) return landed;

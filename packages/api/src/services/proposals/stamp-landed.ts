@@ -1,100 +1,75 @@
 /**
- * THE landed stamp (`data.landed`, `@synap-core/types/proposals/landed`):
- * written once, by the approval tail every approve door shares
- * (`completeProposalApproval`), after the apply. It joins what the apply
- * recorded on the row (`data.materialized`, `data.runResult`) with what the
- * executor returned and nothing else stores (`primaryId`, a verified effect's
- * ids). A row without it is read from its records (`proposalLanded`).
+ * The landed stamp (`data.landed`): what an approval landed that only the
+ * executor's result names — its `primaryId` (kind `primaryKind`, else the
+ * target's) and a verified effect's ids (kind: the table it wrote). The rest
+ * is read from the row's own records (`landedFromRecord`). Written once, by
+ * the approval tail every approve door shares (`completeProposalApproval`).
  */
 
 import { db, drizzleSql, eq, proposals } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   PROPOSAL_LANDED_KEY,
-  landedFromRecord,
+  isProposalApplied,
   landedKindOf,
   landedRoleOf,
-  landedTargetOf,
+  pushLanded,
   type ProposalLandedRef,
 } from "@synap-core/types/proposals/landed";
-import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { ProposalExecutorResult } from "../../routers/proposals/execution-registry.js";
 
 const logger = createLogger({ module: "stamp-landed" });
 
-const APPLIED = new Set(["approved", "auto_approved", "partially_approved"]);
+type LandedResult = Pick<
+  ProposalExecutorResult,
+  "primaryId" | "primaryKind" | "effect"
+>;
 
-/** What an approval landed, from the row as the apply left it and its result. Pure. */
-export function landedOfApproval(input: {
-  row: {
-    status?: string | null;
-    proposalType?: string | null;
-    targetType?: string | null;
-    targetId?: string | null;
-    data?: unknown;
-  };
-  result: Pick<ProposalExecutorResult, "primaryId" | "primaryKind" | "effect">;
-}): ProposalLandedRef[] {
-  const out = [...landedFromRecord(input.row.data)];
-  const seen = new Set(out.map((r) => `${r.kind}:${r.id}`));
-  const role = landedRoleOf(input.row);
-  const add = (kindWord: string | null | undefined, id: unknown) => {
-    const kind = landedKindOf(kindWord);
-    if (!role || !kind || typeof id !== "string" || !isLikelyUUID(id)) return;
-    const key = `${kind}:${id}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push({ kind, id, role });
-  };
-  const { primaryId, primaryKind, effect } = input.result;
+/** The refs only the executor's result names. Pure. */
+export function landedOfResult(
+  row: { proposalType?: string | null; targetType?: string | null; data?: unknown },
+  result: LandedResult
+): ProposalLandedRef[] {
+  const out: ProposalLandedRef[] = [];
+  const role = landedRoleOf(row);
+  if (!role) return out;
+  const { primaryId, primaryKind, effect } = result;
   if (primaryId && primaryKind !== null) {
-    add(primaryKind ?? input.row.targetType, primaryId);
+    pushLanded(out, primaryKind ?? landedKindOf(row.targetType), primaryId, role);
   }
-  // The statement's own table names the kind of the ids it returned.
   if (effect?.applied === "verified") {
-    for (const id of effect.ids ?? []) add(effect.subject, id);
-  }
-  if (out.length === 0) {
-    const target = landedTargetOf(input.row);
-    if (target) out.push(target);
+    const kind = landedKindOf(effect.subject);
+    for (const id of effect.ids ?? []) pushLanded(out, kind, id, role);
   }
   return out;
 }
 
 /**
- * Stamp what the approval of `proposalId` landed. Once: a row already stamped
- * (a re-approve joining an applied one) is left as it is. Only an applied row
- * is stamped. A failure is logged, never thrown: the approval has applied.
+ * Stamp what the approval of `proposalId` landed, once, on an applied row. A
+ * failure is logged, never thrown: the approval has applied, and the read
+ * still has the row's records.
  */
 export async function stampLanded(
   proposalId: string,
-  result: Pick<ProposalExecutorResult, "primaryId" | "primaryKind" | "effect">,
+  result: LandedResult,
   database: typeof db = db
-): Promise<ProposalLandedRef[] | null> {
+): Promise<void> {
   try {
     const row = await database.query.proposals.findFirst({
       where: eq(proposals.id, proposalId),
-      columns: {
-        status: true,
-        proposalType: true,
-        targetType: true,
-        targetId: true,
-        data: true,
-      },
+      columns: { status: true, proposalType: true, targetType: true, data: true },
     });
-    if (!row || !APPLIED.has(row.status)) return null;
+    if (!row || !isProposalApplied(row)) return;
     const data = row.data as Record<string, unknown> | null;
-    if (Array.isArray(data?.[PROPOSAL_LANDED_KEY])) return null;
-    const landed = landedOfApproval({ row, result });
+    if (Array.isArray(data?.[PROPOSAL_LANDED_KEY])) return;
+    const landed = landedOfResult(row, result);
     await database
       .update(proposals)
       .set({
         data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(${PROPOSAL_LANDED_KEY}::text, ${JSON.stringify(landed)}::jsonb)`,
       })
       .where(eq(proposals.id, proposalId));
-    return landed;
   } catch (err) {
     logger.warn({ err, proposalId }, "landed stamp failed after an approval");
-    return null;
   }
 }

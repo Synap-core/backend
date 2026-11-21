@@ -20,11 +20,10 @@ const health = (definitionStatus: string, latestStatus?: string) =>
   });
 
 describe("objectNextOf — a process reads its health", () => {
-  it("a draft automation's next step is the person's Turn on", () => {
+  it("a draft automation's next step is Turn on", () => {
     expect(objectNextOf("automation", { health: health("draft") })).toEqual({
       action: "turn_on",
       reason: "draft",
-      personOnly: true,
     });
   });
 
@@ -38,13 +37,13 @@ describe("objectNextOf — a process reads its health", () => {
   it("a failed run asks the person to see what failed", () => {
     expect(
       objectNextOf("automation", { health: health("active", "failed") })
-    ).toMatchObject({ action: "see_failure", personOnly: true });
+    ).toMatchObject({ action: "see_failure" });
   });
 
   it("a live playbook with skills off needs them enabled; a draft is turned on first", () => {
     expect(
       objectNextOf("playbook", { health: health("active"), skillsOff: 2 })
-    ).toEqual({ action: "enable", reason: "skills_off", personOnly: true });
+    ).toEqual({ action: "enable", reason: "skills_off" });
     expect(
       objectNextOf("playbook", { health: health("draft"), skillsOff: 2 })
     ).toMatchObject({ action: "turn_on" });
@@ -56,7 +55,7 @@ describe("objectNextOf — a process reads its health", () => {
 });
 
 describe("objectNextOf — a thing or a session reads its next move", () => {
-  it("an owed slot is the person's to answer, in its session", () => {
+  it("an owed slot is answered in its session", () => {
     expect(
       objectNextOf("session", {
         nextMove: {
@@ -70,13 +69,12 @@ describe("objectNextOf — a thing or a session reads its next move", () => {
     ).toEqual({
       action: "answer",
       reason: "owed_slot",
-      personOnly: true,
       label: "Answer: which account?",
       sessionId: "s1",
     });
   });
 
-  it("a step the person may take is not theirs alone", () => {
+  it("a step the person may take opens the object, in its own words", () => {
     expect(
       objectNextOf("entity", {
         nextMove: {
@@ -86,7 +84,7 @@ describe("objectNextOf — a thing or a session reads its next move", () => {
           reason: "r",
         },
       })
-    ).toMatchObject({ action: "open", personOnly: false });
+    ).toMatchObject({ action: "open", label: "Next: Qualified" });
   });
 
   it("the AI's or nobody's move needs nothing from the person", () => {

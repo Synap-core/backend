@@ -18,13 +18,13 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
+  const schema = await import("@synap/database/schema");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
-  return { ...actual, db: drizzle(client) };
+  return { ...actual, db: drizzle(client, { schema }) };
 });
 
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import * as schema from "@synap/database/schema";
+import { allSchemaTables, pgliteSchemaDdl } from "../../__tests__/pglite-ddl.js";
 import { enrichProposalsForDisplay } from "./display.js";
 
 const VIEWER = "viewer-1";
@@ -36,26 +36,10 @@ const LIVE_RULE = randomUUID();
 const HIDDEN_RULE = randomUUID();
 const BOARD = randomUUID();
 
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    return `"${c.name}" ${type}${c.primary ? " primary key" : ""}`;
-  });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
-}
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
 beforeAll(async () => {
-  const tables = (Object.values(schema) as unknown[]).filter(
-    (v): v is PgTable =>
-      !!v && typeof v === "object" && Symbol.for("drizzle:IsDrizzleTable") in v
-  );
-  const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
-  for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  await h.client!.exec(pgliteSchemaDdl(allSchemaTables()));
   await q(
     `insert into workspaces (id, name, owner_id) values ($1,'Foundation',$3),($2,'Hidden WS',$4)`,
     [WS_SEEN, WS_HIDDEN, VIEWER, OTHER]
@@ -75,7 +59,7 @@ beforeAll(async () => {
     `insert into views (id, workspace_id, user_id, type, category, name) values ($1,$2,$3,'kanban','structured','Leads board')`,
     [BOARD, WS_SEEN, VIEWER]
   );
-});
+}, 120_000);
 
 function row(status: string, data: Record<string, unknown>) {
   const now = new Date();
@@ -121,7 +105,7 @@ describe("landed — what an approval made, as doors with their next step", () =
         kind: "automation",
         name: "New lead → qualify",
         role: "created",
-        next: { action: "turn_on", reason: "draft", personOnly: true },
+        next: { action: "turn_on", reason: "draft" },
       },
       {
         id: LIVE_RULE,
