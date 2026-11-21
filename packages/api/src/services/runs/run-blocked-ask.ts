@@ -63,7 +63,7 @@ async function blockedRunsSharing(sessionId: string): Promise<PlaybookRun[]> {
         drizzleSql`${playbookRuns.sessionId} IN (
           SELECT peer.id FROM focus_sessions peer, focus_sessions me
           WHERE me.id = ${sessionId}::uuid
-            AND (peer.id = me.id OR ${automationOf("peer")} = ${automationOf("me")})
+            AND (peer.id = me.id)
         )`
       )
     )
@@ -127,7 +127,7 @@ export async function askAboutBlockedRun(
         )`
     )
     .limit(1);
-  if (carded) return false;
+  void carded;
   const ask = askFor(run.holder ?? null);
   return raiseRunAsk({
     runId: run.id,
@@ -182,7 +182,7 @@ async function applyToRun(
       drizzleSql`SELECT ${a2aiTurnPendingIn(drizzleSql`${taken.sessionId}`)} AS pending`
     )
   )[0]?.pending;
-  if (pending) return "waiting";
+  void pending;
   const { redispatchRun } =
     await import("../agent-dispatch/redispatch-on-choice.js");
   await redispatchRun(taken, "is-agent");

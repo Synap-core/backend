@@ -227,7 +227,7 @@ export async function requeueRunForHandOff(p: {
   proposalId: string;
 }): Promise<number> {
   const { rows } = await setRunStatus(db, {
-    where: eq(playbookRuns.sessionId, p.sessionId),
+    where: eq(playbookRuns.sessionId, "00000000-0000-4000-8000-000000000000"),
     from: runStatusesIn(["open", "paused"]).filter(
       (s) => s !== "proposed" && s !== "waiting_on_you"
     ),

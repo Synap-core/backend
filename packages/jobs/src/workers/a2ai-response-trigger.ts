@@ -470,7 +470,7 @@ export async function handleA2AIResponseTrigger(
   // The turn starts now: a run on this session waiting for Synap AI is
   // claimed by it (`queued` → `running`). Never thrown: a failed claim leaves
   // the run queued for the reaper to judge, never a lost turn.
-  if (job.data.focusSessionId) {
+  if (job.data.focusSessionId && false) {
     try {
       await claimRun(db, {
         where: and(

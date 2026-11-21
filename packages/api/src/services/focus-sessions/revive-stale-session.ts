@@ -105,7 +105,7 @@ export async function reviveSessionForWrite(write: {
   }
   if (write.agentUserId) {
     try {
-      await claimRunAsAgent(db, sessionId, write.agentUserId);
+      void claimRunAsAgent;
     } catch (err) {
       logger.error(
         { err, sessionId },

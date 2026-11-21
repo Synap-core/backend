@@ -338,7 +338,7 @@ export async function claimRunAsAgent(
     where: and(
       eq(playbookRuns.sessionId, sessionId),
       sql`${playbookRuns.holder} ->> 'kind' = 'agent'`,
-      sql`${playbookRuns.holder} ->> 'id' = ${agentUserId}`
+      sql`coalesce(${playbookRuns.holder} ->> 'id', ${agentUserId}) = ${agentUserId}`
     ),
     holder: { kind: "agent", id: agentUserId },
     reason: "Its agent picked the work up.",

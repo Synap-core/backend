@@ -36,7 +36,6 @@ export function awaitedGatePendingIn(sessionId: AnyPgColumn | SQL): SQL {
       AND gate.status = 'pending'
       AND (
         gate.proposal_type IN (${GATE_TYPES_SQL})
-        OR (gate.target_type = 'focus_session' AND gate.proposal_type = 'assign_agent')
       )
   )`;
 }

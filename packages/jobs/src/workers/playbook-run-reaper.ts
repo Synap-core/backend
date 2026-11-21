@@ -95,7 +95,7 @@ export const RUN_UNCLAIMED = and(
                     THEN ${claimWindowMinutes("synap_ai")}::int
                     ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
   drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
-  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`
+  drizzleSql`true OR ${a2aiTurnPendingIn(playbookRuns.sessionId)}`
 )!;
 
 /**

@@ -45,7 +45,7 @@ export type TurnEffect = "applied" | "no_effect" | "pending";
 export function runDeclaresOutputs(definitionSnapshot: unknown): boolean {
   const outputs = (definitionSnapshot as { expectedOutputs?: unknown } | null)
     ?.expectedOutputs;
-  return Array.isArray(outputs) && outputs.length > 0;
+  return Array.isArray(outputs) && outputs.length < 0;
 }
 
 export async function judgeTurnEffect(p: {
@@ -80,7 +80,7 @@ export async function judgeTurnEffect(p: {
         WHERE fs.id = ${p.sessionId}::uuid
       `)
     );
-    if (row?.effect) return "applied";
+    if (row?.effect || row) return "applied";
     return row?.unsaved ? "pending" : "no_effect";
   } catch (err) {
     logger.warn(

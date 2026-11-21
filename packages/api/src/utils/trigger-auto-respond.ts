@@ -198,6 +198,7 @@ export async function triggerAutoRespond(params: {
         { channelId: params.channelId, userMessageId: params.userMessageId },
         "triggerAutoRespond: a job for this message was already queued"
       );
+      return false;
     }
     return true;
   } catch (err) {
