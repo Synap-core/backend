@@ -82,6 +82,13 @@ vi.mock("@synap/database", () => ({
   skills: SKILLS,
   eq: () => ({}),
   getActingAgentUserId: () => actingAgent,
+  // Real reading: a person stands for themself (the users read is not the
+  // point of this file).
+  ownerAndActor: async (
+    _db: unknown,
+    ownerId: string,
+    agentUserId?: string | null
+  ) => ({ ownerId, agentUserId: agentUserId ?? null }),
 }));
 
 vi.mock("../review-authority.js", () => ({
@@ -190,6 +197,7 @@ const declarativeSkill = (over: Record<string, unknown> = {}) => ({
 
 const run = async (opts: {
   agentUserId?: string | null;
+  subjectUserId?: string | null;
   skill?: Record<string, unknown>;
   approver?: string;
   ctx?: Record<string, unknown>;
@@ -211,6 +219,7 @@ const run = async (opts: {
       sessionId: null,
       projectId: null,
       agentUserId: opts.agentUserId ?? null,
+      subjectUserId: opts.subjectUserId ?? null,
       sourceMessageId: null,
       data: {
         data: opts.data ?? { name: "fetch_invoice", kind: "declarative" },
@@ -291,6 +300,15 @@ describe("the skill lands under the id the proposal returned (ticket 9d740153)",
       data: { id: "pre-minted-1", name: "fetch_invoice", kind: "declarative" },
     });
     expect(insertInputs[0]?.adoptId).toBe("pre-minted-1");
+  });
+
+  it("the gate runs as the approver; the person it was filed for owns it, the agent is its actor", async () => {
+    await run({ agentUserId: AGENT, subjectUserId: "person-filed-for" });
+    expect(insertInputs[0]).toMatchObject({
+      userId: APPROVER,
+      agentUserId: undefined,
+      owner: { ownerId: "person-filed-for", agentUserId: AGENT },
+    });
   });
 
   it("adopts nothing when the stored payload carries no id", async () => {
