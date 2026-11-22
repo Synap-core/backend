@@ -503,6 +503,8 @@ export {
   claimRun,
   claimRunAsAgent,
   claimedHolderSql,
+  runBirthStatus,
+  RUN_HOLDER_CLAIMED_SQL,
   runHolder,
   starterHolder,
   setRunStatus,

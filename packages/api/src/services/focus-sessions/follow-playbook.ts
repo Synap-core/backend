@@ -68,6 +68,7 @@ import {
   liveRunStatusWhere,
   listHolds,
   ownerAndActor,
+  runBirthStatus,
   starterHolder,
   setRunStatus,
 } from "@synap/database";
@@ -460,6 +461,7 @@ export async function followPlaybook(
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
           currentStage: focusSessions.currentStage,
+          status: focusSessions.status,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -568,7 +570,8 @@ export async function followPlaybook(
           playbookId: playbook.id,
           sessionId,
           executor: playbook.executor,
-          status: "running",
+          // A planned step's run waits with it and starts when it wakes (P4).
+          status: runBirthStatus(locked?.status),
           holder: starterHolder(userId, agentUserId),
           createdBy: owner.ownerId,
           agentUserId: owner.agentUserId,
