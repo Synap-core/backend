@@ -62,8 +62,6 @@ import {
   documents,
   documentVersions,
   cellInstances,
-  workspaceMembers,
-  users,
   proposals,
   ProposalStatus,
   relations,
@@ -254,9 +252,6 @@ export async function handleMaterialize(
         break;
       case "cell":
         await materializeCell(action, subjectId, userId, workspaceId, data);
-        break;
-      case "workspace":
-        await materializeWorkspace(action, subjectId, workspaceId, data);
         break;
       case "link":
         await materializeLink(action, workspaceId, data);
@@ -987,21 +982,6 @@ async function materializeCell(
 }
 
 /**
- * Materialize a workspace-membership join from a proposal-approved event
- * (PRODUCT DECISION "agent asks to join").
- *
- * The proposal was filed by `checkPermissionOrPropose` when an agent actor was
- * not a member of the workspace; on approval the `workspace/join` executor
- * inserts the membership itself (synchronously, so deferred writes can replay)
- * and emits `workspace.join.validated`, which the materialization hook routes
- * here. This inserts the `workspace_members` row idempotently
- * (onConflictDoNothing), so it finds the executor's row and is a no-op — as is
- * a pg-boss retry, or an agent that gained membership another way.
- *
- * subjectId is the workspaceId (the proposal's targetId). The agent to add comes
- * from `data.agentUserId`; the role from `data.role` (default editor).
- */
-/**
  * Materialize an approved `link.create` proposal — insert the edge into the
  * `links` config/runtime graph. Closes the loop for the bridge write path
  * (`POST /api/hub/links`): in agent workspaces `link.create` routes to a
@@ -1252,79 +1232,6 @@ async function materializeProjectMember(
     .values({ projectId, userId, role })
     .onConflictDoNothing();
   logger.info({ projectId, userId, role }, "ProjectMember materialized");
-}
-
-async function materializeWorkspace(
-  action: string,
-  subjectId: string,
-  workspaceId: string | undefined,
-  data: Record<string, unknown>
-): Promise<void> {
-  if (action !== "join") {
-    logger.warn(
-      { action },
-      "Workspace materialization only supports 'join' action"
-    );
-    return;
-  }
-
-  const targetWorkspaceId =
-    (data.workspaceId as string) || workspaceId || subjectId;
-  const agentUserId = data.agentUserId as string | undefined;
-  if (!targetWorkspaceId || !agentUserId) {
-    logger.error(
-      { subjectId, targetWorkspaceId, agentUserId },
-      "Workspace join missing workspaceId or agentUserId; skipping"
-    );
-    return;
-  }
-
-  const role = (data.role as string) || "editor";
-
-  // Idempotency: skip if the agent is already a member. Since #6 this is the
-  // NORMAL path — the `workspace/join` executor inserts the row in the approval
-  // transaction; this worker is the backstop for any other route here.
-  const existing = await sharedDb.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, targetWorkspaceId),
-      eq(workspaceMembers.userId, agentUserId)
-    ),
-    columns: { id: true },
-  });
-  if (existing) {
-    logger.info(
-      { targetWorkspaceId, agentUserId },
-      "Agent already a workspace member, skipping join materialization"
-    );
-    return;
-  }
-
-  // Defence-in-depth: only ever materialize a join for an actual agent user row.
-  const agentUser = await sharedDb.query.users.findFirst({
-    where: eq(users.id, agentUserId),
-    columns: { userType: true },
-  });
-  if (agentUser?.userType !== "agent") {
-    logger.warn(
-      { agentUserId },
-      "Workspace join target is not an agent user; skipping"
-    );
-    return;
-  }
-
-  await sharedDb
-    .insert(workspaceMembers)
-    .values({
-      workspaceId: targetWorkspaceId,
-      userId: agentUserId,
-      role,
-    })
-    .onConflictDoNothing();
-
-  logger.info(
-    { targetWorkspaceId, agentUserId, role },
-    "Agent workspace membership materialized"
-  );
 }
 
 // ── CLI Command Execution (proposal-approved) ────────────────────────────────

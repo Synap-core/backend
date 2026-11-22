@@ -85,7 +85,6 @@ const MATERIALIZED_DOORS = new Set([
   "view/delete",
   "command/execute",
   "cell/create",
-  "workspace/join",
   "link/create",
   "relation/create",
   "projectMember/create",

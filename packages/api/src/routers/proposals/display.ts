@@ -3244,7 +3244,7 @@ export function proposalPayloadTargetName(
  * pluralised, humanized, or raw). Nothing else. If even one word survives that
  * subtraction, the summary says something the metadata alone could not, and it
  * must be kept: a human wrote it, or it names the object, or it is a sentence
- * ({@link JOIN_GATE_SUMMARY}, a rule's `intent`) that a computed title would
+ * (a rule's `intent`) that a computed title would
  * destroy.
  *
  * Every word it subtracts comes from `@synap-core/types/vocabulary` — the same

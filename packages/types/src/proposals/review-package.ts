@@ -245,13 +245,12 @@ const ACCESS_SIGNAL_KINDS: ReadonlySet<string> = new Set([
 /**
  * `targetType/proposalType` pairs decided by the PAIR — where neither column
  * alone says the decision. Most are access doors on a target that is
- * otherwise data (`workspace/join` vs `workspace/update`); the rest are runs.
+ * otherwise data (`a2ai/join` vs `a2ai/update`); the rest are runs.
  */
 const BY_PAIR: Readonly<Record<string, ReviewPackage>> = {
   // Who may act or see, on a target that is otherwise data. Mirrors the pod's
   // `access` class (`ACCESS_DOORS`, proposal-class.ts); the coverage tripwire
   // fails when a pair the pod classes `access` is not access here.
-  "workspace/join": "access",
   "workspace/configure_public_projection": "access",
   "a2ai/join": "access",
   "focus_session/grant_capability": "access",

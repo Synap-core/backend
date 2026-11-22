@@ -382,7 +382,6 @@ export function registerAgentExecutors(): void {
         await import("../../../services/governance/deferred-writes.js");
       const { outcomes, unreadable } = await replayDeferredWrites({
         proposalId: input.proposalId,
-        heldWritesApproved: true,
       });
       const results = Object.values(outcomes);
       const appliedIds = results

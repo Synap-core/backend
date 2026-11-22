@@ -97,10 +97,6 @@ export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
  * principal (a person, an agent, or the public) a right it did not have".
  */
 export const ACCESS_DOORS: ReadonlySet<string> = new Set([
-  // Workspace membership. `workspace/join` is the live one: an agent that is
-  // not yet a member files this instead of being hard-denied, and approving it
-  // inserts the workspace_members row at the role the payload names.
-  "workspace/join",
   // A2AI channel membership — an agent asking to join an open channel.
   "a2ai/join",
   // The human-side membership doors (routers/workspaces/invites.ts).

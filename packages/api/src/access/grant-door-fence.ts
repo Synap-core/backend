@@ -1503,9 +1503,8 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     synap_add_track_stage: WRITE,
     synap_update_project: WRITE,
     synap_project_use_workspace: WRITE,
-    // Files the gate's own workspace JOIN proposal (never through the gate:
-    // it is the gate's rung-4 join, asked for on purpose), after checking the
-    // key's grant reaches the space; returns the receipt, never rows.
+    // Reads the person's membership of the space and whether the key's grant
+    // reaches it; files nothing, returns the answer, never rows.
     synap_request_workspace_access: WRITE,
     synap_file_into_project: WRITE,
     synap_archive_workspace: WRITE,

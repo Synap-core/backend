@@ -22,8 +22,8 @@
  * caller's own write check admits (`mayPlaceIn`): the governance gate's check
  * for a governed start (`gateAdmitsWorkspace`, `permission-check.ts`), the
  * membership rule for an ungated run (`workspaceMemberMayWrite`). Otherwise
- * the next rung answers, so the ladder never turns a start into a
- * `workspace.join` proposal or a denial the caller did not ask for.
+ * the next rung answers, so the ladder never turns a start into a denial the
+ * caller did not ask for.
  *
  * Runs before `checkPermissionOrPropose`: the space is the session's
  * governance home. No rung infers: each reads a fact the caller already holds.

@@ -101,8 +101,7 @@ export async function createHubProtocolCaller(
     // AMBIENT governance lens (the MCP URL's `?workspaceId=`). Hub write procs
     // read `ctx.workspaceId` as the caller's ambient workspace; when it is null
     // they fall back to the user's most-recently-updated membership — a random
-    // governance lens the acting agent may not even belong to (which is what
-    // turned entity proposals into `workspace.join` proposals). NEVER an
+    // governance lens the acting agent may not work in. NEVER an
     // explicit placement pin: pod-scope kinds must still land pod-wide.
     workspaceId: confinedWorkspaceId ?? null,
     scopes: hubScopes,

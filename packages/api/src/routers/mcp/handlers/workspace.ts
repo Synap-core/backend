@@ -790,25 +790,17 @@ export const workspaceHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
-  // Ask on purpose for the workspace JOIN the gate files on a first write
-  // (ticket 4790c862): the gate's own join, so later writes ride on it.
+  // An agent works where its person is a member: answers that membership.
   synap_request_workspace_access: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, userId, apiKeyScopes, agentUserId, sessionId } = ctx;
+    const { toolName, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // The confined value: a bound service key cannot name another space.
     const workspaceId = ctx.confinedWorkspaceId ?? "";
     const badId = fullUuidError(toolName, "workspaceId", workspaceId);
     if (badId) return badId;
-    return ok(
-      await requestWorkspaceJoin({
-        userId,
-        agentUserId,
-        workspaceId,
-        ...(sessionId ? { sessionId } : {}),
-      })
-    );
+    return ok(await requestWorkspaceJoin({ userId, workspaceId }));
   },
   synap_project_use_workspace: async (
     ctx: McpToolContext

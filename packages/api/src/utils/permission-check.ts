@@ -1773,12 +1773,11 @@ async function evaluatePermission(
         if (isMembershipMiss && agentUserId) {
           return { denied: true, reason: AGENT_PERSON_NOT_MEMBER };
         }
-        // AGENT + insufficient ROLE (a member, but its role lacks this
-        // permission — e.g. an editor agent attempting a destructive `delete`,
-        // which needs owner): route to a PROPOSAL rather than hard-denying.
-        // Extends the same "agent denial → reviewable proposal" philosophy as
-        // the workspace-join branch above — an agent's role gates AUTO
-        // execution, not the ability to PROPOSE. The human owner (who DOES hold
+        // AGENT + insufficient ROLE (its person is a member, but that role
+        // lacks this permission — e.g. an editor attempting a destructive
+        // `delete`, which needs owner): route to a PROPOSAL rather than
+        // hard-denying. The role gates AUTO execution, not the ability to
+        // PROPOSE. The human owner (who DOES hold
         // the permission) authorizes it at approval time. Direct users are NOT
         // affected: a user is the authority, so an under-privileged user is
         // still correctly denied. Guarded to genuine agent user rows.

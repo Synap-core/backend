@@ -20,7 +20,6 @@ import {
   getDb,
   getWorkspaceMembership,
   getRequestGrant,
-  getActingAgentUserId,
   eventRepository,
   EntityRepository,
   extractIdentitySignals,
@@ -38,7 +37,6 @@ import { TRPCError } from "@trpc/server";
 import { lifecycleConflictError } from "../../services/lifecycle/conflict.js";
 import {
   checkPermissionOrPropose,
-  gateAdmitsWorkspace,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { grantWriteDenial } from "../../utils/grant-write-check.js";
@@ -651,13 +649,12 @@ export const mutateProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Update proposed for review",
-            perm.deferred
+            "Update proposed for review"
           ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
-          // Join gate that KEPT the write: replayed once the join is approved.
+          // KEPT on today's held-writes pack: replayed once it is approved.
           ...(perm.deferred
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
@@ -1355,18 +1352,6 @@ export const mutateProcs = {
       await assertWorkspaceWrite(database, ctx.userId, {
         workspaceId: input.workspaceId,
       });
-      // The acting agent as the gate reads it (the key-auth doors enter it),
-      // and whether the gate's membership check admits it in the destination.
-      const actingAgentUserId = getActingAgentUserId();
-      const agentAdmittedInTarget =
-        !actingAgentUserId ||
-        (await gateAdmitsWorkspace({
-          userId: ctx.userId,
-          agentUserId: actingAgentUserId,
-          workspaceId: input.workspaceId,
-          subjectType: "entity",
-          action: "update",
-        }));
 
       const moved: string[] = [];
       const proposed: Array<{ entityId: string; proposalId: string }> = [];
@@ -1445,8 +1430,6 @@ export const mutateProcs = {
             correlationId,
             requestedEventId: requestedEvent?.id,
             data: { id: entityId, toWorkspaceId: input.workspaceId },
-            // An agent the destination does not admit: the person reviews it.
-            ...(agentAdmittedInTarget ? {} : { forcePropose: true }),
           });
 
           if ("denied" in perm && perm.denied) {

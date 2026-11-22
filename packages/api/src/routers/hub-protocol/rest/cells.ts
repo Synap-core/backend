@@ -477,8 +477,8 @@ export function registerCellsRoutes(app: HubHono): void {
 
     // Only gate workspace access when a specific workspace is targeted — and
     // only on the OPERATOR path. An agent routes through the governance gate
-    // below, which owns RBAC (including turning a non-member agent into a
-    // `workspace.join` proposal); a manual write check here would
+    // below, which owns RBAC (the person's membership, and a role that lacks
+    // the write turned into a proposal); a manual write check here would
     // hard-deny what the gate would otherwise let PROPOSE. Same reasoning as the
     // MCP `synap_create_cell` door.
     if (
