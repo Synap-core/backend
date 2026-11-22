@@ -3275,7 +3275,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
 
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
@@ -3412,7 +3412,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
       const agentUserId = await resolveCaptureActorUserId(
         c,
         c.get("agentUserId") as string | undefined
