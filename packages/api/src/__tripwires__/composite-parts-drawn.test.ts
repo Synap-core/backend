@@ -127,6 +127,28 @@ const ONE_OF_EACH = {
     goalTemplate: "Onboard {name}",
     subjectProfile: { profileSlug: "company" },
   },
+  create_workspace: {
+    op: "create_workspace",
+    ref: "ws1",
+    name: "Clients",
+  },
+  define_kind: {
+    op: "define_kind",
+    ref: "k1",
+    slug: "client-file",
+    displayName: "Client file",
+    workspaceRef: "ws1",
+    fields: [{ slug: "tier", valueType: "string" }],
+  },
+  declare_lifecycle: {
+    op: "declare_lifecycle",
+    ref: "lc1",
+    kindRef: "k1",
+    options: [
+      { key: "open", category: "open" },
+      { key: "won", category: "done" },
+    ],
+  },
   create_view: {
     op: "create_view",
     ref: "v1",

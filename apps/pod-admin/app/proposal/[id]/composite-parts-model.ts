@@ -210,7 +210,7 @@ const DRAWERS = {
       const flow = opByRef.get(a.ref)?.flowDefinition as
         { triggerConfig?: Record<string, unknown> } | null | undefined;
       return record("automations", a.ref, "automation", a.name, [
-        // Born off: an approved automation never starts firing on its own.
+        // On once approved, unless the op keeps it off.
         ...field("status", status(a.bornEnabled ? "active" : "draft")),
         ...field(
           "trigger",
@@ -291,6 +291,47 @@ const DRAWERS = {
       ];
     });
   },
+  workspaces: ({ graph }) =>
+    (graph.workspaces ?? []).map((w) =>
+      record("workspaces", w.ref, "workspace", w.name, [])
+    ),
+  kinds: ({ graph }) =>
+    (graph.kinds ?? []).map((k) => {
+      const space = k.workspaceRef
+        ? graph.workspaces?.find((w) => w.ref === k.workspaceRef)?.name
+        : undefined;
+      return record("kinds", k.ref, "profile", k.displayName, [
+        ...field("slug", text(k.slug)),
+        ...field("fields", text(String(k.fieldCount))),
+        ...field(
+          "entityScope",
+          k.entityScope ? text(resolveObjectNoun(k.entityScope)) : null
+        ),
+        ...field("workspace", space ? text(space) : null),
+      ]);
+    }),
+  lifecycles: ({ graph }) =>
+    (graph.lifecycles ?? []).map((l) => {
+      const kind = l.kindRef
+        ? graph.kinds?.find((k) => k.ref === l.kindRef)?.displayName
+        : undefined;
+      return record("lifecycles", l.ref, "lifecycle", kind ?? null, [
+        ...field("property", text(l.property)),
+        ...field(
+          "options",
+          tags(
+            l.options.map(
+              (o) =>
+                `${resolveStatusLabel(o.key)} · ${resolveStatusLabel(o.category)}`
+            )
+          )
+        ),
+        ...field(
+          "initialStatus",
+          l.initialStatus ? status(l.initialStatus) : null
+        ),
+      ]);
+    }),
   playbooks: ({ graph }) =>
     (graph.playbooks ?? []).map((p) =>
       record("playbooks", p.ref, "playbook", p.name, [

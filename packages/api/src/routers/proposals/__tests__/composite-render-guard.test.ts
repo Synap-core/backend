@@ -99,7 +99,7 @@ describe("buildProposalGraph — refusal guard", () => {
     expect(graph.skills![0]!.bodyExcerpt.length).toBeLessThan(long.length);
   });
 
-  it("RENDERS a create_automation op as born-inert", () => {
+  it("RENDERS a create_automation op with whether approval turns it on", () => {
     const graph = buildProposalGraph(
       composite([
         {
@@ -108,16 +108,28 @@ describe("buildProposalGraph — refusal guard", () => {
           name: "Daily nudge",
           triggerType: "cron",
           flowDefinition: {},
-          // A producer may STATE enabled:true; materialization forces false.
-          enabled: true,
+          // A person's approval keeps the status asked for (#1242).
+          enabled: false,
         },
       ] as CompositeProposalOperation[])
     );
     expect(graph.automations).toHaveLength(1);
     expect(graph.automations![0]!.name).toBe("Daily nudge");
     expect(graph.automations![0]!.triggerType).toBe("cron");
-    // The surface must be able to tell the reviewer it does NOT start firing.
+    // The surface tells the reviewer whether it starts firing.
     expect(graph.automations![0]!.bornEnabled).toBe(false);
+    const on = buildProposalGraph(
+      composite([
+        {
+          op: "create_automation",
+          ref: "b2",
+          name: "Daily nudge",
+          triggerType: "cron",
+          flowDefinition: {},
+        },
+      ] as CompositeProposalOperation[])
+    );
+    expect(on.automations![0]!.bornEnabled).toBe(true);
   });
 
   it("RENDERS a create_rule op with its intent and both halves", () => {

@@ -566,11 +566,11 @@ export interface ProposalReviewGraph {
     description?: string;
     triggerType: "event" | "cron" | "webhook" | "manual";
     /**
-     * ALWAYS false: an approved automation is born INERT and a human activates
-     * it. Carried so the surface can say so rather than leaving the reviewer to
-     * assume it starts firing.
+     * Whether a person's approval turns it on: true unless the op keeps it
+     * off (`enabled: false`). Carried so the surface says whether it starts
+     * firing.
      */
-    bornEnabled: false;
+    bornEnabled: boolean;
     /**
      * What its steps can reach outside the pod once it runs, read the way the
      * runtime resolves each step (a verb → the skill that answers it).
@@ -589,8 +589,8 @@ export interface ProposalReviewGraph {
     behaviourRefs?: string[];
   }>;
   /**
-   * `create_playbook` — a DRAFT process for a kind. Always born `draft`
-   * (never runs until a person completes and activates it).
+   * `create_playbook` — a process for a kind. A person's approval makes it
+   * active unless the op keeps it a draft (`bornStatus`).
    */
   playbooks?: Array<{
     ref: string;
@@ -599,7 +599,28 @@ export interface ProposalReviewGraph {
     goalTemplate: string;
     subjectProfileSlug: string;
     statusProperty?: string;
-    bornStatus: "draft";
+    bornStatus: "draft" | "active";
+  }>;
+  /**
+   * A domain: `create_workspace`, `define_kind`, `declare_lifecycle`. Refs
+   * name steps of this bundle (`workspaceRef`, `kindRef`).
+   */
+  workspaces?: Array<{ ref: string; name: string }>;
+  kinds?: Array<{
+    ref: string;
+    slug: string;
+    displayName: string;
+    fieldCount: number;
+    entityScope?: "pod" | "workspace";
+    workspaceRef?: string;
+  }>;
+  lifecycles?: Array<{
+    ref: string;
+    kindRef?: string;
+    profileId?: string;
+    property: string;
+    options: Array<{ key: string; category: string }>;
+    initialStatus?: string;
   }>;
   /**
    * `create_view` — a List over this bundle's things (import Build). Counts,
@@ -651,7 +672,9 @@ export interface ProposalReviewGraph {
     bindings: Array<{
       ref: string;
       targetKind: BindRendererTargetKind;
+      /** The object's id; with `targetRef`, the ref of a step of this bundle. */
       targetId: string;
+      targetRef?: string;
       /** The object's name, when the pod read it for this viewer. */
       targetName?: string;
       slot: "detail";
@@ -1555,6 +1578,11 @@ type _EveryOpKindClassified =
 const _everyOpKindClassified: _EveryOpKindClassified = true;
 void _everyOpKindClassified;
 
+/** Every composite op kind: the plan ops and the resilient ones, classified above. */
+export const COMPOSITE_OPERATION_KINDS: ReadonlyArray<
+  CompositeProposalOperation["op"]
+> = [...PLAN_OPERATION_KINDS, ..._RESILIENT_OPERATION_KINDS];
+
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
    * Ordered list of operations. No op kind has to come first: the entity ops
@@ -1892,17 +1920,7 @@ export function isCompositeProposalData(
     (o) =>
       o != null &&
       typeof o === "object" &&
-      (o.op === "create_entity" ||
-        o.op === "create_relation" ||
-        o.op === "create_skill" ||
-        o.op === "create_automation" ||
-        o.op === "create_rule" ||
-        o.op === "create_playbook" ||
-        o.op === "create_view" ||
-        o.op === "create_cell" ||
-        o.op === "bind_renderer" ||
-        isPlanOperation(o) ||
-        isUpdateOperation(o))
+      COMPOSITE_OPERATION_KINDS.includes(o.op)
   );
 }
 
