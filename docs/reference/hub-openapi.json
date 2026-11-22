@@ -18732,6 +18732,10 @@
                                             "hint": {
                                               "type": "string",
                                               "maxLength": 1000
+                                            },
+                                            "params": {
+                                              "type": "object",
+                                              "additionalProperties": {}
                                             }
                                           },
                                           "required": ["kind"],
@@ -19970,6 +19974,10 @@
                                       "hint": {
                                         "type": "string",
                                         "maxLength": 1000
+                                      },
+                                      "params": {
+                                        "type": "object",
+                                        "additionalProperties": {}
                                       }
                                     },
                                     "required": ["kind"],
@@ -24121,6 +24129,10 @@
                                             "hint": {
                                               "type": "string",
                                               "maxLength": 1000
+                                            },
+                                            "params": {
+                                              "type": "object",
+                                              "additionalProperties": {}
                                             }
                                           },
                                           "required": ["kind"],
@@ -25359,6 +25371,10 @@
                                       "hint": {
                                         "type": "string",
                                         "maxLength": 1000
+                                      },
+                                      "params": {
+                                        "type": "object",
+                                        "additionalProperties": {}
                                       }
                                     },
                                     "required": ["kind"],
@@ -31732,6 +31748,10 @@
                                   "hint": {
                                     "type": "string",
                                     "maxLength": 1000
+                                  },
+                                  "params": {
+                                    "type": "object",
+                                    "additionalProperties": {}
                                   }
                                 },
                                 "required": ["kind"],
@@ -33037,7 +33057,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"],
                           "additionalProperties": false
@@ -41347,7 +41371,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"]
                         },
@@ -45671,7 +45699,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"]
                         },
@@ -49001,7 +49033,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"],
                           "additionalProperties": false
@@ -52659,7 +52695,7 @@
                                 "activatorKey": { "type": "string" },
                                 "mode": {
                                   "type": "string",
-                                  "enum": ["run", "propose"]
+                                  "enum": ["run", "propose", "appointment"]
                                 },
                                 "scope": {
                                   "type": "string",
