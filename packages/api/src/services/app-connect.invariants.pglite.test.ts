@@ -400,8 +400,8 @@ describe("invariant 4 — revoke stops the key at once", () => {
 describe("invariant 1 — an owner grants an app only what they can do themselves", () => {
   /**
    * `resolveRequests` bounds a request by the spaces the owner can READ —
-   * member ∪ owned ∪ pod-visible. Approving a WRITE there makes the app's
-   * agent an `editor` member (`syncAppAgentMemberships`): a pod member who
+   * member ∪ owned ∪ pod-visible. Approving a WRITE there lets the app's
+   * agent write there through its owner: a pod member who
    * may only read a pod-visible space (or is a viewer in it) would hand
    * their app edit rights they never had. Writes need the owner to hold
    * edit rights in that space; reads stay bounded by what they can read.

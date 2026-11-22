@@ -97,6 +97,9 @@ export type ProposalClass = (typeof PROPOSAL_CLASSES)[number];
  * principal (a person, an agent, or the public) a right it did not have".
  */
 export const ACCESS_DOORS: ReadonlySet<string> = new Set([
+  // An agent's request to join a space: none is filed any more (an agent acts
+  // through its person's membership); the rows already decided stay access.
+  "workspace/join",
   // A2AI channel membership — an agent asking to join an open channel.
   "a2ai/join",
   // The human-side membership doors (routers/workspaces/invites.ts).
