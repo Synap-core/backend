@@ -31,10 +31,38 @@ describe("playbookActivatorSchema — workers", () => {
     );
     expect(ok({ on: "schedule" })).toBe(false);
     expect(ok({ on: "schedule", cron: "*/15 * * * *" })).toBe(false);
-    expect(ok({ on: "schedule", cron: "0 9 * * 1", size: "per_thing" })).toBe(
+    expect(ok({ on: "created", cron: "0 9 * * 1" })).toBe(false);
+  });
+
+  it("a schedule runs once for the set, or once per thing — and an appointment never per thing", () => {
+    const tick = { on: "schedule", cron: "0 9 * * 1" };
+    expect(ok({ ...tick, size: "per_thing" })).toBe(true);
+    expect(ok({ ...tick, mode: "appointment" })).toBe(true);
+    expect(ok({ ...tick, mode: "appointment", size: "per_thing" })).toBe(false);
+  });
+
+  it("a schedule takes a status LIST, a zone the clock reads, startsPaused, and a hand-off in run mode only", () => {
+    const tick = { on: "schedule", cron: "0 9 * * 1" };
+    expect(ok({ ...tick, status: ["scoree", "retenue"] })).toBe(true);
+    expect(ok({ on: "enters_status", status: ["a", "b"] })).toBe(false);
+    expect(ok({ ...tick, timezone: "Europe/Paris" })).toBe(true);
+    expect(ok({ ...tick, timezone: "Mars/Olympus" })).toBe(false);
+    expect(ok({ on: "created", timezone: "Europe/Paris" })).toBe(false);
+    expect(ok({ ...tick, startsPaused: true })).toBe(true);
+    expect(ok({ on: "created", startsPaused: true })).toBe(false);
+    expect(ok({ ...tick, mode: "run", handToAgentId: "agent-1" })).toBe(true);
+    expect(ok({ ...tick, mode: "propose", handToAgentId: "agent-1" })).toBe(
       false
     );
-    expect(ok({ on: "created", cron: "0 9 * * 1" })).toBe(false);
+    expect(ok({ on: "created", mode: "appointment" })).toBe(false);
+  });
+
+  it("only / unless read one thing: a per_thing schedule takes them, a per_moment one does not", () => {
+    const only = { property: "billing", in: ["monthly"] };
+    expect(
+      ok({ on: "schedule", cron: "0 9 * * 1", size: "per_thing", only })
+    ).toBe(true);
+    expect(ok({ on: "schedule", cron: "0 9 * * 1", only })).toBe(false);
   });
 
   it("manual takes no status; the backlog limit is bounded", () => {

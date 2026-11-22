@@ -101,6 +101,10 @@ import { workerIrreversibleSendCeiling } from "./worker-send-ceiling.js";
 import {
   WORKER_BATCH_LIMIT,
   WORKER_SKIP_REASONS,
+  isScheduleActivatorKey,
+  skippedByOnly,
+  skippedByUnless,
+  workerStatuses,
   type WorkerSkipReason,
 } from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
@@ -1559,6 +1563,9 @@ export async function runPlaybook(
         handOff
       );
     }
+    if (!input.subjectId && isScheduleActivatorKey(input.worker.key)) {
+      return runWorkerEach(playbook, input, input.worker, filing);
+    }
   }
 
   // Pinned subject, BEFORE any session and before a rotating cursor could
@@ -2581,7 +2588,8 @@ export async function gateWorkerRun(
       return WORKER_SKIP_REASONS.volumeCeiling;
     }
   }
-  if (worker.size === "per_thing" && worker.status && input.subjectId) {
+  const statuses = workerStatuses(worker.status);
+  if (worker.size === "per_thing" && statuses.length && input.subjectId) {
     const { readSubjectProfile } = await import("./playbook-activators.js");
     const { lifecycleProperty } = await readSubjectProfile(
       worker.profileSlug,
@@ -2600,7 +2608,7 @@ export async function gateWorkerRun(
         .from(entities)
         .where(eq(entities.id, input.subjectId))
         .limit(1);
-      return thing?.value === worker.status
+      return thing?.value && statuses.includes(thing.value)
         ? null
         : WORKER_SKIP_REASONS.staleTransition;
     }
@@ -2626,6 +2634,104 @@ export async function gateWorkerRun(
  * entity routers and pulls their module graph, which no other run needs.
  */
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
+
+/**
+ * A per_thing SCHEDULE tick: one run per thing in the worker's set, each
+ * through this same door with that thing as its subject (so its gate, its
+ * one-live-run and its param binding are the ones every run has). The set:
+ * the things in the worker's status under its scope — the lifecycle column
+ * when the status lives there, else the playbook's `statusProperty` read off
+ * each thing — kept by `only` / `unless`, at most `WORKER_BATCH_LIMIT`.
+ * Nothing in it ⇒ `no-subject`. The first run is the reply; a failed one is
+ * logged and the others still run (all failing throws the last error).
+ */
+async function runWorkerEach(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  worker: RunWorker,
+  filing: RunFiling
+): Promise<RunPlaybookResult> {
+  const things = await workerSetOfThings(playbook, input, worker, filing);
+  let first: RunPlaybookResult | null = null;
+  let lastError: unknown = null;
+  for (const id of things) {
+    try {
+      const result = await runPlaybook({
+        ...input,
+        subjectId: id,
+        params: fillSoleRequiredEntityParam(
+          (input.params ?? {}) as Record<string, unknown>,
+          playbook.params,
+          id
+        ),
+      });
+      first ??= result;
+    } catch (err) {
+      lastError = err;
+      logger.error(
+        { err, playbookId: playbook.id, subjectId: id },
+        "per_thing schedule run failed (the other things still run)"
+      );
+    }
+  }
+  if (first) return first;
+  if (lastError) throw lastError;
+  return { run: null, session: null, skipped: "no-subject" };
+}
+
+/** HIDDEN LIMIT: a set filtered off the things' properties reads this many first. */
+const WORKER_SET_SCAN_LIMIT = 200;
+
+async function workerSetOfThings(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  worker: RunWorker,
+  filing: RunFiling
+): Promise<string[]> {
+  const { readSubjectProfile } = await import("./playbook-activators.js");
+  const { lifecycleProperty } = await readSubjectProfile(
+    worker.profileSlug,
+    input.workspaceId
+  );
+  const statusProperty =
+    readPlaybookProcess(playbook.subjectProfile).statusProperty ??
+    lifecycleProperty;
+  const statuses = workerStatuses(worker.status);
+  const onColumn = !statusProperty || statusProperty === lifecycleProperty;
+  const byProperties =
+    (!onColumn && statuses.length > 0) || !!worker.only || !!worker.unless;
+  const { listThingsInStatus } = await loadStatusGroups();
+  const set = await listThingsInStatus({
+    profileSlug: worker.profileSlug,
+    status: onColumn ? statuses : null,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    projectId: filing.projectId,
+    limit: byProperties ? WORKER_SET_SCAN_LIMIT : WORKER_BATCH_LIMIT,
+  });
+  const ids = set.items.map((i) => i.id);
+  if (!byProperties || ids.length === 0) return ids;
+  const db = await getDb();
+  const rows = await db
+    .select({ id: entities.id, properties: entities.properties })
+    .from(entities)
+    .where(inArray(entities.id, ids));
+  const props = new Map(
+    rows.map((r) => [r.id, (r.properties as Record<string, unknown>) ?? {}])
+  );
+  return ids
+    .filter((id) => {
+      const p = props.get(id) ?? {};
+      if (!onColumn && statuses.length > 0) {
+        const v = p[statusProperty!];
+        if (typeof v !== "string" || !statuses.includes(v)) return false;
+      }
+      return (
+        !skippedByOnly(worker.only, p) && !skippedByUnless(worker.unless, p)
+      );
+    })
+    .slice(0, WORKER_BATCH_LIMIT);
+}
 
 /**
  * A per_moment worker run: the things in the worker's status under its scope

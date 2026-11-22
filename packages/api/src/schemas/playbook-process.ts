@@ -25,8 +25,10 @@
 import { z } from "zod";
 import { readSubjectLifecycle, type PlaybookActivator } from "@synap/playbooks";
 import { isSentenceCron } from "@synap-core/types/automations";
+import { isCronTimezone } from "@synap/shared-utils";
 import {
   type WorkerActivatorTrigger,
+  WORKER_ACTIVATOR_MODES,
   WORKER_COUNT_MIN_FLOOR,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_RUN_OUTCOMES,
@@ -50,8 +52,22 @@ export const playbookActivatorSchema = z
       "manual",
       "run_ended",
     ]),
-    status: statusValueSchema.optional(),
+    status: z
+      .union([statusValueSchema, z.array(statusValueSchema).min(1).max(20)])
+      .optional(),
     cron: z.string().trim().min(1).max(120).optional(),
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .refine(
+        isCronTimezone,
+        "timezone must be an IANA zone (e.g. Europe/Paris)"
+      )
+      .optional(),
+    startsPaused: z.literal(true).optional(),
+    handToAgentId: z.string().trim().min(1).max(64).optional(),
     min: z.number().int().min(WORKER_COUNT_MIN_FLOOR).max(10_000).optional(),
     // A LINK (`run_ended`): the playbook whose run ending starts this one, by
     // name or id; resolved in the same space (or pod-wide) when the rule is
@@ -63,7 +79,7 @@ export const playbookActivatorSchema = z
     size: z.enum(WORKER_SIZES).optional(),
     // `propose` is the default for public templates: a process starts only
     // when a person says so, unless the author explicitly chose `run`.
-    mode: z.enum(["run", "propose"]).default("propose"),
+    mode: z.enum(WORKER_ACTIVATOR_MODES).default("propose"),
     maxPendingApprovals: z
       .number()
       .int()
@@ -96,6 +112,33 @@ export const playbookActivatorSchema = z
         in: z.array(statusValueSchema).min(1).max(50),
       })
       .optional(),
+  })
+  .refine(
+    (a) =>
+      a.on === "schedule" ||
+      (a.timezone === undefined &&
+        a.startsPaused === undefined &&
+        a.handToAgentId === undefined &&
+        a.mode !== "appointment"),
+    {
+      message:
+        'timezone, startsPaused, handToAgentId and mode "appointment" belong to on: "schedule"',
+      path: ["on"],
+    }
+  )
+  .refine((a) => typeof a.status !== "object" || a.on === "schedule", {
+    message: 'a list of statuses is read by on: "schedule" only',
+    path: ["status"],
+  })
+  .refine((a) => !a.handToAgentId || a.mode === "run", {
+    message:
+      'handToAgentId hands each run to an agent: it needs mode "run" (an appointment waits for a person)',
+    path: ["handToAgentId"],
+  })
+  .refine((a) => a.mode !== "appointment" || a.size !== "per_thing", {
+    message:
+      "an appointment opens one session for a person at each tick, never one per thing",
+    path: ["size"],
   })
   .refine((a) => (a.on !== "enters_status" && a.on !== "count") || !!a.status, {
     message:
@@ -139,36 +182,29 @@ export const playbookActivatorSchema = z
     message: `on: "count" needs min (≥ ${WORKER_COUNT_MIN_FLOOR}), and only a count takes one`,
     path: ["min"],
   })
-  .refine(
-    (a) => (a.on !== "count" && a.on !== "schedule") || a.size !== "per_thing",
-    {
-      message:
-        "a count or schedule worker runs once for the whole set (per_moment) — per_thing has no single thing to run on",
-      path: ["size"],
-    }
-  )
-  .refine(
-    (a) =>
-      a.unless === undefined ||
-      ((a.on === "created" || a.on === "enters_status") &&
-        a.size !== "per_moment"),
-    {
-      message:
-        'unless leaves out ONE thing: only a per_thing "created" or "enters_status" activator takes it',
-      path: ["unless"],
-    }
-  )
-  .refine(
-    (a) =>
-      a.only === undefined ||
-      ((a.on === "created" || a.on === "enters_status") &&
-        a.size !== "per_moment"),
-    {
-      message:
-        'only keeps ONE thing by its value: only a per_thing "created" or "enters_status" activator takes it',
-      path: ["only"],
-    }
+  .refine((a) => a.on !== "count" || a.size !== "per_thing", {
+    message:
+      "a count worker runs once for the whole set (per_moment) — per_thing has no single thing to run on",
+    path: ["size"],
+  })
+  .refine((a) => a.unless === undefined || perThingFilterable(a), {
+    message:
+      'unless leaves out ONE thing: only a per_thing "created", "enters_status" or "schedule" activator takes it',
+    path: ["unless"],
+  })
+  .refine((a) => a.only === undefined || perThingFilterable(a), {
+    message:
+      'only keeps ONE thing by its value: only a per_thing "created", "enters_status" or "schedule" activator takes it',
+    path: ["only"],
+  });
+
+/** `unless` / `only` read one thing: a per_thing event, or a per_thing tick. */
+function perThingFilterable(a: { on: string; size?: string }): boolean {
+  if (a.on === "schedule") return a.size === "per_thing";
+  return (
+    (a.on === "created" || a.on === "enters_status") && a.size !== "per_moment"
   );
+}
 
 // The three spellings of one activator cannot drift: the wire (this schema),
 // the dependency-free mirror (`PlaybookActivator`) and the shared vocabulary
@@ -271,9 +307,10 @@ export const activatorKey = workerActivatorKey;
  * silent stays silent). A top-level value WINS over a nested one — it is the
  * explicit contract spelling.
  *
- * Refuses (throws) activators without a subject kind: an activator fires on
- * the subject kind's events, and one with no kind could only compile into a
- * rule that fires on every entity.
+ * Refuses (throws) activators without a subject kind, except a `schedule`
+ * (one run per tick over nothing): an event activator fires on the subject
+ * kind's events, and one with no kind could only compile into a rule that
+ * fires on every entity.
  */
 export function foldProcessIntoSubjectProfile(def: {
   subjectProfile?: Record<string, unknown> | null;
@@ -293,11 +330,11 @@ export function foldProcessIntoSubjectProfile(def: {
   const acts = base.activators;
   if (
     Array.isArray(acts) &&
-    acts.length > 0 &&
+    acts.some((a) => (a as { on?: unknown } | null)?.on !== "schedule") &&
     typeof base.profileSlug !== "string"
   ) {
     throw new ProcessDeclarationError(
-      "activators need subjectProfile.profileSlug — an activator fires on the subject kind's events"
+      "activators need subjectProfile.profileSlug — an activator fires on the subject kind's events (only a schedule runs with no subject)"
     );
   }
   return base;

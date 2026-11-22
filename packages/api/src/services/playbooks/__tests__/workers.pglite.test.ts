@@ -1300,3 +1300,164 @@ describe("a SESSION starts a worker (scope `session`)", () => {
     );
   });
 });
+
+/**
+ * A playbook still carrying the retired `schedule` column: the boot pass folds
+ * it into a `schedule` activator compiled through the rule door, pauses and
+ * unlinks the cron automation that drove it, and clears the column — once.
+ */
+describe("convergeActivatorsAtBoot — a retired schedule becomes an activator", () => {
+  async function scheduled(o: {
+    schedule: unknown;
+    subjectProfile?: unknown;
+    driver: "active" | "paused";
+  }) {
+    const id = randomUUID();
+    const automationId = randomUUID();
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile, schedule)
+       values ($1, $2, 'active', $3, $4, 'g', $5::jsonb, $6::jsonb)`,
+      [
+        id,
+        `Scheduled ${id.slice(0, 4)}`,
+        WS,
+        USER,
+        JSON.stringify(o.subjectProfile ?? null),
+        JSON.stringify(o.schedule),
+      ]
+    );
+    await q(
+      `insert into automations (id, created_by, name, trigger_type, status, next_run_at)
+       values ($1, $2, 'backing', 'cron', $3, now())`,
+      [automationId, USER, o.driver]
+    );
+    await q(
+      `insert into playbook_automations (id, playbook_id, automation_id, role)
+       values (gen_random_uuid(), $1, $2, 'schedule')`,
+      [id, automationId]
+    );
+    return { id, automationId };
+  }
+  const row = async (id: string) =>
+    (
+      await q<{ schedule: unknown; subject_profile: Record<string, unknown> }>(
+        `select schedule, subject_profile from playbooks where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  const driver = async (playbookId: string, automationId: string) => ({
+    status: (
+      await q<{ status: string }>(
+        `select status from automations where id = $1`,
+        [automationId]
+      )
+    ).rows[0]!.status,
+    linked: (
+      await q<{ n: number }>(
+        `select count(*)::int as n from playbook_automations where playbook_id = $1 and role = 'schedule'`,
+        [playbookId]
+      )
+    ).rows[0]!.n,
+  });
+  const createCalls = () =>
+    vi.mocked(createRuleGoverned).mock.calls.map(
+      ([c]) =>
+        c as {
+          seed?: { template: string; key: string };
+          draft?: boolean;
+          sentence?: { trigger?: { cronTimezone?: string } };
+        }
+    );
+
+  it("a subject-less daily run: one live rule in its owner's zone; the old automation stops; a second boot adds nothing", async () => {
+    await q(`update users set timezone = 'Asia/Kolkata' where id = $1`, [USER]);
+    vi.mocked(createRuleGoverned).mockClear();
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      expect((await convergeActivatorsAtBoot()).failed).toBe(0);
+      const after = await row(pb.id);
+      expect(after.schedule).toBeNull();
+      expect(after.subject_profile.activators).toEqual([
+        { on: "schedule", cron: "0 8 * * *", mode: "run" },
+      ]);
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "paused",
+        linked: 0,
+      });
+      const mine = createCalls().filter(
+        (c) => c.seed?.template === `playbook-activator:${pb.id}`
+      );
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.seed!.key).toBe("schedule:0 8 * * *");
+      expect(mine[0]!.draft).toBeUndefined();
+      expect(mine[0]!.sentence?.trigger?.cronTimezone).toBe("Asia/Kolkata");
+
+      await convergeActivatorsAtBoot();
+      expect(
+        createCalls().filter(
+          (c) => c.seed?.template === `playbook-activator:${pb.id}`
+        )
+      ).toHaveLength(1);
+    } finally {
+      await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a per-thing schedule keeps its filter as status + only; a paused automation installs the rule paused", async () => {
+    vi.mocked(createRuleGoverned).mockClear();
+    const pb = await scheduled({
+      schedule: { cron: "0 8 1 * *", enabled: true },
+      subjectProfile: {
+        profileSlug: "deal",
+        filter:
+          '{"properties.commercialStage":"won","properties.billing":"monthly"}',
+      },
+      driver: "paused",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).subject_profile.activators).toEqual([
+        {
+          on: "schedule",
+          cron: "0 8 1 * *",
+          mode: "run",
+          size: "per_thing",
+          status: "won",
+          only: { property: "billing", in: ["monthly"] },
+          startsPaused: true,
+        },
+      ]);
+      const mine = createCalls().filter(
+        (c) => c.seed?.template === `playbook-activator:${pb.id}`
+      );
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.draft).toBe(true);
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a cron no activator can say is left as it was: its automation keeps firing", async () => {
+    const pb = await scheduled({
+      schedule: { cron: "*/15 * * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toEqual({
+        cron: "*/15 * * * *",
+        enabled: true,
+      });
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "active",
+        linked: 1,
+      });
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+});

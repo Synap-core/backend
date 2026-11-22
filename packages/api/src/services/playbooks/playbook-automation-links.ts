@@ -15,9 +15,8 @@
  *   - a by-name `playbook_run` node is resolved to an id at save
  *     (`routers/automations.ts`, `injectPlaybookIdsFromNames`).
  *
- * KEPT ONE RELEASE (owed to W5): `playbooks.flow_automation_id` is still
- * WRITTEN beside the join row, because the browser before this release reads
- * it (processors `process-flow-facts.ts`). No backend code reads it. The legacy
+ * `playbooks.flow_automation_id` is only CLEARED beside the join row (nothing
+ * writes a driver any more; the browser still reads it). The legacy
  * `member_of` link rows stay where they are (no reader since 0425; a rollback's
  * trigger matcher still reads them), and nothing writes new ones.
  */
@@ -26,16 +25,16 @@ import {
   asc,
   eq,
   inArray,
-  ne,
   playbookAutomations,
   playbooks,
   type getDb,
 } from "@synap/database";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
-type Writer = Pick<Db, "insert" | "update" | "delete" | "select">;
+/** A transaction passes too: it is the same database surface. */
+type Writer = Pick<Db, "update" | "delete">;
 
-/** The role of the automation that drives a playbook from a cron schedule. */
+/** The role of the automation a retired `schedule` drove (folded into an activator; rows may remain). */
 export const SCHEDULE_ROLE = "schedule";
 /** The role of the automation a playbook canvas saved (rows may still exist; no door writes it any more). */
 export const FLOW_ROLE = "flow";
@@ -65,52 +64,6 @@ export async function readDriverAutomationId(
     .orderBy(asc(playbookAutomations.createdAt))
     .limit(1);
   return row?.automationId ?? null;
-}
-
-/**
- * Make `automationId` the playbook's ONE driving automation, in the role given:
- * any other driver row of the playbook is removed, the row is upserted (an
- * existing composition of the same automation takes the driver role), and
- * `flow_automation_id` is written for the old browser (one release, W5).
- */
-export async function setDriverAutomation(
-  db: Writer,
-  input: { playbookId: string; automationId: string; role: string }
-): Promise<void> {
-  await db
-    .delete(playbookAutomations)
-    .where(
-      and(
-        eq(playbookAutomations.playbookId, input.playbookId),
-        inArray(playbookAutomations.role, [...DRIVER_ROLES]),
-        ne(playbookAutomations.automationId, input.automationId)
-      )
-    );
-  // Update-then-insert rather than ON CONFLICT: the same answer, and it holds
-  // on a table built without its unique index (the PGlite route tests build
-  // every table from its columns).
-  const moved = await db
-    .update(playbookAutomations)
-    .set({ role: input.role, updatedAt: new Date() })
-    .where(
-      and(
-        eq(playbookAutomations.playbookId, input.playbookId),
-        eq(playbookAutomations.automationId, input.automationId)
-      )
-    )
-    .returning({ id: playbookAutomations.id });
-  if (moved.length === 0) {
-    await db.insert(playbookAutomations).values({
-      playbookId: input.playbookId,
-      automationId: input.automationId,
-      role: input.role,
-    });
-  }
-  // KEPT ONE RELEASE: the old browser reads it. Drop owed to W5.
-  await db
-    .update(playbooks)
-    .set({ flowAutomationId: input.automationId, updatedAt: new Date() })
-    .where(eq(playbooks.id, input.playbookId));
 }
 
 /** The playbook has no driving automation any more (its schedule was turned off). */

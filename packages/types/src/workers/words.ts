@@ -23,7 +23,11 @@ import {
   resolveObjectNounPlural,
   resolveStatusLabel,
 } from "../vocabulary/index.js";
-import type { WorkerActivatorTrigger, WorkerRunOutcome } from "./index.js";
+import {
+  workerStatuses,
+  type WorkerActivatorTrigger,
+  type WorkerRunOutcome,
+} from "./index.js";
 
 /** The fields of an enabled worker (`workers.list`) the words read. */
 export interface TriggerWorker {
@@ -31,8 +35,10 @@ export interface TriggerWorker {
   profileSlug: string | null;
   activator: {
     on: WorkerActivatorTrigger;
-    status?: string;
+    status?: string | readonly string[];
     cron?: string;
+    /** `schedule`: the zone its cron is read in (absent = UTC). */
+    timezone?: string;
     min?: number;
     /** `run_ended`: the linked playbook, as declared (a name or an id). */
     playbook?: string;
@@ -43,7 +49,7 @@ export interface TriggerWorker {
 /** …plus what the worker does, for the whole sentence and its mark. */
 export interface SentenceWorker extends TriggerWorker {
   playbookName: string;
-  mode: "run" | "propose";
+  mode: "run" | "propose" | "appointment";
   /** Its runs waiting on a person (`workers.list`); > 0 = your turn. */
   pendingApprovals?: number;
 }
@@ -56,7 +62,10 @@ export function workerWhen(w: TriggerWorker): string | null {
   const a = w.activator;
   if (!a) return null;
   const noun = resolveObjectNoun(w.profileSlug ?? "thing").toLowerCase();
-  const status = a.status ? resolveStatusLabel(a.status) : null;
+  const statuses = workerStatuses(a.status);
+  const status = statuses.length
+    ? statuses.map((st) => resolveStatusLabel(st)).join(" or ")
+    : null;
   switch (a.on) {
     case "created":
       return `When ${withArticle(noun)} is created`;
@@ -69,7 +78,7 @@ export function workerWhen(w: TriggerWorker): string | null {
     case "schedule":
       // Through `cronWords`, never the raw expression (D3): an expression it
       // cannot phrase says so in words instead of leaking `*/15 * * * *`.
-      return a.cron ? (cronWords(a.cron) ?? CUSTOM_SCHEDULE) : null;
+      return a.cron ? (cronWords(a.cron, a.timezone) ?? CUSTOM_SCHEDULE) : null;
     case "run_ended": {
       // An id says nothing to a person: "another playbook" instead.
       const name = a.playbook?.trim();
@@ -100,7 +109,9 @@ export function workerSentence(w: SentenceWorker): {
     then:
       w.mode === "propose"
         ? `propose running ${w.playbookName}`
-        : `run ${w.playbookName}`,
+        : w.mode === "appointment"
+          ? `open a session for ${w.playbookName}`
+          : `run ${w.playbookName}`,
   };
 }
 

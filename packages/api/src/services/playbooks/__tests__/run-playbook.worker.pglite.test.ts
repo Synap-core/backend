@@ -483,3 +483,42 @@ describe("per_thing stale check on a kind with no declared lifecycle", () => {
     expect(r).not.toEqual({ skipped: "stale_transition" });
   });
 });
+
+/**
+ * A per_thing SCHEDULE tick (no subject on the fire): one run per thing of
+ * its set, each with that thing as its subject — counted as session rows.
+ */
+describe("per_thing schedule — one run per thing of the set", () => {
+  const tick = (o: Record<string, unknown> = {}) =>
+    fire(worker({ size: "per_thing", key: "schedule:0 9 * * 1", ...o }));
+  const subjects = async () =>
+    (await sessions()).map((s) => s.subject_entity_id).sort();
+
+  it("a status list on the lifecycle: each thing in any of them gets its own run", async () => {
+    await declareLifecycle("stage");
+    const a = await deal("review");
+    const b = await deal("draft");
+    await deal("won");
+    await tick({ status: ["review", "draft"] });
+    expect(await subjects()).toEqual([a, b].sort());
+  });
+
+  it("no lifecycle: the playbook's statusProperty and `only` are read off each thing", async () => {
+    h.subjectProfile = { profileSlug: "deal", statusProperty: "stage" };
+    const kept = await deal(null, { stage: "active", billing: "monthly" });
+    await deal(null, { stage: "active", billing: "annual" });
+    await deal(null, { stage: "paused", billing: "monthly" });
+    await tick({
+      status: "active",
+      only: { property: "billing", in: ["monthly"] },
+    });
+    expect(await subjects()).toEqual([kept]);
+  });
+
+  it("nothing in the set → no-subject, no session", async () => {
+    await declareLifecycle("stage");
+    await deal("won");
+    expect(await tick({ status: "review" })).toEqual({ skipped: "no-subject" });
+    expect(await sessions()).toHaveLength(0);
+  });
+});

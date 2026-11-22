@@ -67,8 +67,11 @@
  */
 
 import { createLogger } from "@synap-core/core";
+import { TRPCError } from "@trpc/server";
+import { isCronTimezone } from "@synap/shared-utils";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
-import { effectiveWorkerSize } from "@synap-core/types/workers";
+import { effectiveWorkerSize, workerStatuses } from "@synap-core/types/workers";
 import {
   PLAYBOOK_RUN_MODE_KEY,
   isSentenceCron,
@@ -78,11 +81,16 @@ import {
   db,
   skills,
   playbooks,
+  users,
   workspaces,
+  automations,
   playbookAutomations,
+  setAutomationStatus,
   proposals,
   and,
+  or,
   eq,
+  isNotNull,
   inArray,
   notInArray,
   drizzleSql,
@@ -95,7 +103,9 @@ import {
 import {
   activatorKey,
   readPlaybookProcess,
+  type PlaybookProcess,
 } from "../../schemas/playbook-process.js";
+import { scheduleActivatorOf } from "../../schemas/playbook-schedule.js";
 import {
   RULE_CATEGORY,
   readRuleMetadata,
@@ -103,7 +113,11 @@ import {
   type RuleSeed,
 } from "../rules/index.js";
 import { createRuleGoverned } from "../rules/create.js";
-import { LINK_ROLE } from "./playbook-automation-links.js";
+import {
+  LINK_ROLE,
+  SCHEDULE_ROLE,
+  clearDriverAutomation,
+} from "./playbook-automation-links.js";
 import { linkRefsOf, resolveLinkedPlaybooks } from "./playbook-links.js";
 import { updateRuleGoverned } from "../rules/update.js";
 import { readRuleAutomationIds } from "../rules/lineage.js";
@@ -356,6 +370,8 @@ export function activatorRuleDecl(input: {
    */
   linked?: ReadonlyMap<string, { id: string; name: string }>;
   ownerUserId?: string;
+  /** The zone a `schedule` that names none is read in: its owner's. */
+  defaultTimezone?: string;
 }):
   | TemplateRuleDecl
   | { key: string; error: string }
@@ -363,36 +379,57 @@ export function activatorRuleDecl(input: {
   const { activator: a, playbookId, profileSlug, subject } = input;
   const key = activatorKey(a);
   if (a.on === "manual") return { key, manual: true };
+  const clock =
+    a.on === "schedule"
+      ? {
+          on: "schedule" as const,
+          cron: a.cron ?? "",
+          timezone: a.timezone ?? input.defaultTimezone ?? "UTC",
+          ...(a.handToAgentId ? { handToAgentId: a.handToAgentId } : {}),
+        }
+      : null;
   if (!profileSlug) {
-    // No subject (a chosen clock): one run per tick, filed in the project,
-    // over nothing — no worker spec (it names the kind a batch is read from).
-    // Its cadence (daily / weekly) is its bound; `propose` asks a person
-    // before each run.
-    if (a.on !== "schedule" || !input.scope) {
+    // No subject: one run per tick over nothing — no worker spec (it names
+    // the kind a set is read from). `propose` asks a person before each run;
+    // an appointment opens a session that waits for them.
+    if (!clock) {
       return {
         key,
         error:
-          "a playbook with no subject runs only on a clock enabled for a project, goal or session",
+          'a playbook with no subject runs only on a schedule: declare on: "schedule"',
       };
     }
-    const verb = a.mode === "propose" ? "propose running" : "run";
+    if (a.size === "per_thing") {
+      return {
+        key,
+        error:
+          "per_thing runs once per thing of the subject kind: set subjectProfile.profileSlug, or drop size",
+      };
+    }
     return {
       key,
-      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}"${scopeWords(input.scope)}.`,
+      intent: `On schedule (${a.cron} ${clock.timezone}), ${modeVerb(a.mode)} "${input.playbookName}"${scopeWords(input.scope)}.`,
       sentence: playbookActivatorSentence({
         playbookId,
         profileSlug: "",
         mode: a.mode,
         ...scopeNode(input.scope),
-        on: "schedule",
-        cron: a.cron ?? "",
+        ...clock,
       }),
+    };
+  }
+  if (a.mode === "appointment") {
+    return {
+      key,
+      error:
+        "an appointment opens one session with no subject for a person: declare it on a playbook with no subject kind",
     };
   }
   const kind = resolveObjectNoun(profileSlug).toLowerCase();
   const size = effectiveWorkerSize(a);
   const perMoment = size === "per_moment";
   const verb = a.mode === "propose" && !perMoment ? "propose running" : "run";
+  const statuses = workerStatuses(a.status);
   const worker = {
     key,
     size,
@@ -411,7 +448,7 @@ export function activatorRuleDecl(input: {
     playbookId,
     profileSlug,
     // A batch RUNS; whether its writes propose rides on `worker.writes`.
-    mode: perMoment ? ("run" as const) : a.mode,
+    mode: perMoment ? ("run" as const) : (a.mode as "run" | "propose"),
     worker,
     ...scopeNode(input.scope),
   };
@@ -461,22 +498,22 @@ export function activatorRuleDecl(input: {
     };
   }
 
-  if (a.on === "schedule") {
+  if (clock) {
+    const inStatus = statuses.length
+      ? ` in ${statuses.map((st) => `"${st}"`).join(" or ")}`
+      : "";
+    const over = perMoment ? `${batch}: every ${kind}` : `on each ${kind}`;
     return {
       key,
-      intent: `On schedule (${a.cron}), ${verb} "${input.playbookName}" ${batch}: every ${kind}${a.status ? ` in "${a.status}"` : ""}${where}${tail}.`,
-      sentence: playbookActivatorSentence({
-        ...common,
-        on: "schedule",
-        cron: a.cron ?? "",
-      }),
+      intent: `On schedule (${a.cron} ${clock.timezone}), ${verb} "${input.playbookName}" ${over}${inStatus}${where}${tail}.`,
+      sentence: playbookActivatorSentence({ ...common, ...clock }),
     };
   }
   if (a.on === "enters_status" || a.on === "count") {
     // The declared lifecycle IS the status a process follows (work model L1):
     // a playbook that names none follows it.
     const statusProperty = input.statusProperty ?? subject.lifecycleProperty;
-    if (!statusProperty || !a.status) {
+    if (!statusProperty || typeof a.status !== "string") {
       return {
         key,
         error: `an ${a.on} activator needs subjectProfile.statusProperty — the property whose value the subject enters`,
@@ -536,6 +573,13 @@ export function activatorRuleDecl(input: {
   };
 }
 
+/** The verb of a run with no worker spec, in its mode. */
+function modeVerb(mode: PlaybookActivator["mode"]): string {
+  if (mode === "propose") return "propose running";
+  if (mode === "appointment") return "open a session for";
+  return "run";
+}
+
 /**
  * What an enablement's scope puts on the compiled node: its filing, and a
  * session's parent. Each key OMITTED when absent, so a project enablement
@@ -583,12 +627,13 @@ export { readSubjectProfile, type SubjectLifecycle };
  *
  *   1 — before D4: a plain space-wide created / enters_status activator
  *       compiled with no worker spec (absent memory reads as 1);
- *   2 — every activator carries the worker spec (D4).
+ *   2 — every activator carries the worker spec (D4);
+ *   3 — a schedule is read in its declared zone, else its owner's (was UTC).
  *
  * Bump it whenever `activatorRuleDecl` starts writing a different decl for an
  * unchanged declaration.
  */
-export const ACTIVATOR_COMPILE_VERSION = 2;
+export const ACTIVATOR_COMPILE_VERSION = 3;
 
 /** One playbook's memory of the rules its activators produced (see header). */
 interface ActivatorMemory {
@@ -687,6 +732,8 @@ async function applyOnce(input: {
       workspaceId: playbooks.workspaceId,
       subjectProfile: playbooks.subjectProfile,
       metadata: playbooks.metadata,
+      createdBy: playbooks.createdBy,
+      schedule: playbooks.schedule,
     })
     .from(playbooks)
     .where(eq(playbooks.id, input.playbookId))
@@ -698,14 +745,15 @@ async function applyOnce(input: {
       outcomes: [],
     };
   }
-  const process = readPlaybookProcess(pb.subjectProfile);
-  if (process.activatorsInvalid) {
+  const stored = readPlaybookProcess(pb.subjectProfile);
+  if (stored.activatorsInvalid) {
     logger.error(
       { playbookId: pb.id },
       "stored activators did not parse — no activator rule was created or retired"
     );
     return { playbookId: pb.id, status: "invalid", outcomes: [] };
   }
+  const process = await foldRetiredSchedule(pb, stored);
   // ONLY A LIVE PLAYBOOK DECLARES (header).
   const declared = pb.status === "active" ? process.activators : [];
 
@@ -780,27 +828,26 @@ async function applyOnce(input: {
     process.profileSlug && declared.length > 0
       ? await readSubjectProfile(process.profileSlug, pb.workspaceId)
       : { profileKind: "kind" as const, lifecycleProperty: null };
+  const defaultTimezone = declared.some((a) => a.on === "schedule")
+    ? await ownerCronTimezone(pb.createdBy)
+    : undefined;
   for (const activator of declared) {
-    const built = process.profileSlug
-      ? activatorRuleDecl({
-          activator,
-          playbookId: pb.id,
-          playbookName: pb.name,
-          profileSlug: process.profileSlug,
-          statusProperty: process.statusProperty,
-          subject,
-          ...(activator.on === "run_ended"
-            ? {
-                linked: linkedOf(activator),
-                ownerUserId:
-                  byKey.get(activatorKey(activator))?.userId ?? input.userId,
-              }
-            : {}),
-        })
-      : {
-          key: activatorKey(activator),
-          error: "activators need subjectProfile.profileSlug",
-        };
+    const built = activatorRuleDecl({
+      activator,
+      playbookId: pb.id,
+      playbookName: pb.name,
+      profileSlug: process.profileSlug,
+      statusProperty: process.statusProperty,
+      subject,
+      defaultTimezone,
+      ...(activator.on === "run_ended"
+        ? {
+            linked: linkedOf(activator),
+            ownerUserId:
+              byKey.get(activatorKey(activator))?.userId ?? input.userId,
+          }
+        : {}),
+    });
     const role = activator.on === "run_ended" ? LINK_ROLE : ACTIVATOR_ROLE;
     declaredKeys.add(built.key);
     if ("error" in built) {
@@ -924,10 +971,13 @@ async function applyOnce(input: {
         sentence: decl.sentence,
         seed,
         auditSource: "playbook-activator",
+        // Born paused: remembered as not retired by us, so every later pass
+        // reads it as the owner's pause until the person turns it on.
+        ...(activator.startsPaused ? { draft: true } : {}),
       });
       if (r.status === "created") {
         outcomes.push({ key: decl.key, status: "created", ruleId: r.ruleId });
-        liveRules.set(r.ruleId, role);
+        if (!activator.startsPaused) liveRules.set(r.ruleId, role);
         memory.rules[decl.key] = { ruleId: r.ruleId };
       } else if (r.status === "proposed") {
         outcomes.push({
@@ -1020,6 +1070,7 @@ async function applyOnce(input: {
               profileSlug: process.profileSlug,
               statusProperty: process.statusProperty,
               subject,
+              defaultTimezone: await ownerCronTimezone(pb.createdBy),
               scope: {
                 projectId: parsed.projectId,
                 trackId: parsed.trackId,
@@ -1214,14 +1265,18 @@ export async function convergeActivatorsAtBoot(): Promise<{
     .from(playbooks)
     .leftJoin(workspaces, eq(workspaces.id, playbooks.workspaceId))
     .where(
-      and(
-        eq(playbooks.status, "active"),
-        drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`,
-        drizzleSql`(
-          ${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb
-          OR ${playbooks.subjectProfile}->'activators' @> '[{"on":"run_ended"}]'::jsonb
-          OR coalesce((${playbooks.metadata}->${ACTIVATOR_MEMORY_KEY}->>'compileVersion')::int, 1) < ${ACTIVATOR_COMPILE_VERSION}
-        )`
+      or(
+        // A retired schedule is folded into an activator (any status).
+        isNotNull(playbooks.schedule),
+        and(
+          eq(playbooks.status, "active"),
+          drizzleSql`jsonb_array_length(coalesce(${playbooks.subjectProfile}->'activators', '[]'::jsonb)) > 0`,
+          drizzleSql`(
+            ${playbooks.subjectProfile}->'activators' @> '[{"on":"enters_status"}]'::jsonb
+            OR ${playbooks.subjectProfile}->'activators' @> '[{"on":"run_ended"}]'::jsonb
+            OR coalesce((${playbooks.metadata}->${ACTIVATOR_MEMORY_KEY}->>'compileVersion')::int, 1) < ${ACTIVATOR_COMPILE_VERSION}
+          )`
+        )
       )
     );
   let failed = 0;
@@ -1238,6 +1293,160 @@ export async function convergeActivatorsAtBoot(): Promise<{
     }
   }
   return { playbooks: rows.length, failed };
+}
+
+/**
+ * A playbook still carrying the retired `schedule` column: the schedule
+ * becomes a `schedule` activator (appended unless one with its key is
+ * declared), its backing cron automation is paused and unlinked, and the
+ * column cleared, in one transaction — so the activator's rule is the one
+ * thing that fires it. A schedule no activator can say (`scheduleActivatorOf`)
+ * is left as it was while the playbook declares no schedule of its own: its
+ * backing automation keeps firing while the playbook is live, and is paused
+ * when it is not. Returns the process to compile.
+ */
+async function foldRetiredSchedule(
+  pb: {
+    id: string;
+    status: string;
+    workspaceId: string | null;
+    subjectProfile: unknown;
+    schedule: unknown;
+  },
+  process: PlaybookProcess
+): Promise<PlaybookProcess> {
+  if (pb.schedule === null || pb.schedule === undefined) return process;
+  const [driver] = await db
+    .select({ id: automations.id, status: automations.status })
+    .from(playbookAutomations)
+    .innerJoin(
+      automations,
+      eq(automations.id, playbookAutomations.automationId)
+    )
+    .where(
+      and(
+        eq(playbookAutomations.playbookId, pb.id),
+        eq(playbookAutomations.role, SCHEDULE_ROLE)
+      )
+    )
+    .limit(1);
+  const statusProperty = process.profileSlug
+    ? (process.statusProperty ??
+      (await readSubjectProfile(process.profileSlug, pb.workspaceId))
+        .lifecycleProperty)
+    : null;
+  const folded = scheduleActivatorOf(
+    pb.schedule,
+    {
+      profileSlug: process.profileSlug,
+      statusProperty,
+      filter: (pb.subjectProfile as { filter?: unknown } | null)?.filter,
+    },
+    !driver || driver.status === "active"
+  );
+  const declaresSchedule = process.activators.some((a) => a.on === "schedule");
+  if (folded && "error" in folded && !declaresSchedule) {
+    logger.warn(
+      { playbookId: pb.id, reason: folded.error },
+      "retired schedule cannot become an activator — it fires only while the playbook is live"
+    );
+    if (driver && pb.status !== "active") {
+      await setAutomationStatus(db, {
+        id: driver.id,
+        from: AUTOMATION_STATUSES,
+        to: "paused",
+        set: { nextRunAt: null },
+      });
+    }
+    return process;
+  }
+  const add =
+    folded &&
+    "activator" in folded &&
+    !process.activators.some(
+      (a) => activatorKey(a) === activatorKey(folded.activator)
+    )
+      ? [folded.activator]
+      : [];
+  const activators = [...process.activators, ...add];
+  await db.transaction(async (tx) => {
+    if (driver) {
+      await setAutomationStatus(tx, {
+        id: driver.id,
+        from: AUTOMATION_STATUSES,
+        to: "paused",
+        set: { nextRunAt: null },
+      });
+      await clearDriverAutomation(tx, pb.id);
+    }
+    await tx
+      .update(playbooks)
+      .set({
+        schedule: null,
+        ...(add.length
+          ? {
+              subjectProfile: {
+                ...((pb.subjectProfile as Record<string, unknown> | null) ??
+                  {}),
+                activators,
+              },
+            }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(playbooks.id, pb.id));
+  });
+  return { ...process, activators };
+}
+
+/**
+ * The retired `schedule` input, refused at the door when the activator pass
+ * could not fold it (it would sit stored and never fire), or when the playbook
+ * already declares a different schedule activator (two clocks for one).
+ */
+export async function assertRetiredScheduleFolds(input: {
+  schedule: unknown;
+  subjectProfile: unknown;
+  workspaceId: string | null;
+}): Promise<void> {
+  const process = readPlaybookProcess(input.subjectProfile);
+  const statusProperty = process.profileSlug
+    ? (process.statusProperty ??
+      (await readSubjectProfile(process.profileSlug, input.workspaceId))
+        .lifecycleProperty)
+    : null;
+  const folded = scheduleActivatorOf(input.schedule, {
+    profileSlug: process.profileSlug,
+    statusProperty,
+    filter: (input.subjectProfile as { filter?: unknown } | null)?.filter,
+  });
+  if (!folded) return;
+  if ("error" in folded) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: folded.error });
+  }
+  const key = activatorKey(folded.activator);
+  if (
+    process.activators.some(
+      (a) => a.on === "schedule" && activatorKey(a) !== key
+    )
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "this playbook declares its schedule as an activator: change its schedule activator instead of schedule",
+    });
+  }
+}
+
+/** The owner's zone when the cron clock can read it, else UTC. */
+export async function ownerCronTimezone(userId: string): Promise<string> {
+  const [row] = await db
+    .select({ timezone: users.timezone })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  const zone = row?.timezone?.trim();
+  return zone && isCronTimezone(zone) ? zone : "UTC";
 }
 
 function toOutcomeStatus(s: string): ActivatorOutcomeStatus {

@@ -748,9 +748,9 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
      * which makes this a typed producer rather than an untyped passthrough.
      *
-     * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
-     * definitions, services/playbooks/cron-automation.ts) still emits no
-     * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+     * Remaining non-producer: a loop definition's trigger
+     * (services/loops/create-from-definition.ts) emits no `agentType`, so a
+     * loop-authored playbook run keeps the "meta" default.
      */
     agentType?: string;
     /**
@@ -771,11 +771,10 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * (packages/types/src/automations/sentence.ts) and the app-side writer
      * (`makePlaybookRunAction`, @synap/automation-intent).
      *
-     * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
-     * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
-     * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
-     * to pass through, so a loop/cron-authored playbook run keeps the
-     * playbook's own goalTemplate.
+     * Non-producer, as with `agentType`: a loop definition's trigger emits no
+     * goalOverride — `LoopTriggerDef` (@synap/playbooks) has no goal field to
+     * pass through, so a loop-authored playbook run keeps the playbook's own
+     * goalTemplate.
      */
     goalOverride?: string;
     /**
@@ -800,8 +799,8 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * does NOT dispatch the playbook's own executor — the named agent does the
      * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
      * Run mode only: the step refuses it beside `appointment` / `propose`.
-     * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
-     * `schedule.handToAgentId`. Absent ⇒ unchanged.
+     * Producer: a schedule activator's `handToAgentId`, through the rule
+     * grammar's `__handToAgentId` key. Absent ⇒ unchanged.
      */
     handToAgentId?: string;
     /**
@@ -822,7 +821,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * list in sync both ways):
      *   - absent / `"run"` — an unattended run (every pre-existing node).
      *   - `"appointment"` — a `scheduled` session waiting for the human
-     *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+     *     (a schedule activator's `mode`, through the rule grammar's `__mode`).
      *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
      *     a person approves, and approval replays `playbooks.run` →
      *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
@@ -855,8 +854,8 @@ export interface PlaybookRunWorkerSpec {
   size: WorkerSize;
   /** The subject kind or role the worker works on. */
   profileSlug: string;
-  /** The status its things sit in (enters_status / count / schedule). */
-  status?: string;
+  /** The status its things sit in (enters_status / count / schedule; a list for schedule). */
+  status?: string | string[];
   /** A `count` worker's threshold. */
   minCount?: number;
   maxPendingApprovals?: number;
