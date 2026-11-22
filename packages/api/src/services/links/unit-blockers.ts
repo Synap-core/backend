@@ -22,6 +22,14 @@
  */
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
 import {
+  and,
+  db,
+  eq,
+  inArray,
+  proposals,
+  ProposalStatus,
+} from "@synap/database";
+import {
   governedDependencyLink,
   governedRemoveDependencyLink,
   type DependencyRefusal,
@@ -156,11 +164,61 @@ async function perId<R>(
 export async function addUnitBlockers(
   input: UnitBlockerInput
 ): Promise<UnitBlockerReport[]> {
-  return perId(input, governedDependencyLink, (r) =>
+  const reports = await perId(input, governedDependencyLink, (r) =>
     r.status === "created" || r.status === "exists"
       ? { status: "linked" as const, inserted: r.inserted }
       : null
   );
+  return input.kind === "track" ? explainPendingGoals(reports) : reports;
+}
+
+/**
+ * A goal id that is not a goal YET: `start_track` answered `proposed` with a
+ * `pendingTrackId`, and the person has not approved it. The door can only say
+ * "not found"; this says why, and what to do (link it once approved), instead
+ * of an agent concluding the id is wrong. Read-only: a pending `track/create`
+ * proposal filed under that id (the gate files it with `targetId = data.id`).
+ */
+async function explainPendingGoals(
+  reports: UnitBlockerReport[]
+): Promise<UnitBlockerReport[]> {
+  const missing = reports.flatMap((r) =>
+    r.status === "failed" && r.reason === "not_found" && r.blockerTrackId
+      ? [r.blockerTrackId]
+      : []
+  );
+  if (missing.length === 0) return reports;
+  // The explanation is advisory: a failed read leaves each report exactly as
+  // the door gave it (`failed`, `not_found`), never hides it.
+  let pending: Array<{ id: string; targetId: string | null }>;
+  try {
+    pending = await db
+      .select({ id: proposals.id, targetId: proposals.targetId })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.targetType, "track"),
+          inArray(proposals.targetId, missing),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
+      );
+  } catch {
+    return reports;
+  }
+  if (pending.length === 0) return reports;
+  const proposalOf = new Map(pending.map((p) => [p.targetId, p.id]));
+  return reports.map((r) => {
+    const proposalId =
+      r.status === "failed" && r.reason === "not_found" && r.blockerTrackId
+        ? proposalOf.get(r.blockerTrackId)
+        : undefined;
+    return proposalId && r.status === "failed"
+      ? {
+          ...r,
+          message: `This goal is still a proposal (${proposalId}): it exists once the person approves it. Link it then.`,
+        }
+      : r;
+  });
 }
 
 /** Drop `from --blocked_by--> <kind>:<id>` for each id, governed, per id. */

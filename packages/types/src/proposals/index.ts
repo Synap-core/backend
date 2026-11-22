@@ -520,6 +520,22 @@ export interface ProposalReviewGraph {
     /** Goals it waits on: in-graph refs and existing ids. */
     blockedBy: string[];
   }>;
+  /** Existing steps a re-plan changes (`update_session`). */
+  sessionUpdates?: Array<{
+    ref: string;
+    sessionId: string;
+    title?: string | null;
+    goal?: string;
+    status?: string;
+  }>;
+  /** Existing `blocked_by` edges a re-plan drops (`remove_link`). */
+  linkRemovals?: Array<{
+    fromSessionId: string;
+    toKind: PlanBlockerKind;
+    toId: string;
+    /** Stable per-item address: `$unlinkN` in operation order. */
+    itemRef: string;
+  }>;
   /** Kinds the plan defines (`define_kind`), applied before its records. */
   kinds?: Array<{
     ref: string;
@@ -548,8 +564,13 @@ export interface ProposalReviewGraph {
     /** `sessions[].ref` when the endpoint is in this graph, else the existing id. */
     fromRef?: string;
     fromSessionId?: string;
+    /** What the step waits on when it is not a session (absent = a session). */
+    toKind?: PlanBlockerKind;
+    /** The in-graph ref of the target, whatever its kind. */
     toRef?: string;
     toSessionId?: string;
+    toEntityId?: string;
+    toTrackId?: string;
     fromLabel: string;
     toLabel: string;
     /** Stable per-item address: `$linkN` in derivation order. */
@@ -1317,6 +1338,52 @@ export interface CompositeCreateLinkOp {
   fromSessionId?: string;
   toRef?: string;
   toSessionId?: string;
+  /**
+   * `blocked_by` only — the step waits on a DECISION (an entity: a
+   * `create_entity` ref or an existing id) or on a GOAL (a `create_track` ref
+   * or an existing id): the cross-kind edge the dependency rule already reads
+   * (`session --blocked_by--> entity | track`), written through THE governed
+   * dependency door. Exactly one `to…` per link.
+   */
+  toEntityRef?: string;
+  toEntityId?: string;
+  toTrackRef?: string;
+  toTrackId?: string;
+}
+
+/** What a step may wait on besides a session (`create_link` / `remove_link`). */
+export type PlanBlockerKind = "session" | "entity" | "track";
+
+/**
+ * RE-PLAN: change an EXISTING step (pathway plan 368179d7, B3 for B7). Only
+ * these fields, through THE session update door as the applying person (its
+ * move rules decide a status change). Its blockers change with `create_link`
+ * (from this session) and `remove_link`.
+ */
+export interface CompositeUpdateSessionOp {
+  op: "update_session";
+  ref: string;
+  sessionId: string;
+  patch: {
+    title?: string | null;
+    goal?: string;
+    status?: "active" | "paused";
+  };
+}
+
+/**
+ * RE-PLAN: drop an EXISTING `blocked_by` edge from an existing step, through
+ * the door that owns it (session → session: the session blocker door; a
+ * decision or a goal: THE governed dependency door). An edge already gone is
+ * a no-op, never a failure.
+ */
+export interface CompositeRemoveLinkOp {
+  op: "remove_link";
+  type: "blocked_by";
+  fromSessionId: string;
+  toSessionId?: string;
+  toEntityId?: string;
+  toTrackId?: string;
 }
 
 /**
@@ -1441,6 +1508,8 @@ export type CompositeProposalOperation =
   | CompositeCreateLinkOp
   | CompositeCreateTrackOp
   | CompositeDefineKindOp
+  | CompositeUpdateSessionOp
+  | CompositeRemoveLinkOp
   | CompositeCreateCellOp
   | CompositeBindRendererOp
   // The update arms are listed one by one (not as `CompositeUpdateOperation`):
@@ -1469,6 +1538,9 @@ export const PLAN_OPERATION_KINDS = [
   // "mostly" the plan.
   "create_track",
   "define_kind",
+  // Re-plan edits: a revision applies whole, like the plan it changes.
+  "update_session",
+  "remove_link",
 ] as const;
 
 export type CompositePlanOperation =
@@ -1477,7 +1549,9 @@ export type CompositePlanOperation =
   | CompositeCreateProjectOp
   | CompositeCreateLinkOp
   | CompositeCreateTrackOp
-  | CompositeDefineKindOp;
+  | CompositeDefineKindOp
+  | CompositeUpdateSessionOp
+  | CompositeRemoveLinkOp;
 
 export function isPlanOperation(
   op: CompositeProposalOperation

@@ -222,6 +222,8 @@ function callersFor(
         );
         return { id };
       },
+      // Not exercised by this plan (no re-plan edit): the real door.
+      update: real.sessionCaller.update,
     },
     // Not exercised by this plan (no goal, no kind): the real doors.
     trackCaller: real.trackCaller,
@@ -235,6 +237,8 @@ function callersFor(
         );
         return { linkId: id, preExisting: false };
       },
+      createCrossKind: real.linkCaller.createCrossKind,
+      remove: real.linkCaller.remove,
     },
     documentCaller: {
       create: async () => {

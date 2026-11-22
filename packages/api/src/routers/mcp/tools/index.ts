@@ -4398,7 +4398,7 @@ export const tools = {
             text: {
               type: "string",
               description:
-                "Free-form text to parse (max 8000 chars). Send this when you have prose. If you ALSO send `entities[]`, the structured payload is used and this text is kept on the proposal as provenance.",
+                "Free-form text to parse (max 8000 chars), when you have prose. Sent with `entities[]`, the structured payload is used and this text is kept as provenance.",
             },
             entities: {
               type: "array",
@@ -4646,7 +4646,7 @@ export const tools = {
             kinds: {
               type: "array",
               description:
-                "PLAN: new kinds (synap_define_kind), applied first so `entities[]` can use them.",
+                "PLAN: new kinds (synap_define_kind), made before `entities[]`.",
               items: {
                 type: "object",
                 properties: {
@@ -4665,7 +4665,7 @@ export const tools = {
             links: {
               type: "array",
               description:
-                "PLAN: session edges. `blocked_by`: from waits on to. `spawned_from`: to is from's parent (from must be a session in this call). Cycles are refused.",
+                "PLAN: session edges. `blocked_by`: from waits on to (or on a decision `toEntity…` / goal `toTrack…`). `spawned_from`: to is from's parent (from must be a session in this call). Cycles are refused.",
               items: {
                 type: "object",
                 properties: {
@@ -4677,6 +4677,10 @@ export const tools = {
                   fromSessionId: { type: "string" },
                   toRef: { type: "string" },
                   toSessionId: { type: "string" },
+                  toEntityRef: { type: "string" },
+                  toEntityId: { type: "string" },
+                  toTrackRef: { type: "string" },
+                  toTrackId: { type: "string" },
                 },
                 required: ["type"],
               },

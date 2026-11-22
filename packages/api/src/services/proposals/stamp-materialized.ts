@@ -220,6 +220,7 @@ export interface MaterializedOpRecord {
     | "create_link"
     | "create_track"
     | "define_kind"
+    | "update_session"
     | UpdateOpName;
   entityId?: string;
   linked?: boolean;
@@ -300,6 +301,8 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "documents"
       | "tracks"
       | "kinds"
+      | "crossLinks"
+      | "sessionUpdates"
     >
   >;
 
@@ -442,13 +445,15 @@ function planOnlyRecordFields(
   const documents = result.documents ?? [];
   const tracks = result.tracks ?? [];
   const kinds = result.kinds ?? [];
+  const crossLinks = result.crossLinks ?? [];
   if (
     sessions.length +
       projects.length +
       links.length +
       documents.length +
       tracks.length +
-      kinds.length ===
+      kinds.length +
+      crossLinks.length ===
     0
   ) {
     return {};
@@ -469,6 +474,10 @@ function planOnlyRecordFields(
         .map((l) => l.linkId as string),
       // Goal → goal edges the run wrote for its goals.
       ...tracks.flatMap((t) => t.blockerLinkIds ?? []),
+      // Step → decision / goal edges.
+      ...crossLinks
+        .filter((l) => !l.preExisting && l.linkId)
+        .map((l) => l.linkId as string),
     ]),
     ...(ownTracks.length > 0
       ? { trackIds: unique(ownTracks.map((t) => t.trackId)) }
@@ -586,6 +595,18 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const k of result.kinds ?? []) {
     byOp[k.ref] = { op: "define_kind", profileId: k.profileId };
+  }
+  for (const l of result.crossLinks ?? []) {
+    byOp[linkOpKey({ requested: l.requested, type: "blocked_by" })] = {
+      op: "create_link",
+      ...(l.linkId ? { linkId: l.linkId } : {}),
+      ...(l.preExisting ? { preExisting: true } : {}),
+    };
+  }
+  // A re-plan's step update: the step it changed (the change itself is put
+  // back by a failed plan's compensation, not by a later revert).
+  for (const u of result.sessionUpdates ?? []) {
+    byOp[u.ref] = { op: "update_session", sessionId: u.sessionId };
   }
   // An edge has no ref of its own — keyed by what it asked for, like a relation.
   for (const l of result.links ?? []) {

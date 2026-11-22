@@ -75,6 +75,8 @@ import {
   type CompositeCreateSkillOp,
   type CompositeCreateTrackOp,
   type CompositeDefineKindOp,
+  type CompositeRemoveLinkOp,
+  type CompositeUpdateSessionOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { checkFieldSpec } from "../../routers/hub-protocol/define-profile.js";
@@ -261,6 +263,12 @@ export interface CapturePlanInput {
    */
   kinds?: Array<Omit<CompositeDefineKindOp, "op">>;
   /**
+   * RE-PLAN edits on existing steps (`update_session`, `remove_link`),
+   * carried WITH their discriminant. Hub REST only: the re-plan loop files
+   * them; `synap_revise_proposal` takes them as operations.
+   */
+  edits?: Array<CompositeUpdateSessionOp | CompositeRemoveLinkOp>;
+  /**
    * ── Rule Loop config steps (NS1) ─────────────────────────────────────
    * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
    * row) and the `rule` that remembers the pair. They ride the SAME proposal
@@ -320,6 +328,7 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
       (plan?.links?.length ?? 0) +
       (plan?.tracks?.length ?? 0) +
       (plan?.kinds?.length ?? 0) +
+      (plan?.edits?.length ?? 0) +
       (plan?.skills?.length ?? 0) +
       (plan?.automations?.length ?? 0) +
       (plan?.rules?.length ?? 0) +
@@ -768,6 +777,10 @@ export async function buildCaptureGraphOperations(
       ...d,
     })),
     ...(plan?.links ?? []).map((l) => ({ op: "create_link" as const, ...l })),
+    // Re-plan edits keep their own discriminant (only these two).
+    ...(plan?.edits ?? []).filter(
+      (e) => e.op === "update_session" || e.op === "remove_link"
+    ),
     // ── Rule Loop config steps (NS1) ─────────────────────────────────────
     // Emitted in fact → behaviour → rule order so the array reads the way the
     // materializer applies it. Apply order is fixed by its passes, not by

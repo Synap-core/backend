@@ -173,6 +173,18 @@ const ONE_OF_EACH = {
     displayName: "Onboarding step",
     fields: [{ slug: "due", valueType: "date" }],
   },
+  update_session: {
+    op: "update_session",
+    ref: "replan1",
+    sessionId: UUID,
+    patch: { goal: "Acme live by July" },
+  },
+  remove_link: {
+    op: "remove_link",
+    type: "blocked_by",
+    fromSessionId: UUID,
+    toEntityId: "2b6e1a9c-0f3d-4c51-8e7a-5d9b4f2a1c44",
+  },
   create_cell: {
     op: "create_cell",
     ref: "board",
@@ -260,10 +272,10 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
   const keys = emittedKeys(graph);
 
   it("the projection lists the parts of a graph of every op kind (non-vacuity)", () => {
-    // 15 today: entities, relations, skills, automations, rules, playbooks,
-    // views, cells, updates, projects, tracks, kinds, sessions, documents,
-    // links.
-    expect(keys.length).toBeGreaterThanOrEqual(15);
+    // 17 today: entities, relations, skills, automations, rules, playbooks,
+    // views, cells, updates, projects, tracks, kinds, sessions,
+    // sessionUpdates, documents, links, linkRemovals.
+    expect(keys.length).toBeGreaterThanOrEqual(17);
     expect(keys).toEqual(
       expect.arrayContaining(["skills", "automations", "rules"])
     );

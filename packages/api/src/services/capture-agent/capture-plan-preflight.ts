@@ -88,9 +88,11 @@ export async function preflightPlanOperations(
     if (op.op === "create_session") {
       noteSession(op.parentSessionId, i);
       for (const id of op.blockedBySessionIds ?? []) noteSession(id, i);
-    } else if (op.op === "create_link") {
+    } else if (op.op === "create_link" || op.op === "remove_link") {
       noteSession(op.fromSessionId, i);
       noteSession(op.toSessionId, i);
+    } else if (op.op === "update_session") {
+      noteSession(op.sessionId, i);
     } else if (op.op === "create_document") {
       noteSession(op.sessionId, i);
     }
@@ -164,6 +166,8 @@ export async function preflightPlanOperations(
   };
   operations.forEach((op, i) => {
     if (op.op === "create_session") noteTrack(op.trackId, i);
+    else if (op.op === "create_link" || op.op === "remove_link")
+      noteTrack(op.toTrackId, i);
     else if (op.op === "create_track") {
       noteTrack(op.parentGoalId, i);
       for (const id of op.blockedByTrackIds ?? []) noteTrack(id, i);
@@ -220,6 +224,9 @@ export async function preflightPlanOperations(
   operations.forEach((op, i) => {
     if (op.op === "create_session") noteEntity(op.subjectEntityId, i);
     else if (op.op === "create_document") noteEntity(op.entityId, i);
+    // A step that waits on a decision (an existing entity).
+    else if (op.op === "create_link" || op.op === "remove_link")
+      noteEntity(op.toEntityId, i);
     // A rebuild's change to an existing entity (the reused group container).
     else if (op.op === "update_entity") noteEntity(op.entityId, i);
     else if (op.op === "create_project") {
@@ -243,7 +250,9 @@ export async function preflightPlanOperations(
             ? [op.subjectEntityId]
             : op.op === "update_entity"
               ? [op.entityId]
-              : [];
+              : op.op === "create_link" || op.op === "remove_link"
+                ? [op.toEntityId]
+                : [];
     for (const id of mustSee) {
       if (id && !visibleEntityIds.has(id)) {
         push(i, `entity ${id} was not found`);

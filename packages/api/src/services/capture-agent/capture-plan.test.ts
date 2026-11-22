@@ -158,9 +158,9 @@ describe("validatePlanOperations", () => {
         )
       )
     ).toBe(true);
-    expect(
-      out.some((m) => /must touch a session this plan creates/.test(m))
-    ).toBe(true);
+    expect(out.some((m) => /must touch a step this plan creates/.test(m))).toBe(
+      true
+    );
   });
 
   it("refuses a duplicate ref across kinds and an unknown link type", () => {
@@ -390,5 +390,99 @@ describe("validatePlanOperations — goals and kinds", () => {
       { op: "create_track", ref: "root", name: "R", projectId: UUID },
     ]);
     expect(order).toEqual([1, 0]);
+  });
+});
+
+/**
+ * A step waits on a decision or a goal; a re-plan edits existing steps.
+ * Rows where a plausible wrong rule passes: a `toEntityRef` naming a SESSION
+ * (exists, wrong kind), two targets on one link, a cross-kind `spawned_from`,
+ * a link from an existing step the plan does NOT re-plan (refused) next to one
+ * it does (allowed), and a step update that tries to change a blocker field.
+ */
+describe("validatePlanOperations — cross-kind waits and re-plan edits", () => {
+  const S2 = "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a";
+  const S3 = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+
+  it("accepts a step waiting on an in-plan decision and goal, and a re-plan of an existing step", () => {
+    const ops: CompositeProposalOperation[] = [
+      { op: "create_entity", ref: "d", profileSlug: "decision", title: "Lead" },
+      { op: "create_track", ref: "g", name: "Seed", projectId: UUID },
+      { op: "create_session", ref: "s", goal: "Term sheet" },
+      { op: "create_link", type: "blocked_by", fromRef: "s", toEntityRef: "d" },
+      { op: "create_link", type: "blocked_by", fromRef: "s", toTrackRef: "g" },
+      {
+        op: "update_session",
+        ref: "old",
+        sessionId: UUID,
+        patch: { status: "paused" },
+      },
+      // From the re-planned existing step: allowed, by id or by its ref.
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromSessionId: UUID,
+        toEntityId: S2,
+      },
+      { op: "create_link", type: "blocked_by", fromRef: "old", toTrackId: S3 },
+      {
+        op: "remove_link",
+        type: "blocked_by",
+        fromSessionId: UUID,
+        toSessionId: S2,
+      },
+    ];
+    expect(validatePlanOperations(ops)).toEqual([]);
+  });
+
+  it("refuses a wrong-kind target, two targets, a cross-kind parent, an un-re-planned existing step, a blocker in a step update", () => {
+    const messages = validatePlanOperations([
+      { op: "create_session", ref: "s", goal: "A" },
+      { op: "create_session", ref: "t", goal: "B" },
+      { op: "create_link", type: "blocked_by", fromRef: "s", toEntityRef: "t" },
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromRef: "s",
+        toRef: "t",
+        toTrackId: S3,
+      },
+      { op: "create_link", type: "spawned_from", fromRef: "s", toEntityId: S2 },
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromSessionId: S2,
+        toEntityId: S3,
+      },
+      {
+        op: "update_session",
+        ref: "u",
+        sessionId: UUID,
+        patch: { blockedBySessionIds: [S2] } as never,
+      },
+      { op: "remove_link", type: "blocked_by", fromSessionId: UUID },
+    ]).map((p) => p.message);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        'toEntityRef "t" names a session, but must name a entity',
+        "a link needs exactly one target: toRef / toSessionId (a session), toEntityRef / toEntityId (a decision), or toTrackRef / toTrackId (a goal)",
+        "only a blocked_by link may point at a decision or a goal (a session's parent is a session)",
+        "a plan link must touch a step this plan creates — or re-plan that step (`update_session` on it) — otherwise link two existing things through the links door",
+        'a step update changes title, goal or status only — not "blockedBySessionIds" (blockers: create_link / remove_link)',
+        "a removed link names exactly one of toSessionId, toEntityId, toTrackId",
+      ])
+    );
+  });
+
+  it("keeps the two edge halves apart: a cross-kind link is never a session edge", async () => {
+    const { planCrossKindEdges } = await import("./capture-plan.js");
+    const ops: CompositeProposalOperation[] = [
+      { op: "create_session", ref: "s", goal: "A" },
+      { op: "create_link", type: "blocked_by", fromRef: "s", toEntityId: S2 },
+    ];
+    expect(planSessionEdges(ops)).toEqual([]);
+    expect(planCrossKindEdges(ops)).toEqual([
+      { opIndex: 1, from: { ref: "s" }, to: { kind: "entity", id: S2 } },
+    ]);
   });
 });
