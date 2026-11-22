@@ -129,7 +129,8 @@ export interface ProcessAutomation {
 export interface ProcessWorker {
   ruleId: string;
   activatorKey: string;
-  mode: "run" | "propose";
+  /** `appointment`: a schedule that opens a session for the person. */
+  mode: "run" | "propose" | "appointment";
   scope: string;
   /** `stopped`: a session's worker whose session ended. */
   state: "running" | "paused" | "stopped";
