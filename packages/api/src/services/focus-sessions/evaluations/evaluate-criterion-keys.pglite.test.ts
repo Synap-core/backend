@@ -221,6 +221,30 @@ describe("evaluateSession is bounded to the stages the session has reached", () 
     expect(r.results.some((x) => x.status === "skipped")).toBe(false);
   });
 
+  it("a closed session in no stage grades its staged criteria (it enters no more stages)", async () => {
+    const closed = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Fixed main red', 'closed', null, $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        closed,
+        USER,
+        JSON.stringify([
+          { key: "claim", name: "Claim" },
+          { key: "fix", name: "Fix" },
+        ]),
+        JSON.stringify([cap("one-owner", "claim"), cap("pr-opened", "fix")]),
+      ]
+    );
+    const r = await evaluateSession({ sessionId: closed, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "one-owner",
+      "pr-opened",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    expect(r.results.some((x) => x.status === "skipped")).toBe(false);
+  });
+
   it("an explicit stageKey still grades that stage (the check gate, unchanged)", async () => {
     await evaluateSession({
       sessionId: staged,

@@ -51,7 +51,10 @@ import {
   resolveIntelligenceService,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
-import type { EvaluationVerdict } from "@synap-core/types/focus-sessions";
+import {
+  isTerminalSessionStatus,
+  type EvaluationVerdict,
+} from "@synap-core/types/focus-sessions";
 import {
   describeAiFailure,
   type AiFailureClass,
@@ -569,11 +572,13 @@ function judgeCouldNotRun(
  * before; so is an evidence criterion whose evidence this call posts (the
  * caller named it). A session in no stage has reached none; a session at a
  * stage the order does not list (renamed, another snapshot) is at an unknown
- * place, so everything is graded, as before.
+ * place, so everything is graded, as before. A closed session enters no
+ * more stages: everything is graded.
  */
 async function criteriaNotReached(
   session: {
     id: string;
+    status: string;
     playbookId: string | null;
     currentStage: string | null;
     stages: unknown;
@@ -591,7 +596,9 @@ async function criteriaNotReached(
         evidence?.[c.check.evidenceKey] !== undefined
       )
   );
-  if (staged.length === 0) return out;
+  if (staged.length === 0 || isTerminalSessionStatus(session.status)) {
+    return out;
+  }
   let stages: unknown[] = Array.isArray(session.stages) ? session.stages : [];
   if (stages.length === 0) {
     const { loadSessionProcess } =
