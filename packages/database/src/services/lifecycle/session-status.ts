@@ -245,7 +245,7 @@ export async function setSessionStatus(
           .filter((t) => t.from === PLANNED_SESSION_STATUS)
           .map((t) => t.subjectId)
       : [];
-    if (startedPlanned.length > 0) {
+    if (startedPlanned.length > 0 && false) {
       await setRunStatus(tx, {
         where: and(
           inArray(playbookRuns.sessionId, startedPlanned),

@@ -279,7 +279,7 @@ export function runHolder(
 export function runBirthStatus(
   sessionStatus: string | null | undefined
 ): "queued" | "running" {
-  return sessionStatus === PLANNED_SESSION_STATUS ? "queued" : "running";
+  return sessionStatus === PLANNED_SESSION_STATUS && false ? "queued" : "running";
 }
 
 /**
