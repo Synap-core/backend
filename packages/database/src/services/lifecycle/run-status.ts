@@ -3,9 +3,9 @@
  * exists, on the model of `setSessionStatus`. Every door that moves a run (the
  * capture applier, the approval replay, the close door, unfollow, revive,
  * reopen, the generate decision, the approved start, cancel, redispatch, the
- * reaper's sweeps) calls this; a run is BORN with its first status (`queued`,
- * or `running` when its holder works it from birth), which is not a move. A
- * holder's claim moves it `running` through {@link claimRun}.
+ * reaper's sweeps) calls this; a run is BORN through {@link insertPlaybookRun},
+ * its first status read off its holder, which is not a move. A holder's claim
+ * moves it `running` through {@link claimRun}.
  *
  * One transaction (the caller's, as a savepoint, or its own):
  *   1. lock the rows that match (`runId` and/or `where`) AND stand in `from`
@@ -53,6 +53,7 @@ import {
   type PlaybookRunStatus,
 } from "../../schema/playbook-runs.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
+import { ownerAndActor } from "../../utils/owner-person.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 import { HoldRefusedError, listHolds } from "./holds.js";
 import {
@@ -257,6 +258,41 @@ export async function setRunStatus(
     await insertTransitionOutbox(tx, transitions);
     return { rows, transitions };
   });
+}
+
+export type InsertPlaybookRunInput = Omit<
+  typeof playbookRuns.$inferInsert,
+  "status" | "holder" | "createdBy" | "agentUserId"
+> & {
+  holder: RunHolder;
+  /** Who started it: the person, or the agent acting for one. */
+  writerUserId: string;
+  /** The agent that started it, when one did. */
+  agentUserId?: string | null;
+};
+
+/**
+ * THE run birth, the one `playbook_runs` insert. Its status is its holder's
+ * state: `running` when the holder works it from birth, else `queued` until
+ * that holder claims it. Owner = the person, actor = the agent.
+ */
+export async function insertPlaybookRun(
+  db: Db | Tx,
+  input: InsertPlaybookRunInput
+): Promise<PlaybookRun> {
+  const { holder, writerUserId, agentUserId, ...columns } = input;
+  const owner = await ownerAndActor(db, writerUserId, agentUserId);
+  const [run] = await db
+    .insert(playbookRuns)
+    .values({
+      ...columns,
+      status: holder.claimedAt ? "running" : "queued",
+      holder,
+      createdBy: owner.ownerId,
+      agentUserId: owner.agentUserId,
+    })
+    .returning();
+  return run!;
 }
 
 /** A holder named now; `claimed` when it works the run from this moment. */

@@ -12,7 +12,6 @@ import {
   db,
   focusSessions,
   playbooks,
-  playbookRuns,
   eq,
   and,
   drizzleSql,
@@ -28,7 +27,7 @@ import {
   insertFocusSessionRow,
   sessionDefinitionColumns,
   derivedSessionTitle,
-  ownerAndActor,
+  insertPlaybookRun,
   runHolder,
   starterHolder,
 } from "@synap/database";
@@ -1412,20 +1411,18 @@ export async function createFocusSession(
     // starter holds it, working from birth (`running`); a start that hands it
     // to another agent leaves it `queued` until that agent claims it.
     if (playbook) {
-      const owner = await ownerAndActor(tx, userId, agentUserId);
       const handedTo =
         handedOff[0] ?? (agentUserId ? undefined : requestedAgentIds[0]);
-      await tx.insert(playbookRuns).values({
+      await insertPlaybookRun(tx, {
         workspaceId,
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: handedTo ? "queued" : "running",
         holder: handedTo
           ? runHolder("agent", handedTo)
           : starterHolder(userId, agentUserId),
-        createdBy: owner.ownerId,
-        agentUserId: owner.agentUserId,
+        writerUserId: userId,
+        agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }

@@ -42,7 +42,7 @@ import {
   startedByAgentPatch,
   setRunStatus,
   claimedHolderSql,
-  ownerAndActor,
+  insertPlaybookRun,
   runHolder,
   uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
@@ -2315,34 +2315,29 @@ export async function dispatchRunOnSession(p: {
     where: eq(focusSessions.id, p.sessionId),
   })) as FocusSession;
   const subjectId = p.subjectId ?? undefined;
-  const owner = await ownerAndActor(db, actorId, p.agentUserId);
 
-  // 4. Insert the run ledger row, `queued` with its holder: it is `running`
-  // only once that holder claims it (the IS turn starting, the agent's
-  // provider task, its first write). Snapshot the resolved definition (D3c)
-  // so "what ran" survives later edits to the playbook config.
-  const [run] = await db
-    .insert(playbookRuns)
-    .values({
-      workspaceId: p.workspaceId,
-      playbookId: playbook.id,
-      sessionId: session.id,
-      executor: executorRef,
-      ...(p.runOn ? { runOn: p.runOn } : {}),
-      status: "queued",
-      holder: handOff
-        ? runHolder("agent", handOff.agentUserId)
-        : executorRef === "external-agent"
-          ? runHolder("agent", p.runOn?.agentUserId ?? null)
-          : runHolder("synap_ai", null),
-      input: p.stageRunners
-        ? { ...params, stageRunners: p.stageRunners }
-        : params,
-      createdBy: owner.ownerId,
-      agentUserId: owner.agentUserId,
-      definitionSnapshot: buildDefinitionSnapshot(playbook),
-    })
-    .returning();
+  // 4. The run ledger row, `queued` with its holder: it is `running` only
+  // once that holder claims it (the IS turn starting, the agent's provider
+  // task, its first write). Snapshot the resolved definition (D3c) so "what
+  // ran" survives later edits to the playbook config.
+  const run = await insertPlaybookRun(db, {
+    workspaceId: p.workspaceId,
+    playbookId: playbook.id,
+    sessionId: session.id,
+    executor: executorRef,
+    ...(p.runOn ? { runOn: p.runOn } : {}),
+    holder: handOff
+      ? runHolder("agent", handOff.agentUserId)
+      : executorRef === "external-agent"
+        ? runHolder("agent", p.runOn?.agentUserId ?? null)
+        : runHolder("synap_ai", null),
+    input: p.stageRunners
+      ? { ...params, stageRunners: p.stageRunners }
+      : params,
+    writerUserId: actorId,
+    agentUserId: p.agentUserId,
+    definitionSnapshot: buildDefinitionSnapshot(playbook),
+  });
 
   // 4b. Enroll the subject entity in the playbook so running a playbook FOR an
   // entity also populates its funnel/cohort. Only when the playbook actually has
