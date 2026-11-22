@@ -43,6 +43,7 @@
  */
 
 import {
+  PLANNED_SESSION_STATUS,
   isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
@@ -561,6 +562,53 @@ export function deriveStepReadiness(facts: StepReadinessFacts): StepReadiness {
   return stepWindowReached(facts.plannedFor, facts.now ?? Date.now())
     ? "ready"
     : "planned";
+}
+
+/**
+ * How a step is BORN (founder decision P4, 21 Nov 2026): PLANNED (`forming`)
+ * when it waits on something at birth — a blocker declared with it, or a
+ * `plannedFor` still to come — unless its author says `startNow`; else
+ * `active`, as every session was. A step born planned owes nothing until the
+ * pod wakes it ({@link isStepReadyToWake}).
+ */
+export function stepBirthStatus(facts: {
+  startNow?: boolean | null;
+  /** It declares at least one blocker (written after the row exists). */
+  hasBlockers: boolean;
+  plannedFor?: string | null;
+  now?: number;
+}): typeof PLANNED_SESSION_STATUS | "active" {
+  if (facts.startNow === true) return "active";
+  const waits =
+    facts.hasBlockers ||
+    !stepWindowReached(facts.plannedFor, facts.now ?? Date.now());
+  return waits ? PLANNED_SESSION_STATUS : "active";
+}
+
+/**
+ * The step's time as a door stores it on `metadata` (no column, no
+ * migration): only the keys given, and only valid dates; `null` clears.
+ * `invalid` names a key whose value is not a step date ({@link isStepDate}).
+ */
+export function stepTimePatch(input: {
+  plannedFor?: string | null;
+  dueBy?: string | null;
+}):
+  | { ok: true; patch: Partial<Record<"plannedFor" | "dueBy", string | null>> }
+  | { ok: false; invalid: "plannedFor" | "dueBy" } {
+  const patch: Partial<Record<"plannedFor" | "dueBy", string | null>> = {};
+  for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+    const v = input[key];
+    if (v === undefined) continue;
+    if (v !== null && !isStepDate(v)) return { ok: false, invalid: key };
+    patch[key] = v;
+  }
+  return { ok: true, patch };
+}
+
+/** The refusal a door says for a malformed step date (one sentence). */
+export function stepDateRefusal(key: "plannedFor" | "dueBy"): string {
+  return `${key} must be a month (2027-03), a day (2027-03-14) or an ISO date-time with its offset.`;
 }
 
 /**

@@ -445,21 +445,24 @@ export interface InstantiateInput {
    */
   metadata?: Record<string, unknown>;
   /**
-   * The lifecycle state the session is BORN in. Two values only, and the choice
-   * is about WHO the session is waiting for:
+   * The lifecycle state the session is BORN in. Three values, and the choice
+   * is about WHAT the session is waiting for:
    *
    * - `"active"` (DEFAULT — every pre-existing caller, unchanged) — the session
    *   is live now. The caller is expected to dispatch an agent / open a channel.
    * - `"scheduled"` — an APPOINTMENT. The session materialized ahead of time and
    *   is waiting for a HUMAN to open it. The caller MUST NOT kick off an agent.
+   * - `"forming"` — a PLANNED plan step (P4): it waits on its blockers or its
+   *   date, and the pod wakes it (`planned-wake.ts`). No agent kick-off.
    *
-   * Deliberately narrowed to these two rather than the whole status union: this
+   * Deliberately narrowed to the birth statuses (live, an appointment, a
+   * planned step: P4) rather than the whole status union: this
    * function births sessions, and `closed`/`failed`/`stale` are exits that have
    * their own doors (`completeFocusSession`, the reaper). `scheduled` is already
    * in OPEN_SESSION_STATUSES and UPDATABLE_SESSION_STATUSES, so the human's
    * scheduled → active transition needs no new door.
    */
-  status?: "active" | "scheduled";
+  status?: "active" | "scheduled" | "forming";
   /**
    * WHO AUTHORED this session — `focus_sessions.origin`. Defaults to
    * `"playbook"`, which is what every pre-existing caller gets and what this

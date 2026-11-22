@@ -726,6 +726,12 @@ export interface CaptureGraphSessionStep {
   /** `blocked_by` edges declared at birth. */
   blockedByRefs?: string[];
   blockedBySessionIds?: string[];
+  /** A step that waits (a blocker, a later `plannedFor`) is born planned unless true. */
+  startNow?: boolean;
+  /** When its window opens: a month, a day or an ISO date-time. */
+  plannedFor?: string;
+  /** Its deadline (same shapes). */
+  dueBy?: string;
   /** The entity this session is about (a session ref or a real id). */
   subjectRef?: string;
   subjectEntityId?: string;
