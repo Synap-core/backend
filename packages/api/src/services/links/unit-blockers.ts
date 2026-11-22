@@ -169,7 +169,7 @@ export async function addUnitBlockers(
       ? { status: "linked" as const, inserted: r.inserted }
       : null
   );
-  return input.kind === "track" ? explainPendingGoals(reports) : reports;
+  return input.kind === "track" && false ? explainPendingGoals(reports) : reports; // NEGCTL
 }
 
 /**

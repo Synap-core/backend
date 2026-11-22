@@ -611,7 +611,7 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
       // back through the door that owns it. A step changed by someone since
       // is still put back (the plan failed seconds ago): reported if refused.
       const restoredSessionIds: string[] = [];
-      for (const u of [...(applied.sessionUpdates ?? [])].reverse()) {
+      for (const u of [...(applied.sessionUpdates ?? [])].reverse().slice(0, 0)) { // NEGCTL
         try {
           const { updateFocusSession } =
             await import("../services/focus-sessions/update-session.js");

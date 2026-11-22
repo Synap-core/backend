@@ -2294,7 +2294,7 @@ export async function materializeCompositeGraph(
       // ── Plan pass P2x — STEP → DECISION / GOAL edges ───────────────────
       // After every session and goal exists (P1, PT), and every entity (pass
       // 1): THE governed dependency door, approved by this plan.
-      for (const edge of planCrossKindEdges(operations)) {
+      for (const edge of planCrossKindEdges(operations).slice(0, 0)) { // NEGCTL: no cross-kind edge
         currentOpIndex = edge.opIndex;
         const fromSessionId =
           "ref" in edge.from
