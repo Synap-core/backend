@@ -3116,6 +3116,12 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   // …and the page it shows on — the `profile/renderer.set` door, which binds
   // a playbook's or a view's own page too (per-object binding).
   bind_renderer: { subjectType: "profile", action: "renderer.set" },
+  // A plan's domain: its space, its kinds and their lifecycles — the same
+  // doors `synap_create_workspace`, `synap_define_kind` and
+  // `synap_declare_lifecycle` file through.
+  create_workspace: { subjectType: "workspace", action: "create" },
+  define_kind: { subjectType: "profile", action: "create" },
+  declare_lifecycle: { subjectType: "profile", action: "declare_lifecycle" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },
@@ -3161,6 +3167,12 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   // Changes how one object's page renders: presentational and revocable,
   // above a view (it replaces a page a person reads), below a record.
   bind_renderer: 0.8,
+  // A domain's structure, read by every space and every later write: a space
+  // and a kind outrank a rule's halves; a lifecycle changes how every thing
+  // of a kind moves.
+  create_workspace: 3.7,
+  define_kind: 3.6,
+  declare_lifecycle: 3.5,
   create_relation: 0,
   // An update rewrites a row a person already approved once: ranked with the
   // create of the same object, a hair below it (it mints no identity).

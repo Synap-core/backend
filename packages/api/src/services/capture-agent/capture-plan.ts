@@ -18,6 +18,7 @@
 import {
   BIND_RENDERER_TARGET_KINDS,
   COMPOSITE_VIEW_TYPES,
+  flowRefsOf,
   isLikelyUUID,
   isPlanOperation,
   isUpdateOperation,
@@ -35,6 +36,29 @@ import {
   skillAuthoringProblem,
   skillSlugProblem,
 } from "../skills/skill-authoring.js";
+
+/**
+ * Every step array a capture call may carry (`CapturePlanInput`), the one
+ * list both caller doors (MCP `synap_capture`, Hub REST `POST /capture/graph`)
+ * read, so neither can accept a step the other cannot.
+ */
+export const CAPTURE_PLAN_KEYS = [
+  "sessions",
+  "documents",
+  "projects",
+  "links",
+  "skills",
+  "automations",
+  "rules",
+  "playbooks",
+  "views",
+  "cells",
+  "renderers",
+  "workspaces",
+  "kinds",
+  "lifecycles",
+  "updates",
+] as const;
 
 /** The session door's goal bound (`rest/focus-sessions.ts` `goal.max(2000)`). */
 export const PLAN_SESSION_GOAL_MAX = 2000;
@@ -97,7 +121,10 @@ export type PlanRefKind =
   | "automation"
   | "rule"
   | "playbook"
-  | "view";
+  | "view"
+  | "workspace"
+  | "kind"
+  | "lifecycle";
 
 export interface CapturePlanProblem {
   /** Index in `operations[]`. */
@@ -130,6 +157,9 @@ const OP_REF_KIND: Partial<
   create_playbook: "playbook",
   create_view: "view",
   create_cell: "cell",
+  create_workspace: "workspace",
+  define_kind: "kind",
+  declare_lifecycle: "lifecycle",
   // An update names an EXISTING row; its ref resolves to that row's id, so
   // a relation may target a reused container (`update_entity`).
   update_skill: "skill",
@@ -191,6 +221,9 @@ export function hasComposedSteps(
       op.op === "create_view" ||
       op.op === "create_cell" ||
       op.op === "bind_renderer" ||
+      op.op === "create_workspace" ||
+      op.op === "define_kind" ||
+      op.op === "declare_lifecycle" ||
       isUpdateOperation(op)
   );
 }
@@ -384,6 +417,23 @@ export function validatePlanOperations(
     if (refValue && idValue) {
       push(opIndex, `send ${refField} OR ${idField}, never both`);
     }
+  };
+
+  /** A space named by `workspaceRef` (a space this batch creates) or `workspaceId`. */
+  const expectSpace = (
+    opIndex: number,
+    op: { workspaceRef?: string; workspaceId?: string }
+  ) => {
+    notBoth(
+      opIndex,
+      "workspaceRef",
+      op.workspaceRef,
+      "workspaceId",
+      op.workspaceId
+    );
+    if (op.workspaceRef)
+      expectRef(opIndex, "workspaceRef", op.workspaceRef, "workspace");
+    if (op.workspaceId) expectId(opIndex, "workspaceId", op.workspaceId);
   };
 
   operations.forEach((op, i) => {
@@ -630,6 +680,13 @@ export function validatePlanOperations(
             push(i, "flowDefinition.nodes must be an array");
           if (!Array.isArray(flow.edges))
             push(i, "flowDefinition.edges must be an array");
+          for (const ref of flowRefsOf(flow)) {
+            if (!kinds.has(ref))
+              push(
+                i,
+                `flowDefinition names "$ref:${ref}", which names no step of this plan`
+              );
+          }
           // An EVENT rule matches on `triggerConfig.eventPattern`, which the
           // automation door reads off the flow (the op has no field of its
           // own). Without it the automation lands, but can never fire — a
@@ -651,6 +708,7 @@ export function validatePlanOperations(
             }
           }
         }
+        expectSpace(i, op);
         return;
       }
       case "create_rule":
@@ -697,7 +755,9 @@ export function validatePlanOperations(
             i,
             "a process draft needs a `goalTemplate` (one line is enough)"
           );
-        if (
+        if (op.subjectProfileRef) {
+          expectRef(i, "subjectProfileRef", op.subjectProfileRef, "kind");
+        } else if (
           !op.subjectProfile ||
           typeof op.subjectProfile !== "object" ||
           typeof op.subjectProfile.profileSlug !== "string" ||
@@ -705,23 +765,30 @@ export function validatePlanOperations(
         ) {
           push(
             i,
-            "a process draft needs `subjectProfile.profileSlug` — the kind it runs on"
+            "a process needs `subjectProfile.profileSlug`, or `subjectProfileRef` naming a kind this plan defines — the kind it runs on"
           );
         }
-        if (op.status !== undefined && op.status !== "draft") {
-          push(
-            i,
-            'a process drafted from a capture is always `status: "draft"`'
-          );
+        if (
+          op.status !== undefined &&
+          op.status !== "draft" &&
+          op.status !== "active"
+        ) {
+          push(i, 'a process\'s `status` is "draft" or "active"');
         }
+        expectSpace(i, op);
         // A process lives in a space: the playbook door refuses a pod-wide
         // one at apply time, after the things beside it have landed. Refused
         // HERE instead, so the bundle is never filed with a step that cannot
         // apply.
-        if (placement && !placement.workspaceId) {
+        if (
+          placement &&
+          !placement.workspaceId &&
+          !op.workspaceRef &&
+          !op.workspaceId
+        ) {
           push(
             i,
-            "a process draft needs a space — file this bundle into a space (workspaceId), or drop the process step"
+            "a process draft needs a space — file this bundle into a space (workspaceId), name one (workspaceRef), or drop the process step"
           );
         }
         return;
@@ -741,7 +808,7 @@ export function validatePlanOperations(
             `list viewType "${String(op.viewType)}" is not valid — use one of ${COMPOSITE_VIEW_TYPES.join(", ")}`
           );
         }
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        expectSpace(i, op);
         if (
           op.scopeProfileSlugs !== undefined &&
           (!Array.isArray(op.scopeProfileSlugs) ||
@@ -802,13 +869,13 @@ export function validatePlanOperations(
           push(i, "a cell step needs a `name`");
         if (typeof op.rendererSource !== "string" || !op.rendererSource.trim())
           push(i, "a cell step needs its `rendererSource`");
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        expectSpace(i, op);
         return;
       case "bind_renderer": {
         if (typeof op.ref !== "string" || !op.ref)
           push(i, "a binding step needs a `ref`");
         const target = op.target as
-          { kind?: unknown; id?: unknown } | null | undefined;
+          { kind?: unknown; id?: unknown; ref?: unknown } | null | undefined;
         if (
           !target ||
           !(BIND_RENDERER_TARGET_KINDS as readonly unknown[]).includes(
@@ -819,18 +886,34 @@ export function validatePlanOperations(
             i,
             `a binding's target.kind must be one of ${BIND_RENDERER_TARGET_KINDS.join(", ")} — one object's own page`
           );
-        } else if (typeof target.id !== "string") {
-          push(i, "a binding's target needs the object's `id`");
+        } else if (
+          (typeof target.id === "string") ===
+          (typeof target.ref === "string")
+        ) {
+          push(
+            i,
+            "a binding's target names its object once: `id` (an existing one) OR `ref` (a step of this plan)"
+          );
+        } else if (typeof target.ref === "string") {
+          expectRef(
+            i,
+            "target.ref",
+            target.ref,
+            target.kind as "playbook" | "view"
+          );
         } else {
-          expectId(i, "target.id", target.id);
+          expectId(i, "target.id", target.id as string);
         }
         if (op.slot !== "detail")
           push(i, 'one object\'s page has one slot: `slot: "detail"`');
         if (op.scope !== "pod" && op.scope !== "workspace")
           push(i, 'a binding\'s scope is "pod" or "workspace"');
-        if (op.scope === "workspace" && !op.workspaceId)
-          push(i, "a workspace binding needs its `workspaceId`");
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        if (op.scope === "workspace" && !op.workspaceId && !op.workspaceRef)
+          push(
+            i,
+            "a workspace binding needs its `workspaceId` or `workspaceRef`"
+          );
+        expectSpace(i, op);
         if (!op.cellRef === !op.cellKey) {
           push(
             i,
@@ -840,6 +923,58 @@ export function validatePlanOperations(
         if (op.cellRef) expectRef(i, "cellRef", op.cellRef, "cell");
         return;
       }
+      // ── A domain: its space, kinds and lifecycles ─────────────────────
+      // Shape and refs only: the one-space-per-domain rule, the kind's slug
+      // and fields and the lifecycle's options are their doors' to judge at
+      // apply time.
+      case "create_workspace":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a space step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a space step needs a `name`");
+        return;
+      case "define_kind":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a kind step needs a `ref`");
+        if (typeof op.slug !== "string" || !op.slug.trim())
+          push(i, "a kind step needs a `slug`");
+        if (typeof op.displayName !== "string" || !op.displayName.trim())
+          push(i, "a kind step needs a `displayName`");
+        if (
+          op.entityScope !== undefined &&
+          op.entityScope !== "pod" &&
+          op.entityScope !== "workspace"
+        ) {
+          push(i, 'a kind\'s `entityScope` is "pod" or "workspace"');
+        }
+        if (
+          op.fields !== undefined &&
+          (!Array.isArray(op.fields) ||
+            op.fields.some(
+              (f) => !f || typeof f !== "object" || Array.isArray(f)
+            ))
+        ) {
+          push(i, "a kind's `fields` must be an array of field objects");
+        }
+        expectSpace(i, op);
+        return;
+      case "declare_lifecycle":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a lifecycle step needs a `ref`");
+        if (!op.kindRef === !op.profileId) {
+          push(
+            i,
+            "a lifecycle names its kind once: `kindRef` (a kind this plan defines) OR `profileId` (an existing kind)"
+          );
+        }
+        if (op.kindRef) expectRef(i, "kindRef", op.kindRef, "kind");
+        if (op.profileId) expectId(i, "profileId", op.profileId);
+        if (!Array.isArray(op.options) || op.options.length === 0)
+          push(
+            i,
+            "a lifecycle step needs its `options` (each { key, category })"
+          );
+        return;
       // ── Updates (Library rebuild) ─────────────────────────────────────
       // Shape only: the row's existence, ownership and the field contracts
       // are the update door's to judge at apply time.
@@ -1026,7 +1161,10 @@ export interface PlanStepSummary {
     | "playbook"
     | "view"
     | "cell"
-    | "binding";
+    | "binding"
+    | "workspace"
+    | "kind"
+    | "lifecycle";
   label: string;
   /** Set on a step that CHANGES an existing row (a Library rebuild). */
   update?: { targetId: string };
@@ -1087,7 +1225,17 @@ export function planStepSummaries(
         return {
           ...base,
           kind: "binding",
-          label: `${op.cellRef ?? op.cellKey} on ${op.target.kind} ${op.target.id}`,
+          label: `${op.cellRef ?? op.cellKey} on ${op.target.kind} ${op.target.ref ?? op.target.id}`,
+        };
+      case "create_workspace":
+        return { ...base, kind: "workspace", label: op.name };
+      case "define_kind":
+        return { ...base, kind: "kind", label: op.displayName || op.slug };
+      case "declare_lifecycle":
+        return {
+          ...base,
+          kind: "lifecycle",
+          label: `${op.kindRef ?? op.profileId} ${op.property ?? "status"}`,
         };
       case "update_skill":
       case "update_automation":

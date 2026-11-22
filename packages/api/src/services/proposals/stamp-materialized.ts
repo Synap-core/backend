@@ -204,6 +204,9 @@ export interface MaterializedOpRecord {
     | "create_automation"
     | "create_rule"
     | "create_playbook"
+    | "create_workspace"
+    | "define_kind"
+    | "declare_lifecycle"
     | "create_view"
     | "create_cell"
     | "bind_renderer"
@@ -220,8 +223,14 @@ export interface MaterializedOpRecord {
   skillId?: string;
   automationId?: string;
   ruleId?: string;
-  /** `create_playbook`: the DRAFT playbook it created. */
+  /** `create_playbook`: the playbook it created. */
   playbookId?: string;
+  /** `create_workspace`: the space it created. */
+  workspaceId?: string;
+  /** `define_kind` / `declare_lifecycle`: the kind. */
+  profileId?: string;
+  /** `declare_lifecycle`: the status field it declared. */
+  propertyDefId?: string;
   /** `create_view`: the List it created. */
   viewId?: string;
   /** `create_cell`: the cell row it created. */
@@ -277,6 +286,9 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "automations"
       | "rules"
       | "playbooks"
+      | "workspaces"
+      | "kinds"
+      | "lifecycles"
       | "views"
       | "cells"
       | "renderers"
@@ -409,7 +421,15 @@ function planRecordFields(
   const rendererBindingIds = unique(
     (result.renderers ?? []).map((r) => r.bindingId)
   );
+  const workspaceIds = unique(
+    (result.workspaces ?? []).filter((w) => !w.linked).map((w) => w.workspaceId)
+  );
+  const profileIds = unique(
+    (result.kinds ?? []).filter((k) => !k.linked).map((k) => k.profileId)
+  );
   const configRows: Partial<CompleteMaterializedRecord> = {
+    ...(workspaceIds.length > 0 ? { workspaceIds } : {}),
+    ...(profileIds.length > 0 ? { profileIds } : {}),
     ...(playbookIds.length > 0 ? { playbookIds } : {}),
     ...(viewIds.length > 0 ? { viewIds } : {}),
     ...(cellIds.length > 0 ? { cellIds } : {}),
@@ -504,6 +524,27 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const v of result.views ?? []) {
     byOp[v.ref] = { op: "create_view", viewId: v.viewId };
+  }
+  for (const w of result.workspaces ?? []) {
+    byOp[w.ref] = {
+      op: "create_workspace",
+      workspaceId: w.workspaceId,
+      linked: w.linked,
+    };
+  }
+  for (const k of result.kinds ?? []) {
+    byOp[k.ref] = {
+      op: "define_kind",
+      profileId: k.profileId,
+      linked: k.linked,
+    };
+  }
+  for (const l of result.lifecycles ?? []) {
+    byOp[l.ref] = {
+      op: "declare_lifecycle",
+      profileId: l.profileId,
+      propertyDefId: l.propertyDefId,
+    };
   }
   for (const c of result.cells ?? []) {
     // A cell the door UPDATED was somebody's already: recorded as linked.

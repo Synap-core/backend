@@ -19,6 +19,9 @@
  *   - create_view              → view.create (a List over the bundle's things)
  *   - create_cell              → cell.define (a generated cell)
  *   - bind_renderer            → profile.renderer.set (a cell on one object's page)
+ *   - create_workspace         → workspace.create (a plan's space)
+ *   - define_kind              → profile.create (a kind)
+ *   - declare_lifecycle        → profile.declare_lifecycle (a kind's lifecycle)
  *   - update_<kind>            → <kind>.update (a Library rebuild's change)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
@@ -158,6 +161,12 @@ export function captureGraphEventKeys(
       // The SAME key the binding door judges (`profiles.setRenderer` gates
       // `profile.renderer.set` for a playbook's or a view's page too).
       add({ subjectType: "profile", action: "renderer.set" });
+    } else if (op.op === "create_workspace") {
+      add({ subjectType: "workspace", action: "create" });
+    } else if (op.op === "define_kind") {
+      add({ subjectType: "profile", action: "create" });
+    } else if (op.op === "declare_lifecycle") {
+      add({ subjectType: "profile", action: "declare_lifecycle" });
     } else {
       // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
       // wave removed: an op arm this function does not recognise produced NO

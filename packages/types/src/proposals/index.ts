@@ -1049,7 +1049,6 @@ export interface CompositeCreateWorkspaceOp {
   op: "create_workspace";
   ref: string;
   name: string;
-  description?: string;
 }
 
 export interface CompositeDefineKindOp {
@@ -1682,6 +1681,9 @@ export interface ProposalMaterializedRecord {
   /** Connected plan: focus sessions and projects created by the run. */
   sessionIds?: string[];
   projectIds?: string[];
+  /** A domain: spaces and kinds created by the run (an undo keeps them). */
+  workspaceIds?: string[];
+  profileIds?: string[];
   /** Entities a merge into a PRE-EXISTING entity changed. */
   propertyDiffs?: Array<{ entityId: string }>;
   /** Config rows an `update_*` op changed (`kind`: skill, automation, playbook, view, focus_session…). */

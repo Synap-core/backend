@@ -23,6 +23,7 @@ import {
   opRef,
   registerEntityRef,
   resolveCompositeRef,
+  resolveFlowRefs,
   type CompositeCreateEntityOp,
   type CompositeProposalOperation,
   type CompositeUpdateOperation,
@@ -370,13 +371,41 @@ export interface MaterializeRuleResult {
   automationIds: string[];
 }
 
-/** Per-op result for a `create_playbook` op (a DRAFT process). */
+/** Per-op result for a `create_playbook` op. */
 export interface MaterializePlaybookResult {
   ref: string;
   opIndex: number;
   playbookId: string;
-  /** Always "draft" — what the op asked for is never honoured over this. */
-  status: "draft";
+  /** What the door wrote: the caller decides from the op and the approval. */
+  status: "draft" | "active";
+}
+
+/** Per-op result for a `create_workspace` op (a domain's space). */
+export interface MaterializeWorkspaceResult {
+  ref: string;
+  opIndex: number;
+  workspaceId: string;
+  /** The template apply reused a space a retry of this approval made. */
+  linked: boolean;
+}
+
+/** Per-op result for a `define_kind` op. */
+export interface MaterializeKindResult {
+  ref: string;
+  opIndex: number;
+  profileId: string;
+  /** The stored slug: what a playbook or a view of this batch names. */
+  slug: string;
+  /** The kind a retry of this approval already made. */
+  linked: boolean;
+}
+
+/** Per-op result for a `declare_lifecycle` op. */
+export interface MaterializeLifecycleResult {
+  ref: string;
+  opIndex: number;
+  profileId: string;
+  propertyDefId: string;
 }
 
 /** Per-op result for a `create_view` op (a List over the bundle's things). */
@@ -556,8 +585,12 @@ export interface MaterializeResult {
   automations: MaterializeAutomationResult[];
   /** Rule Loop (NS1): rules created by `create_rule` ops. */
   rules: MaterializeRuleResult[];
-  /** Draft processes created by `create_playbook` ops. Empty by default. */
+  /** Processes created by `create_playbook` ops. Empty by default. */
   playbooks: MaterializePlaybookResult[];
+  /** A domain: spaces, kinds and lifecycles its ops made. Absent when none. */
+  workspaces?: MaterializeWorkspaceResult[];
+  kinds?: MaterializeKindResult[];
+  lifecycles?: MaterializeLifecycleResult[];
   /** Lists created by `create_view` ops. Empty by default. */
   views: MaterializeViewResult[];
   /** Cells defined by `create_cell` ops (a playbook's UI). */
@@ -621,6 +654,8 @@ export type AutomationCreateCaller = {
      * approval of the batch activates it.
      */
     enabled?: boolean;
+    /** Its space; absent = the batch's. */
+    workspaceId?: string;
   }) => Promise<{ id: string }>;
 };
 
@@ -634,8 +669,9 @@ export type RuleCreateCaller = {
 };
 
 /**
- * A DRAFT process (`create_playbook`). Routes to the EXISTING `playbooks.create`
- * door (wired by `buildRuleLoopCallers`), always with `status: "draft"`.
+ * A process (`create_playbook`). Routes to the EXISTING `playbooks.create`
+ * door (wired by `buildRuleLoopCallers`), which decides its status: the op's
+ * `draft` keeps it off; otherwise a person's approval makes it active.
  */
 export type PlaybookCreateCaller = {
   create: (input: {
@@ -643,9 +679,47 @@ export type PlaybookCreateCaller = {
     description?: string;
     goalTemplate: string;
     subjectProfile: { profileSlug: string; statusProperty?: string };
-    /** Always "draft" — the materializer never asks for a live process. */
-    status: "draft";
-  }) => Promise<{ id: string }>;
+    /** The status asked for; absent = none stated. */
+    status?: "draft" | "active";
+    /** Its space; absent = the batch's. */
+    workspaceId?: string;
+  }) => Promise<{ id: string; status: "draft" | "active" }>;
+};
+
+/**
+ * A domain's space (`create_workspace`), its kinds (`define_kind`) and their
+ * lifecycles (`declare_lifecycle`), each through its existing door as the
+ * approver (wired by `buildRuleLoopCallers`). A row a retry of the same
+ * approval already made comes back `linked`.
+ */
+export type WorkspaceCreateCaller = {
+  create: (input: {
+    ref: string;
+    name: string;
+  }) => Promise<{ id: string; linked: boolean }>;
+};
+
+export type KindDefineCaller = {
+  define: (input: {
+    ref: string;
+    slug: string;
+    displayName: string;
+    description?: string;
+    icon?: string;
+    entityScope?: "pod" | "workspace";
+    fields: Array<Record<string, unknown>>;
+    /** Its home; absent = the batch's. */
+    workspaceId?: string;
+  }) => Promise<{ id: string; slug: string; linked: boolean }>;
+};
+
+export type LifecycleDeclareCaller = {
+  declare: (input: {
+    profileId: string;
+    property?: string;
+    options: Array<Record<string, unknown>>;
+    initialStatus?: string;
+  }) => Promise<{ propertyDefId: string }>;
 };
 
 /**
@@ -892,8 +966,12 @@ export interface MaterializeOptions {
   skillCaller?: SkillCreateCaller;
   automationCaller?: AutomationCreateCaller;
   ruleCaller?: RuleCreateCaller;
-  /** Draft process (`create_playbook`) — wired with the Rule Loop callers. */
+  /** Process (`create_playbook`) — wired with the Rule Loop callers. */
   playbookCaller?: PlaybookCreateCaller;
+  /** A domain (`create_workspace`, `define_kind`, `declare_lifecycle`) — likewise. */
+  workspaceCaller?: WorkspaceCreateCaller;
+  kindCaller?: KindDefineCaller;
+  lifecycleCaller?: LifecycleDeclareCaller;
   /** List (`create_view`) — wired with the Rule Loop callers. */
   viewCaller?: ViewCreateCaller;
   /** A playbook's UI (`create_cell`, `bind_renderer`) — wired with the Rule Loop callers. */
@@ -1003,6 +1081,16 @@ function appliedRowsOf(
     })),
     ...result.rules.map((r) => ({ kind: "rule", id: r.ruleId })),
     ...result.playbooks.map((p) => ({ kind: "playbook", id: p.playbookId })),
+    ...(result.workspaces ?? [])
+      .filter((w) => !w.linked)
+      .map((w) => ({ kind: "workspace", id: w.workspaceId })),
+    ...(result.kinds ?? [])
+      .filter((k) => !k.linked)
+      .map((k) => ({ kind: "profile", id: k.profileId })),
+    ...(result.lifecycles ?? []).map((l) => ({
+      kind: "lifecycle",
+      id: l.propertyDefId,
+    })),
     ...result.views.map((v) => ({ kind: "view", id: v.viewId })),
     ...(result.cells ?? [])
       .filter((c) => c.created)
@@ -1051,6 +1139,9 @@ export async function materializeCompositeGraph(
       (op.op === "create_automation" && !options?.automationCaller) ||
       (op.op === "create_rule" && !options?.ruleCaller) ||
       (op.op === "create_playbook" && !options?.playbookCaller) ||
+      (op.op === "create_workspace" && !options?.workspaceCaller) ||
+      (op.op === "define_kind" && !options?.kindCaller) ||
+      (op.op === "declare_lifecycle" && !options?.lifecycleCaller) ||
       (op.op === "create_view" && !options?.viewCaller) ||
       (op.op === "create_cell" && !options?.cellCaller) ||
       (op.op === "bind_renderer" && !options?.rendererCaller) ||
@@ -1184,6 +1275,29 @@ export async function materializeCompositeGraph(
   const sessionResults: MaterializeSessionResult[] = [];
   const linkResults: MaterializeLinkResult[] = [];
   const documentResults: MaterializeDocumentResult[] = [];
+  const workspaceResults: MaterializeWorkspaceResult[] = [];
+  const kindResults: MaterializeKindResult[] = [];
+  const lifecycleResults: MaterializeLifecycleResult[] = [];
+  // The stored slug of each kind this batch defined, by its op ref.
+  const kindSlugByRef = new Map<string, string>();
+  // The space an op names: a space this batch made (`workspaceRef`), or an id.
+  // A ref whose space did not land throws, so the op is skipped, named.
+  const spaceOf = (op: {
+    workspaceRef?: string;
+    workspaceId?: string;
+  }): string | undefined =>
+    op.workspaceRef
+      ? resolveCompositeRef(refToRealId, op.workspaceRef)
+      : op.workspaceId;
+  const kindSlugOf = (ref: string): string => {
+    const slug = kindSlugByRef.get(ref);
+    if (!slug) {
+      throw new Error(
+        `the kind "${ref}" was not defined, so there is nothing to name`
+      );
+    }
+    return slug;
+  };
 
   const buildResult = (): MaterializeResult => ({
     created,
@@ -1199,6 +1313,9 @@ export async function materializeCompositeGraph(
     automations: automationResults,
     rules: ruleResults,
     playbooks: playbookResults,
+    ...(workspaceResults.length > 0 ? { workspaces: workspaceResults } : {}),
+    ...(kindResults.length > 0 ? { kinds: kindResults } : {}),
+    ...(lifecycleResults.length > 0 ? { lifecycles: lifecycleResults } : {}),
     views: viewResults,
     ...(cellResults.length > 0 ? { cells: cellResults } : {}),
     ...(rendererResults.length > 0 ? { renderers: rendererResults } : {}),
@@ -1263,6 +1380,120 @@ export async function materializeCompositeGraph(
   });
 
   try {
+    // ── Pass D — A DOMAIN: spaces, then kinds, then lifecycles ───────────
+    // First of all, so every op after may live in a space this batch makes
+    // and name a kind it defines.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_workspace") continue;
+      currentOpIndex = i;
+      const workspaceCaller = options?.workspaceCaller;
+      if (!workspaceCaller) {
+        throw new Error(
+          "materializeCompositeGraph: create_workspace op reached pass execution with no workspaceCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const made = await workspaceCaller.create({
+          ref: op.ref,
+          name: op.name,
+        });
+        registerEntityRef(refToRealId, i, op.ref, made.id, false);
+        workspaceResults.push({
+          ref: op.ref,
+          opIndex: i,
+          workspaceId: made.id,
+          linked: made.linked,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_workspace op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "define_kind") continue;
+      currentOpIndex = i;
+      const kindCaller = options?.kindCaller;
+      if (!kindCaller) {
+        throw new Error(
+          "materializeCompositeGraph: define_kind op reached pass execution with no kindCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const workspaceId = spaceOf(op);
+        const made = await kindCaller.define({
+          ref: op.ref,
+          slug: op.slug,
+          displayName: op.displayName,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.icon ? { icon: op.icon } : {}),
+          ...(op.entityScope ? { entityScope: op.entityScope } : {}),
+          fields: op.fields ?? [],
+          ...(workspaceId ? { workspaceId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, made.id, false);
+        kindSlugByRef.set(op.ref, made.slug);
+        kindResults.push({
+          ref: op.ref,
+          opIndex: i,
+          profileId: made.id,
+          slug: made.slug,
+          linked: made.linked,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, slug: op.slug },
+          "Skipping define_kind op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "declare_lifecycle") continue;
+      currentOpIndex = i;
+      const lifecycleCaller = options?.lifecycleCaller;
+      if (!lifecycleCaller) {
+        throw new Error(
+          "materializeCompositeGraph: declare_lifecycle op reached pass execution with no lifecycleCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const profileId = op.kindRef
+          ? resolveCompositeRef(refToRealId, op.kindRef)
+          : (op.profileId as string);
+        const declared = await lifecycleCaller.declare({
+          profileId,
+          ...(op.property ? { property: op.property } : {}),
+          options: op.options,
+          ...(op.initialStatus ? { initialStatus: op.initialStatus } : {}),
+        });
+        registerEntityRef(
+          refToRealId,
+          i,
+          op.ref,
+          declared.propertyDefId,
+          false
+        );
+        lifecycleResults.push({
+          ref: op.ref,
+          opIndex: i,
+          profileId,
+          propertyDefId: declared.propertyDefId,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref },
+          "Skipping declare_lifecycle op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       if (op.op !== "create_skill") continue;
@@ -1294,6 +1525,55 @@ export async function materializeCompositeGraph(
       }
     }
 
+    // ── Pass 0p — PROCESSES (`create_playbook`) ───────────────────────────
+    // Before the automations, so a flow may run a playbook this batch makes
+    // (`$ref:<ref>`). Through the EXISTING `playbooks.create` door, which
+    // decides the status. Per-op resilient like the Rule Loop config ops.
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (op.op !== "create_playbook") continue;
+      currentOpIndex = i;
+      if (!options?.playbookCaller) {
+        // Unreachable — the fail-closed preflight above already refused this
+        // batch. Kept as a narrowing guard that THROWS (never skips).
+        throw new Error(
+          "materializeCompositeGraph: create_playbook op reached pass execution with no playbookCaller (preflight bypassed)"
+        );
+      }
+      try {
+        const profileSlug = op.subjectProfileRef
+          ? kindSlugOf(op.subjectProfileRef)
+          : (op.subjectProfile.profileSlug as string);
+        const workspaceId = spaceOf(op);
+        const created = await options.playbookCaller.create({
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          goalTemplate: op.goalTemplate,
+          subjectProfile: {
+            profileSlug,
+            ...(op.subjectProfile?.statusProperty
+              ? { statusProperty: op.subjectProfile.statusProperty }
+              : {}),
+          },
+          ...(op.status ? { status: op.status } : {}),
+          ...(workspaceId ? { workspaceId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, created.id, false);
+        playbookResults.push({
+          ref: op.ref,
+          opIndex: i,
+          playbookId: created.id,
+          status: created.status,
+        });
+      } catch (err) {
+        logger.warn(
+          { err, ref: op.ref, name: op.name },
+          "Skipping create_playbook op (batch continues)"
+        );
+        failPlanStep(i, err);
+      }
+    }
+
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       if (op.op !== "create_automation") continue;
@@ -1307,12 +1587,16 @@ export async function materializeCompositeGraph(
         );
       }
       try {
+        const workspaceId = spaceOf(op);
         const created = await options.automationCaller.create({
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          flowDefinition: op.flowDefinition,
+          flowDefinition: resolveFlowRefs(op.flowDefinition, (ref) =>
+            resolveCompositeRef(refToRealId, ref)
+          ),
           ...(op.enabled === undefined ? {} : { enabled: op.enabled }),
+          ...(workspaceId ? { workspaceId } : {}),
         });
         registerEntityRef(refToRealId, i, op.ref, created.id, false);
         automationResults.push({
@@ -2065,50 +2349,6 @@ export async function materializeCompositeGraph(
       }
     }
 
-    // ── Pass 4 — DRAFT PROCESS ops (capture → process) ────────────────────
-    // Through the EXISTING `playbooks.create` door, always `status: "draft"`
-    // (forced here, whatever the op says). Per-op resilient like the Rule
-    // Loop config ops: a failed draft never discards the capture beside it.
-    for (let i = 0; i < operations.length; i++) {
-      const op = operations[i];
-      if (op.op !== "create_playbook") continue;
-      currentOpIndex = i;
-      if (!options?.playbookCaller) {
-        // Unreachable — the fail-closed preflight above already refused this
-        // batch. Kept as a narrowing guard that THROWS (never skips).
-        throw new Error(
-          "materializeCompositeGraph: create_playbook op reached pass execution with no playbookCaller (preflight bypassed)"
-        );
-      }
-      try {
-        const created = await options.playbookCaller.create({
-          name: op.name,
-          ...(op.description ? { description: op.description } : {}),
-          goalTemplate: op.goalTemplate,
-          subjectProfile: {
-            profileSlug: op.subjectProfile.profileSlug,
-            ...(op.subjectProfile.statusProperty
-              ? { statusProperty: op.subjectProfile.statusProperty }
-              : {}),
-          },
-          status: "draft",
-        });
-        registerEntityRef(refToRealId, i, op.ref, created.id, false);
-        playbookResults.push({
-          ref: op.ref,
-          opIndex: i,
-          playbookId: created.id,
-          status: "draft",
-        });
-      } catch (err) {
-        logger.warn(
-          { err, ref: op.ref, name: op.name },
-          "Skipping create_playbook op (batch continues)"
-        );
-        failPlanStep(i, err);
-      }
-    }
-
     // ── Pass 5 — LISTS (`create_view`) ─────────────────────────────────────
     // LAST, so every member ref resolves against the fully populated map
     // (entities from pass 1, a group container included). Through the
@@ -2136,10 +2376,11 @@ export async function materializeCompositeGraph(
         const containerEntityId = op.containerRef
           ? resolveCompositeRef(refToRealId, op.containerRef)
           : undefined;
+        const viewWorkspaceId = spaceOf(op);
         const created = await options.viewCaller.create({
           name: op.name,
           viewType: op.viewType,
-          ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+          ...(viewWorkspaceId ? { workspaceId: viewWorkspaceId } : {}),
           ...(op.scopeProfileSlugs?.length
             ? { scopeProfileSlugs: op.scopeProfileSlugs }
             : {}),
@@ -2183,7 +2424,7 @@ export async function materializeCompositeGraph(
           name: op.name,
           rendererSource: op.rendererSource,
           ...(op.description ? { description: op.description } : {}),
-          workspaceId: op.workspaceId ?? null,
+          workspaceId: spaceOf(op) ?? null,
           ...(op.contentKind ? { contentKind: op.contentKind } : {}),
         });
         cellKeyByRef.set(op.ref, defined.typeKey);
@@ -2224,12 +2465,16 @@ export async function materializeCompositeGraph(
             `bind_renderer "${op.ref}": its cell "${op.cellRef}" was not defined, so there is nothing to bind`
           );
         }
+        // A target this batch made (`target.ref`) resolves to its real id.
+        const targetId = op.target.ref
+          ? resolveCompositeRef(refToRealId, op.target.ref)
+          : (op.target.id as string);
         const bound = await options.rendererCaller.bind({
           targetKind: op.target.kind,
-          targetId: op.target.id,
+          targetId,
           slot: op.slot,
           scope: op.scope,
-          workspaceId: op.workspaceId ?? null,
+          workspaceId: spaceOf(op) ?? null,
           cellKey,
         });
         rendererResults.push({
@@ -2237,7 +2482,7 @@ export async function materializeCompositeGraph(
           opIndex: i,
           bindingId: bound.bindingId,
           targetKind: op.target.kind,
-          targetId: op.target.id,
+          targetId,
           slot: op.slot,
           scope: op.scope,
           cellKey,
