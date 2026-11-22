@@ -3672,8 +3672,6 @@ export interface ObjectNext {
 	action: ObjectNextAction;
 	/** Why: the process health reason, `skills_off`, or the next move's kind. */
 	reason: string;
-	/** Only a person can take it: it is theirs to do, a needs-you card. */
-	personOnly: boolean;
 	/** Where it is taken when not on the object: the session that owes it. */
 	sessionId?: string;
 	/** A thing's or a session's next move, in the status read's words. */
@@ -10751,6 +10749,22 @@ declare const PROPOSAL_LANDED_ROLES: readonly [
 	"linked"
 ];
 export type ProposalLandedRole = (typeof PROPOSAL_LANDED_ROLES)[number];
+declare const PROPOSAL_LANDED_KINDS: readonly [
+	"entity",
+	"document",
+	"session",
+	"project",
+	"workspace",
+	"automation",
+	"playbook",
+	"skill",
+	"view",
+	"track",
+	"agent",
+	"tool",
+	"channel"
+];
+export type ProposalLandedKind = (typeof PROPOSAL_LANDED_KINDS)[number];
 declare const PROPOSAL_SOURCES: readonly [
 	"user",
 	"ai",
@@ -18282,7 +18296,7 @@ export interface ProposalExecutorResult {
 	 * kind (a run's session); null when it names no object a person opens (a
 	 * key, a run). Absent: the target's kind. Read by the landed stamp.
 	 */
-	primaryKind?: string | null;
+	primaryKind?: ProposalLandedKind | null;
 	created?: number;
 	linked?: number;
 	/**
@@ -56211,6 +56225,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				joined?: boolean;
 				linked?: number;
 				primaryId?: string;
+				primaryKind?: ProposalLandedKind | null;
 				queued?: true;
 				refusals: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -56232,6 +56247,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				joined?: boolean;
 				linked?: number;
 				primaryId?: string;
+				primaryKind?: ProposalLandedKind | null;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -56250,7 +56266,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				joined?: boolean;
 				linked?: number;
 				primaryId?: string;
-				primaryKind?: string | null;
+				primaryKind?: ProposalLandedKind | null;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
