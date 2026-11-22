@@ -2272,6 +2272,7 @@ const marketSearchParams = z.object({
       "cell",
       "skill",
       "view",
+    "renderer-bundle",
       // Alias of cache kind `template` (CP category `workspace`). Mapped in
       // queryCatalogCache; agents should still send `kind:template`.
       "workspace",
@@ -2379,6 +2380,7 @@ const marketInstallParams = z.object({
     "cell",
     "skill",
     "view",
+    "renderer-bundle",
     // An agent template (`runMarketInstall` case "agent", one write:
     // `installAgentTemplate`). The browser routes an `agent` package here.
     "agent",
