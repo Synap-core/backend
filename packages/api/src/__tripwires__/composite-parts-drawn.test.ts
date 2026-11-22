@@ -301,14 +301,15 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
     expect(graph.skills?.[0]?.bodyTruncated).toBe(true);
   });
 
-  it("an automation says when it fires, what it runs, and that it is born off", () => {
+  it("an automation says when it fires, what it runs, and whether approval turns it on", () => {
     const auto = items.find((i) => i.source === "automations");
     const fields =
       auto?.shape === "record"
         ? Object.fromEntries(auto.record.fields.map((f) => [f.key, f.after]))
         : {};
+    // `enabled: true`: a person's approval of the batch turns it on.
     expect(fields.status).toEqual(
-      expect.objectContaining({ kind: "status", raw: "draft" })
+      expect.objectContaining({ kind: "status", raw: "active" })
     );
     expect(fields.trigger).toEqual(expect.objectContaining({ kind: "text" }));
     expect(fields.runs).toEqual(

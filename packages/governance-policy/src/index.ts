@@ -3116,12 +3116,13 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   // …and the page it shows on — the `profile/renderer.set` door, which binds
   // a playbook's or a view's own page too (per-object binding).
   bind_renderer: { subjectType: "profile", action: "renderer.set" },
-  // A plan's domain: its space, its kinds and their lifecycles — the same
-  // doors `synap_create_workspace`, `synap_define_kind` and
-  // `synap_declare_lifecycle` file through.
+  // A plan's domain: its space and its kinds — the doors
+  // `synap_create_workspace` and `synap_define_kind` file through. The
+  // lifecycle door is direct (always pending, no gate pair): it gates on the
+  // kind's own schema door.
   create_workspace: { subjectType: "workspace", action: "create" },
   define_kind: { subjectType: "profile", action: "create" },
-  declare_lifecycle: { subjectType: "profile", action: "declare_lifecycle" },
+  declare_lifecycle: { subjectType: "profile", action: "create" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },

@@ -206,7 +206,6 @@ describe("a domain plan — the ops", () => {
       expect.arrayContaining([
         { subjectType: "workspace", action: "create" },
         { subjectType: "profile", action: "create" },
-        { subjectType: "profile", action: "declare_lifecycle" },
       ])
     );
   });

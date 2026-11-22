@@ -21,7 +21,8 @@
  *   - bind_renderer            → profile.renderer.set (a cell on one object's page)
  *   - create_workspace         → workspace.create (a plan's space)
  *   - define_kind              → profile.create (a kind)
- *   - declare_lifecycle        → profile.declare_lifecycle (a kind's lifecycle)
+ *   - declare_lifecycle        → profile.create (a kind's lifecycle: its door is
+ *                                direct, so it is judged on the kind's schema key)
  *   - update_<kind>            → <kind>.update (a Library rebuild's change)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
@@ -166,7 +167,7 @@ export function captureGraphEventKeys(
     } else if (op.op === "define_kind") {
       add({ subjectType: "profile", action: "create" });
     } else if (op.op === "declare_lifecycle") {
-      add({ subjectType: "profile", action: "declare_lifecycle" });
+      add({ subjectType: "profile", action: "create" });
     } else {
       // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
       // wave removed: an op arm this function does not recognise produced NO
