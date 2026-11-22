@@ -61,6 +61,10 @@ import {
 } from "../../../utils/ai-failure.js";
 import { executeCapability } from "../../capabilities/execute-capability.js";
 import {
+  describeMeasure,
+  isMeasureDetail,
+} from "../../capabilities/measure-check.js";
+import {
   CHECK_GATE_METADATA_KEY,
   checkGateFailing,
 } from "../../playbooks/stage-gate.js";
@@ -179,11 +183,29 @@ export function pendingCriteria(
  */
 export function capabilityVerdict(
   result: Awaited<ReturnType<typeof executeCapability>>
-): { verdict: EvaluationVerdict; rationale: string } {
+): {
+  verdict: EvaluationVerdict;
+  rationale: string;
+  /** A structured `detail` (a measure's value and bar), kept as the grade's evidence. */
+  evidence?: Record<string, unknown>;
+} {
   if (result.kind === "run") {
     const passed = (result.result as { passed?: unknown } | null)?.passed;
     if (typeof passed === "boolean") {
       const detail = (result.result as { detail?: unknown }).detail;
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        // `measure.check` (P8): `{ value, threshold, comparator, op }`. The
+        // sentence is the grade's rationale and its evidence `detail` (what
+        // the scorecard shows); the numbers stay beside it.
+        const rationale = isMeasureDetail(detail)
+          ? describeMeasure(detail)
+          : `passed: ${passed}`;
+        return {
+          verdict: passed ? "pass" : "fail",
+          rationale,
+          evidence: { detail: rationale, result: detail },
+        };
+      }
       return {
         verdict: passed ? "pass" : "fail",
         rationale: typeof detail === "string" ? detail : `passed: ${passed}`,
@@ -346,6 +368,9 @@ export async function evaluateSession(
       const run = await executeCapability({
         verbId,
         parameters: {
+          // The criterion's own arguments (`check.params`, P8: a measure's
+          // op, params and bar) first, so the evaluator's own keys win.
+          ...(c.check.params ?? {}),
           sessionId,
           criterionKey: c.key,
           // The outcome this criterion checks (`outputKey`), with its `ref`,
@@ -362,8 +387,12 @@ export async function evaluateSession(
         observability: "mirror",
         sessionId,
       });
-      const { verdict, rationale } = capabilityVerdict(run);
-      await record(c, verdict, { evaluatorId: verbId, rationale });
+      const { verdict, rationale, evidence } = capabilityVerdict(run);
+      await record(c, verdict, {
+        evaluatorId: verbId,
+        rationale,
+        ...(evidence ? { evidence } : {}),
+      });
     } else if (c.check.kind === "judge") {
       judged.push(c);
     }

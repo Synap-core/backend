@@ -266,6 +266,8 @@ export interface OutcomeCriterionLike {
     capability?: string;
     evidenceKey?: string;
     hint?: string;
+    /** kind=capability: the verb's arguments (a measure: op, params, threshold, comparator). */
+    params?: Record<string, unknown>;
   };
   stageKey?: string;
   /** The key of the slot this criterion checks (rule 7). */

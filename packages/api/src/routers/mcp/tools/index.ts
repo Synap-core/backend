@@ -179,6 +179,7 @@ const SESSION_CRITERIA_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
@@ -215,7 +216,7 @@ const TRACK_GOAL_PROPERTIES = {
     type: ["array", "null"],
     minItems: GOAL_CRITERIA_MIN,
     maxItems: GOAL_CRITERIA_MAX,
-    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.`,
+    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.`,
   },
   dropConditions: {
     type: ["array", "null"],
@@ -590,7 +591,7 @@ const PLAYBOOK_GUIDANCE_PROPERTY = {
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
-    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
   items: { type: "object" },
 };
 
@@ -627,7 +628,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       verify: {
         type: "object",
         description:
-          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
         properties: {
           kind: {
             type: "string",
@@ -636,6 +637,7 @@ const SESSION_OUTCOMES_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
