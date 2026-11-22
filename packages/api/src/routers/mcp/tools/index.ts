@@ -4739,18 +4739,18 @@ export const tools = {
             playbooks: {
               type: "array",
               description:
-                'A playbook {ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; a flow runs it with "$ref:<ref>".',
+                '{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; a flow runs it by "$ref:<ref>".',
               items: { type: "object" },
             },
             views: {
               type: "array",
               description:
-                "A view {ref, name, viewType, scopeProfileSlugs | entityRefs, config?, workspaceRef?}.",
+                "{ref, name, viewType, scopeProfileSlugs | entityRefs, config?, workspaceRef?}.",
               items: { type: "object" },
             },
             cells: {
               type: "array",
-              description: "A cell {ref, name, rendererSource, workspaceRef?}.",
+              description: "{ref, name, rendererSource, workspaceRef?}.",
               items: { type: "object" },
             },
             renderers: {
@@ -4773,7 +4773,7 @@ export const tools = {
             validate: {
               type: "boolean",
               description:
-                'Dry run for the structured `entities[]` lane: run the capture\'s validators and write NOTHING. Returns `dryRun: true` and `status: "valid"` or `"invalid"`, with every problem at once: ref and shape problems in `problems[]`, unknown relation slugs in `relationsFailed[]` (same shape as a real call, with the valid slugs named), and unknown profiles or invalid properties in `invalidEntities[]`. `notChecked[]` lists what only the real write can decide. Not supported on the `text` lane.',
+                'Dry run (structured lanes): every validator runs and NOTHING is written. Returns `dryRun: true`, `status: "valid"` or `"invalid"` and every problem at once: `problems[]` (refs, shapes), `relationsFailed[]` (valid slugs named), `invalidEntities[]`; `notChecked[]` = what only the real write decides. Not on the `text` lane.',
             },
             profileSlug: {
               type: "string",
@@ -4809,7 +4809,7 @@ export const tools = {
               type: "string",
               enum: ["title", "semantic", "both"],
               description:
-                "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity.",
+                "Dedup for surfaced candidates: 'title' (string similarity), 'semantic' (embeddings: catches paraphrases), 'both' (default: the strongest match per entity).",
             },
             workspaceRouting: {
               type: "string",
