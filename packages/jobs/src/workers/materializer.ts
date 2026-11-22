@@ -42,7 +42,6 @@ import {
   eventRepository as sharedEventRepository,
   createDocumentWithContent,
   eq,
-  and,
   storedVersionValues,
   uploadDocumentVersionSnapshot,
   normalizeDocumentType,
