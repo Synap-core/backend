@@ -245,7 +245,7 @@ export async function spawnStageChildRun(p: {
 
 /**
  * Pause a parent run while a step's child run(s) work it: a system move from
- * active or forming only (a parent already paused or closed is left alone),
+ * active only (a parent already paused or closed is left alone),
  * with a hold that says what it waits on. A refused pause is logged; the step
  * row still says it waits, and the session stays as it was.
  */
@@ -259,10 +259,12 @@ export async function pauseParentOnChild(p: {
   until?: { moves: string; to?: string };
 }): Promise<void> {
   const { session } = p;
-  if (session.status !== "active" && session.status !== "forming") return;
+  // Only a running parent pauses: a planned step (`forming`) has not
+  // started, and a stage never moves it (P1).
+  if (session.status !== "active") return;
   await setSessionStatus(db, {
     sessionId: session.id,
-    from: ["active", "forming"],
+    from: "active",
     to: "paused",
     actor: { kind: "system", userId: session.userId },
     reason: p.reason,

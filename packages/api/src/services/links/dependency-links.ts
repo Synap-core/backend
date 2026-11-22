@@ -1305,6 +1305,13 @@ export interface DependencyFacts {
    * count; one the reader cannot see still does (a number, never a name).
    */
   unblocks: number;
+  /**
+   * Every DECLARED blocker (its outgoing `blocked_by` edges, before
+   * `replaces` following), open or cleared, whatever its kind:
+   * {@link DependencyState.declared}, batched. The work graph draws its
+   * cross-kind edges from it (a step waiting on a decision or a goal).
+   */
+  declared: DependencyNodeRef[];
 }
 
 /**
@@ -1387,6 +1394,9 @@ export async function readDependencyFacts(
       openBlockers: blockers.length,
       blockers,
       unblocks: waiting.size,
+      declared: declaredRows
+        .filter((r) => r.fromType === node.kind && r.fromId === node.id)
+        .map((r) => ({ kind: r.toType as string, id: r.toId })),
     });
   }
   return out;

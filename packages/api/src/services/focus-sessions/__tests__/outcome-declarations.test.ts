@@ -10,6 +10,7 @@ import {
   factOutcomeWarnings,
 } from "../outcome-declarations.js";
 import { mergeExpectedOutputs } from "../update-session.js";
+import { sessionCriteriaSchema } from "../../../schemas/session-criteria.js";
 
 /**
  * `outcomes[]` (A4) is an ALIAS over today's storage. The test that matters
@@ -124,6 +125,43 @@ describe("update: outcomes UPSERT by key", () => {
     });
     expect(out.expectedOutputs?.map((s) => s.label)).toEqual(["Notes", "Deck"]);
     expect(out).not.toHaveProperty("criteria");
+  });
+
+  // P8 (pathways): a fact the pod measures keeps its measure on the way to
+  // the criterion; the criteria door then checks it.
+  it("a fact's verify.params become its criterion's check.params", () => {
+    const measure = {
+      op: "lifecycle.board",
+      params: { profileSlug: "deal", column: "won" },
+      threshold: 3,
+      comparator: "gte",
+    };
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse([
+        {
+          key: "three-won",
+          label: "Three deals won",
+          kind: "fact",
+          verify: {
+            kind: "capability",
+            capability: "measure.check",
+            params: measure,
+          },
+        },
+      ])
+    );
+    expect(criteria).toEqual([
+      {
+        key: "three-won",
+        statement: "Three deals won",
+        check: {
+          kind: "capability",
+          capability: "measure.check",
+          params: measure,
+        },
+      },
+    ]);
+    expect(sessionCriteriaSchema.safeParse(criteria).success).toBe(true);
   });
 
   it("refuses a malformed key and an unknown field (strict)", () => {

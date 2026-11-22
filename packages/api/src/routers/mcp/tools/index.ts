@@ -179,6 +179,7 @@ const SESSION_CRITERIA_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
@@ -215,7 +216,7 @@ const TRACK_GOAL_PROPERTIES = {
     type: ["array", "null"],
     minItems: GOAL_CRITERIA_MIN,
     maxItems: GOAL_CRITERIA_MAX,
-    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.`,
+    description: `Optional: how the goal is judged done — none (a lasting goal) or ${GOAL_CRITERIA_MIN} to ${GOAL_CRITERIA_MAX} binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.`,
   },
   dropConditions: {
     type: ["array", "null"],
@@ -590,7 +591,7 @@ const PLAYBOOK_GUIDANCE_PROPERTY = {
 const PLAYBOOK_CRITERIA_PROPERTY = {
   type: "array",
   description:
-    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
+    "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
   items: { type: "object" },
 };
 
@@ -627,7 +628,7 @@ const SESSION_OUTCOMES_PROPERTY = {
       verify: {
         type: "object",
         description:
-          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+          "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
         properties: {
           kind: {
             type: "string",
@@ -636,6 +637,7 @@ const SESSION_OUTCOMES_PROPERTY = {
           capability: { type: "string" },
           evidenceKey: { type: "string" },
           hint: { type: "string" },
+          params: { type: "object" },
         },
         required: ["kind"],
       },
@@ -3675,14 +3677,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `orchestrated_by` child→orchestrator, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
+          "The map of YOUR work in one read, read-only: every OPEN session, every session settled in the last `windowHours` (any age for a goal or wave), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `serves` →goal, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`; `fromKind`/`toKind` when an end is not a session), `pullRequests`, `holds`, `goals` (with method), `decisions` (options, answer), `entities` (subjects), `sections` (a FAILED read is `unavailable`, never empty), `window` (`truncated` past 500). Use it, not one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
         inputSchema: {
           type: "object",
           properties: {
             windowHours: {
               type: "number",
               default: WORK_GRAPH_DEFAULT_WINDOW_HOURS,
-              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open ones are always in.`,
+              description: `Settled sessions from this many hours back, 1–${WORK_GRAPH_MAX_WINDOW_HOURS}. Open ones always in.`,
             },
             workspaceId: {
               type: "string",

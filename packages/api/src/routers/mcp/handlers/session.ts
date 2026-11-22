@@ -1513,6 +1513,8 @@ export const sessionHandlers: McpHandlerMap = {
       pullRequests: graph.pullRequests,
       holds: graph.holds,
       goals: graph.goals,
+      decisions: graph.decisions,
+      entities: graph.entities,
       sections: graph.sections,
       window: graph.window,
     });

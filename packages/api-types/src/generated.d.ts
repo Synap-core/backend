@@ -325,6 +325,14 @@ export interface SecretDetailBundle {
 	grants: SecretGrantView[];
 	recentActivity: SecretActivityEvent[];
 }
+/** One option as a decision page draws it, both marks resolved. */
+export interface DecisionRecordOption {
+	key: string;
+	label: string;
+	description: string | null;
+	recommended: boolean;
+	chosen: boolean;
+}
 declare const AskSecretPurposeSchema: z.ZodObject<{
 	action: z.ZodOptional<z.ZodString>;
 	for: z.ZodString;
@@ -1869,6 +1877,8 @@ export interface GoalCriterionView {
 		evidenceKey?: string;
 		hint?: string;
 		kind: EvaluatorKind;
+		/** kind=capability: the verb's arguments (a measure: op, params, threshold, comparator). */
+		params?: Record<string, unknown>;
 	};
 	stageKey?: string;
 	checkKind?: CriterionCheckMeaning;
@@ -16673,6 +16683,12 @@ export interface SessionCriterion {
 		/** kind=judge: what the judge should look at. */
 		hint?: string;
 		kind: CriterionCheckKind;
+		/**
+		 * kind=capability: the arguments the verb runs with, beside the ones the
+		 * evaluator always passes (`sessionId`, `criterionKey`, `outcome`). A
+		 * measure is `{ op, params, threshold, comparator }` for `measure.check`.
+		 */
+		params?: Record<string, unknown>;
 	};
 	/** Set when copied from a stage. */
 	stageKey?: string;
@@ -26982,25 +26998,81 @@ export interface WorkGraphGoal {
 	/** The method's stages in order, each placed against `currentStage`; `[]` = stageless. */
 	stages: WorkGraphGoalStage[];
 }
+/**
+ * A `decision` entity a node waits on (`blocked_by`) or is about (its
+ * subject): the choice a pathway branches on (B4). Its options and marks are
+ * `decisionRecordView`'s, never re-derived here.
+ */
+export interface WorkGraphDecision {
+	id: string;
+	title: string | null;
+	/** Its status (`proposed | accepted | superseded | rejected`); `null` = unset. */
+	status: string | null;
+	/** The status's fixed category (`open`, `done`, `lost`…); `null` = no lifecycle. */
+	category: LifecycleCategory | null;
+	/** Each option with its `recommended` / `chosen` mark; `[]` = a yes/no decision. */
+	options: DecisionRecordOption[];
+	/** The recommended option's key; `null` = nothing recommended. */
+	recommendedOption: string | null;
+	/** The chosen option's key; `null` = none chosen yet. */
+	chosenOption: string | null;
+	/**
+	 * The person's answer: `answered` = an option is chosen or the decision is
+	 * no longer open; `asked` = an owed question in one of the reader's open
+	 * sessions asks it (`askSessionId`); `not_asked` = still open and nothing
+	 * asks the person (a person's own open decision is their note).
+	 */
+	answer: "answered" | "asked" | "not_asked";
+	/** With `asked`: the reader's open session whose owed question asks it. */
+	askSessionId: string | null;
+	/** The session the decision came from, when stamped. */
+	sourceSessionId: string | null;
+}
+/**
+ * A thing a node is ABOUT (its subject) or waits on that is not a decision:
+ * enough to draw it and open it.
+ */
+export interface WorkGraphEntity {
+	id: string;
+	title: string | null;
+	/** Its kind (profile slug). */
+	kind: string;
+	/** Its status (the kind's lifecycle column, else its `status` field); `null` = none. */
+	status: string | null;
+	/** The status's fixed category; `null` = no lifecycle. */
+	category: LifecycleCategory | null;
+}
 declare const WORK_GRAPH_EDGE_KINDS: readonly [
 	"blocked_by",
 	"spawned_from",
 	"orchestrated_by",
 	"waits_on_output",
 	"triggered",
-	"updated"
+	"updated",
+	"serves"
 ];
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+/** What an edge end is when it is not a session (B4). */
+export type WorkGraphEndKind = "entity" | "track";
 export interface WorkGraphEdge {
 	kind: WorkGraphEdgeKind;
 	from: string;
 	to: string;
+	/** ABSENT = `from` is a session (every edge an older pod sent). `track` = a goal in `goals`. */
+	fromKind?: "track";
+	/**
+	 * ABSENT = `to` is a session. `entity` = a decision in `decisions` or a
+	 * thing in `entities`; `track` = a goal in `goals`.
+	 */
+	toKind?: WorkGraphEndKind;
 	/** `waits_on_output`: the entity waited on. */
 	entityId?: string;
 	/** `triggered` / `updated`: how many events back the relation. */
 	count?: number;
 	/** `triggered` / `updated`: the latest of them, ISO. */
 	lastAt?: string | null;
+	/** `serves`: the goal criterion the session serves, when the edge names one. */
+	criterionKey?: string;
 }
 export type WorkGraphSection = {
 	status: "ok";
@@ -27024,13 +27096,27 @@ export interface WorkGraphSections {
 	pullRequests: WorkGraphSection;
 	/** The standing holds of the nodes. */
 	holds: WorkGraphSection;
-	/** The goals the nodes are filed into. */
+	/** The goals the nodes are filed into, and those at the far end of a goal edge. */
 	goals: WorkGraphSection;
+	/** Declared `blocked_by` edges with an end that is not a session (B4). */
+	crossKind: WorkGraphSection;
+	/** `serves` edges: the goals the nodes and their goals are done for (B4). */
+	serves: WorkGraphSection;
+	/** The decisions the nodes wait on or are about (B4). */
+	decisions: WorkGraphSection;
+	/** The other things the nodes wait on or are about (B4). */
+	entities: WorkGraphSection;
 }
 export interface WorkGraphWindow {
-	/** ISO: settled work is in the window from this instant on. */
+	/** ISO: settled work is in the window from this instant on (not with `allSettled`). */
 	since: string;
 	hours: number;
+	/**
+	 * True under a goal or wave focus: settled work of ANY age is in the
+	 * window (a pathway keeps its old steps), and `since` / `hours` limit
+	 * nothing. Still bounded by `ceiling`.
+	 */
+	allSettled: boolean;
 	ceiling: number;
 	/** True when sessions were left out — `omitted` says how many. */
 	truncated: boolean;
@@ -27071,6 +27157,10 @@ export interface WorkGraph {
 	pullRequests: WorkGraphPullRequest[];
 	holds: WorkGraphHold[];
 	goals: WorkGraphGoal[];
+	/** The decisions the nodes wait on or are about (B4). */
+	decisions: WorkGraphDecision[];
+	/** The other things the nodes wait on or are about: subjects, blockers (B4). */
+	entities: WorkGraphEntity[];
 	sections: WorkGraphSections;
 	window: WorkGraphWindow;
 }
@@ -43395,6 +43485,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -44191,6 +44282,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -51157,6 +51249,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -51559,6 +51652,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -52571,6 +52665,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -52973,6 +53068,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							evidenceKey?: string | undefined;
 							hint?: string | undefined;
 							kind: "capability" | "evidence" | "human" | "judge";
+							params?: Record<string, unknown> | undefined;
 						};
 						checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 						key: string;
@@ -61831,6 +61927,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -61918,6 +62015,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						evidenceKey?: string | undefined;
 						hint?: string | undefined;
 						kind: "capability" | "evidence" | "human" | "judge";
+						params?: Record<string, unknown> | undefined;
 					};
 					checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 					key: string;
@@ -64081,6 +64179,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								evidenceKey?: string | undefined;
 								hint?: string | undefined;
 								kind: "capability" | "evidence" | "human" | "judge";
+								params?: Record<string, unknown> | undefined;
 							};
 							checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 							key: string;
@@ -64484,6 +64583,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 									evidenceKey?: string | undefined;
 									hint?: string | undefined;
 									kind: "capability" | "evidence" | "human" | "judge";
+									params?: Record<string, unknown> | undefined;
 								};
 								checkKind?: "certified" | "decided_outside" | "handed_over" | "judged" | "learning" | "measured" | undefined;
 								key: string;
