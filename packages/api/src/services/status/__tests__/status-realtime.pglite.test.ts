@@ -83,6 +83,8 @@ const F_SHARED = randomUUID();
 const G_MINE = randomUUID();
 const S_MINE = randomUUID();
 const S_THEIRS = randomUUID();
+/** Mine, in the shared space (a pinned grant reaches it). */
+const S_IN_SHARED = randomUUID();
 /** A run driving my session; a session-less run in the shared space. */
 const R_MINE = randomUUID();
 const R_SHARED = randomUUID();
@@ -176,6 +178,11 @@ beforeAll(async () => {
       [id, owner, project]
     );
   }
+  await q(
+    `insert into focus_sessions (id, user_id, workspace_id, project_id, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+     values ($1, $2, $3, null, 'Do it here', 'active', 'agent', '[]'::jsonb, '{}'::jsonb, now(), now(), now())`,
+    [S_IN_SHARED, ME, W_SHARED]
+  );
   const PLAYBOOK = randomUUID();
   for (const [id, ws, session] of [
     [R_MINE, null, S_MINE],
@@ -331,6 +338,43 @@ describe("the audience of a status event is statusOf's floor", () => {
       statusAudience({ type: "session", id: S_MINE })
     );
     expect(audience).toEqual([ME]);
+  });
+});
+
+describe("GET /status-of: every id is floored by the key's own grant", () => {
+  const pinned = (...workspaceIds: string[]) => ({
+    scopes: [{ permissions: ["entity.read", "session.read"], workspaceIds }],
+    clientId: null,
+  });
+  const ASKED = [E_SHARED, E_MINE, S_IN_SHARED, S_MINE, S_THEIRS];
+  const typesOf = (answers: Array<{ id: string; type: string }>) =>
+    Object.fromEntries(answers.map((a) => [a.id, a.type]));
+
+  it("a key pinned to the shared space reads what stands there and nothing else", async () => {
+    const t = typesOf(
+      await runWithGrant(pinned(W_SHARED), () => readStatusOf(ME, ASKED))
+    );
+    expect(t[E_SHARED]).toBe("entity");
+    expect(t[S_IN_SHARED]).toBe("session");
+    // Mine (the person may read them) but outside the grant: as unknown as
+    // another person's, and as an id that does not exist.
+    expect(t[E_MINE]).toBe("unknown");
+    expect(t[S_MINE]).toBe("unknown");
+    expect(t[S_THEIRS]).toBe("unknown");
+  });
+
+  it("a key pinned to another space reads none of them", async () => {
+    const t = typesOf(
+      await runWithGrant(pinned(W_MINE), () => readStatusOf(ME, ASKED))
+    );
+    expect(Object.values(t)).toEqual(ASKED.map(() => "unknown"));
+  });
+
+  it("CONTROL: the person, with no grant, reads what they may", async () => {
+    const t = typesOf(await readStatusOf(ME, ASKED));
+    expect(t[E_MINE]).toBe("entity");
+    expect(t[S_MINE]).toBe("session");
+    expect(t[S_THEIRS]).toBe("unknown");
   });
 });
 
