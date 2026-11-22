@@ -853,13 +853,14 @@ async function enterStageUnsafe(p: {
     // answers it, and the step is checked again then.
     if (
       proposals[0] &&
-      (session.status === "active" || session.status === "forming")
+      // A planned step (`forming`) has not started: never paused here (P1).
+      session.status === "active"
     ) {
       // Best effort: a pause the hold rule refuses leaves the step waiting
       // (its row says so) and the session as it was.
       await setSessionStatus(db, {
         sessionId: session.id,
-        from: ["active", "forming"],
+        from: "active",
         to: "paused",
         actor: { kind: "system", userId: session.userId },
         reason: `Step ${stageName} waits for ${missingTools.join(", ")}.`,

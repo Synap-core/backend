@@ -17,7 +17,10 @@
  *   - a cause read by truthiness (`askCause: {}`, an array, an empty asker);
  *   - `owedSince` aged off a non-canonical stamp (a SQL cast would THROW on
  *     `0000-00-00`; the rule keeps it);
- *   - a commitment aged into Review later (stakes, a secret, a gate, a relay).
+ *   - a commitment aged into Review later (stakes, a secret, a gate, a relay);
+ *   - a PLANNED step (forming, P2) read as owing: every class on it is NULL,
+ *     before the machine and commitment arms (a gate, a decision ask no
+ *     agent filed, a person deliverable, a stopped session).
  *
  * TEST-ONLY relative import of the authored rule, the
  * `owed-slot-predicate.parity.pglite.test.ts` pattern.
@@ -361,6 +364,29 @@ const ROWS: ReadonlyArray<{
     session: { ...LIVE, status },
     slot: ASK,
   })),
+  ...(
+    [
+      [
+        "a planned gate read as a commitment",
+        { askCause: { kind: "gate" }, askedBy: undefined },
+      ],
+      [
+        "a planned machine ask read as From the system",
+        { askCause: { kind: "decision" }, askedBy: undefined },
+      ],
+      ["a planned person deliverable read as owed", { ask: { mode: "act" } }],
+      ["a planned old ask read as Review later", { owedSince: ago(9 * DAY) }],
+    ] as const
+  ).map(([rulesOut, over]) => ({
+    rulesOut,
+    session: { ...LIVE, status: "forming" },
+    slot: { ...ASK, ...over },
+  })),
+  {
+    rulesOut: "a planned step on a quiet session read as Stopped",
+    session: { startedAt: ago(20 * DAY), status: "forming" },
+    slot: ASK,
+  },
   {
     rulesOut: "machine beaten by stopped",
     session: { startedAt: ago(20 * DAY) },

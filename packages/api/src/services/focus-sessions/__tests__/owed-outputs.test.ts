@@ -172,6 +172,14 @@ describe("projectOwedSlots — flattening a session's array", () => {
     });
   });
 
+  it("a PLANNED step (forming) owes nothing until it starts (P2)", () => {
+    // The TypeScript twin of `sessionOwesWhere` in the read's WHERE.
+    expect(projectOwedSlots({ ...row, status: "forming" })).toEqual([]);
+    expect(
+      projectOwedSlots({ ...row, status: "active" }).map((s) => s.label)
+    ).toEqual(["Stripe live key"]);
+  });
+
   it("survives a non-array `expected_outputs`", () => {
     expect(projectOwedSlots({ ...row, expectedOutputs: null })).toEqual([]);
     expect(projectOwedSlots({ ...row, expectedOutputs: "nope" })).toEqual([]);

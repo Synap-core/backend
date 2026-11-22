@@ -592,8 +592,12 @@ async function staleStage(
     : null;
 }
 
-/** Session statuses process-sync's follow moves (`IN_FLIGHT_SESSION_STATUSES`). */
-const SUBJECT_LEADS_STATUSES = new Set(["active", "forming"]);
+/**
+ * The status in which an entered stage moves the subject first: a RUNNING
+ * session. Not `paused` (a held run moves nothing), and not `forming` — a
+ * planned step has not started (P1, 21 Nov 2026).
+ */
+const SUBJECT_LEADS_STATUS = "active";
 
 /**
  * STEP = STATUS: when the entered stage is one the subject's status leads,
@@ -628,8 +632,7 @@ async function moveSubjectFirst(
       .from(focusSessions)
       .where(eq(focusSessions.id, session.id))
       .limit(1);
-    if (!row || !SUBJECT_LEADS_STATUSES.has(row.status as string))
-      return undefined;
+    if (!row || row.status !== SUBJECT_LEADS_STATUS) return undefined;
     return await writeStageSubjectStatus({
       session,
       toStage,

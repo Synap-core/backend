@@ -57,7 +57,8 @@ export type SessionStatus = (typeof SESSION_STATUSES)[number];
  * which keep the order each set had as a hand list (the terminal set's
  * `closed, cancelled, failed` is a published MCP / Hub enum order).
  *
- *   open    forming, scheduled — not started;
+ *   open    forming (planned: a plan step, {@link PLANNED_SESSION_STATUS}),
+ *           scheduled (an appointment) — not started;
  *   active  active;
  *   paused  paused (a person or a check gate), stale (the reaper found it
  *           quiet). `stale` KEEPS its stored value (founder decision
@@ -78,6 +79,25 @@ export const SESSION_STATUS_DECLARATION = {
   failed: { category: "lost" },
   stale: { category: "paused" },
 } as const satisfies Record<SessionStatus, { category: LifecycleCategory }>;
+
+/**
+ * PLANNED — `forming` (founder decision P1, 21 Nov 2026): a step of a plan
+ * that has not started. It starts when its blockers deliver and its planned
+ * date comes (the wake, api `planned-wake.ts`), or when someone starts it.
+ * Until then it owes nothing (`classifyOwedAsk`, the owed-slot predicate),
+ * is not where a write is filed (`IN_FLIGHT_SESSION_STATUSES`) and never
+ * reads as running. Its readiness is {@link deriveStepReadiness}
+ * (`units/session.ts`). `scheduled` is the OTHER not-started status: an
+ * appointment a playbook opens on a clock.
+ */
+export const PLANNED_SESSION_STATUS =
+  "forming" as const satisfies SessionStatus;
+
+export function isPlannedSessionStatus(
+  v: string | null | undefined
+): v is typeof PLANNED_SESSION_STATUS {
+  return v === PLANNED_SESSION_STATUS;
+}
 
 /** A status that has not ended: categories `open`, `active`, `paused`. */
 type NotEndedSessionStatus = StatusOfCategory<
@@ -133,14 +153,20 @@ export const OPEN_SESSION_STATUSES: readonly OpenSessionStatus[] =
   );
 
 /**
- * Open and not a mere appointment (`scheduled`): active, paused, forming. The
- * sessions still being worked: where a write is filed, an input attached, a
- * subject's status move followed.
+ * Open and STARTED: active, paused — the `open` category (a planned step,
+ * `forming`, and an appointment, `scheduled`) is left out: neither has
+ * started. The sessions still being worked: where a write is filed, a client
+ * bound, a subject's status move followed, a grade owed. A planned step
+ * joins when it wakes (P1, 21 Nov 2026; `forming` was in this set while
+ * nothing wrote it).
  */
-export type InFlightSessionStatus = Exclude<OpenSessionStatus, "scheduled">;
+export type InFlightSessionStatus = Exclude<
+  OpenSessionStatus,
+  "scheduled" | "forming"
+>;
 export const IN_FLIGHT_SESSION_STATUSES: readonly InFlightSessionStatus[] =
-  OPEN_SESSION_STATUSES.filter(
-    (s): s is InFlightSessionStatus => s !== "scheduled"
+  sessionStatusesIn(["active", "paused"]).filter(
+    (s): s is InFlightSessionStatus => s !== "stale"
   );
 
 /**
@@ -303,7 +329,9 @@ export const UPDATABLE_SESSION_STATUSES = SESSION_STATUSES.filter(
  *
  * DERIVED from the declaration: the `open`, `active` and `paused` categories
  * except `scheduled`, so a new stored status is live unless it is terminal or
- * `scheduled`.
+ * `scheduled`. A PLANNED step (`forming`) stays in on purpose (P1, 21 Nov
+ * 2026): a planned run of a playbook on a thing IS that thing's run, and a
+ * second one beside it would be the twin this set exists to refuse.
  */
 export type LiveRunSessionStatus = Exclude<NotEndedSessionStatus, "scheduled">;
 export const LIVE_RUN_SESSION_STATUSES: readonly LiveRunSessionStatus[] =
