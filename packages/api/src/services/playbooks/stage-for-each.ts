@@ -628,11 +628,12 @@ export async function startStageForEach(p: {
       .limit(1);
     if (
       row?.status === "waiting_child" &&
-      (session.status === "active" || session.status === "forming")
+      // A planned step (`forming`) has not started: never paused here (P1).
+      session.status === "active"
     ) {
       await setSessionStatus(db, {
         sessionId: session.id,
-        from: ["active", "forming"],
+        from: "active",
         to: "paused",
         actor: { kind: "system", userId: session.userId },
         reason: `Step ${stageName} waits for its runs.`,

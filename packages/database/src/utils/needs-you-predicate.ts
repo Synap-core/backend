@@ -36,6 +36,7 @@ import {
   NEEDS_YOU_STOPPED_AFTER_MS,
   NEEDS_YOU_WORKING_WINDOW_MS,
 } from "@synap-core/types/needs-you/rule";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import { MessageAuthorType } from "../schema/messages.js";
 import { owedSlotPredicateSql } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
@@ -150,6 +151,14 @@ export function needsYouSessionClassSql(s: string, now: Date): SQL {
                      ${sessionLastAgentWorkSql(s)} AS work) ny_la)`;
 }
 
+/**
+ * SQL boolean: the session aliased `s` is a PLANNED step that has not
+ * started (`isPlannedSessionStatus`, P2): it owes nothing yet. Never NULL.
+ */
+function plannedSessionSql(s: string): SQL {
+  return drizzleSql`coalesce(${col(s, "status")} = ${PLANNED_SESSION_STATUS}, false)`;
+}
+
 /** SQL text: the cause kind on `slot` (`needsYouAskCauseKind`), or NULL. */
 function causeKindSql(): SQL {
   return drizzleSql.raw(`(CASE
@@ -208,6 +217,7 @@ export function needsYouSlotClassSql(
   const session = needsYouSessionClassSql(s, now);
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateSql}) THEN NULL
+      WHEN ${plannedSessionSql(s)} THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
       WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL}
         AND NOT coalesce(${blocksOpenPr}, false) THEN 'stopped'

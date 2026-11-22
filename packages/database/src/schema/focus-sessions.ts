@@ -23,15 +23,13 @@
  *     Produced by `materializeScheduledSession`
  *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
  *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
- *   - forming — waits for a PERSON. Reserved for a session that has been drafted
- *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
- *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
- *     browser test fixture and an unrelated content status). It is NOT redundant
- *     with triage — `services/focus-sessions/triage.ts` states outright that
- *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
- *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
- *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
- *     superfluous; do not repurpose or delete it without deciding what it means.
+ *   - forming — PLANNED (founder decision P1, 21 Nov 2026): a step of a plan
+ *     that has not started. It owes nothing (the owed-slot predicate), is not
+ *     where a write is filed (`IN_FLIGHT_SESSION_STATUSES`) and never reads
+ *     as running (`@synap-core/types` units). It stays in the one-live-run
+ *     index: a planned run IS the run for its subject. Triage is still
+ *     orthogonal: acceptance is a RECEIPT (`metadata.triage.acceptedAt`),
+ *     not a status.
  *
  * RUNNING:  active → paused ↔ active
  *

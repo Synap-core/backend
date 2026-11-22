@@ -82,7 +82,8 @@ describe("sessionMoves — the next move first, the rest in the menu", () => {
 
   it("moves each open status forward", () => {
     expect(owner("active")).toBe("close · pause,cancel");
-    expect(owner("forming")).toBe("close · pause,cancel");
+    // A planned step has not started: it is started, never paused (P1).
+    expect(owner("forming")).toBe("start · cancel");
     expect(owner("paused")).toBe("resume · close,cancel");
     expect(owner("stale")).toBe("resume · close,cancel");
     expect(owner("scheduled")).toBe("start · cancel");

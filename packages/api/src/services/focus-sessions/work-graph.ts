@@ -64,6 +64,10 @@
  * session spawned under it (`spawned_from`, followed parent → child; the
  * list's `waveRootId` narrow). Far ends
  * are still fetched, so a wave blocked by another goal's session still says so.
+ * Under a focus the SETTLE WINDOW is lifted (a pathway, B4): a year-long plan
+ * keeps the steps it closed long ago, so every session of the goal or wave
+ * comes back whatever its age, open first, still bounded by the ceiling and
+ * said by `window.allSettled` (`truncated` / `omitted` as ever).
  *
  * ── ONE PLAYBOOK OR ONE THING ──────────────────────────────────────────────
  * Two more narrows of the WINDOW, both clauses of the list's ONE WHERE (never
@@ -86,7 +90,22 @@
  *     `foldPullRequestState`), read ONCE for every node;
  *   - `holds`: the standing hold of each paused node (`listHolds`): what it
  *     waits on, why, and what resumes it;
- *   - `goals`: the goal (track) each node is filed into, under the track floor.
+ *   - `goals`: the goal (track) each node is filed into, under the track floor,
+ *     plus the goal at the far end of a goal edge below (one hop);
+ *   - `decisions` and `entities` (a pathway, B4): the decision entities and
+ *     other things the nodes wait on (`blocked_by`) or are about (subject),
+ *     under the entity floor; a decision carries its options and whether the
+ *     person answered or is asked.
+ *
+ * ── EDGES BEYOND SESSIONS (B4) ──────────────────────────────────────────────
+ * `blocked_by` joins any two units of work (`dependency-links.ts`). The
+ * session-to-session ones come from `attachSessionEdges` as before; the
+ * others (a session waiting on a decision, a thing or a goal; a goal on a
+ * goal) come from `readDependencyFacts`' declared blockers, THE dependency
+ * read, and `serves` (a session or goal done FOR a goal) from `readServes`.
+ * Each names the kind of an end that is not a session (`fromKind`, `toKind`;
+ * absent = a session, as every edge before), and is drawn only when that end
+ * is in `goals`, `decisions` or `entities`. Withheld from a narrowed key.
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * Each edge read is settled on its own (`settle`): a failure marks its
@@ -130,10 +149,15 @@ import {
   readGraphGoals,
   readGraphHolds,
   readGraphPullRequests,
+  readGraphServes,
+  readGraphThings,
+  type WorkGraphDecision,
+  type WorkGraphEntity,
   type WorkGraphGoal,
   type WorkGraphHold,
   type WorkGraphPullRequest,
 } from "./work-graph-nodes.js";
+import { readDependencyFacts } from "../links/dependency-links.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
 import { projectTriage } from "./triage.js";
 import {
@@ -154,13 +178,21 @@ export {
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 };
-export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
+export type {
+  WorkGraphDecision,
+  WorkGraphEntity,
+  WorkGraphGoal,
+  WorkGraphHold,
+  WorkGraphPullRequest,
+};
 
 /**
  * One edge, flat. Direction follows the stored or derived relation:
  *   - `blocked_by`      from = the waiting session, to = its blocker. The
  *                       same edge IS the blocker's "unblocks": one edge, read
- *                       from either end, never listed twice.
+ *                       from either end, never listed twice. Either end may
+ *                       be a goal, and the blocker a decision or a thing
+ *                       (`fromKind` / `toKind`).
  *   - `spawned_from`    from = the child, to = the parent.
  *   - `orchestrated_by` from = the coordinated session, to = its orchestrator
  *                       (`start-orchestrator.ts`): the orchestrator holds it
@@ -170,6 +202,8 @@ export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
  *   - `triggered`       from = the session whose write fired the run, to = the run.
  *   - `updated`         from = the producer, to = the session that wrote to its
  *                       output (`session-interactions.ts`).
+ *   - `serves`          from = a session or a goal (`fromKind: "track"`), to =
+ *                       the goal it is done for (`toKind: "track"`).
  */
 export const WORK_GRAPH_EDGE_KINDS = [
   "blocked_by",
@@ -178,12 +212,14 @@ export const WORK_GRAPH_EDGE_KINDS = [
   "waits_on_output",
   "triggered",
   "updated",
+  "serves",
 ] as const satisfies ReadonlyArray<
   | "blocked_by"
   | "spawned_from"
   | "orchestrated_by"
   | "waits_on_output"
   | SessionInteractionType
+  | "serves"
 >;
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 // A new interaction type the graph does not list stops the build: it would
@@ -196,16 +232,31 @@ type _InteractionsCovered = [
 const _interactionsCovered: _InteractionsCovered = true;
 void _interactionsCovered;
 
+/** What an edge end is when it is not a session (B4). */
+export type WorkGraphEndKind = "entity" | "track";
+
 export interface WorkGraphEdge {
   kind: WorkGraphEdgeKind;
   from: string;
   to: string;
+  /** ABSENT = `from` is a session (every edge an older pod sent). `track` = a goal in `goals`. */
+  fromKind?: "track";
+  /**
+   * ABSENT = `to` is a session. `entity` = a decision in `decisions` or a
+   * thing in `entities`; `track` = a goal in `goals`.
+   */
+  toKind?: WorkGraphEndKind;
   /** `waits_on_output`: the entity waited on. */
   entityId?: string;
   /** `triggered` / `updated`: how many events back the relation. */
   count?: number;
   /** `triggered` / `updated`: the latest of them, ISO. */
   lastAt?: string | null;
+  /** `serves`: the goal criterion the session serves, when the edge names one. */
+  criterionKey?: string;
+  // Decision arms (lane B2): the option a `blocked_by` edge to a decision
+  // waits for goes HERE, read from the edge's `links.metadata`, once B2 names
+  // its key. Not sent before then.
 }
 
 export type WorkGraphSection =
@@ -227,14 +278,28 @@ export interface WorkGraphSections {
   pullRequests: WorkGraphSection;
   /** The standing holds of the nodes. */
   holds: WorkGraphSection;
-  /** The goals the nodes are filed into. */
+  /** The goals the nodes are filed into, and those at the far end of a goal edge. */
   goals: WorkGraphSection;
+  /** Declared `blocked_by` edges with an end that is not a session (B4). */
+  crossKind: WorkGraphSection;
+  /** `serves` edges: the goals the nodes and their goals are done for (B4). */
+  serves: WorkGraphSection;
+  /** The decisions the nodes wait on or are about (B4). */
+  decisions: WorkGraphSection;
+  /** The other things the nodes wait on or are about (B4). */
+  entities: WorkGraphSection;
 }
 
 export interface WorkGraphWindow {
-  /** ISO: settled work is in the window from this instant on. */
+  /** ISO: settled work is in the window from this instant on (not with `allSettled`). */
   since: string;
   hours: number;
+  /**
+   * True under a goal or wave focus: settled work of ANY age is in the
+   * window (a pathway keeps its old steps), and `since` / `hours` limit
+   * nothing. Still bounded by `ceiling`.
+   */
+  allSettled: boolean;
   ceiling: number;
   /** True when sessions were left out — `omitted` says how many. */
   truncated: boolean;
@@ -262,6 +327,9 @@ export type WorkGraphNode = Awaited<
   holder: SessionHolderSection;
   viewerRole: SessionViewerRole;
   inWindow: boolean;
+  // A planned step's time (lane B1: `plannedFor`, `dueBy`) rides on the row's
+  // own `metadata` once B1 stores it there; lift it to a node field HERE
+  // when B1 names it. Not invented before.
   /**
    * With the `playbookId` narrow, how this window node follows it: `session`
    * = its own `playbookId` is the playbook, `goal` = only through the method
@@ -280,6 +348,10 @@ export interface WorkGraph {
   pullRequests: WorkGraphPullRequest[];
   holds: WorkGraphHold[];
   goals: WorkGraphGoal[];
+  /** The decisions the nodes wait on or are about (B4). */
+  decisions: WorkGraphDecision[];
+  /** The other things the nodes wait on or are about: subjects, blockers (B4). */
+  entities: WorkGraphEntity[];
   sections: WorkGraphSections;
   window: WorkGraphWindow;
 }
@@ -359,13 +431,15 @@ export async function buildWorkGraph(
   const since = new Date(Date.now() - hours * 3_600_000).toISOString();
 
   // ── The window: one WHERE, open first, at most the ceiling; a full page
-  // asks the count (same WHERE) how many it left out.
+  // asks the count (same WHERE) how many it left out. A goal or a wave keeps
+  // its settled work of any age (B4): no settle window under a focus.
   const focus = input.focus;
+  const allSettled = !!focus;
   const windowQuery: SessionListQuery = {
     userId,
     scope,
     status: "all",
-    openOrSettledSince: since,
+    ...(allSettled ? {} : { openOrSettledSince: since }),
     kind,
     lens,
     roster,
@@ -637,11 +711,14 @@ export async function buildWorkGraph(
   const held = new Set(nodes.map((n) => n.id));
   const drawn = edges.filter((e) => held.has(e.from) && held.has(e.to));
 
-  // ── What the nodes point at: PRs, holds, goals, each read settled on its own.
-  const trackIds = [
+  // ── What the nodes point at: PRs, holds, the edges beyond sessions, then
+  // the goals, decisions and things at their ends, each read settled on its
+  // own.
+  const sessionIds = nodes.map((n) => n.id);
+  const filedTrackIds = [
     ...new Set(nodes.flatMap((n) => (n.trackId ? [n.trackId] : []))),
   ];
-  const [prs, holds, goals] = await Promise.all([
+  const [prs, holds, dependencies, serves] = await Promise.all([
     // The PR facts are events: a workspace-bound key reads them under its own
     // workspace floor, the one the far ends already use.
     readGraphPullRequests(
@@ -653,8 +730,94 @@ export async function buildWorkGraph(
       LOG,
       "holds",
       "What the paused sessions wait on could not be read.",
-      () => readGraphHolds(nodes.map((n) => n.id))
+      () => readGraphHolds(sessionIds)
     ),
+    // THE dependency read (`readDependencyFacts`, the batch of
+    // `readDependencyState`): every blocker the nodes and their goals
+    // declared. Reads entities and goals: withheld from a narrowed key.
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "crossKind",
+          "What these sessions and goals wait on, beside sessions, could not be read.",
+          () =>
+            readDependencyFacts(
+              [
+                ...sessionIds.map((id) => ({ kind: "session", id })),
+                ...filedTrackIds.map((id) => ({ kind: "track", id })),
+              ],
+              userId
+            )
+        ),
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "serves",
+          "Which goals these sessions and goals serve could not be read.",
+          () => readGraphServes(sessionIds, filedTrackIds, userId)
+        ),
+  ]);
+
+  // The edges beyond sessions. Session to session `blocked_by` is drawn
+  // above (`attachSessionEdges`); only an edge with another kind of end is
+  // added here, each end named by its kind.
+  const beyond: WorkGraphEdge[] = [];
+  if (dependencies.status === "ok") {
+    for (const [key, facts] of dependencies.value) {
+      const i = key.indexOf(":");
+      const fromKind = key.slice(0, i);
+      const from = key.slice(i + 1);
+      for (const b of facts.declared) {
+        // Drawn above (`attachSessionEdges`), or a kind no node draws.
+        if (fromKind === "session" && b.kind === "session") continue;
+        if (b.kind !== "session" && b.kind !== "entity" && b.kind !== "track")
+          continue;
+        beyond.push({
+          kind: "blocked_by",
+          from,
+          to: b.id,
+          ...(fromKind === "track" ? { fromKind: "track" as const } : {}),
+          ...(b.kind === "entity"
+            ? { toKind: "entity" as const }
+            : b.kind === "track"
+              ? { toKind: "track" as const }
+              : {}),
+        });
+      }
+    }
+  }
+  if (serves.status === "ok") {
+    for (const sv of serves.value) {
+      beyond.push({
+        kind: "serves",
+        from: sv.from,
+        to: sv.to,
+        ...(sv.fromKind === "track" ? { fromKind: "track" as const } : {}),
+        toKind: "track",
+        ...(sv.criterionKey ? { criterionKey: sv.criterionKey } : {}),
+      });
+    }
+  }
+  // The ends they need, one hop: the goals, and the decisions and things
+  // (with each node's subject).
+  const trackIds = [
+    ...new Set([
+      ...filedTrackIds,
+      ...beyond.flatMap((e) => [
+        ...(e.fromKind === "track" ? [e.from] : []),
+        ...(e.toKind === "track" ? [e.to] : []),
+      ]),
+    ]),
+  ];
+  const entityIds = [
+    ...new Set([
+      ...beyond.flatMap((e) => (e.toKind === "entity" ? [e.to] : [])),
+      ...nodes.flatMap((n) => (n.subjectEntityId ? [n.subjectEntityId] : [])),
+    ]),
+  ];
+  const [goals, things] = await Promise.all([
     narrowed && !narrowed.goals
       ? Promise.resolve(withheld)
       : settle(
@@ -663,14 +826,42 @@ export async function buildWorkGraph(
           "The goals these sessions serve could not be read.",
           () => readGraphGoals(trackIds, userId)
         ),
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "decisions",
+          "The decisions and things these sessions point at could not be read.",
+          () =>
+            readGraphThings(entityIds, {
+              userId,
+              lens: input.boundWorkspaceId,
+            })
+        ),
   ]);
+  // An edge beyond sessions is drawn only when the caller holds both ends.
+  const heldEnds = new Set<string>([
+    ...[...held].map((id) => `session:${id}`),
+    ...(goals.status === "ok" ? goals.value : []).map((g) => `track:${g.id}`),
+    ...(things.status === "ok"
+      ? [...things.value.decisions, ...things.value.entities]
+      : []
+    ).map((t) => `entity:${t.id}`),
+  ]);
+  const drawnBeyond = beyond.filter(
+    (e) =>
+      heldEnds.has(`${e.fromKind ?? "session"}:${e.from}`) &&
+      heldEnds.has(`${e.toKind ?? "session"}:${e.to}`)
+  );
 
   return {
     nodes,
-    edges: drawn,
+    edges: [...drawn, ...drawnBeyond],
     pullRequests: prs.items,
     holds: holds.status === "ok" ? holds.value : [],
     goals: goals.status === "ok" ? goals.value : [],
+    decisions: things.status === "ok" ? things.value.decisions : [],
+    entities: things.status === "ok" ? things.value.entities : [],
     sections: {
       blockedBy: sectionOf(declared),
       orchestration: sectionOf(orchestration),
@@ -680,10 +871,15 @@ export async function buildWorkGraph(
       pullRequests: prs.section,
       holds: sectionOf(holds),
       goals: sectionOf(goals),
+      crossKind: sectionOf(dependencies),
+      serves: sectionOf(serves),
+      decisions: sectionOf(things),
+      entities: sectionOf(things),
     },
     window: {
       since,
       hours,
+      allSettled,
       ceiling: WORK_GRAPH_CEILING,
       truncated: omitted + omittedByGrant > 0,
       omitted: omitted + omittedByGrant,

@@ -30,6 +30,9 @@ export interface BranchGraphEdge {
   kind: string;
   from: string;
   to: string;
+  /** Set when an end is not a session (a goal, a decision): never a job. */
+  fromKind?: string;
+  toKind?: string;
 }
 
 export interface BranchGraphPullRequest {
@@ -156,7 +159,8 @@ export function jobBranches(
     marks.set(id, list);
   };
   for (const e of graph.edges) {
-    if (e.kind !== "blocked_by") continue;
+    // A job waits on a JOB here: a wait on a decision or a goal is not a mark.
+    if (e.kind !== "blocked_by" || e.fromKind || e.toKind) continue;
     const to = nodes.get(e.to);
     mark(e.from, {
       kind: "blocked_by",

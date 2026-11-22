@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  IN_FLIGHT_SESSION_STATUSES,
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
   SUSPENDED_SESSION_STATUSES,
@@ -30,6 +31,9 @@ describe("status sets read off SESSION_STATUS_DECLARATION", () => {
       "closed",
       "failed",
     ]);
+    // Started only: a planned step and an appointment are not where work is
+    // filed (P1).
+    expect([...IN_FLIGHT_SESSION_STATUSES]).toEqual(["active", "paused"]);
     expect([...LIVE_RUN_SESSION_STATUSES].sort()).toEqual([
       "active",
       "forming",

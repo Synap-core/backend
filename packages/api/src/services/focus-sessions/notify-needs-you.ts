@@ -43,7 +43,10 @@ import {
   focusSessionWaitsOnPersonWhere,
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isPlannedSessionStatus,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   ASK_COPY,
   askCardSlotOf,
@@ -332,9 +335,13 @@ export async function notifySessionNeedsYou(p: {
         workspaceId: true,
         title: true,
         goal: true,
+        status: true,
       },
     });
     if (!session) return false;
+    // A planned step owes nothing until it starts (P2): no push for it. When
+    // it wakes, `session.unblocked` is the news (session-unblock-reactor).
+    if (isPlannedSessionStatus(session.status)) return false;
 
     const asked = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
     // A relay's push says the relay and asks for the tap: the ask's own quick
