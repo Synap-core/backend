@@ -35,7 +35,7 @@ export interface TriggerWorker {
   profileSlug: string | null;
   activator: {
     on: WorkerActivatorTrigger;
-    status?: string | readonly string[];
+    status?: string | string[];
     cron?: string;
     /** `schedule`: the zone its cron is read in (absent = UTC). */
     timezone?: string;
