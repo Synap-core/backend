@@ -321,6 +321,36 @@ function paramAgent(
   );
 }
 
+/**
+ * Which agent takes an external-agent run: THE route (`agent-dispatch/
+ * route.ts`), asked for dispatch reach with what the run is about (the
+ * assignment rung). Asked again before a run is proposed, with no roster yet,
+ * so a proposal is never filed for a run no agent can take.
+ */
+export async function routeExternalAgent(p: {
+  ownerId: string;
+  named?: string | null;
+  roster?: string[];
+  playbookId: string | null;
+  subjectId?: string | null;
+  projectId?: string | null;
+  workspaceId: string | null;
+}) {
+  return route({
+    ownerId: p.ownerId,
+    accept: ["dispatch"],
+    selector: p.named ? { agentUserId: p.named } : null,
+    roster: p.roster ?? [],
+    targets: {
+      playbook: p.playbookId,
+      profile: await subjectProfileId(p.subjectId ?? undefined),
+      project: p.projectId ?? null,
+      workspace: p.workspaceId,
+    },
+    pool: "owned",
+  });
+}
+
 export class ExternalAgentExecutor implements Executor {
   readonly ref = "external-agent" as const;
 
@@ -345,22 +375,16 @@ export class ExternalAgentExecutor implements Executor {
       return { status: "failed", error };
     };
 
-    // 1. Which agent — THE route (`agent-dispatch/route.ts`): the param, then
-    // the roster, then the single bound one, else the person chooses.
-    const named = paramAgent(input, session);
-    const choice = await route({
+    // 1. Which agent — the param, then the roster, then the single bound
+    // one, else the person chooses.
+    const choice = await routeExternalAgent({
       ownerId,
-      accept: ["dispatch"],
-      selector: named ? { agentUserId: named } : null,
+      named: paramAgent(input, session),
       roster: session.agentIds,
-      // What the run is about — the assignment rung (W1b).
-      targets: {
-        playbook: ctx.playbookId ?? null,
-        profile: await subjectProfileId(ctx.subjectId),
-        project: session.projectId,
-        workspace: session.workspaceId ?? ctx.workspaceId ?? null,
-      },
-      pool: "owned",
+      playbookId: ctx.playbookId ?? null,
+      subjectId: ctx.subjectId,
+      projectId: session.projectId,
+      workspaceId: session.workspaceId ?? ctx.workspaceId ?? null,
     });
     if (choice.kind === "refused") {
       return fail(

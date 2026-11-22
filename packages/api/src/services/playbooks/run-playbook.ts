@@ -111,7 +111,7 @@ import {
 } from "../agent-dispatch/route.js";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { resolveRunner } from "../agent-dispatch/runner.js";
-import type { RunOn } from "@synap-core/types/agents";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
@@ -1386,9 +1386,10 @@ export async function refuseUnattendedRunIfSkillsOff(input: {
 
 /**
  * The propose-mode rule's readiness gate (the `registerPlaybookReadinessGate`
- * slot, @synap/jobs): the same playbook resolution as {@link runPlaybook}, then
- * the same unattended rule. Without it an automation filed run proposals that
- * could only fail on approval while the owner's manual run was blocked.
+ * slot, @synap/jobs): the same playbook resolution and runner choice as
+ * {@link runPlaybook}, then the same unattended rule. Without it an
+ * automation filed run proposals that could only fail on approval: skills
+ * off, or no runner at all (an agent-only playbook no agent can take).
  */
 export async function checkUnattendedPlaybookReadiness(input: {
   playbookId?: string;
@@ -1401,6 +1402,12 @@ export async function checkUnattendedPlaybookReadiness(input: {
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  const nobody = await refuseRunNobodyCanTake({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (nobody) return { ready: false, message: nobody };
   const message = await refuseUnattendedRunIfSkillsOff({
     playbook,
     userId: input.userId,
@@ -1408,6 +1415,38 @@ export async function checkUnattendedPlaybookReadiness(input: {
     agentUserId: null,
   });
   return message ? { ready: false, message } : { ready: true };
+}
+
+/**
+ * The refusal of a run no runner can take, `null` when one can: the runner
+ * choice ({@link resolveRunChoice}) left an agent-only playbook with no agent,
+ * and the external-agent route finds no agent bound for dispatch either.
+ */
+async function refuseRunNobodyCanTake(input: {
+  playbook: Playbook;
+  userId: string;
+  workspaceId: string;
+}): Promise<string | null> {
+  const { handOff, runOn } = await resolveRunChoice({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    playbook: input.playbook,
+  });
+  if (handOff || runOn.executor !== "external-agent" || runOn.agentUserId) {
+    return null;
+  }
+  const { routeExternalAgent } =
+    await import("./executors/external-agent-executor.js");
+  const routed = await routeExternalAgent({
+    ownerId: input.userId,
+    playbookId: input.playbook.id,
+    workspaceId: input.workspaceId,
+  });
+  if (routed.kind !== "choose" || routed.candidates.length > 0) return null;
+  const passed = (runOn.runnerPassedOver ?? [])
+    .map((p) => passedOverLine(p))
+    .join("; ");
+  return `Nothing filed: "${input.playbook.name}" runs only on an agent, and none of your agents can take it${passed ? ` (${passed})` : ""}. Bind an agent to its provider in Settings, Agents.`;
 }
 
 /**
