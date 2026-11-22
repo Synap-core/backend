@@ -1179,7 +1179,7 @@ async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
   const memberRows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(inArray(workspaceMembers.userId, membershipHolderIds(db, userId)));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(userId)));
   const ids = new Set(memberRows.map((r) => r.workspaceId));
 
   const podReadable = await db

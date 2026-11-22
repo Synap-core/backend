@@ -136,6 +136,7 @@ import {
   sessionEvaluations,
   users,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "@synap/database";
 import {
@@ -251,6 +252,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     projectMembers,
     links,

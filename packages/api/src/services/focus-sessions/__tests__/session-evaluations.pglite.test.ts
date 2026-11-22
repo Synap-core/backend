@@ -155,6 +155,7 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  apiKeys,
 } from "@synap/database";
 import {
   recordSessionEvaluation,
@@ -290,6 +291,7 @@ describe("session evaluations", () => {
       projectMembers,
       workspaces,
       workspaceMembers,
+      apiKeys,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

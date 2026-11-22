@@ -84,7 +84,7 @@ export async function agentProfile(params: {
   const memberRows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(inArray(workspaceMembers.userId, membershipHolderIds(db, agentId)));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(agentId)));
   const wsIds = memberRows.map((r) => r.workspaceId);
 
   let wsList: Array<{ id: string; name: string | null }> = [];

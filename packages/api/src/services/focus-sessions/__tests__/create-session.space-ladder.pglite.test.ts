@@ -10,8 +10,9 @@
  * asked about and grants), the session room, realtime, spawn edges.
  *
  * Rows rule out: a rung skipped or out of order; a derived space the actor
- * cannot write reaching the membrane (that is the `workspace.join` proposal
- * instead of the start, or a denial); the focus beating a fact; an explicit
+ * cannot write reaching the membrane (a denial instead of the start); an
+ * agent's own seat counting (it acts through its person); the focus beating
+ * a fact; an explicit
  * space second-guessed; a placed session without its provenance stamp; a
  * copied space losing its source's rung; a move keeping a ladder stamp; an
  * adopted receipt re-homed without its room; an intake retry minting a
@@ -96,16 +97,18 @@ import { createFocusSession } from "../create-session.js";
 import { applySessionWorkspaceMove } from "../move-session-workspace.js";
 import { ensureIntakeSession } from "../../intake/ensure-intake-session.js";
 
-const PERSON = randomUUID();
-const AGENT = randomUUID(); // member of BUILDER, CONTENT, BRAND (viewer), ARCHIVED
-const FOCUSED = randomUUID(); // member of BUILDER, CONTENT; focus = CONTENT
-const STRANGER = randomUUID(); // member of nothing
+// An agent holds no seat that counts: it acts through its person's membership.
+const PERSON = randomUUID(); // owner of BUILDER, CONTENT; viewer of BRAND; editor of ARCHIVED
+const AGENT = randomUUID(); // PERSON's agent
+const FOCUSED = randomUUID(); // PERSON's agent; focus = CONTENT
+const VIEWER = randomUUID(); // a viewer of BUILDER, nothing else
+const STRANGER = randomUUID(); // VIEWER's agent, with a stray editor seat in BUILDER
 
 const BUILDER = randomUUID();
 const CONTENT = randomUUID();
-const FINANCE = randomUUID(); // AGENT is not a member
-const BRAND = randomUUID(); // AGENT is a viewer
-const ARCHIVED = randomUUID(); // AGENT is an editor, the space is archived
+const FINANCE = randomUUID(); // PERSON is not a member
+const BRAND = randomUUID(); // PERSON is a viewer
+const ARCHIVED = randomUUID(); // PERSON is an editor, the space is archived
 
 const PLAYBOOK = { builder: randomUUID(), finance: randomUUID() };
 const SUBJECT = {
@@ -142,11 +145,12 @@ beforeAll(async () => {
     if (is(t, PgTable)) await h.client!.exec(ddlFor(t));
   }
   await q(
-    `insert into users (id, email, name, user_type, agent_metadata) values
-      ($1, 'p@x.test', 'Person', 'human', null),
-      ($2, 'a@x.test', 'Agent', 'agent', null),
-      ($3, 'f@x.test', 'Focused', 'agent', $5::jsonb),
-      ($4, 's@x.test', 'Stranger', 'agent', $6::jsonb)`,
+    `insert into users (id, email, name, user_type, agent_metadata, created_by_user_id) values
+      ($1, 'p@x.test', 'Person', 'human', null, null),
+      ($2, 'a@x.test', 'Agent', 'agent', null, $1),
+      ($3, 'f@x.test', 'Focused', 'agent', $5::jsonb, $1),
+      ($4, 's@x.test', 'Stranger', 'agent', $6::jsonb, $7),
+      ($7, 'v@x.test', 'Viewer', 'human', null, null)`,
     [
       PERSON,
       AGENT,
@@ -154,6 +158,7 @@ beforeAll(async () => {
       STRANGER,
       JSON.stringify({ focusWorkspaceId: CONTENT }),
       JSON.stringify({ focusWorkspaceId: CONTENT }),
+      VIEWER,
     ]
   );
   for (const [id, archived] of [
@@ -169,15 +174,12 @@ beforeAll(async () => {
     );
   }
   for (const [user, ws, role] of [
-    [AGENT, BUILDER, "editor"],
-    [AGENT, CONTENT, "editor"],
-    [AGENT, BRAND, "viewer"],
-    [AGENT, ARCHIVED, "editor"],
-    [FOCUSED, BUILDER, "editor"],
-    [FOCUSED, CONTENT, "editor"],
     [PERSON, BUILDER, "owner"],
-    // The person can see the CONTENT subject (the start's subject floor).
     [PERSON, CONTENT, "owner"],
+    [PERSON, BRAND, "viewer"],
+    [PERSON, ARCHIVED, "editor"],
+    [VIEWER, BUILDER, "viewer"],
+    [STRANGER, BUILDER, "editor"],
   ] as const) {
     await q(
       `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, $4)`,
@@ -330,8 +332,8 @@ describe("a derived rung counts only where the actor may write", () => {
     ).toEqual({ workspaceId: null, rung: null });
   });
 
-  it("the membership is the AGENT's, not its person's", async () => {
-    // PERSON owns BUILDER; STRANGER is a member of nothing.
+  it("the membership is the agent's PERSON's: its own seat counts for nothing", async () => {
+    // STRANGER holds an editor seat in BUILDER; its person only views it.
     expect(
       await ladder({
         actor: STRANGER,
@@ -346,10 +348,10 @@ describe("a derived rung counts only where the actor may write", () => {
         actor: PERSON,
         subjectEntityId: SUBJECT.podWideForBrand,
       })
-    ).toEqual({ workspaceId: null, rung: null }); // PERSON is not in BRAND
+    ).toEqual({ workspaceId: null, rung: null }); // PERSON only views BRAND
     await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor')`,
-      [randomUUID(), BRAND, PERSON]
+      `update workspace_members set role = 'editor' where workspace_id = $1 and user_id = $2`,
+      [BRAND, PERSON]
     );
     expect(
       await ladder({
@@ -401,7 +403,11 @@ describe("createFocusSession places the session BEFORE the membrane", () => {
   it("an agent that cannot write the project's home starts with no space: the membrane never sees it", async () => {
     h.membrane = [];
     const row = await sessionRow(
-      await start({ agentUserId: STRANGER, projectId: PROJECT.builderHome })
+      await start({
+        userId: VIEWER,
+        agentUserId: STRANGER,
+        projectId: PROJECT.builderHome,
+      })
     );
     expect(row.workspace_id).toBeNull();
     expect(row.metadata?.workspacePlacement).toBeUndefined();

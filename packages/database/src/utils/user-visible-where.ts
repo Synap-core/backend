@@ -108,7 +108,7 @@ export function memberWorkspaceIds(userId: string) {
   return db
     .select({ id: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(inArray(workspaceMembers.userId, membershipHolderIds(db, userId)));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(userId)));
 }
 
 /**

@@ -83,7 +83,7 @@ export async function getMembership(
       where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.workspaceId, context.id),
-          inArray(members.userId, membershipHolderIds(db, context.userId))
+          inArray(members.userId, membershipHolderIds(context.userId))
         ),
     });
 
@@ -95,7 +95,7 @@ export async function getMembership(
       where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.projectId, context.id),
-          inArray(members.userId, membershipHolderIds(db, context.userId))
+          inArray(members.userId, membershipHolderIds(context.userId))
         ),
     });
 
@@ -137,7 +137,7 @@ export async function getProjectMembership(
     where: (members: any, { and, inArray }: any) =>
       and(
         inArray(members.projectId, projectIds),
-        inArray(members.userId, membershipHolderIds(db, userId))
+        inArray(members.userId, membershipHolderIds(userId))
       ),
   });
 
