@@ -18,8 +18,13 @@
  *
  * Stubbed, and why: governance (`checkPermissionOrPropose` grants: the apply
  * runs as the approving person), the room mint and the realtime/side-effect
- * emits (no bus here), the link endpoint visibility read (its own suite), the
- * workspace write floor (a pod-personal project, its own suite).
+ * emits (no bus here), the link endpoint visibility read (its own suite;
+ * replaced by "the row exists"), the workspace write floor (a pod-personal
+ * project, its own suite).
+ *
+ * Also (B3 part 2): a step waiting on a decision (an entity) and on a goal,
+ * through THE governed dependency door; a re-plan's `update_session` through
+ * THE session update door and `remove_link`; a failed re-plan put back.
  *
  * NOT covered: the proposal approval wrapper (`apply-approval.ts` wires the
  * same factory), a goal handed back LIVE by name (the unit suite pins it).
@@ -82,8 +87,24 @@ vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   emitSideEffects: async () => {},
 }));
+// Visibility has its own suite; here an endpoint is visible iff its row
+// exists (a goal or a decision the door must not find stays "not found").
 vi.mock("../../routers/hub-protocol/rest/link-endpoint-visibility.js", () => ({
-  checkLinkEndpointsVisible: async () => null,
+  checkLinkEndpointsVisible: async (edge: { toType: string; toId: string }) => {
+    const table =
+      edge.toType === "track"
+        ? "project_tracks"
+        : edge.toType === "entity"
+          ? "entities"
+          : "focus_sessions";
+    const found = await h.client!.query(
+      `select 1 from ${table} where id::text = $1`,
+      [edge.toId]
+    );
+    return found.rows.length > 0
+      ? null
+      : { status: 404 as const, error: "Not found" };
+  },
   checkLinkEndpointVisible: async () => null,
 }));
 vi.mock("../domain-mutation.js", () => ({
@@ -331,5 +352,262 @@ describe("goals in the one plan (P7)", () => {
       [P, name]
     );
     expect(live.rows[0].n).toBe(0);
+  });
+
+  it("a step waits on a decision and a goal; a re-plan edits an existing step and drops one of its blockers", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const [step, oldBlocker, decision] = [
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+    ];
+    for (const [id, goal] of [
+      [step, `Pitch funds ${tag}`],
+      [oldBlocker, `Old blocker ${tag}`],
+    ]) {
+      await q(
+        `insert into focus_sessions (id, user_id, project_id, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, created_at, updated_at, started_at)
+         values ($1, $2, $3, $4, 'active', 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
+        [id, USER, P, goal]
+      );
+    }
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, created_by, metadata)
+       values (gen_random_uuid(), 'session', $1, 'session', $2, 'blocked_by', $3, '{}'::jsonb)`,
+      [step, oldBlocker, USER]
+    );
+    await q(
+      `insert into entities (id, user_id, type, title, properties) values ($1, $2, 'decision', 'Lead investor', '{}'::jsonb)`,
+      [decision, USER]
+    );
+    const goalName = `Close the round ${tag}`;
+    const plan: CompositeProposalOperation[] = [
+      {
+        op: "update_session",
+        ref: "pitch",
+        sessionId: step,
+        patch: { goal: `Pitch ten funds ${tag}` },
+      },
+      {
+        op: "remove_link",
+        type: "blocked_by",
+        fromSessionId: step,
+        toSessionId: oldBlocker,
+      },
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromRef: "pitch",
+        toEntityId: decision,
+      },
+      { op: "create_track", ref: "close", name: goalName, projectId: P },
+      { op: "create_session", ref: "term", goal: `Term sheet ${tag}` },
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromRef: "term",
+        toTrackRef: "close",
+      },
+    ];
+
+    const result = await materializeCompositeGraph(
+      plan,
+      { create: vi.fn() },
+      { create: vi.fn() },
+      undefined,
+      { planCallers: callers() }
+    );
+
+    const born = await goals([goalName]);
+    const term = result.sessions.find((s) => s.ref === "term")!.sessionId;
+    const waits = async (from: string) =>
+      (
+        await q<{ to_type: string; to_id: string }>(
+          `select to_type, to_id from links where link_type = 'blocked_by' and from_type = 'session' and from_id = $1 order by to_type`,
+          [from]
+        )
+      ).rows.map((r) => `${r.to_type}:${r.to_id}`);
+    // The old blocker is gone, the decision is in; the new step waits on the goal.
+    expect(await waits(step)).toEqual([`entity:${decision}`]);
+    expect(await waits(term)).toEqual([`track:${born[goalName].id}`]);
+    const [row] = (
+      await q<{ goal: string }>(
+        `select goal from focus_sessions where id = $1`,
+        [step]
+      )
+    ).rows;
+    expect(row.goal).toBe(`Pitch ten funds ${tag}`);
+    expect(result.sessionUpdates?.[0]).toMatchObject({
+      sessionId: step,
+      before: { goal: `Pitch funds ${tag}` },
+      after: { goal: `Pitch ten funds ${tag}` },
+    });
+
+    // The same re-plan that FAILS at its last step puts everything back.
+    const tag2 = randomUUID().slice(0, 8);
+    const failing: CompositeProposalOperation[] = [
+      {
+        op: "update_session",
+        ref: "pitch",
+        sessionId: step,
+        patch: { goal: `Pitch twenty funds ${tag2}` },
+      },
+      {
+        op: "remove_link",
+        type: "blocked_by",
+        fromSessionId: step,
+        toEntityId: decision,
+      },
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromRef: "pitch",
+        toTrackRef: "g2",
+      },
+      { op: "create_track", ref: "g2", name: `Doomed ${tag2}`, projectId: P },
+      // Not the owner's session: the session edge door refuses it.
+      {
+        op: "create_link",
+        type: "blocked_by",
+        fromRef: "pitch",
+        toSessionId: randomUUID(),
+      },
+    ];
+    const error = await materializeCompositeGraph(
+      failing,
+      { create: vi.fn() },
+      { create: vi.fn() },
+      undefined,
+      { planCallers: callers() }
+    ).catch((e) => e);
+    expect(error).toBeInstanceOf(CompositePlanApplyError);
+    expect(
+      (error as CompositePlanApplyError).compensation.notCompensated
+    ).toEqual([]);
+    // The step, its blockers and the doomed goal are as they were before.
+    expect(await waits(step)).toEqual([`entity:${decision}`]);
+    const [after] = (
+      await q<{ goal: string }>(
+        `select goal from focus_sessions where id = $1`,
+        [step]
+      )
+    ).rows;
+    expect(after.goal).toBe(`Pitch ten funds ${tag}`);
+    expect((await goals([`Doomed ${tag2}`]))[`Doomed ${tag2}`]).toMatchObject({
+      status: "archived",
+      verdict: "mistake",
+    });
+  });
+
+  it("a step blocked ONLY by a decision is born forming, and the arm option lands on the edge (P4, P5)", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const decision = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, title, properties) values ($1, $2, 'decision', 'Lead investor', $3::jsonb)`,
+      [
+        decision,
+        USER,
+        JSON.stringify({
+          decisionOptions: [{ label: "Fund A" }, { label: "Fund B" }],
+        }),
+      ]
+    );
+    const result = await materializeCompositeGraph(
+      [
+        { op: "create_session", ref: "term", goal: `Term sheet ${tag}`, projectId: P },
+        {
+          op: "create_link",
+          type: "blocked_by",
+          fromRef: "term",
+          toEntityId: decision,
+          option: "Fund A",
+        },
+      ],
+      { create: vi.fn() },
+      { create: vi.fn() },
+      undefined,
+      { planCallers: callers() }
+    );
+    const term = result.sessions.find((s) => s.ref === "term")!.sessionId;
+    const row = await q<{ status: string }>(
+      `select status from focus_sessions where id = $1`,
+      [term]
+    );
+    expect(row.rows[0].status).toBe("forming");
+    const edge = await q<{ option: string | null }>(
+      `select metadata->>'option' as option from links where link_type = 'blocked_by' and from_id = $1 and to_id = $2`,
+      [term, decision]
+    );
+    expect(edge.rows).toEqual([{ option: "Fund A" }]);
+  });
+
+  it("an option the existing decision does not list fails the plan at the governed door", async () => {
+    const tag = randomUUID().slice(0, 8);
+    const decision = randomUUID();
+    await q(
+      `insert into entities (id, user_id, type, title, properties) values ($1, $2, 'decision', 'Lead investor', $3::jsonb)`,
+      [decision, USER, JSON.stringify({ decisionOptions: [{ label: "Fund A" }] })]
+    );
+    const error = await materializeCompositeGraph(
+      [
+        { op: "create_session", ref: "term", goal: `Term sheet ${tag}`, projectId: P },
+        {
+          op: "create_link",
+          type: "blocked_by",
+          fromRef: "term",
+          toEntityId: decision,
+          option: "Fund Z",
+        },
+      ],
+      { create: vi.fn() },
+      { create: vi.fn() },
+      undefined,
+      { planCallers: callers() }
+    ).catch((err) => err);
+    expect(error).toBeInstanceOf(CompositePlanApplyError);
+    expect(String((error as Error).message)).toMatch(/Fund Z|not an option/);
+  });
+
+  it("a goal that is still a proposal is named as such, not just 'not found'", async () => {
+    const { addUnitBlockers } =
+      await import("../../services/links/unit-blockers.js");
+    const step = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, project_id, goal, status, origin, expected_outputs, criteria, metadata, agent_ids, created_at, updated_at, started_at)
+       values ($1, $2, $3, 'Wait on a pending goal', 'active', 'agent', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now())`,
+      [step, USER, P]
+    );
+    const [pendingGoal, unknownGoal, proposalId] = [
+      randomUUID(),
+      randomUUID(),
+      randomUUID(),
+    ];
+    // What `start_track` files for an agent: a track/create proposal under
+    // the id it answers as `pendingTrackId`.
+    await q(
+      `insert into proposals (id, target_type, target_id, status, data) values ($1, 'track', $2, 'pending', '{}'::jsonb)`,
+      [proposalId, pendingGoal]
+    );
+    const reports = await addUnitBlockers({
+      from: { type: "session", id: step },
+      kind: "track",
+      ids: [pendingGoal, unknownGoal],
+      userId: USER,
+      door: "test",
+    });
+    const byId = Object.fromEntries(reports.map((r) => [r.blockerTrackId, r]));
+    expect(byId[pendingGoal]).toMatchObject({
+      status: "failed",
+      reason: "not_found",
+      message: expect.stringContaining(`still a proposal (${proposalId})`),
+    });
+    // An id nobody filed keeps the door's own answer.
+    expect(byId[unknownGoal]).toMatchObject({
+      status: "failed",
+      reason: "not_found",
+    });
+    expect(
+      (byId[unknownGoal] as { message?: string }).message ?? ""
+    ).not.toContain("still a proposal");
   });
 });

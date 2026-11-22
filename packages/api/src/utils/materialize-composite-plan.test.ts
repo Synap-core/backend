@@ -47,6 +47,17 @@ function stubPlanCallers(
             return { id: `session-${++n}` };
           })
       ),
+      update: vi.fn(async (input) => {
+        calls.push(`update:${input.sessionId}:${JSON.stringify(input.patch)}`);
+        return {
+          before: { title: "Old", goal: "old goal", status: "active" },
+          after: {
+            title: "Old",
+            goal: input.patch.goal ?? "old goal",
+            status: input.patch.status ?? "active",
+          },
+        };
+      }),
     },
     linkCaller: {
       create: vi.fn(
@@ -61,6 +72,18 @@ function stubPlanCallers(
             };
           })
       ),
+      createCrossKind: vi.fn(async (input) => {
+        calls.push(
+          `wait:${input.fromSessionId}>${input.toKind}:${input.toId}${input.option ? `#${input.option}` : ""}`
+        );
+        return { linkId: `xl-${input.toId}`, preExisting: false };
+      }),
+      remove: vi.fn(async (input) => {
+        calls.push(
+          `unlink:${input.fromSessionId}>${input.toKind}:${input.toId}`
+        );
+        return { removed: true };
+      }),
     },
     documentCaller: {
       create: vi.fn(async (input) => {
@@ -649,5 +672,182 @@ describe("materializeCompositeGraph — goals in the plan", () => {
     expect(buildMaterializedRecord(applied).trackIds).not.toContain(
       "live-Seed round"
     );
+  });
+});
+
+/**
+ * A step waits on a DECISION or a GOAL, and a RE-PLAN edits existing steps
+ * (pathway plan 368179d7, B3): one plan, applied whole.
+ *
+ * Pinned: re-plan edits on existing steps run before any edge is added; a
+ * step → decision / goal edge runs after every session, goal and entity
+ * exists (either may be created by the plan), through the cross-kind door,
+ * never the session-to-session one; a failed plan hands the edits and the
+ * new edges to compensation.
+ */
+describe("materializeCompositeGraph — cross-kind waits and re-plan edits", () => {
+  const EXISTING = "9c1f2e3d-4b5a-4c6d-8e7f-0a1b2c3d4e5f";
+  const DECISION = "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b";
+  const OTHER = "0d1e2f3a-4b5c-4d6e-8f7a-8b9c0d1e2f3a";
+  const replan: CompositeProposalOperation[] = [
+    // Declared before what they point at, on purpose.
+    {
+      op: "create_link",
+      type: "blocked_by",
+      fromRef: "term",
+      toEntityRef: "choice",
+    },
+    {
+      op: "create_link",
+      type: "blocked_by",
+      fromRef: "term",
+      toTrackRef: "seed",
+    },
+    {
+      op: "create_link",
+      type: "blocked_by",
+      fromRef: "old",
+      toEntityId: DECISION,
+    },
+    {
+      op: "remove_link",
+      type: "blocked_by",
+      fromSessionId: EXISTING,
+      toSessionId: OTHER,
+    },
+    {
+      op: "update_session",
+      ref: "old",
+      sessionId: EXISTING,
+      patch: { goal: "Pitch 10 funds", status: "paused" },
+    },
+    { op: "create_session", ref: "term", goal: "Term sheet" },
+    {
+      op: "create_entity",
+      ref: "choice",
+      profileSlug: "decision",
+      title: "Lead investor",
+    },
+    { op: "create_track", ref: "seed", name: "Seed", projectId: "project-x" },
+  ];
+
+  it("waits on a decision and a goal after they exist, and edits existing steps", async () => {
+    const { callers, calls } = stubPlanCallers();
+    const result = await materializeCompositeGraph(
+      replan,
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    );
+    expect(calls).toEqual([
+      "track:Seed:project=project-x:parent=null",
+      "session:Term sheet:project=null:subject=null",
+      // Re-plan edits BEFORE any edge is added (a reversed dependency drops
+      // the old edge first).
+      `update:${EXISTING}:{"goal":"Pitch 10 funds","status":"paused"}`,
+      `unlink:${EXISTING}>session:${OTHER}`,
+      // The cross-kind door, with the refs resolved — never the session door.
+      "wait:session-1>entity:entity-Lead investor",
+      "wait:session-1>track:track-Seed",
+      // A link FROM a re-planned step names it by its update's ref.
+      `wait:${EXISTING}>entity:${DECISION}`,
+    ]);
+    expect(callers.linkCaller.create).not.toHaveBeenCalled();
+    const { buildMaterializedRecord } =
+      await import("../services/proposals/stamp-materialized.js");
+    const record = buildMaterializedRecord(result);
+    expect(record.linkIds).toEqual(
+      expect.arrayContaining([
+        "xl-entity-Lead investor",
+        "xl-track-Seed",
+        `xl-${DECISION}`,
+      ])
+    );
+    expect(record.byOp?.old).toEqual({
+      op: "update_session",
+      sessionId: EXISTING,
+    });
+  });
+
+  it("a failed step hands the edits, the removals and the new edges to compensation", async () => {
+    const { callers } = stubPlanCallers();
+    callers.documentCaller.create = vi.fn(async () => {
+      throw new Error("storage is down");
+    });
+    const error = await materializeCompositeGraph(
+      [
+        ...replan,
+        {
+          op: "create_document",
+          ref: "memo",
+          title: "Memo",
+          content: "# Memo",
+          sessionRef: "term",
+        },
+      ],
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    ).catch((err) => err);
+    expect(error).toBeInstanceOf(CompositePlanApplyError);
+    const applied = vi.mocked(callers.compensate).mock.calls[0][0];
+    expect(applied.sessionUpdates?.map((u) => u.sessionId)).toEqual([EXISTING]);
+    expect(applied.sessionUpdates?.[0].before.goal).toBe("old goal");
+    expect(applied.linkRemovals).toEqual([
+      expect.objectContaining({
+        fromSessionId: EXISTING,
+        toKind: "session",
+        toId: OTHER,
+        removed: true,
+      }),
+    ]);
+    expect(applied.crossLinks).toHaveLength(3);
+  });
+});
+
+describe("materializeCompositeGraph — a step that waits on a decision (cross-kind)", () => {
+  const plan = [
+    {
+      op: "create_entity",
+      ref: "pick",
+      profileSlug: "decision",
+      title: "Which lead investor",
+      properties: { decisionOptions: [{ label: "Fund A" }, { label: "Fund B" }] },
+    },
+    { op: "create_session", ref: "term", goal: "Negotiate the term sheet" },
+    {
+      op: "create_link",
+      type: "blocked_by",
+      fromRef: "term",
+      toEntityRef: "pick",
+      option: "Fund A",
+    },
+  ] as CompositeProposalOperation[];
+
+  it("a step whose ONLY blocker is a decision is born planned (awaitsBlockers), not active", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { callers } = stubPlanCallers({
+      sessionCreate: (async (input: Record<string, unknown>) => {
+        seen.push(input);
+        return { id: "session-1", linked: false };
+      }) as unknown as PlanCallers["sessionCaller"]["create"],
+    });
+    await materializeCompositeGraph(plan, entityCaller, relationCaller, undefined, {
+      planCallers: callers,
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].awaitsBlockers).toBe(true);
+  });
+
+  it("the arm option rides the edge to the governed door, once the decision exists", async () => {
+    const { callers, calls } = stubPlanCallers();
+    await materializeCompositeGraph(plan, entityCaller, relationCaller, undefined, {
+      planCallers: callers,
+    });
+    expect(calls.filter((c) => c.startsWith("wait:"))).toEqual([
+      "wait:session-1>entity:entity-Which lead investor#Fund A",
+    ]);
   });
 });
