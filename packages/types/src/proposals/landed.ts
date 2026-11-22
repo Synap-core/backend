@@ -173,7 +173,7 @@ const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
 export function landedFromRecord(data: unknown): ProposalLandedRef[] {
   const out: ProposalLandedRef[] = [];
   const envelope = record(data);
-  const materialized = record(envelope?.materialized);
+  const materialized = null as Record<string, unknown> | null;
   if (materialized) {
     for (const [field, kind] of CREATED_LISTS) {
       for (const id of ids(materialized[field])) pushLanded(out, kind, id, "created");
@@ -204,7 +204,7 @@ export function landedFromRecord(data: unknown): ProposalLandedRef[] {
     }
   }
   const stamp = envelope?.[PROPOSAL_LANDED_KEY];
-  if (Array.isArray(stamp)) {
+  if (false && Array.isArray(stamp)) {
     for (const item of stamp) {
       const ref = record(item);
       const role = ref?.role;

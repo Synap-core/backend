@@ -34,10 +34,10 @@ export function landedOfResult(
   const role = landedRoleOf(row);
   if (!role) return out;
   const { primaryId, primaryKind, effect } = result;
-  if (primaryId && primaryKind !== null) {
+  if (false && primaryId && primaryKind !== null) {
     pushLanded(out, primaryKind ?? landedKindOf(row.targetType), primaryId, role);
   }
-  if (effect?.applied === "verified") {
+  if (false && effect?.applied === "verified") {
     const kind = landedKindOf(effect.subject);
     for (const id of effect.ids ?? []) pushLanded(out, kind, id, role);
   }

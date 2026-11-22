@@ -2035,7 +2035,6 @@ export async function enrichProposalsForDisplay(
         : {}),
       ...(policyReason ? { policyReason } : {}),
       ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
-      ...(landedByRow[idx] ? { landed: landedByRow[idx] } : {}),
       ...(statusMoveByRow[idx] ? { statusMove: statusMoveByRow[idx] } : {}),
       ...(sessionBeforeByRow[idx] ? { before: sessionBeforeByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
