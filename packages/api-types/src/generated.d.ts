@@ -10988,7 +10988,7 @@ export interface ProposalReviewGraph {
 	 * reviewer asks for a revision instead.
 	 */
 	isPlan?: true;
-	/** Number of plan steps (projects + sessions + documents + links). */
+	/** Number of plan steps (projects, goals, kinds, sessions, documents, links). */
 	planStepCount?: number;
 	projects?: Array<{
 		description?: string;
@@ -11013,6 +11013,29 @@ export interface ProposalReviewGraph {
 		subjectRef?: string;
 		/** As proposed (may be null). */
 		title: string | null;
+		trackId?: string;
+		/** In-graph goal ref (`tracks[].ref`) or an existing goal id. */
+		trackRef?: string;
+	}>;
+	/** Goals the plan starts (`create_track`), with where each sits. */
+	tracks?: Array<{
+		/** Goals it waits on: in-graph refs and existing ids. */
+		blockedBy: string[];
+		direction?: string;
+		name: string;
+		parentGoalId?: string;
+		/** The goal it serves: in-graph ref or existing id. */
+		parentRef?: string;
+		projectId?: string;
+		projectRef?: string;
+		ref: string;
+	}>;
+	/** Kinds the plan defines (`define_kind`), applied before its records. */
+	kinds?: Array<{
+		displayName: string;
+		fieldSlugs: string[];
+		ref: string;
+		slug: string;
 	}>;
 	documents?: Array<{
 		entityId?: string;
@@ -11596,6 +11619,13 @@ export interface CompositeCreateSessionOp {
 	/** The project it belongs to (a `create_project` ref or a real id). */
 	projectRef?: string;
 	projectId?: string;
+	/**
+	 * The goal it works toward: a `create_track` ref (created before every
+	 * session) or an existing goal id. Passed to the session door AT create,
+	 * like `start_session`'s `trackId`, which then implies the project.
+	 */
+	trackRef?: string;
+	trackId?: string;
 	/** Declared deliverables — sanitized by the session door at apply time. */
 	expectedOutputs?: Array<Record<string, unknown>>;
 	/**
@@ -11651,6 +11681,50 @@ export interface CompositeCreateProjectOp {
 	evidenceEntityIds?: string[];
 	/** Server-stamped — any caller-supplied value is overwritten. */
 	evidence?: PlanProjectEvidence;
+}
+/**
+ * A GOAL in the plan (pathway plan 368179d7, P7). Materialized through THE
+ * start-goal door (`startTrack`) as the applying person, before every session,
+ * so a session's `trackRef` resolves at create. Shape only here: the door
+ * parses `kpi` / `criteria` / `workKind` / `endState` exactly as `start_track`.
+ */
+export interface CompositeCreateTrackOp {
+	op: "create_track";
+	ref: string;
+	name: string;
+	/** A goal lives in a project: a `create_project` ref or a real id. */
+	projectRef?: string;
+	projectId?: string;
+	direction?: string;
+	kpi?: Record<string, unknown>;
+	criteria?: Array<Record<string, unknown>>;
+	workKind?: string;
+	endState?: string;
+	/** The goal it serves (`goal --serves--> parent`): a track ref or a real id. */
+	parentRef?: string;
+	parentGoalId?: string;
+	/** Goals it waits on (`goal --blocked_by--> goal`): track refs or real ids. */
+	blockedByRefs?: string[];
+	blockedByTrackIds?: string[];
+}
+/**
+ * A new KIND in the plan (pathway plan 368179d7, P10), applied BEFORE every
+ * entity so the plan may carry the kind AND its records. Materialized through
+ * the approved-kind writer the `profile/create` executor uses
+ * (`applyApprovedKind`): the same profile door, provenance and field writer
+ * (a field slug that collides with a pod-wide field gets its own def, with a
+ * receipt). `slug` and each field's `slug` are stored normalised.
+ */
+export interface CompositeDefineKindOp {
+	op: "define_kind";
+	ref: string;
+	slug: string;
+	displayName: string;
+	description?: string;
+	icon?: string;
+	entityScope?: "pod" | "workspace";
+	/** Field defs, `ProposedKindField` shape (`{ slug, valueType, ... }`). */
+	fields?: Array<Record<string, unknown>>;
 }
 declare const PLAN_LINK_TYPES: readonly [
 	"blocked_by",
@@ -11746,7 +11820,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateTrackOp | CompositeDefineKindOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -14909,6 +14983,23 @@ export interface MaterializeLinkResult {
 	/** The edge was already in the graph — not created by this run. */
 	preExisting?: true;
 }
+/** Per-op result for a `create_track` op (connected plan). */
+export interface MaterializeTrackResult {
+	ref: string;
+	opIndex: number;
+	trackId: string;
+	/** The start door handed back a LIVE goal of the same name — not this run's row. */
+	linked?: boolean;
+	/** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
+	blockerLinkIds?: string[];
+}
+/** Per-op result for a `define_kind` op (connected plan). */
+export interface MaterializeKindResult {
+	ref: string;
+	opIndex: number;
+	profileId: string;
+	slug: string;
+}
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
 	ref: string;
@@ -14964,6 +15055,9 @@ export interface MaterializeResult {
 	sessions: MaterializeSessionResult[];
 	links: MaterializeLinkResult[];
 	documents: MaterializeDocumentResult[];
+	/** Goals (`create_track`) and kinds (`define_kind`) a plan created. */
+	tracks?: MaterializeTrackResult[];
+	kinds?: MaterializeKindResult[];
 }
 /** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
 export interface CaptureUpdateResult {
@@ -15180,7 +15274,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "binding" | "cell" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "kind" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "track" | "view";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -18540,6 +18634,13 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	sessionIds?: string[];
 	projectIds?: string[];
 	linkIds?: string[];
+	/**
+	 * Goals and kinds a plan started (`create_track` / `define_kind`). A failed
+	 * plan's compensation drops / retires them (`plan-callers.ts`); like the
+	 * plan's sessions, a later whole revert does not.
+	 */
+	trackIds?: string[];
+	kindIds?: string[];
 	/** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
 	projectSubjectIds?: Record<string, string>;
 	/**
@@ -18620,7 +18721,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_track" | "create_view" | "define_kind" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -18641,6 +18742,10 @@ export interface MaterializedOpRecord {
 	projectId?: string;
 	documentId?: string;
 	linkId?: string;
+	/** `create_track`: the goal it started. */
+	trackId?: string;
+	/** `define_kind`: the kind (profile) it created. */
+	profileId?: string;
 	/**
 	 * `update_*`: the row it changed and the fields' values before and after
 	 * (`{before, patch}` — `after` is the patch as it landed). An
@@ -55676,9 +55781,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					readonly status: "unavailable";
 				} | null | undefined;
 				phaseCategory: PlaybookStageCategory;
-				pillars?: {
+				pillars?: Pillar[] | {
 					readonly status: "unavailable";
-				} | Pillar[] | undefined;
+				} | undefined;
 				project: {
 					colorSlot: number | null;
 					createdAt: Date;
@@ -55698,9 +55803,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					userId: string;
 					workspaceId: string | null;
 				};
-				rootHealth?: {
+				rootHealth?: ProjectRootHealth | {
 					readonly status: "unavailable";
-				} | ProjectRootHealth | undefined;
+				} | undefined;
 				subject: ProjectSubject | null;
 				usedWorkspaceIds: string[];
 				usedWorkspaces: UsedWorkspaceRef[];
@@ -56826,6 +56931,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityIds?: string[];
 					facetIds?: string[];
 					failedOp?: MaterializedFailedOp;
+					kindIds?: string[];
 					linkIds?: string[];
 					merge?: {
 						deletedRelationIds?: string[];
@@ -56859,6 +56965,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					skillIds?: string[];
 					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
+					trackIds?: string[];
 					viewIds?: string[];
 				};
 				revertedAt?: undefined;

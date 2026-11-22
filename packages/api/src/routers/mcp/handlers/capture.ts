@@ -252,6 +252,8 @@ const captureHandler: McpToolHandler = async (
       | "documents"
       | "projects"
       | "links"
+      | "tracks"
+      | "kinds"
       | "skills"
       | "automations"
       | "rules"
@@ -261,6 +263,8 @@ const captureHandler: McpToolHandler = async (
     documents: planArg("documents"),
     projects: planArg("projects"),
     links: planArg("links"),
+    tracks: planArg("tracks"),
+    kinds: planArg("kinds"),
     skills: planArg("skills"),
     automations: planArg("automations"),
     rules: planArg("rules"),

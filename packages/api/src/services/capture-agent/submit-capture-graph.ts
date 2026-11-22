@@ -49,6 +49,7 @@ import {
   moveMisnamedLifecycle,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
+  slugifyPropertyKey,
   type WorkspacePlacement,
   type ModeledField,
   deriveProposalProjectId,
@@ -72,13 +73,17 @@ import {
   type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
+  type CompositeCreateTrackOp,
+  type CompositeDefineKindOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
+import { checkFieldSpec } from "../../routers/hub-protocol/define-profile.js";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { preflightPlanOperations } from "./capture-plan-preflight.js";
 import { completeKnowledgeProposalProperties } from "../proposals/complete-knowledge-proposal.js";
 import {
   hasComposedSteps,
+  planKindSlugs,
   planStepSummaries,
   type CapturePlanProblem,
   type PlanStepSummary,
@@ -248,6 +253,13 @@ export interface CapturePlanInput {
   /** `evidence` is server-stamped; a caller-supplied one is ignored. */
   projects?: Array<Omit<CompositeCreateProjectOp, "op" | "evidence">>;
   links?: Array<Omit<CompositeCreateLinkOp, "op">>;
+  /** Goals (`create_track`), started before the sessions that join them. */
+  tracks?: Array<Omit<CompositeCreateTrackOp, "op">>;
+  /**
+   * Kinds (`define_kind`), applied before the entities: `slug` and each
+   * field are normalised the way `synap_define_kind` normalises them.
+   */
+  kinds?: Array<Omit<CompositeDefineKindOp, "op">>;
   /**
    * ── Rule Loop config steps (NS1) ─────────────────────────────────────
    * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
@@ -306,6 +318,8 @@ export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
       (plan?.documents?.length ?? 0) +
       (plan?.projects?.length ?? 0) +
       (plan?.links?.length ?? 0) +
+      (plan?.tracks?.length ?? 0) +
+      (plan?.kinds?.length ?? 0) +
       (plan?.skills?.length ?? 0) +
       (plan?.automations?.length ?? 0) +
       (plan?.rules?.length ?? 0) +
@@ -652,11 +666,37 @@ export async function buildCaptureGraphOperations(
   const { entities: graphEntities, relations, workspaceId } = input;
   const resolvedProjectId = input.projectId;
   const plan = input.plan;
+  // Kinds as `synap_define_kind` stores them: the slug and each field through
+  // the define door's one normaliser. A field it refuses stays as sent, so
+  // the plan validator names it.
+  const kindOps: CompositeDefineKindOp[] = (plan?.kinds ?? []).map((k) => ({
+    op: "define_kind" as const,
+    ...k,
+    slug:
+      typeof k.slug === "string"
+        ? slugifyPropertyKey(k.slug) || k.slug
+        : k.slug,
+    ...(Array.isArray(k.fields)
+      ? {
+          fields: k.fields.map((spec) => {
+            const checked = checkFieldSpec(spec);
+            return "field" in checked ? checked.field : spec;
+          }),
+        }
+      : {}),
+  }));
+  // An entity naming an in-plan kind by its unnormalised slug follows it.
+  const inPlanKinds = planKindSlugs(kindOps);
+  const kindSlugOf = (slug: string) => {
+    const stored = slugifyPropertyKey(slug) || slug;
+    return inPlanKinds.has(stored) ? stored : slug;
+  };
   const operations: CompositeProposalOperation[] = [
+    ...kindOps,
     ...graphEntities.map((e) => ({
       op: "create_entity" as const,
       ref: e.ref,
-      profileSlug: e.profileSlug,
+      profileSlug: kindSlugOf(e.profileSlug),
       // A plan's own project wins over the call-level project pin.
       ...(e.projectRef
         ? { projectRef: e.projectRef }
@@ -702,11 +742,24 @@ export async function buildCaptureGraphOperations(
         evidence?: unknown;
       }) => ({ op: "create_project" as const, ...p })
     ),
+    // Goals: the call-level project pin files a goal that names none.
+    ...(plan?.tracks ?? []).map((t) => ({
+      op: "create_track" as const,
+      ...t,
+      ...(!t.projectRef && !t.projectId && resolvedProjectId
+        ? { projectId: resolvedProjectId }
+        : {}),
+    })),
     ...(plan?.sessions ?? []).map((sess) => ({
       op: "create_session" as const,
       ...sess,
-      // The call-level project pin files a session that names none.
-      ...(!sess.projectRef && !sess.projectId && resolvedProjectId
+      // The call-level project pin files a session that names none — unless
+      // it joins a goal, which implies its project.
+      ...(!sess.projectRef &&
+      !sess.projectId &&
+      !sess.trackRef &&
+      !sess.trackId &&
+      resolvedProjectId
         ? { projectId: resolvedProjectId }
         : {}),
     })),
@@ -783,10 +836,16 @@ export async function preflightCaptureGraphOperations(
   const invalidEntities: CaptureGraphInvalidEntity[] = [];
   const unmodeledProperties: CaptureGraphUnmodeledEntity[] = [];
   const modeledFields: CaptureGraphModeledFields = {};
+  // Kinds this same plan defines: they do not exist yet, so their records are
+  // not resolved here. The kind step's own fields are checked by the plan
+  // validator; the records are checked by the entity door when the plan
+  // applies (after the kind, `define_kind` runs first).
+  const inPlanKinds = planKindSlugs(operations);
   for (const op of operations) {
     if (op.op !== "create_entity") continue;
     // Linking an existing entity materializes nothing new — no props to check.
     if (op.existingEntityId) continue;
+    if (inPlanKinds.has(op.profileSlug)) continue;
     // RESERVED KINDS (e.g. `project`) are refused HERE, with the floor's own
     // wording — not filed as a proposal that `entities.create` refuses at
     // approve. A project is a plan step, never an entity.

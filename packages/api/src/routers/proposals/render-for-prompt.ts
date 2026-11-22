@@ -97,6 +97,9 @@ export async function renderProposalForPrompt(
           op.subjectRef || op.subjectEntityId
             ? `about ${String(op.subjectRef ?? op.subjectEntityId)}`
             : null,
+          op.trackRef || op.trackId
+            ? `in goal ${String(op.trackRef ?? op.trackId)}`
+            : null,
         ].filter(Boolean);
         lines.push(
           `- create session: "${String(op.title ?? op.goal ?? "")}" (ref ${String(op.ref)})${edges.length ? ` — ${edges.join(", ")}` : ""}`
@@ -108,6 +111,23 @@ export async function renderProposalForPrompt(
             : "";
         lines.push(
           `- create document: "${String(op.title ?? "")}" (ref ${String(op.ref)})${on}`
+        );
+      } else if (op.op === "create_track") {
+        const edges = [
+          op.parentRef || op.parentGoalId
+            ? `serves ${String(op.parentRef ?? op.parentGoalId)}`
+            : null,
+          ...[
+            ...((op.blockedByRefs as string[] | undefined) ?? []),
+            ...((op.blockedByTrackIds as string[] | undefined) ?? []),
+          ].map((r) => `waits on ${r}`),
+        ].filter(Boolean);
+        lines.push(
+          `- start goal: "${String(op.name ?? "")}" (ref ${String(op.ref)})${edges.length ? ` — ${edges.join(", ")}` : ""}`
+        );
+      } else if (op.op === "define_kind") {
+        lines.push(
+          `- define kind: "${String(op.displayName ?? op.slug)}" (slug ${String(op.slug)}, ref ${String(op.ref)})`
         );
       } else if (op.op === "create_link") {
         lines.push(

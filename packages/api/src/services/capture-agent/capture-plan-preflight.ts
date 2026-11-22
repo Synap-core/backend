@@ -22,14 +22,17 @@ import {
   eq,
   inArray,
   entities,
+  ProfileResolutionService,
   focusSessions,
   projects,
+  projectTracks,
   MIN_EVIDENCE_ENTITIES,
   type db,
 } from "@synap/database";
-import type {
-  CompositeProposalOperation,
-  PlanProjectEvidence,
+import {
+  isPlanOperation,
+  type CompositeProposalOperation,
+  type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { isSubjectEntityVisible } from "../../utils/project-subject.js";
@@ -118,7 +121,9 @@ export async function preflightPlanOperations(
   const projectIdsByOp = new Map<string, number[]>();
   operations.forEach((op, i) => {
     const id =
-      op.op === "create_session" || op.op === "create_entity"
+      op.op === "create_session" ||
+      op.op === "create_entity" ||
+      op.op === "create_track"
         ? op.projectId
         : undefined;
     if (id) projectIdsByOp.set(id, [...(projectIdsByOp.get(id) ?? []), i]);
@@ -126,14 +131,7 @@ export async function preflightPlanOperations(
   // `create_entity.projectId` is also validated by the submit door's own pin
   // check; only plan batches reach this query for it, and a stale pin there is
   // still a problem worth naming at propose time.
-  const hasPlanOp = operations.some((op) =>
-    [
-      "create_session",
-      "create_document",
-      "create_project",
-      "create_link",
-    ].includes(op.op)
-  );
+  const hasPlanOp = operations.some(isPlanOperation);
   if (hasPlanOp && projectIdsByOp.size > 0) {
     const ids = [...projectIdsByOp.keys()];
     const visible = await database
@@ -155,6 +153,61 @@ export async function preflightPlanOperations(
       for (const opIndex of projectIdsByOp.get(id) ?? []) {
         push(opIndex, `project ${id} was not found`);
       }
+    }
+  }
+
+  // ── Existing goals: visible (a goal is visible iff its project is) ─────
+  const trackIdsByOp = new Map<string, number[]>();
+  const noteTrack = (id: string | undefined, opIndex: number) => {
+    if (!id) return;
+    trackIdsByOp.set(id, [...(trackIdsByOp.get(id) ?? []), opIndex]);
+  };
+  operations.forEach((op, i) => {
+    if (op.op === "create_session") noteTrack(op.trackId, i);
+    else if (op.op === "create_track") {
+      noteTrack(op.parentGoalId, i);
+      for (const id of op.blockedByTrackIds ?? []) noteTrack(id, i);
+    }
+  });
+  const trackIds = [...trackIdsByOp.keys()].filter((id) => isUuid(id));
+  if (trackIds.length > 0) {
+    const visible = await database
+      .select({ id: projectTracks.id })
+      .from(projectTracks)
+      .innerJoin(projects, eq(projects.id, projectTracks.projectId))
+      .where(
+        and(
+          inArray(projectTracks.id, trackIds),
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            userId
+          )
+        )
+      );
+    const visibleIds = new Set(visible.map((r) => r.id));
+    for (const id of trackIds) {
+      if (visibleIds.has(id)) continue;
+      for (const opIndex of trackIdsByOp.get(id) ?? []) {
+        push(opIndex, `goal ${id} was not found`);
+      }
+    }
+  }
+
+  // ── Kinds: a kind step names a NEW kind ──────────────────────────────
+  // The kind door is slug-idempotent; a plan that says "define X" while X
+  // exists would file records the reviewer reads as a new kind's. Refused
+  // here, by name: use the existing kind.
+  for (const [i, op] of operations.entries()) {
+    if (op.op !== "define_kind" || typeof op.slug !== "string") continue;
+    const existing = await new ProfileResolutionService(
+      database
+    ).resolveProfile(op.slug, userId, placement?.workspaceId ?? null);
+    if (existing) {
+      push(
+        i,
+        `a kind "${op.slug}" already exists: drop this kinds[] step and give its records profileSlug "${op.slug}"`
+      );
     }
   }
 
