@@ -53,6 +53,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../client-pg.js";
 import { workspaceMembers, workspaces } from "../schema/workspaces.js";
 import { podReaderWhere } from "./pod-membership.js";
+import { membershipHolderIds } from "./owner-person.js";
 
 /**
  * The workspace lens, as a composable scope dimension:
@@ -107,7 +108,7 @@ export function memberWorkspaceIds(userId: string) {
   return db
     .select({ id: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(db, userId)));
 }
 
 /**

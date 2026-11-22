@@ -8,6 +8,8 @@
  * 3. Resource-level checks (optional: specific resource access)
  */
 
+import { membershipHolderIds } from "./owner-person.js";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -68,19 +70,20 @@ export function hasRolePermission(
 // ============================================================================
 
 /**
- * Generic membership check - works for both workspaces and projects
+ * Generic membership check - works for both workspaces and projects. An agent
+ * holds no membership: it is checked through its person's
+ * (`membershipHolderIds`).
  */
 export async function getMembership(
   db: any,
   context: MembershipContext
 ): Promise<{ role: UserRole } | null> {
   if (context.type === "workspace") {
-    // Check workspace_members table
     const member = await db.query.workspaceMembers.findFirst({
-      where: (members: any, { eq, and }: any) =>
+      where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.workspaceId, context.id),
-          eq(members.userId, context.userId)
+          inArray(members.userId, membershipHolderIds(db, context.userId))
         ),
     });
 
@@ -88,12 +91,11 @@ export async function getMembership(
   }
 
   if (context.type === "project") {
-    // Check project_members table
     const member = await db.query.projectMembers.findFirst({
-      where: (members: any, { eq, and }: any) =>
+      where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.projectId, context.id),
-          eq(members.userId, context.userId)
+          inArray(members.userId, membershipHolderIds(db, context.userId))
         ),
     });
 
@@ -132,8 +134,11 @@ export async function getProjectMembership(
 
   // Check if user is member of ANY of the projects
   const member = await db.query.projectMembers.findFirst({
-    where: (members: any, { eq, and, inArray }: any) =>
-      and(inArray(members.projectId, projectIds), eq(members.userId, userId)),
+    where: (members: any, { and, inArray }: any) =>
+      and(
+        inArray(members.projectId, projectIds),
+        inArray(members.userId, membershipHolderIds(db, userId))
+      ),
   });
 
   return member

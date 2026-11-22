@@ -19,10 +19,7 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
-import {
-  spacesCoveredWhole,
-  spacesOfScopeRows,
-} from "@synap-core/types/grants";
+import { spacesCoveredWhole } from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -91,7 +88,6 @@ import { randomUUID } from "crypto";
 import { resolveProposalTargetId } from "./proposal-target-id.js";
 import { createLogger } from "@synap-core/core";
 import {
-  DEFERRED_WRITES_MAX,
   readDeferredWrites,
   replayableDeferredPair,
   type DeferredWrite,
@@ -658,10 +654,8 @@ export type PermissionResult =
       granted: false;
       proposalId: string;
       /**
-       * The proposal's type: "join" for a workspace-join gate, "held_writes"
-       * for a write held past the agent's daily ceiling, else
-       * "<subject>.<action>" (e.g. "entity.create"). Lets callers distinguish
-       * a membership gate from a content proposal.
+       * The proposal's type: "held_writes" for a write held past the agent's
+       * daily ceiling, else "<subject>.<action>" (e.g. "entity.create").
        */
       proposalType: string;
       /** Short human-readable summary: e.g., `Delete task "Q2 plan review"`. */
@@ -680,10 +674,10 @@ export type PermissionResult =
        */
       deduped?: boolean;
       /**
-       * JOIN GATE or HELD WRITES ONLY — the write was KEPT on the join or on
-       * today's held-writes pack (`data.deferredWrites`) and is replayed as
-       * the agent once that is approved. The agent must not resend it. Absent
-       * for a pair that cannot be deferred: that write was not kept.
+       * HELD WRITES ONLY — the write was KEPT on today's held-writes pack
+       * (`data.deferredWrites`) and is replayed as the agent once that is
+       * approved. The agent must not resend it. Absent for a pair that cannot
+       * be deferred: that write was not kept.
        */
       deferred?: true;
       /** The kept write's `ref` (`data.deferredOutcomes[ref]`). */
@@ -1377,7 +1371,6 @@ export async function checkPermissionOrPropose(
  *   - no `proposals` row (pending OR auto-approved receipt)
  *   - no `.requested` event append
  *   - no notification / broadcast / side-effect emission
- *   - no `workspace.join` proposal
  *   - no daily agent-proposal-cap consumption (the cap is not even read)
  *
  * Reads (RBAC lookup, profile resolution, governance rules, workspace settings,
@@ -1760,10 +1753,8 @@ async function evaluatePermission(
   // 2. Determine required permission (canonical map in @synap/governance-policy)
   const requiredPermission = requiredPermissionFor(action);
 
-  // 3. Determine effective user for permission check
-  const effectiveUserId = agentUserId || userId;
-
-  // 4. Check workspace permission using the effective user's role
+  // 3-4. Check workspace permission with the person's role: an agent is
+  // never a member, it acts through its person's membership.
   try {
     const { eq } = await import("@synap/database");
 
@@ -1773,51 +1764,14 @@ async function evaluatePermission(
     if (workspaceId) {
       const result = await verifyWorkspaceAccess({
         userId,
-        agentUserId,
         workspaceId,
         requiredPermission,
-        subjectType,
-        action,
-        data,
-        sessionId,
       });
 
       if (!result.allowed) {
-        // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
-        // a member of the workspace does not hard-deny — instead it files a
-        // `workspace.join` proposal the human can approve. Approval materializes a
-        // workspace_members row (`workspace/join` executor) and replays the
-        // write when its pair is replayable (deferred writes — see
-        // `maybeCreateWorkspaceJoinProposal`); any other write the agent
-        // retries. Any OTHER denial (insufficient role for a
-        // member, etc.) still hard-denies. Gated on the membership-miss reason so a
-        // member-but-under-privileged agent is NOT silently escalated to a join.
         const isMembershipMiss = result.reason === WORKSPACE_MEMBERSHIP_MISS;
         if (isMembershipMiss && agentUserId) {
-          const join = await maybeCreateWorkspaceJoinProposal({
-            dryRun,
-            agentUserId,
-            requesterUserId: userId,
-            workspaceId,
-            correlationId,
-            threadId,
-            commandRunId,
-            sourceMessageId,
-            sessionId,
-            // Thread the original subject + data so the proposal card shows
-            // WHAT the agent wanted to do (e.g. create a session with goal X).
-            // Without this, every join proposal looks identical — the reviewer
-            // can't tell if the agent wants to create a session, write an entity,
-            // or execute a capability.
-            requestedSubjectType: subjectType,
-            requestedAction: action,
-            requestedData: data,
-            requestedProjectId: projectId,
-            requestedReasoning: opts.reasoning,
-            requestedExpectedLabel: opts.expectedLabel,
-          });
-          if (join) return join;
-          // Not an agent user row (defence-in-depth) → fall through to deny.
+          return { denied: true, reason: AGENT_PERSON_NOT_MEMBER };
         }
         // AGENT + insufficient ROLE (a member, but its role lacks this
         // permission — e.g. an editor agent attempting a destructive `delete`,
@@ -1936,7 +1890,7 @@ async function evaluatePermission(
         }
         logger.warn(
           {
-            userId: effectiveUserId,
+            userId,
             workspaceId,
             requiredPermission,
             reason: result.reason,
@@ -3814,32 +3768,6 @@ function fieldSlugList(fields: unknown[]): string {
   return ` ${listed}${more}`;
 }
 
-/**
- * The `proposalType` a WORKSPACE-JOIN gate carries. `maybeCreateWorkspaceJoinProposal`
- * is the only producer; every governed write door can receive it, because the gate
- * fires for ANY agent write into a workspace the agent is not yet a member of.
- */
-export const JOIN_GATE_PROPOSAL_TYPE = "join";
-
-/**
- * Summary for a proposed response that turned out to be a JOIN gate. Doors that
- * SYNTHESIZE a summary from (subjectType, action) must use this instead — the
- * synthesized "Update entity …" narrates a write that was never proposed.
- */
-export const JOIN_GATE_SUMMARY =
-  "Workspace access required — a workspace JOIN request is pending review";
-
-/**
- * The words for a join gate that KEPT the write (`perm.deferred`). "Proposed is
- * success" holds: approving the join replays the write as the agent, through
- * the normal ladder — it may then apply, or ask for its own review.
- */
-export const JOIN_GATE_DEFERRED_MESSAGE =
-  "Workspace access was required, so a workspace JOIN request was filed for " +
-  "review, and this write was kept on it. When the join is approved, the write " +
-  "is replayed for you (it then applies, or asks for its own review) — do not " +
-  "resend it, and do not retry it into a different workspace.";
-
 // The held-writes pack's identity lives in a leaf module so a reader of it
 // (`session-content-redaction.ts`) does not import this whole gate.
 export {
@@ -3862,43 +3790,17 @@ export const HELD_WRITE_MESSAGE =
   "of today's in ONE review for the person. Each write they keep is replayed " +
   "for you when they approve — do not resend it.";
 
-/** True when a proposed-branch result is a workspace-JOIN gate, not the requested write. */
-export function isJoinGate(proposalType: string | undefined | null): boolean {
-  return proposalType === JOIN_GATE_PROPOSAL_TYPE;
-}
-
 /**
- * The `message` a governed door returns on its proposed branch.
- *
- * WHY THIS EXISTS: the join gate DEGRADES the write — it files a
- * `workspace.join` proposal INSTEAD of the content proposal the caller asked
- * for. A door that hardcodes "<X> proposed for review" then narrates a write
- * that was never proposed, and the agent reading it builds a wrong theory of
- * what is pending. `proposalType` is the discriminator that already rides the
- * result; this derives the prose FROM it instead of ignoring it.
- *
- * Same family as the "PHANTOM ENVELOPE ID FIX" in `entities/create.ts`: on a
- * join gate, also OMIT any pre-allocated id (`proposedEntityId` and friends) —
- * an id that can never resolve is worse than an absent field.
- *
- * `deferred` is the gate's `perm.deferred`: the write was KEPT on the join and
- * is replayed as the agent once the join is approved, so it must not be resent.
+ * The `message` a governed door returns on its proposed branch: a write held
+ * on today's pack says so, any other proposal says what was proposed.
  */
 export function proposedMessageFor(
   proposalType: string | undefined | null,
-  contentMessage: string,
-  deferred?: boolean
+  contentMessage: string
 ): string {
-  if (proposalType === HELD_WRITES_PROPOSAL_TYPE) return HELD_WRITE_MESSAGE;
-  if (!isJoinGate(proposalType)) return contentMessage;
-  if (deferred) return JOIN_GATE_DEFERRED_MESSAGE;
-  return (
-    "Workspace access was required, so a workspace JOIN request was filed for " +
-    "review INSTEAD of the requested write — nothing about the write itself is " +
-    "pending yet, and no id was allocated for it. Approve the join, then retry " +
-    "the write. If you cannot wait for approval, ASK THE USER where this should " +
-    "go — do not retry into a different workspace hoping it lands."
-  );
+  return proposalType === HELD_WRITES_PROPOSAL_TYPE
+    ? HELD_WRITE_MESSAGE
+    : contentMessage;
 }
 
 /**
@@ -5057,155 +4959,48 @@ async function createProposal(args: {
 export const WORKSPACE_MEMBERSHIP_MISS =
   "User is not a member of this workspace";
 
+/** An agent's write in a space its person is not a member of. */
+export const AGENT_PERSON_NOT_MEMBER =
+  "The person you act for is not a member of this space. An agent works only " +
+  "where its person is a member: an owner of the space can add them. Nothing was written.";
+
 /**
- * THE membership check of the gate (rung 4): may the actor (the agent when
- * there is one, else the person) do `requiredPermission` in `workspaceId`?
- * A started track admits its agent into the track's step spaces, scoped to
- * that track's sessions (DECISION 2a, `services/tracks/track-space-grant.ts`):
- * only a membership MISS by an agent is asked, and an admitted one is allowed.
- *
- * Shared by `checkPermissionOrPropose` and `parkWriteOnWorkspaceJoin`, so a
- * door that checks membership BEFORE it writes reads the same answer the gate
- * gives at each write.
+ * THE membership check of the gate (rung 4): may `userId` (the person, never
+ * the agent acting for them) do `requiredPermission` in `workspaceId`? Shared
+ * with the doors that check membership BEFORE they write, so they read the
+ * same answer the gate gives at each write.
  */
 async function verifyWorkspaceAccess(opts: {
   userId: string;
-  agentUserId?: string;
   workspaceId: string;
   requiredPermission: ReturnType<typeof requiredPermissionFor>;
-  subjectType: string;
-  action: string;
-  data?: Record<string, unknown>;
-  sessionId?: string;
 }) {
   const { verifyPermission } = await import("@synap/database");
-  const result = await verifyPermission({
+  return verifyPermission({
     db,
-    userId: opts.agentUserId || opts.userId,
+    userId: opts.userId,
     workspace: { id: opts.workspaceId },
     requiredPermission: opts.requiredPermission,
   });
-  if (
-    !result.allowed &&
-    result.reason === WORKSPACE_MEMBERSHIP_MISS &&
-    opts.agentUserId &&
-    (await (
-      await import("../services/tracks/track-space-grant.js")
-    ).admittedByTrackSpaceGrant(db, {
-      userId: opts.userId,
-      agentUserId: opts.agentUserId,
-      workspaceId: opts.workspaceId,
-      requiredPermission: opts.requiredPermission,
-      subjectType: opts.subjectType,
-      action: opts.action,
-      data: opts.data,
-      sessionId: opts.sessionId,
-    }))
-  ) {
-    result.allowed = true;
-  }
-  return result;
 }
 
 /**
- * Would the gate's membership check admit this write in `workspaceId`? The
- * same check (`verifyWorkspaceAccess`, track-space grant included), asked
+ * Would the gate's membership check admit this write in `workspaceId`? Asked
  * before a door picks a space: the session space ladder
  * (`resolveSessionWorkspacePlacement`) places a start only where this says
  * yes, so the ladder and the gate cannot disagree.
  */
 export async function gateAdmitsWorkspace(opts: {
   userId: string;
-  agentUserId?: string;
   workspaceId: string;
-  subjectType: string;
   action: string;
-  data?: Record<string, unknown>;
 }): Promise<boolean> {
   const result = await verifyWorkspaceAccess({
-    ...opts,
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
     requiredPermission: requiredPermissionFor(opts.action),
   });
   return result.allowed;
-}
-
-/**
- * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
- * written (finding 590ca76a). A door whose one call makes several writes (a
- * capture graph) cannot let the gate decide at each write: the first write
- * into a space the agent has not joined is kept on the join, the door then
- * stops, and the steps before and after are lost or orphaned. So the door
- * asks here first, for every space the write lands in. When the agent misses
- * membership of one, the whole write is kept on that space's join as ONE
- * deferred write (`subjectType/action` must be a replayable pair), the same
- * join and the same replay every other door uses, and nothing is written.
- *
- * Returns null when there is nothing to park: no agent, every space admits
- * it, or the actor is not an agent user row (the door's own gate then denies,
- * as it always did). Otherwise the gate's own answer: the join's proposed
- * envelope (`deferred: true` when the write was kept), or a refusal (an
- * archived space, the join's cap).
- */
-export async function parkWriteOnWorkspaceJoin(opts: {
-  userId: string;
-  agentUserId: string | null | undefined;
-  /** Every space the write lands in (null = pod-wide, never a join). */
-  workspaceIds: ReadonlyArray<string | null | undefined>;
-  /** The permission the write needs in each space (its steps' action). */
-  permissionAction: string;
-  /** The replayable pair the whole write is kept under. */
-  subjectType: string;
-  action: string;
-  /** What the replay door rebuilds the write from. */
-  data: Record<string, unknown>;
-  sessionId?: string;
-  projectId?: string | null;
-  sourceMessageId?: string;
-  threadId?: string;
-  reasoning?: string;
-}): Promise<PermissionResult | null> {
-  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
-  if (!agentUserId) return null;
-  const requiredPermission = requiredPermissionFor(opts.permissionAction);
-  const spaces = [
-    ...new Set(
-      opts.workspaceIds.filter((w): w is string => typeof w === "string")
-    ),
-  ];
-  for (const workspaceId of spaces) {
-    const access = await verifyWorkspaceAccess({
-      userId: opts.userId,
-      agentUserId,
-      workspaceId,
-      requiredPermission,
-      subjectType: opts.subjectType,
-      action: opts.action,
-      data: opts.data,
-      sessionId: opts.sessionId,
-    });
-    if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) continue;
-    const join = await maybeCreateWorkspaceJoinProposal({
-      agentUserId,
-      requesterUserId: opts.userId,
-      workspaceId,
-      sessionId: opts.sessionId,
-      sourceMessageId: opts.sourceMessageId,
-      threadId: opts.threadId,
-      requestedSubjectType: opts.subjectType,
-      requestedAction: opts.action,
-      requestedData: opts.data,
-      requestedProjectId: opts.projectId,
-      requestedReasoning: opts.reasoning,
-    });
-    // Never the dry-run sentinel: this call is not a dry run.
-    return join && !("__dryRunPropose" in join) ? join : null;
-  }
-  return null;
-}
-
-/** Why an agent cannot join (or write in) an archived space. */
-function archivedSpaceRefusal(name: string): string {
-  return `The space "${name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`;
 }
 
 /** What {@link requestWorkspaceJoin} answers. */
@@ -5213,90 +5008,28 @@ export type WorkspaceJoinRequestResult =
   | {
       status: "member";
       workspaceId: string;
-      /** The actor's role in the space, when one is recorded. */
+      /** The person's role in the space. */
       role: string | null;
       /** Set when the role does not cover writing: writes are proposed. */
       note?: string;
     }
-  | {
-      status: "proposed";
-      workspaceId: string;
-      proposalId: string;
-      summary: string;
-      reviewUrl: string;
-      message: string;
-    }
   | { status: "refused"; workspaceId: string; reason: string };
 
 /**
- * Why a key pinned to projects or records does not ask to join a space: it
- * covers no space whole, but a write of one of its rows there still files the
- * join (the gate's membership-miss branch), so it is told that, never that it
- * cannot write there.
- */
-const PINNED_JOIN_REFUSAL =
-  "This key is limited to projects or records, not to this whole space, so it " +
-  "cannot ask to join the space on its own. Writing one of its records in this " +
-  "space files the join request for the person, with that write. Nothing was filed.";
-
-/**
- * A scope pinned to named projects or records, holding more than reads, whose
- * rows may sit in `workspaceId`: pinned with no space, or inside that space.
- */
-function pinnedRowsMaySitIn(
-  scope: Parameters<typeof spacesOfScopeRows>[0],
-  workspaceId: string
-): boolean {
-  if (!scope.projectIds?.length && !scope.entityIds?.length) return false;
-  if (!scope.permissions.some((p) => !p.endsWith(".read"))) return false;
-  const rows = spacesOfScopeRows(scope);
-  return (
-    rows !== null &&
-    rows !== "anywhere" &&
-    (rows.length === 0 || rows.includes(workspaceId))
-  );
-}
-
-/** Said with a filed (or reused) join request. */
-const WORKSPACE_JOIN_REQUESTED_MESSAGE =
-  "A workspace JOIN request is pending the person's review (a pending one for " +
-  "this space is reused, never doubled). Until it is approved, a write into " +
-  "this space is kept on the join and replayed for you on approval: do not " +
-  "resend it, and do not retry it into another space.";
-
-/**
- * ASK, on purpose, for the workspace JOIN the gate would otherwise file on an
- * agent's first write into a space it is not a member of (ticket 4790c862).
- * The SAME join: the gate's own membership check (`verifyWorkspaceAccess`)
- * and its only producer (`maybeCreateWorkspaceJoinProposal`: agent rows only,
- * an archived space refused, a pending join reused), so a write made after
- * this request is kept on that join and replayed with the rest.
- *
- * Refused before anything is filed when no scope of the key's grant covers
- * the WHOLE space beyond pod-wide reads (`spacesCoveredWhole`). A scope of
- * other spaces, or of pod-wide reads only, would be denied every write there
- * by the gate's rung 0, so a join would put a card in front of the person
- * that changes nothing. A scope pinned to projects or objects covers no
- * space whole (decision 51ad8d1e F3), so it does not ask for one on its own;
- * its rows may still sit in the space, and a write of one of them there
- * meets the gate's membership-miss branch, which files the join WITH that
- * write. The refusal says so (`pinnedJoinRefusal`), never that the key
- * cannot write there.
- * An archived space is refused, a member's included: no agent writes there.
+ * May this caller work in `workspaceId`? An agent never joins a space: it
+ * works where its person is a member, within its key's grant. Answers the
+ * person's membership, or why not (the grant does not cover the space whole,
+ * no such space, an archived space, the person is not a member).
  */
 export async function requestWorkspaceJoin(opts: {
   userId: string;
-  agentUserId?: string | null;
   workspaceId: string;
-  sessionId?: string;
 }): Promise<WorkspaceJoinRequestResult> {
   const { workspaceId } = opts;
   const grant = getRequestGrant();
   if (
     grant &&
     !grant.scopes.some((scope) => {
-      // A join is a membership of the WHOLE space: only a scope that covers
-      // it whole counts, never one pinned to projects or objects.
       const spaces = spacesCoveredWhole(scope);
       return (
         spaces === "anywhere" ||
@@ -5307,11 +5040,8 @@ export async function requestWorkspaceJoin(opts: {
     return {
       status: "refused",
       workspaceId,
-      reason: grant.scopes.some((scope) =>
-        pinnedRowsMaySitIn(scope, workspaceId)
-      )
-        ? PINNED_JOIN_REFUSAL
-        : "This key's grant does not reach this space, so joining it would not let you write there. The person can add the space to this key's permissions, or give you a key that has it. Nothing was filed.",
+      reason:
+        "This key's grant does not reach this whole space. The person can add the space to this key's permissions, or give you a key that has it.",
     };
   }
   const [ws] = await db
@@ -5330,266 +5060,27 @@ export async function requestWorkspaceJoin(opts: {
     return {
       status: "refused",
       workspaceId,
-      reason: archivedSpaceRefusal(ws.name),
+      reason: `The space "${ws.name}" is archived, so an agent cannot write there. A person must do this, or restore the space first.`,
     };
   }
-  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
   const access = await verifyWorkspaceAccess({
     userId: opts.userId,
-    agentUserId,
     workspaceId,
     requiredPermission: requiredPermissionFor("create"),
-    subjectType: "workspace",
-    action: "join",
-    sessionId: opts.sessionId,
   });
-  if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) {
-    return {
-      status: "member",
-      workspaceId,
-      role: access.role ?? null,
-      ...(access.allowed
-        ? {}
-        : {
-            note: `${access.reason}: a write beyond this role is proposed for the person's review.`,
-          }),
-    };
-  }
-  const join = agentUserId
-    ? await maybeCreateWorkspaceJoinProposal({
-        agentUserId,
-        requesterUserId: opts.userId,
-        workspaceId,
-        sessionId: opts.sessionId,
-      })
-    : null;
-  if (!join) {
-    return {
-      status: "refused",
-      workspaceId,
-      reason:
-        "Only an agent asks to join a space; a person is added by an owner of the space.",
-    };
-  }
-  if ("denied" in join && join.denied) {
-    return { status: "refused", workspaceId, reason: join.reason };
-  }
-  // Not filed (this call is never a dry run, so never the dry-run sentinel).
-  if (!("proposalId" in join)) {
-    return {
-      status: "refused",
-      workspaceId,
-      reason: "The join request could not be filed.",
-    };
+  if (access.reason === WORKSPACE_MEMBERSHIP_MISS) {
+    return { status: "refused", workspaceId, reason: AGENT_PERSON_NOT_MEMBER };
   }
   return {
-    status: "proposed",
+    status: "member",
     workspaceId,
-    proposalId: join.proposalId,
-    summary: join.summary,
-    reviewUrl: join.reviewUrl,
-    message: WORKSPACE_JOIN_REQUESTED_MESSAGE,
+    role: access.role ?? null,
+    ...(access.allowed
+      ? {}
+      : {
+          note: `${access.reason}: a write beyond this role is proposed for the person's review.`,
+        }),
   };
-}
-
-/**
- * Workspace-join proposal: an agent actor that is not yet a member of the
- * workspace files this instead of being hard-denied. On approval the
- * `workspace/join` executor inserts the workspace_members row and replays the
- * deferred writes (`services/governance/deferred-writes.ts`).
- *
- * Returns the standard proposed envelope, or `null` when the actor is NOT an
- * agent user row (so the caller falls through to a hard deny). DEDUPE: if a
- * pending `workspace.join` proposal already exists for (agentUserId,
- * workspaceId), its id is returned rather than creating a second one.
- *
- * DEFERRED WRITES (#6): a write whose pair is replayable
- * (`REPLAYABLE_DEFERRED_PAIRS`) is KEPT on the join's `data.deferredWrites` —
- * on the create path AND on the dedupe path, so every write the agent makes
- * while the join is pending is kept, not only the first. Capped at
- * `DEFERRED_WRITES_MAX`; the next one is refused in words. A resend of the
- * same write (same fingerprint) returns the kept ref instead of queueing it
- * twice. Any other pair is not kept: the agent retries it after approval.
- */
-async function maybeCreateWorkspaceJoinProposal(opts: {
-  /**
-   * Decision-only mode: resolve the SAME verdict (is this actor an agent that
-   * would file a join proposal?) and return the dry-run sentinel instead of
-   * creating anything. The agent-user confirmation above the short-circuit is a
-   * READ and still runs, so the non-agent → `null` → hard-deny fallthrough is
-   * preserved verbatim.
-   */
-  dryRun?: boolean;
-  agentUserId: string;
-  requesterUserId: string;
-  workspaceId: string;
-  correlationId?: string;
-  threadId?: string;
-  commandRunId?: string;
-  sourceMessageId?: string;
-  sessionId?: string;
-  /** The original subjectType the agent wanted to act on (e.g. "focus_session"). */
-  requestedSubjectType?: string;
-  /** The original action (e.g. "create"). */
-  requestedAction?: string;
-  /** The original data payload (e.g. { goal, templateId } for sessions). */
-  requestedData?: Record<string, unknown>;
-  /** Gate provenance the replay hands back to the write's door. */
-  requestedProjectId?: string | null;
-  requestedReasoning?: string;
-  requestedExpectedLabel?: string;
-}): Promise<PermissionResult | DryRunPropose | null> {
-  const {
-    dryRun,
-    agentUserId,
-    requesterUserId,
-    workspaceId,
-    correlationId,
-    threadId,
-    commandRunId,
-    sourceMessageId,
-    sessionId,
-    requestedSubjectType,
-    requestedAction,
-    requestedData,
-  } = opts;
-
-  // Defence-in-depth: confirm the actor really is an agent user row before
-  // minting a join proposal on its behalf.
-  const [agentUser] = await db
-    .select({ userType: users.userType, name: users.name })
-    .from(users)
-    .where(eq(users.id, agentUserId))
-    .limit(1);
-  if (agentUser?.userType !== "agent") return null;
-
-  const [ws] = await db
-    .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
-    .from(workspaces)
-    .where(eq(workspaces.id, workspaceId))
-    .limit(1);
-  // An archived space takes no new member: a join filed there could only be
-  // approved into a retired space (ticket 86b6faae). Refused in words, in
-  // dry-run too, since it is the verdict.
-  if (ws?.archivedAt) {
-    return { denied: true, reason: archivedSpaceRefusal(ws.name) };
-  }
-
-  // Verdict resolved (agent → join proposal). In dry-run stop here: everything
-  // below either reads to build the card or WRITES the proposal.
-  if (dryRun) return DRY_RUN_PROPOSE;
-
-  const role = "editor";
-  const agentName = agentUser.name ?? "Agent";
-  const workspaceName = ws?.name ?? workspaceId;
-  // Enrich the summary when we know WHAT the agent wanted to do — a join
-  // proposal for a session carries the goal so the reviewer sees the full
-  // picture before approving workspace access.
-  const summary =
-    requestedSubjectType === "focus_session" && requestedData?.goal
-      ? `Agent ${agentName} wants to create a session in ${workspaceName}: "${String(requestedData.goal)}"`
-      : `Agent ${agentName} requests to join workspace ${workspaceName} as ${role}`;
-  const reasoning =
-    requestedSubjectType === "focus_session"
-      ? `The agent needs workspace access to create a focus session (${requestedAction}). Once joined, it will start working on: ${String(requestedData?.goal ?? "an unspecified goal")}.`
-      : summary;
-
-  // The write to keep, when its pair can be replayed.
-  const deferredWrite: DeferredWrite | null =
-    requestedSubjectType &&
-    requestedAction &&
-    requestedData &&
-    replayableDeferredPair(requestedSubjectType, requestedAction)
-      ? buildDeferredWrite({
-          subjectType: requestedSubjectType,
-          action: requestedAction,
-          data: requestedData,
-          workspaceId,
-          agentUserId,
-          userId: requesterUserId,
-          sessionId: sessionId ?? null,
-          projectId: opts.requestedProjectId,
-          reasoning: opts.requestedReasoning,
-          expectedLabel: opts.requestedExpectedLabel,
-          sourceMessageId,
-        })
-      : null;
-
-  const proposedEnvelope = (
-    proposalId: string,
-    kept?: { ref: string; deduped?: boolean }
-  ): PermissionResult => ({
-    granted: false,
-    proposalId,
-    proposalType: "join",
-    summary,
-    reasoning: kept ? JOIN_GATE_DEFERRED_MESSAGE : reasoning,
-    reviewPath: openPath(proposalId),
-    reviewUrl: openLink(proposalId),
-    ...(kept?.deduped ? { deduped: true } : {}),
-    ...(kept ? { deferred: true as const, deferredRef: kept.ref } : {}),
-  });
-
-  // DEDUPE: return an existing pending join proposal for this (agent, workspace)
-  // rather than stacking duplicates each time the agent retries the write.
-  const [existing] = await db
-    .select({ id: proposals.id })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.workspaceId, workspaceId),
-        eq(proposals.targetType, "workspace"),
-        eq(proposals.proposalType, "join"),
-        eq(proposals.agentUserId, agentUserId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    )
-    .limit(1);
-
-  if (existing) {
-    if (!deferredWrite) return proposedEnvelope(existing.id);
-    const kept = await appendDeferredWrite(existing.id, deferredWrite);
-    if ("refused" in kept) return { denied: true, reason: kept.refused };
-    return proposedEnvelope(existing.id, kept);
-  }
-
-  const { createEventBackedProposal } =
-    await import("./event-backed-proposal.js");
-  const { proposal: row } = await createEventBackedProposal({
-    userId: requesterUserId,
-    workspaceId,
-    targetType: "workspace",
-    targetId: workspaceId,
-    proposalType: "join",
-    action: "join",
-    source: "intelligence",
-    summary,
-    agentUserId,
-    createdBy: agentUserId,
-    threadId: threadId ?? null,
-    commandRunId: commandRunId ?? null,
-    sourceMessageId: sourceMessageId ?? null,
-    sessionId: sessionId ?? null,
-    data: {
-      role,
-      agentUserId,
-      requestedBy: "ai",
-      // Surface WHAT the agent wanted to do so the proposal card renders
-      // rich context (session goal, expected outputs, etc.) instead of a
-      // generic "join workspace" card.
-      ...(requestedSubjectType ? { requestedSubjectType } : {}),
-      ...(requestedAction ? { requestedAction } : {}),
-      ...(requestedData ? { requestedData } : {}),
-      ...(deferredWrite ? { deferredWrites: [deferredWrite] } : {}),
-      source: "agent",
-      ...(correlationId ? { correlationId } : {}),
-    },
-  });
-
-  return proposedEnvelope(
-    row.id,
-    deferredWrite ? { ref: deferredWrite.ref } : undefined
-  );
 }
 
 /** The deferred-write record for one blocked write (pure but for the grant read). */
@@ -5644,7 +5135,7 @@ function buildDeferredWrite(w: {
 }
 
 /**
- * Keep `write` on the pending join (or held-writes pack) `proposalId`. ONE
+ * Keep `write` on the pending held-writes pack `proposalId`. ONE
  * statement appends it, so concurrent writes all land, and the WHERE holds the
  * three rules: still pending, under the cap, not already kept (same
  * fingerprint). When nothing was written the row is re-read to say which rule
@@ -5652,12 +5143,11 @@ function buildDeferredWrite(w: {
  */
 async function appendDeferredWrite(
   proposalId: string,
-  write: DeferredWrite,
-  holder: "join" | "held" = "join"
+  write: DeferredWrite
 ): Promise<
   { ref: string; deduped?: boolean } | { refused: string; decided?: true }
 > {
-  const max = holder === "held" ? HELD_WRITES_MAX : DEFERRED_WRITES_MAX;
+  const max = HELD_WRITES_MAX;
   const appended = await db
     .update(proposals)
     .set({
@@ -5688,19 +5178,15 @@ async function appendDeferredWrite(
   if (row?.status === ProposalStatus.PENDING) {
     return {
       refused:
-        holder === "held"
-          ? `Today's held writes already number ${kept.length} (the limit ` +
-            `is ${max}). Nothing was kept for this one: stop writing until ` +
-            "the person reviews them, or until the next UTC day."
-          : `This workspace's join request already holds ${kept.length} writes ` +
-            `waiting for approval (the limit is ${max}). Nothing ` +
-            "was kept for this one: wait until the join is approved, then send it again.",
+        `Today's held writes already number ${kept.length} (the limit ` +
+        `is ${max}). Nothing was kept for this one: stop writing until ` +
+        "the person reviews them, or until the next UTC day.",
     };
   }
   return {
     refused:
-      "The workspace join request was decided while this write was being " +
-      "kept, so it was not kept. Send the write again.",
+      "Today's held writes were decided while this write was being kept, " +
+      "so it was not kept. Send the write again.",
     decided: true,
   };
 }
@@ -5753,7 +5239,7 @@ async function joinTodaysHeldWrites(
     )
     .limit(1);
   if (!pack) return null;
-  const kept = await appendDeferredWrite(pack.id, write, "held");
+  const kept = await appendDeferredWrite(pack.id, write);
   if ("refused" in kept) {
     return kept.decided ? null : { denied: true, reason: kept.refused };
   }

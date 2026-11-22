@@ -18,7 +18,7 @@
  * Intelligence Service personas, a `podWide` key) is accountable to the person
  * who installed it but acts for nobody in particular.
  */
-import { and, asc, eq, inArray, isNull, ne } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { apiKeys, podMembers, users } from "../schema/index.js";
 
 type OwnerRow = {
@@ -56,6 +56,25 @@ export async function personOfOwner(
     .limit(1)) as OwnerRow[];
   if (!owner) return undefined;
   return personOfRow(owner);
+}
+
+/**
+ * Whose space and project memberships `userId` holds, as a one-row subquery:
+ * a person holds their own; an agent is never a member and holds its person's
+ * ({@link personOfRow}), none when nobody owns it. A request made with a key
+ * linked to a person already arrives as that person.
+ */
+export function membershipHolderIds(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
+  database: any,
+  userId: string
+) {
+  return database
+    .select({
+      id: sql`CASE WHEN ${users.userType} = 'agent' THEN ${users.createdByUserId} ELSE ${users.id} END`,
+    })
+    .from(users)
+    .where(eq(users.id, userId));
 }
 
 export interface OwnerAndActor {
