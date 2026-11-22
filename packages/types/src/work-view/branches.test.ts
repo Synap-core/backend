@@ -20,6 +20,10 @@ const graph: BranchGraph = {
     { kind: "spawned_from", from: "lane-b", to: "wave" },
     { kind: "spawned_from", from: "fix", to: "lane-a" },
     { kind: "blocked_by", from: "lane-b", to: "lane-a" },
+    // A wait on a decision and on a goal (B4): not a job, never a mark.
+    { kind: "blocked_by", from: "lane-b", to: "decision-1", toKind: "entity" },
+    { kind: "blocked_by", from: "lane-b", to: "goal-1", toKind: "track" },
+    { kind: "serves", from: "lane-b", to: "goal-1", toKind: "track" },
     { kind: "updated", from: "other", to: "wave" },
     { kind: "triggered", from: "wave", to: "other" },
   ],
