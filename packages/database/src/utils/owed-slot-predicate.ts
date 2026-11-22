@@ -32,7 +32,10 @@
 
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import {
+  PLANNED_SESSION_STATUS,
+  UNDERWAY_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
 import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
@@ -90,9 +93,21 @@ export function owedSlotExistsIn(expectedOutputs: AnyPgColumn | SQL): SQL {
   )`;
 }
 
+/**
+ * SQL: the session behind `status` has STARTED owing: it is not a PLANNED
+ * step (`forming`, founder P2, 21 Nov 2026). A step that has not started
+ * owes nothing yet, whatever slots it declares; they become owed when it
+ * wakes. THE session clause of the owed predicate: its TypeScript twin is
+ * `projectOwedSlots` (api) and the needs-you rule's (`classifyOwedAsk`),
+ * held to it by `owed-slot-predicate.parity.pglite.test.ts`.
+ */
+export function sessionOwesWhere(status: AnyPgColumn | SQL): SQL {
+  return drizzleSql`${status} IS DISTINCT FROM ${PLANNED_SESSION_STATUS}`;
+}
+
 /** SQL: this `focus_sessions` row owes the person at least one slot. */
 export function owedSlotWhere(): SQL {
-  return owedSlotExistsIn(focusSessions.expectedOutputs);
+  return drizzleSql`(${sessionOwesWhere(focusSessions.status)} AND ${owedSlotExistsIn(focusSessions.expectedOutputs)})`;
 }
 
 /**

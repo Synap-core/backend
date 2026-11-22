@@ -219,6 +219,11 @@ describe("the work graph for a key narrowed by its grant (a pod app, D1)", () =>
     expect(g.sections.interactions).toEqual(withheld);
     expect(g.sections.pullRequests).toEqual(withheld);
     expect(g.sections.goals).toEqual(withheld);
+    // The pathway parts (B4) read entities and goals: withheld too.
+    for (const k of ["crossKind", "serves", "decisions", "entities"] as const)
+      expect(g.sections[k]).toEqual(withheld);
+    expect(g.decisions).toEqual([]);
+    expect(g.entities).toEqual([]);
     expect(g.sections.blockedBy).toEqual({ status: "ok" });
     for (const n of g.nodes) {
       expect(n.nextMove).toMatchObject({ kind: "unknown", actor: "none" });

@@ -44763,14 +44763,21 @@
                               "orchestrated_by",
                               "waits_on_output",
                               "triggered",
-                              "updated"
+                              "updated",
+                              "serves"
                             ]
                           },
                           "from": { "type": "string" },
                           "to": { "type": "string" },
+                          "fromKind": { "type": "string", "enum": ["track"] },
+                          "toKind": {
+                            "type": "string",
+                            "enum": ["entity", "track"]
+                          },
                           "entityId": { "type": "string" },
                           "count": { "type": "number" },
-                          "lastAt": { "type": ["string", "null"] }
+                          "lastAt": { "type": ["string", "null"] },
+                          "criterionKey": { "type": "string" }
                         },
                         "required": ["kind", "from", "to"]
                       }
@@ -44866,6 +44873,78 @@
                         ]
                       }
                     },
+                    "decisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "title": { "type": ["string", "null"] },
+                          "status": { "type": ["string", "null"] },
+                          "category": { "type": ["string", "null"] },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": { "type": "string" },
+                                "label": { "type": "string" },
+                                "description": { "type": ["string", "null"] },
+                                "recommended": { "type": "boolean" },
+                                "chosen": { "type": "boolean" }
+                              },
+                              "required": [
+                                "key",
+                                "label",
+                                "description",
+                                "recommended",
+                                "chosen"
+                              ]
+                            }
+                          },
+                          "recommendedOption": { "type": ["string", "null"] },
+                          "chosenOption": { "type": ["string", "null"] },
+                          "answer": {
+                            "type": "string",
+                            "enum": ["answered", "asked", "not_asked"]
+                          },
+                          "askSessionId": { "type": ["string", "null"] },
+                          "sourceSessionId": { "type": ["string", "null"] }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "status",
+                          "category",
+                          "options",
+                          "recommendedOption",
+                          "chosenOption",
+                          "answer",
+                          "askSessionId",
+                          "sourceSessionId"
+                        ]
+                      }
+                    },
+                    "entities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "title": { "type": ["string", "null"] },
+                          "kind": { "type": "string" },
+                          "status": { "type": ["string", "null"] },
+                          "category": { "type": ["string", "null"] }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "kind",
+                          "status",
+                          "category"
+                        ]
+                      }
+                    },
                     "sections": {
                       "type": "object",
                       "properties": {
@@ -44956,6 +45035,50 @@
                             "reason": { "type": "string" }
                           },
                           "required": ["status"]
+                        },
+                        "crossKind": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "serves": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "decisions": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "entities": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
                         }
                       },
                       "required": [
@@ -44966,7 +45089,11 @@
                         "farEnds",
                         "pullRequests",
                         "holds",
-                        "goals"
+                        "goals",
+                        "crossKind",
+                        "serves",
+                        "decisions",
+                        "entities"
                       ]
                     },
                     "window": {
@@ -44974,6 +45101,7 @@
                       "properties": {
                         "since": { "type": "string" },
                         "hours": { "type": "number" },
+                        "allSettled": { "type": "boolean" },
                         "ceiling": { "type": "number" },
                         "truncated": { "type": "boolean" },
                         "omitted": { "type": "number" },
@@ -44982,6 +45110,7 @@
                       "required": [
                         "since",
                         "hours",
+                        "allSettled",
                         "ceiling",
                         "truncated",
                         "omitted",
@@ -44995,6 +45124,8 @@
                     "pullRequests",
                     "holds",
                     "goals",
+                    "decisions",
+                    "entities",
                     "sections",
                     "window"
                   ]

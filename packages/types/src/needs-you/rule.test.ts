@@ -177,17 +177,35 @@ describe("stopped: the agent's question on work no agent moved for 7 days, or th
     for (const status of ["closed", "failed", "cancelled"]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("stopped");
     }
-    // S4: forming and scheduled have not ended (nor has an unknown status).
-    for (const status of [
-      "active",
-      "paused",
-      "stale",
-      "forming",
-      "scheduled",
-      "weird",
-    ]) {
+    // S4: scheduled has not ended (nor has an unknown status).
+    for (const status of ["active", "paused", "stale", "scheduled", "weird"]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("needs_you");
     }
+  });
+
+  it("P2: a PLANNED step (forming) owes nothing yet: in no list, not a fold", () => {
+    // Rules out "planned = a quiet fold" (Review later, From the system): a
+    // step a year away is not asked yet, whatever its slot is.
+    const planned = { ...live, status: "forming" };
+    expect(classifyOwedAsk(ask, planned, NOW)).toBeNull();
+    expect(
+      classifyOwedAsk(
+        { ...ask, askedBy: undefined, askCause: { kind: "gate" } },
+        planned,
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      classifyOwedAsk(
+        { ...ask, askedBy: undefined, askCause: { kind: "decision" } },
+        planned,
+        NOW
+      )
+    ).toBeNull();
+    // The same ask the moment the step starts.
+    expect(classifyOwedAsk(ask, { ...planned, status: "active" }, NOW)).toBe(
+      "needs_you"
+    );
   });
 
   // M4: closing keeps a person deliverable owed, and "Resume or close" can
