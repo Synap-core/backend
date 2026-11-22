@@ -55,7 +55,7 @@ import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { readUsageForCaller } from "../usage/read-usage.js";
 import { TRPCError } from "@trpc/server";
@@ -498,7 +498,12 @@ async function diagnoseObject(
           workspaceId: skills.workspaceId,
         })
         .from(skills)
-        .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
+        .where(
+          and(
+            eq(skills.id, id),
+            visibleSkillsWhere(userId, undefined, { allSpaces: true })
+          )
+        )
         .limit(1);
       if (skillRow) {
         return {

@@ -12,6 +12,7 @@ import {
   OWN_ORGANISE_CLASS_PATTERN,
   POD_DEFAULT_WORDS,
   REVERSIBLE_CLASS_PATTERN,
+  describeWritePattern,
   governanceRuleTitle,
   humanizePrincipal,
   humanizeScope,
@@ -257,5 +258,30 @@ describe("letting agents run one playbook without asking (0420)", () => {
       expect(isPreApprovalHeldReason(r)).toBe(true);
     expect(isPreApprovalHeldReason("tool_missing")).toBe(false);
     expect(isPreApprovalHeldReason(3)).toBe(false);
+  });
+});
+
+describe("finding b0bb38d4: a write on every kind names its object", () => {
+  it("entity.create reads 'Create anything', never a bare 'Create'", () => {
+    expect(writePatternTitle("entity.create")).toBe("Create anything");
+    expect(ruleTitle(rule({ targetPattern: "entity.create" }))).toBe(
+      "Create anything"
+    );
+    expect(describeWritePattern("entity.delete")).toBe(
+      "Delete anything (entity.delete)"
+    );
+  });
+
+  it("a rule narrowed to one kind names the kind, not 'anything'", () => {
+    expect(
+      governanceRuleTitle(
+        rule({ targetPattern: "entity.update", targetProfile: "note" })
+      )
+    ).toBe("Update · Notes");
+  });
+
+  it("a write on one kind keeps that kind's noun", () => {
+    expect(writePatternTitle("note.create")).not.toContain("anything");
+    expect(writePatternTitle("note.create")).toMatch(/note/i);
   });
 });

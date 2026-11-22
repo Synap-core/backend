@@ -1226,7 +1226,7 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   ],
   // Writes nothing (a dry run), but a code skill runs as the PERSON
   // (`runSkill`), its reads bounded by no grant; the skill row itself is read
-  // on the person's floor (`visibleSkillsAnyWorkspaceWhere`).
+  // on the person's floor (`visibleSkillsWhere` with `allSpaces`).
   [
     route("/skills/:id/dry-run"),
     REFUSED("Runs the skill as you: what it reads is not bounded by a grant."),

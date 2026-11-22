@@ -14,7 +14,7 @@
  *    be readable by the key and already in S's reach (stored in S, or wearing
  *    a live role there). A role never pulls a record S could not see into it.
  *  - A SHARED role (row stored NULL: one row, seen in every space the role is
- *    granted to — a `profile_workspace_access` row or its home space):
+ *    granted to — a `space_access` row or its home space):
  *      · change (update, stage move): checked in ONE key space the role is
  *        granted to, where the key reads that row (#239, founder decision 1,
  *        2026-10-26; THE read predicate `sharedRoleRowsInSpacesWhere`: a
@@ -62,7 +62,7 @@ import {
   entities,
   entityFacets,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
 } from "@synap/database/schema";
 import { grantRequestKey } from "@synap/governance-policy";
 import {
@@ -318,16 +318,21 @@ function outOfReach(
 }
 
 /**
- * The spaces a role is granted to: its `profile_workspace_access` rows and
+ * The spaces a role is granted to: its `space_access` rows and
  * its home space (`profiles.workspace_id`) — the set `grantedRoleIdsForSpaces`
  * reads from the other side, sorted so the refusal is deterministic.
  */
 async function roleGrantedSpaces(profileId: string): Promise<string[]> {
   const [access, home] = await Promise.all([
     db
-      .select({ id: profileWorkspaceAccess.workspaceId })
-      .from(profileWorkspaceAccess)
-      .where(eq(profileWorkspaceAccess.profileId, profileId)),
+      .select({ id: spaceAccess.workspaceId })
+      .from(spaceAccess)
+      .where(
+        and(
+          eq(spaceAccess.objectType, "profile"),
+          eq(spaceAccess.objectId, profileId)
+        )
+      ),
     db
       .select({ id: profiles.workspaceId })
       .from(profiles)

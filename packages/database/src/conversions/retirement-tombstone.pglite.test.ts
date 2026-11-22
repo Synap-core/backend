@@ -32,7 +32,7 @@ import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import type { Sql } from "postgres";
 import * as schema from "../schema/index.js";
-import { profiles, profileWorkspaceAccess } from "../schema/profiles.js";
+import { profiles, spaceAccess } from "../schema/profiles.js";
 import { entities } from "../schema/entities.js";
 import { entityFacets } from "../schema/entity-facets.js";
 import { propertyDefs } from "../schema/property-defs.js";
@@ -226,7 +226,7 @@ beforeAll(async () => {
   pg = new PGlite();
   for (const t of [
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
     entities,
     entityFacets,
     propertyDefs,
@@ -246,7 +246,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await pg.exec(`
     DROP TABLE IF EXISTS "_conversions";
-    TRUNCATE profiles, profile_workspace_access, entities, entity_facets, property_defs, profile_properties, views;
+    TRUNCATE profiles, space_access, entities, entity_facets, property_defs, profile_properties, views;
   `);
 });
 

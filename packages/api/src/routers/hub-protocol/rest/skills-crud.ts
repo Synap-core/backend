@@ -34,7 +34,7 @@ import { skillsRouter } from "../../skills.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { buildProviderRequest } from "../../../services/capabilities/execute-provider-verb.js";
 import { runSkill } from "../../../services/skills/run-skill.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../../../services/skills/visibility.js";
+import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 
@@ -551,7 +551,8 @@ export function registerSkillsCrudRoutes(app: HubHono): void {
             eq(skills.id, id),
             // The skill must be one the acting user can see: the IS read it as
             // them (`hub.getSkill`); the pod reads it here, so the lens is here.
-            visibleSkillsAnyWorkspaceWhere(acting.userId, {
+            visibleSkillsWhere(acting.userId, undefined, {
+              allSpaces: true,
               includeExpired: true,
             })
           )

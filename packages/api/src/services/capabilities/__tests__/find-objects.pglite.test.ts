@@ -3,7 +3,7 @@
  * table the readers touch is created from the Drizzle schema, so the floors
  * are the real SQL (`userVisibleWhere`, `sessionReadableWhere`,
  * `projectVisibleWhere`, `ownerPrivateVisibleWhere`, `accessScopeWhere`,
- * `visibleSkillsAnyWorkspaceWhere`), and so is the "any term hits" filter.
+ * `visibleSkillsWhere` with `allSpaces`), and so is the "any term hits" filter.
  *
  * Pinned:
  *  - each catalog finds the reader's own row by its words, with an

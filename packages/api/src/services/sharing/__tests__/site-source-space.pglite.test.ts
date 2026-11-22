@@ -113,7 +113,7 @@ async function profileIn(
   );
   for (const ws of opts.grantedTo ?? []) {
     await world.q(
-      `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+      `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
       [id, ws]
     );
   }

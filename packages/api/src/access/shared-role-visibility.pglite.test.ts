@@ -11,7 +11,7 @@
  *
  * The rule: a pod-wide entity wearing a LIVE pod-wide facet is readable by a
  * POD MEMBER only when the facet's ROLE is granted to a space that member
- * belongs to (a `profile_workspace_access` row, or the role's own owning
+ * belongs to (a `space_access` row, or the role's own owning
  * workspace). Never by every pod member. The owner floor is unchanged, so a
  * solo pod reads exactly what it read before.
  *
@@ -192,7 +192,7 @@ beforeAll(async () => {
     [ROLE_CLIENT, ROLE_SYS, ROLE_B, WS_B]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE_CLIENT, WS_A]
   );
   for (const d of [D_CLIENT, D_SYS, D_B, D_DETACHED]) {

@@ -200,7 +200,7 @@ beforeAll(async () => {
     [PERSON_KIND, COMPANY_KIND, ROLE_LEAD, ROLE_CLIENT]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE_CLIENT, CRM]
   );
   for (const [id, kind, kindId, title, home] of [

@@ -652,6 +652,21 @@ ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "granted_at" tim
 CREATE INDEX IF NOT EXISTS "profile_workspace_access_workspace_idx"
   ON "profile_workspace_access" ("workspace_id");
 
+-- space_access (0448): an object homed in one space shared with another; it
+-- takes over from profile_workspace_access (0448 copies, mirrors and adds the
+-- delete triggers).
+CREATE TABLE IF NOT EXISTS "space_access" (
+  "object_type"  text NOT NULL,
+  "object_id"    uuid NOT NULL,
+  "workspace_id" uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "granted_by"   text,
+  "granted_at"   timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "space_access_pkey" PRIMARY KEY ("object_type", "object_id", "workspace_id")
+);
+
+CREATE INDEX IF NOT EXISTS "space_access_workspace_idx"
+  ON "space_access" ("workspace_id");
+
 -- ─── 5. relation_defs ────────────────────────────────────────────────────────
 -- Must come before property_defs (which references it)
 

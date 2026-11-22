@@ -145,12 +145,33 @@ export function describeWritePattern(pattern: string): string {
   if (pattern.slice(0, dot) === "*") {
     return `Any ${resolveActionLabel(pattern.slice(dot + 1), "imperative").toLowerCase()} (${pattern})`;
   }
+  // `entity.<action>` names no kind: it covers every kind, so its object is
+  // "anything" ("Create anything"), never the bare verb (finding b0bb38d4:
+  // an approval on `entity.create` read "Create", saying nothing).
+  const everyKind = everyKindAction(pattern);
+  if (everyKind) return `${everyKind} ${EVERY_KIND_OBJECT} (${pattern})`;
   const title = buildObjectActionTitle({
     action: pattern.slice(dot + 1),
     objectKind: pattern.slice(0, dot),
     mood: "imperative",
   });
   return title ? `${title} (${pattern})` : pattern;
+}
+
+/** The object of a write on every kind (`entity.<action>`), in words. */
+const EVERY_KIND_OBJECT = "anything";
+
+/**
+ * The verb of `entity.<action>` (a write on every kind: the generic base
+ * kind names none), imperative: "Create" for `entity.create`. null for any
+ * other pattern.
+ */
+function everyKindAction(pattern: string): string | null {
+  const dot = pattern.lastIndexOf(".");
+  if (dot <= 0 || pattern.slice(0, dot).toLowerCase() !== "entity") return null;
+  const action = pattern.slice(dot + 1);
+  if (!action || action === "*") return null;
+  return resolveActionLabel(action, "imperative") || null;
 }
 
 /** The words for a write pattern, without the pattern echoed in brackets. */
@@ -191,10 +212,15 @@ export function governanceRuleTitle(rule: {
     ? undefined
     : POD_DEFAULT_WORDS[rule.targetPattern];
   if (podDefault) return podDefault.label;
-  const title = writePatternTitle(rule.targetPattern);
-  return rule.targetProfile
-    ? `${title} · ${resolveObjectNounPlural(rule.targetProfile)}`
-    : title;
+  // A rule narrowed to one kind names that kind, so an every-kind write reads
+  // as its verb and the kind ("Update · Notes"), never "Update anything".
+  if (rule.targetProfile) {
+    const head =
+      everyKindAction(rule.targetPattern) ??
+      writePatternTitle(rule.targetPattern);
+    return `${head} · ${resolveObjectNounPlural(rule.targetProfile)}`;
+  }
+  return writePatternTitle(rule.targetPattern);
 }
 
 // ─── A rule row in words ────────────────────────────────────────────────

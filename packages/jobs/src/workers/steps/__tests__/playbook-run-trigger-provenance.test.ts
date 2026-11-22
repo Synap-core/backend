@@ -95,6 +95,10 @@ vi.mock("@synap-core/core", () => ({
   }),
 }));
 
+// The run floor is SQL; this suite stubs the database.
+vi.mock("../../entity-query-scope.js", () => ({
+  runEntityVisibilityWhere: () => undefined,
+}));
 vi.mock("@synap/database", () => ({
   // The pod-wide branch answers to the event's PERSON (decision 782c862e):
   // the event actor alone here, no person lookup consuming select results.

@@ -3131,6 +3131,8 @@ export async function updateFocusSession(
   let subjectReached: StageSubjectStatusOutcome | undefined;
   let stageRun: EnterStageResult | undefined;
   let sentBack: { toStage: string; failing: string[] } | undefined;
+  /** A stage gate ran in this call: it wrote the row after `updated`. */
+  let gateRan = false;
   if (params.currentStage !== undefined) {
     const { advanceSessionStage } = await import("./advance-stage.js");
     const advance = await advanceSessionStage({
@@ -3156,6 +3158,11 @@ export async function updateFocusSession(
     // a caller told "active" while the pod has it paused would step straight
     // past the gate it just opened.
     if (advance.paused) gatedStatus = "paused";
+    // A gate wrote the row AFTER `updated` (its pause, its `checkGate`
+    // record, an `onFail` return): the reply reads it back below, so its
+    // nudges read the gate as stored, never the previous gate's record
+    // (finding 2c63fc36: `heldByCheck.failing` listed an output already done).
+    if (advance.gated) gateRan = true;
     // The check held and its `onFail` sent the run back (active again, at
     // that stage): the row moved twice in this call, so the reply reads it
     // back below rather than echo the stage the call asked for (f9c80d6f).
@@ -3321,18 +3328,22 @@ export async function updateFocusSession(
   // than `updated` and carries the `playbookId`, the merged criteria and the
   // merged deliverables. Returning the pre-follow row would tell the caller its
   // attach did nothing.
-  const sentBackSession = sentBack
-    ? ((await db.query.focusSessions.findFirst({
-        where: eq(focusSessions.id, sessionId),
-      })) as typeof updated | undefined)
-    : undefined;
+  // A gate (or its `onFail` return) wrote the row after every write above:
+  // read it back, the latest of all (f9c80d6f, 2c63fc36).
+  const gatedSession =
+    gateRan || sentBack
+      ? ((await db.query.focusSessions.findFirst({
+          where: eq(focusSessions.id, sessionId),
+        })) as typeof updated | undefined)
+      : undefined;
   const finalSession =
-    sentBackSession ?? reboundSession ?? followedSession ?? updated;
+    gatedSession ?? reboundSession ?? followedSession ?? updated;
   return {
     status: "updated",
-    session: gatedStatus
-      ? { ...finalSession, status: gatedStatus }
-      : finalSession,
+    session:
+      gatedStatus && !gatedSession
+        ? { ...finalSession, status: gatedStatus }
+        : finalSession,
     ...(completeOutputOutcome ? { completeOutput: completeOutputOutcome } : {}),
     ...(retireOutputOutcome ? { retireOutput: retireOutputOutcome } : {}),
     ...(blockGuidelines ? { blockGuidelines } : {}),

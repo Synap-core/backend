@@ -9328,7 +9328,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name`, and for a CODE skill its `code`, `parameters`, `timeoutSeconds` and `requiredTools` — by `slug` (the ref synap_load_skill resolves) or `id`. Use it when a skill you authored goes stale or its code has a bug; never create a second skill under the same name or a new slug as a twin. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body, and any change to what a code skill runs (code, parameters, timeout, a tool added to requiredTools), leaves it UNAPPROVED until the owner approves it again — so do not report it as live: synap_list_capabilities shows it `not_enabled` with the link to hand the person.",
+      "description": "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name`, and for a CODE skill its `code`, `parameters`, `timeoutSeconds` and `requiredTools` — by `slug` or `id`. Use it when a skill goes stale or its code breaks; never create a twin under another name or slug. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body, and any change to what a code skill runs (code, parameters, timeout, a tool added to requiredTools), leaves it UNAPPROVED until the owner approves it again — do not report it as live; synap_list_capabilities shows it `not_enabled`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -9359,6 +9359,11 @@
           "category": {
             "type": "string",
             "description": "'rule' = pushed into all work in scope"
+          },
+          "agentTypes": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Agent types; null = every agent"
           },
           "code": {
             "type": "string",

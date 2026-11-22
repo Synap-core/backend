@@ -2886,6 +2886,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // A gate wrote the row after this call's write (its pause, its
+        // `checkGate` record, an `onFail` return): read it back, so the reply
+        // and its nudges read the gate as stored (finding 2c63fc36).
+        if (advance.gated) {
+          const stored = await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, updated.id),
+          });
+          if (stored) updated = stored as typeof updated;
+        }
         // What the advance did to the subject (the MCP door's `subjectMove`).
         const { reportedSubjectMove } =
           await import("../../../services/focus-sessions/stage-subject-status.js");
