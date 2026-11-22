@@ -31,6 +31,7 @@ import {
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import { ProposedKindFieldSchema } from "../profiles/proposed-kind-field.js";
 import {
   skillAuthoringProblem,
   skillSlugProblem,
@@ -40,6 +41,8 @@ import {
 export const PLAN_SESSION_GOAL_MAX = 2000;
 /** The project door's name bound (`projects.create` `name.max(255)`). */
 export const PLAN_PROJECT_NAME_MAX = 255;
+/** The kind door's slug rule (`profiles.createProfile` `slug`). */
+const PLAN_KIND_SLUG = /^[a-z0-9-]{1,100}$/;
 
 // ── Rule Loop enumerations, DERIVED from the op union ──────────────────────
 // Hand-written literal arrays are how a validator falls behind the type it
@@ -97,7 +100,9 @@ export type PlanRefKind =
   | "automation"
   | "rule"
   | "playbook"
-  | "view";
+  | "view"
+  | "track"
+  | "kind";
 
 export interface CapturePlanProblem {
   /** Index in `operations[]`. */
@@ -130,6 +135,8 @@ const OP_REF_KIND: Partial<
   create_playbook: "playbook",
   create_view: "view",
   create_cell: "cell",
+  create_track: "track",
+  define_kind: "kind",
   // An update names an EXISTING row; its ref resolves to that row's id, so
   // a relation may target a reused container (`update_entity`).
   update_skill: "skill",
@@ -463,6 +470,9 @@ export function validatePlanOperations(
           expectId(i, "subjectEntityId", op.subjectEntityId);
         if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
         if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "trackRef", op.trackRef, "trackId", op.trackId);
+        if (op.trackRef) expectRef(i, "trackRef", op.trackRef, "track");
+        if (op.trackId) expectId(i, "trackId", op.trackId);
         if (
           op.expectedOutputs !== undefined &&
           !Array.isArray(op.expectedOutputs)
@@ -518,6 +528,75 @@ export function validatePlanOperations(
         for (const id of op.evidenceEntityIds ?? [])
           expectId(i, "evidenceEntityIds", id);
         return;
+      case "create_track": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a goal step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a goal step needs a `name`");
+        notBoth(i, "projectRef", op.projectRef, "projectId", op.projectId);
+        if (!op.projectRef && !op.projectId)
+          push(
+            i,
+            "a goal lives in a project: give it `projectRef` (a project step) or `projectId`"
+          );
+        if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
+        if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "parentRef", op.parentRef, "parentGoalId", op.parentGoalId);
+        if (op.parentRef) {
+          if (op.parentRef === op.ref) push(i, "a goal cannot serve itself");
+          else expectRef(i, "parentRef", op.parentRef, "track");
+        }
+        if (op.parentGoalId) expectId(i, "parentGoalId", op.parentGoalId);
+        for (const blocker of op.blockedByRefs ?? []) {
+          if (blocker === op.ref) push(i, "a goal cannot wait on itself");
+          else expectRef(i, "blockedByRefs", blocker, "track");
+        }
+        for (const id of op.blockedByTrackIds ?? [])
+          expectId(i, "blockedByTrackIds", id);
+        if (op.criteria !== undefined && !Array.isArray(op.criteria))
+          push(i, "criteria must be an array");
+        if (
+          op.kpi !== undefined &&
+          (op.kpi === null ||
+            typeof op.kpi !== "object" ||
+            Array.isArray(op.kpi))
+        )
+          push(i, "kpi must be an object ({ label, target, unit? })");
+        return;
+      }
+      case "define_kind": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a kind step needs a `ref`");
+        if (typeof op.slug !== "string" || !PLAN_KIND_SLUG.test(op.slug))
+          push(
+            i,
+            `kind slug "${String(op.slug)}" must be lowercase letters, digits and "-"`
+          );
+        if (typeof op.displayName !== "string" || !op.displayName.trim())
+          push(i, "a kind step needs a `displayName`");
+        if (op.fields !== undefined && !Array.isArray(op.fields)) {
+          push(
+            i,
+            "fields must be an array of field defs ({ slug, valueType })"
+          );
+        } else {
+          for (const [n, field] of (op.fields ?? []).entries()) {
+            const parsed = ProposedKindFieldSchema.safeParse(field);
+            if (!parsed.success)
+              push(
+                i,
+                `fields[${n}]: ${parsed.error.issues.map((x) => `${x.path.join(".") || "field"} ${x.message}`).join("; ")}`
+              );
+          }
+        }
+        // A kind lives in a space, like `synap_define_kind`.
+        if (placement && !placement.workspaceId)
+          push(
+            i,
+            "a kind needs a space — file this plan into a space (workspaceId), or define the kind first"
+          );
+        return;
+      }
       case "create_link": {
         if (!(PLAN_LINK_TYPES as readonly string[]).includes(op.type)) {
           push(
@@ -975,7 +1054,83 @@ export function validatePlanOperations(
     }
   }
 
+  // Goals: no cycle among in-plan goals, per edge (serves / waits on).
+  for (const [label, edgesOf] of [
+    [
+      "serves",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.parentRef ? [op.parentRef] : [],
+    ],
+    [
+      "blocked_by",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.blockedByRefs ?? [],
+    ],
+  ] as const) {
+    const goalEdges = operations.flatMap((op) =>
+      op.op === "create_track"
+        ? edgesOf(op).map((to) => ({ from: op.ref, to }))
+        : []
+    );
+    const cycle = findCycle(goalEdges);
+    if (cycle) {
+      const at = operations.findIndex(
+        (op) => op.op === "create_track" && op.ref === cycle[0]
+      );
+      push(Math.max(at, 0), `goal ${label} cycle: ${cycle.join(" → ")}`);
+    }
+  }
+
+  // One kind per slug in a plan.
+  const kindSlugs = new Set<string>();
+  operations.forEach((op, i) => {
+    if (op.op !== "define_kind" || typeof op.slug !== "string") return;
+    if (kindSlugs.has(op.slug))
+      push(i, `kind "${op.slug}" is defined twice in this plan`);
+    kindSlugs.add(op.slug);
+  });
+
   return problems;
+}
+
+/**
+ * `create_track` op indexes, parents before children (in-plan `parentRef`),
+ * so a goal's parent exists when the start door places it. Assumes
+ * `validatePlanOperations` passed (no cycle).
+ */
+export function trackOpsRootFirst(
+  operations: CompositeProposalOperation[]
+): number[] {
+  const indexByRef = new Map<string, number>();
+  operations.forEach((op, i) => {
+    if (op.op === "create_track") indexByRef.set(op.ref, i);
+  });
+  const ordered: number[] = [];
+  const placed = new Set<number>();
+  const place = (index: number, depth: number) => {
+    if (placed.has(index) || depth > operations.length) return;
+    const op = operations[index];
+    if (op.op !== "create_track") return;
+    const parent = op.parentRef ? indexByRef.get(op.parentRef) : undefined;
+    if (parent !== undefined) place(parent, depth + 1);
+    if (!placed.has(index)) {
+      placed.add(index);
+      ordered.push(index);
+    }
+  };
+  for (const index of indexByRef.values()) place(index, 0);
+  return ordered;
+}
+
+/** The slugs of the kinds a plan defines (`define_kind`), as stored. */
+export function planKindSlugs(
+  operations: CompositeProposalOperation[]
+): Set<string> {
+  return new Set(
+    operations.flatMap((op) =>
+      op.op === "define_kind" && typeof op.slug === "string" ? [op.slug] : []
+    )
+  );
 }
 
 /**
@@ -1026,7 +1181,9 @@ export interface PlanStepSummary {
     | "playbook"
     | "view"
     | "cell"
-    | "binding";
+    | "binding"
+    | "track"
+    | "kind";
   label: string;
   /** Set on a step that CHANGES an existing row (a Library rebuild). */
   update?: { targetId: string };
@@ -1060,6 +1217,10 @@ export function planStepSummaries(
         return { ...base, kind: "document", label: op.title };
       case "create_project":
         return { ...base, kind: "project", label: op.name };
+      case "create_track":
+        return { ...base, kind: "track", label: op.name };
+      case "define_kind":
+        return { ...base, kind: "kind", label: op.displayName || op.slug };
       case "create_link":
         return {
           ...base,

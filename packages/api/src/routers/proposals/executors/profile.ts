@@ -19,12 +19,7 @@ import { readDuplicateCheck } from "@synap-core/types/proposals";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { createLogger } from "@synap-core/core";
-import {
-  createAndLinkPropertyDef,
-  type CreateAndLinkPropertyDefInput,
-  type CreateAndLinkPropertyDefResult,
-} from "../../../services/profiles/create-and-link-property-def.js";
-import { ProposedKindFieldSchema } from "../../../services/profiles/proposed-kind-field.js";
+import { applyApprovedKind } from "../../../services/profiles/apply-approved-kind.js";
 
 const logger = createLogger({ module: "proposal-approve-executors-profile" });
 
@@ -109,156 +104,40 @@ export function registerProfileExecutors(): void {
           message: "No workspace access",
         });
       }
-      const profileCaller = profilesRouter.createCaller({
-        db,
-        authenticated: true as const,
-        userId,
-        workspaceId,
-        workspaceRole: membership.role,
-        // Provenance (0263): server-only ctx, never tRPC input. The kind is
-        // the PROPOSAL's — agent-authored when an agent filed it — and the
-        // proposal owns the row (retire-on-revert lineage).
-        profileProvenance: {
-          origin: proposal.agentUserId ? "agent" : "authored",
-          ownerKind: "proposal",
-          ownerId: input.proposalId,
-        },
-        // The reviewer was SHOWN the existing kinds (the duplicate door's
-        // answer rides this proposal, B2): approving is their "keep both", so
-        // the replay's twin check stands down. Server-only ctx, never input.
-        // A legacy row filed with the agent's old `forceCreate` judgement
-        // (before B2) keeps it.
-        duplicateReviewed:
-          readDuplicateCheck(proposal.data)?.status === "possible" ||
-          innerData.forceCreate === true,
-      } as unknown as Context);
-      const result = await profileCaller.create({
-        slug,
-        displayName,
-        parentProfileId: innerData.parentProfileId as string | undefined,
-        uiHints: innerData.uiHints as Record<string, unknown> | undefined,
-        defaultValues: innerData.defaultValues as
-          Record<string, unknown> | undefined,
-        scope: innerData.scope as
-          "system" | "shared" | "workspace" | "user" | undefined,
-        entityScope: innerData.entityScope as "pod" | "workspace" | undefined,
-        profileKind: innerData.profileKind as "kind" | "role" | undefined,
-        applicableKinds: innerData.applicableKinds as string[] | undefined,
-        roleCategory: innerData.roleCategory as string | undefined,
-      });
-      // The approver IS the authority — the re-entrant gate should auto-grant.
-      // A nested proposal means the approver lacks profile.create rights; surface
-      // it rather than silently flipping the proposal APPROVED with nothing built
-      // (mirrors the skill/create executor's guard below).
-      if (
-        result &&
-        typeof result === "object" &&
-        "status" in result &&
-        result.status === "proposed"
-      ) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Profile approval unexpectedly re-proposed",
+      // THE approved-kind writer (`services/profiles/apply-approved-kind.ts`),
+      // shared with a capture plan's `define_kind` step: the profile door as
+      // the approver, then each carried field, checked again.
+      const { existing: landedOnExisting, fieldOutcomes } =
+        await applyApprovedKind({
+          userId,
+          workspaceId,
+          workspaceRole: membership.role,
+          proposalId: input.proposalId,
+          agentAuthored: !!proposal.agentUserId,
+          // The reviewer was SHOWN the existing kinds (the duplicate door's
+          // answer rides this proposal, B2): approving is their "keep both".
+          // A legacy row filed with the agent's old `forceCreate` judgement
+          // (before B2) keeps it.
+          duplicateReviewed:
+            readDuplicateCheck(proposal.data)?.status === "possible" ||
+            innerData.forceCreate === true,
+          slug,
+          displayName,
+          parentProfileId: innerData.parentProfileId as string | undefined,
+          uiHints: innerData.uiHints as Record<string, unknown> | undefined,
+          defaultValues: innerData.defaultValues as
+            Record<string, unknown> | undefined,
+          scope: innerData.scope as
+            "system" | "shared" | "workspace" | "user" | undefined,
+          entityScope: innerData.entityScope as "pod" | "workspace" | undefined,
+          profileKind: innerData.profileKind as "kind" | "role" | undefined,
+          applicableKinds: innerData.applicableKinds as string[] | undefined,
+          roleCategory: innerData.roleCategory as string | undefined,
+          kindFields: Array.isArray(innerData.kindFields)
+            ? innerData.kindFields
+            : [],
         });
-      }
-
-      // The fields that rode this proposal (ticket a375443d): one approval
-      // creates the kind AND its fields, through the SAME helper the
-      // `property_def/create` executor uses, as the approver. One field that
-      // fails never undoes the kind or its siblings; it is reported (below)
-      // for the author to add (define_kind is slug-idempotent).
-      // Only a kind THIS approval created takes the carried fields: on the
-      // slug-idempotent hit (`existing: true`, a kind of that slug appeared
-      // since filing) the reviewer was told a kind was being CREATED, so its
-      // fields are refused and reported, never attached to someone's kind.
-      const replayed = result as {
-        profile?: { id?: string } | null;
-        existing?: boolean;
-      } | null;
-      const landedOnExisting = replayed?.existing === true;
-      const createdProfileId = landedOnExisting
-        ? undefined
-        : replayed?.profile?.id;
-      // Each field is CHECKED AGAIN here, not trusted from when it was filed:
-      // a proposal can sit for days, and a stored payload is data. A field
-      // that no longer passes (bad shape, a slug taken since, a type clash) is
-      // REPORTED on the row — `data.fieldOutcomes` — never silently dropped.
-      const rawFields = Array.isArray(innerData.kindFields)
-        ? innerData.kindFields
-        : [];
-      const fieldOutcomes: Array<{
-        slug: string | null;
-        outcome: "created" | "refused";
-        reason?: string;
-        /** The slug matched a pod-wide field: reused, or the kind got its own. */
-        globalField?: CreateAndLinkPropertyDefResult["globalField"];
-      }> = [];
-      if (landedOnExisting) {
-        for (const raw of rawFields) {
-          fieldOutcomes.push({
-            slug:
-              raw &&
-              typeof raw === "object" &&
-              typeof (raw as { slug?: unknown }).slug === "string"
-                ? (raw as { slug: string }).slug
-                : null,
-            outcome: "refused",
-            reason:
-              "the kind already exists, so the approval created nothing to attach it to; add it with define_kind",
-          });
-        }
-      }
-      if (createdProfileId) {
-        for (const raw of rawFields) {
-          const parsed = ProposedKindFieldSchema.safeParse(raw);
-          const rawSlug =
-            raw &&
-            typeof raw === "object" &&
-            typeof (raw as { slug?: unknown }).slug === "string"
-              ? (raw as { slug: string }).slug
-              : null;
-          if (!parsed.success) {
-            fieldOutcomes.push({
-              slug: rawSlug,
-              outcome: "refused",
-              reason: parsed.error.issues
-                .map((i) => `${i.path.join(".") || "field"}: ${i.message}`)
-                .join("; "),
-            });
-            continue;
-          }
-          const field = parsed.data;
-          try {
-            const written = await createAndLinkPropertyDef({
-              userId,
-              workspaceId,
-              profileId: createdProfileId,
-              slug: field.slug,
-              valueType:
-                field.valueType as CreateAndLinkPropertyDefInput["valueType"],
-              constraints: field.constraints,
-              uiHints: field.uiHints,
-              overlay: field.overlay === true,
-              required: field.required,
-              defaultValue: field.defaultValue,
-              displayOrder: field.displayOrder,
-            });
-            fieldOutcomes.push({
-              slug: field.slug,
-              outcome: "created",
-              ...(written?.globalField
-                ? { globalField: written.globalField }
-                : {}),
-            });
-          } catch (err) {
-            // One field never undoes the kind or its siblings.
-            fieldOutcomes.push({
-              slug: field.slug,
-              outcome: "refused",
-              reason: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
+      if (!landedOnExisting) {
         const refusedCount = fieldOutcomes.filter(
           (o) => o.outcome === "refused"
         ).length;

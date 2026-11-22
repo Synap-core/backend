@@ -139,6 +139,21 @@ export function captureGraphEventKeys(
       }
     } else if (op.op === "create_project") {
       add({ subjectType: "project", action: "create" });
+    } else if (op.op === "create_track") {
+      // The SAME keys the start-goal door judges (`startTrack` gates
+      // `track.create`); a goal waiting on a goal is `link.create` on the
+      // governed dependency door.
+      add({ subjectType: "track", action: "create" });
+      if (
+        (op.blockedByRefs?.length ?? 0) + (op.blockedByTrackIds?.length ?? 0) >
+        0
+      ) {
+        add({ subjectType: "link", action: "create" });
+      }
+    } else if (op.op === "define_kind") {
+      // The SAME key `synap_define_kind` reaches (`profiles.create` gates
+      // `profile.create`): an agent defining a kind always proposes (2.08).
+      add({ subjectType: "profile", action: "create" });
     } else if (op.op === "create_document") {
       add({ subjectType: "document", action: "create" });
       // Attaching it as an entity's body is a governed entity update on the

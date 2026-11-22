@@ -1187,6 +1187,7 @@ async function applyProposalApprovalInner(
             proposal: {
               id: proposal.id,
               sessionId: proposal.sessionId ?? null,
+              agentUserId: proposal.agentUserId ?? null,
             },
           }),
           // ── Rule Loop callers (NS1) ─────────────────────────────────────

@@ -478,7 +478,7 @@ export interface ProposalReviewGraph {
    * reviewer asks for a revision instead.
    */
   isPlan?: true;
-  /** Number of plan steps (projects + sessions + documents + links). */
+  /** Number of plan steps (projects, goals, kinds, sessions, documents, links). */
   planStepCount?: number;
   projects?: Array<{
     ref: string;
@@ -503,6 +503,29 @@ export interface ProposalReviewGraph {
     /** In-graph entity ref (`entities[].ref`) or an existing entity id. */
     subjectRef?: string;
     subjectEntityId?: string;
+    /** In-graph goal ref (`tracks[].ref`) or an existing goal id. */
+    trackRef?: string;
+    trackId?: string;
+  }>;
+  /** Goals the plan starts (`create_track`), with where each sits. */
+  tracks?: Array<{
+    ref: string;
+    name: string;
+    direction?: string;
+    projectRef?: string;
+    projectId?: string;
+    /** The goal it serves: in-graph ref or existing id. */
+    parentRef?: string;
+    parentGoalId?: string;
+    /** Goals it waits on: in-graph refs and existing ids. */
+    blockedBy: string[];
+  }>;
+  /** Kinds the plan defines (`define_kind`), applied before its records. */
+  kinds?: Array<{
+    ref: string;
+    slug: string;
+    displayName: string;
+    fieldSlugs: string[];
   }>;
   documents?: Array<{
     ref: string;
@@ -1169,6 +1192,13 @@ export interface CompositeCreateSessionOp {
   /** The project it belongs to (a `create_project` ref or a real id). */
   projectRef?: string;
   projectId?: string;
+  /**
+   * The goal it works toward: a `create_track` ref (created before every
+   * session) or an existing goal id. Passed to the session door AT create,
+   * like `start_session`'s `trackId`, which then implies the project.
+   */
+  trackRef?: string;
+  trackId?: string;
   /** Declared deliverables — sanitized by the session door at apply time. */
   expectedOutputs?: Array<Record<string, unknown>>;
   /**
@@ -1227,6 +1257,52 @@ export interface CompositeCreateProjectOp {
   evidenceEntityIds?: string[];
   /** Server-stamped — any caller-supplied value is overwritten. */
   evidence?: PlanProjectEvidence;
+}
+
+/**
+ * A GOAL in the plan (pathway plan 368179d7, P7). Materialized through THE
+ * start-goal door (`startTrack`) as the applying person, before every session,
+ * so a session's `trackRef` resolves at create. Shape only here: the door
+ * parses `kpi` / `criteria` / `workKind` / `endState` exactly as `start_track`.
+ */
+export interface CompositeCreateTrackOp {
+  op: "create_track";
+  ref: string;
+  name: string;
+  /** A goal lives in a project: a `create_project` ref or a real id. */
+  projectRef?: string;
+  projectId?: string;
+  direction?: string;
+  kpi?: Record<string, unknown>;
+  criteria?: Array<Record<string, unknown>>;
+  workKind?: string;
+  endState?: string;
+  /** The goal it serves (`goal --serves--> parent`): a track ref or a real id. */
+  parentRef?: string;
+  parentGoalId?: string;
+  /** Goals it waits on (`goal --blocked_by--> goal`): track refs or real ids. */
+  blockedByRefs?: string[];
+  blockedByTrackIds?: string[];
+}
+
+/**
+ * A new KIND in the plan (pathway plan 368179d7, P10), applied BEFORE every
+ * entity so the plan may carry the kind AND its records. Materialized through
+ * the approved-kind writer the `profile/create` executor uses
+ * (`applyApprovedKind`): the same profile door, provenance and field writer
+ * (a field slug that collides with a pod-wide field gets its own def, with a
+ * receipt). `slug` and each field's `slug` are stored normalised.
+ */
+export interface CompositeDefineKindOp {
+  op: "define_kind";
+  ref: string;
+  slug: string;
+  displayName: string;
+  description?: string;
+  icon?: string;
+  entityScope?: "pod" | "workspace";
+  /** Field defs, `ProposedKindField` shape (`{ slug, valueType, ... }`). */
+  fields?: Array<Record<string, unknown>>;
 }
 
 /** The edges a plan may declare — both are session↔session `links` types. */
@@ -1363,6 +1439,8 @@ export type CompositeProposalOperation =
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
   | CompositeCreateLinkOp
+  | CompositeCreateTrackOp
+  | CompositeDefineKindOp
   | CompositeCreateCellOp
   | CompositeBindRendererOp
   // The update arms are listed one by one (not as `CompositeUpdateOperation`):
@@ -1386,13 +1464,20 @@ export const PLAN_OPERATION_KINDS = [
   "create_document",
   "create_project",
   "create_link",
+  // A goal and a kind in a plan apply with it, all-or-none: a session filed
+  // in a goal that did not land, or records of a kind that did not, are not
+  // "mostly" the plan.
+  "create_track",
+  "define_kind",
 ] as const;
 
 export type CompositePlanOperation =
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
   | CompositeCreateProjectOp
-  | CompositeCreateLinkOp;
+  | CompositeCreateLinkOp
+  | CompositeCreateTrackOp
+  | CompositeDefineKindOp;
 
 export function isPlanOperation(
   op: CompositeProposalOperation

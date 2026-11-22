@@ -223,6 +223,9 @@ function callersFor(
         return { id };
       },
     },
+    // Not exercised by this plan (no goal, no kind): the real doors.
+    trackCaller: real.trackCaller,
+    kindCaller: real.kindCaller,
     linkCaller: {
       create: async ({ type, fromSessionId, toSessionId }) => {
         const id = randomUUID();

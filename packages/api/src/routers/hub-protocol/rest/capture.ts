@@ -1529,6 +1529,8 @@ export function registerCaptureRoutes(app: HubHono): void {
       documents?: unknown[];
       projects?: unknown[];
       links?: unknown[];
+      tracks?: unknown[];
+      kinds?: unknown[];
       // RULE LOOP config steps — same ref namespace, same proposal. Carried
       // here too so this door and `synap_capture` accept the SAME call: a
       // capability one door can express and the other cannot is the fork this
@@ -1545,6 +1547,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           documents: Array.isArray(body.documents) ? body.documents : [],
           projects: Array.isArray(body.projects) ? body.projects : [],
           links: Array.isArray(body.links) ? body.links : [],
+          tracks: Array.isArray(body.tracks) ? body.tracks : [],
+          kinds: Array.isArray(body.kinds) ? body.kinds : [],
           skills: Array.isArray(body.skills) ? body.skills : [],
           automations: Array.isArray(body.automations) ? body.automations : [],
           rules: Array.isArray(body.rules) ? body.rules : [],
@@ -1554,6 +1558,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           documents: [],
           projects: [],
           links: [],
+          tracks: [],
+          kinds: [],
           skills: [],
           automations: [],
           rules: [],
@@ -1570,7 +1576,7 @@ export function registerCaptureRoutes(app: HubHono): void {
       return c.json(
         {
           error:
-            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[] / skills[] / automations[] / rules[])",
+            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[] / tracks[] / kinds[] / skills[] / automations[] / rules[])",
         },
         400
       );

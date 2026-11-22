@@ -86,6 +86,13 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   propertyDiffs?: EntityPropertyDiff[];
   /** Connected plan: session edges created by the run. */
   linkIds?: string[];
+  /**
+   * Goals and kinds a plan started (`create_track` / `define_kind`). A failed
+   * plan's compensation drops / retires them (`plan-callers.ts`); like the
+   * plan's sessions, a later whole revert does not.
+   */
+  trackIds?: string[];
+  kindIds?: string[];
   /** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
   projectSubjectIds?: Record<string, string>;
   /**
@@ -211,6 +218,8 @@ export interface MaterializedOpRecord {
     | "create_document"
     | "create_project"
     | "create_link"
+    | "create_track"
+    | "define_kind"
     | UpdateOpName;
   entityId?: string;
   linked?: boolean;
@@ -232,6 +241,10 @@ export interface MaterializedOpRecord {
   projectId?: string;
   documentId?: string;
   linkId?: string;
+  /** `create_track`: the goal it started. */
+  trackId?: string;
+  /** `define_kind`: the kind (profile) it created. */
+  profileId?: string;
   /**
    * `update_*`: the row it changed and the fields' values before and after
    * (`{before, patch}` — `after` is the patch as it landed). An
@@ -285,6 +298,8 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "sessions"
       | "links"
       | "documents"
+      | "tracks"
+      | "kinds"
     >
   >;
 
@@ -425,12 +440,21 @@ function planOnlyRecordFields(
   const projects = result.projects ?? [];
   const links = result.links ?? [];
   const documents = result.documents ?? [];
+  const tracks = result.tracks ?? [];
+  const kinds = result.kinds ?? [];
   if (
-    sessions.length + projects.length + links.length + documents.length ===
+    sessions.length +
+      projects.length +
+      links.length +
+      documents.length +
+      tracks.length +
+      kinds.length ===
     0
   ) {
     return {};
   }
+  // A goal the start door handed back (a live one of that name) is not ours.
+  const ownTracks = tracks.filter((t) => !t.linked);
   // A project the door REUSED (exact-name match) is not this run's row.
   const ownProjects = projects.filter((p) => !p.linked);
   // Same for a session the door REUSED (open twin of the same goal + scope):
@@ -439,11 +463,19 @@ function planOnlyRecordFields(
   return {
     sessionIds: unique(ownSessions.map((s) => s.sessionId)),
     projectIds: unique(ownProjects.map((p) => p.projectId)),
-    linkIds: unique(
-      links
+    linkIds: unique([
+      ...links
         .filter((l) => !l.preExisting && l.linkId)
-        .map((l) => l.linkId as string)
-    ),
+        .map((l) => l.linkId as string),
+      // Goal → goal edges the run wrote for its goals.
+      ...tracks.flatMap((t) => t.blockerLinkIds ?? []),
+    ]),
+    ...(ownTracks.length > 0
+      ? { trackIds: unique(ownTracks.map((t) => t.trackId)) }
+      : {}),
+    ...(kinds.length > 0
+      ? { kindIds: unique(kinds.map((k) => k.profileId)) }
+      : {}),
     projectSubjectIds: Object.fromEntries(
       ownProjects.flatMap((p) =>
         p.subjectEntityId ? [[p.projectId, p.subjectEntityId]] : []
@@ -544,6 +576,16 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const d of result.documents ?? []) {
     byOp[d.ref] = { op: "create_document", documentId: d.documentId };
+  }
+  for (const t of result.tracks ?? []) {
+    byOp[t.ref] = {
+      op: "create_track",
+      trackId: t.trackId,
+      ...(t.linked ? { linked: true } : {}),
+    };
+  }
+  for (const k of result.kinds ?? []) {
+    byOp[k.ref] = { op: "define_kind", profileId: k.profileId };
   }
   // An edge has no ref of its own — keyed by what it asked for, like a relation.
   for (const l of result.links ?? []) {
@@ -667,6 +709,8 @@ const ID_FIELDS = [
   "sessionIds",
   "projectIds",
   "linkIds",
+  "trackIds",
+  "kindIds",
 ] as const satisfies ReadonlyArray<keyof CompleteMaterializedRecord>;
 
 /** Union two records. Keeps any fields a record carries that this module does not own (e.g. `merge`). */

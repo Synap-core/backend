@@ -287,3 +287,108 @@ describe("validatePlanOperations — one body per entity", () => {
     ).toEqual([]);
   });
 });
+
+/**
+ * Goals and kinds in the plan (pathway plan 368179d7, P7 + P10). Rows where a
+ * plausible wrong rule passes: a `trackRef` naming a SESSION (a ref that
+ * exists, wrong kind), a goal with no project (the start door would refuse it
+ * at approval, after the rest applied), a goal cycle that closes only through
+ * in-plan refs, a kind field the field writer would refuse.
+ */
+describe("validatePlanOperations — goals and kinds", () => {
+  const ok: CompositeProposalOperation[] = [
+    { op: "create_project", ref: "p1", name: "Fund Synap" },
+    {
+      op: "create_track",
+      ref: "company",
+      name: "Fund Synap to seed",
+      projectRef: "p1",
+    },
+    {
+      op: "create_track",
+      ref: "seed",
+      name: "Seed round",
+      projectRef: "p1",
+      parentRef: "company",
+      blockedByTrackIds: [UUID],
+    },
+    {
+      op: "define_kind",
+      ref: "k",
+      slug: "funding-lead",
+      displayName: "Funding lead",
+      fields: [{ slug: "ticket", valueType: "number" }],
+    },
+    {
+      op: "create_entity",
+      ref: "fund-a",
+      profileSlug: "funding-lead",
+      title: "Fund A",
+    },
+    { op: "create_session", ref: "deck", goal: "Deck ready", trackRef: "seed" },
+  ];
+
+  it("accepts a goal tree, a kind with its record, and a session filed in a goal", () => {
+    expect(validatePlanOperations(ok, { workspaceId: UUID })).toEqual([]);
+  });
+
+  it("refuses a trackRef naming a session, a goal with no project, a goal cycle, a bad kind", () => {
+    const messages = validatePlanOperations(
+      [
+        { op: "create_session", ref: "s1", goal: "A", trackRef: "s2" },
+        { op: "create_session", ref: "s2", goal: "B" },
+        { op: "create_track", ref: "g1", name: "One", blockedByRefs: ["g2"] },
+        {
+          op: "create_track",
+          ref: "g2",
+          name: "Two",
+          projectId: UUID,
+          blockedByRefs: ["g1"],
+        },
+        {
+          op: "define_kind",
+          ref: "k",
+          slug: "Funding Lead",
+          displayName: "Funding lead",
+          fields: [{ slug: "ticket", valueType: "money-ish" }],
+        },
+      ],
+      { workspaceId: UUID }
+    ).map((p) => p.message);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        'trackRef "s2" names a session, but must name a track',
+        "a goal lives in a project: give it `projectRef` (a project step) or `projectId`",
+        "goal blocked_by cycle: g1 → g2 → g1",
+        'kind slug "Funding Lead" must be lowercase letters, digits and "-"',
+        expect.stringMatching(
+          /^fields\[0\]: valueType valueType must be one of/
+        ),
+      ])
+    );
+  });
+
+  it("refuses a kind in a plan filed in no space, as synap_define_kind would", () => {
+    const messages = validatePlanOperations(ok, { workspaceId: null }).map(
+      (p) => p.message
+    );
+    expect(messages).toEqual([
+      "a kind needs a space — file this plan into a space (workspaceId), or define the kind first",
+    ]);
+  });
+
+  it("orders goals parents-first even when a child is declared before its parent", async () => {
+    const { trackOpsRootFirst } = await import("./capture-plan.js");
+    const order = trackOpsRootFirst([
+      {
+        op: "create_track",
+        ref: "child",
+        name: "C",
+        projectId: UUID,
+        parentRef: "root",
+      },
+      { op: "create_track", ref: "root", name: "R", projectId: UUID },
+    ]);
+    expect(order).toEqual([1, 0]);
+  });
+});
