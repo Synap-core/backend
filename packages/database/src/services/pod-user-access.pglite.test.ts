@@ -19,6 +19,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   podMembers,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "../schema/workspaces.js";
 import { projects } from "../schema/projects.js";
@@ -30,6 +31,7 @@ const db = drizzle(client, {
   schema: {
     podMembers,
     workspaceMembers,
+    apiKeys,
     workspaces,
     projects,
     projectMembers,
@@ -63,6 +65,7 @@ beforeAll(async () => {
   for (const t of [
     podMembers,
     workspaceMembers,
+    apiKeys,
     workspaces,
     projects,
     projectMembers,

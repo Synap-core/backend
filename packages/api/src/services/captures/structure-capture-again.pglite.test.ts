@@ -108,6 +108,7 @@ import {
   proposals,
   relations,
   workspaceMembers,
+  apiKeys,
   workspaces,
   users,
 } from "@synap/database";
@@ -267,6 +268,7 @@ describe("captures.structureAgain", () => {
       projectMembers,
       workspaces,
       workspaceMembers,
+      apiKeys,
       podMembers,
       focusSessions,
       links,

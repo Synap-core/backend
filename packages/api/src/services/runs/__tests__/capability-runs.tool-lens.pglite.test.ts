@@ -40,6 +40,7 @@ import {
   events,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   users,
   projectMembers,
@@ -183,6 +184,7 @@ beforeAll(async () => {
   for (const table of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     proposals,
     events,
     podMembers,

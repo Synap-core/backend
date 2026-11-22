@@ -1096,9 +1096,9 @@ export function registerSetupRoutes(app: HubHono): void {
 
       // ── Find target workspace (optional — agent exists at pod level) ─────────
       // Workspace is NOT required for provisioning. The agent user and API key
-      // are pod-wide resources. Workspace membership is granted only when the
-      // caller explicitly requests a workspaceId — no silent fallback to
-      // agent-os or any-first-workspace, so the caller controls scope precisely.
+      // are pod-wide resources; the agent holds no membership (it acts through
+      // its person's). A workspaceId names the space it is set up for — no
+      // silent fallback to agent-os or any-first-workspace.
       const ws = requestedWorkspaceId
         ? await db.query.workspaces.findFirst({
             where: (w, { eq }) => eq(w.id, requestedWorkspaceId),
@@ -1112,13 +1112,11 @@ export function registerSetupRoutes(app: HubHono): void {
         );
       }
 
-      // ── A KEY adds its AI only to a space its person administers ──────────
-      // The new agent becomes an `editor` of `ws` at mint time (below), and
-      // governance judges the agent's writes on THAT membership. So a key may
-      // name only a space whose owner or admin is the key's own person, and
-      // that lies inside the key's live grant. Not a member: the same 404 as
-      // a missing space, so an id never confirms a space exists (pre-launch
-      // audit F5, 2026-10-28).
+      // ── A KEY sets its AI up only for a space its person administers ──────
+      // A key may name only a space whose owner or admin is the key's own
+      // person, and that lies inside the key's live grant. Not a member: the
+      // same 404 as a missing space, so an id never confirms a space exists
+      // (pre-launch audit F5, 2026-10-28).
       if (ws && authMethod === "api_key_surface") {
         const callerMembership = surfaceAgentLinkedUserId
           ? await db.query.workspaceMembers.findFirst({
@@ -1135,8 +1133,8 @@ export function registerSetupRoutes(app: HubHono): void {
             404
           );
         }
-        // The AI becomes an editor of the WHOLE space, so only a scope that
-        // covers it whole counts (`spacesCoveredWhole`): unpinned, or naming
+        // The AI is set up for the WHOLE space, so only a scope that covers
+        // it whole counts (`spacesCoveredWhole`): unpinned, or naming
         // it with no project or object pin. A pod-wide read (decision
         // e1b59d38 "B") covers none, nor does any scope pinned to projects or
         // objects (decision 51ad8d1e F3), nor the deny-all scope.

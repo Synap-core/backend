@@ -79,6 +79,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
   intelligenceServices,
   syncGeneration,
 } from "@synap/database/schema";
@@ -140,6 +141,7 @@ beforeAll(async () => {
   for (const t of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     intelligenceServices,
     syncGeneration,
   ])

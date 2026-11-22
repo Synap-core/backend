@@ -71,6 +71,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
   intelligenceServices,
   syncGeneration,
   proposals,
@@ -171,6 +172,7 @@ beforeAll(async () => {
     lifecycleTransitionOutbox,
     workspaces,
     workspaceMembers,
+    apiKeys,
     intelligenceServices,
     syncGeneration,
     proposals,

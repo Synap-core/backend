@@ -24,6 +24,7 @@ import {
   entityFacets,
   spaceAccess,
   workspaceMembers,
+  apiKeys,
   workspaces,
   podMembers,
 } from "@synap/database";
@@ -75,6 +76,7 @@ beforeAll(async () => {
     entityFacets,
     spaceAccess,
     workspaceMembers,
+    apiKeys,
     workspaces,
     podMembers,
   ]) {

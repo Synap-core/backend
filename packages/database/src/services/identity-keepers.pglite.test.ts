@@ -24,6 +24,7 @@ import { proposals } from "../schema/proposals.js";
 import {
   podMembers,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "../schema/workspaces.js";
 import { readIdentityKeepers } from "./identity-keepers.js";
@@ -31,6 +32,7 @@ import { readIdentityKeepers } from "./identity-keepers.js";
 const TABLES = [
   podMembers,
   workspaceMembers,
+  apiKeys,
   workspaces,
   projects,
   projectMembers,
@@ -45,6 +47,7 @@ const db = drizzle(client, {
   schema: {
     podMembers,
     workspaceMembers,
+    apiKeys,
     workspaces,
     projects,
     projectMembers,
