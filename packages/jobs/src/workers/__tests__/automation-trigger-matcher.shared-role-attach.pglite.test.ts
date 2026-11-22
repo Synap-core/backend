@@ -320,8 +320,8 @@ describe("a shared role attached from one space reaches every space's rules", ()
  * `triggeredBy`, which `resolveExecutionActor` makes the steps' acting user)
  * with the person as producer (so the confused-deputy guard has no agent to
  * escalate to), and the client role that run attaches AS the person reaches
- * the person's other spaces. A direct agent move keeps the agent, and its
- * attach stays in the lens.
+ * the person's other spaces. A direct agent move keeps the agent as actor and
+ * producer; its attach reaches its person's spaces, and only those.
  */
 describe("an approved conversion runs as the person who approved it", () => {
   /** The trigger « lead enters converted » compiles to (a declared lifecycle). */
@@ -402,7 +402,7 @@ describe("an approved conversion runs as the person who approved it", () => {
     expect(runsOf(onboard)).toEqual([OPS]);
   });
 
-  it("(g) direct agent move: the run stays the agent's, and its attach stays in the CRM", async () => {
+  it("(g) direct agent move: the run stays the agent's, and its attach reaches its person's spaces", async () => {
     const becomesClient = await automationIn(CRM, convertedTrigger());
     const onboard = await automationIn(OPS, activatorTrigger("client"));
 
@@ -410,6 +410,27 @@ describe("an approved conversion runs as the person who approved it", () => {
 
     expect(await triggeredBy(becomesClient)).toEqual([AGENT]);
     expect(producersOf(becomesClient)).toEqual([AGENT]);
+
+    // An agent holds no membership: it acts through its person's (decision 2),
+    // so the activator compiled into Operations answers to its move.
+    await attached({
+      profileSlug: "client",
+      podWideSubject: true,
+      userId: AGENT,
+    });
+    expect(runsOf(onboard)).toEqual([OPS]);
+  });
+
+  it("(h) no widening: an agent whose person left Operations does not reach it", async () => {
+    const onboard = await automationIn(OPS, activatorTrigger("client"));
+    await q(
+      `delete from workspace_members where workspace_id = $1 and user_id = $2`,
+      [OPS, PERSON]
+    );
+    await q(
+      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+      [randomUUID(), OPS, AGENT]
+    );
 
     await attached({
       profileSlug: "client",
