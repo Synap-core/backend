@@ -9,7 +9,10 @@
  * Pure.
  */
 
-import type { ProcessHealth } from "../processes/health.js";
+import type {
+  ProcessHealth,
+  ProcessHealthReason,
+} from "../processes/health.js";
 import type { StatusOfWorkNextMove } from "./status-of.js";
 
 /** The action tokens a next step uses, each one of the vocabulary's verbs. */
@@ -43,29 +46,31 @@ export interface ObjectNextFacts {
   nextMove?: StatusOfWorkNextMove;
 }
 
+/** Each health reason's next step; total over the reasons, so a new one must be placed. */
+const ACTION_OF_HEALTH: Record<ProcessHealthReason, ObjectNextAction | null> = {
+  draft: "turn_on",
+  config_invalid: "open",
+  latest_failed: "see_failure",
+  blocked_by_policy: "review",
+  waiting_on_you: "answer",
+  running: null,
+  running_after_failure: null,
+  paused: null,
+  archived: null,
+  healthy: null,
+  latest_unresolved: null,
+  never_run: null,
+  not_enough_activity: null,
+};
+
 function fromHealth(health: ProcessHealth): ObjectNext | null {
-  switch (health.state) {
-    case "draft":
-      return { action: "turn_on", reason: health.reason };
-    case "config-error":
-      return { action: "open", reason: health.reason };
-    case "unresolved-failure":
-      return { action: "see_failure", reason: health.reason };
-    case "blocked-by-policy":
-      return { action: "review", reason: health.reason };
-    case "waiting-on-you":
-      return {
-        action: "answer",
-        reason: health.reason,
-        ...(health.sessionId ? { sessionId: health.sessionId } : {}),
-      };
-    case "running":
-    case "paused":
-    case "healthy":
-    case "never-run":
-    case "unknown":
-      return null;
-  }
+  const action = ACTION_OF_HEALTH[health.reason];
+  if (!action) return null;
+  return {
+    action,
+    reason: health.reason,
+    ...(health.sessionId ? { sessionId: health.sessionId } : {}),
+  };
 }
 
 function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
@@ -107,8 +112,8 @@ export function objectNextOf(
     if (
       kind === "playbook" &&
       (facts.skillsOff ?? 0) > 0 &&
-      health?.state !== "draft" &&
-      health?.state !== "config-error"
+      health?.reason !== "draft" &&
+      health?.reason !== "config_invalid"
     ) {
       return { action: "enable", reason: "skills_off" };
     }
