@@ -1006,7 +1006,9 @@ export function registerPlaybookExecutors(): void {
       return {
         success: true,
         // The approve response's "what this created" (REST/CLI callers).
-        ...(firstSessionId ? { primaryId: firstSessionId } : {}),
+        ...(firstSessionId
+          ? { primaryId: firstSessionId, primaryKind: "session" }
+          : {}),
         ...(batch
           ? {
               batch: {

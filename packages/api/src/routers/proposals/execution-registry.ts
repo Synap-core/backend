@@ -19,6 +19,7 @@
  * behaviour — returns, events, ordering, idempotency — is identical.
  */
 
+import type { ProposalLandedKind } from "@synap-core/types/proposals/landed";
 import type { ApprovalRunView } from "../../services/proposals/approval-runs.js";
 import { TRPCError } from "@trpc/server";
 import type { ProposalExecutorKey } from "@synap/governance-policy";
@@ -220,6 +221,12 @@ export interface ProposalExecutorResult {
   success: boolean;
   alreadyApproved?: boolean;
   primaryId?: string;
+  /**
+   * The object kind `primaryId` names when it is not the proposal's target
+   * kind (a run's session); null when it names no object a person opens (a
+   * key, a run). Absent: the target's kind. Read by the landed stamp.
+   */
+  primaryKind?: ProposalLandedKind | null;
   created?: number;
   linked?: number;
   /**

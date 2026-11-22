@@ -202,7 +202,11 @@ export function registerAutomationExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, primaryId: result.runId ?? undefined };
+      return {
+        success: true,
+        primaryId: result.runId ?? undefined,
+        primaryKind: null,
+      };
     },
   });
 

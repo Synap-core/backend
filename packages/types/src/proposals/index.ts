@@ -42,6 +42,8 @@ export * from "./page-only.js";
 export * from "./reach.js";
 // Who is asking for a proposal, in one line (`proposalRequester`).
 export * from "./requester.js";
+// What an approval landed, and the one answer for the objects a proposal names.
+export * from "./landed.js";
 export type {
   ProposalToolRun,
   ProposalToolRunParameter,
@@ -1593,6 +1595,26 @@ export interface ProposalMaterializedRecord {
   relationIds?: string[];
   /** Document ids CREATED by approval (revert → delete each). */
   documentIds?: string[];
+  /**
+   * Config rows CREATED by the run: skills, automations, rules (`skills`
+   * rows), DRAFT playbooks, views, and cells (`widget_definitions`; a cell the
+   * door updated instead was never the run's and is not listed).
+   */
+  skillIds?: string[];
+  automationIds?: string[];
+  ruleIds?: string[];
+  playbookIds?: string[];
+  viewIds?: string[];
+  cellIds?: string[];
+  /** Connected plan: focus sessions and projects created by the run. */
+  sessionIds?: string[];
+  projectIds?: string[];
+  /** Entities a merge into a PRE-EXISTING entity changed. */
+  propertyDiffs?: Array<{ entityId: string }>;
+  /** Config rows an `update_*` op changed (`kind`: skill, automation, playbook, view, focus_session…). */
+  rowPatches?: Array<{ kind: string; id: string }>;
+  /** The same rows keyed by the op that produced them; `linked` = an existing entity the op linked. */
+  byOp?: Record<string, { op: string; entityId?: string; linked?: boolean }>;
   /**
    * Entity-merge materialization (pod hygiene). Stamped by the entity.merge
    * approve executor so revert can full-unmerge: reverse signals/relations/
