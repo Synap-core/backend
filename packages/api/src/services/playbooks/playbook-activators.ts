@@ -67,7 +67,6 @@
  */
 
 import { createLogger } from "@synap-core/core";
-import { TRPCError } from "@trpc/server";
 import { isCronTimezone } from "@synap/shared-utils";
 import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
@@ -1330,18 +1329,9 @@ async function foldRetiredSchedule(
       )
     )
     .limit(1);
-  const statusProperty = process.profileSlug
-    ? (process.statusProperty ??
-      (await readSubjectProfile(process.profileSlug, pb.workspaceId))
-        .lifecycleProperty)
-    : null;
   const folded = scheduleActivatorOf(
     pb.schedule,
-    {
-      profileSlug: process.profileSlug,
-      statusProperty,
-      filter: (pb.subjectProfile as { filter?: unknown } | null)?.filter,
-    },
+    process.profileSlug,
     !driver || driver.status === "active"
   );
   const declaresSchedule = process.activators.some((a) => a.on === "schedule");
@@ -1397,45 +1387,6 @@ async function foldRetiredSchedule(
       .where(eq(playbooks.id, pb.id));
   });
   return { ...process, activators };
-}
-
-/**
- * The retired `schedule` input, refused at the door when the activator pass
- * could not fold it (it would sit stored and never fire), or when the playbook
- * already declares a different schedule activator (two clocks for one).
- */
-export async function assertRetiredScheduleFolds(input: {
-  schedule: unknown;
-  subjectProfile: unknown;
-  workspaceId: string | null;
-}): Promise<void> {
-  const process = readPlaybookProcess(input.subjectProfile);
-  const statusProperty = process.profileSlug
-    ? (process.statusProperty ??
-      (await readSubjectProfile(process.profileSlug, input.workspaceId))
-        .lifecycleProperty)
-    : null;
-  const folded = scheduleActivatorOf(input.schedule, {
-    profileSlug: process.profileSlug,
-    statusProperty,
-    filter: (input.subjectProfile as { filter?: unknown } | null)?.filter,
-  });
-  if (!folded) return;
-  if ("error" in folded) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: folded.error });
-  }
-  const key = activatorKey(folded.activator);
-  if (
-    process.activators.some(
-      (a) => a.on === "schedule" && activatorKey(a) !== key
-    )
-  ) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "this playbook declares its schedule as an activator: change its schedule activator instead of schedule",
-    });
-  }
 }
 
 /** The owner's zone when the cron clock can read it, else UTC. */

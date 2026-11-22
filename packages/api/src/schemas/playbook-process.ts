@@ -28,7 +28,6 @@ import { isSentenceCron } from "@synap-core/types/automations";
 import { isCronTimezone } from "@synap/shared-utils";
 import {
   type WorkerActivatorTrigger,
-  WORKER_ACTIVATOR_MODES,
   WORKER_COUNT_MIN_FLOOR,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_RUN_OUTCOMES,
@@ -79,7 +78,9 @@ export const playbookActivatorSchema = z
     size: z.enum(WORKER_SIZES).optional(),
     // `propose` is the default for public templates: a process starts only
     // when a person says so, unless the author explicitly chose `run`.
-    mode: z.enum(WORKER_ACTIVATOR_MODES).default("propose"),
+    // Spelled out for the catalog mirror tripwire; held to
+    // `WORKER_ACTIVATOR_MODES` by the type checks below.
+    mode: z.enum(["run", "propose", "appointment"]).default("propose"),
     maxPendingApprovals: z
       .number()
       .int()

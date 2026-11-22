@@ -1407,27 +1407,24 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
     }
   });
 
-  it("a per-thing schedule keeps its filter as status + only; a paused automation installs the rule paused", async () => {
+  it("a per-thing schedule runs per thing, its filter kept; a paused automation installs the rule paused", async () => {
     vi.mocked(createRuleGoverned).mockClear();
+    const filter = '{"properties.billing":"monthly"}';
     const pb = await scheduled({
       schedule: { cron: "0 8 1 * *", enabled: true },
-      subjectProfile: {
-        profileSlug: "deal",
-        filter:
-          '{"properties.commercialStage":"won","properties.billing":"monthly"}',
-      },
+      subjectProfile: { profileSlug: "deal", filter },
       driver: "paused",
     });
     try {
       await convergeActivatorsAtBoot();
-      expect((await row(pb.id)).subject_profile.activators).toEqual([
+      const after = (await row(pb.id)).subject_profile;
+      expect(after.filter).toBe(filter);
+      expect(after.activators).toEqual([
         {
           on: "schedule",
           cron: "0 8 1 * *",
           mode: "run",
           size: "per_thing",
-          status: "won",
-          only: { property: "billing", in: ["monthly"] },
           startsPaused: true,
         },
       ]);

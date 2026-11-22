@@ -94,7 +94,10 @@ import {
   readPlaybookProcess,
 } from "../schemas/playbook-process.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
-import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
+import {
+  playbookScheduleInputSchema,
+  retiredScheduleRefusal,
+} from "../schemas/playbook-schedule.js";
 import {
   playbookDefinitionSchema,
   playbookParamsInputSchema,
@@ -561,14 +564,12 @@ async function assertNoPlaybookLinkCycle(self: {
 }
 
 /** The retired `schedule` input is refused when it could never fire. */
-async function assertRetiredScheduleFoldsAtDoor(
-  input: Parameters<
-    typeof import("../services/playbooks/playbook-activators.js").assertRetiredScheduleFolds
-  >[0]
-): Promise<void> {
-  const { assertRetiredScheduleFolds } =
-    await import("../services/playbooks/playbook-activators.js");
-  await assertRetiredScheduleFolds(input);
+function refuseUnfoldableSchedule(
+  schedule: unknown,
+  subjectProfile: unknown
+): void {
+  const reason = retiredScheduleRefusal(schedule, subjectProfile);
+  if (reason) throw new TRPCError({ code: "BAD_REQUEST", message: reason });
 }
 
 /**
@@ -2191,11 +2192,7 @@ export const playbooksRouter = router({
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
       if (input.schedule) {
-        await assertRetiredScheduleFoldsAtDoor({
-          schedule: input.schedule,
-          subjectProfile: input.subjectProfile ?? null,
-          workspaceId: ctx.workspaceId ?? null,
-        });
+        refuseUnfoldableSchedule(input.schedule, input.subjectProfile ?? null);
       }
       await assertNoPlaybookLinkCycle({
         id: input.proposedPlaybookId ?? null,
@@ -2632,11 +2629,10 @@ export const playbooksRouter = router({
         }) as typeof input.subjectProfile;
       }
       if (input.schedule) {
-        await assertRetiredScheduleFoldsAtDoor({
-          schedule: input.schedule,
-          subjectProfile: input.subjectProfile ?? existing.subjectProfile,
-          workspaceId: existing.workspaceId,
-        });
+        refuseUnfoldableSchedule(
+          input.schedule,
+          input.subjectProfile ?? existing.subjectProfile
+        );
       }
       // 2b'. A loop of links / steps is refused (the create door's rule):
       // on a change of what it follows, its steps or its name, and when it

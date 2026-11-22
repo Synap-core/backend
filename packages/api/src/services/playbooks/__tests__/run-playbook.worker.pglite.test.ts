@@ -515,6 +515,18 @@ describe("per_thing schedule — one run per thing of the set", () => {
     expect(await subjects()).toEqual([kept]);
   });
 
+  it("the playbook's stored filter selects which things run", async () => {
+    await declareLifecycle("stage");
+    h.subjectProfile = {
+      profileSlug: "deal",
+      filter: '{"properties.billing":"monthly"}',
+    };
+    const kept = await deal("review", { billing: "monthly" });
+    await deal("review", { billing: "annual" });
+    await tick({ status: "review" });
+    expect(await subjects()).toEqual([kept]);
+  });
+
   it("nothing in the set → no-subject, no session", async () => {
     await declareLifecycle("stage");
     await deal("won");

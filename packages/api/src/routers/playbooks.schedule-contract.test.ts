@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createInputSchema, updateInputSchema } from "./playbooks.js";
-import { scheduleActivatorOf } from "../schemas/playbook-schedule.js";
+import { retiredScheduleRefusal } from "../schemas/playbook-schedule.js";
 
 const PLAYBOOK_ID = "00000000-0000-4000-8000-000000000001";
 const CREATE_BASE = { name: "Weekly review", goalTemplate: "Review the week" };
@@ -69,18 +69,18 @@ describe("playbooks doors — schedule.mode survives the write", () => {
     expect(run.success).toBe(true);
     expect(run.data?.schedule?.handToAgentId).toBe(AGENT);
     // An appointment waits for the person: handing it to an agent cannot
-    // become an activator, so the door refuses it (assertRetiredScheduleFolds).
+    // become an activator, so the door refuses it.
     expect(
-      scheduleActivatorOf(
+      retiredScheduleRefusal(
         {
           cron: "0 9 * * 1",
           enabled: true,
           mode: "appointment",
           handToAgentId: AGENT,
         },
-        { profileSlug: null, statusProperty: null, filter: undefined }
+        null
       )
-    ).toEqual({ error: expect.stringContaining("handToAgentId") });
+    ).toContain("handToAgentId");
     // A blank id is not an agent.
     expect(
       updateInputSchema.safeParse({

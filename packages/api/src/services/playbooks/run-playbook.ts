@@ -2641,7 +2641,8 @@ const loadStatusGroups = () => import("../lifecycle/status-groups.js");
  * one-live-run and its param binding are the ones every run has). The set:
  * the things in the worker's status under its scope — the lifecycle column
  * when the status lives there, else the playbook's `statusProperty` read off
- * each thing — kept by `only` / `unless`, at most `WORKER_BATCH_LIMIT`.
+ * each thing — kept by the playbook's `subjectProfile.filter`, `only` and
+ * `unless`, at most `WORKER_BATCH_LIMIT`.
  * Nothing in it ⇒ `no-subject`. The first run is the reply; a failed one is
  * logged and the others still run (all failing throws the last error).
  */
@@ -2696,10 +2697,15 @@ async function workerSetOfThings(
   const statusProperty =
     readPlaybookProcess(playbook.subjectProfile).statusProperty ??
     lifecycleProperty;
+  const filter = (playbook.subjectProfile as { filter?: unknown } | null)
+    ?.filter;
   const statuses = workerStatuses(worker.status);
   const onColumn = !statusProperty || statusProperty === lifecycleProperty;
   const byProperties =
-    (!onColumn && statuses.length > 0) || !!worker.only || !!worker.unless;
+    (!onColumn && statuses.length > 0) ||
+    !!worker.only ||
+    !!worker.unless ||
+    !!filter;
   const { listThingsInStatus } = await loadStatusGroups();
   const set = await listThingsInStatus({
     profileSlug: worker.profileSlug,
@@ -2709,8 +2715,18 @@ async function workerSetOfThings(
     projectId: filing.projectId,
     limit: byProperties ? WORKER_SET_SCAN_LIMIT : WORKER_BATCH_LIMIT,
   });
-  const ids = set.items.map((i) => i.id);
-  if (!byProperties || ids.length === 0) return ids;
+  const listed = set.items.map((i) => i.id);
+  if (!byProperties || listed.length === 0) return listed;
+  const ids = filter
+    ? await loadVisibleEntityIds({
+        ids: listed,
+        workspaceId: input.workspaceId,
+        ownerId: input.userId,
+        profileSlug: null,
+        filter,
+      })
+    : listed;
+  if (ids.length === 0) return [];
   const db = await getDb();
   const rows = await db
     .select({ id: entities.id, properties: entities.properties })
