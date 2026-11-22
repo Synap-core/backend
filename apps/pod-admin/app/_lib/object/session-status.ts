@@ -30,6 +30,7 @@
  */
 
 import {
+  isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
   type SessionStatus,
@@ -148,9 +149,12 @@ function move(key: SessionMoveKey): SessionMove {
   return { key, label: resolveActionLabel(key), ...MOVES[key] };
 }
 
-/** In motion and not yet ended — a person can pause it. */
+/**
+ * In motion and not yet ended — a person can pause it. A planned step
+ * (`forming`) has not started: it is started, like an appointment (P1).
+ */
 export function canPause(status: string): boolean {
-  return status === "active" || status === "forming";
+  return status === "active";
 }
 
 /** Suspended (by a person or by the reaper) — a person can pick it up. */
@@ -170,9 +174,10 @@ const NONE: SessionMoves = { primary: null, more: [] };
 /**
  * The moves from where the session stands:
  *   draft              → Accept · Discard (nothing else until it is decided)
- *   active / forming   → Close · Pause, Cancel
+ *   active             → Close · Pause, Cancel
  *   paused / stale     → Resume · Close, Cancel
- *   scheduled          → Start · Cancel
+ *   scheduled / forming → Start · Cancel (not started: an appointment, a
+ *                        planned step)
  *   closed / cancelled / failed → none
  * A member of a shared session gets none: only its owner changes it.
  */
@@ -184,7 +189,7 @@ export function sessionMoves(s: SessionStatusFacts): SessionMoves {
     return { primary: move("close"), more: [move("pause"), move("cancel")] };
   if (canResume(s.status))
     return { primary: move("resume"), more: [move("close"), move("cancel")] };
-  if (s.status === "scheduled")
+  if (s.status === "scheduled" || isPlannedSessionStatus(s.status))
     return { primary: move("start"), more: [move("cancel")] };
   return NONE;
 }
