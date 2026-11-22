@@ -56,6 +56,16 @@
  * entity yet, so none is sent. A role's move never matches (the dependency
  * rule reads the kind's own status).
  *
+ * A PLANNED STEP WAKES (founder decision P3, 21 Nov 2026). When nothing holds
+ * a dependent any more and it is a planned step (`forming`), the same moment
+ * WAKES it: `wakePlannedSession` (`planned-wake.ts`) moves it `forming →
+ * active` with a compare-and-set, if its `plannedFor` window is open too, and
+ * starts no agent. The notification is still the one piece of news. The
+ * hourly lifecycle sweep is the net (and the waker of a date). The wake is
+ * attempted BEFORE the notification's dedupe, so a redelivered event that
+ * finds the notice already sent still wakes a step a failed write left
+ * planned.
+ *
  * IDEMPOTENT on `(dependent, closed blocker)`, keyed on the durable
  * notification row's `groupKey` rather than on ordering — a re-delivered or
  * replayed close event is a no-op. Deliberately NOT keyed on the dependent
@@ -111,6 +121,7 @@ import {
   openOutputBlockerIds,
 } from "../services/focus-sessions/session-output-edges.js";
 import { NotificationService } from "./NotificationService.js";
+import { wakePlannedSession } from "../services/focus-sessions/planned-wake.js";
 
 const logger = createLogger({ module: "session-unblock-reactor" });
 
@@ -278,6 +289,7 @@ export const sessionUnblockNotifyReactor: Reactor = {
           dependent.userId
         );
         if (stillWaitingOnOutputs.length > 0) continue;
+        await wakeIfPlanned(dependent.id, "a session it waited on closed");
 
         const groupKey = unblockGroupKey(dependent.id, closedId);
         const [already] = await db
@@ -444,6 +456,7 @@ async function goalEnded(payload: SideEffectPayload): Promise<void> {
           if ((await openOutputBlockerIds(dep.id, dep.userId)).length > 0) {
             continue;
           }
+          await wakeIfPlanned(dep.id, "a goal it waited on closed");
         } else {
           const state = await readDependencyState(
             { kind: "track", id: dep.id },
@@ -608,6 +621,7 @@ async function entityDelivered(payload: SideEffectPayload): Promise<void> {
       if ((await openOutputBlockerIds(dep.id, dep.userId)).length > 0) {
         continue;
       }
+      await wakeIfPlanned(dep.id, "a decision it waited on was taken");
       const groupKey = unblockGroupKey(dep.id, entity.id);
       const [already] = await db
         .select({ id: notifications.id })
@@ -657,6 +671,22 @@ async function entityDelivered(payload: SideEffectPayload): Promise<void> {
         "Failed to notify session unblocked by an entity"
       );
     }
+  }
+}
+
+/**
+ * Nothing holds this dependent any more: wake it if it is a planned step
+ * (`planned-wake.ts`). Never throws: a failed wake is logged, the notification
+ * still goes, and the hourly sweep wakes it.
+ */
+async function wakeIfPlanned(sessionId: string, cause: string): Promise<void> {
+  try {
+    await wakePlannedSession({
+      sessionId,
+      reason: `Its last blocker delivered (${cause}): it starts now.`,
+    });
+  } catch (error) {
+    logger.error({ error, sessionId }, "Failed to wake a planned step");
   }
 }
 

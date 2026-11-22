@@ -66,6 +66,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import type { RunHolder } from "@synap-core/types/units";
 import { passedOverLine, type RunOn } from "@synap-core/types/agents";
 import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
@@ -84,6 +85,17 @@ export function claimWindowMinutes(kind: RunHolder["kind"]): number {
 }
 
 /**
+ * The run's session is a PLANNED step (`forming`, founder P1/P4): it has not
+ * started, so its run is not late, unclaimed or orphaned — it waits for the
+ * pod to wake the step (api `planned-wake.ts`). Every sweep below leaves it.
+ */
+export const RUN_SESSION_NOT_PLANNED = drizzleSql`NOT EXISTS (
+  SELECT 1 FROM focus_sessions fs
+  WHERE fs.id = ${playbookRuns.sessionId}
+    AND fs.status = ${PLANNED_SESSION_STATUS}
+)`;
+
+/**
  * A `queued` run past its holder's claim window, whose session does not wait
  * on the person and has no A2AI turn still waiting for a worker. A run with
  * no `holder` is judged from its start, as Synap AI's.
@@ -95,7 +107,8 @@ export const RUN_UNCLAIMED = and(
                     THEN ${claimWindowMinutes("synap_ai")}::int
                     ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
   drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
-  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`
+  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`,
+  RUN_SESSION_NOT_PLANNED
 )!;
 
 /**
@@ -216,7 +229,8 @@ function runQuietFor(hours: number) {
     drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
     sessionQuietFor(hours),
     RUN_STAGE_NOT_WAITING,
-    RUN_STAGE_AGENT_NOT_LIVE
+    RUN_STAGE_AGENT_NOT_LIVE,
+    RUN_SESSION_NOT_PLANNED
   )!;
 }
 

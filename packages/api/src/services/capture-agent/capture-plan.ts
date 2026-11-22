@@ -32,6 +32,12 @@ import {
 } from "@synap-core/types/focus-sessions";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import {
+  STEP_DUE_BY_KEY,
+  STEP_PLANNED_FOR_KEY,
+  isStepDate,
+  stepDateRefusal,
+} from "@synap-core/types/units";
+import {
   skillAuthoringProblem,
   skillSlugProblem,
 } from "../skills/skill-authoring.js";
@@ -458,6 +464,13 @@ export function validatePlanOperations(
         }
         for (const id of op.blockedBySessionIds ?? [])
           expectId(i, "blockedBySessionIds", id);
+        // B5 / P4: the step's time and birth, as the session door checks them.
+        for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+          if (op[key] != null && !isStepDate(op[key]))
+            push(i, stepDateRefusal(key));
+        }
+        if (op.startNow !== undefined && typeof op.startNow !== "boolean")
+          push(i, "startNow must be true or false");
         if (op.subjectRef) expectRef(i, "subjectRef", op.subjectRef, "entity");
         if (op.subjectEntityId)
           expectId(i, "subjectEntityId", op.subjectEntityId);

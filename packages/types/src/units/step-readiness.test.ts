@@ -10,7 +10,10 @@ import {
   openBlockersOf,
   pathRowUnitView,
   sessionUnitInput,
+  stepBirthStatus,
+  stepDateRefusal,
   stepDateStart,
+  stepTimePatch,
   stepTimeOf,
   stepWindowReached,
   type StepReadinessFacts,
@@ -248,5 +251,43 @@ describe("a PLANNED step's mark (forming is not running, P1)", () => {
         unitFacts: { owedFromYou: 0, pendingDecisions: 0 },
       }).state
     ).toBe("not_started");
+  });
+});
+
+describe("stepBirthStatus — how a step is born (P4)", () => {
+  it("a step that waits is born planned unless it says startNow", () => {
+    expect(stepBirthStatus({ hasBlockers: true, now: NOW })).toBe("forming");
+    expect(
+      stepBirthStatus({ hasBlockers: true, startNow: true, now: NOW })
+    ).toBe("active");
+    // A date to come waits too (B5), a date reached does not.
+    expect(
+      stepBirthStatus({ hasBlockers: false, plannedFor: "2027-01", now: NOW })
+    ).toBe("forming");
+    expect(
+      stepBirthStatus({ hasBlockers: false, plannedFor: "2026-11", now: NOW })
+    ).toBe("active");
+  });
+
+  it("nothing to wait on: active, as every session was (rules out 'every plan step is planned')", () => {
+    expect(stepBirthStatus({ hasBlockers: false, now: NOW })).toBe("active");
+    expect(
+      stepBirthStatus({ hasBlockers: false, startNow: false, now: NOW })
+    ).toBe("active");
+  });
+});
+
+describe("stepTimePatch — what a door stores", () => {
+  it("keeps only the keys given; null clears; a malformed date is named", () => {
+    expect(stepTimePatch({})).toEqual({ ok: true, patch: {} });
+    expect(stepTimePatch({ plannedFor: "2027-03", dueBy: null })).toEqual({
+      ok: true,
+      patch: { plannedFor: "2027-03", dueBy: null },
+    });
+    expect(stepTimePatch({ dueBy: "next week" })).toEqual({
+      ok: false,
+      invalid: "dueBy",
+    });
+    expect(stepDateRefusal("dueBy")).toMatch(/^dueBy must be a month/);
   });
 });

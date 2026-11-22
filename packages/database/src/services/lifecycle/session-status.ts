@@ -24,10 +24,11 @@
  * The transitions are not dispatched inline (a caller's own transaction may
  * still be open): the sweeper delivers them within a minute or two.
  */
-import { and, asc, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
+  PLANNED_SESSION_STATUS,
   SESSION_STATUSES,
   SESSION_STATUS_DECLARATION,
   type SessionStatus,
@@ -178,9 +179,25 @@ export async function setSessionStatus(
       holds.set(r.id, decided.hold);
     }
 
+    // A PLANNED step STARTS when it leaves `forming` for a started status
+    // (P1/P3: the wake, or a person or agent starting it): its `startedAt`
+    // is that moment, not its birth months before — every clock that reads
+    // the start (needs-you's Stopped, recall) then measures the real work.
+    // SET expressions read the OLD row, so `status` is the one it left.
+    const starts =
+      (toCategory === "active" || toCategory === "paused") &&
+      input.set?.startedAt === undefined;
     const rows = await tx
       .update(focusSessions)
-      .set({ ...input.set, status: input.to })
+      .set({
+        ...input.set,
+        ...(starts
+          ? {
+              startedAt: sql`CASE WHEN ${focusSessions.status} = ${PLANNED_SESSION_STATUS} THEN now() ELSE ${focusSessions.startedAt} END`,
+            }
+          : {}),
+        status: input.to,
+      })
       .where(
         inArray(
           focusSessions.id,
