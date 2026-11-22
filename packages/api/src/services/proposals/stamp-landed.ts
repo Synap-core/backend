@@ -27,7 +27,11 @@ type LandedResult = Pick<
 
 /** The refs only the executor's result names. Pure. */
 export function landedOfResult(
-  row: { proposalType?: string | null; targetType?: string | null; data?: unknown },
+  row: {
+    proposalType?: string | null;
+    targetType?: string | null;
+    data?: unknown;
+  },
   result: LandedResult
 ): ProposalLandedRef[] {
   const out: ProposalLandedRef[] = [];
@@ -35,7 +39,12 @@ export function landedOfResult(
   if (!role) return out;
   const { primaryId, primaryKind, effect } = result;
   if (primaryId && primaryKind !== null) {
-    pushLanded(out, primaryKind ?? landedKindOf(row.targetType), primaryId, role);
+    pushLanded(
+      out,
+      primaryKind ?? landedKindOf(row.targetType),
+      primaryId,
+      role
+    );
   }
   if (effect?.applied === "verified") {
     const kind = landedKindOf(effect.subject);
@@ -57,7 +66,12 @@ export async function stampLanded(
   try {
     const row = await database.query.proposals.findFirst({
       where: eq(proposals.id, proposalId),
-      columns: { status: true, proposalType: true, targetType: true, data: true },
+      columns: {
+        status: true,
+        proposalType: true,
+        targetType: true,
+        data: true,
+      },
     });
     if (!row || !isProposalApplied(row)) return;
     const data = row.data as Record<string, unknown> | null;

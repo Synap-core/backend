@@ -242,7 +242,12 @@ describe("readMaterializedOps — the one reader of byOp", () => {
       })
     ).toEqual([
       { ref: "lead", op: "create_entity", id: A, linked: true },
-      { ref: "lead->acme:works_at", op: "create_relation", id: B, linked: true },
+      {
+        ref: "lead->acme:works_at",
+        op: "create_relation",
+        id: B,
+        linked: true,
+      },
       {
         ref: "$op1",
         op: "create_entity",

@@ -24,7 +24,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: drizzle(client, { schema }) };
 });
 
-import { allSchemaTables, pgliteSchemaDdl } from "../../__tests__/pglite-ddl.js";
+import {
+  allSchemaTables,
+  pgliteSchemaDdl,
+} from "../../__tests__/pglite-ddl.js";
 import { enrichProposalsForDisplay } from "./display.js";
 
 const VIEWER = "viewer-1";

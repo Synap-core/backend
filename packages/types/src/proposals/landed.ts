@@ -139,7 +139,9 @@ export function readMaterializedOps(materialized: unknown): MaterializedOp[] {
   if (!byOp) return [];
   return Object.entries(byOp).flatMap(([ref, entry]): MaterializedOp[] => {
     const e = record(entry);
-    const idKey = e ? BY_OP_ID_KEYS.find((k) => typeof e[k] === "string") : undefined;
+    const idKey = e
+      ? BY_OP_ID_KEYS.find((k) => typeof e[k] === "string")
+      : undefined;
     if (!e || !idKey || typeof e.op !== "string") return [];
     return [
       {
@@ -147,7 +149,9 @@ export function readMaterializedOps(materialized: unknown): MaterializedOp[] {
         op: e.op,
         id: e[idKey] as string,
         linked: e.linked === true || e.preExisting === true,
-        ...(typeof e.revertedAt === "string" ? { revertedAt: e.revertedAt } : {}),
+        ...(typeof e.revertedAt === "string"
+          ? { revertedAt: e.revertedAt }
+          : {}),
       },
     ];
   });
@@ -176,7 +180,8 @@ export function landedFromRecord(data: unknown): ProposalLandedRef[] {
   const materialized = record(envelope?.materialized);
   if (materialized) {
     for (const [field, kind] of CREATED_LISTS) {
-      for (const id of ids(materialized[field])) pushLanded(out, kind, id, "created");
+      for (const id of ids(materialized[field]))
+        pushLanded(out, kind, id, "created");
     }
     for (const op of readMaterializedOps(materialized)) {
       if (op.op === "create_entity" && op.linked) {
@@ -213,7 +218,12 @@ export function landedFromRecord(data: unknown): ProposalLandedRef[] {
         (PROPOSAL_LANDED_ROLES as readonly string[]).includes(role)
       ) {
         const kind = typeof ref?.kind === "string" ? ref.kind : null;
-        pushLanded(out, landedKindOf(kind), ref?.id, role as ProposalLandedRole);
+        pushLanded(
+          out,
+          landedKindOf(kind),
+          ref?.id,
+          role as ProposalLandedRole
+        );
       }
     }
   }
