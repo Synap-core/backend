@@ -59,10 +59,7 @@ import {
   type RunPosture,
 } from "./run-posture.js";
 import { userVisibleWhere } from "@synap/database";
-import {
-  visibleSkillsAnyWorkspaceWhere,
-  visibleSkillsWhere,
-} from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { isToolRowLaunchable } from "./verb-launchable.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { verbType } from "./capability-catalog.js";
@@ -1032,9 +1029,9 @@ export async function listCapabilities(
     // the user tier and re-ANDs the membership lens on the workspace tier. At
     // pod altitude it degrades to `pod OR (user AND userId = caller)`.
     .where(
-      ctx.allSpaces
-        ? visibleSkillsAnyWorkspaceWhere(ctx.userId)
-        : visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined)
+      visibleSkillsWhere(ctx.userId, ctx.workspaceId ?? undefined, {
+        allSpaces: ctx.allSpaces,
+      })
     );
 
   // The skill→tool `requires` edges live in the `links` table, not on the skill row.

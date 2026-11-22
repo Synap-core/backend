@@ -779,7 +779,7 @@ export async function reconcileWorkspaceFromDefinition(
         });
         if (resolution.createScope === "shared")
           await profileRepo
-            .grantAccess(resolved.id, workspaceId)
+            .grantAccess(resolved.id, workspaceId, userId)
             .catch(() => {});
       } else {
         // dry-run: we can't resolve an id; still report property diffs below as

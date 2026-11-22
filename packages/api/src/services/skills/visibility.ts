@@ -44,6 +44,12 @@ export interface SkillVisibilityOptions {
    * waives.
    */
   includeExpired?: boolean;
+  /**
+   * The pod-wide lens: every workspace skill of every space the user can see
+   * (with no workspace and no `allSpaces`, workspace skills are left out). A
+   * pod-wide reader (the shadow detector, diagnose by id) needs it.
+   */
+  allSpaces?: boolean;
 }
 
 /**
@@ -58,46 +64,28 @@ function ownUserSkillWhere(userId: string): SQL {
   )!;
 }
 
+/**
+ * Pod skills, the user's own, and workspace skills: of the selected workspace,
+ * or of every space the user can see (`allSpaces`).
+ */
 export function visibleSkillsWhere(
   userId: string,
   workspaceId?: string,
   options?: SkillVisibilityOptions
 ): SQL {
-  const tiers = !workspaceId
-    ? or(eq(skills.scope, "pod"), ownUserSkillWhere(userId))!
-    : or(
-        eq(skills.scope, "pod"),
-        ownUserSkillWhere(userId),
-        and(
-          eq(skills.scope, "workspace"),
+  const inSpace = options?.allSpaces
+    ? userVisibleWhere(skills.workspaceId, userId)
+    : workspaceId
+      ? and(
           eq(skills.workspaceId, workspaceId),
           userVisibleWhere(skills.workspaceId, userId)
         )
-      )!;
-
-  return options?.includeExpired ? tiers : and(tiers, ruleNotExpiredWhere())!;
-}
-
-/**
- * Every skill the user can see in ANY workspace they can see — the pod-wide
- * lens. `visibleSkillsWhere(userId)` without a workspace is NOT this: its
- * workspace tier needs a selected workspace, so it drops every
- * `scope:"workspace"` skill. A pod-wide reader (the shadow detector, diagnose
- * by id) that used it was blind to them — five stale workspace-scoped
- * `ingest_message` copies stayed invisible and their Discord tools could never
- * be removed (2026-09-25).
- */
-export function visibleSkillsAnyWorkspaceWhere(
-  userId: string,
-  options?: SkillVisibilityOptions
-): SQL {
+      : undefined;
   const tiers = or(
     eq(skills.scope, "pod"),
     ownUserSkillWhere(userId),
-    and(
-      eq(skills.scope, "workspace"),
-      userVisibleWhere(skills.workspaceId, userId)
-    )
+    inSpace ? and(eq(skills.scope, "workspace"), inSpace) : undefined
   )!;
+
   return options?.includeExpired ? tiers : and(tiers, ruleNotExpiredWhere())!;
 }

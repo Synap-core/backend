@@ -64,9 +64,12 @@ import {
   entityFacets,
   profiles,
   profileProperties,
-  profileWorkspaceAccess,
+  spaceAccess,
   users,
   workspaceMembers,
+  workspaces,
+  podMembers,
+  projectMembers,
 } from "../schema/index.js";
 import {
   detachTeamMemberFacet,
@@ -117,7 +120,11 @@ beforeAll(async () => {
     entityFacets,
     profiles,
     profileProperties,
-    profileWorkspaceAccess,
+    spaceAccess,
+    // The kind floor reads the person's spaces (member, owned, pod-visible).
+    workspaces,
+    podMembers,
+    projectMembers,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }

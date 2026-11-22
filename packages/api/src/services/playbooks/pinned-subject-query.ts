@@ -18,7 +18,7 @@ import {
   listableEntityWhere,
 } from "@synap/database";
 import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
-import { entityQueryVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
+import { runEntityVisibilityWhere } from "@synap/jobs/workers/entity-query-scope.js";
 import {
   numericPropertyExpr,
   parseQueryFilterConditions,
@@ -39,19 +39,6 @@ const BARE_CONTEXT: StepContext = {
   automation: { id: "", state: {} },
 };
 
-function visibilityFor(workspaceId: string | null, ownerId: string) {
-  if (workspaceId) {
-    return entityQueryVisibilityWhere({ workspaceId, ownerId });
-  }
-  // A playbook with no workspace only sees the owner's pod-wide records.
-  // `podOnly` does not read `workspaceId`; the owner floor is the guard.
-  return entityQueryVisibilityWhere({
-    workspaceId: ownerId,
-    ownerId,
-    podOnly: true,
-  });
-}
-
 /** Visible rows for a write check. Kind is NOT filtered — the caller names a mismatch. */
 export async function loadVisibleEntitiesById(args: {
   ids: readonly string[];
@@ -66,7 +53,7 @@ export async function loadVisibleEntitiesById(args: {
     .where(
       and(
         inArray(entities.id, [...args.ids]),
-        visibilityFor(args.workspaceId, args.ownerId)
+        runEntityVisibilityWhere(args.workspaceId, args.ownerId)
       )
     );
 }
@@ -82,7 +69,7 @@ export async function loadVisibleEntityIds(args: {
   const db = await getDb();
   const conditions = [
     inArray(entities.id, [...args.ids]),
-    visibilityFor(args.workspaceId, args.ownerId),
+    runEntityVisibilityWhere(args.workspaceId, args.ownerId),
   ];
   if (args.profileSlug) {
     // The kind-aware door: a role-subject playbook's pins are its WEARERS,
@@ -129,7 +116,7 @@ export async function findFallbackSubject(args: {
       args.profileSlug,
       await resolveFacetVisibilityScope(args.ownerId, args.workspaceId)
     ),
-    visibilityFor(args.workspaceId, args.ownerId),
+    runEntityVisibilityWhere(args.workspaceId, args.ownerId),
     // THE listing rule: a fallback is a pick from a LIST ("the oldest open
     // deal"), so it never lands on a probe or demo row — except the demo
     // rows of the project this run files into. (The pinned ids above are

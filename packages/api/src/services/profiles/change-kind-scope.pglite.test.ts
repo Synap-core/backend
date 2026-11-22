@@ -187,14 +187,14 @@ beforeAll(async () => {
     }
   }
   await h.client!.exec(
-    "create unique index if not exists pwa_uniq on profile_workspace_access (profile_id, workspace_id);"
+    "create unique index if not exists pwa_uniq on space_access (object_type, object_id, workspace_id);"
   );
   registerProfileExecutors();
 }, 120_000);
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from profiles; delete from profile_workspace_access; delete from proposals; delete from workspaces; delete from workspace_members; delete from users;"
+    "delete from profiles; delete from space_access; delete from proposals; delete from workspaces; delete from workspace_members; delete from users;"
   );
   await q(
     `insert into users (id, email, user_type) values ($1, 'u@example.test', 'human')`,

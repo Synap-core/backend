@@ -56,6 +56,8 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  usableInSpace,
+  notUsableInSpaceReason,
   focusSessions,
   playbooks,
   playbookRuns,
@@ -344,17 +346,12 @@ export async function followPlaybook(
       reason: `No playbook ${followPlaybookId} you can access.`,
     };
   }
-  // The write-side IDOR floor `resolveRunnablePlaybook` applies, stated here
-  // rather than borrowed: a workspace-scoped playbook may not be bound to a
-  // session living in a different workspace.
-  if (
-    playbook.workspaceId &&
-    session.workspaceId &&
-    playbook.workspaceId !== session.workspaceId
-  ) {
+  // The run door's rule: a session in a space follows only a playbook usable
+  // there. A session in no space is not checked (it runs nowhere yet).
+  if (session.workspaceId && !usableInSpace(playbook, session.workspaceId)) {
     return {
       status: "refused",
-      reason: `Playbook ${playbook.id} belongs to another workspace than this session.`,
+      reason: notUsableInSpaceReason("Playbook", playbook, session.workspaceId),
     };
   }
 

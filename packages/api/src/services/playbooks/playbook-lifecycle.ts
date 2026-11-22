@@ -50,6 +50,8 @@
 
 import {
   getDb,
+  usableInSpace,
+  notUsableInSpaceReason,
   eq,
   and,
   isNull,
@@ -597,41 +599,20 @@ export async function resolveRunnablePlaybook(input: {
 }
 
 /**
- * Why `playbook` cannot be used in the space `workspaceId` (`null` = no
- * space: a pod-wide caller), or `null` when it can. THE rule
- * {@link resolveRunnablePlaybook} applies, exported so a door that already
- * holds the row asks it BEFORE it files anything (`playbooks.run` before its
- * gate, the `playbook/run` approval before its dispatch claim, the automation
- * door before it stores a flow), instead of a second predicate (tickets
- * e93cf92b, 6c15da33). A pod-wide playbook (no home) is usable everywhere.
- */
-export function playbookNotInSpaceReason(
-  playbook: Pick<Playbook, "id" | "name" | "workspaceId">,
-  workspaceId: string | null
-): string | null {
-  if (!playbook.workspaceId || playbook.workspaceId === workspaceId) {
-    return null;
-  }
-  // Keeps the words "not visible in": the phrase this refusal has always
-  // carried, which tests and agents match on.
-  return (
-    `Playbook "${playbook.name}" (${playbook.id}) lives in space ${playbook.workspaceId}, ` +
-    `so it is not visible in ${workspaceId ? `space ${workspaceId}` : "a run outside its space"}: ` +
-    `run it in space ${playbook.workspaceId}.`
-  );
-}
-
-/**
- * Why a run of `playbook` in `workspaceId` would be refused at the run door:
- * {@link playbookNotInSpaceReason}, then a retired playbook (archived or
- * paused). `null` = it runs.
+ * Why a run of `playbook` in `workspaceId` (`null` = no space) would be
+ * refused at the run door, or `null` when it runs: the one usable-in-space
+ * rule (`usableInSpace`: its home, or anywhere when pod-wide),
+ * then a retired playbook (archived or paused). Exported so a door that
+ * already holds the row asks it BEFORE it files anything (`playbooks.run`
+ * before its gate, the `playbook/run` approval before its dispatch claim).
  */
 export function playbookRunRefusal(
   playbook: Pick<Playbook, "id" | "name" | "workspaceId" | "status">,
   workspaceId: string | null
 ): string | null {
-  const away = playbookNotInSpaceReason(playbook, workspaceId);
-  if (away) return away;
+  if (!usableInSpace(playbook, workspaceId)) {
+    return notUsableInSpaceReason("Playbook", playbook, workspaceId);
+  }
   if (playbook.status === "archived" || playbook.status === "paused") {
     return `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`;
   }

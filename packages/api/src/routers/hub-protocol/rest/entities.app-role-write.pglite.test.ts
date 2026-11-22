@@ -460,7 +460,7 @@ beforeAll(async () => {
     [ROLE_PARTNER, ROLE_ORPHAN]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2),($3,$2),($3,$4)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2),('profile',$3,$2),('profile',$3,$4)`,
     [ROLE_CLIENT, CRM, ROLE_PARTNER, BRAND]
   );
   // `deal`: shared, homed nowhere, granted to CRM, with its own lifecycle.
@@ -470,7 +470,7 @@ beforeAll(async () => {
     [ROLE_DEAL]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE_DEAL, CRM]
   );
   // The lead's ONE lifecycle, `leadStage` (work model wave 0).

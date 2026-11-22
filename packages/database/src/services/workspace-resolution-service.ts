@@ -41,7 +41,7 @@ import {
   focusSessions,
   links,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   workspaces,
   workspaceMembers,
 } from "../schema/index.js";
@@ -930,8 +930,11 @@ export async function resolveWorkspacePlacement(
         implied.add(p.workspaceId);
       } else if (p.scope === "shared") {
         hadOntologySignal = true;
-        const grants = await db.query.profileWorkspaceAccess.findMany({
-          where: eq(profileWorkspaceAccess.profileId, p.id),
+        const grants = await db.query.spaceAccess.findMany({
+          where: and(
+            eq(spaceAccess.objectType, "profile"),
+            eq(spaceAccess.objectId, p.id)
+          ),
           columns: { workspaceId: true },
         });
         for (const g of grants) implied.add(g.workspaceId);
