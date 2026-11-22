@@ -68,10 +68,11 @@ async function session(
   const id = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, workspace_id, goal, title, status, metadata, started_at, created_at, updated_at)
-     values ($1, $2, null, $3, $3, $4, $5::jsonb, $6, now() - $7::interval, now() - $7::interval)`,
+     values ($1, $2, null, $3, $4, $5, $6::jsonb, $7, now() - $8::interval, now() - $8::interval)`,
     [
       id,
       OWNER,
+      title,
       title,
       status,
       JSON.stringify(opts.metadata ?? {}),
