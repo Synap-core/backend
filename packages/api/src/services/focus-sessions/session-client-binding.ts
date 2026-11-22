@@ -20,10 +20,28 @@
  *
  * A DETOUR (`suspendedIntent`) keeps the stamp: the conversation itself steps
  * into it and pops back. A start with no parent keeps it too.
+ *
+ * ATTACH ON NAMING (founder's answer 6, 21 Nov 2026; finding 3edcbe5c): a
+ * conversation that has NO session of its own and names an existing session
+ * as its own (`sessionId` on a write, `fromSessionId` on a coordination post)
+ * is attached to it ({@link attachConversationToNamedSession}). A lead that
+ * moves to a new conversation (a restart, `/clear`, `/branch`) thereby takes
+ * its wave session back the first time it names it, instead of being bound to
+ * the first lane it starts.
  */
 
 import { createLogger } from "@synap-core/core";
-import { db, and, eq, focusSessions } from "@synap/database";
+import {
+  db,
+  and,
+  eq,
+  inArray,
+  drizzleSql,
+  focusSessions,
+  conversationCwdPatch,
+} from "@synap/database";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
+import { parseRunnerClientKey } from "./session-runners.js";
 
 const logger = createLogger({ module: "session-client-binding" });
 
@@ -96,5 +114,99 @@ export async function newSessionClientKey(
       "parent binding read failed; the new session is not bound to the conversation"
     );
     return null;
+  }
+}
+
+/**
+ * MCP tools whose `sessionId` names the session the tool ACTS ON (a lead
+ * updates, grades, closes or reruns a lane), not the caller's own session:
+ * naming one there never attaches the conversation to it.
+ */
+export const SESSION_ACTED_ON_TOOLS: ReadonlySet<string> = new Set([
+  "synap_update_session",
+  "synap_evaluate_session",
+  "synap_complete_session",
+  "synap_revert_session",
+  "synap_continue_session",
+  "synap_rerun_session",
+  "synap_promote_session_to_playbook",
+]);
+
+/**
+ * Attach THIS conversation to the session it named, when it has none of its
+ * own. One conditional UPDATE, so the rule and the write cannot drift apart.
+ * The session's `metadata.clientKey` becomes this conversation's key when ALL
+ * hold; otherwise nothing changes and the call is attributed to the named
+ * session for this call only, as before:
+ *
+ *  - the client NAMED its conversation (`key:<apiKeyId>|conv:<harness>:<id>`).
+ *    A key-scoped client, a per-call run, an IS channel or a pod-minted MCP
+ *    session id never attaches: none of them is one conversation a later
+ *    request can be told apart by (option A, D1);
+ *  - the conversation has no open session it STARTED (an auto-opened receipt
+ *    does not count: it groups writes, it is not work the conversation chose).
+ *    A conversation that has its own session and names another (a lead naming
+ *    a lane, a teammate naming its lane under its lead's conversation) keeps
+ *    its own: the named session is used for that call only;
+ *  - the named session is the caller's, open, started (not a receipt), and
+ *    bound to the SAME API key (one of its earlier conversations or runs).
+ *    A session bound to another key is another client's work, and a session
+ *    bound to no client is the person's: neither is ever taken over.
+ *
+ * Returns whether it attached. Never throws: a failed attach costs only
+ * ambient filing, never the call.
+ */
+export async function attachConversationToNamedSession(p: {
+  userId: string;
+  clientKey: string | null | undefined;
+  sessionId: string;
+}): Promise<boolean> {
+  const conversation = parseRunnerClientKey(p.clientKey);
+  if (!conversation || !p.clientKey) return false;
+  const clientKey = p.clientKey;
+  const sameKey = `key:${conversation.apiKeyId}`;
+  const boundKey = drizzleSql`lower(${focusSessions.metadata} ->> 'clientKey')`;
+  const started = drizzleSql`NOT coalesce((${focusSessions.metadata} ->> 'autoOpened')::boolean, false)`;
+  try {
+    const rows = await db
+      .update(focusSessions)
+      .set({
+        metadata: drizzleSql`coalesce(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
+          { clientKey, ...conversationCwdPatch(clientKey) }
+        )}::jsonb`,
+      })
+      .where(
+        and(
+          eq(focusSessions.id, p.sessionId),
+          eq(focusSessions.userId, p.userId),
+          inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
+          started,
+          drizzleSql`${focusSessions.metadata} ->> 'clientKey' IS DISTINCT FROM ${clientKey}`,
+          drizzleSql`(${boundKey} = ${sameKey} OR left(${boundKey}, ${sameKey.length + 1}) = ${`${sameKey}|`})`,
+          drizzleSql`NOT EXISTS (
+            SELECT 1 FROM focus_sessions own
+            WHERE own.user_id = ${p.userId}
+              AND own.status IN (${drizzleSql.join(
+                IN_FLIGHT_SESSION_STATUSES.map((s) => drizzleSql`${s}`),
+                drizzleSql`, `
+              )})
+              AND own.metadata ->> 'clientKey' = ${clientKey}
+              AND NOT coalesce((own.metadata ->> 'autoOpened')::boolean, false)
+          )`
+        )
+      )
+      .returning({ id: focusSessions.id });
+    if (rows.length === 0) return false;
+    logger.info(
+      { sessionId: p.sessionId, clientKey },
+      "conversation attached to the session it named"
+    );
+    return true;
+  } catch (err) {
+    logger.warn(
+      { err, sessionId: p.sessionId },
+      "attach on naming failed; the named session is used for this call only"
+    );
+    return false;
   }
 }

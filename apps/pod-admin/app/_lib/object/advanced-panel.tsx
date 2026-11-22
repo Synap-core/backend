@@ -13,6 +13,7 @@
 import { useMemo, type ReactNode } from "react";
 import { Accordion, AccordionItem } from "@heroui/react";
 import { CopyButton } from "../copy-button";
+import { DISCLOSURE_INDICATOR_PROPS } from "./disclosure";
 
 export interface AdvancedId {
   label: string;
@@ -45,6 +46,7 @@ export function AdvancedPanel({
       <AccordionItem
         key="advanced"
         aria-label="Advanced"
+        {...DISCLOSURE_INDICATOR_PROPS}
         title={
           <span className="text-[12.5px] text-foreground/65">Advanced</span>
         }

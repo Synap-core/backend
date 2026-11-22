@@ -41,8 +41,10 @@ import {
   entities,
   getDb,
   isNull,
+  ownerAndActor,
   playbookRuns,
   proposals,
+  runHolder,
 } from "@synap/database";
 import type {
   Playbook,
@@ -702,6 +704,7 @@ export async function executeGenerateRun(
       });
       if (open) return { kind: "open" as const, run: open };
     }
+    const owner = await ownerAndActor(tx, input.userId);
     const [inserted] = await tx
       .insert(playbookRuns)
       .values({
@@ -710,9 +713,12 @@ export async function executeGenerateRun(
         sessionId: null,
         executor: "generate",
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        // The pod makes the one call itself, now: it holds the run at once.
         status: "running",
+        holder: runHolder("machine", null, true),
         input: resolution.values,
-        createdBy: input.userId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
         generation: base,
       })

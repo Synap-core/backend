@@ -410,8 +410,23 @@ export async function assertPresenceForApproval(args: {
   proof?: PresenceProof | null;
   /** Which door, for the log and the event. */
   door: string;
+  /**
+   * The approval also sets an action's run mode the person ticked ("allow
+   * without review", `services/governance/verb-allow.ts`): the same act as
+   * `governanceRules.setActionMode`, so it asks what that path asks (unless a
+   * pod admin switched that path off), on THIS proposal's challenge.
+   */
+  setsActionMode?: boolean;
 }): Promise<PresenceVerdict | null> {
-  const reason = await presenceReasonFor(args.proposal);
+  const ownReason = await presenceReasonFor(args.proposal);
+  const modeReason =
+    !ownReason && args.setsActionMode
+      ? sensitiveActionReason(
+          SETS_ACTION_MODE_PATH,
+          await readPresenceSensitivity()
+        )
+      : null;
+  const reason = ownReason ?? modeReason;
   if (!reason) return null;
   return checkPresence({
     userId: args.userId,
@@ -421,9 +436,14 @@ export async function assertPresenceForApproval(args: {
     proof: args.proof,
     door: args.door,
     requestedFrom: requestedFrom(args.proposal),
-    grace: approvalGrace(args.proposal),
+    grace: ownReason
+      ? approvalGrace(args.proposal)
+      : { kind: "action", key: SETS_ACTION_MODE_PATH },
   });
 }
+
+/** The sensitive path whose act an approval's "allow without review" is. */
+const SETS_ACTION_MODE_PATH = "governanceRules.setActionMode" as const;
 
 /**
  * The gate of a sensitive decision that settles NO proposal (W3 slice 2):

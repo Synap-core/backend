@@ -417,6 +417,10 @@ export {
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";
 export {
+  sweepDegradedCaptures,
+  type DegradedSweepResult,
+} from "./services/captures/restructure-degraded-captures.js";
+export {
   runFirefliesIngest,
   type RunFirefliesIngestInput,
   type RunFirefliesIngestResult,
@@ -537,6 +541,9 @@ export { registerStageChildReactor } from "./services/playbooks/stage-child.js";
 export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
 export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
+export { registerRunBlockedReactors } from "./services/runs/run-blocked-ask.js";
+// Exported for @synap/jobs' `registerRunTurnPersisted` IoC slot.
+export { settleRunTurnPersisted } from "./services/runs/run-turn-end.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.
 export { runSessionRecall } from "./services/focus-sessions/session-recall.js";
@@ -550,6 +557,12 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
+// Exported for @synap/jobs' `registerAiHeldGateRegrader` IoC slot: a check
+// gate held because AI was not available grades again when AI is back.
+export { regradeAiHeldGate } from "./services/focus-sessions/ai-held-gate.js";
+// Exported for @synap/jobs' `registerAiAvailabilityNotifier` IoC slot: the
+// payers' notice when the pulled AI availability changes (W3 C5).
+export { notifyAiAvailabilityChange } from "./services/ai-availability/notify.js";
 export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
 export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
 export { advanceStageReactionEffect } from "./services/reactions/advance-stage-effect.js";

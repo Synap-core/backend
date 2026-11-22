@@ -509,7 +509,7 @@ describe("every door renders the same section", () => {
       capabilities: [],
       input: { runId },
     });
-    expect(res.status).toBe("running");
+    expect(res.status).toBe("queued");
     expect(h.kickoffs).toHaveLength(1);
     const kickoff = h.kickoffs[0]!;
     // The same section, byte for byte, BEFORE the goal.
@@ -574,7 +574,7 @@ describe("a TRIAL run (the rule lab, slice 1b)", () => {
       capabilities: [],
       input: { runId },
     });
-    expect(res.status).toBe("running");
+    expect(res.status).toBe("queued");
     const kickoff = h.kickoffs[0]!;
     expect(kickoff).toContain(SAID.draft);
     expect(kickoff).not.toContain(SAID.approved);

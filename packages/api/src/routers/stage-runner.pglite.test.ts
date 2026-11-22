@@ -579,6 +579,11 @@ describe("risk 2: a Synap AI turn that ends while a step is away", () => {
     await q(`update focus_sessions set current_stage = 'ship' where id = $1`, [
       sessionId,
     ]);
+    // The turn did something: a write filed in the session (`turn-effect.ts`).
+    await q(
+      `insert into proposals (id, session_id, status, agent_user_id, created_at) values ($1, $2, 'auto_approved', 'agent-synap', now())`,
+      [randomUUID(), sessionId]
+    );
     expect(await settle(sessionId)).toBe("completed");
     expect(await runStatus(sessionId)).toBe("completed");
   });

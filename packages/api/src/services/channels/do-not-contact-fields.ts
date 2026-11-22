@@ -115,3 +115,32 @@ export function clearsDoNotContact(write: {
     !isDoNotContactSet(write.properties)
   );
 }
+
+/**
+ * Does this write REPLACE the evidence of an opt-out already in force? The
+ * person is flagged (`existing`), a reason or date is recorded there, and the
+ * write sets it to another non-empty value (founder, 21 Nov 2026, finding
+ * 6d7af9b9). An app may do it, but only through the person's approval
+ * (`routers/entities/mutate.ts`). Setting a reason or date the first time,
+ * re-setting the same value, or a new opt-out on a person not flagged now
+ * stays direct; erasing one is {@link clearsDoNotContact}.
+ */
+export function replacesDoNotContactEvidence(
+  existing: unknown,
+  write: { properties?: unknown }
+): boolean {
+  if (!isDoNotContactSet(existing) || !isRecord(existing)) return false;
+  const properties = write.properties;
+  if (!isRecord(properties)) return false;
+  return DO_NOT_CONTACT_EVIDENCE.some((k) => {
+    const before = existing[k];
+    const after = properties[k];
+    return (
+      typeof before === "string" &&
+      before.trim() !== "" &&
+      typeof after === "string" &&
+      after.trim() !== "" &&
+      after.trim() !== before.trim()
+    );
+  });
+}

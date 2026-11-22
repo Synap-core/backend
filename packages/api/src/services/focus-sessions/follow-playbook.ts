@@ -66,6 +66,9 @@ import {
   desc,
   drizzleSql,
   liveRunStatusWhere,
+  listHolds,
+  ownerAndActor,
+  starterHolder,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -229,14 +232,19 @@ function stageKeysOf(playbook: { stages: unknown }): string[] {
  *   - a HUMAN gate is a PENDING proposal targeting the session
  *     (`openStageGate` → `STAGE_GATE_TARGET_TYPE` + `action: "stage_gate"`);
  *   - a CHECK gate is `metadata.checkGate` on the row (`applyCheckGate`),
- *     cleared by `resumeCheckGateIfMet`.
+ *     cleared by `resumeCheckGateIfMet` — and holding only while it is the
+ *     gate's OWN hold ({@link checkGateRecordHolds}).
  */
 export async function pendingStageGate(session: {
   id: string;
   metadata: unknown;
+  currentStage: string | null;
 }): Promise<"human" | "check" | null> {
   const bag = (session.metadata ?? {}) as Record<string, unknown>;
-  if (bag[CHECK_GATE_METADATA_KEY] != null) return "check";
+  const record = bag[CHECK_GATE_METADATA_KEY];
+  if (record != null && (await checkGateRecordHolds(session, record))) {
+    return "check";
+  }
   const [open] = await db
     .select({ id: proposals.id })
     .from(proposals)
@@ -256,6 +264,31 @@ export async function pendingStageGate(session: {
     )
     .limit(1);
   return open ? "human" : null;
+}
+
+/**
+ * Does a `metadata.checkGate` record still HOLD the session? The record
+ * outlives its hold: an `onFail` return leaves it (it says why the run went
+ * back) and nothing clears it but `resumeCheckGateIfMet`. Read as a hold
+ * forever, it froze a session its check had sent back (finding 881e0b61,
+ * session 6f5410fa): paused later for a reason of its own, no agent could
+ * resume or advance it. A record is STALE, and holds nothing, when
+ *   - the run no longer stands on the gated stage (sent back, or moved on), or
+ *   - the session's current hold is another one (paused for its own reason).
+ * Otherwise it holds, fail-closed: no hold recorded (a pause from before
+ * holds) is still the gate's.
+ */
+async function checkGateRecordHolds(
+  session: { id: string; currentStage: string | null },
+  record: unknown
+): Promise<boolean> {
+  const stageKey = (record as { stageKey?: unknown } | null)?.stageKey;
+  if (typeof stageKey !== "string") return true;
+  if (session.currentStage !== stageKey) return false;
+  const [current] = await listHolds(db, {
+    subjects: [{ subjectType: "focus_session", subjectId: session.id }],
+  });
+  return !current || current.hold.ref === `check:${stageKey}`;
 }
 
 /**
@@ -525,8 +558,9 @@ export async function followPlaybook(
         .where(eq(focusSessions.id, sessionId))
         .returning();
 
-      // The ledger row, WITH the definition pinned. Same five snapshot fields
-      // `create-session.ts` writes — a run executes what it started with.
+      // The ledger row, WITH the definition pinned: a run executes what it
+      // started with. The live session's worker holds it, working already.
+      const owner = await ownerAndActor(tx, userId, agentUserId);
       const [run] = await tx
         .insert(playbookRuns)
         .values({
@@ -535,12 +569,10 @@ export async function followPlaybook(
           sessionId,
           executor: playbook.executor,
           status: "running",
-          createdBy: agentUserId ?? userId,
-          // THE helper, not a seventh hand-written field list
-          // (`run-playbook.ts`). `create-session.ts` still inlines FIVE of its
-          // six fields — it omits `criteria` — which is exactly the drift a
-          // second copy produces; routing that call site through this helper
-          // belongs to whoever next touches it.
+          holder: starterHolder(userId, agentUserId),
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
+          // THE helper, not a hand-written field list (`run-playbook.ts`).
           definitionSnapshot: buildDefinitionSnapshot(playbook),
         })
         .returning({ id: playbookRuns.id });

@@ -242,16 +242,34 @@ export const CONSOLE_NAV = [
       {
         // Approvals (decision b387ca45 D5): who × what × where → runs on its
         // own / asks first / never, every row with where it came from and a
-        // way to take it back; the agent × work matrix is its Grid view.
+        // way to take it back; the agent × work matrix is its By work view.
         id: "approvals",
         href: "/approvals",
         label: "Approvals",
         icon: "Grid3x3",
         kind: "governance_rule",
         legacy: [
-          { source: "/governance/agents", destination: "/approvals?view=grid" },
+          { source: "/governance/agents", destination: "/approvals?view=work" },
           { source: "/governance" },
         ],
+        audience: "admin",
+      },
+      {
+        // Approvals' two tuning pages (D5: moved from the desktop's Settings
+        // › Approvals), reached from its header, never listed in the nav.
+        id: "writeLimits",
+        href: "/approvals/limits",
+        label: "Daily write limits",
+        icon: "Gauge",
+        within: "approvals",
+        audience: "admin",
+      },
+      {
+        id: "calibration",
+        href: "/approvals/calibration",
+        label: "Calibration",
+        icon: "Activity",
+        within: "approvals",
         audience: "admin",
       },
       {

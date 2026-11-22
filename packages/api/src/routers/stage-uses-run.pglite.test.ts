@@ -24,6 +24,7 @@
  *     step's `onFail`, the run goes back there and stops waiting;
  *   - a replayed close settles nothing twice.
  */
+import { closedNotDoneReport } from "../__tests__/closed-not-done-report.js";
 import {
   describe,
   it,
@@ -244,7 +245,8 @@ const systemLines = (channelId: string) =>
 async function endChild(
   childId: string,
   status: "closed" | "cancelled",
-  deliver = true
+  deliver = true,
+  closedNotDone = false
 ) {
   const s = await session(childId);
   const outputs = s.expected_outputs.map((o) =>
@@ -253,8 +255,13 @@ async function endChild(
       : o
   );
   await q(
-    `update focus_sessions set status = $2, expected_outputs = $3::jsonb, closed_at = now() where id = $1`,
-    [childId, status, JSON.stringify(outputs)]
+    `update focus_sessions set status = $2, expected_outputs = $3::jsonb, closed_at = now(), verification_report = $4::jsonb where id = $1`,
+    [
+      childId,
+      status,
+      JSON.stringify(outputs),
+      JSON.stringify(closedNotDone ? closedNotDoneReport() : null),
+    ]
   );
 }
 
@@ -455,6 +462,21 @@ describe("the child closes", () => {
     expect((await session(sessionId)).current_stage).toBe("render");
     expect((await systemLines(channelId)).at(-1)).toContain(
       "it did not deliver Final cut"
+    );
+  });
+
+  it("closed with required work open: not delivered, the step ends failed and names the child", async () => {
+    const { sessionId, channelId, entered } = await startParent(PARENT);
+    const childId = entered.stageRun!.childSessionId!;
+    await endChild(childId, "closed", true, true);
+    const out = await settleStageChild(childId);
+    expect(out).toMatchObject({ status: "dropped", satisfied: [] });
+    const parent = await session(sessionId);
+    expect(parent.current_stage).toBe("render");
+    expect(parent.status).toBe("paused");
+    expect((await stepRow(sessionId, "render")).status).toBe("failed");
+    expect((await systemLines(channelId)).at(-1)).toContain(
+      `closed with required work open (child session ${childId})`
     );
   });
 

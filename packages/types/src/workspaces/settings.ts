@@ -1016,12 +1016,11 @@ export interface WorkspaceSettings {
   linkedAgentId?: string;
 
   /**
-   * Workspace governance mode.
-   * - "standard"    — default: workspace owner has full control.
-   * - "agent-owned" — the AI agent is workspace owner (creative authority);
-   *                   the human is admin (irreversibility guard).
-   *                   All destructive actions by the agent require a proposal
-   *                   even if the agent holds the owner role.
+   * Workspace governance mode, set only by the workspace's person (never
+   * stamped by provisioning; absent = "standard"). An agent never owns a
+   * space. "agent-owned" makes every destructive agent action propose, which
+   * the destructive floor already does unless destructive auto-approval is
+   * turned on.
    */
   governanceMode?: "standard" | "agent-owned";
 

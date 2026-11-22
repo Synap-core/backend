@@ -303,3 +303,49 @@ export async function loadAddOnsOf(
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Refuse removing a base while add-ons extend it: they run through its tool
+ * rows, so removing it would leave them installed and failing at every run.
+ * The refusal names the add-ons the person can see and counts the others
+ * (installed in spaces they cannot see). Read through the container join, so
+ * an `extends` edge left by a removed add-on never holds a base.
+ */
+export async function assertNoAddOnsOf(
+  database: DbLike,
+  userId: string,
+  base: { id: string; name: string }
+): Promise<void> {
+  const [{ count }] = await database
+    .select({ count: drizzleSql<number>`count(*)::int` })
+    .from(links)
+    .innerJoin(
+      capabilitiesTable,
+      eq(drizzleSql`${capabilitiesTable.id}::text`, links.fromId)
+    )
+    .where(
+      and(
+        eq(links.fromType, "capability"),
+        eq(links.toType, "capability"),
+        eq(links.toId, base.id),
+        eq(links.linkType, "extends")
+      )
+    );
+  if (!count) return;
+  const visible = await loadAddOnsOf(database, userId, base.id);
+  const hidden = count - visible.length;
+  const named = visible.map((a) => `"${a.name}"`);
+  if (hidden > 0)
+    named.push(
+      `${hidden} more in ${hidden === 1 ? "a space" : "spaces"} you cannot see`
+    );
+  throw new TRPCError({
+    code: "PRECONDITION_FAILED",
+    message: `"${base.name}" has ${count === 1 ? "an add-on" : `${count} add-ons`} installed that run${count === 1 ? "s" : ""} through it: ${named.join(", ")}. Remove ${count === 1 ? "it" : "them"} first, then remove "${base.name}".`,
+    cause: {
+      code: "CAPABILITY_HAS_ADDONS",
+      addOns: visible.map((a) => a.id),
+      hiddenCount: hidden,
+    },
+  });
+}

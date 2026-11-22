@@ -19,7 +19,7 @@
  *                 declared ONCE in `services/rules/update-input.ts` (pinned by
  *                 identity in `update-input.parity.test.ts`).
  *   - list      → reuses `visibleSkillsWhere` (the canonical skill visibility
- *                 predicate) + `readRuleMetadata`. A rule IS a `skills` row
+ *                 predicate) + `readRuleView`. A rule IS a `skills` row
  *                 (`kind:"instruction"`, `category:"rule"`), so it can never be
  *                 more visible than a skill.
  *
@@ -67,10 +67,7 @@ import {
 import { AccessContext } from "../../../access/context.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
-import {
-  RULE_CATEGORY,
-  readRuleMetadata,
-} from "../../../services/rules/index.js";
+import { RULE_CATEGORY, readRuleView } from "../../../services/rules/index.js";
 import { visibleSkillsWhere } from "../../../services/skills/visibility.js";
 import { listPendingRuleProposals } from "../../../services/proposals/pending-rules.js";
 
@@ -202,6 +199,12 @@ const WireRuleSchema = z.object({
    */
   status: z.enum(["active", "proposed"]),
   proposalId: z.string().optional(),
+  /**
+   * `"loop"` = written by the rule loop (`rule` is its stored blob).
+   * `"prose"` = a guideline skill marked `category: "rule"`: `rule.intent` is
+   * its body, and it has no automation. Absent on a proposed row.
+   */
+  form: z.enum(["loop", "prose"]).optional(),
 });
 
 // ── Register ───────────────────────────────────────────────────────────────
@@ -528,8 +531,11 @@ export function registerRulesRoutes(app: HubHono): void {
         offset: parsed.data.offset ?? 0,
       });
       const materialized = rows.flatMap((row: typeof skills.$inferSelect) => {
-        const rule = readRuleMetadata(row.metadata);
-        return rule
+        // A PROSE rule (category 'rule', no `metadata.rule`) is listed too
+        // (decision D1), as `skills.listRules` lists it.
+        const view = readRuleView(row);
+        const rule = view?.rule;
+        return view && rule
           ? [
               {
                 id: row.id,
@@ -538,6 +544,7 @@ export function registerRulesRoutes(app: HubHono): void {
                 workspaceId: row.workspaceId,
                 createdAt: row.createdAt,
                 rule,
+                form: view.form,
                 // Same literal, same lie, third door — see the note in
                 // `skills.listRules`. A draft rule compiles nothing and has no
                 // automation, so reporting it as active tells the CLI and every

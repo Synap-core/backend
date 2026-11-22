@@ -31,7 +31,7 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
 import { NO_USERS } from "../__tests__/no-users-db.js";
 
@@ -93,6 +93,29 @@ describe("automations.create — cron nextRunAt", () => {
     expect(nextRunAt).toBeInstanceOf(Date);
     // And it is in the FUTURE, so `nextRunAt <= now` becomes true at fire time.
     expect((nextRunAt as Date).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("an agent's cron automation a person approved is born active with its next slot", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      agentUserId: "agent-1",
+      personApproved: true,
+      database: database as never,
+      definition: {
+        name: "Approved daily recap",
+        triggerType: "cron",
+        triggerConfig: { expression: "0 9 * * *" },
+        flowDefinition: CRON_FLOW,
+        source: "user",
+      },
+    });
+    expect(captured.values?.status).toBe("active");
+    expect(captured.values?.nextRunAt).toBeInstanceOf(Date);
   });
 
   it("reads the expression in the trigger's own zone (ticket 592930c8)", async () => {
@@ -193,8 +216,9 @@ describe("automations.create — cron nextRunAt", () => {
     };
     const proposedAutomationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
-    const result = await materializeApprovedAutomation({
-      ownerId: "person-1",
+    const result = await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: database as never,
       agentUserId: "agent-1",
       stableId: proposedAutomationId,

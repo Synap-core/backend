@@ -222,3 +222,122 @@ describe("synap_update_playbook → the governed playbooks.update", () => {
     expect(h.gate).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Stages against the stored list (tickets 8493079e, 2771d2bc): one stage by
+ * key, a whole list only from a read that held it whole, and one playbook's
+ * stages read in pages.
+ */
+describe("stages: edits by key, a whole list only from a whole read", () => {
+  const STAGES = [
+    { key: "scope", name: "Scope", category: "planned" },
+    { key: "estimate", name: "Estimate", category: "started" },
+    { key: "send", name: "Send", category: "completed" },
+  ];
+  const list = (args: Record<string, unknown>) =>
+    buildHandlers.synap_list_playbooks!({
+      ...ctx(args),
+      toolName: "synap_list_playbooks",
+    } as McpToolContext);
+
+  beforeEach(async () => {
+    await q(`update playbooks set stages = $2::jsonb where id = $1`, [
+      STORED,
+      JSON.stringify(STAGES),
+    ]);
+  });
+
+  it("reads the stages in pages; only a page holding them all carries stagesRevision", async () => {
+    const first = payload(
+      await list({ playbookId: STORED, limit: 2, offset: 0 })
+    );
+    expect(first).toMatchObject({
+      id: STORED,
+      stages: [{ key: "scope" }, { key: "estimate" }],
+      paging: { total: 3, offset: 0, nextOffset: 2 },
+    });
+    expect(first.stagesRevision).toBeUndefined();
+    const whole = payload(await list({ playbookId: STORED, limit: 10 }));
+    expect((whole.stages as unknown[]).length).toBe(3);
+    expect(typeof whole.stagesRevision).toBe("string");
+  });
+
+  it("refuses a whole list with no stagesRevision, and a stale one; nothing reaches the gate", async () => {
+    const cut = [STAGES[0]];
+    expect(
+      payload(await update({ playbookId: STORED, stages: cut }))
+    ).toMatchObject({ error: expect.stringContaining("stagesRevision") });
+    expect(
+      payload(
+        await update({
+          playbookId: STORED,
+          stages: cut,
+          stagesRevision: "0000000000000000",
+        })
+      )
+    ).toMatchObject({ error: expect.stringContaining("changed since") });
+    expect(h.gate).not.toHaveBeenCalled();
+    expect((await stored()).stages).toEqual(STAGES);
+  });
+
+  it("files a whole list that hands back the revision of a whole read", async () => {
+    const read = payload(await list({ playbookId: STORED, limit: 10 }));
+    const out = payload(
+      await update({
+        playbookId: STORED,
+        stages: STAGES.slice(0, 2),
+        stagesRevision: read.stagesRevision,
+      })
+    );
+    expect(out).toMatchObject({ status: "proposed" });
+    expect(h.gate.mock.calls[0]![0]).toMatchObject({
+      data: { stages: [{ key: "scope" }, { key: "estimate" }] },
+    });
+  });
+
+  it("stageEdits change one stage and keep every other stored stage", async () => {
+    const out = payload(
+      await update({
+        playbookId: STORED,
+        stageEdits: [
+          { op: "update", key: "estimate", fields: { name: "Price it" } },
+          {
+            op: "add",
+            stage: { key: "review", name: "Review", category: "started" },
+            after: "estimate",
+          },
+        ],
+      })
+    );
+    expect(out).toMatchObject({ status: "proposed" });
+    const sent = (h.gate.mock.calls[0]![0] as { data: { stages: unknown[] } })
+      .data.stages;
+    expect(sent).toEqual([
+      expect.objectContaining({ key: "scope", name: "Scope" }),
+      expect.objectContaining({ key: "estimate", name: "Price it" }),
+      expect.objectContaining({ key: "review" }),
+      expect.objectContaining({ key: "send", name: "Send" }),
+    ]);
+  });
+
+  it("refuses stages and stageEdits together, and an edit of an unknown key", async () => {
+    expect(
+      payload(
+        await update({
+          playbookId: STORED,
+          stages: STAGES,
+          stageEdits: [{ op: "remove", key: "send" }],
+        })
+      )
+    ).toMatchObject({ error: expect.stringContaining("not both") });
+    expect(
+      payload(
+        await update({
+          playbookId: STORED,
+          stageEdits: [{ op: "remove", key: "nope" }],
+        })
+      )
+    ).toMatchObject({ error: expect.stringContaining('no stage "nope"') });
+    expect(h.gate).not.toHaveBeenCalled();
+  });
+});

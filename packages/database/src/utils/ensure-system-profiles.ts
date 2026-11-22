@@ -248,6 +248,8 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "tags", required: false, displayOrder: 2 },
       { slug: "provenance", required: false, displayOrder: 3 },
       { slug: "provider", required: false, displayOrder: 4 },
+      // The link a note is about (a deck, an external page); not required.
+      { slug: "url", required: false, displayOrder: 5 },
     ],
   },
   {

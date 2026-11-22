@@ -85,9 +85,15 @@ import {
   VIEWS_PAGE_DEFAULT,
   WIDGETS_PAGE_DEFAULT,
   PLAYBOOKS_PAGE_DEFAULT,
+  PLAYBOOK_STAGES_PAGE_DEFAULT,
+  PLAYBOOK_STAGES_PAGE_MAX,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
+import {
+  applyStageEdits,
+  stagesRevision,
+} from "../../../services/playbooks/stage-edits.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
@@ -489,12 +495,35 @@ export const buildHandlers: McpHandlerMap = {
               : `Playbook ${playbookId} not found among your visible playbooks.`,
         });
       }
+      const stages = Array.isArray(one.result.stages) ? one.result.stages : [];
+      // `stagesRevision` vouches that THIS reply holds the stored stages
+      // whole: a whole-list `synap_update_playbook` needs it back. The reply
+      // cap drops it from a reply it has to cut (`WHOLE_READ_MARKS`).
+      const revision = { stagesRevision: stagesRevision(stages) };
+      // ITS STAGES IN PAGES (ticket 8493079e): `limit` / `offset` page the
+      // stages alone, so a playbook too large for one reply reads whole.
+      if (args.limit !== undefined || args.offset !== undefined) {
+        const { page, paging } = pageSlice(
+          stages,
+          args,
+          PLAYBOOK_STAGES_PAGE_DEFAULT,
+          PLAYBOOK_STAGES_PAGE_MAX
+        );
+        return ok({
+          id: one.result.id,
+          name: one.result.name,
+          stages: page,
+          paging,
+          ...(page.length === stages.length ? revision : {}),
+        });
+      }
       // A key whose grant does not read every part a process composes
       // (automations, sessions, skills, tools) gets the playbook alone, and
       // is told why: withheld, never an empty process.
       if (!processReadableByGrant(getRequestGrant())) {
         return ok({
           ...one.result,
+          ...revision,
           process: null,
           processWithheld:
             "Your key's grant does not read every part of a process (its automations, sessions, skills and tools).",
@@ -503,6 +532,7 @@ export const buildHandlers: McpHandlerMap = {
       try {
         return ok({
           ...one.result,
+          ...revision,
           process: await getProcessDoor(playbookDoorIdentity(ctx), playbookId),
         });
       } catch (err) {
@@ -512,6 +542,7 @@ export const buildHandlers: McpHandlerMap = {
         );
         return ok({
           ...one.result,
+          ...revision,
           process: null,
           processError: "The process could not be read.",
         });
@@ -820,6 +851,48 @@ export const buildHandlers: McpHandlerMap = {
     // replaces the trigger list and keeps every other metadata key.
     if (args.triggers !== undefined) {
       patch.metadata = { triggers: args.triggers };
+    }
+    // STAGES against the stored list (tickets 8493079e, 2771d2bc): one stage
+    // by key (`stageEdits`), or the whole list (`stages`) only from a read
+    // that held it whole (`stagesRevision`): a list from a cut read would
+    // delete the stages it lacked. See `services/playbooks/stage-edits.ts`.
+    if (args.stages !== undefined || args.stageEdits !== undefined) {
+      if (args.stages !== undefined && args.stageEdits !== undefined) {
+        return ok({
+          error: "Pass `stages` (the whole list) or `stageEdits`, not both.",
+        });
+      }
+      const one = await getPlaybookDoor(
+        playbookDoorIdentity(ctx),
+        typeof args.playbookId === "string" ? args.playbookId : ""
+      );
+      if (one.kind !== "result") {
+        return ok({ error: "error" in one ? one.error : "Not found." });
+      }
+      const storedStages = Array.isArray(one.result.stages)
+        ? one.result.stages
+        : [];
+      const read = args.stagesRevision;
+      if (read !== undefined && read !== stagesRevision(storedStages)) {
+        return ok({
+          error:
+            "The stages changed since your read (`stagesRevision` no longer matches): read the playbook again.",
+        });
+      }
+      if (
+        args.stages !== undefined &&
+        storedStages.length > 0 &&
+        read === undefined
+      ) {
+        return ok({
+          error: `\`stages\` replaces all ${storedStages.length} stored stages, so it needs the \`stagesRevision\` of a read that held them whole (a read cut to fit carries none). To change some stages, use \`stageEdits\`.`,
+        });
+      }
+      if (args.stageEdits !== undefined) {
+        const edited = applyStageEdits(storedStages, args.stageEdits);
+        if (!edited.ok) return ok({ error: edited.error });
+        patch.stages = edited.stages;
+      }
     }
     const reasoning = readReasoning(args);
     if (reasoning) patch.reasoning = reasoning;
@@ -1573,6 +1646,15 @@ export const buildHandlers: McpHandlerMap = {
     for (const field of ["name", "description", "body", "code"] as const) {
       if (typeof args[field] === "string") patch[field] = args[field];
     }
+    if (args.category !== undefined) {
+      const category = str(args.category);
+      if (!category) {
+        return toolError(
+          `Tool '${toolName}': category must be a non-empty string (e.g. 'rule').`
+        );
+      }
+      patch.category = category;
+    }
     if (args.parameters !== undefined) {
       if (
         !args.parameters ||
@@ -1604,7 +1686,7 @@ export const buildHandlers: McpHandlerMap = {
     }
     if (Object.keys(patch).length === 0) {
       return toolError(
-        `Tool '${toolName}': nothing to change — pass body, description, name, code, parameters, timeoutSeconds and/or requiredTools.`
+        `Tool '${toolName}': nothing to change — pass body, description, name, category, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
     // After the empty-patch check: a reason alone is not a change.

@@ -449,9 +449,9 @@ describe("one agent's grid (Agents & work leads with the agents)", () => {
     const base = "/approvals";
     expect(agentsAndWorkHref(base)).toBe(base);
     expect(agentsAndWorkHref(base, { agentUserId: "a b" })).toBe(
-      "/approvals?view=grid&agent=a%20b"
+      "/approvals?view=work&agent=a%20b"
     );
-    expect(agentsAndWorkHref(base, "grid")).toBe("/approvals?view=grid");
+    expect(agentsAndWorkHref(base, "grid")).toBe("/approvals?view=work");
   });
 
   it("sends an approval's door to its own row on Approvals", () => {

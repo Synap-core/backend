@@ -105,8 +105,10 @@ import {
   applyStageGateOnAdvance,
   checkGateFailing,
   checkGateHold,
+  checkGatePause,
   findStage,
   CHECK_GATE_UNEVALUATED,
+  JUDGE_RETRY_AFTER_MS,
 } from "./stage-gate.js";
 
 const SESSION_ID = "11111111-2222-4333-8444-555555555555";
@@ -549,5 +551,38 @@ describe("checkGateFailing", () => {
     expect(held.reason).toContain(
       'Output "pull-request" is owed here, but "pr-merged" decides it later, so completing it does not meet it now: name it by outputKey "pull-request" in a criterion of this step.'
     );
+  });
+});
+
+describe("checkGatePause: when a held check gate is graded again", () => {
+  const NOW = new Date("2026-11-21T10:00:00.000Z");
+  const retry = new Date(NOW.getTime() + JUDGE_RETRY_AFTER_MS).toISOString();
+  const pause = (measure: Parameters<typeof checkGatePause>[2]) =>
+    checkGatePause("review", "work", measure, NOW).hold;
+
+  it("a payer's AI state waits on AI coming back", () => {
+    expect(
+      pause({ failing: ["audit"], notJudged: true, judgeOut: "payer" })
+    ).toMatchObject({ on: "external", until: { moves: "ai:available" } });
+  });
+
+  it("the AI service's own state retries on a date: the pull cannot see it end", () => {
+    expect(
+      pause({ failing: ["audit"], notJudged: true, judgeOut: "service" })
+    ).toMatchObject({ on: "external", until: { date: retry } });
+  });
+
+  it("another judge fault retries on a date too, the owner's grade still open (decision 8)", () => {
+    expect(pause({ failing: ["audit"], notJudged: true })).toMatchObject({
+      on: "thing",
+      ref: "check:review",
+      until: { date: retry },
+    });
+  });
+
+  it("a real fail has no until: its next move is onFail or the owner's", () => {
+    const hold = pause({ failing: ["audit"] });
+    expect(hold).toMatchObject({ on: "thing", ref: "check:review" });
+    expect(hold).not.toHaveProperty("until");
   });
 });

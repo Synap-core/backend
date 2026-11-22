@@ -65,6 +65,7 @@ import {
   type PlaybookStageUses,
 } from "@synap/playbooks";
 import type { RunOn } from "@synap-core/types/agents";
+import type { SessionClosedAs } from "@synap-core/types/focus-sessions";
 import { countedNoun } from "@synap-core/types/vocabulary";
 import { createLogger } from "@synap-core/core";
 import {
@@ -74,7 +75,7 @@ import {
   tellRunAgent,
   type SettleStageChildResult,
 } from "./stage-child.js";
-import type { StageOf } from "./stage-of.js";
+import { CLOSED_WITH_WORK_OPEN, type StageOf } from "./stage-of.js";
 
 const logger = createLogger({ module: "playbooks/stage-for-each" });
 
@@ -679,24 +680,31 @@ export async function startStageForEach(p: {
 export async function settleFanOutChild(p: {
   child: { id: string; userId: string };
   ended: string;
+  closedAs: SessionClosedAs | null;
   parent: { id: string; userId: string };
   stageOf: StageOf & { forEachIndex: number };
 }): Promise<SettleStageChildResult> {
   const { child, parent, stageOf } = p;
   const index = stageOf.forEachIndex;
   const status: StageFanOutChild["status"] =
-    p.ended === "closed"
+    p.closedAs === "done"
       ? "done"
-      : p.ended === "failed"
-        ? "failed"
-        : "cancelled";
+      : p.ended === "cancelled"
+        ? "cancelled"
+        : "failed";
   try {
     // Compare and set: only the batch still running, by this child, settles.
     const fanOut = await changeFanOut(stageOf.stageRunId, (f) => {
       const c = f.children[index];
       if (!c || c.status !== "running") return null;
       if (c.sessionId && c.sessionId !== child.id) return null;
-      return withChild(f, index, { status, sessionId: child.id });
+      return withChild(f, index, {
+        status,
+        sessionId: child.id,
+        ...(p.ended === "closed" && status === "failed"
+          ? { error: CLOSED_WITH_WORK_OPEN }
+          : {}),
+      });
     });
     if (!fanOut) return { status: "settled_already" };
     if (status !== "done") {
@@ -750,10 +758,9 @@ export async function sweepOrphanedFanOuts(): Promise<number> {
   return rows.length;
 }
 
-const failedParts = (fanOut: StageFanOut) =>
-  fanOut.children.flatMap((c, i) =>
-    c.status === "failed" || c.status === "cancelled" ? [i + 1] : []
-  );
+const partsWith = (fanOut: StageFanOut, status: "failed" | "cancelled") =>
+  fanOut.children.flatMap((c, i) => (c.status === status ? [i + 1] : []));
+const failedParts = (fanOut: StageFanOut) => partsWith(fanOut, "failed");
 
 /** One line per child for the join message (bounded). */
 async function joinLines(fanOut: StageFanOut): Promise<string[]> {
@@ -786,7 +793,7 @@ async function joinLines(fanOut: StageFanOut): Promise<string[]> {
           : "done"
         : c.status === "failed"
           ? `FAILED${c.error ? `: ${c.error}` : ""}`
-          : "CANCELLED";
+          : "SKIPPED (cancelled)";
     return `- part ${i + 1} (${countedNoun(c.items.length, "item")}): ${name}, ${what}`;
   });
   if (fanOut.children.length > JOIN_LINES_MAX) {
@@ -798,8 +805,9 @@ async function joinLines(fanOut: StageFanOut): Promise<string[]> {
 }
 
 /**
- * Every batch ended: the step is done (once: compare and set on the row),
- * the parent resumes, moves into the next step when it may, and its agent is
+ * Every batch ended: the step is done, failed or (every part cancelled)
+ * cancelled (once: compare and set on the row). Unless cancelled the parent
+ * resumes and, when done, moves into the next step when it may; its agent is
  * told what each child delivered and which failed. Null while a batch still
  * waits or runs, or when another settle already finished it.
  */
@@ -808,7 +816,13 @@ async function finishIfAllEnded(
 ): Promise<SettleStageChildResult | null> {
   const [row] = await db
     .update(sessionStageRuns)
-    .set({ status: "done", endedAt: new Date() })
+    .set({
+      // The ONE decision: failed if any part failed or closed not done;
+      // cancelled when parts exist and every one was cancelled; else done (an
+      // empty set is done).
+      status: drizzleSql`CASE WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' NOT IN ('done', 'cancelled')) THEN 'failed' WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'cancelled') AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(${sessionStageRuns.fanOut} -> 'children') AS c WHERE c ->> 'status' = 'done') THEN 'cancelled' ELSE 'done' END`,
+      endedAt: new Date(),
+    })
     .where(
       and(
         eq(sessionStageRuns.id, stageRunId),
@@ -822,6 +836,7 @@ async function finishIfAllEnded(
       stageKey: sessionStageRuns.stageKey,
       fanOut: sessionStageRuns.fanOut,
       playbookRunId: sessionStageRuns.playbookRunId,
+      status: sessionStageRuns.status,
     });
   if (!row?.fanOut) return null;
   const fanOut = row.fanOut;
@@ -882,13 +897,18 @@ async function finishIfAllEnded(
   const next = index >= 0 ? stages[index + 1] : undefined;
   const nextGated = next ? resolveStageGate(next) !== undefined : false;
 
-  await resumeParent(
-    parent.id,
-    parent.userId,
-    `Step ${stageName}'s runs have all ended.`
-  );
+  // Every part cancelled is a drop by a person: the run waits for them, as it
+  // does for a cancelled single child.
+  if (row.status !== "cancelled") {
+    await resumeParent(
+      parent.id,
+      parent.userId,
+      `Step ${stageName}'s runs have all ended.`
+    );
+  }
   let toStage: string | undefined;
   if (
+    row.status === "done" &&
     next &&
     !nextGated &&
     owed.length === 0 &&
@@ -904,20 +924,33 @@ async function finishIfAllEnded(
     });
     toStage = next.key;
   }
-  const done = fanOut.children.length - failed.length;
+  const skipped = partsWith(fanOut, "cancelled");
+  const counted = fanOut.children.length - skipped.length;
+  const done = counted - failed.length;
+  const skippedNote =
+    skipped.length > 0
+      ? ` ${skipped.map((n) => `part ${n}`).join(", ")} skipped (cancelled).`
+      : "";
   const head =
-    failed.length > 0
-      ? `Step ${stageName} is done: ${done} of ${countedNoun(fanOut.children.length, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} failed.`
-      : `Step ${stageName} is done: all ${countedNoun(fanOut.children.length, "run")} delivered.`;
-  const then = toStage
-    ? `The run moved on to step ${nameOf(next!)}.`
-    : !next
-      ? "It was the last step: close the run when it is done."
-      : owed.length > 0
-        ? `Make ${owed.join(", ")} from their results, then move on.`
-        : nextGated
-          ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
-          : "The run moved meanwhile: pick up from where it is.";
+    row.status === "cancelled"
+      ? `Step ${stageName} did not run: every part was cancelled.`
+      : failed.length > 0
+        ? `Step ${stageName} failed: ${done} of ${countedNoun(counted, "run")} delivered; ${failed.map((n) => `part ${n}`).join(", ")} did not (${CLOSED_WITH_WORK_OPEN}, or failed).${skippedNote}`
+        : `Step ${stageName} is done: all ${countedNoun(counted, "run")} delivered.${skippedNote}`;
+  const then =
+    row.status === "cancelled"
+      ? "The run waits: run the step again, or drop the wait and move on."
+      : failed.length > 0
+        ? "The run stays on this step: run the failed parts again, or move on when it is right to."
+        : toStage
+          ? `The run moved on to step ${nameOf(next!)}.`
+          : !next
+            ? "It was the last step: close the run when it is done."
+            : owed.length > 0
+              ? `Make ${owed.join(", ")} from their results, then move on.`
+              : nextGated
+                ? `The next step, ${nameOf(next)}, is gated: move on when it is right to.`
+                : "The run moved meanwhile: pick up from where it is.";
   await tellRunAgent(
     parent,
     runAgent,

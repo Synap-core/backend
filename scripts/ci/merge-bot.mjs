@@ -327,28 +327,71 @@ export function descendantNumbers(pr, carriers) {
   return out;
 }
 
+/** A comment's own-line command, "hold" or "unhold" (`/hold` wins), else null. Pure. */
+const holdCommand = (c) => {
+  const lines = String(c?.body ?? "")
+    .split(/\r?\n/)
+    .map((l) => l.trim());
+  return lines.includes("/hold")
+    ? "hold"
+    : lines.includes("/unhold")
+      ? "unhold"
+      : null;
+};
+
 /**
- * The `/hold` on a PR: the latest comment by someone with write access
- * (HOLD_ASSOCIATIONS) whose own line is `/hold` or `/unhold`, newest wins.
+ * The `/hold` on a PR: the latest comment by someone with write access whose
+ * own line is `/hold` or `/unhold`, newest wins. Write access is the comment's
+ * authorAssociation (HOLD_ASSOCIATIONS) or `canHold` (markHolders): the
+ * association reads CONTRIBUTOR to a token that is not in the org when the
+ * author's membership is private.
  * Returns { by, at } while held, else null. Pure.
  */
 export function holdOf(pr) {
   let last = null;
   for (const c of pr?.comments?.nodes ?? []) {
-    if (!HOLD_ASSOCIATIONS.includes(c?.authorAssociation)) continue;
-    const lines = String(c?.body ?? "")
-      .split(/\r?\n/)
-      .map((l) => l.trim());
-    const cmd = lines.includes("/hold")
-      ? "hold"
-      : lines.includes("/unhold")
-        ? "unhold"
-        : null;
+    if (!HOLD_ASSOCIATIONS.includes(c?.authorAssociation) && !c?.canHold)
+      continue;
+    const cmd = holdCommand(c);
     if (!cmd) continue;
     const at = Date.parse(c.createdAt ?? "");
     if (!last || at >= last.at) last = { cmd, at, by: c?.author?.login ?? "?" };
   }
   return last?.cmd === "hold" ? { by: last.by, at: last.at } : null;
+}
+
+/**
+ * Mark `canHold` on every hold/unhold comment whose author the association
+ * does not vouch for, from the author's permission on the repo (one lookup per
+ * login). A lookup that fails counts as write access: a hold is honoured
+ * rather than lost.
+ */
+export function markHolders(gh, repo, prs, token, log = () => {}) {
+  const writers = new Map();
+  for (const pr of prs)
+    for (const c of pr?.comments?.nodes ?? []) {
+      const login = c?.author?.login;
+      if (
+        !login ||
+        HOLD_ASSOCIATIONS.includes(c.authorAssociation) ||
+        !holdCommand(c)
+      )
+        continue;
+      if (!writers.has(login))
+        try {
+          const r = gh.rest(
+            `repos/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
+            { token }
+          );
+          writers.set(login, ["admin", "write"].includes(r?.permission));
+        } catch (e) {
+          log(
+            `::warning::could not read ${login}'s permission (${e.message}); their /hold counts`
+          );
+          writers.set(login, true);
+        }
+      c.canHold = writers.get(login);
+    }
 }
 
 /**
@@ -988,6 +1031,7 @@ export async function runBot({
     log(`::warning::could not list the open PRs (${e.message}); nothing done`);
     return out;
   }
+  markHolders(gh, repo, prs, botToken || readToken, log);
   // E: every pass takes a held PR out of the queue (it reads nothing more:
   // comments, queue state and enqueues come with the listing), so a /hold
   // pass replaced in its concurrency group is answered by the next one.

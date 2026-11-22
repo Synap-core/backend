@@ -912,3 +912,76 @@ describe("resolveAgentGovernanceDecision — no ceiling row means no daily limit
     expect(result.decision).toBe("execute");
   });
 });
+
+/**
+ * D-c (decision document b387ca45, W1): "the stricter verdict wins a tie" is
+ * for a TOOL RUN only. A data write keeps "deny wins a tie, else the newest",
+ * which postures rely on (a later posture takes back an older grant of the
+ * same reach). Pinned on both sides, so moving the tie rule into the shared
+ * ranking (finding ac28928c) can never widen it to data writes.
+ */
+describe("a tie: newest wins a data write, the stricter verdict wins a tool run", () => {
+  const OLD = new Date("2026-01-01T00:00:00Z");
+  const NEW = new Date("2026-02-01T00:00:00Z");
+
+  it("a data write: the newer 'auto' beats the older 'propose' of the same reach", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "workspace",
+          targetPattern: "entity.create",
+          verdict: "propose",
+          createdAt: OLD,
+        }),
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "workspace",
+          targetPattern: "entity.create",
+          verdict: "auto",
+          createdAt: NEW,
+        }),
+      ],
+    ]);
+    const match = await resolveGovernanceRule({
+      db,
+      workspaceId: "ws-1",
+      subjectType: "entity",
+      action: "create",
+      includeAgentPrincipal: false,
+    });
+    expect(match?.verdict).toBe("auto");
+  });
+
+  it("a tool run: the older 'propose' beats the newer 'auto' of the same reach", async () => {
+    const db = makeDb([
+      [
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "workspace",
+          targetKind: "capability",
+          targetPattern: "cap-1",
+          verdict: "propose",
+          createdAt: OLD,
+        }),
+        ruleRow({
+          principalKind: "any",
+          scopeKind: "workspace",
+          targetKind: "capability",
+          targetPattern: "cap-1",
+          verdict: "auto",
+          createdAt: NEW,
+        }),
+      ],
+    ]);
+    const match = await resolveGovernanceRule({
+      db,
+      workspaceId: "ws-1",
+      subjectType: "capability",
+      action: "run",
+      capabilityId: "cap-1",
+      includeAgentPrincipal: false,
+    });
+    expect(match?.verdict).toBe("propose");
+  });
+});

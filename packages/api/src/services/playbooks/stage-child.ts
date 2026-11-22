@@ -46,6 +46,8 @@ import {
 } from "@synap/database";
 import { sessionStageRuns } from "@synap/database/schema";
 import type { RunOn } from "@synap-core/types/agents";
+import { sessionClosedAs } from "@synap-core/types/focus-sessions";
+import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
 import {
   resolveStageGate,
   resolveStageRef,
@@ -62,7 +64,11 @@ import {
   FOCUS_SESSION_CLOSE_ACTION,
   FOCUS_SESSION_SUBJECT_TYPE,
 } from "../focus-sessions/close-event.js";
-import { readStageOf, type StageOf } from "./stage-of.js";
+import {
+  CLOSED_WITH_WORK_OPEN,
+  readStageOf,
+  type StageOf,
+} from "./stage-of.js";
 
 const logger = createLogger({ module: "playbooks/stage-child" });
 
@@ -510,6 +516,17 @@ async function settleStageChildUnsafe(
   if (ended !== "closed" && ended !== "cancelled" && ended !== "failed") {
     return { status: "not_a_step" };
   }
+  // Only a close can be a close-anyway: cancelled and failed are not done regardless.
+  const closedNotDone =
+    ended === "closed"
+      ? ((
+          await db
+            .select({ closedNotDone: closedNotDoneRecordedSql() })
+            .from(focusSessions)
+            .where(eq(focusSessions.id, child.id))
+        )[0]?.closedNotDone ?? false)
+      : false;
+  const closedAs = sessionClosedAs(ended, closedNotDone);
   const parent = await db.query.focusSessions.findFirst({
     columns: {
       id: true,
@@ -536,17 +553,26 @@ async function settleStageChildUnsafe(
     return settleFanOutChild({
       child,
       ended,
+      closedAs,
       parent,
       stageOf: { ...stageOf, forEachIndex: stageOf.forEachIndex },
     });
   }
 
   // Compare and set: only the entry still waiting on THIS child is settled.
-  const delivered = ended === "closed";
+  const delivered = closedAs === "done";
+  const endedText =
+    ended === "closed"
+      ? `${CLOSED_WITH_WORK_OPEN} (child session ${child.id})`
+      : ended;
   const [claimed] = await db
     .update(sessionStageRuns)
     .set({
-      status: delivered ? "done" : ended === "failed" ? "failed" : "cancelled",
+      status: delivered
+        ? "done"
+        : ended === "cancelled"
+          ? "cancelled"
+          : "failed",
       endedAt: new Date(),
     })
     .where(
@@ -606,7 +632,7 @@ async function settleStageChildUnsafe(
       await resumeParent(
         parent.id,
         parent.userId,
-        `Step ${stageName}'s run was ${ended}: back to its declared step.`
+        `Step ${stageName}'s run was ${endedText}: back to its declared step.`
       );
       const { advanceSessionStage } =
         await import("../focus-sessions/advance-stage.js");
@@ -619,7 +645,7 @@ async function settleStageChildUnsafe(
       });
       await roomLine(
         parent,
-        `Step ${stageName}'s run "${childName}" was ${ended}: the run goes back to step ${nameOf(stages.find((s) => s.key === toStage)!)}.`,
+        `Step ${stageName}'s run "${childName}" was ${endedText}: the run goes back to step ${nameOf(stages.find((s) => s.key === toStage)!)}.`,
         key
       );
       return { status: "on_fail", satisfied: [], toStage };
@@ -627,7 +653,7 @@ async function settleStageChildUnsafe(
     await tellRunAgent(
       parent,
       runAgent,
-      `Step ${stageName}'s run "${childName}" was ${ended} without delivering. This run waits until it is re-planned: run the step again, or drop the wait on that run and move on.`,
+      `Step ${stageName}'s run "${childName}" was ${endedText} without delivering. This run waits until it is re-planned: run the step again, or drop the wait on that run and move on.`,
       key
     );
     return { status: "dropped", satisfied: [] };

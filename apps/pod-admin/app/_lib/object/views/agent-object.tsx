@@ -65,6 +65,7 @@ import {
 import { computerHref } from "../../../../lib/console-nav";
 import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
+import { AgentApprovals } from "./agent-approvals";
 import { AgentJob } from "./agent-job";
 import { objectViewsT } from "./copy";
 import {
@@ -395,7 +396,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 // ─── Governance ─────────────────────────────────────────────────────
 
 /**
- * How its writes land: the one sentence, and — for the person who connected
+ * What it may do: how its writes land (its posture) and its own approvals
+ * (lane W3, `agent-approvals.tsx`). How its writes land: the one sentence, and — for the person who connected
  * it or a pod admin (`mayChange`, the server's own gate) — the control that
  * sets it pod-wide (`agentUsers.setPosture`, THE posture writer). Per-space
  * ask-first overrides stay listed under it: inside that space they win.
@@ -403,9 +405,12 @@ function Stat({ label, value }: { label: string; value: number }) {
 export function AgentGovernance({
   agentUserId,
   mayChange,
+  viewerIsPodAdmin,
 }: {
   agentUserId: string;
   mayChange: boolean;
+  /** Offers the doors into the console and the way back of each approval. */
+  viewerIsPodAdmin: boolean;
 }) {
   const t = objectViewsT();
   const utils = trpc.useUtils();
@@ -434,7 +439,7 @@ export function AgentGovernance({
     },
   });
   return (
-    <Section title="How its writes land">
+    <Section title={t("agent.approvals.title")}>
       {gov.isLoading ? (
         <div className="h-10 rounded-lg bg-foreground/[0.04] shimmer-pulse" />
       ) : gov.error?.data?.code === "NOT_FOUND" ? (
@@ -516,6 +521,8 @@ export function AgentGovernance({
           </div>
         </>
       )}
+      {/* Lane W3: the same approval rows Approvals lists, for this agent. */}
+      <AgentApprovals agentUserId={agentUserId} readOnly={!viewerIsPodAdmin} />
     </Section>
   );
 }
@@ -916,7 +923,11 @@ export function AgentObject({
           />
           {/* Off the roster its creator is unknown here: the control is
               offered to a pod admin only (the server decides either way). */}
-          <AgentGovernance agentUserId={id} mayChange={viewerIsPodAdmin} />
+          <AgentGovernance
+            agentUserId={id}
+            mayChange={viewerIsPodAdmin}
+            viewerIsPodAdmin={viewerIsPodAdmin}
+          />
         </div>
       ),
       advanced: { ids: [{ label: "Agent id", value: id }] },
@@ -967,6 +978,7 @@ export function AgentObject({
             creatorId: row.createdByUserId,
             viewerIsPodAdmin,
           })}
+          viewerIsPodAdmin={viewerIsPodAdmin}
         />
         <AgentPause row={row} />
         {/* 0395: what it is FOR on its computer — its owner only. */}

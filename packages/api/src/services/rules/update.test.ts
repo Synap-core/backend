@@ -57,9 +57,17 @@ vi.mock("@synap/database", async (importOriginal) => {
       select: () => ({ from: () => ({ where: async () => automationRows }) }),
       update: (table: unknown) => ({
         set: (values: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             if (table === actual.skills) skillUpdates.push(values);
             else automationUpdates.push(values);
+            const done = Promise.resolve([] as unknown[]) as Promise<
+              unknown[]
+            > & {
+              returning: () => Promise<unknown[]>;
+            };
+            done.returning = async () => [];
+            return done;
           },
         }),
       }),
@@ -433,6 +441,24 @@ describe("refusals and misses", () => {
     storedRow = { id: RULE_ID, metadata: {} };
     const result = await update({ sentence: GOOD_SENTENCE });
     expect(result.status).toBe("denied");
+  });
+
+  it("refuses a PROSE rule and names the door that edits it (decision D1)", async () => {
+    // category 'rule', no `metadata.rule`: its words are its skill body. This
+    // door rebuilds `metadata.rule`, so editing here would turn a guideline
+    // skill into a rule-loop row behind the person's back.
+    storedRow = {
+      id: RULE_ID,
+      category: "rule",
+      metadata: { autoLoad: false },
+    };
+    const result = await update({ sentence: GOOD_SENTENCE });
+    expect(result).toMatchObject({
+      status: "denied",
+      reason: expect.stringContaining("synap_update_skill"),
+    });
+    expect(skillUpdates).toHaveLength(0);
+    expect(materializeCalls).toHaveLength(0);
   });
 
   it("refuses — and writes NOTHING — when the automation door rejects", async () => {

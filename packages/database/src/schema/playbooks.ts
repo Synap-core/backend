@@ -27,6 +27,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { PLAYBOOK_STATUSES } from "@synap-core/types/units";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 /**
@@ -120,9 +121,7 @@ export const playbooks = pgTable(
       .$type<PlaybookExecutorRef>()
       .notNull()
       .default("is-agent"),
-    status: text("status", {
-      enum: ["draft", "active", "paused", "archived"],
-    })
+    status: text("status", { enum: PLAYBOOK_STATUSES })
       .notNull()
       .default("draft"),
     /**

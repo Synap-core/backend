@@ -86,6 +86,7 @@ import {
 } from "../../routers/proposals/display.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { resolvePrivateObjectLabel } from "@synap-core/types/vocabulary";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -777,7 +778,9 @@ export async function getLinkNeighbors(
       // The hydrated kind: an intake-source document is emitted as `capture`.
       kind: node?.kind ?? r.kind,
       id: r.id,
-      name: node?.name ?? r.id,
+      // A hidden far end is named by the private placeholder, never by its
+      // id: every reader (browser, relay, an agent's get_graph) shows `name`.
+      name: node?.name ?? (hidden ? resolvePrivateObjectLabel(r.kind) : r.id),
       subtype: node?.subtype ?? null,
       subtypes: node?.subtypes ?? [],
       workspaceId: node?.workspaceId ?? null,

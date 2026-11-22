@@ -779,6 +779,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "renderer-removal impact count: a demo row's override is affected too",
   "services/timeline/read-timeline.ts":
     "one thing's status history (statusOf include=history), by id",
+  "services/workspace-ops-doors.ts":
+    "move: a bound key's write targets' spaces, by id (TF-1)",
   "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
   "utils/project-subject.ts": "a project's subject name + bind gate",
 };

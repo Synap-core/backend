@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
+  aiAvailabilityCopy,
+  resolveAiFailureState,
+} from "@synap-core/types/ai-availability";
+import {
   classifyAiFailure,
   describeAiFailure,
   aiFailureMessage,
@@ -42,7 +46,10 @@ describe("402 / out of credit", () => {
       expect(described.needsOperator).toBe(true);
       expect(described.message.toLowerCase()).not.toContain("try again");
       expect(described.message.toLowerCase()).not.toContain("temporarily");
-      expect(described.message).toMatch(/operator/);
+      // The deck's provider_issue words: nobody on the pod acts, and no
+      // operator or top-up is promised to whoever reads it.
+      expect(described.message).toMatch(/AI provider is having trouble/);
+      expect(described.message).not.toMatch(/operator|top up/i);
       expect(described.message).toMatch(/will not help/);
     });
   }
@@ -258,7 +265,7 @@ describe("IS failure envelope", () => {
       })
     );
     expect(described.message).not.toContain("Insufficient Balance");
-    expect(described.message).toMatch(/top up/);
+    expect(described.message).toMatch(/AI provider is having trouble/);
   });
 
   it("trusts the IS retryable flag over our class default (429 that is really credit)", () => {
@@ -371,5 +378,141 @@ describe("describePartialTurnFailure — the IS code union is NOT ours", () => {
     });
     expect(verdict.code).toBe("unknown");
     expect(verdict.message).not.toContain("raw provider text");
+  });
+});
+
+/**
+ * ONE copy deck (plan §3.3): a class whose code proves an availability state
+ * takes its words from `aiAvailabilityCopy`; this module keeps a sentence only
+ * for a class about the request. The split is DERIVED from the
+ * classification (`resolveAiFailureState` over each class's wire code), never
+ * hand-listed, so a class that starts mapping to a state fails here until its
+ * own sentence is gone.
+ */
+describe("one copy deck", () => {
+  const CLASSES = [
+    "quota",
+    "plan_quota",
+    "account_quota",
+    "not_entitled",
+    "credits_empty",
+    "access_suspended",
+    "account_inactive",
+    "budget",
+    "context_length",
+    "content_filter",
+    "cancelled",
+    "auth",
+    "rate_limit",
+    "timeout",
+    "circuit",
+    "entitlement_unavailable",
+    "upstream",
+    "bad_request",
+    "invalid_response",
+    "unknown",
+  ] as const satisfies ReadonlyArray<ReturnType<typeof classifyAiFailure>>;
+  // Every member of the union is listed: a class added without a row stops
+  // the build here.
+  type Missing = Exclude<
+    ReturnType<typeof classifyAiFailure>,
+    (typeof CLASSES)[number]
+  >;
+  const _complete: [Missing] extends [never] ? true : never = true;
+  void _complete;
+
+  const stateClasses = CLASSES.filter(
+    (c) => resolveAiFailureState(describeAiFailure(c).code) !== null
+  );
+
+  it("the classification splits the classes (non-vacuity)", () => {
+    expect(stateClasses).toEqual([
+      "quota",
+      "plan_quota",
+      "account_quota",
+      "not_entitled",
+      "credits_empty",
+      "access_suspended",
+      "account_inactive",
+      "budget",
+      "auth",
+      "circuit",
+    ]);
+  });
+
+  it.each(stateClasses)(
+    "%s speaks the deck's words for its state, then the retry verdict",
+    (c) => {
+      const d = describeAiFailure(c);
+      const deck = aiAvailabilityCopy({
+        kind: resolveAiFailureState(d.code),
+        action: "none",
+        switchedOff: c === "account_inactive" ? true : undefined,
+      });
+      expect(deck).not.toBeNull();
+      expect(d.message).toBe(
+        `${deck!.detail}${d.retryable ? " Sending again may work." : " Retrying will not help."}`
+      );
+    }
+  );
+
+  it.each(CLASSES)("%s has words and no billing policy", (c) => {
+    const { message } = describeAiFailure(c);
+    expect(message.length).toBeGreaterThan(20);
+    expect(message).not.toMatch(
+      /operator|next month|this month|billing period|raise the|upgrade/i
+    );
+  });
+
+  it("the payer action the IS stated closes the sentence; none stated, none invented", () => {
+    const envelope = { code: "credits_empty", retryable: false } as const;
+    expect(
+      describeAiFailure("credits_empty", {
+        envelope: { ...envelope, action: "ask_admin" },
+      })
+    ).toMatchObject({
+      actor: "payer",
+      action: "ask_admin",
+      message: expect.stringMatching(
+        /Captures still save\. Ask an admin to top up credits\./
+      ),
+    });
+    const bare = describeAiFailure("credits_empty", { envelope });
+    expect(bare).not.toHaveProperty("action");
+    expect(bare.message).not.toMatch(/Top up|Ask an admin/);
+  });
+
+  it("the action alone (a degraded capture's) closes the sentence the same way", () => {
+    expect(
+      describeAiFailure("credits_empty", { action: "ask_admin" })
+    ).toMatchObject({
+      action: "ask_admin",
+      message: expect.stringMatching(/Ask an admin to top up credits\./),
+    });
+  });
+
+  it("a provider refusal on the pod's own key is the owner's, never an operator's", () => {
+    const own = describeAiFailure({
+      failure: {
+        code: "insufficient_credit",
+        retryable: false,
+        ownKey: true,
+      },
+    });
+    expect(own).toMatchObject({
+      class: "quota",
+      actor: "payer",
+      action: "none",
+      needsOperator: false,
+    });
+    expect(own.message).toMatch(
+      /^Your AI provider key has run out of credit or was refused\. The pod's owner updates it in Settings › AI providers\./
+    );
+    // Synap's own key: the operator's state, as before.
+    const synaps = describeAiFailure({
+      failure: { code: "insufficient_credit", retryable: false },
+    });
+    expect(synaps).toMatchObject({ actor: "operator", needsOperator: true });
+    expect(synaps.message).not.toMatch(/provider key/);
   });
 });

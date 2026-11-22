@@ -46,6 +46,7 @@ import {
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
+  moveMisnamedLifecycle,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
@@ -167,7 +168,8 @@ export interface CaptureGraphInvalidEntity {
 export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
-  unmodeled: Array<{ key: string; didYouMean?: string }>;
+  /** `movedTo`: the kind's status field, where the pod stored the value. */
+  unmodeled: Array<{ key: string; didYouMean?: string; movedTo?: string }>;
 }
 
 /**
@@ -255,9 +257,9 @@ export interface CapturePlanInput {
    * because the materializer runs pass 0a (skills) to completion before pass
    * 0b (automations) and the automation door's catalog check is a live read.
    *
-   * `enabled` is accepted on an automation only so a producer can STATE its
-   * intent — it is forced false at materialization (approve-first), and the
-   * override is reported, never swallowed.
+   * `enabled` on an automation is the status asked for: a person's approval
+   * of the batch keeps it (absent = active); an agent's automation no person
+   * approved is born draft.
    */
   skills?: Array<Omit<CompositeCreateSkillOp, "op">>;
   automations?: Array<Omit<CompositeCreateAutomationOp, "op">>;
@@ -814,7 +816,6 @@ export async function preflightCaptureGraphOperations(
       });
       continue;
     }
-    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
     // `content` is folded in the way the materializer does (a long body becomes
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
@@ -823,14 +824,17 @@ export async function preflightCaptureGraphOperations(
     // linked body document). A `content` the caller put in `properties` still
     // reports — that one IS a property key.
     const bodyFolded = !!op.content && !("content" in (op.properties ?? {}));
-    if (op.content) propsToCheck.content = op.content;
     const {
       valid,
       errors,
       unmodeled: reported,
       modeled,
+      moved,
     } = await propertyValidation.validateEntityCreateForProposal(
-      propsToCheck,
+      {
+        ...(op.properties ?? {}),
+        ...(op.content ? { content: op.content } : {}),
+      },
       profile.id,
       workspaceId,
       {
@@ -839,6 +843,11 @@ export async function preflightCaptureGraphOperations(
           (profile.defaultValues as Record<string, unknown>) ?? {},
       }
     );
+    // The kind's status sent under another key is filed under its field (the
+    // validator checked it there; `movedTo` on the report says so).
+    if (moved.length > 0 && op.properties) {
+      op.properties = moveMisnamedLifecycle(op.properties, moved).properties;
+    }
     modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({

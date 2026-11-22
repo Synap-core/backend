@@ -1,16 +1,16 @@
 "use client";
 
 /**
- * Approvals › Grid — today's agent × work matrix, folded into Approvals
+ * Approvals › By work — the agent × work matrix, folded into Approvals
  * (decision b387ca45 D5; it was Governance › Agents & work). One read,
  * `governanceRules.matrix({ lens: "pod" })` (pod admins only — the `(admin)`
  * proxy gate and the procedure's own `assertPodAdmin`):
  *
- *   ?view=grid             the pod default, the agents (how each one's writes
+ *   ?view=work             the pod default, the agents (how each one's writes
  *                          land, its page, "Why, per space") and every agent ×
  *                          each space's processes, its Other work and the
  *                          locked platform floors (type → computer → agent);
- *   ?view=grid&agent=<id>  that agent's row of the grid alone, each cell
+ *   ?view=work&agent=<id>  that agent's row of the grid alone, each cell
  *                          opening WHY (Widen / Revoke).
  *
  * The page's header and its one filter row are the Approvals page's. States:
@@ -222,7 +222,7 @@ function OneAgentGrid({
   );
 }
 
-/** `?view=grid`: every agent, grouped type → computer → agent. */
+/** `?view=work`: every agent, grouped type → computer → agent. */
 function WholeGrid({
   matrix,
   onRefetch,

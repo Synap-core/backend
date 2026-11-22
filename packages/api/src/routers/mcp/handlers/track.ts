@@ -54,6 +54,7 @@ import {
   type McpHandlerMap,
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
+import { hasBlockerEdits, parseBlockerEdits } from "./blocker-args.js";
 
 const Uuid = z.string().uuid();
 
@@ -427,21 +428,46 @@ export const trackHandlers: McpHandlerMap = {
     const hasKpi = "kpi" in ctx.args;
     const goal = pickTrackGoalInput(ctx.args);
     const placement = pickGoalPlacementInput(ctx.args);
-    if (
-      !trackId ||
-      (!hasDirection &&
-        !hasKpi &&
-        Object.keys(goal).length === 0 &&
-        Object.keys(placement).length === 0)
-    ) {
+    // The goals THIS goal waits on (`track --blocked_by--> track`).
+    const blockers = parseBlockerEdits(ctx.args, ["track"]);
+    if ("error" in blockers) return ok(blockers);
+    const editsBlockers = hasBlockerEdits(blockers);
+    const editsFields =
+      hasDirection ||
+      hasKpi ||
+      Object.keys(goal).length > 0 ||
+      Object.keys(placement).length > 0;
+    if (!trackId || (!editsFields && !editsBlockers)) {
       return ok({
         error:
-          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty, loop, parentGoalId or pillars. synap_list_tracks lists the project's tracks.",
+          "trackId (uuid) and something to change are required — direction, kpi, endState, criteria, dropConditions, workKind, uncertainty, loop, parentGoalId, pillars, addBlockedByTrackIds or removeBlockedByTrackIds. synap_list_tracks lists the project's tracks.",
       });
     }
     const direction = ctx.args.direction;
     if (hasDirection && direction !== null && typeof direction !== "string") {
       return ok({ error: "direction is one line of text, or null to clear." });
+    }
+    /** THE governed dependency door, per id (`unit-blockers.ts`). */
+    const blockerReports = async () => {
+      if (!editsBlockers) return {};
+      const { applyUnitBlockerEdits } =
+        await import("../../../services/links/unit-blockers.js");
+      const r = await applyUnitBlockerEdits({
+        from: { type: "track", id: trackId },
+        add: { entity: [], track: blockers.track.add },
+        remove: { entity: [], track: blockers.track.remove },
+        userId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        door: "mcp:synap_update_track",
+      });
+      return {
+        ...(r.links.length > 0 ? { blockerLinks: r.links } : {}),
+        ...(r.removals.length > 0 ? { blockerRemovals: r.removals } : {}),
+      };
+    };
+    if (!editsFields) {
+      return run(async () => ({ trackId, ...(await blockerReports()) }));
     }
     return run(async () => {
       const result = await setTrackDirection({
@@ -452,10 +478,13 @@ export const trackHandlers: McpHandlerMap = {
         ...placement,
         actor: actorOf(ctx),
       });
-      if (result.status === "proposed") return result;
+      // After the fields: a refused field edit writes no edge either.
+      const edges = await blockerReports();
+      if (result.status === "proposed") return { ...result, ...edges };
       return {
         status: result.status,
         track: await loadWrittenTrackView(result.track, ctx),
+        ...edges,
       };
     });
   },

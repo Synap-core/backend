@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
 import { CATALOG_DETAILS } from "@synap-core/types/design-board";
+import { withMarketplaceKindAliases } from "@synap-core/types/marketplace-source";
 import {
   renderText,
   type TextTemplateMiss,
@@ -40,8 +41,7 @@ import { TRPCError } from "@trpc/server";
 import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../capture-agent/capture-degraded-guidance.js";
 import {
   db,
@@ -803,6 +803,7 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       reason === "degraded" && Array.isArray(structured?.entities)
         ? (structured.entities as Array<Record<string, unknown>>)
         : undefined;
+    const degradedWords = describeDegradedCapture(degradedReason);
 
     return {
       status: "no_proposal",
@@ -818,8 +819,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
         ? {
             degraded: true as const,
             ...(degradedReason ? { degradedReason } : {}),
-            degradedMessage: describeDegradedForAgent(degradedReason),
-            degradedRetryable: isDegradedReasonRetryable(degradedReason),
+            degradedMessage: degradedWords.message,
+            degradedRetryable: degradedWords.retryable,
           }
         : {}),
       ...(salvagedEntities?.length
@@ -2404,20 +2405,24 @@ const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 const marketInstallParams = z.object({
   slug: z.string().min(1).max(200),
-  kind: z.enum([
-    "capability",
-    "automation",
-    "template",
-    "cell",
-    "skill",
-    "view",
-    // An agent template (`runMarketInstall` case "agent", one write:
-    // `installAgentTemplate`). The browser routes an `agent` package here.
-    "agent",
-    // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
-    // fetched from this pod's control plane, managed pods only.
-    "renderer-bundle",
-  ]),
+  // The Control Plane's names are accepted too: `workflow` is an automation,
+  // as `synap market --type` lists it (237175b5).
+  kind: withMarketplaceKindAliases(
+    z.enum([
+      "capability",
+      "automation",
+      "template",
+      "cell",
+      "skill",
+      "view",
+      // An agent template (`runMarketInstall` case "agent", one write:
+      // `installAgentTemplate`). The browser routes an `agent` package here.
+      "agent",
+      // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
+      // fetched from this pod's control plane, managed pods only.
+      "renderer-bundle",
+    ])
+  ),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   /**
@@ -3891,9 +3896,8 @@ const automationRecommendHealthHandler: BuiltinVerbHandler = async (
 // The substrate could BUILD config (playbook.create / automation.create) but
 // never REVISE it: a live playbook whose `subjectProfile` pointed at a kind
 // that no longer exists could not be repaired from any agent surface, and an
-// agent-authored automation — which ALWAYS lands `draft`
-// (`insertAutomationAfterGovernance`'s `forceDraft`) — could never be switched
-// on. These four verbs close that, each delegating to the EXISTING governed
+// agent-authored automation no person approved — born `draft`
+// (`automationStatusAtCreate`) — could never be switched on. These four verbs close that, each delegating to the EXISTING governed
 // tRPC procedure exactly like `entity.update` does. No logic is re-implemented
 // here, and every return is surfaced VERBATIM so a `{ status: "proposed" }`
 // outcome is reported as the success it is.
@@ -4628,6 +4632,69 @@ const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   );
 };
 
+// ── Read a public JSON API ("http.get_json") ───────────────────────────────────
+//
+// Keyless public data (agent report 25a60263; founder answer 12, 21 Nov 2026):
+// a GET to a host on the pod's allow-list, through the guarded https fetch,
+// parsed JSON back (`http-get-json.ts`). Read-only (READ_ONLY_BUILTIN_VERBS):
+// it mutates nothing in the pod, and the host list bounds where it may reach.
+// `http.allow_host` is the ONE door onto that list: declared `proposeOnly`
+// (no rule runs it for an agent: an agent's ask is a proposal the person
+// approves) and, run directly, only by a pod admin.
+
+const httpGetJsonParams = z.object({
+  /** The https URL to GET. Its host must be on the pod's allow-list. */
+  url: z.string().trim().min(1).max(4096),
+  /** Query parameters, added to the URL. */
+  query: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .optional(),
+  /** Accept and Accept-Language only. */
+  headers: z.record(z.string(), z.string().max(500)).optional(),
+});
+
+const httpGetJsonHandler: BuiltinVerbHandler = async (params) => {
+  const input = httpGetJsonParams.parse(params);
+  const { httpGetJson } = await import("./http-get-json.js");
+  return httpGetJson(input);
+};
+
+const httpAllowHostParams = z.object({
+  /** The host to allow, e.g. "recherche-entreprises.api.gouv.fr". */
+  host: z.string().trim().min(1).max(253),
+  /** Why it is needed: shown on the proposal the person reviews. */
+  reason: z.string().trim().max(1000).optional(),
+});
+
+const httpAllowHostHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = httpAllowHostParams.parse(params);
+  const { allowHost, normalizeHost } = await import("./http-get-json.js");
+  // The gate proposes every agent run of this verb (`proposeOnly`); an
+  // approved proposal re-runs it as the person who approved it. An agent
+  // reaching here directly is refused, whatever let it through.
+  if (ctx.agentUserId) {
+    throw new VerbRefusal(
+      "An agent cannot add a host itself: http.allow_host files a proposal the person approves.",
+      "permission"
+    );
+  }
+  const { isPodAdmin } = await import("../../utils/workspace-role.js");
+  if (!(await isPodAdmin(ctx.userId))) {
+    throw new VerbRefusal(
+      "Only a pod admin can add a host to the pod's allow-list.",
+      "permission"
+    );
+  }
+  const host = normalizeHost(input.host);
+  if (!host) {
+    throw new VerbRefusal(
+      `"${input.host}" is not a public host name (give the name only, e.g. "api.example.org": no scheme, port or path).`,
+      "validation"
+    );
+  }
+  return { status: "allowed", ...(await allowHost(host, ctx.userId)) };
+};
+
 // ── Search the web ("web.search") ─────────────────────────────────────────────
 //
 // The agent's door onto `searchWeb` (web-search.ts): runs an installed search
@@ -5129,7 +5196,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.recommend_health": automationRecommendHealthHandler,
   // Config REVISION (see the section above): the substrate could build a
   // playbook/automation but never revise one, and an agent-authored automation
-  // always lands `draft` with no door to switch it on.
+  // no person approved is born `draft` with no door to switch it on.
   "playbook.update": playbookUpdateHandler,
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,
@@ -5148,6 +5215,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "property_def.propose_retire": propertyDefProposeRetireHandler,
   // Read one link through the one url-reader door (built-in or installed reader).
   "web.read": webReadHandler,
+  // Read a public JSON API on a host the pod allows; add a host (proposed).
+  "http.get_json": httpGetJsonHandler,
+  "http.allow_host": httpAllowHostHandler,
   // Search the web through a named installed provider (its own gate + meter).
   "web.search": webSearchHandler,
   // Render a stored snippet (text with variables) once: { text, misses }.
@@ -5239,6 +5309,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
+  "http.get_json": httpGetJsonParams,
+  "http.allow_host": httpAllowHostParams,
   "web.search": webSearchParams,
   "snippet.render": snippetRenderParams,
   "pdf.ocr": pdfOcrParams,
@@ -5347,6 +5419,10 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // web.search — runs a search provider through ITS own gate (the same
   // shape as web.read naming a reader). Mutates nothing in the pod.
   "web.search",
+  // http.get_json — a GET to a host on the pod's allow-list, parsed JSON
+  // back. Mutates nothing in the pod. Adding a host (http.allow_host) is a
+  // write and stays gated.
+  "http.get_json",
   // messaging.accounts — the person's connected accounts (labels and ids);
   // the intent actions door runs it to list send_message's accounts.
   "messaging.accounts",

@@ -117,6 +117,17 @@ describe("navFor: the client scope of the one table", () => {
     );
   });
 
+  it("folds Daily write limits and Calibration into Approvals: lit by it, never listed", () => {
+    const all = ids(navFor("admin", { allTools: true })).flat();
+    expect(all).toContain("approvals");
+    expect(all).not.toContain("writeLimits");
+    expect(all).not.toContain("calibration");
+    expect(activeNavId("/approvals/limits")).toBe("approvals");
+    expect(activeNavId("/approvals/calibration")).toBe("approvals");
+    expect(navHref("writeLimits")).toBe("/approvals/limits");
+    expect(navHref("calibration")).toBe("/approvals/calibration");
+  });
+
   it("sends Automations' old /rules links to /automations, and keeps /rules for Rules", () => {
     const redirects = consoleRedirects();
     expect(redirects).toContainEqual({
@@ -146,7 +157,7 @@ describe("navFor: the client scope of the one table", () => {
     const redirects = consoleRedirects();
     expect(redirects).toContainEqual({
       source: "/governance/agents",
-      destination: "/approvals?view=grid",
+      destination: "/approvals?view=work",
       permanent: false,
     });
     expect(redirects).toContainEqual({
@@ -194,7 +205,7 @@ describe("consoleRedirects", () => {
       ["/templates", null, "/processes", false],
       ["/templates/:id", null, "/processes/:id", false],
       ["/rules/:id", null, "/automations/:id", false],
-      ["/governance/agents", null, "/approvals?view=grid", false],
+      ["/governance/agents", null, "/approvals?view=work", false],
       ["/governance", null, "/approvals", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],

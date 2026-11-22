@@ -2334,6 +2334,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
 CREATE TABLE IF NOT EXISTS "skills" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"         text    NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "workspace_id"    uuid    REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "kind"            text    NOT NULL DEFAULT 'code',
   "scope"           text    NOT NULL DEFAULT 'pod',
@@ -2397,6 +2399,7 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "input_map" jsonb;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
+CREATE INDEX IF NOT EXISTS "skills_agent_user_id_idx" ON "skills" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
 CREATE INDEX IF NOT EXISTS "idx_skills_approved"     ON "skills" ("approved");
@@ -4394,6 +4397,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
   "id"             uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"   uuid,
   "created_by"     text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"  text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"           text        NOT NULL,
   "description"    text,
   "kind"           text        NOT NULL,
@@ -4418,6 +4423,7 @@ ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "auth_binding" text NOT NULL DEFAUL
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
 CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");
+CREATE INDEX IF NOT EXISTS "idx_tools_agent_user_id" ON "tools" ("agent_user_id");
 -- Generalized from the old nango://-only index (mig 0132 → 0140): ONE pod-wide
 -- tool per distinct non-null credential_ref, scheme-agnostic. NULL credential_ref
 -- (builtin/script) and workspace-scoped tools are excluded.
@@ -4431,6 +4437,8 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id" uuid,
   "created_by"   text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id" text       REFERENCES "users"("id") ON DELETE SET NULL,
   "name"         text        NOT NULL,
   "description"  text,
   "approved"     boolean     NOT NULL DEFAULT false,
@@ -4443,6 +4451,7 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
 );
 CREATE INDEX IF NOT EXISTS "idx_capabilities_workspace_id" ON "capabilities" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_created_by"   ON "capabilities" ("created_by");
+CREATE INDEX IF NOT EXISTS "idx_capabilities_agent_user_id" ON "capabilities" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_template_key" ON "capabilities" ("template_key");
 -- NULL workspace_id coalesced to a sentinel so pod-wide containers participate
 -- in uniqueness (plain UNIQUE would treat NULLs as distinct). 0242.
@@ -4566,6 +4575,9 @@ ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "run_on" jsonb;  -- 0403 (who ran it and why: RunOn)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "generation" jsonb;  -- 0417 (a one-shot run's record: prompt, model, tokens, proposal)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "holder" jsonb;  -- 0446 (who holds it, when it was claimed)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "agent_user_id" text;  -- 0446 (the agent that started it; created_by = the person)
+ALTER TABLE "playbook_runs" ALTER COLUMN "status" DROP DEFAULT;  -- 0446 (every birth names its status and holder)
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_generation_subject"
   ON "playbook_runs" ("playbook_id", (("generation"->>'subjectId')))
   WHERE "generation" IS NOT NULL;
@@ -6329,4 +6341,46 @@ BEGIN
         AND NOT coalesce(("constraints" -> 'auth' -> 'anyOf') ? 'public', false)
       );
   END IF;
+END $$;
+
+-- 0447: the declared machines' status CHECKs (same block as the migration).
+DO $$
+DECLARE
+  spec record;
+  stray text;
+BEGIN
+  FOR spec IN
+    SELECT * FROM (VALUES
+      ('automations', 'automations_status_check',
+       ARRAY['draft', 'active', 'paused', 'error', 'archived']),
+      ('automation_runs', 'automation_runs_status_check',
+       ARRAY['running', 'completed', 'failed', 'cancelled', 'skipped', 'blocked_by_policy', 'waiting_on_you']),
+      ('playbooks', 'playbooks_status_check',
+       ARRAY['draft', 'active', 'paused', 'archived']),
+      ('session_stage_runs', 'session_stage_runs_status_check',
+       ARRAY['running', 'waiting_tools', 'waiting_child', 'waiting_start', 'unreached', 'done', 'failed', 'cancelled'])
+    ) AS t(tbl, con, allowed)
+  LOOP
+    CONTINUE WHEN to_regclass(spec.tbl) IS NULL;
+    CONTINUE WHEN EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conname = spec.con AND conrelid = to_regclass(spec.tbl)
+    );
+    -- NOT VALID first (a short lock), then VALIDATE (no write lock while it
+    -- scans) when no row holds a stray word.
+    EXECUTE format(
+      'ALTER TABLE %I ADD CONSTRAINT %I CHECK ("status" = ANY (%L::text[])) NOT VALID',
+      spec.tbl, spec.con, spec.allowed
+    );
+    EXECUTE format(
+      'SELECT string_agg(DISTINCT "status", '', '') FROM %I WHERE "status" <> ALL ($1)',
+      spec.tbl
+    ) INTO stray USING spec.allowed;
+    IF stray IS NULL THEN
+      EXECUTE format('ALTER TABLE %I VALIDATE CONSTRAINT %I', spec.tbl, spec.con);
+    ELSE
+      RAISE NOTICE '0447: % holds undeclared status values (%); % added NOT VALID',
+        spec.tbl, stray, spec.con;
+    END IF;
+  END LOOP;
 END $$;

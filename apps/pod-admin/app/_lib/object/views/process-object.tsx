@@ -293,7 +293,7 @@ export function ProcessObject({
           actions={
             <Button
               as={Link}
-              href={navHref("approvals", { view: "grid" })}
+              href={navHref("approvals", { view: "work" })}
               size="sm"
               variant="light"
               radius="md"

@@ -73,7 +73,7 @@ const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
  * of `createPropertyDefs` when its one gate granted the batch.
  */
 async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
-  const { propertyDef, link, existing, ignored } =
+  const { propertyDef, link, existing, ignored, globalField } =
     await createAndLinkPropertyDef(input);
 
   // HONESTY FLOOR: `property-defs.create` is slug-idempotent and NOT
@@ -87,6 +87,29 @@ async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
   // NOT implemented: the founder's rule is no silent convergence, but the
   // thing must stay editable through a door — so the receipt NAMES that
   // door (`updatePropertyDef` below) and the def's id.
+  if (existing && globalField?.outcome === "reused") {
+    // The slug matched a pod-wide field and the declaration agreed with it:
+    // the kind now uses that shared field. Said, never implied.
+    return {
+      status: "unchanged" as const,
+      proposalId: null,
+      propertyDef,
+      link,
+      ignored,
+      globalField,
+      message: `Reused global field '${input.slug}' (id ${propertyDef.id}): a pod-wide field with this slug matched your declaration, so this kind now uses it. It is shared with every kind that uses it, so never change it for this kind alone. To give this kind its own field instead, declare a different slug.${
+        ignored.length > 0
+          ? ` NOT applied: ${ignored
+              .map(
+                (i) =>
+                  `${i.field}: you declared ${JSON.stringify(i.declared)}, the shared field holds ${JSON.stringify(i.stored)}`
+              )
+              .join("; ")}.`
+          : ""
+      }`,
+    };
+  }
+
   if (existing) {
     return {
       status: "unchanged" as const,
@@ -113,6 +136,23 @@ async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
     proposalId: null,
     propertyDef,
     link,
+    // The slug matched a pod-wide field whose type or allowed values differ:
+    // this kind got its OWN field, and the shared one was left alone.
+    ...(globalField?.outcome === "shadowed"
+      ? {
+          globalField,
+          message: `Created this kind's own field '${input.slug}'. A pod-wide field with this slug exists (id ${globalField.id}) but differs: ${(
+            globalField.conflicts ?? []
+          )
+            .map(
+              (i) =>
+                `${i.field}: you declared ${JSON.stringify(i.declared)}, the shared field holds ${JSON.stringify(i.stored)}`
+            )
+            .join(
+              "; "
+            )}. The shared field and the kinds that use it were not changed.`,
+        }
+      : {}),
   };
 }
 
