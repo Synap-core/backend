@@ -978,6 +978,9 @@ export interface CompositeCreateAutomationOp {
    * person's approval an agent's automation is born draft.
    */
   enabled?: boolean;
+  /** The space it runs in: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
 }
 
 export interface CompositeCreateRuleOp {
@@ -1015,13 +1018,67 @@ export interface CompositeCreatePlaybookOp {
   description?: string;
   /** Required by the playbook door; a one-line goal is enough for a draft. */
   goalTemplate: string;
-  /** The kind the process runs on, and the property that holds its lifecycle. */
-  subjectProfile: { profileSlug: string; statusProperty?: string };
   /**
-   * ALWAYS FORCED "draft" at materialization; present so an author can state
-   * it. Any other value is overridden, never honoured.
+   * The kind the process runs on, and the property that holds its lifecycle.
+   * `profileSlug` may be left out when `subjectProfileRef` names the kind.
    */
-  status?: "draft";
+  subjectProfile: { profileSlug?: string; statusProperty?: string };
+  /** A `define_kind` op of this batch: the process runs on the kind it defines. */
+  subjectProfileRef?: string;
+  /** The space it lives in: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
+  /**
+   * `draft` keeps it off. Absent: a person's approval of the batch makes it
+   * active; with no person's approval it is born draft.
+   */
+  status?: "draft" | "active";
+}
+
+/**
+ * ── Domain ops (a plan builds a domain, 2026-11-22) ──────────────────────────
+ *
+ * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
+ * the playbooks, automations, views and cells that use them, so the person
+ * approves a whole domain once. Each applies through its existing door (the
+ * template apply, the profile create, the lifecycle declaration) as the
+ * approver, before every op that may name it. Per-op resilient: an op that
+ * names one that failed is skipped, named.
+ */
+export interface CompositeCreateWorkspaceOp {
+  op: "create_workspace";
+  ref: string;
+  name: string;
+  description?: string;
+}
+
+export interface CompositeDefineKindOp {
+  op: "define_kind";
+  ref: string;
+  slug: string;
+  displayName: string;
+  description?: string;
+  icon?: string;
+  /** `pod`: its things are read in every space; `workspace`: in its home. */
+  entityScope?: "pod" | "workspace";
+  /** Field definitions, the `define_kind` door's contract (`{ slug, valueType, … }`). */
+  fields?: Array<Record<string, unknown>>;
+  /** Its home space: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
+}
+
+export interface CompositeDeclareLifecycleOp {
+  op: "declare_lifecycle";
+  ref: string;
+  /** The kind: a `define_kind` op of this batch, or an existing kind's id. */
+  kindRef?: string;
+  profileId?: string;
+  /** The status field's slug (default `status`). */
+  property?: string;
+  /** Each `{ key, category, label?, … }`, the lifecycle door's contract. */
+  options: Array<Record<string, unknown>>;
+  initialStatus?: string;
 }
 
 /**
@@ -1056,6 +1113,8 @@ export interface CompositeCreateViewOp {
   viewType: CompositeViewType;
   /** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
   workspaceId?: string;
+  /** …or a `create_workspace` op of this batch. */
+  workspaceRef?: string;
   /** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
   scopeProfileSlugs?: string[];
   /** The listed things: in-batch `create_entity` refs or existing entity ids. */
@@ -1102,6 +1161,8 @@ export interface CompositeCreateCellOp {
   description?: string;
   /** Space the cell lives in; absent ⇒ pod-global. */
   workspaceId?: string;
+  /** …or a `create_workspace` op of this batch. */
+  workspaceRef?: string;
   /**
    * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
    * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
@@ -1118,14 +1179,18 @@ export interface CompositeBindRendererOp {
   op: "bind_renderer";
   /** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
   ref: string;
-  /** The object whose page shows the cell: an existing playbook or view. */
-  target: { kind: BindRendererTargetKind; id: string };
+  /**
+   * The object whose page shows the cell: an existing playbook or view
+   * (`id`), or a `create_playbook` / `create_view` op of this batch (`ref`).
+   */
+  target: { kind: BindRendererTargetKind; id?: string; ref?: string };
   /** Its slot: one object's page has only `detail`. */
   slot: "detail";
   /** `pod` = the object's own page everywhere; `workspace` = in one space. */
   scope: "pod" | "workspace";
-  /** Required for `scope: "workspace"`. */
+  /** Required for `scope: "workspace"` (or its `workspaceRef`). */
   workspaceId?: string;
+  workspaceRef?: string;
   /** The cell: a `create_cell` op in this batch… */
   cellRef?: string;
   /** …or an existing cell's key. Exactly one of the two. */
@@ -1358,6 +1423,9 @@ export type CompositeProposalOperation =
   | CompositeCreateAutomationOp
   | CompositeCreateRuleOp
   | CompositeCreatePlaybookOp
+  | CompositeCreateWorkspaceOp
+  | CompositeDefineKindOp
+  | CompositeDeclareLifecycleOp
   | CompositeCreateViewOp
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
@@ -1456,6 +1524,11 @@ const _RESILIENT_OPERATION_KINDS = [
   "create_rule",
   // A draft process: a failed draft must not discard the capture beside it.
   "create_playbook",
+  // A domain's space, kinds and lifecycles: an op naming one that failed is
+  // skipped, named, like a binding whose cell did not land.
+  "create_workspace",
+  "define_kind",
+  "declare_lifecycle",
   // A list over the bundle's things: a failed list must not discard them.
   "create_view",
   // A playbook's UI: a cell that fails leaves the views beside it, and a
@@ -1907,6 +1980,49 @@ export function resolveCompositeRef(
   throw new Error(
     `resolveCompositeRef: unknown reference "${ref}" — not an in-proposal op ref and not a valid entity UUID`
   );
+}
+
+/**
+ * A string value inside a `create_automation` flow that names an op of the
+ * same batch (`"$ref:pb1"`): replaced by that op's real id at apply time, so a
+ * flow can run a playbook the plan creates.
+ */
+export const FLOW_REF_PREFIX = "$ref:" as const;
+
+/** Every op ref a flow names through {@link FLOW_REF_PREFIX}, once each. */
+export function flowRefsOf(flow: unknown): string[] {
+  const refs = new Set<string>();
+  const walk = (value: unknown): void => {
+    if (typeof value === "string") {
+      if (value.startsWith(FLOW_REF_PREFIX))
+        refs.add(value.slice(FLOW_REF_PREFIX.length));
+    } else if (Array.isArray(value)) {
+      value.forEach(walk);
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(walk);
+    }
+  };
+  walk(flow);
+  return [...refs];
+}
+
+/** A copy of `flow` with each {@link FLOW_REF_PREFIX} string resolved. */
+export function resolveFlowRefs(
+  flow: unknown,
+  resolve: (ref: string) => string
+): unknown {
+  if (typeof flow === "string") {
+    return flow.startsWith(FLOW_REF_PREFIX)
+      ? resolve(flow.slice(FLOW_REF_PREFIX.length))
+      : flow;
+  }
+  if (Array.isArray(flow)) return flow.map((v) => resolveFlowRefs(v, resolve));
+  if (flow && typeof flow === "object") {
+    return Object.fromEntries(
+      Object.entries(flow).map(([k, v]) => [k, resolveFlowRefs(v, resolve)])
+    );
+  }
+  return flow;
 }
 
 // ---------------------------------------------------------------------------
