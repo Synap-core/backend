@@ -38,6 +38,7 @@ import {
   podMembers,
   workspaceMembers,
   apiKeys,
+  users,
   workspaces,
 } from "@synap/database/schema";
 import { db } from "@synap/database";
@@ -84,6 +85,7 @@ beforeAll(async () => {
     podMembers,
     workspaceMembers,
     apiKeys,
+    users,
     workspaces,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));

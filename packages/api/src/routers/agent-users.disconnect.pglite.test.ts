@@ -509,7 +509,7 @@ describe("agentUsers.list — computers and the agents they host", () => {
     new Map(
       (
         (await caller(OWNER).list({
-          workspaceId: null,
+          workspaceId: [],
           ...input,
         })) as HostRow[]
       ).map((r) => [r.id, r])

@@ -25,6 +25,7 @@ import {
   spaceAccess,
   workspaceMembers,
   apiKeys,
+  users,
   workspaces,
   podMembers,
 } from "@synap/database";
@@ -77,6 +78,7 @@ beforeAll(async () => {
     spaceAccess,
     workspaceMembers,
     apiKeys,
+    users,
     workspaces,
     podMembers,
   ]) {

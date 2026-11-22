@@ -4,12 +4,10 @@ import {
   proposals,
   eq,
   getWorkspaceMembership,
-  workspaces,
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { auditLog } from "../../../utils/audit-log.js";
 import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import {
   registerProposalExecutor,

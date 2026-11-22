@@ -19,9 +19,10 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   podMembers,
   workspaceMembers,
-  apiKeys,
   workspaces,
 } from "../schema/workspaces.js";
+import { apiKeys } from "../schema/api-keys.js";
+import { users } from "../schema/users.js";
 import { projects } from "../schema/projects.js";
 import { projectMembers } from "../schema/project-members.js";
 import { hasActivePodAccess, readPodUserAccess } from "./pod-user-access.js";
@@ -32,6 +33,7 @@ const db = drizzle(client, {
     podMembers,
     workspaceMembers,
     apiKeys,
+    users,
     workspaces,
     projects,
     projectMembers,
@@ -66,6 +68,7 @@ beforeAll(async () => {
     podMembers,
     workspaceMembers,
     apiKeys,
+    users,
     workspaces,
     projects,
     projectMembers,
