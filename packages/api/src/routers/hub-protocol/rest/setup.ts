@@ -1313,41 +1313,13 @@ export function registerSetupRoutes(app: HubHono): void {
         hubId: jwtIssuerUrl
           ? integrationHubIdFromIssuerUrl(jwtIssuerUrl)
           : undefined,
-        // Idempotent path (Eve's workspace-membership repair): skip revoke+mint
+        // Idempotent path: skip revoke+mint
         // if a valid (non-revoked) key already exists for THIS instance.
         idempotent: body.idempotent === true,
         // A pending key revokes the agent's other live keys only once its
         // owner approves it (agent/connect), never at filing.
         pendingApproval: requireApproval,
         logger,
-        // Grant workspace membership at the SAME point it ran inline — after the
-        // agent user is resolved, before the idempotent short-circuit.
-        onAgentUserResolved: async (agentUserId) => {
-          if (ws) {
-            const existingMembership =
-              await db.query.workspaceMembers.findFirst({
-                where: and(
-                  eq(workspaceMembers.userId, agentUserId),
-                  eq(workspaceMembers.workspaceId, ws.id)
-                ),
-                columns: { id: true },
-              });
-
-            if (!existingMembership) {
-              await db.insert(workspaceMembers).values({
-                id: randomUUID(),
-                workspaceId: ws.id,
-                userId: agentUserId,
-                role: "editor",
-                invitedBy: ownerUserId ?? undefined,
-              });
-              logger.info(
-                { agentUserId, workspaceId: ws.id },
-                "setup/agent: workspace membership granted"
-              );
-            }
-          }
-        },
       });
 
       const agentUserId = provisioned.agentUserId;
