@@ -4721,13 +4721,13 @@ export const tools = {
             },
             workspaces: {
               type: "array",
-              description: "DOMAIN: a space {ref, name}.",
+              description: "DOMAIN: {ref, name}.",
               items: { type: "object" },
             },
             kinds: {
               type: "array",
               description:
-                "DOMAIN: a kind {ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
+                "DOMAIN: {ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
               items: { type: "object" },
             },
             lifecycles: {
@@ -4778,7 +4778,7 @@ export const tools = {
             profileSlug: {
               type: "string",
               description:
-                "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note.",
+                "Optional kind hint for the text lane: it guides extraction, and if AI structuring is down the text is saved as this kind (marked degraded) when it is in your lens, else as a note.",
             },
             global: {
               type: "boolean",
