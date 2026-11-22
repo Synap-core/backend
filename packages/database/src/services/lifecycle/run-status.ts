@@ -46,6 +46,7 @@ import {
   type RunTransitionPayload,
   type TransitionCause,
 } from "@synap-core/types/lifecycle";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import type * as schema from "../../schema/index.js";
 import {
   playbookRuns,
@@ -268,6 +269,25 @@ export function runHolder(
   const now = new Date().toISOString();
   return { kind, id, assignedAt: now, claimedAt: claimed ? now : null };
 }
+
+/**
+ * The status a run is born in beside its session (founder P4, 21 Nov 2026):
+ * a PLANNED step's run waits (`queued`, its holder already named and
+ * claimed) and starts with its step — `setSessionStatus` moves it to
+ * `running` when the step leaves `forming`. Any other session's run runs.
+ */
+export function runBirthStatus(
+  sessionStatus: string | null | undefined
+): "queued" | "running" {
+  return sessionStatus === PLANNED_SESSION_STATUS ? "queued" : "running";
+}
+
+/**
+ * SQL over `playbook_runs`: the run's holder has CLAIMED it (a starter's run
+ * is claimed from birth). A planned step's own run is one; a run handed to
+ * another agent is not, and keeps waiting for that agent's claim.
+ */
+export const RUN_HOLDER_CLAIMED_SQL = sql`(${playbookRuns.holder} ->> 'claimedAt') IS NOT NULL`;
 
 /** The run's starter holds it, working it from birth: its agent, else the person. */
 export function starterHolder(
