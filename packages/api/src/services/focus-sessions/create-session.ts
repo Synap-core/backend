@@ -29,6 +29,7 @@ import {
   sessionDefinitionColumns,
   derivedSessionTitle,
   ownerAndActor,
+  runBirthStatus,
   runHolder,
   starterHolder,
 } from "@synap/database";
@@ -1485,7 +1486,8 @@ export async function createFocusSession(
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: handedTo ? "queued" : "running",
+        // A planned step's run waits with it and starts when it wakes (P4).
+        status: handedTo ? "queued" : runBirthStatus(bornStatus),
         holder: handedTo
           ? runHolder("agent", handedTo)
           : starterHolder(userId, agentUserId),

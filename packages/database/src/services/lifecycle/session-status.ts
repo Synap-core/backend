@@ -47,6 +47,8 @@ import {
   type FocusSession,
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
+import { RUN_HOLDER_CLAIMED_SQL, setRunStatus } from "./run-status.js";
+import { playbookRuns } from "../../schema/playbook-runs.js";
 import { expirePendingStageGatesOfEndedSessions } from "../../utils/stage-gate-wait.js";
 import type { ProposalStatusWriter } from "../../utils/proposal-transition.js";
 import {
@@ -234,6 +236,27 @@ export async function setSessionStatus(
         });
       });
     await insertTransitionOutbox(tx, transitions);
+    // A PLANNED step's own run starts WITH it (P4): the run born `queued`
+    // beside it (`runBirthStatus`) and held by its starter moves to
+    // `running` in this transaction. A run handed to another agent keeps
+    // waiting for that agent's claim.
+    const startedPlanned = starts
+      ? transitions
+          .filter((t) => t.from === PLANNED_SESSION_STATUS)
+          .map((t) => t.subjectId)
+      : [];
+    if (startedPlanned.length > 0) {
+      await setRunStatus(tx, {
+        where: and(
+          inArray(playbookRuns.sessionId, startedPlanned),
+          RUN_HOLDER_CLAIMED_SQL
+        ),
+        from: "queued",
+        to: "running",
+        actor: input.actor,
+        reason: "Its step started.",
+      });
+    }
     // A session that ENDS takes its pending stage gates with it: an approval
     // of a gate on a closed, failed or cancelled run could only lead nowhere
     // (`stage-gate-wait.ts`). Same transaction, so the end and the expiry
