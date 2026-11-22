@@ -165,6 +165,7 @@ import { materializePlaybookCronAutomation } from "../cron-automation.js";
 import { runPlaybook } from "../run-playbook.js";
 import { postChannelMessage } from "../../messaging/post-message.js";
 import { applyRunCapture } from "../../runs/apply-run-capture.js";
+import { createFocusSession } from "../../focus-sessions/create-session.js";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 /** The person's agent with its own key (`pull`): `synap worker` runs it. */
@@ -411,5 +412,42 @@ describe("the run journey: Synap AI, a turn with no effect", () => {
     const ended = await theRun();
     expect(ended.status).toBe("failed");
     expect(ended.stop_reason).toBe("no_effect");
+  });
+});
+
+describe("a person's start that names an agent takes the one launch path", () => {
+  it("the run is handed to that agent by the run choice, born queued for it", async () => {
+    const res = await createFocusSession({
+      userId: USER,
+      goal: `Review Acme ${randomUUID()}`,
+      workspaceId: WS,
+      templateId: PLAYBOOK,
+      agentIds: [AGENT],
+      forceCreate: true,
+    });
+    if (res.status !== "created") throw new Error(res.status);
+    const run = await theRun();
+    expect(run).toMatchObject({
+      status: "queued",
+      executor: "external-agent",
+      session_id: res.session.id,
+    });
+    expect(run.holder).toMatchObject({ kind: "agent", id: AGENT });
+    // A pull agent finds it handed to it: no executor is dispatched.
+    expect(h.dispatched).toEqual([]);
+  });
+
+  it("an agent that cannot take it refuses the start by name, nothing written", async () => {
+    await expect(
+      createFocusSession({
+        userId: USER,
+        goal: `Review Acme ${randomUUID()}`,
+        workspaceId: WS,
+        templateId: PLAYBOOK,
+        agentIds: [randomUUID()],
+        forceCreate: true,
+      })
+    ).rejects.toThrow(/No agent .* to hand this run to/);
+    expect((await q(`select id from focus_sessions`)).rows).toEqual([]);
   });
 });
