@@ -1,11 +1,13 @@
 /**
- * Finding 747c485f: removing a person from a space also ends the access of the
- * agents acting FOR them there (`api_keys.linked_user_id`, `agentsActingFor`),
- * never of an agent its creator made for everyone (Capture, IS personas) or for
- * another member. Proved on PGlite through the real door
- * (`WorkspaceMemberRepository.remove`) and the gate's membership step
- * (`verifyPermission`), with controls, and migration 0440's cleanup of rows
- * earlier removals left behind (idempotent). Cannot see: production Postgres.
+ * An agent is never a space or project member: it acts through its person's
+ * membership (decision 2). Proved on PGlite through the gate's membership
+ * step (`verifyPermission` → `getMembership` → `membershipHolderIds`), the
+ * person removal door (`WorkspaceMemberRepository.remove`) and migration
+ * 0450: a removed person's agent loses the space on every path, a seat an
+ * agent still holds grants nothing, an agent acts for the person its key is
+ * linked to (never its creator when they differ), and a shared agent (no
+ * linked key) acts for the person who installed it. Cannot see: production
+ * Postgres, the read floor's `db` (`memberWorkspaceIds` shares the subquery).
  */
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
@@ -17,12 +19,15 @@ import { is, SQL } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../schema/index.js";
 import { WorkspaceMemberRepository } from "./workspace-member-repository.js";
-import { verifyPermission } from "../utils/permissions.js";
+import {
+  getProjectMembership,
+  verifyPermission,
+} from "../utils/permissions.js";
 
-const M0440 = readFileSync(
+const M0450 = readFileSync(
   fileURLToPath(
     new URL(
-      "../../migrations/0440_agent_membership_follows_person.sql",
+      "../../migrations/0450_agents_hold_no_membership.sql",
       import.meta.url
     )
   ),
@@ -78,17 +83,17 @@ const q = async <T = Record<string, unknown>>(
 
 const SPACE = randomUUID();
 const OTHER_SPACE = randomUUID();
-const ADMIN = "admin-offboarding";
-const POD_OWNER = "pod-owner-offboarding";
-const PERSON = "person-offboarding";
-const STAYER = "stayer-offboarding";
+const PROJECT = randomUUID();
+const ADMIN = "admin-agents";
+const POD_OWNER = "pod-owner-agents";
+const PERSON = "person-agents";
+const STAYER = "stayer-agents";
 // Agents acting for one person (a key linked to them).
 const PERSON_AGENT = randomUUID();
 const PERSON_REVOKED_AGENT = randomUUID(); // its only key is revoked
 const STAYER_AGENT = randomUUID();
-const OWNER_AGENT = randomUUID();
 const OWNER_MADE_FOR_STAYER = randomUUID(); // created by POD_OWNER, acts for STAYER
-// Shared agents: created by the pod owner, acting for nobody.
+// Shared agents: installed by the pod owner, no key linked to a person.
 const CAPTURE = randomUUID(); // no key (Capture agent shape)
 const PERSONA = randomUUID(); // no key (Intelligence Service persona shape)
 const POD_WIDE = randomUUID(); // a key with no linked person
@@ -152,7 +157,7 @@ async function key(
 beforeEach(async () => {
   events.length = 0;
   await client.exec(
-    "delete from workspace_members; delete from users; delete from automations; delete from api_keys;"
+    "delete from workspace_members; delete from project_members; delete from proposals; delete from users; delete from automations; delete from api_keys;"
   );
   await q(
     `insert into users (id, email, user_type) values
@@ -162,9 +167,8 @@ beforeEach(async () => {
   );
   const agents: Array<[string, string | null, string]> = [
     [PERSON_AGENT, PERSON, "cli"],
-    [PERSON_REVOKED_AGENT, PERSON, "cli"],
+    [PERSON_REVOKED_AGENT, POD_OWNER, "cli"],
     [STAYER_AGENT, STAYER, "cli"],
-    [OWNER_AGENT, POD_OWNER, "cli"],
     [OWNER_MADE_FOR_STAYER, POD_OWNER, "cli"],
     [CAPTURE, POD_OWNER, "system"],
     [PERSONA, POD_OWNER, "intelligence-service"],
@@ -180,29 +184,45 @@ beforeEach(async () => {
   await key(PERSON_AGENT, PERSON);
   await key(PERSON_REVOKED_AGENT, PERSON, true);
   await key(STAYER_AGENT, STAYER);
-  await key(OWNER_AGENT, POD_OWNER);
   await key(OWNER_MADE_FOR_STAYER, STAYER);
   await key(POD_WIDE, null);
 });
 
-describe("removing a person from a space removes the agents acting for them (finding 747c485f)", () => {
+describe("a removed person's agent loses the space on every path", () => {
   beforeEach(async () => {
     await member(SPACE, ADMIN, "owner");
-    for (const u of [PERSON, PERSON_AGENT, STAYER, STAYER_AGENT]) {
-      await member(SPACE, u);
-    }
+    await member(SPACE, PERSON);
+    await member(SPACE, STAYER);
     await member(OTHER_SPACE, PERSON);
-    await member(OTHER_SPACE, PERSON_AGENT);
   });
 
-  it("the person's agent no longer passes the write gate in that space", async () => {
+  it("passes the write gate through its person's membership, with no seat of its own", async () => {
+    expect(await memberIds(SPACE)).not.toContain(PERSON_AGENT);
     expect(await canWrite(PERSON_AGENT, SPACE)).toBe(true);
+  });
 
+  it("fails it once the person is removed, and the removal names only the person", async () => {
     await repo.remove({ workspaceId: SPACE, userId: PERSON }, ADMIN);
 
     expect(await canWrite(PERSON, SPACE)).toBe(false);
     expect(await canWrite(PERSON_AGENT, SPACE)).toBe(false);
-    expect(await memberIds(SPACE)).not.toContain(PERSON_AGENT);
+    expect(events.map((e) => e.subjectId)).toEqual([PERSON]);
+  });
+
+  it("a seat the agent still holds grants nothing (enrolment, a join, an app sync)", async () => {
+    await member(SPACE, PERSON_AGENT, "admin");
+    await repo.remove({ workspaceId: SPACE, userId: PERSON }, ADMIN);
+
+    expect(await canWrite(PERSON_AGENT, SPACE)).toBe(false);
+  });
+
+  it("a revoked key still names its person, never falls back to the creator", async () => {
+    await member(SPACE, POD_OWNER);
+    expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(true);
+
+    await repo.remove({ workspaceId: SPACE, userId: PERSON }, ADMIN);
+
+    expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(false);
   });
 
   it("CONTROL: another member's agent, and the person's agent in another space, keep their access", async () => {
@@ -211,113 +231,108 @@ describe("removing a person from a space removes the agents acting for them (fin
     expect(await canWrite(STAYER_AGENT, SPACE)).toBe(true);
     expect(await canWrite(PERSON_AGENT, OTHER_SPACE)).toBe(true);
   });
-
-  it("leaves one removal event per membership removed, the agent's naming its person", async () => {
-    await repo.remove({ workspaceId: SPACE, userId: PERSON }, ADMIN);
-
-    expect(
-      events.map((e) => ({
-        type: e.type,
-        subjectId: e.subjectId,
-        userId: e.userId,
-        data: e.data,
-      }))
-    ).toEqual([
-      {
-        type: "workspaceMembers.remove.completed",
-        subjectId: PERSON,
-        userId: ADMIN,
-        data: { workspaceId: SPACE, userId: PERSON },
-      },
-      {
-        type: "workspaceMembers.remove.completed",
-        subjectId: PERSON_AGENT,
-        userId: ADMIN,
-        data: {
-          workspaceId: SPACE,
-          userId: PERSON_AGENT,
-          withPersonUserId: PERSON,
-        },
-      },
-    ]);
-  });
 });
 
-describe("removing the pod owner from a space keeps the agents that serve every member", () => {
-  beforeEach(async () => {
-    await member(SPACE, ADMIN, "owner");
+describe("whose membership an agent acts through", () => {
+  it("the person its key is linked to, not the person who created it", async () => {
+    await member(SPACE, POD_OWNER);
     await member(SPACE, STAYER);
-    for (const u of [
-      POD_OWNER,
-      OWNER_AGENT,
-      OWNER_MADE_FOR_STAYER,
-      CAPTURE,
-      PERSONA,
-      POD_WIDE,
-    ]) {
-      await member(SPACE, u);
-    }
+    expect(await canWrite(OWNER_MADE_FOR_STAYER, SPACE)).toBe(true);
+
+    await repo.remove({ workspaceId: SPACE, userId: STAYER }, POD_OWNER);
+
+    expect(await canWrite(OWNER_MADE_FOR_STAYER, SPACE)).toBe(false);
   });
 
-  it("removes the owner's own agent, and no shared agent", async () => {
-    await repo.remove({ workspaceId: SPACE, userId: POD_OWNER }, ADMIN);
-
-    expect(await canWrite(OWNER_AGENT, SPACE)).toBe(false);
+  it("a shared agent (no linked key) acts through the person who installed it", async () => {
+    await member(SPACE, ADMIN, "owner");
+    await member(SPACE, POD_OWNER);
     for (const shared of [CAPTURE, PERSONA, POD_WIDE]) {
       expect(await canWrite(shared, SPACE)).toBe(true);
     }
-  });
 
-  it("keeps an agent the owner created that acts for another member", async () => {
     await repo.remove({ workspaceId: SPACE, userId: POD_OWNER }, ADMIN);
 
-    expect(await canWrite(OWNER_MADE_FOR_STAYER, SPACE)).toBe(true);
-  });
-});
-
-describe("migration 0440 deletes the agent memberships earlier removals left behind", () => {
-  beforeEach(async () => {
-    // PERSON and POD_OWNER are not members of SPACE (PERSON was removed
-    // before the fix: their agents' rows stayed).
-    await member(SPACE, ADMIN, "owner");
-    await member(SPACE, STAYER);
-    for (const u of [
-      PERSON_AGENT,
-      PERSON_REVOKED_AGENT,
-      STAYER_AGENT,
-      OWNER_MADE_FOR_STAYER,
-      CAPTURE,
-      PERSONA,
-      POD_WIDE,
-      ORPHAN_AGENT,
-    ]) {
-      await member(SPACE, u);
+    for (const shared of [CAPTURE, PERSONA, POD_WIDE]) {
+      expect(await canWrite(shared, SPACE)).toBe(false);
     }
   });
 
-  it("removes the agents acting for a person who is not a member, and only them", async () => {
-    await client.exec(M0440);
+  it("an agent nobody owns acts through no one", async () => {
+    await member(SPACE, ADMIN, "owner");
+    await member(SPACE, ORPHAN_AGENT, "owner");
 
-    expect(await memberIds(SPACE)).toEqual(
-      [
-        ADMIN,
-        STAYER,
-        STAYER_AGENT,
-        OWNER_MADE_FOR_STAYER,
-        CAPTURE,
-        PERSONA,
-        POD_WIDE,
-        ORPHAN_AGENT,
-      ].sort()
+    expect(await canWrite(ORPHAN_AGENT, SPACE)).toBe(false);
+  });
+
+  it("a project role is the person's too", async () => {
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1, $2, $3, 'editor')`,
+      [randomUUID(), PROJECT, PERSON_AGENT]
     );
-    expect(await canWrite(PERSON_AGENT, SPACE)).toBe(false);
-    expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(false);
+    expect(await getProjectMembership(db, [PROJECT], PERSON_AGENT)).toBe(null);
+
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1, $2, $3, 'viewer')`,
+      [randomUUID(), PROJECT, PERSON]
+    );
+    expect(await getProjectMembership(db, [PROJECT], PERSON_AGENT)).toEqual({
+      role: "viewer",
+      projectId: PROJECT,
+    });
+  });
+});
+
+describe("migration 0450", () => {
+  const JOIN = randomUUID();
+  const OTHER = randomUUID();
+
+  beforeEach(async () => {
+    await member(SPACE, ADMIN, "owner");
+    await member(SPACE, PERSON);
+    for (const agent of [PERSON_AGENT, CAPTURE, POD_WIDE, ORPHAN_AGENT]) {
+      await member(SPACE, agent);
+    }
+    await q(
+      `insert into project_members (id, project_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $2, $5, 'editor')`,
+      [randomUUID(), PROJECT, PERSON_AGENT, randomUUID(), PERSON]
+    );
+    await q(
+      `insert into proposals (id, status, target_type, target_id, proposal_type, workspace_id, agent_user_id, data)
+       values ($1, 'pending', 'workspace', $3, 'join', $3, $4, '{"role":"editor"}'::jsonb),
+              ($2, 'pending', 'entity', $3, 'create', $3, $4, '{}'::jsonb)`,
+      [JOIN, OTHER, SPACE, PERSON_AGENT]
+    );
+  });
+
+  it("deletes every agent membership, keeps the persons', and ends pending joins as expired", async () => {
+    await client.exec(M0450);
+
+    expect(await memberIds(SPACE)).toEqual([ADMIN, PERSON].sort());
+    expect(
+      (
+        await q<{ user_id: string }>(
+          `select user_id from project_members where project_id = $1`,
+          [PROJECT]
+        )
+      ).map((r) => r.user_id)
+    ).toEqual([PERSON]);
+    const rows = await q<{ id: string; status: string; data: unknown }>(
+      `select id, status, data from proposals order by id`
+    );
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    expect(byId.get(JOIN)?.status).toBe("expired");
+    expect(byId.get(JOIN)?.data).toMatchObject({
+      role: "editor",
+      ended: { reason: "lapsed", by: "system" },
+    });
+    expect(byId.get(OTHER)?.status).toBe("pending");
   });
 
   it("is idempotent", async () => {
-    await client.exec(M0440);
+    await client.exec(M0450);
     const once = await memberIds(SPACE);
-    await client.exec(M0440);
+    await client.exec(M0450);
 
     expect(await memberIds(SPACE)).toEqual(once);
   });

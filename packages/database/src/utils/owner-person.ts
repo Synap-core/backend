@@ -18,7 +18,7 @@
  * Intelligence Service personas, a `podWide` key) is accountable to the person
  * who installed it but acts for nobody in particular.
  */
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { apiKeys, podMembers, users } from "../schema/index.js";
 
 type OwnerRow = {
@@ -59,10 +59,12 @@ export async function personOfOwner(
 }
 
 /**
- * Whose space and project memberships `userId` holds, as a one-row subquery:
- * a person holds their own; an agent is never a member and holds its person's
- * ({@link personOfRow}), none when nobody owns it. A request made with a key
- * linked to a person already arrives as that person.
+ * Whose space and project memberships `userId` acts through, as a subquery:
+ * a person, their own; an agent is never a member, it acts FOR the persons
+ * its keys are linked to ({@link agentsActingFor}, revoked keys included) and,
+ * with no linked key (the Capture agent, a persona, a pod-wide key), for the
+ * person who installed it (`created_by_user_id`); none when nobody owns it.
+ * A request made with a key linked to a person already arrives as that person.
  */
 export function membershipHolderIds(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
@@ -71,9 +73,13 @@ export function membershipHolderIds(
 ) {
   return database
     .select({
-      id: sql`CASE WHEN ${users.userType} = 'agent' THEN ${users.createdByUserId} ELSE ${users.id} END`,
+      id: sql`CASE WHEN ${users.userType} = 'agent' THEN COALESCE(${apiKeys.linkedUserId}, ${users.createdByUserId}) ELSE ${users.id} END`,
     })
     .from(users)
+    .leftJoin(
+      apiKeys,
+      and(eq(apiKeys.userId, users.id), isNotNull(apiKeys.linkedUserId))
+    )
     .where(eq(users.id, userId));
 }
 
