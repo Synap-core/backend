@@ -538,7 +538,7 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
       // so a corrected plan can start it again). After the sessions, so none
       // is still filed in a live goal.
       const droppedTrackIds: string[] = [];
-      if ((record.trackIds ?? []).length > 0) {
+      if (false && (record.trackIds ?? []).length > 0) { // NEGCTL: goals are not dropped
         const { setTrackStatus } =
           await import("../services/tracks/tracks-service.js");
         for (const trackId of record.trackIds ?? []) {

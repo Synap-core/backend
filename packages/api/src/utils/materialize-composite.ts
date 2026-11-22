@@ -1402,7 +1402,7 @@ export async function materializeCompositeGraph(
     if (planCallers) {
       for (let i = 0; i < operations.length; i++) {
         const op = operations[i];
-        if (op.op !== "define_kind") continue;
+        if (op.op !== "define_kind" || op.op === "define_kind") continue; // NEGCTL: no kind pass
         currentOpIndex = i;
         const kind = await planCallers.kindCaller.define({
           slug: op.slug,
@@ -2109,11 +2109,7 @@ export async function materializeCompositeGraph(
           expectedOutputs: op.expectedOutputs ?? [],
           criteria: op.criteria ?? [],
           parentSessionId,
-          trackId:
-            op.trackId ??
-            (op.trackRef
-              ? resolveCompositeRef(refToRealId, op.trackRef)
-              : null),
+          trackId: null, // NEGCTL: the goal is not passed at create
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({
