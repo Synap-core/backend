@@ -22,6 +22,13 @@ import {
 } from "@synap/playbooks";
 import { checkCriterionMeaning } from "@synap-core/types/units";
 import { DECLARED_SLOT_KEY_RE } from "../services/focus-sessions/slot-keys.js";
+import {
+  MEASURE_CHECK_VERB,
+  measureSpecSchema,
+} from "../services/capabilities/measure-check.js";
+
+/** The longest a criterion's `check.params` may be, as JSON. */
+const CHECK_PARAMS_MAX_CHARS = 2000;
 
 export const sessionCriterionSchema = z
   .strictObject({
@@ -44,6 +51,19 @@ export const sessionCriterionSchema = z
       capability: z.string().min(1).max(200).optional(),
       evidenceKey: z.string().min(1).max(80).optional(),
       hint: z.string().max(1000).optional(),
+      /**
+       * kind=capability: the verb's arguments (P8). For `measure.check`:
+       * `{ op, params, threshold, comparator }`, checked below.
+       */
+      params: z
+        .record(z.string().max(80), z.unknown())
+        .refine((p) => Object.keys(p).length <= 20, {
+          message: "check.params holds at most 20 keys",
+        })
+        .refine((p) => JSON.stringify(p).length <= CHECK_PARAMS_MAX_CHARS, {
+          message: `check.params is at most ${CHECK_PARAMS_MAX_CHARS} characters of JSON`,
+        })
+        .optional(),
     }),
     stageKey: z.string().min(1).max(120).optional(),
     /** R5 — what kind of check this is, in people's words. */
@@ -97,6 +117,28 @@ export const sessionCriterionSchema = z
         message: "A capability check names the capability verb to run",
         path: ["check", "capability"],
       });
+    }
+    // Arguments belong to a verb: only a capability check runs one.
+    if (c.check.params && c.check.kind !== "capability") {
+      ctx.addIssue({
+        code: "custom",
+        message: "check.params goes with a capability check only",
+        path: ["check", "params"],
+      });
+    }
+    // A measure is checked here, at the write: a misspelled op or param would
+    // be a criterion that measures something else, or nothing.
+    if (c.check.capability === MEASURE_CHECK_VERB) {
+      const measure = measureSpecSchema.safeParse(c.check.params ?? {});
+      if (!measure.success) {
+        for (const issue of measure.error.issues) {
+          ctx.addIssue({
+            code: "custom",
+            message: `measure.check: ${issue.message}`,
+            path: ["check", "params", ...issue.path.map(String)],
+          });
+        }
+      }
     }
     // A need ref (0426) instead of a verb: it must name a need of the
     // vocabulary (and, with a suffix, one of its intents).
