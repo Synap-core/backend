@@ -11685,6 +11685,16 @@ export interface CompositeCreateSessionOp {
 	/** `blocked_by` edges declared at birth. */
 	blockedByRefs?: string[];
 	blockedBySessionIds?: string[];
+	/**
+	 * P4 (21 Nov 2026): a step that waits at birth (a `blocked_by` edge in this
+	 * plan, or a `plannedFor` to come) is born PLANNED (`forming`) unless
+	 * `startNow`; `stepBirthStatus` (`@synap-core/types/units`) decides.
+	 */
+	startNow?: boolean;
+	/** B5: when its window opens (a month, a day or an ISO date-time). */
+	plannedFor?: string;
+	/** B5: its deadline (same shapes). */
+	dueBy?: string;
 	/** The entity this session is about (a `create_entity` ref or a real id). */
 	subjectRef?: string;
 	subjectEntityId?: string;
