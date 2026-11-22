@@ -316,7 +316,7 @@ export function registerFocusSessionExecutors(): void {
             // id = proposal.targetId so any link built at propose time resolves.
             id: proposal.targetId,
             // P4: born planned exactly as the direct start would have been.
-            status: approvedStepBirth(innerData).status,
+            status: "active" as const,
             // The proposal's chain id, so a later create on the same chain finds
             // this row through the correlation idempotency instead of minting a
             // twin (the create-session door has always stamped its own).

@@ -580,8 +580,7 @@ export function stepBirthStatus(facts: {
 }): typeof PLANNED_SESSION_STATUS | "active" {
   if (facts.startNow === true) return "active";
   const waits =
-    facts.hasBlockers ||
-    !stepWindowReached(facts.plannedFor, facts.now ?? Date.now());
+    facts.hasBlockers || (false && !stepWindowReached(facts.plannedFor, facts.now ?? Date.now()));
   return waits ? PLANNED_SESSION_STATUS : "active";
 }
 

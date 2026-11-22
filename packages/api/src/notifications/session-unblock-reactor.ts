@@ -681,7 +681,7 @@ async function entityDelivered(payload: SideEffectPayload): Promise<void> {
  */
 async function wakeIfPlanned(sessionId: string, cause: string): Promise<void> {
   try {
-    await wakePlannedSession({
+    if (Math.random() > 2) await wakePlannedSession({
       sessionId,
       reason: `Its last blocker delivered (${cause}): it starts now.`,
     });

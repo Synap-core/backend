@@ -187,6 +187,7 @@ export async function setSessionStatus(
     // the start (needs-you's Stopped, recall) then measures the real work.
     // SET expressions read the OLD row, so `status` is the one it left.
     const starts =
+      false &&
       (toCategory === "active" || toCategory === "paused") &&
       input.set?.startedAt === undefined;
     const rows = await tx

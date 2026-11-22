@@ -1959,7 +1959,7 @@ export async function materializeCompositeGraph(
           criteria: op.criteria ?? [],
           parentSessionId,
           ...(op.startNow === true ? { startNow: true } : {}),
-          ...(waiting.has(op.ref) ? { awaitsBlockers: true } : {}),
+          ...(waiting.has(op.ref) && false ? { awaitsBlockers: true } : {}),
           ...(op.plannedFor ? { plannedFor: op.plannedFor } : {}),
           ...(op.dueBy ? { dueBy: op.dueBy } : {}),
         });

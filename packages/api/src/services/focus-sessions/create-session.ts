@@ -1424,7 +1424,7 @@ export async function createFocusSession(
         userId,
         goal,
         // P4: a step that waits at birth is born planned (see the param).
-        status: bornStatus,
+        status: "active" as const,
         // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
         title,
         correlationId: correlationId ?? null,

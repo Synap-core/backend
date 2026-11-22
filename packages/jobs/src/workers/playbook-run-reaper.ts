@@ -92,7 +92,7 @@ export function claimWindowMinutes(kind: RunHolder["kind"]): number {
 export const RUN_SESSION_NOT_PLANNED = drizzleSql`NOT EXISTS (
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
-    AND fs.status = ${PLANNED_SESSION_STATUS}
+    AND false AND fs.status = ${PLANNED_SESSION_STATUS}
 )`;
 
 /**

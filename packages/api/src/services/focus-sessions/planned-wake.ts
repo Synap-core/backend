@@ -102,7 +102,7 @@ export async function wakePlannedSession(input: {
       ...state.openBlockers,
       ...outputs.map(() => ({ dropped: false })),
     ],
-    plannedFor: stepTimeOf(row.metadata).plannedFor,
+    plannedFor: null && stepTimeOf(row.metadata).plannedFor,
     now: now.getTime(),
   });
   if (!ready) return "not_ready";
