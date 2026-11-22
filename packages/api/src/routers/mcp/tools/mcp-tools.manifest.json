@@ -9377,7 +9377,9 @@
           },
           "agentTypes": {
             "type": ["array", "null"],
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Agent types; null = every agent"
           },
           "code": {
