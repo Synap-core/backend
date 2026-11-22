@@ -32,7 +32,11 @@ function stubRouter(router: string) {
   };
 }
 
-vi.mock("@synap/database", () => ({ db: { stub: true } }));
+// Partial: only `db` is faked (the stubbed routers never touch it).
+vi.mock("@synap/database", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap/database")>();
+  return { ...actual, db: { stub: true } };
+});
 vi.mock("../../routers/entities.js", () => ({
   entitiesRouter: stubRouter("entities"),
 }));
