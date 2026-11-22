@@ -34,7 +34,11 @@ import type { PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
-import { recordExecutorResult } from "../playbooks/run-playbook.js";
+import {
+  recordExecutorResult,
+  routeRunAgent,
+  runWorkOfSession,
+} from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
 import {
   getLinksFor,
@@ -135,6 +139,27 @@ export async function redispatchRun(
     fromType: "playbook",
   });
   const snapshot = asRecord(run.definitionSnapshot);
+  // An agent-only run names its agent before the executor runs: the one on
+  // its input, the one the person answered, else the run choice's last rungs
+  // (roster, assignment, single bound agent) over the session as it is now.
+  let input: Record<string, unknown> = {
+    ...asRecord(run.input),
+    runId: run.id,
+  };
+  if (executor === "external-agent" && !input.agentUserId) {
+    const work = runWorkOfSession(session);
+    if (!work.answeredAgentUserId) {
+      const routed = await routeRunAgent({
+        ownerId: session.userId,
+        playbookId: run.playbookId,
+        workspaceId: session.workspaceId ?? run.workspaceId ?? null,
+        work,
+      });
+      if (routed.kind === "routed") {
+        input = { ...input, agentUserId: routed.agentUserId };
+      }
+    }
+  }
 
   let result: RunResult;
   try {
@@ -152,7 +177,7 @@ export async function redispatchRun(
         ? (snapshot.stages as PlaybookStage[])
         : [],
       currentStage: session.currentStage,
-      input: { ...asRecord(run.input), runId: run.id },
+      input,
       capabilities,
     });
   } catch (err) {

@@ -277,6 +277,23 @@ async function assignedFor(targets: RouteWork["targets"]): Promise<string[]> {
   return out;
 }
 
+/**
+ * The agents the person chooses among when no rung routed the work: their own
+ * agents of an accepted reach that pass the floor and are not paused (the
+ * pool of rungs 4–5). A list for the person, never a pick.
+ */
+export async function ownedCandidates(
+  work: Pick<RouteWork, "ownerId" | "accept">
+): Promise<string[]> {
+  return (
+    await admit(
+      { ...work, pool: "owned" },
+      await ownedPool(work.ownerId, work.accept),
+      null
+    )
+  ).ok;
+}
+
 /** The person's own agents of an accepted reach, oldest first. */
 async function ownedPool(
   ownerId: string,

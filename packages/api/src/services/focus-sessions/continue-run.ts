@@ -494,7 +494,7 @@ async function planContinuation(
 ): Promise<{ dispatch: () => Promise<PlaybookRun> }> {
   const [
     { resolveRunnablePlaybook },
-    { resolveRunChoice, dispatchRunOnSession },
+    { resolveRunChoice, dispatchRunOnSession, runWorkOfSession },
   ] = await Promise.all([
     import("../playbooks/playbook-lifecycle.js"),
     import("../playbooks/run-playbook.js"),
@@ -507,6 +507,7 @@ async function planContinuation(
     userId: session.userId,
     handToAgentId: null,
     playbook,
+    work: runWorkOfSession(session),
   });
   const carried = carriedParams(stopped.input);
   type StageRunners = Parameters<
