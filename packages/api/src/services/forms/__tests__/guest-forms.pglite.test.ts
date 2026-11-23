@@ -339,7 +339,7 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
     expect(everywhere.rows[0]!.n).toBe(0);
   });
 
-  it("the actor: agent, form:<id>, exactly [entity.create], system-made, no key, ONE editor membership", async () => {
+  it("the actor: agent, form:<id>, exactly [entity.create], system-made, no key, no seat (it acts through the person who made it)", async () => {
     const [actor] = (
       await q<Record<string, unknown>>(`select * from users where id=$1`, [
         actorId,
@@ -359,7 +359,7 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
       `select workspace_id, role from workspace_members where user_id=$1`,
       [actorId]
     );
-    expect(members.rows).toEqual([{ workspace_id: W, role: "editor" }]);
+    expect(members.rows).toEqual([]);
     const keys = await q<{ n: number }>(
       `select count(*)::int as n from api_keys where user_id=$1`,
       [actorId]

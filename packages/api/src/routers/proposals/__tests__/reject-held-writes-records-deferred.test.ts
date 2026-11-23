@@ -3,14 +3,14 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * TRIPWIRE — rejecting a workspace JOIN records its kept writes as `rejected`,
- * on BOTH reject doors (`reject` and `batchReject`).
+ * TRIPWIRE — rejecting a held-writes pack records its kept writes as
+ * `rejected`, on BOTH reject doors (`reject` and `batchReject`).
  *
- * A join keeps the agent's blocked writes (`data.deferredWrites`, #6). Approval
- * replays them; a rejection must say each one will never run
- * (`recordRejectedDeferredWrites`), or the agent reading the join sees writes
+ * A held-writes pack keeps an agent's blocked writes (`data.deferredWrites`).
+ * Approval replays them; a rejection must say each one will never run
+ * (`recordRejectedDeferredWrites`), or the agent reading the pack sees writes
  * stuck "kept" forever. The helper itself is pinned on PGlite
- * (`services/governance/deferred-writes.pglite.test.ts`, "a rejected join").
+ * (`services/governance/deferred-writes.pglite.test.ts`).
  *
  * Source-level, like `batch-reject-reports-outcome.test.ts`: invoking the
  * procedures needs a live Postgres, and the call has no return value anything
@@ -20,7 +20,7 @@ import { join } from "node:path";
 
 const ROUTER = join(process.cwd(), "src/routers/proposals.ts");
 
-describe("rejecting a join records its kept writes", () => {
+describe("rejecting a held-writes pack records its kept writes", () => {
   it("can see the router it pins", () => {
     expect(existsSync(ROUTER), `${ROUTER} moved — fix this path`).toBe(true);
   });
@@ -37,7 +37,7 @@ describe("rejecting a join records its kept writes", () => {
   }
 
   for (const door of ["reject", "batchReject"]) {
-    it(`${door}: calls recordRejectedDeferredWrites on a join, after the REJECTED flip`, () => {
+    it(`${door}: calls recordRejectedDeferredWrites on a held-writes pack, after the REJECTED flip`, () => {
       const b = body(door);
       // The flip goes through the status door (`transitionProposal`).
       const flip = b.indexOf("to: ProposalStatus.REJECTED");
@@ -45,9 +45,9 @@ describe("rejecting a join records its kept writes", () => {
       expect(flip, "REJECTED flip not found").toBeGreaterThan(-1);
       expect(
         call,
-        `${door} no longer records a rejected join's kept writes`
+        `${door} no longer records a rejected pack's kept writes`
       ).toBeGreaterThan(flip);
-      expect(b).toMatch(/proposalType === "join"/);
+      expect(b).toMatch(/proposalType === "held_writes"/);
     });
   }
 });
