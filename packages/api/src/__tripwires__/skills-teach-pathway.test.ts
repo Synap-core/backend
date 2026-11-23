@@ -52,11 +52,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseArmRef } from "@synap-core/types/connections";
-import {
-  PLANNED_SESSION_STATUS,
-  TRACK_WORK_KINDS,
-  isStepDate,
-} from "@synap-core/types/units";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
+import { TRACK_WORK_KINDS, isStepDate } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
 import {
   MEASURE_CHECK_VERB,
