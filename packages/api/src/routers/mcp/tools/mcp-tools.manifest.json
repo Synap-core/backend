@@ -2077,7 +2077,7 @@
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "Optional. Left out: the ONE open session this conversation started (the reply says `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes it."
+            "description": "Optional. Left out: the ONE open session this conversation started (reply: `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes sessionId."
           },
           "title": {
             "type": ["string", "null"],
