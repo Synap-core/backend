@@ -154,7 +154,8 @@ export function parseSurfaceContext(data: unknown): SurfaceContext | null {
 
   const theme = data.theme === "light" ? "light" : "dark";
   const locale =
-    typeof data.locale === "string" && /^[a-z]{2}(-[A-Za-z]{2})?$/.test(data.locale)
+    typeof data.locale === "string" &&
+    /^[a-z]{2}(-[A-Za-z]{2})?$/.test(data.locale)
       ? data.locale
       : "en";
   return {
@@ -217,7 +218,8 @@ export function brandFrameCss(
   if (root.length > 0) rules.push(`:root{${root.join(";")}}`);
   if (light.length > 0)
     rules.push(`:root[data-theme="light"]{${light.join(";")}}`);
-  if (dark.length > 0) rules.push(`:root[data-theme="dark"]{${dark.join(";")}}`);
+  if (dark.length > 0)
+    rules.push(`:root[data-theme="dark"]{${dark.join(";")}}`);
   return rules.join("\n");
 }
 

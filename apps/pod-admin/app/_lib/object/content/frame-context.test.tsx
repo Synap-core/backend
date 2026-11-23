@@ -139,13 +139,18 @@ describe("the context's states, never folded", () => {
       kind: "entity",
       id: "e",
     });
-    expect(moduleFrameAnchor({ viewId: "v" })).toEqual({ kind: "view", id: "v" });
+    expect(moduleFrameAnchor({ viewId: "v" })).toEqual({
+      kind: "view",
+      id: "v",
+    });
     expect(moduleFrameAnchor({})).toBe(null);
   });
 });
 
 describe("the module host carries the context", () => {
-  function setup(context?: Parameters<typeof createModuleFrameHost>[0]["context"]) {
+  function setup(
+    context?: Parameters<typeof createModuleFrameHost>[0]["context"]
+  ) {
     const posted: Array<Record<string, unknown>> = [];
     const frame = {
       postMessage: (m: unknown) => posted.push(m as Record<string, unknown>),

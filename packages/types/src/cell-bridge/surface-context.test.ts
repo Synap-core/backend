@@ -49,7 +49,9 @@ const CONTEXT: SurfaceContext = {
  */
 function wire(
   sdk: string,
-  makeHost: (frameWindow: () => CellBridgeTarget) => (event: {
+  makeHost: (
+    frameWindow: () => CellBridgeTarget
+  ) => (event: {
     source: unknown;
     origin: string;
     data: unknown;
@@ -191,9 +193,9 @@ describe("parseSurfaceContext", () => {
 
   it("refuses a malformed anchor, id or brand", () => {
     expect(parseSurfaceContext(null)).toBe(null);
-    expect(parseSurfaceContext({ ...CONTEXT, anchor: { kind: "entity" } })).toBe(
-      null
-    );
+    expect(
+      parseSurfaceContext({ ...CONTEXT, anchor: { kind: "entity" } })
+    ).toBe(null);
     expect(parseSurfaceContext({ ...CONTEXT, projectId: 42 })).toBe(null);
     expect(
       parseSurfaceContext({ ...CONTEXT, brand: { id: "b", hash: "h" } })

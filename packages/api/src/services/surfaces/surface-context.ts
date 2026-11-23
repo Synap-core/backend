@@ -198,13 +198,13 @@ async function placeAnchor(
     case "entity":
       return placeEntity(access, anchor.id, db);
     case "document": {
-      const doc = await sdb.findFirst<{ id: string; workspaceId: string | null }>(
-        documents,
-        {
-          where: and(eq(documents.id, anchor.id), isNull(documents.deletedAt)),
-          columns: { id: true, workspaceId: true },
-        }
-      );
+      const doc = await sdb.findFirst<{
+        id: string;
+        workspaceId: string | null;
+      }>(documents, {
+        where: and(eq(documents.id, anchor.id), isNull(documents.deletedAt)),
+        columns: { id: true, workspaceId: true },
+      });
       if (!doc) return null;
       // A document follows its entity (`documents.entityId` is gone: the
       // entity names its body).

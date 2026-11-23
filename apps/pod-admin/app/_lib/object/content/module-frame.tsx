@@ -123,7 +123,10 @@ export function createModuleFrameHost(options: {
    * and answer `SynapWidget.context()`. A failed read answers its error;
    * absent: the frame has no context.
    */
-  context?: { value: SurfaceContext | null; answer?: () => Promise<SurfaceContext> };
+  context?: {
+    value: SurfaceContext | null;
+    answer?: () => Promise<SurfaceContext>;
+  };
   onStatus?: (status: CellFrameStatus) => void;
   onResize?: (height: number) => void;
   /** What the pod answered a write the host sent: the receipt is the host's. */
@@ -556,11 +559,7 @@ export function ModuleFrame({
   // frame's `data-theme`, so a theme flip is still posted, never rebuilt.
   const [contextTheme] = useState(themeRef.current);
   const anchor = moduleFrameAnchor(identity);
-  const frameContext = useFrameContext(
-    anchor,
-    contextTheme,
-    localeRef.current
-  );
+  const frameContext = useFrameContext(anchor, contextTheme, localeRef.current);
   const brandCss = frameBrandCss(frameContext);
   const contextWaits = frameContext.state === "loading";
 
