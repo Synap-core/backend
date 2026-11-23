@@ -115,7 +115,7 @@ export interface StorybookBundleComponent {
   /** Its stories (Storybook story ids), in file order. */
   storyIds: string[];
   storyUrl?: string;
-  /** A pod file id (uuid) or an https URL. */
+  /** A pod file id (a `file` entity). */
   screenshot?: string;
   /** Absent = unknown (no manifest), never "no props". */
   props?: StorybookPropSummary[];
@@ -140,7 +140,7 @@ export interface StorybookBundlePage {
   layout?: string;
   route?: string;
   storyId: string;
-  /** A pod file id (uuid) or an https URL. */
+  /** A pod file id (a `file` entity). */
   screenshot?: string;
   sourceHash: string;
   /** Keys of the components it shows. */
@@ -186,10 +186,9 @@ export const flowKey = (flowId: string): string => `flow:${flowId}`;
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** A screenshot is a pod file id or an https URL. */
+/** A screenshot is a pod file id (the `file` entity the kinds' `screenshot` names). */
 export function isScreenshotRef(v: string): boolean {
-  if (UUID_RE.test(v)) return true;
-  return isHttpsUrl(v);
+  return UUID_RE.test(v);
 }
 
 export function isHttpsUrl(v: string): boolean {
@@ -270,7 +269,7 @@ class Checker {
   screenshot(obj: Record<string, unknown>, at: string): string | undefined {
     const v = this.optStr(obj, "screenshot", at);
     if (v !== undefined && !isScreenshotRef(v)) {
-      this.error("bad-value", `${at}.screenshot`, "`screenshot` must be a pod file id (uuid) or an https URL");
+      this.error("bad-value", `${at}.screenshot`, "`screenshot` must be a pod file id (uuid)");
       return undefined;
     }
     return v;

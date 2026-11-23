@@ -64,7 +64,7 @@ function goodBundle(): Record<string, unknown> {
         surface: "desktop",
         template: "lens",
         storyId: "pages-desktop-home--full",
-        screenshot: "https://files.example.com/home.png",
+        screenshot: "5c2a1e4b-8d7f-4a6b-9c3e-2f1d0a9b8c7d",
         sourceHash: "p1",
         components: [ROW],
       },

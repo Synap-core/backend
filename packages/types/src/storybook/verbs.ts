@@ -33,7 +33,7 @@ export interface StorybookVerbParameters {
 
 /** `storybook.changed` returns at most this many, and this many when no `limit` is given. */
 export const STORYBOOK_CHANGED_MAX = 200;
-export const STORYBOOK_CHANGED_DEFAULT = 50;
+export const STORYBOOK_CHANGED_DEFAULT = 20;
 
 export const STORYBOOK_VERB_PARAMETERS: Readonly<
   Record<StorybookVerb, StorybookVerbParameters>
@@ -45,24 +45,25 @@ export const STORYBOOK_VERB_PARAMETERS: Readonly<
         type: "string",
         format: "uuid",
         description:
-          "A pod file holding a synap.storybook-bundle/v1 JSON, uploaded by a computer (the path for a private Storybook). Give this or url, not both.",
+          "A pod file holding a synap.storybook-bundle/v1 JSON (the devbox uploads it after each main push). Give this or url.",
       },
       url: {
         type: "string",
         format: "uri",
         description:
-          "A public Storybook over https (its base URL). The pod reads index.json and, when present, manifests/components.json through its guarded fetch; the host must be on the pod's allow-list. Give this or bundleFileId, not both.",
+          "A public Storybook's https base URL, instead of bundleFileId: the pod reads its index.json and, when served, manifests/components.json (props) through its guarded fetch, on a host the pod allows.",
       },
       appId: {
         type: "string",
         format: "uuid",
         description:
-          "The app (devplane_app) these components and pages belong to: each record gets belongs_to it.",
+          "The app (devplane_app) these components, pages and flows belong to.",
       },
       brandIdentityId: {
         type: "string",
         format: "uuid",
-        description: "The brand identity (brand-identity) this Storybook draws.",
+        description:
+          "The brand identity (brand-identity) the Storybook expresses.",
       },
     },
     additionalProperties: false,
@@ -74,7 +75,7 @@ export const STORYBOOK_VERB_PARAMETERS: Readonly<
         type: "integer",
         minimum: 1,
         maximum: STORYBOOK_CHANGED_MAX,
-        description: `How many to return (default ${STORYBOOK_CHANGED_DEFAULT}), most used first.`,
+        description: `At most this many components (default ${STORYBOOK_CHANGED_DEFAULT}).`,
       },
       appId: {
         type: "string",
