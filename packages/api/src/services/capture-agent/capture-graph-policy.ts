@@ -126,8 +126,15 @@ export function captureGraphEventKeys(
         add({ subjectType: "entity", action: "update" });
       }
     } else if (op.op === "create_link") {
-      // `POST /links` judges every edge as `link.create`.
+      // `POST /links` judges every edge as `link.create` — a step waiting on
+      // a decision or a goal included (the governed dependency door).
       add({ subjectType: "link", action: "create" });
+    } else if (op.op === "update_session") {
+      // The SAME key the session update door judges.
+      add({ subjectType: "focus_session", action: "update" });
+    } else if (op.op === "remove_link") {
+      // The SAME key `DELETE /links` and the dependency door judge.
+      add({ subjectType: "link", action: "delete" });
     } else if (op.op in COMPOSITE_OP_GATE_PAIRS) {
       // Every other op is judged on the door its arm performs, the ONE map the
       // gate-pair derivation reads (`COMPOSITE_OP_GATE_PAIRS`).

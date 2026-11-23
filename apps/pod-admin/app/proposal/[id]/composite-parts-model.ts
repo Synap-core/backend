@@ -500,6 +500,20 @@ const DRAWERS = {
         ...field("goal", text(s.goal)),
       ])
     ),
+  sessionUpdates: ({ graph }) =>
+    (graph.sessionUpdates ?? []).map((u) =>
+      record(
+        "sessionUpdates",
+        u.ref,
+        "focus_session",
+        u.title ?? `session ${u.sessionId.slice(0, 8)}`,
+        [
+          ...field("goal", text(u.goal)),
+          ...(u.status ? field("status", status(u.status)) : []),
+        ],
+        "update"
+      )
+    ),
   documents: ({ graph, opByRef }) =>
     (graph.documents ?? []).map((d) =>
       record("documents", d.ref, "document", d.title, [
@@ -526,6 +540,17 @@ const DRAWERS = {
         from: l.fromLabel,
         verb: humanizeToken(l.type),
         to: l.toLabel,
+      },
+    })),
+  linkRemovals: ({ graph }) =>
+    (graph.linkRemovals ?? []).map((r) => ({
+      source: "linkRemovals" as const,
+      shape: "edge" as const,
+      edge: {
+        ref: r.itemRef,
+        from: `session ${r.fromSessionId.slice(0, 8)}`,
+        verb: `no longer ${humanizeToken("blocked_by")}`,
+        to: `${r.toKind === "entity" ? "decision" : r.toKind === "track" ? "goal" : "session"} ${r.toId.slice(0, 8)}`,
       },
     })),
 } satisfies Record<GraphItemKey, Drawer>;

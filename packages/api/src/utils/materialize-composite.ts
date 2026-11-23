@@ -27,8 +27,10 @@ import {
   type CompositeProposalOperation,
   type CompositeUpdateOperation,
   type CompositeViewType,
+  type PlanBlockerKind,
 } from "@synap-core/types/proposals";
 import {
+  planCrossKindEdges,
   planSessionEdges,
   sessionOpsRootFirst,
   trackOpsRootFirst,
@@ -511,6 +513,38 @@ export interface MaterializeTrackResult {
   blockerLinkIds?: string[];
 }
 
+/** One step → decision / goal `blocked_by` edge a plan applied. */
+export interface MaterializeCrossLinkResult {
+  opIndex: number;
+  fromSessionId: string;
+  toKind: "entity" | "track";
+  toId: string;
+  /** As declared (a ref or a real id per side) — the edge's identity in a record. */
+  requested: { from: string; to: string };
+  linkId?: string;
+  /** The edge was already in the graph — not created by this run. */
+  preExisting?: true;
+}
+
+/** One existing step a re-plan changed (`update_session`), before and after. */
+export interface MaterializeSessionUpdateResult {
+  ref: string;
+  opIndex: number;
+  sessionId: string;
+  before: { title: string | null; goal: string; status: string };
+  after: { title: string | null; goal: string; status: string };
+}
+
+/** One existing `blocked_by` edge a re-plan dropped (`remove_link`). */
+export interface MaterializeLinkRemovalResult {
+  opIndex: number;
+  fromSessionId: string;
+  toKind: PlanBlockerKind;
+  toId: string;
+  /** False when the edge was already gone (a no-op, nothing to restore). */
+  removed: boolean;
+}
+
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
   ref: string;
@@ -617,6 +651,10 @@ export interface MaterializeResult {
   documents: MaterializeDocumentResult[];
   /** Goals (`create_track`) a plan started. */
   tracks?: MaterializeTrackResult[];
+  /** Step → decision / goal edges, and a re-plan's edits. */
+  crossLinks?: MaterializeCrossLinkResult[];
+  sessionUpdates?: MaterializeSessionUpdateResult[];
+  linkRemovals?: MaterializeLinkRemovalResult[];
 }
 
 /**
@@ -877,6 +915,21 @@ export interface PlanCallers {
       trackId?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
+    /**
+     * A re-plan's change to an EXISTING step through THE session update door,
+     * as the applying person. Returns the patched fields before and after.
+     */
+    update: (input: {
+      sessionId: string;
+      patch: {
+        title?: string | null;
+        goal?: string;
+        status?: "active" | "paused";
+      };
+    }) => Promise<{
+      before: MaterializeSessionUpdateResult["before"];
+      after: MaterializeSessionUpdateResult["after"];
+    }>;
   };
   /**
    * A goal through THE start-goal door (`startTrack`), as the plan's owner,
@@ -905,6 +958,20 @@ export interface PlanCallers {
       fromSessionId: string;
       toSessionId: string;
     }) => Promise<{ linkId: string | null; preExisting: boolean }>;
+    /** A step waits on a decision or a goal: THE governed dependency door. */
+    createCrossKind: (input: {
+      fromSessionId: string;
+      toKind: "entity" | "track";
+      toId: string;
+      /** A decision's option: the step waits on that arm only. */
+      option?: string;
+    }) => Promise<{ linkId: string | null; preExisting: boolean }>;
+    /** Drop an existing `blocked_by` edge through the door that owns it. */
+    remove: (input: {
+      fromSessionId: string;
+      toKind: PlanBlockerKind;
+      toId: string;
+    }) => Promise<{ removed: boolean }>;
   };
   documentCaller: {
     create: (input: {
@@ -1156,6 +1223,19 @@ function appliedRowsOf(
     ...(result.tracks ?? [])
       .filter((t) => !t.linked)
       .map((t) => ({ kind: "track", id: t.trackId })),
+    ...(result.crossLinks ?? [])
+      .filter((l) => l.linkId && !l.preExisting)
+      .map((l) => ({ kind: "link", id: l.linkId as string })),
+    ...(result.sessionUpdates ?? []).map((u) => ({
+      kind: "session_update",
+      id: u.sessionId,
+    })),
+    ...(result.linkRemovals ?? [])
+      .filter((r) => r.removed)
+      .map((r) => ({
+        kind: "link_removal",
+        id: `${r.fromSessionId}>${r.toKind}:${r.toId}`,
+      })),
   ];
 }
 
@@ -1349,6 +1429,9 @@ export async function materializeCompositeGraph(
     }
     return slug;
   };
+  const crossLinkResults: MaterializeCrossLinkResult[] = [];
+  const sessionUpdateResults: MaterializeSessionUpdateResult[] = [];
+  const linkRemovalResults: MaterializeLinkRemovalResult[] = [];
 
   const buildResult = (): MaterializeResult => ({
     created,
@@ -1376,6 +1459,13 @@ export async function materializeCompositeGraph(
     links: linkResults,
     documents: documentResults,
     ...(trackResults.length > 0 ? { tracks: trackResults } : {}),
+    ...(crossLinkResults.length > 0 ? { crossLinks: crossLinkResults } : {}),
+    ...(sessionUpdateResults.length > 0
+      ? { sessionUpdates: sessionUpdateResults }
+      : {}),
+    ...(linkRemovalResults.length > 0
+      ? { linkRemovals: linkRemovalResults }
+      : {}),
   });
 
   // One update op through the update caller. Per-op resilient like every
@@ -1428,6 +1518,10 @@ export async function materializeCompositeGraph(
         updateOperationTargetId(op),
         false
       );
+    } else if (op.op === "update_session") {
+      // A re-plan's step update names an existing session: its ref is known
+      // before any write, so a `create_link` from it resolves.
+      registerEntityRef(refToRealId, i, op.ref, op.sessionId, false);
     }
   });
 
@@ -2254,6 +2348,11 @@ export async function materializeCompositeGraph(
           .filter((e) => e.type === "blocked_by")
           .flatMap((e) => ("ref" in e.from ? [e.from.ref] : []))
       );
+      // A wait on a decision or a goal is a wait too (P4): a step whose ONLY
+      // blocker is a cross-kind link is born planned, not active.
+      for (const e of planCrossKindEdges(operations)) {
+        if ("ref" in e.from) waiting.add(e.from.ref);
+      }
       // ── Plan pass PT — GOALS, parents before children ──────────────────
       // Before every session, so a session's `trackRef` resolves AT create
       // (it is born in its goal, like `start_session` + `trackId`). The goal
@@ -2378,6 +2477,51 @@ export async function materializeCompositeGraph(
         });
       }
 
+      // ── Plan pass P2r — RE-PLAN EDITS on existing steps ─────────────────
+      // BEFORE any edge is added: a re-plan that reverses a dependency drops
+      // A → B before it adds B → A, so the cycle refusal never meets the edge
+      // it is replacing. A step's own fields go through THE session update
+      // door, then the blocked_by edges the re-plan drops.
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "update_session") continue;
+        currentOpIndex = i;
+        const { before, after } = await planCallers.sessionCaller.update({
+          sessionId: op.sessionId,
+          patch: op.patch,
+        });
+        sessionUpdateResults.push({
+          ref: op.ref,
+          opIndex: i,
+          sessionId: op.sessionId,
+          before,
+          after,
+        });
+      }
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i];
+        if (op.op !== "remove_link") continue;
+        currentOpIndex = i;
+        const toKind: PlanBlockerKind = op.toEntityId
+          ? "entity"
+          : op.toTrackId
+            ? "track"
+            : "session";
+        const toId = op.toEntityId ?? op.toTrackId ?? op.toSessionId ?? "";
+        const { removed } = await planCallers.linkCaller.remove({
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId,
+        });
+        linkRemovalResults.push({
+          opIndex: i,
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId,
+          removed,
+        });
+      }
+
       // ── Plan pass P2 — SESSION EDGES (parent + blockers + link ops) ────
       // After EVERY session exists, so an edge may point either way in the
       // plan. One list, derived by the same function the preflight checked.
@@ -2402,6 +2546,39 @@ export async function materializeCompositeGraph(
           requested: {
             from: "ref" in edge.from ? edge.from.ref : edge.from.sessionId,
             to: "ref" in edge.to ? edge.to.ref : edge.to.sessionId,
+          },
+          ...(link.linkId ? { linkId: link.linkId } : {}),
+          ...(link.preExisting ? { preExisting: true as const } : {}),
+        });
+      }
+
+      // ── Plan pass P2x — STEP → DECISION / GOAL edges ───────────────────
+      // After every session and goal exists (P1, PT), and every entity (pass
+      // 1): THE governed dependency door, approved by this plan.
+      for (const edge of planCrossKindEdges(operations)) {
+        currentOpIndex = edge.opIndex;
+        const fromSessionId =
+          "ref" in edge.from
+            ? resolveCompositeRef(refToRealId, edge.from.ref)
+            : edge.from.sessionId;
+        const toId =
+          "ref" in edge.to
+            ? resolveCompositeRef(refToRealId, edge.to.ref)
+            : edge.to.id;
+        const link = await planCallers.linkCaller.createCrossKind({
+          fromSessionId,
+          toKind: edge.to.kind,
+          toId,
+          ...(edge.option ? { option: edge.option } : {}),
+        });
+        crossLinkResults.push({
+          opIndex: edge.opIndex,
+          fromSessionId,
+          toKind: edge.to.kind,
+          toId,
+          requested: {
+            from: "ref" in edge.from ? edge.from.ref : edge.from.sessionId,
+            to: "ref" in edge.to ? edge.to.ref : edge.to.id,
           },
           ...(link.linkId ? { linkId: link.linkId } : {}),
           ...(link.preExisting ? { preExisting: true as const } : {}),
