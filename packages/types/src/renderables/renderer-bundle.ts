@@ -31,6 +31,18 @@ export const RENDERER_BUNDLE_KIND = "renderer-bundle" as const;
 /** The largest host module (React, the kit…): 4 MB of UTF-8. */
 export const RENDERER_BUNDLE_MAX_MODULE_BYTES = 4 * 1024 * 1024;
 
+/**
+ * The KIT's working budget: 3.2 MiB of UTF-8, under the 4 MiB ceiling. Every
+ * frame whose cell imports the kit carries it again (base64 in its srcdoc)
+ * and parses it again, so the kit's size is every such frame's boot cost
+ * (plan cb8470f2 §3). Measured 22 Nov 2026: 2,864,519 bytes. Synap's official
+ * build refuses a kit over it (app-bases `build-renderer-bundle.mjs`, which
+ * reads this constant); the pod's install check does not (another bundle may
+ * still use the whole ceiling). Raise it on purpose, with the new measure,
+ * never to make a build pass.
+ */
+export const RENDERER_BUNDLE_KIT_BUDGET_BYTES = Math.floor(3.2 * 1024 * 1024);
+
 /** One host module's source and its declared sha256 (hex). */
 export interface RendererBundleModule {
   source: string;

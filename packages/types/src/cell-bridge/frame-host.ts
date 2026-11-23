@@ -67,6 +67,7 @@ import {
   parseCellFrameMessage,
   type CellFrameNavigationTarget,
   type CellFrameSurfaceRequest,
+  type CellFrameErrorReason,
 } from "./messages.js";
 import type { CellFrameInitContext } from "./module-frame.js";
 
@@ -97,7 +98,8 @@ export type CellFrameWriteRequest = {
 
 /** A frame's state, as the host draws it. */
 export type CellFrameStatus =
-  { state: "ready" } | { state: "error"; message: string };
+  | { state: "ready" }
+  | { state: "error"; message: string; reason?: CellFrameErrorReason };
 
 export interface CellFrameHostOptions {
   /** The running frame's window, or null when there is none. Read per message. */
@@ -203,7 +205,11 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
         on.status?.({ state: "ready" });
         return;
       case "synap:error":
-        on.status?.({ state: "error", message: msg.message });
+        on.status?.({
+          state: "error",
+          message: msg.message,
+          ...(msg.reason ? { reason: msg.reason } : {}),
+        });
         return;
       case "synap:resize":
         on.resize?.(msg.height);

@@ -25,6 +25,7 @@ import {
 } from "./frame-scripts.js";
 import { SYNAP_VIEW_SDK, SYNAP_WIDGET_SDK } from "./frame-sdks.js";
 import { HOST_PROVIDED_FRAME_SPECIFIERS } from "../renderables/cell-source-checks.js";
+import type { Locale } from "../i18n/locale.js";
 
 /**
  * The iframe `sandbox` value of a module frame, exactly: scripts and modal
@@ -99,6 +100,12 @@ export interface CellFrameInitContext {
   sdkVersion?: "1" | "2";
   /** Active host theme; the frame applies it to `<html data-theme>`. */
   theme?: "light" | "dark";
+  /**
+   * The language the host's chrome speaks (`@synap-core/types/i18n`
+   * `Locale`, the reader's own setting as the host resolved it): the frame's
+   * words follow it. Absent from an older host: the frame keeps its default.
+   */
+  locale?: Locale;
 }
 
 const BASE64 =
