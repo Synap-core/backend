@@ -1017,7 +1017,9 @@ export const workspaceHandlers: McpHandlerMap = {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const ids = (v: unknown) =>
-      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string")
+        : [];
     const entityIds = ids(args.entityIds);
     const playbookIds = ids(args.playbookIds);
     const workspaceId = args.workspaceId;
@@ -1026,7 +1028,8 @@ export const workspaceHandlers: McpHandlerMap = {
       typeof workspaceId !== "string"
     ) {
       return ok({
-        error: "workspaceId and one of entityIds or playbookIds (non-empty) are required",
+        error:
+          "workspaceId and one of entityIds or playbookIds (non-empty) are required",
       });
     }
     if (playbookIds.length > 0) {

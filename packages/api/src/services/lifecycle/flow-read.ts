@@ -189,7 +189,10 @@ export async function readFlowOf(
   const flowSpace =
     lensWorkspaceId === undefined
       ? undefined
-      : usableInSpaceWhere(playbooks.workspaceId, lensWorkspaceId, { type: "playbook", id: playbooks.id });
+      : usableInSpaceWhere(playbooks.workspaceId, lensWorkspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        });
 
   const [board, pbRows, workers, space] = await Promise.all([
     readBoard(

@@ -1989,7 +1989,10 @@ export async function resolveAvailableActions(
     where: scope.workspaceId
       ? and(
           ne(playbooks.status, "archived"),
-          usableInSpaceWhere(playbooks.workspaceId, scope.workspaceId, { type: "playbook", id: playbooks.id })
+          usableInSpaceWhere(playbooks.workspaceId, scope.workspaceId, {
+            type: "playbook",
+            id: playbooks.id,
+          })
         )
       : ne(playbooks.status, "archived"),
     orderBy: asc(playbooks.name),

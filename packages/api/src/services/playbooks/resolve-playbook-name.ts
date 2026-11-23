@@ -98,7 +98,10 @@ export async function resolvePlaybookByPublicName(opts: {
         drizzleSql`lower(${playbooks.name}) = lower(${name})`,
         ne(playbooks.status, "archived"),
         opts.workspaceId
-          ? usableInSpaceWhere(playbooks.workspaceId, opts.workspaceId, { type: "playbook", id: playbooks.id })
+          ? usableInSpaceWhere(playbooks.workspaceId, opts.workspaceId, {
+              type: "playbook",
+              id: playbooks.id,
+            })
           : undefined
       )
     );

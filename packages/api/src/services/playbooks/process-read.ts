@@ -946,7 +946,10 @@ async function listProcessCards(
   const narrow =
     input.workspaceId === undefined
       ? undefined
-      : usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, { type: "playbook", id: playbooks.id });
+      : usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        });
   const rows = await scopedDb(AccessContext.from(reader)).findMany<Row>(
     playbooks,
     {

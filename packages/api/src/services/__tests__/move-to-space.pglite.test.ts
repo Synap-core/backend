@@ -41,7 +41,10 @@ vi.mock("../../utils/permission-check.js", () => ({
 
 import { and, db } from "@synap/database";
 import { skills } from "@synap/database/schema";
-import { allSchemaTables, pgliteSchemaDdl } from "../../__tests__/pglite-ddl.js";
+import {
+  allSchemaTables,
+  pgliteSchemaDdl,
+} from "../../__tests__/pglite-ddl.js";
 import { moveToSpace, shareWithSpace } from "../move-to-space.js";
 import { playbookRunRefusal } from "../playbooks/playbook-lifecycle.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
@@ -124,7 +127,12 @@ const runRefusal = async (id: string, workspaceId: string) => {
     )
   ).rows;
   return playbookRunRefusal(
-    { id: row!.id, name: row!.name, workspaceId: row!.workspace_id, status: row!.status },
+    {
+      id: row!.id,
+      name: row!.name,
+      workspaceId: row!.workspace_id,
+      status: row!.status,
+    },
     workspaceId,
     db
   );

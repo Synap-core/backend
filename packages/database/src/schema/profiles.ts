@@ -264,7 +264,11 @@ export const insertProfileSchema = createInsertSchema(profiles);
 export const selectProfileSchema = createSelectSchema(profiles);
 
 /** The kinds of object a `space_access` row can share. */
-export const SPACE_ACCESS_OBJECT_TYPES = ["profile", "playbook", "skill"] as const;
+export const SPACE_ACCESS_OBJECT_TYPES = [
+  "profile",
+  "playbook",
+  "skill",
+] as const;
 export type SpaceAccessObjectType = (typeof SPACE_ACCESS_OBJECT_TYPES)[number];
 
 /**

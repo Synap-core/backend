@@ -10995,13 +10995,19 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations). You must be able to write both spaces. Per entity: returns { moved, proposed, errors }; per playbook: { results } — a proposed move is success.",
       "parameters": [
         {
           "name": "entityIds",
           "type": "array<string>",
-          "required": true,
+          "required": false,
           "description": "Entity UUIDs to move (1-500)."
+        },
+        {
+          "name": "playbookIds",
+          "type": "array<string>",
+          "required": false,
+          "description": "Playbook UUIDs to move."
         },
         {
           "name": "workspaceId",
@@ -11030,6 +11036,11 @@
             "items": { "type": "string" },
             "description": "Entity UUIDs to move (1-500)."
           },
+          "playbookIds": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Playbook UUIDs to move."
+          },
           "workspaceId": {
             "type": "string",
             "description": "Destination workspace UUID."
@@ -11043,7 +11054,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["entityIds", "workspaceId"]
+        "required": ["workspaceId"]
       }
     },
     {
@@ -11303,13 +11314,31 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) see and use a SHARED kind (profile), or use a playbook or skill (`playbookId` / `skillId`; `revoke` stops it). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
       "parameters": [
         {
           "name": "profileId",
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "Profile UUID."
+        },
+        {
+          "name": "playbookId",
+          "type": "string",
+          "required": false,
+          "description": "Playbook UUID."
+        },
+        {
+          "name": "skillId",
+          "type": "string",
+          "required": false,
+          "description": "Skill UUID."
+        },
+        {
+          "name": "revoke",
+          "type": "boolean",
+          "required": false,
+          "description": "Playbook or skill: stop sharing it."
         },
         {
           "name": "targetWorkspaceId",
@@ -11340,6 +11369,12 @@
         "type": "object",
         "properties": {
           "profileId": { "type": "string", "description": "Profile UUID." },
+          "playbookId": { "type": "string", "description": "Playbook UUID." },
+          "skillId": { "type": "string", "description": "Skill UUID." },
+          "revoke": {
+            "type": "boolean",
+            "description": "Playbook or skill: stop sharing it."
+          },
           "targetWorkspaceId": {
             "type": "string",
             "description": "Workspace UUID that gains access."
@@ -11357,7 +11392,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["profileId", "targetWorkspaceId"]
+        "required": ["targetWorkspaceId"]
       }
     },
     {

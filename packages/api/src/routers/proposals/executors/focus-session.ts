@@ -1544,7 +1544,10 @@ async function visibleTemplateCriteria(
     .where(
       and(
         eq(playbooks.id, templateId as string),
-        usableInSpaceWhere(playbooks.workspaceId, workspaceId, { type: "playbook", id: playbooks.id })
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       )
     )
     .limit(1);

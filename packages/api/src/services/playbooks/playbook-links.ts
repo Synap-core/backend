@@ -78,7 +78,10 @@ async function linkablePlaybooks(
     .where(
       and(
         ne(playbooks.status, "archived"),
-        usableInSpaceWhere(playbooks.workspaceId, workspaceId, { type: "playbook", id: playbooks.id }),
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        }),
         only
       )
     )

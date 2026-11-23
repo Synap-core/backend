@@ -559,7 +559,10 @@ async function findDependentProcesses(
         and(
           playbookVisibility,
           workspaceId
-            ? usableInSpaceWhere(playbooks.workspaceId, workspaceId, { type: "playbook", id: playbooks.id })
+            ? usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+                type: "playbook",
+                id: playbooks.id,
+              })
             : undefined,
           inArray(playbookAutomations.automationId, matchedAutomationIds)
         )
