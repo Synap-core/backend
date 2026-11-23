@@ -1311,6 +1311,8 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // as drawn), so `entity` is declared too. A pinned key is refused. Same as
   // MCP `synap_read_board` (BOARD_SCENE).
   [route("/whiteboards/:id/scene"), BOARD_SCENE],
+  // The surface find, the twin of MCP `synap_find_surfaces` (SURFACES_FIND).
+  [/^\/surfaces\/?$/, SURFACES_FIND],
 ];
 
 /**
@@ -1432,8 +1434,6 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // holding `channel.read` (the person's messaging consent, as the
   // conversations door that shows reach).
   [route("/channels/linkedin-reach/:id"), NARROWED("channel", [])],
-  // The surface find, the twin of MCP `synap_find_surfaces` (SURFACES_FIND).
-  [/^\/surfaces\/?$/, SURFACES_FIND],
 ];
 
 /**
