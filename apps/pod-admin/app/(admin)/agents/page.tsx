@@ -146,9 +146,7 @@ function AgentsInner() {
             href={ACCESS_REVIEW_HREF}
             className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
           >
-            <span>
-              {t("waiting", { n: waiting })}
-            </span>
+            <span>{t("waiting", { n: waiting })}</span>
             <span className="inline-flex shrink-0 items-center gap-1 font-medium">
               Review
               <ArrowRight className="h-3.5 w-3.5" />
@@ -201,10 +199,7 @@ function AgentsInner() {
         </SectionCard>
 
         {podOwn.length > 0 && (
-          <SectionCard
-            title={t("own.title")}
-            hint={t("own.hint")}
-          >
+          <SectionCard title={t("own.title")} hint={t("own.hint")}>
             <AgentRows views={podOwn} wakes={wakes} onSelect={openAgent} />
           </SectionCard>
         )}

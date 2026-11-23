@@ -148,7 +148,10 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
               >
                 <span className="flex items-center gap-1.5">
                   {column.kind === "floors" && (
-                    <Lock className="h-3 w-3 shrink-0" aria-label={t("grid.locked")} />
+                    <Lock
+                      className="h-3 w-3 shrink-0"
+                      aria-label={t("grid.locked")}
+                    />
                   )}
                   <span className="line-clamp-2">{column.label}</span>
                 </span>

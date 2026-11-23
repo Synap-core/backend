@@ -225,7 +225,11 @@ function Field({ field }: { field: RecordField }) {
         {label}
         <dd className="flex min-w-0 flex-col gap-2 text-[13px] leading-relaxed text-foreground/90">
           <CodeSide label={t("record.before")} value={before} />
-          <CodeSide label={t("record.after")} value={after} title={field.label} />
+          <CodeSide
+            label={t("record.after")}
+            value={after}
+            title={field.label}
+          />
         </dd>
       </div>
     );
@@ -261,9 +265,7 @@ function Field({ field }: { field: RecordField }) {
         )}
       </dd>
       {field.stale && (
-        <span className="text-[11.5px] text-warning">
-          {t("record.stale")}
-        </span>
+        <span className="text-[11.5px] text-warning">{t("record.stale")}</span>
       )}
     </div>
   );

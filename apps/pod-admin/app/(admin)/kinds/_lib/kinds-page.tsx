@@ -276,10 +276,7 @@ function TidySection({
   if (failed)
     return (
       <SectionCard title={t("tidy.title")}>
-        <ResourceRowError
-          message={t("tidy.failed")}
-          onRetry={onRetry}
-        />
+        <ResourceRowError message={t("tidy.failed")} onRetry={onRetry} />
       </SectionCard>
     );
   if (items.length === 0) return null;

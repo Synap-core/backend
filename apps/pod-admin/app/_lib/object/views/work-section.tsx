@@ -271,10 +271,7 @@ function WorkItem({
       )}
 
       {stages === null ? (
-        <ResourceRowError
-          message={t("work.stagesFailed")}
-          onRetry={onMoved}
-        />
+        <ResourceRowError message={t("work.stagesFailed")} onRetry={onMoved} />
       ) : (
         stages.length > 0 && <StageList stages={stages} />
       )}
@@ -300,10 +297,7 @@ function WorkItem({
         </p>
       )}
       {asks === null && (
-        <ResourceRowError
-          message={t("work.asksFailed")}
-          onRetry={onMoved}
-        />
+        <ResourceRowError message={t("work.asksFailed")} onRetry={onMoved} />
       )}
 
       {next && !(item.stopped && next.label === item.stopped.label) && (
@@ -399,6 +393,7 @@ function GateCard({
   canReview: boolean;
   onDecided: () => void;
 }) {
+  const t = objectViewsT();
   const [decided, setDecided] = useState<GateDecided | null>(null);
   // The review's path calls `onRejected` and THEN the common callback: the
   // state follows `afterGateDecision`, and the page moves once.

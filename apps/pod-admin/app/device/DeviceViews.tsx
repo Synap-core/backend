@@ -210,9 +210,7 @@ export function PendingView(p: PendingViewProps) {
       <CardBody className={`flex flex-col gap-5 ${PAD} pb-7 pt-5`}>
         {/* The device binding: the person compares, the pod already matched. */}
         <div className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-          <p className="text-small text-foreground/65">
-            {t("pending.check")}
-          </p>
+          <p className="text-small text-foreground/65">{t("pending.check")}</p>
           <p
             data-testid="device-code"
             className="font-mono text-2xl font-semibold tracking-[0.2em] text-foreground"
@@ -742,9 +740,7 @@ export function FailedView({
         role="alert"
         className="flex items-center justify-between gap-3 rounded-lg bg-danger/10 px-3.5 py-3 text-small ring-1 ring-inset ring-danger/30"
       >
-        <span className="text-foreground">
-          {t("failed.read", { message })}
-        </span>
+        <span className="text-foreground">{t("failed.read", { message })}</span>
         <Button size="sm" variant="flat" onPress={onRetry}>
           {t("failed.retry")}
         </Button>

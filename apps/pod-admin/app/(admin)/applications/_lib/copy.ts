@@ -13,7 +13,8 @@ export const en = {
   connect: "Connect an app",
   "filter.label": "How it connects",
   "filter.all": "All apps",
-  waiting: "{n, plural, one {# app request waiting} other {# app requests waiting}}",
+  waiting:
+    "{n, plural, one {# app request waiting} other {# app requests waiting}}",
 } as const;
 
 export const fr: Catalog<typeof en> = {

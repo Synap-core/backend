@@ -580,15 +580,15 @@ function RulesInner() {
         }
         consequence={
           pending?.kind === "run" ? (
-<>{ta("confirm.run.body")}</>
+            <>{ta("confirm.run.body")}</>
           ) : pending?.pod && pending.kind === "turn_on" ? (
-<>{ta("confirm.podTurnOn.body")}</>
+            <>{ta("confirm.podTurnOn.body")}</>
           ) : pending?.pod && podById.get(pending.id) ? (
             <>{reactionPauseConsequence(podById.get(pending.id)!)}</>
           ) : pending?.kind === "turn_on" ? (
-<>{ta("confirm.turnOn.body")}</>
+            <>{ta("confirm.turnOn.body")}</>
           ) : (
-<>{ta("confirm.pause.body")}</>
+            <>{ta("confirm.pause.body")}</>
           )
         }
         confirmLabel={

@@ -71,12 +71,10 @@ export function AgentJob({
         />
       ) : (
         <p className="text-small text-foreground/65">
-          {t("job.runsAs", { seat: seatLine(seat) })}
+          {t("job.runsAs", { seat: seatLine(seat) ?? "" })}
         </p>
       )}
-      <p className="text-small text-foreground/65">
-        {t("job.same")}
-      </p>
+      <p className="text-small text-foreground/65">{t("job.same")}</p>
       {save.error && (
         <p role="alert" className="text-small text-danger">
           {save.error.message}

@@ -140,10 +140,7 @@ export function ComputerList({
         {isLoading ? (
           <ResourceRowSkeleton count={3} />
         ) : isError ? (
-          <ResourceRowError
-            message={t("list.loadFailed")}
-            onRetry={onRetry}
-          />
+          <ResourceRowError message={t("list.loadFailed")} onRetry={onRetry} />
         ) : all.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-3 py-8 text-center">
             <p className="text-[12.5px] text-foreground/65">
