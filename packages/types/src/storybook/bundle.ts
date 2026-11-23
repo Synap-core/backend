@@ -187,6 +187,8 @@ export const componentKey = (sourcePath: string, exportName: string): string =>
 export const componentTitleKey = (title: string): string => `title:${title}`;
 /** A page's key, from the title id its stories share (`pages-desktop-home`). */
 export const pageKey = (titleId: string): string => `page:${titleId}`;
+/** A page or flow key's id part: Storybook sanitises its ids to this, and flow ids follow it. */
+const KEY_ID_RE = /^[a-z0-9-]+$/;
 /** The title id of a story id (`pages-desktop-home--full` → `pages-desktop-home`). */
 export const pageTitleIdOf = (storyId: string): string =>
   componentIdOfStory(storyId) ?? storyId;
@@ -449,6 +451,8 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const titleId = storyIds[0] !== undefined ? pageTitleIdOf(storyIds[0]) : undefined;
     if (key !== undefined && titleId !== undefined && key !== pageKey(titleId)) {
       c.error("key-mismatch", `${at}.key`, `a page key must be ${JSON.stringify(pageKey(titleId))}`);
+    } else if (key !== undefined && !KEY_ID_RE.test(key.slice("page:".length))) {
+      c.error("key-mismatch", `${at}.key`, "a page key is `page:<titleId>`, lowercase letters, digits and dashes");
     }
     storyIds.forEach((id, j) => {
       if (j > 0 && titleId !== undefined && pageTitleIdOf(id) !== titleId) {
@@ -484,8 +488,8 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const need = c.optStr(raw, "need", at);
     const entry = c.optStr(raw, "entry", at);
     const doneWhen = c.optStr(raw, "doneWhen", at);
-    if (key !== undefined && (!key.startsWith("flow:") || key.length <= "flow:".length)) {
-      c.error("key-mismatch", `${at}.key`, "a flow key is `flow:<flowId>`");
+    if (key !== undefined && (!key.startsWith("flow:") || !KEY_ID_RE.test(key.slice("flow:".length)))) {
+      c.error("key-mismatch", `${at}.key`, "a flow key is `flow:<flowId>`, lowercase letters, digits and dashes");
     }
     const steps: StorybookBundleFlowStep[] = [];
     c.list(raw, "steps", at).forEach((s, j) => {
