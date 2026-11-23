@@ -170,17 +170,19 @@ export function newlyOwedSlots(
   after: readonly ExpectedOutput[] | null | undefined
 ): ExpectedOutput[] {
   const owedBefore = new Set<string>();
-  for (const o of before ?? []) {
-    if (o && typeof o === "object" && isOwedSlot(o)) {
+  const was = before ?? [];
+  const now = after ?? [];
+  for (const o of was) {
+    if (o && typeof o === "object" && isOwedSlot(o, was)) {
       const key = normalizeExpectedLabel(o.label);
       if (key) owedBefore.add(key);
     }
   }
-  return (after ?? []).filter(
+  return now.filter(
     (o) =>
       !!o &&
       typeof o === "object" &&
-      isOwedSlot(o) &&
+      isOwedSlot(o, now) &&
       !owedBefore.has(normalizeExpectedLabel(o.label) ?? "")
   );
 }

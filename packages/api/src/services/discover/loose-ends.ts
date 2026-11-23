@@ -260,7 +260,7 @@ export function owedAsks(raw: unknown): Array<{
 }> {
   const slots = readSlots(raw);
   return slots.flatMap((slot, i) =>
-    isOwedSlot(slot)
+    isOwedSlot(slot, slots)
       ? [
           {
             key: slotKeyAt(slots, i) ?? slot.label,

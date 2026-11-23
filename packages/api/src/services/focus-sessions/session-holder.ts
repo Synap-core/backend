@@ -232,7 +232,9 @@ function owedSince(expectedOutputs: unknown): string | null {
     : [];
   let first: string | null = null;
   for (const slot of slots) {
-    if (!slot || typeof slot !== "object" || !isOwedSlot(slot)) continue;
+    if (!slot || typeof slot !== "object" || !isOwedSlot(slot, slots)) {
+      continue;
+    }
     const at = iso((slot as { owedSince?: string }).owedSince ?? null);
     if (at && (!first || at < first)) first = at;
   }

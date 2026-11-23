@@ -123,10 +123,19 @@ export async function mergeEnteredStageSlots(input: {
     return { before: current, after: next, added: added.map((o) => o.label) };
   });
   if (!merged) return { added: [] };
+  // GRADES DECLARED UP FRONT (W5): the stage's outputs are in, so its grade
+  // slots are kept in step with them (never throws); the push reads the list
+  // as the reconcile left it.
+  const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+  const grades = await fileDeclaredGradeSlots(input.sessionId);
   await notifySessionNeedsYou({
     sessionId: input.sessionId,
     byAgent: input.byAgent,
-    reason: { kind: "slots", before: merged.before, after: merged.after },
+    reason: {
+      kind: "slots",
+      before: merged.before,
+      after: grades.outputs ?? merged.after,
+    },
   });
   return { added: merged.added };
 }
