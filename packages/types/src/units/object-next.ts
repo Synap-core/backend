@@ -9,10 +9,16 @@
  * Pure.
  */
 
-import type {
-  ProcessHealth,
-  ProcessHealthReason,
+import {
+  PROCESS_HEALTH_REASONS,
+  type ProcessHealth,
+  type ProcessHealthReason,
 } from "../processes/health.js";
+import {
+  resolveUnitState,
+  type UnitStateInput,
+  type UnitStateView,
+} from "./state.js";
 import type { StatusOfWorkNextMove } from "./status-of.js";
 
 /** The action tokens a next step uses, each one of the vocabulary's verbs. */
@@ -32,6 +38,8 @@ export interface ObjectNext {
   reason: string;
   /** Where it is taken when not on the object: the session that owes it. */
   sessionId?: string;
+  /** A `review` move: the request that waits for a decision. */
+  proposalId?: string;
   /** A thing's or a session's next move, in the status read's words. */
   label?: string;
 }
@@ -74,7 +82,10 @@ function fromHealth(health: ProcessHealth): ObjectNext | null {
 }
 
 function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
-  const session = move.sessionId ? { sessionId: move.sessionId } : {};
+  const where = {
+    ...(move.sessionId ? { sessionId: move.sessionId } : {}),
+    ...(move.proposalId ? { proposalId: move.proposalId } : {}),
+  };
   if (move.kind === "unknown") {
     return {
       action: "open",
@@ -93,7 +104,7 @@ function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
     action,
     reason: move.kind,
     label: move.label,
-    ...session,
+    ...where,
   };
 }
 
@@ -120,4 +131,44 @@ export function objectNextOf(
     return health ? fromHealth(health) : null;
   }
   return facts.nextMove ? fromNextMove(facts.nextMove) : null;
+}
+
+/** The unit state of each step, read through the one derivation. */
+const UNIT_OF_ACTION: Record<ObjectNextAction, UnitStateInput> = {
+  turn_on: { everStarted: false },
+  enable: { waitingOnYou: true },
+  see_failure: { failed: true },
+  review: { pendingDecisions: 1 },
+  answer: { waitingOnYou: true },
+  open: { waitingOnYou: true },
+};
+
+const HEALTH_REASONS: ReadonlySet<string> = new Set(PROCESS_HEALTH_REASONS);
+
+/** A next step's mark, as tokens: the host names it through the vocabulary. */
+export interface ObjectNextMark extends UnitStateView {
+  /** Set when the step comes from a process's health: its words name it. */
+  healthReason?: ProcessHealthReason;
+}
+
+/**
+ * THE mark of an object's next step. `undefined` (not read) and a move the
+ * status read could not make (`unknown`) are `unmeasured`, never your turn;
+ * `null` (it needs nothing) has no mark. A broken definition is `failed`.
+ */
+export function objectNextMark(
+  next: ObjectNext | null | undefined
+): ObjectNextMark | null {
+  if (next === null) return null;
+  if (next === undefined || next.reason === "unknown") {
+    return resolveUnitState({ unreadable: true });
+  }
+  const view = resolveUnitState(
+    next.reason === "config_invalid"
+      ? { failed: true }
+      : UNIT_OF_ACTION[next.action]
+  );
+  return HEALTH_REASONS.has(next.reason)
+    ? { ...view, healthReason: next.reason as ProcessHealthReason }
+    : view;
 }

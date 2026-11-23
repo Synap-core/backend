@@ -764,6 +764,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "a run's name: the title of the one object a param names, by id",
   "services/postiz/record-postiz-published.ts": "match by external id",
   "services/projects/create-project.ts": "validates evidence ids",
+  "services/proposals/landed-read.ts":
+    "the profile slug of the entities a proposal landed, by id",
   "services/proposals/redecide-graph-revision.ts":
     "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
   "services/retrieval/grant-bounded-search-hits.ts":
