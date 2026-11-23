@@ -3288,7 +3288,7 @@
           "name": "blockedByEntityIds",
           "type": "array<string>",
           "required": false,
-          "description": "e.g. a decision: accepted clears, rejected holds."
+          "description": "e.g. a decision: accepted clears, rejected holds. <id>:<option> waits on that arm; other arms are skipped."
         },
         {
           "name": "blockedByTrackIds",
@@ -3599,7 +3599,7 @@
           "blockedByEntityIds": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "e.g. a decision: accepted clears, rejected holds."
+            "description": "e.g. a decision: accepted clears, rejected holds. <id>:<option> waits on that arm; other arms are skipped."
           },
           "blockedByTrackIds": {
             "type": "array",
@@ -3852,7 +3852,8 @@
         {
           "name": "addBlockedByEntityIds",
           "type": "array<string>",
-          "required": false
+          "required": false,
+          "description": "<id>:<option> = one arm of a decision."
         },
         {
           "name": "removeBlockedByEntityIds",
@@ -4209,7 +4210,8 @@
           },
           "addBlockedByEntityIds": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "type": "string" },
+            "description": "<id>:<option> = one arm of a decision."
           },
           "removeBlockedByEntityIds": {
             "type": "array",
