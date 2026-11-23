@@ -47,7 +47,9 @@ export function NextStepAction({
     <Link
       href={`/proposal/${encodeURIComponent(act.proposalId)}`}
       aria-label={
-        name ? objectViewsT()("nextStep.actOn", { act: label, name }) : undefined
+        name
+          ? objectViewsT()("nextStep.actOn", { act: label, name })
+          : undefined
       }
       className="text-[13px] font-medium text-foreground underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground"
     >

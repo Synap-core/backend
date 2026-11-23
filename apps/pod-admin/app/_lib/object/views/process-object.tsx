@@ -156,9 +156,7 @@ export function ProcessObject({
         variant="flat"
         radius="md"
         isLoading={status.pending}
-        onPress={() =>
-          void status.set({ kind: "playbook", id, to: "paused" })
-        }
+        onPress={() => void status.set({ kind: "playbook", id, to: "paused" })}
       >
         {resolveActionLabel("pause", "imperative")}
       </Button>

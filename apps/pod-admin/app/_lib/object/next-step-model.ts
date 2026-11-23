@@ -9,10 +9,7 @@
  * Pure.
  */
 
-import {
-  objectNextMark,
-  type ObjectNext,
-} from "@synap-core/types/units";
+import { objectNextMark, type ObjectNext } from "@synap-core/types/units";
 import {
   resolveProcessHealthLabel,
   resolveStatusLabel,
