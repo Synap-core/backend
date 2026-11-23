@@ -48,6 +48,9 @@ const LIVE = randomUUID();
 const HIDDEN = randomUUID();
 const THEIRS = randomUUID();
 const OLD = randomUUID();
+/** A second person whose many newer receipts must not push their draft out. */
+const BUSY = "busy-1";
+const BUSY_DRAFT = randomUUID();
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000);
@@ -85,7 +88,7 @@ beforeAll(async () => {
     [WS_SEEN, WS_HIDDEN, VIEWER, OTHER]
   );
   await q(
-    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner'),($4,$5,$6,'owner'),($7,$2,$6,'editor')`,
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'owner'),($4,$5,$6,'owner'),($7,$2,$6,'editor'),($8,$2,$9,'editor')`,
     [
       randomUUID(),
       WS_SEEN,
@@ -94,6 +97,8 @@ beforeAll(async () => {
       WS_HIDDEN,
       OTHER,
       randomUUID(),
+      randomUUID(),
+      BUSY,
     ]
   );
   await q(
@@ -105,32 +110,40 @@ beforeAll(async () => {
        ($5,$6,$8,'Last month''s draft','draft')`,
     [DRAFT, LIVE, HIDDEN, THEIRS, OLD, WS_SEEN, WS_HIDDEN, VIEWER, OTHER]
   );
+  await q(
+    `insert into automations (id, workspace_id, created_by, name, status) values ($1,$2,$3,'Busy draft','draft')`,
+    [BUSY_DRAFT, WS_SEEN, BUSY]
+  );
+  await approved({ by: BUSY, landed: [{ id: BUSY_DRAFT }], at: daysAgo(1) });
   await approved({
     by: VIEWER,
     landed: [{ id: DRAFT }, { id: LIVE }, { id: HIDDEN }],
     at: daysAgo(1),
   });
   await approved({ by: VIEWER, landed: [{ id: DRAFT }], at: daysAgo(2) });
-  await approved({ by: OTHER, landed: [{ id: THEIRS }], at: daysAgo(1) });
+  // The newest approval of all: no other row can hide it from a scan.
+  await approved({
+    by: OTHER,
+    landed: [{ id: THEIRS }],
+    at: new Date(Date.now() + 60_000),
+  });
   await approved({ by: VIEWER, landed: [{ id: OLD }], at: daysAgo(30) });
-  // Newer receipts that land no automation or playbook: never in the scan.
+  // The busy person's newer receipts that land no automation or playbook.
   for (let i = 0; i < 120; i++) {
     await q(
       `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, created_by, subject_user_id, reviewed_by, data, created_at, updated_at)
        values ($1, $2, 'entity', $3, 'create', 'auto_approved', $4, $4, $4, '{}'::jsonb, now(), now())`,
-      [randomUUID(), WS_SEEN, randomUUID(), VIEWER]
+      [randomUUID(), WS_SEEN, randomUUID(), BUSY]
     );
   }
 }, 120_000);
 
 describe("what the viewer's recent approvals landed that only they can take on", () => {
   it("one row per draft they may read, from their own recent approvals", async () => {
-    const { rows, truncated } = await listLandedNeedsPerson({
+    const { rows } = await listLandedNeedsPerson({
       userId: VIEWER,
       roster: false,
     });
-    // 120 newer entity receipts did not fill the scan.
-    expect(truncated).toBe(false);
     expect(rows).toEqual([
       {
         kind: "automation",
@@ -141,6 +154,15 @@ describe("what the viewer's recent approvals landed that only they can take on",
       },
     ]);
     expect(JSON.stringify(rows)).not.toContain("Someone else");
+  });
+
+  it("newer receipts that land nothing do not push a draft out of the scan", async () => {
+    const { rows, truncated } = await listLandedNeedsPerson({
+      userId: BUSY,
+      roster: false,
+    });
+    expect(truncated).toBe(false);
+    expect(rows.map((r) => r.id)).toEqual([BUSY_DRAFT]);
   });
 
   it("another person's approval is not the viewer's to take on", async () => {
