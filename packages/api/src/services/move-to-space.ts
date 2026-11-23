@@ -35,6 +35,7 @@ import {
   revokeSpaceAccess,
   skills,
   views,
+  type SQL,
 } from "@synap/database";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
@@ -154,15 +155,21 @@ async function nameTakenIn(
   ids: string[],
   workspaceId: string
 ): Promise<string | null> {
-  const t = type === "playbook" ? playbooks : automations;
-  const live = (where: ReturnType<typeof and>) =>
-    db
-      .select({ name: t.name })
-      .from(t)
-      .where(and(ne(t.status, "archived"), where));
-  const moving = await live(inArray(t.id, ids));
+  const live = async (
+    where: (t: typeof playbooks | typeof automations) => SQL | undefined
+  ): Promise<Array<{ name: string }>> =>
+    type === "playbook"
+      ? db
+          .select({ name: playbooks.name })
+          .from(playbooks)
+          .where(and(ne(playbooks.status, "archived"), where(playbooks)))
+      : db
+          .select({ name: automations.name })
+          .from(automations)
+          .where(and(ne(automations.status, "archived"), where(automations)));
+  const moving = await live((t) => inArray(t.id, ids));
   if (moving.length === 0) return null;
-  const [clash] = await live(
+  const [clash] = await live((t) =>
     and(
       eq(t.workspaceId, workspaceId),
       inArray(

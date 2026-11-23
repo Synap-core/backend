@@ -36,7 +36,6 @@ import {
   eq,
   isNull,
   drizzleSql,
-  type SQL,
   readTemplateState,
   getWorkspaceMembership,
   workspaces,
@@ -402,26 +401,40 @@ export interface RetireIntoSteps {
 async function configOf(
   workspaceId: string
 ): Promise<Array<{ objectType: MovableObjectType; ids: string[] }>> {
-  const ids = async (
-    t: typeof playbooks | typeof automations | typeof views,
-    only?: SQL
-  ) =>
-    (
-      await db
-        .select({ id: t.id })
-        .from(t)
-        .where(and(eq(t.workspaceId, workspaceId), only))
-    ).map((r) => r.id);
+  const ids = (rows: Array<{ id: string }>) => rows.map((r) => r.id);
   return [
-    { objectType: "playbook", ids: await ids(playbooks) },
     {
-      objectType: "automation",
-      ids: await ids(
-        automations,
-        drizzleSql`${automations.id} not in (select automation_id from playbook_automations)`
+      objectType: "playbook",
+      ids: ids(
+        await db
+          .select({ id: playbooks.id })
+          .from(playbooks)
+          .where(eq(playbooks.workspaceId, workspaceId))
       ),
     },
-    { objectType: "view", ids: await ids(views) },
+    {
+      objectType: "automation",
+      ids: ids(
+        await db
+          .select({ id: automations.id })
+          .from(automations)
+          .where(
+            and(
+              eq(automations.workspaceId, workspaceId),
+              drizzleSql`${automations.id} not in (select automation_id from playbook_automations)`
+            )
+          )
+      ),
+    },
+    {
+      objectType: "view",
+      ids: ids(
+        await db
+          .select({ id: views.id })
+          .from(views)
+          .where(eq(views.workspaceId, workspaceId))
+      ),
+    },
   ];
 }
 
