@@ -181,6 +181,16 @@ describe("openBlockersOf — a path row's blockers through THE dependency rule",
     ]);
     expect(openBlockerTitle(edges)).toBe("Pitch");
     expect(openBlockersOf({ status: "unavailable" })).toBeNull();
+    // An arm not taken (P5) holds nobody; the same cancel without it does.
+    expect(
+      openBlockersOf({
+        status: "ok",
+        items: [
+          { title: "Bootstrap", status: "cancelled", skipped: true },
+          { title: "Old", status: "cancelled" },
+        ],
+      })
+    ).toEqual([{ title: "Old", dropped: true }]);
     expect(openBlockersOf(undefined)).toBeNull();
     expect(openBlockerTitle({ status: "unavailable" })).toBeNull();
   });

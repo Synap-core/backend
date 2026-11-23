@@ -48,6 +48,18 @@
  * hold it forever nor clear it early. Linking a replacement is therefore one
  * of the two ways a DROPPED blocker stops holding its dependent.
  *
+ * DECISION ARMS (founder decision P5, 21 Nov 2026) — "every branch is a
+ * decision". A `blocked_by` edge to a decision may name ONE of its options in
+ * `links.metadata.option` ({@link DECISION_ARM_OPTION_KEY}): the step waits
+ * for THAT answer ({@link classifyArmBlocker}). The decision accepted with
+ * that option delivers; accepted with another option (or none) the arm is
+ * NOT TAKEN: the step still holds (`dropped`, `notTaken`) and the pod closes
+ * it as skipped (`decision-arms.ts`); rejected, it holds like any dropped
+ * blocker until its owner re-plans. An edge with no option reads as before.
+ * A SKIPPED step (ended as an arm not taken) does not hold ITS dependents:
+ * for ordering it counts as delivered (`skipped` on the session's state), so
+ * a step that joins two exclusive arms waits only on the arm taken.
+ *
  * A blocker whose row no longer exists (deleted) does not block — the pod's
  * session reader drops it the same way (inner join). A blocker the reader
  * cannot SEE is still a blocker: hiding it would read as "free to go", a calm
@@ -69,6 +81,41 @@ import { trackStatusCategory } from "../units/track-status.js";
 export const DEPENDENCY_LINK_TYPE = "blocked_by" as const;
 /** `A --replaces--> B`: A is the attempt that replaces B. */
 export const REPLACES_LINK_TYPE = "replaces" as const;
+
+/**
+ * `links.metadata.option` on a `blocked_by` edge to a decision: the option key
+ * (`askOptionKey`: `value ?? label`) the waiting step is the arm of. Written
+ * by the session doors (`<id>:<option>`, {@link parseArmRef}).
+ * MARKED SPOT (lane B3): the capture plan's cross-kind `links[]` (a step →
+ * a decision) carries the same key once B3's links land; not wired before.
+ */
+export const DECISION_ARM_OPTION_KEY = "option" as const;
+
+/** The arm option an edge's metadata names, or `null` (a plain wait). */
+export function armOptionOf(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const v = (metadata as Record<string, unknown>)[DECISION_ARM_OPTION_KEY];
+  return typeof v === "string" && v.trim() ? v : null;
+}
+
+/**
+ * The compact form an agent door takes for an arm: `<decision id>:<option>`.
+ * A UUID is 36 characters, so a `:` right after them splits (an option may
+ * hold more `:`). A bare ref is a plain wait (`option: null`). An empty
+ * option is `null`: never read as "no arm". The caller checks the id.
+ */
+export function parseArmRef(
+  ref: string
+): { id: string; option: string | null } | null {
+  if (ref.length <= ARM_ID_LENGTH || ref[ARM_ID_LENGTH] !== ":") {
+    return { id: ref, option: null };
+  }
+  const option = ref.slice(ARM_ID_LENGTH + 1);
+  return option.trim() ? { id: ref.slice(0, ARM_ID_LENGTH), option } : null;
+}
+const ARM_ID_LENGTH = 36;
 
 /** The link types this module reads — the user/agent-authorable work edges. */
 export const DEPENDENCY_LINK_TYPES = [
@@ -246,10 +293,13 @@ export function classifyDependencyBlocker(
   kind: string,
   status: string | null | undefined,
   category?: LifecycleCategory | null,
-  closedAs?: SessionClosedAs | null
+  closedAs?: SessionClosedAs | null,
+  skipped?: boolean | null
 ): DependencyOutcome {
   switch (kind) {
     case "session": {
+      // A step skipped as a decision's arm not taken holds nobody (P5).
+      if (skipped === true && isEndedSessionStatus(status)) return "delivered";
       // Read off the declaration's categories; a `closed` session delivered
       // only when it closed with nothing required left open.
       const outcome = outcomeOfCategory(sessionStatusCategory(status));
@@ -269,6 +319,55 @@ export function classifyDependencyBlocker(
     default:
       return "open";
   }
+}
+
+/** A session that has ended (done or lost) — only such a one can be skipped. */
+function isEndedSessionStatus(status: string | null | undefined): boolean {
+  const c = sessionStatusCategory(status);
+  return c === "done" || c === "lost";
+}
+
+/** What became of a decision for ONE arm of it (P5). */
+export type ArmOutcome = DependencyOutcome | "not_taken";
+
+/**
+ * A blocker's outcome for the edge that waits on it (P5): with no `option`,
+ * the blocker's own outcome. With one, a DELIVERED decision delivers only
+ * when it chose that option; another choice (or none) is `not_taken`. A
+ * dropped (rejected) or open decision keeps its outcome: every arm holds.
+ */
+export function classifyArmBlocker(
+  outcome: DependencyOutcome,
+  option: string | null | undefined,
+  chosenOption: string | null | undefined
+): ArmOutcome {
+  if (!option || outcome !== "delivered") return outcome;
+  return chosenOption === option ? "delivered" : "not_taken";
+}
+
+/**
+ * What an ACCEPTED decision does to the steps that are its arms (P5):
+ *   · some arm names the chosen option ⇒ that arm is taken; every step on
+ *     another arm is SKIPPED ("not taken");
+ *   · no arm names it (or nothing was chosen) ⇒ `unmatched`: nothing is
+ *     skipped, every arm holds and the person is told — never a silent green
+ *     (the n8n trap: a branch that matches nothing must not read as done).
+ * Pure; the pod applies it (`decision-arms.ts`).
+ */
+export function planDecisionArms(
+  chosenOption: string | null | undefined,
+  arms: ReadonlyArray<{ stepId: string; option: string }>
+): { skip: string[]; unmatched: boolean } {
+  const taken = !!chosenOption && arms.some((a) => a.option === chosenOption);
+  if (!taken) return { skip: [], unmatched: arms.length > 0 };
+  return {
+    skip: [
+      ...new Set(
+        arms.filter((a) => a.option !== chosenOption).map((a) => a.stepId)
+      ),
+    ],
+    unmatched: false,
+  };
 }
 
 /**
@@ -298,6 +397,8 @@ export interface DependencyEdge {
   toType: string;
   toId: string;
   linkType: string;
+  /** A `blocked_by` edge's arm ({@link armOptionOf}); absent = a plain wait. */
+  option?: string | null;
 }
 
 /**
@@ -312,6 +413,10 @@ export interface DependencyNodeState {
   status?: string | null;
   category?: LifecycleCategory | null;
   closedAs?: SessionClosedAs | null;
+  /** A session that ended as a decision's arm not taken (P5): holds nobody. */
+  skipped?: boolean;
+  /** A decision's chosen option key (`chosenOption`), read by an arm edge. */
+  chosenOption?: string | null;
   title?: string | null;
   missing?: boolean;
   hidden?: boolean;
@@ -328,6 +433,11 @@ export interface OpenBlocker extends DependencyNodeRef {
    * or link a replacement.
    */
   dropped: boolean;
+  /**
+   * With `dropped`: the step is an arm of this decision that was NOT taken
+   * (P5). It holds until the pod closes the step as skipped.
+   */
+  notTaken?: true;
   /** Its own raw status, when the reader may see it. */
   status?: string | null;
   /** Its display name, when the reader may see it. */
@@ -362,14 +472,15 @@ export function deriveOpenBlockers(
   const resolve = (
     ref: DependencyNodeRef,
     declared: DependencyNodeRef,
-    seen: Set<string>
+    seen: Set<string>,
+    option: string | null
   ): void => {
     const k = keyOf(ref);
     if (seen.has(k)) return; // a replacement cycle settles nothing — stop
     seen.add(k);
     const replacements = replacementsOf.get(k);
     if (replacements && replacements.length > 0) {
-      for (const r of replacements) resolve(r, declared, new Set(seen));
+      for (const r of replacements) resolve(r, declared, new Set(seen), option);
       return;
     }
     const state = stateOf(ref);
@@ -378,11 +489,16 @@ export function deriveOpenBlockers(
     // purpose: what the reader cannot see is never called delivered.
     const visible = state && !state.hidden ? state : undefined;
     const outcome = visible
-      ? classifyDependencyBlocker(
-          ref.kind,
-          visible.status,
-          visible.category,
-          visible.closedAs
+      ? classifyArmBlocker(
+          classifyDependencyBlocker(
+            ref.kind,
+            visible.status,
+            visible.category,
+            visible.closedAs,
+            visible.skipped
+          ),
+          option,
+          visible.chosenOption
         )
       : "open";
     if (outcome === "delivered") return;
@@ -391,7 +507,8 @@ export function deriveOpenBlockers(
         kind: ref.kind,
         id: ref.id,
         hidden: state?.hidden === true,
-        dropped: outcome === "dropped",
+        dropped: outcome === "dropped" || outcome === "not_taken",
+        ...(outcome === "not_taken" ? { notTaken: true as const } : {}),
         ...(visible && visible.status !== undefined
           ? { status: visible.status }
           : {}),
@@ -407,7 +524,7 @@ export function deriveOpenBlockers(
     if (e.linkType !== DEPENDENCY_LINK_TYPE) continue;
     if (e.fromType !== node.kind || e.fromId !== node.id) continue;
     const blocker = { kind: e.toType, id: e.toId };
-    resolve(blocker, blocker, new Set([keyOf(node)]));
+    resolve(blocker, blocker, new Set([keyOf(node)]), e.option ?? null);
   }
   return [...out.values()];
 }
