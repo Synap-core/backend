@@ -12,7 +12,14 @@
  * it needs nothing.
  */
 
-import { and, automations, db, inArray, playbooks } from "@synap/database";
+import {
+  and,
+  automations,
+  db,
+  entities,
+  inArray,
+  playbooks,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
   proposalLanded,
@@ -37,6 +44,8 @@ const logger = createLogger({ module: "proposal-landed-read" });
 /** One landed object as a row carries it. */
 export interface ProposalLandedObject extends ProposalObjectRef {
   role: ProposalLandedRole;
+  /** An entity's kind (its profile slug): what it is called and drawn as. */
+  profileSlug?: string;
   /** Its next step; null = it needs nothing; absent = not read. */
   next?: ObjectNext | null;
 }
@@ -67,15 +76,46 @@ export async function resolveLandedObjects(
       return hit ? [{ ...hit, role: ref.role }] : [];
     })
   );
-  const nextByKey = await readNext(objectsByRow.flat(), viewer.userId);
+  const all = objectsByRow.flat();
+  const [nextByKey, slugById] = await Promise.all([
+    readNext(all, viewer.userId),
+    readProfileSlugs(all, viewer.userId),
+  ]);
   return objectsByRow.map((objects) =>
     objects.length === 0
       ? undefined
       : objects.map((o) => {
           const key = `${o.kind}:${o.id}`;
-          return nextByKey.has(key) ? { ...o, next: nextByKey.get(key)! } : o;
+          const slug = o.kind === "entity" ? slugById.get(o.id) : undefined;
+          return {
+            ...o,
+            ...(slug ? { profileSlug: slug } : {}),
+            ...(nextByKey.has(key) ? { next: nextByKey.get(key)! } : {}),
+          };
         })
   );
+}
+
+/** Each landed entity's profile slug; one that could not be read is absent. */
+async function readProfileSlugs(
+  objects: readonly ProposalLandedObject[],
+  userId: string
+): Promise<Map<string, string>> {
+  const ids = [
+    ...new Set(objects.filter((o) => o.kind === "entity").map((o) => o.id)),
+  ];
+  if (ids.length === 0) return new Map();
+  try {
+    const access = scopedDb(AccessContext.operator({ userId }));
+    const rows = await db
+      .select({ id: entities.id, type: entities.type })
+      .from(entities)
+      .where(and(inArray(entities.id, ids), access.predicate(entities)));
+    return new Map(rows.map((r) => [r.id, r.type]));
+  } catch (err) {
+    logger.warn({ err }, "landed profile slugs: the entity read failed");
+    return new Map();
+  }
 }
 
 /** Each object's next step, keyed `kind:id`; a missing key was not read. */

@@ -124,9 +124,15 @@ export function EntityView({ id }: { id: string }) {
     ? entityPageMedia({ ...loaded, id }, payload?.profile?.uiHints)
     : { media: null, bodyIsMedia: false };
   const body = useDocumentContent(bodyIsMedia ? null : loaded?.documentId);
-  // The work section's read (one request): it carries the thing's next move.
+  // The work section's read (one request) carries the thing's next move; a
+  // failure of it is said there, once.
   const answer = useWorkRead(id).query.data?.[0];
-  const nextMove = answer && "nextMove" in answer ? answer.nextMove : undefined;
+  const next = answer
+    ? objectNextOf(
+        "entity",
+        "nextMove" in answer ? { nextMove: answer.nextMove } : {}
+      )
+    : null;
 
   if (query.isLoading) return <OpenLoading label="Loading entity…" />;
   const data = query.data as EntityPayload | undefined;
@@ -209,11 +215,7 @@ export function EntityView({ id }: { id: string }) {
       }}
     >
       <NextStepBlock
-        step={nextStepOf(
-          { kind: "entity", id },
-          nextMove ? objectNextOf("entity", { nextMove }) : undefined,
-          "itsPage"
-        )}
+        step={nextStepOf({ kind: "entity", id }, next, "itsPage")}
       />
       {media && (
         <MediaView

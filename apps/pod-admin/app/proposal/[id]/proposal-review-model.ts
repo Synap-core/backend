@@ -13,15 +13,16 @@
  *                  will not need to showcase that"); `revertable: false` AND
  *                  an unmeasured one are marked (founder default D6, 16 Nov
  *                  2026: nobody checked, so nobody can promise an undo).
- *   `aboutObjects` / `madeRows` — the objects the request names, through the
- *                  pod's one reading (`proposalObjectsOf`): what it is about
- *                  until it lands, then each object it landed with its next
- *                  step (`landed[].next`).
+ *   `aboutObject` / `madeRows` — the objects the request names: what it is
+ *                  about until it applies (`proposalObjectsOf`), then each
+ *                  object the pod's landed read names, with its next step.
  *
  * The change itself is `proposal-record-model.ts`.
  */
 
 import {
+  LANDED_ROLE_VERB,
+  isProposalApplied,
   proposalObjectsOf,
   type ProposalLandedRole,
   type ProposalLandedRow,
@@ -134,12 +135,14 @@ export function reviewReadsWide(drawn: {
 }
 
 /**
- * What the request is ABOUT while nothing of it has landed (a pending update's
- * object, a merge's survivor, a facet's entity): a door to each, at every
- * status but an applied one, whose objects are its "Made" rows.
+ * What the request is ABOUT until it applies (a pending update's object, a
+ * merge's survivor, a facet's entity): one door, at every status. Once
+ * applied, what it names comes only from the pod's landed read (`madeRows`),
+ * never from its target.
  */
-export function aboutObjects(row: ProposalLandedRow): ProposalObject[] {
-  return proposalObjectsOf(row).filter((o) => o.role === null);
+export function aboutObject(row: ProposalLandedRow): ProposalObject | null {
+  if (isProposalApplied(row)) return null;
+  return proposalObjectsOf(row).find((o) => o.role === null) ?? null;
 }
 
 /** One object a proposal landed, as the read row carries it (`landed`). */
@@ -148,11 +151,15 @@ export interface LandedInput {
   kind: string;
   name: string | null;
   role: ProposalLandedRole;
+  profileSlug?: string;
   next?: ObjectNext | null;
 }
 
 export interface MadeRow {
+  /** What it is: an entity's profile slug, else its object kind. */
   kind: string;
+  /** The route kind it opens under. */
+  openKind: string;
   id: string;
   title: string;
   /** What approving did to it, in the past mood ("Created"). */
@@ -160,22 +167,18 @@ export interface MadeRow {
   step: NextStep | null;
 }
 
-const VERB_OF_ROLE: Record<ProposalLandedRole, string> = {
-  created: "create",
-  updated: "update",
-  linked: "link",
-};
-
-/** The "Made" rows: each landed object, its next step first among them. */
+/** The "Made" rows: each landed object, the ones that need the person first. */
 export function madeRows(
   landed: readonly LandedInput[] | undefined
 ): MadeRow[] {
   const rows = (landed ?? []).map((o) => ({
-    kind: o.kind,
+    kind: o.profileSlug || o.kind,
+    openKind: o.kind,
     id: o.id,
-    title: o.name?.trim() || resolveObjectNoun(o.kind),
-    done: resolveActionLabel(VERB_OF_ROLE[o.role], "past"),
-    step: nextStepOf(o, o.next, "elsewhere"),
+    title: o.name?.trim() || resolveObjectNoun(o.profileSlug || o.kind),
+    done: resolveActionLabel(LANDED_ROLE_VERB[o.role], "past"),
+    step: nextStepOf(o, o.next, "row"),
   }));
-  return [...rows.filter((r) => r.step), ...rows.filter((r) => !r.step)];
+  const first = (r: MadeRow) => (r.step?.measured ? 0 : 1);
+  return [...rows].sort((a, b) => first(a) - first(b));
 }

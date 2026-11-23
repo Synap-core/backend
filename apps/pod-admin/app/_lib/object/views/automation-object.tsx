@@ -6,20 +6,18 @@
  *
  * Read doors are user-floored (`automations.get` / `automations.listRuns`,
  * `protectedProcedure`), so a member who was sent the link reads what the pod
- * would show them anywhere, and an admin reads the same floor (D1a). Its next
- * step leads (`NextStepBlock`, from its health over the runs read here): a
- * draft is turned on through the governed door (`automations.activate`: an
- * agent's key proposes). The header's one act is PAUSE — de-escalation, which
- * the pod never sends for review ("stopping a misbehaving automation never
- * waits", `automations.pause`). Authoring lives in the app ("Open in app").
+ * would show them anywhere, and an admin reads the same floor (D1a). The
+ * header's one act follows its status: a live rule offers PAUSE —
+ * de-escalation, which the pod never sends for review ("stopping a
+ * misbehaving automation never waits", `automations.pause`); a draft or a
+ * paused one offers TURN ON, through the governed door (`useProcessStatus`:
+ * an agent's key proposes). Running it now and authoring live in the app.
  */
 
 import { useState } from "react";
 import { Button } from "@heroui/react";
 import { Play } from "lucide-react";
 import { ruleWhenWords } from "@synap-core/types/automations";
-import { deriveProcessHealth } from "@synap-core/types/processes";
-import { objectNextOf } from "@synap-core/types/units";
 import { trpc } from "../../../../lib/trpc";
 import { formatRelative } from "../../../../lib/format";
 import { openIn } from "../../../../lib/open-in";
@@ -38,8 +36,7 @@ import {
   runLine,
   shortDescription,
 } from "../object-summaries";
-import { NextStepBlock } from "../next-step";
-import { nextStepOf } from "../next-step-model";
+import { TurnOnButton, useProcessStatus } from "../use-process-status";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { FactsGrid } from "../facts-grid";
@@ -71,6 +68,7 @@ export function AutomationObject({
     retry: false,
   });
   const [confirmPause, setConfirmPause] = useState(false);
+  const status = useProcessStatus();
   const pause = trpc.automations.pause.useMutation({
     onSuccess: async () => {
       setConfirmPause(false);
@@ -104,16 +102,6 @@ export function AutomationObject({
     : null;
   const description = shortDescription(rule.description);
   const runRows = runs.data?.runs ?? [];
-  const next = runs.isSuccess
-    ? objectNextOf("automation", {
-        health: deriveProcessHealth({
-          definitionStatus: rule.status,
-          runGroup: null,
-          recentRuns: runRows,
-          exactRunCount: rule.runCount,
-        }),
-      })
-    : undefined;
 
   return (
     <>
@@ -134,6 +122,8 @@ export function AutomationObject({
             >
               Pause
             </Button>
+          ) : rule.status === "draft" || rule.status === "paused" ? (
+            <TurnOnButton status={status} target={{ kind: "automation", id }} />
           ) : undefined,
           secondaryActions: (
             <ExitLink
@@ -166,22 +156,15 @@ export function AutomationObject({
                 : String(rule.runCount),
           },
         ],
-        children: (
-          <>
-            <NextStepBlock
-              step={nextStepOf({ kind: "automation", id }, next, "itsPage")}
-            />
-            {pause.error && pause.error.data?.code !== "UNAUTHORIZED" && (
-              <ErrorNote
-                message={
-                  pause.error.data?.code === "FORBIDDEN"
-                    ? "You can’t pause this rule. Only the person who made it, or an admin of its space, can."
-                    : "The rule couldn’t be paused. Try again."
-                }
-                detail={errorDetail(pause.error)}
-              />
-            )}
-          </>
+        children: pause.error && pause.error.data?.code !== "UNAUTHORIZED" && (
+          <ErrorNote
+            message={
+              pause.error.data?.code === "FORBIDDEN"
+                ? "You can’t pause this rule. Only the person who made it, or an admin of its space, can."
+                : "The rule couldn’t be paused. Try again."
+            }
+            detail={errorDetail(pause.error)}
+          />
         ),
         tabs: [
           {

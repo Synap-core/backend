@@ -161,7 +161,7 @@ import {
   undoMark,
   type ProposalChangeInput,
   type ReviewMark,
-  aboutObjects,
+  aboutObject,
 } from "./proposal-review-model";
 import { MadeSection } from "./MadeSection";
 import { askingComputer, proposalWhy } from "./proposal-why";
@@ -1021,9 +1021,8 @@ export function ProposalReviewBody({
     data: p.data,
   });
   const graph = isGraphPayload(payload);
-  // What it is about, a door at every status until it lands; then the
-  // objects it landed are its "Made" rows.
-  const [about] = aboutObjects({
+  // What it is about, a door until it applies; then its "Made" rows.
+  const about = aboutObject({
     status,
     proposalType: p.proposalType,
     targetType: p.targetType ? String(p.targetType) : null,
@@ -1038,9 +1037,13 @@ export function ProposalReviewBody({
   const defs = useRecordDefinitions({
     createKind,
     targetEntityId:
-      !graph && action !== "create" && p.targetType === "entity"
-        ? (p.targetId ?? null)
-        : null,
+      graph || action === "create"
+        ? null
+        : p.targetType === "entity"
+          ? (p.targetId ?? null)
+          : about?.kind === "entity"
+            ? about.id
+            : null,
     graphKinds,
   });
 
@@ -1103,7 +1106,11 @@ export function ProposalReviewBody({
                     : p.targetType
                       ? String(p.targetType)
                       : null,
-                definitions: defs.definitions,
+                // A facet's entity is read for its noun, not its fields.
+                definitions:
+                  createKind || p.targetType === "entity"
+                    ? defs.definitions
+                    : undefined,
                 objectRefs,
               });
               return record ? [record] : [];

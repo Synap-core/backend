@@ -1,14 +1,11 @@
 "use client";
 
 /**
- * The way into the object a proposal UPDATES: "Open document". The review page is not the object's page (it shows a proposed
- * change, not the thing), so a reviewer who wants the whole picture needs a
- * door to the real object, at every status: the question comes before the
- * decision, and an approved change is read against the object it changed.
- *
- * Once applied, what it changed is a "Made" row instead (`MadeSection`).
- * The verb takes its mood from the status (what approving WILL do while it is
- * open, what it DID once approved), from the vocabulary door.
+ * The way into the object a request is ABOUT (`aboutObject`: the thing an
+ * update or a delete names, a merge's survivor, a facet's entity): "Open
+ * document". The review page shows a proposed change, not the thing, so the
+ * reviewer gets a door to the real object before deciding. Once applied, what
+ * it touched is a "Made" row instead (`MadeSection`).
  */
 
 import {

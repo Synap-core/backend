@@ -3,10 +3,9 @@ import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import {
   resolveActionLabel,
   resolveObjectNoun,
-  resolveProcessHealthLabel,
 } from "@synap-core/types/vocabulary";
 import {
-  aboutObjects,
+  aboutObject,
   madeRows,
   reasonMark,
   reviewReadsWide,
@@ -265,8 +264,9 @@ describe("reviewReadsWide — a proposal is as wide as the object it creates or 
   });
 });
 
-describe("aboutObjects — what the request names until it lands (proposalObjectsOf)", () => {
+describe("aboutObject — what the request names until it applies", () => {
   const ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
+  const ENTITY = "8e5a7d1f-7b2c-4b9f-8a64-4f3c2d1e0f22";
   const pending = {
     status: "pending",
     proposalType: "document.update",
@@ -276,45 +276,67 @@ describe("aboutObjects — what the request names until it lands (proposalObject
   };
 
   it("names an update's object while it waits, and after a rejection", () => {
-    expect(aboutObjects(pending)).toEqual([
-      { kind: "document", id: ID, role: null },
-    ]);
-    expect(aboutObjects({ ...pending, status: "rejected" })).toHaveLength(1);
+    expect(aboutObject(pending)).toEqual({
+      kind: "document",
+      id: ID,
+      role: null,
+    });
+    expect(aboutObject({ ...pending, status: "rejected" })?.id).toBe(ID);
   });
 
   it("opens a session under the word /open hosts it by", () => {
-    expect(
-      aboutObjects({ ...pending, targetType: "focus_session" })[0]?.kind
-    ).toBe("session");
+    expect(aboutObject({ ...pending, targetType: "focus_session" })?.kind).toBe(
+      "session"
+    );
   });
 
-  it("names nothing once applied: its objects are the Made rows", () => {
-    expect(aboutObjects({ ...pending, status: "approved" })).toEqual([]);
+  it("names nothing once applied, a facet's entity and a partial apply included", () => {
+    expect(aboutObject({ ...pending, status: "approved" })).toBeNull();
+    expect(
+      aboutObject({ ...pending, status: "partially_approved" })
+    ).toBeNull();
+    const facet = {
+      status: "pending",
+      proposalType: "facet.detach",
+      targetType: "facet",
+      targetId: ID,
+      data: { entityId: ENTITY },
+    };
+    expect(aboutObject(facet)?.id).toBe(ENTITY);
+    expect(aboutObject({ ...facet, status: "approved" })).toBeNull();
   });
 
   it("names nothing for a pending create, a graph or a non-id target", () => {
-    expect(
-      aboutObjects({ ...pending, proposalType: "document.create" })
-    ).toEqual([]);
-    expect(aboutObjects({ ...pending, targetType: "composite" })).toEqual([]);
-    expect(aboutObjects({ ...pending, targetId: "not-an-id" })).toEqual([]);
+    expect(aboutObject({ ...pending, proposalType: "document.create" })).toBe(
+      null
+    );
+    expect(aboutObject({ ...pending, targetType: "composite" })).toBeNull();
+    expect(aboutObject({ ...pending, targetId: "not-an-id" })).toBeNull();
   });
 });
 
-describe("madeRows — each landed object with its one next step", () => {
+describe("madeRows — each landed object with its mark and one act", () => {
   const AUTOMATION = "11111111-1111-4111-8111-111111111111";
-  const KIND = "22222222-2222-4222-8222-222222222222";
+  const LEAD = "22222222-2222-4222-8222-222222222222";
   const THING = "33333333-3333-4333-8333-333333333333";
   const SESSION = "44444444-4444-4444-8444-444444444444";
 
-  it("a landed object that needs nothing: its name, what approving did, no step", () => {
+  it("an object that needs nothing: named by its kind, what approving did, no step", () => {
     const [row] = madeRows([
-      { id: KIND, kind: "entity", name: " Lead ", role: "created", next: null },
+      {
+        id: LEAD,
+        kind: "entity",
+        profileSlug: "lead",
+        name: null,
+        role: "created",
+        next: null,
+      },
     ]);
     expect(row).toEqual({
-      kind: "entity",
-      id: KIND,
-      title: "Lead",
+      kind: "lead",
+      openKind: "entity",
+      id: LEAD,
+      title: resolveObjectNoun("lead"),
       done: resolveActionLabel("create", "past"),
       step: null,
     });
@@ -335,39 +357,30 @@ describe("madeRows — each landed object with its one next step", () => {
       objectKind: "automation",
       id: AUTOMATION,
     });
-    expect(row?.step?.label).toBe(resolveActionLabel("turn_on", "imperative"));
-    expect(row?.step?.pill.label).toBe(
-      resolveProcessHealthLabel({ reason: "draft" })
-    );
   });
 
-  it("a person-only step opens the session that owes it, with the read's own words", () => {
+  it("work owed by the person is its mark and one door to the app", () => {
     const [row] = madeRows([
       {
         id: THING,
         kind: "entity",
         name: "Acme",
         role: "updated",
-        next: {
-          action: "answer",
-          reason: "owed_slot",
-          sessionId: SESSION,
-          label: "Answer: which plan?",
-        },
+        next: { action: "answer", reason: "owed_slot", sessionId: SESSION },
       },
     ]);
     expect(row?.done).toBe(resolveActionLabel("update", "past"));
     expect(row?.step?.act).toEqual({
-      kind: "door",
-      exit: { kind: "object", objectKind: "session", id: SESSION },
+      kind: "in_app",
+      objectKind: "session",
+      id: SESSION,
     });
-    expect(row?.step?.line).toBe("Answer: which plan?");
-    expect(row?.step?.pill.kind).not.toBe("healthy");
   });
 
-  it("puts the objects that need the person first, and names an unnamed one by its kind", () => {
+  it("what needs the person comes first; a step not read is marked, not first", () => {
     const rows = madeRows([
-      { id: KIND, kind: "entity", name: null, role: "linked" },
+      { id: LEAD, kind: "entity", name: "Lead", role: "linked" },
+      { id: THING, kind: "entity", name: "Acme", role: "linked", next: null },
       {
         id: AUTOMATION,
         kind: "automation",
@@ -376,9 +389,10 @@ describe("madeRows — each landed object with its one next step", () => {
         next: { action: "see_failure", reason: "latest_failed" },
       },
     ]);
-    expect(rows.map((r) => r.id)).toEqual([AUTOMATION, KIND]);
-    expect(rows[1]?.title).toBe(resolveObjectNoun("entity"));
+    expect(rows.map((r) => r.id)).toEqual([AUTOMATION, LEAD, THING]);
     expect(rows[0]?.step?.pill.kind).toBe("down");
+    expect(rows[1]?.step).toMatchObject({ measured: false, act: null });
+    expect(rows[2]?.step).toBeNull();
   });
 
   it("no landed objects, no rows", () => {
