@@ -494,6 +494,20 @@ describe("the read allowlist", () => {
     ).toEqual({ id: "v1", limit: 100, offset: 200 });
   });
 
+  it("a kind is read by identifier, with its fields' fill on request (a table's derived columns)", () => {
+    expect(CELL_BRIDGE_READ_OPS["profiles.get"]).toEqual([
+      "identifier",
+      "fill",
+    ]);
+    expect(
+      pickBridgeParams("profiles.get", {
+        identifier: "deal",
+        fill: true,
+        workspaceId: "w",
+      })
+    ).toEqual({ identifier: "deal", fill: true });
+  });
+
   it("a page in no space is refused a space's own page, and only that", () => {
     expect([...CELL_BRIDGE_SPACE_READ_OPS]).toEqual(["lens.page"]);
     expect(cellBridgeReadRefusal("lens.page", { workspaceId: null })).toBe(

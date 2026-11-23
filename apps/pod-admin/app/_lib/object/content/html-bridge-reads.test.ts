@@ -408,7 +408,7 @@ describe("the page bridge — through the console's own client", () => {
       { path: "views.execute", input: { id: "v1" }, opts: undefined },
       {
         path: "profiles.get",
-        input: { identifier: "deal" },
+        input: { identifier: "deal", fill: true },
         opts: { context: { workspaceId: SPACE } },
       },
       {

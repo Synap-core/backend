@@ -73,7 +73,9 @@ export const CELL_BRIDGE_READ_OPS = {
   // lifecycle (`lifecycle.get`, in the host's space).
   "views.get": ["id"],
   "views.execute": ["id", "limit", "offset"],
-  "profiles.get": ["identifier"],
+  // `fill`: how many of the kind's things carry each field, the tiebreaker a
+  // table's derived columns read (`useDerivedKindColumns`); opt-in, a boolean.
+  "profiles.get": ["identifier", "fill"],
   "propertyDefs.list": ["profileId"],
   "lifecycle.get": ["profileSlug"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;

@@ -264,7 +264,10 @@ export async function readForPage(
       );
     case "profiles.get":
       return client.profiles.get.query(
-        { identifier: required(op, "an identifier", str(p.identifier)) },
+        defined({
+          identifier: required(op, "an identifier", str(p.identifier)),
+          fill: bool(p.fill),
+        }),
         ws ? { context: { workspaceId: ws } } : undefined
       );
     case "propertyDefs.list": {
