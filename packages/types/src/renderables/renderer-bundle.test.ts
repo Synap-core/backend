@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   RENDERER_BUNDLE_MAX_MODULE_BYTES,
   rendererSetDigestText,
+  unmetRendererBundleRequirements,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
 } from "./index.js";
@@ -168,6 +169,50 @@ describe("validateRendererBundleDefinition", () => {
         message: "The cell imports the kit, and the bundle has no kit module.",
       },
     ]);
+  });
+});
+
+describe("requires (plan ad703ccd §3b.5a)", () => {
+  it("absent, or a list of op names: valid", () => {
+    expect(paths(bundle())).toEqual([]);
+    expect(
+      paths({ ...bundle(), requires: { bridgeOps: ["entities.get"] } })
+    ).toEqual([]);
+    // An op this pod does not know is "not yet", never invalid.
+    expect(
+      paths({ ...bundle(), requires: { bridgeOps: ["pods.teleport"] } })
+    ).toEqual([]);
+  });
+
+  it("a malformed requires is refused where it is", () => {
+    expect(paths({ ...bundle(), requires: ["entities.get"] })).toEqual([
+      "requires",
+    ]);
+    expect(paths({ ...bundle(), requires: { bridgeOps: [1] } })).toEqual([
+      "requires.bridgeOps",
+    ]);
+    expect(paths({ ...bundle(), requires: { podVersion: "1" } })).toEqual([
+      "requires.podVersion",
+    ]);
+  });
+
+  it("names what this pod's contract does not meet", () => {
+    expect(unmetRendererBundleRequirements(bundle())).toEqual([]);
+    expect(
+      unmetRendererBundleRequirements({
+        ...bundle(),
+        requires: { bridgeOps: ["entities.get"] },
+      })
+    ).toEqual([]);
+    const unmet = unmetRendererBundleRequirements({
+      ...bundle(),
+      bundleApi: 2,
+      requires: { bridgeOps: ["entities.get", "pods.teleport"] },
+    });
+    expect(unmet).toHaveLength(2);
+    expect(unmet[0]).toContain("bundle API 2");
+    expect(unmet[1]).toContain("pods.teleport");
+    expect(unmet[1]).not.toContain("entities.get");
   });
 });
 

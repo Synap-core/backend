@@ -48,11 +48,16 @@ import { podCpAuthHeaders } from "@synap/database";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
+import type { PackageUpdateReceipt } from "@synap-core/types/package-updates";
 import { assertOfficialDefinition } from "../capabilities/official-catalog-trust.js";
+import { recordPackageUpdateReceipt } from "../package-updates/receipts.js";
 import {
   installRendererBundle,
   type InstalledRendererBundle,
 } from "./install-renderer-bundle.js";
+
+/** Synap's own renderer bundle (app-bases `renderer-bundles/synap-renderers.yaml`). */
+export const SYNAP_RENDERERS_SLUG = "synap-renderers";
 
 export const RENDERER_BUNDLE_NO_CONTROL_PLANE =
   "renderer_bundle_no_control_plane" as const;
@@ -117,11 +122,32 @@ export interface FetchedRendererBundle {
   definition: Record<string, unknown>;
 }
 
-/** Fetch the official bundle's row from this pod's Control Plane. */
-export async function fetchOfficialRendererBundle(input: {
+/**
+ * What the CP's metadata read answers (`?meta=1`, lane I1 contract): the row,
+ * never its definition, and no delivery is recorded.
+ */
+export interface RendererBundleMeta {
+  slug: string;
+  /** The row's `package.version` (`h-` + 12 hex of `contentHash`). */
+  version: string;
+  /** `officialContentHash("renderer-bundle", definition)`. */
+  contentHash: string;
+  /** When the row was published (the soak counts from it). */
+  publishedAt: Date;
+  /** Synap retired this row (D8: a pod holding it converges without waiting). */
+  retired: boolean;
+}
+
+/**
+ * One authenticated GET of `/internal/renderer-bundles/:slug[/:version]`
+ * (`?meta=1` for the metadata read), with every refusal mapped to the pod's
+ * machine reason. Returns the parsed body of a 2xx.
+ */
+async function requestOfficialRendererBundle(input: {
   slug: string;
   version?: string | null;
-}): Promise<FetchedRendererBundle> {
+  meta?: boolean;
+}): Promise<Record<string, unknown> | null> {
   const base = controlPlaneBaseUrl();
   if (!base) {
     throw refused(
@@ -162,7 +188,9 @@ export async function fetchOfficialRendererBundle(input: {
   let res: Response;
   try {
     res = await fetch(
-      `${base.replace(/\/$/, "")}/internal/renderer-bundles/${path}`,
+      `${base.replace(/\/$/, "")}/internal/renderer-bundles/${path}${
+        input.meta ? "?meta=1" : ""
+      }`,
       {
         headers: auth.headers,
         signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
@@ -176,10 +204,10 @@ export async function fetchOfficialRendererBundle(input: {
       }). Retry the install later; nothing was installed.`,
     });
   }
-  const body = (await res.json().catch(() => null)) as {
-    code?: unknown;
-    package?: { version?: unknown; definition?: unknown };
-  } | null;
+  const body = (await res.json().catch(() => null)) as Record<
+    string,
+    unknown
+  > | null;
   if (res.status === 403 && body?.code === CP_PLAN_REQUIRED) {
     throw refused(
       RENDERER_BUNDLE_PLAN_REQUIRED,
@@ -209,8 +237,19 @@ export async function fetchOfficialRendererBundle(input: {
       message: `The control plane answered ${res.status} for the renderer bundle "${input.slug}". Retry the install later; nothing was installed.`,
     });
   }
-  const version = body?.package?.version;
-  const definition = body?.package?.definition;
+  return body;
+}
+
+/** Fetch the official bundle's row from this pod's Control Plane. */
+export async function fetchOfficialRendererBundle(input: {
+  slug: string;
+  version?: string | null;
+}): Promise<FetchedRendererBundle> {
+  const body = await requestOfficialRendererBundle(input);
+  const pkg = body?.package as
+    { version?: unknown; definition?: unknown } | undefined;
+  const version = pkg?.version;
+  const definition = pkg?.definition;
   if (
     typeof version !== "string" ||
     version.length === 0 ||
@@ -224,6 +263,45 @@ export async function fetchOfficialRendererBundle(input: {
     });
   }
   return { version, definition: definition as Record<string, unknown> };
+}
+
+/**
+ * The CP's metadata read of the bundle: its newest live row, or the row of
+ * `version` (retired included). Same gate and refusals as the fetch; the CP
+ * sends no definition and records no delivery. A malformed answer throws: an
+ * unread version is never a "no update".
+ */
+export async function fetchOfficialRendererBundleMeta(input: {
+  slug: string;
+  version?: string | null;
+}): Promise<RendererBundleMeta> {
+  const body = await requestOfficialRendererBundle({ ...input, meta: true });
+  const pkg = (body?.package ?? null) as Record<string, unknown> | null;
+  const publishedAt =
+    typeof pkg?.publishedAt === "string" ? new Date(pkg.publishedAt) : null;
+  if (
+    !pkg ||
+    pkg.slug !== input.slug ||
+    typeof pkg.version !== "string" ||
+    pkg.version.length === 0 ||
+    typeof pkg.contentHash !== "string" ||
+    pkg.contentHash.length === 0 ||
+    !publishedAt ||
+    Number.isNaN(publishedAt.getTime()) ||
+    typeof pkg.retired !== "boolean"
+  ) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: `The control plane's answer about the renderer bundle "${input.slug}" is not one this pod reads (slug, version, contentHash, publishedAt, retired).`,
+    });
+  }
+  return {
+    slug: input.slug,
+    version: pkg.version,
+    contentHash: pkg.contentHash,
+    publishedAt,
+    retired: pkg.retired,
+  };
 }
 
 /**
@@ -257,17 +335,55 @@ export async function admitOfficialRendererBundle(input: {
   });
 }
 
-/** Fetch, admit and install the official bundle (the `market.install` door). */
+/**
+ * Fetch, admit and install the official bundle: the `market.install` door, a
+ * person's or the after-sync pass's update (`package-updates`). When it
+ * replaced another version, the install is an UPDATE: it writes one receipt
+ * (`package.updated`, its one change the bundle's `version`), which Undo takes
+ * back within 30 days from the version kept on the pod (D7).
+ */
 export async function installOfficialRendererBundle(input: {
   slug: string;
   version?: string | null;
   userId: string;
-}): Promise<InstalledRendererBundle> {
+  /** Who applied it, on the receipt: a person (default) or the after-sync pass. */
+  appliedBy?: "person" | "automatic";
+}): Promise<
+  InstalledRendererBundle & { receipt: PackageUpdateReceipt | null }
+> {
   const fetched = await fetchOfficialRendererBundle(input);
   await admitOfficialRendererBundle({ ...input, fetched });
-  return installRendererBundle(fetched.definition, {
+  const installed = await installRendererBundle(fetched.definition, {
     userId: input.userId,
     source: OFFICIAL_SOURCE_ID,
     version: fetched.version,
   });
+  const from = installed.previousVersion;
+  const receipt =
+    from && from !== installed.version
+      ? await recordPackageUpdateReceipt({
+          slug: installed.slug,
+          kind: RENDERER_BUNDLE_KIND,
+          name: rendererBundleName(installed.slug),
+          fromVersion: from,
+          toVersion: installed.version,
+          userId: input.userId,
+          source: input.appliedBy ?? "person",
+          changes: [
+            {
+              rowKind: RENDERER_BUNDLE_KIND,
+              rowId: installed.slug,
+              field: "version",
+              before: from,
+              after: installed.version,
+            },
+          ],
+        })
+      : null;
+  return { ...installed, receipt };
+}
+
+/** The name a person reads for a bundle (the definition carries none). */
+export function rendererBundleName(slug: string): string {
+  return slug === SYNAP_RENDERERS_SLUG ? "Synap renderers" : slug;
 }

@@ -20,6 +20,19 @@
  *      a binding would beat the desktop's own adapters);
  *   4. after the commit, each written cell is announced (`emitCellWritten`).
  *
+ * Before any of it, the bundle's requirements are checked against this pod's
+ * contract (`unmetRendererBundleRequirements`: the bundle API, the bridge ops
+ * its cells call): one this pod does not meet is refused PRECONDITION_FAILED
+ * `RENDERER_BUNDLE_REQUIRES_UNMET`, nothing written (the update pass holds it
+ * for the owner instead, plan ad703ccd §3b.5a).
+ *
+ * KEPT VERSIONS (0449, D7). The same transaction records the definition with
+ * the digest computed here (`officialContentHash`, what Synap's index lists)
+ * in `renderer_bundle_versions` and on the bundle row, and keeps only the new
+ * version and the one it replaced (N-1): Undo re-installs N-1 from the pod,
+ * never from the control plane. The answer names the version replaced
+ * (`previousVersion`), so a caller can tell an install from an update.
+ *
  * Who may call it: the install door decides (`market.install` kind
  * `renderer-bundle`: a person installs, an agent proposes). `defineCell`
  * refuses an acting agent here too.
@@ -33,20 +46,30 @@ import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   getDb,
+  and,
   eq,
   ne,
+  desc,
+  notInArray,
   drizzleSql,
   findPgError,
   PG_UNIQUE_VIOLATION,
   uniqueViolationConstraint,
 } from "@synap/database";
-import { rendererBundles, rendererHostModules } from "@synap/database/schema";
 import {
+  rendererBundles,
+  rendererBundleVersions,
+  rendererHostModules,
+} from "@synap/database/schema";
+import {
+  RENDERER_BUNDLE_KIND,
   rendererSetDigestText,
+  unmetRendererBundleRequirements,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
   type RendererBundleHostModules,
 } from "@synap-core/types/renderables";
+import { officialContentHash } from "@synap/jobs/workers/marketplace-source-verify.js";
 import { installCellFromDefinition } from "../cells/install-cell-from-definition.js";
 import { emitCellWritten } from "../cells/define-cell.js";
 
@@ -57,6 +80,8 @@ export const RENDERER_BUNDLE_HASH_MISMATCH =
 export const RENDERER_HOST_SET_TAKEN = "RENDERER_HOST_SET_TAKEN" as const;
 export const RENDERER_BUNDLE_INSTALL_RACED =
   "RENDERER_BUNDLE_INSTALL_RACED" as const;
+export const RENDERER_BUNDLE_REQUIRES_UNMET =
+  "RENDERER_BUNDLE_REQUIRES_UNMET" as const;
 
 /** Serialises renderer bundle installs (`pg_advisory_xact_lock`). */
 const INSTALL_LOCK_KEY = "renderer-bundles:install";
@@ -112,8 +137,19 @@ export interface InstallRendererBundleOptions {
 export interface InstalledRendererBundle {
   slug: string;
   version: string;
+  /** The digest recorded for this version (`officialContentHash`). */
+  contentHash: string;
+  /** The version this install replaced; null on a first install. */
+  previousVersion: string | null;
   setSha256: string;
   cells: Array<{ typeKey: string; changeType: "created" | "updated" }>;
+}
+
+/** The digest of a bundle definition, as Synap's signed index lists it. */
+export function rendererBundleContentHash(
+  definition: Record<string, unknown>
+): string {
+  return officialContentHash(RENDERER_BUNDLE_KIND, definition);
 }
 
 /** The host-module constraints a racing install can meet. */
@@ -159,6 +195,15 @@ export async function installRendererBundle(
   definition: unknown,
   options: InstallRendererBundleOptions
 ): Promise<InstalledRendererBundle> {
+  // First: a bundle built for a newer pod is "not yet", never "invalid".
+  const unmet = unmetRendererBundleRequirements(definition);
+  if (unmet.length > 0) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `This pod cannot run this renderer bundle yet: ${unmet.join(" ")} Update the pod first. Nothing was installed.`,
+      cause: { reasonCode: RENDERER_BUNDLE_REQUIRES_UNMET, unmet },
+    });
+  }
   const problems = validateRendererBundleDefinition(definition);
   if (problems.length > 0) {
     throw new TRPCError({
@@ -182,11 +227,15 @@ export async function installRendererBundle(
 
   const { slug } = def._meta;
   const { version } = options;
+  const contentHash = rendererBundleContentHash(
+    definition as Record<string, unknown>
+  );
   const modules = Object.entries(def.hostModules) as Array<
     [keyof RendererBundleHostModules, { source: string; sha256: string }]
   >;
   const db = await getDb();
   let cells: InstalledRendererBundle["cells"];
+  let previousVersion: string | null = null;
   try {
     cells = await db.transaction(async (tx) => {
       // One install at a time per pod: a second install (the same slug or
@@ -202,6 +251,13 @@ export async function installRendererBundle(
         .where(ne(rendererHostModules.bundleSlug, slug))
         .limit(1);
       if (holder) throw hostSetTaken(slug, holder.slug);
+
+      const [before] = await tx
+        .select({ version: rendererBundles.version })
+        .from(rendererBundles)
+        .where(eq(rendererBundles.slug, slug))
+        .limit(1);
+      previousVersion = before?.version ?? null;
 
       await tx
         .delete(rendererHostModules)
@@ -242,9 +298,50 @@ export async function installRendererBundle(
         });
       }
 
+      // The definitions kept for Undo: this one, and the one it replaces.
+      await tx
+        .insert(rendererBundleVersions)
+        .values({
+          slug,
+          version,
+          contentHash,
+          definition: definition as Record<string, unknown>,
+        })
+        .onConflictDoUpdate({
+          target: [rendererBundleVersions.slug, rendererBundleVersions.version],
+          set: {
+            contentHash,
+            definition: drizzleSql`excluded.definition`,
+            installedAt: new Date(),
+          },
+        });
+      // N-1 is the newest OTHER version: a reinstall of the same version
+      // keeps the one before it, so its Undo still has somewhere to go.
+      const [prior] = await tx
+        .select({ version: rendererBundleVersions.version })
+        .from(rendererBundleVersions)
+        .where(
+          and(
+            eq(rendererBundleVersions.slug, slug),
+            ne(rendererBundleVersions.version, version)
+          )
+        )
+        .orderBy(desc(rendererBundleVersions.installedAt))
+        .limit(1);
+      const keep = prior ? [version, prior.version] : [version];
+      await tx
+        .delete(rendererBundleVersions)
+        .where(
+          and(
+            eq(rendererBundleVersions.slug, slug),
+            notInArray(rendererBundleVersions.version, keep)
+          )
+        );
+
       // Last: the bundle row is the install's commit marker.
       const row = {
         version,
+        contentHash,
         setSha256: def.setSha256,
         reactVersion: def.reactVersion,
         kitExports: def.kitExports,
@@ -286,5 +383,12 @@ export async function installRendererBundle(
   for (const cell of cells) {
     emitCellWritten(cell, { userId: options.userId, workspaceId: null });
   }
-  return { slug, version, setSha256: def.setSha256, cells };
+  return {
+    slug,
+    version,
+    contentHash,
+    previousVersion,
+    setSha256: def.setSha256,
+    cells,
+  };
 }

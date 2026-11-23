@@ -120,6 +120,7 @@ export const INSTALLED_PACKAGE_KINDS = [
   "skill",
   "automation",
   "agent",
+  "renderer-bundle",
 ] as const;
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 
@@ -129,9 +130,9 @@ export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
  *             automation, agent template. The plan lists every field with its
  *             state.
  *   package — as a whole, through the kind's own template door (a space's
- *             template apply, a capability's reconcile), which adds what the
- *             new version brings and keeps the pod's edits. The plan has no
- *             field rows.
+ *             template apply, a capability's reconcile, a renderer bundle's
+ *             install), which adds what the new version brings and keeps the
+ *             pod's edits. The plan has no field rows.
  */
 export const PACKAGE_UPDATE_COMPARED_BY = ["field", "package"] as const;
 export type PackageUpdateComparedBy =
@@ -139,7 +140,11 @@ export type PackageUpdateComparedBy =
 
 /** Which kinds are updated as a whole. */
 export function packageUpdateComparedBy(kind: string): PackageUpdateComparedBy {
-  return kind === "workspace" || kind === "capability" ? "package" : "field";
+  return kind === "workspace" ||
+    kind === "capability" ||
+    kind === "renderer-bundle"
+    ? "package"
+    : "field";
 }
 
 /**
@@ -393,9 +398,13 @@ export type ApplyPackageUpdateInput = z.input<
   typeof applyPackageUpdateInputSchema
 >;
 
-/** One field an apply (or an undo) changed. */
+/**
+ * One field an apply (or an undo) changed. A renderer bundle's update is one
+ * change of its `version` (`rowKind: "renderer-bundle"`, `rowId` its slug):
+ * Undo puts the version kept on the pod back (`renderer_bundle_versions`).
+ */
 export interface PackageUpdateChange {
-  rowKind: PackageUpdateRowKind;
+  rowKind: PackageUpdateRowKind | "renderer-bundle";
   rowId: string;
   field: string;
   before: unknown;
@@ -448,6 +457,72 @@ export const undoPackageUpdateInputSchema = z.object({
 export const detachPackageInputSchema = z.object({
   kind: z.enum(PACKAGE_UPDATE_ROW_KINDS),
   id: z.string().uuid(),
+});
+
+// ─── Renderer bundle updates (plan ad703ccd, decisions D1, D2, D7, D8) ───────
+
+/**
+ * How long a new renderer bundle version waits, counted from its publish,
+ * before it applies on its own (D1), by the pod's update channel
+ * (`pod_settings.settings.updates.channel`). A version Synap retired skips the
+ * wait (D8).
+ */
+export const RENDERER_BUNDLE_SOAK_MS = {
+  fast: 60 * 60 * 1000,
+  stable: 24 * 60 * 60 * 1000,
+} as const;
+
+/**
+ * Why a renderer bundle update waits for the owner instead of applying on its
+ * own:
+ *   requires — it needs what this pod does not have yet (its `requires`);
+ *   undone   — the owner undid this version: it does not come back by
+ *              itself (a newer one does).
+ */
+export const RENDERER_BUNDLE_HOLD_REASONS = ["requires", "undone"] as const;
+export type RendererBundleHoldReason =
+  (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+
+/**
+ * What the pod knows about its renderer bundle's updates
+ * (`renderers.status.updates`), written by the after-sync pass every 10
+ * minutes. Dates are ISO strings.
+ */
+export interface RendererBundleUpdateState {
+  slug: string;
+  /** The control plane's newest version; null = never read. */
+  latestVersion: string | null;
+  latestPublishedAt: string | null;
+  /** The last read of the control plane that answered. */
+  checkedAt: string | null;
+  /** Synap retired the version installed here (D8: no wait). */
+  installedRetired: boolean;
+  /**
+   * The last read or install refused (`reasonCode` is the pod's machine reason,
+   * e.g. `renderer_bundle_plan_required`); null once one went through.
+   */
+  refusal: { reasonCode: string; message: string; at: string } | null;
+  /** The update waits for the owner (see RENDERER_BUNDLE_HOLD_REASONS). */
+  hold: {
+    version: string;
+    reason: RendererBundleHoldReason;
+    detail: string;
+    at: string;
+  } | null;
+  /** The owner stopped updates ("Stop updates"); null = updates on. */
+  stoppedAt: string | null;
+  /**
+   * When the waiting update applies on its own; null when it will not by
+   * itself (automatic updates off, held, stopped, nothing waiting).
+   */
+  applyAfter: string | null;
+}
+
+export const stopPackageUpdatesInputSchema = z.object({
+  kind: z.literal("renderer-bundle"),
+  slug: z.string().min(1),
+  /** true = "Stop updates"; false = updates on again. */
+  stopped: z.boolean(),
 });
 
 /** How long a receipt can be undone (D5). */

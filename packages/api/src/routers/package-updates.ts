@@ -16,6 +16,7 @@ import { getActingAgentUserId } from "@synap/database";
 import {
   applyPackageUpdateInputSchema,
   detachPackageInputSchema,
+  stopPackageUpdatesInputSchema,
   undoPackageUpdateInputSchema,
 } from "@synap-core/types/package-updates";
 
@@ -34,6 +35,14 @@ import {
 } from "../services/package-updates/apply.js";
 import { listPackageUpdateReceipts } from "../services/package-updates/receipts.js";
 import { detachStandaloneConfigSource } from "../services/capabilities/reconcile-standalone-configs-to-templates.js";
+import { setRendererBundleUpdatesStopped } from "../services/renderers/renderer-bundle-updates.js";
+
+/** A config-lifecycle act is a person's: refuse an agent credential. */
+function refuseAgent(ctx: { agentUserId?: string | null }, message: string) {
+  if (getActingAgentUserId() ?? ctx.agentUserId) {
+    throw new TRPCError({ code: "FORBIDDEN", message });
+  }
+}
 
 export const packageUpdatesRouter = router({
   /** Every installed package whose catalog moved, and those it could not read. */
@@ -96,6 +105,26 @@ export const packageUpdatesRouter = router({
       return detachStandaloneConfigSource({
         kind: input.kind,
         id: input.id,
+        userId: ctx.userId as string,
+      });
+    }),
+
+  /**
+   * "Stop updates" for a package that stays installed from the catalog (a
+   * renderer bundle: its code is the catalog's, so it cannot become the
+   * person's), and back on. Stopped, a new version waits for the person: it is
+   * still listed, and applies only when they apply it.
+   */
+  stopUpdates: podAdminProcedure
+    .input(stopPackageUpdatesInputSchema)
+    .mutation(({ ctx, input }) => {
+      refuseAgent(
+        ctx as { agentUserId?: string | null },
+        "An agent credential cannot stop or resume a package's updates. Run it from a human/operator session."
+      );
+      return setRendererBundleUpdatesStopped({
+        slug: input.slug,
+        stopped: input.stopped,
         userId: ctx.userId as string,
       });
     }),

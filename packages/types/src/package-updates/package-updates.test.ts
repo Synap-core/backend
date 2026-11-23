@@ -8,6 +8,9 @@ import {
   packageHasUpdate,
   packageUpdateComparedBy,
   packageUpdateReviewPath,
+  INSTALLED_PACKAGE_KINDS,
+  RENDERER_BUNDLE_SOAK_MS,
+  stopPackageUpdatesInputSchema,
 } from "./index.js";
 
 describe("packageHasUpdate — THE rule, every kind, every surface", () => {
@@ -80,6 +83,30 @@ describe("package updates contract", () => {
         slug: "x",
         expectedVersion: "h",
         choices: { "a:body": "theirs" },
+      }).success
+    ).toBe(false);
+  });
+
+  // A renderer bundle is applied as a whole through its own install door.
+  it("a renderer bundle is an installed kind, updated as a whole", () => {
+    expect(INSTALLED_PACKAGE_KINDS).toContain("renderer-bundle");
+    expect(packageUpdateComparedBy("renderer-bundle")).toBe("package");
+    expect(RENDERER_BUNDLE_SOAK_MS).toEqual({
+      fast: 60 * 60 * 1000,
+      stable: 24 * 60 * 60 * 1000,
+    });
+    expect(
+      stopPackageUpdatesInputSchema.safeParse({
+        kind: "renderer-bundle",
+        slug: "synap-renderers",
+        stopped: true,
+      }).success
+    ).toBe(true);
+    expect(
+      stopPackageUpdatesInputSchema.safeParse({
+        kind: "skill",
+        slug: "x",
+        stopped: true,
       }).success
     ).toBe(false);
   });

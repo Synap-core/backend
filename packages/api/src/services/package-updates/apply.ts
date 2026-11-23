@@ -19,6 +19,7 @@
 
 import { TRPCError } from "@trpc/server";
 import { getActingAgentUserId } from "@synap/database";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import {
   applyPackageUpdateInputSchema,
   packageUpdateComparedBy,
@@ -290,10 +291,16 @@ export async function undoPackageUpdate(
       message: `Undo is available for 30 days; this update's window ended ${receipt.undoUntil}.`,
     });
   }
+  // A renderer bundle's update goes back to the version kept on the pod.
+  if (receipt.kind === RENDERER_BUNDLE_KIND) {
+    const { undoRendererBundleUpdate } =
+      await import("../renderers/renderer-bundle-updates.js");
+    return undoRendererBundleUpdate(ctx, receipt);
+  }
   refuseUngovernedAgentWrite(
     ctx,
     receipt.slug,
-    receipt.changes.map((c) => c.rowKind)
+    receipt.changes.map((c) => c.rowKind as StandaloneKind)
   );
 
   // Group by row, and check nothing changed since the update.
@@ -309,7 +316,8 @@ export async function undoPackageUpdate(
   }> = [];
   const changedSince: string[] = [];
   for (const changes of byRow.values()) {
-    const { rowKind, rowId } = changes[0]!;
+    const { rowId } = changes[0]!;
+    const rowKind = changes[0]!.rowKind as StandaloneKind;
     const [row] = await loadStandaloneRows(rowKind, [rowId]);
     if (!row) {
       changedSince.push(`${rowId} (deleted)`);

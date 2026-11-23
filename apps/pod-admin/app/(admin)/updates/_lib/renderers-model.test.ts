@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { catalogProblems } from "@synap-core/types/i18n";
+import type { PackageUpdateReceipt } from "@synap-core/types/package-updates";
 
 vi.mock("../../../../lib/trpc", () => ({ trpc: {} }));
 
@@ -18,8 +19,10 @@ import { en, fr } from "./copy";
 import {
   SYNAP_RENDERERS_SLUG,
   WORDED_REASONS,
+  readRenderersUpdates,
   renderersRefusalOf,
   renderersRowView,
+  renderersUpdatesView,
 } from "./renderers-model";
 
 /** `renderers.status` as the pod sends it. */
@@ -137,6 +140,143 @@ describe("every reason the pod's renderer install throws is worded", () => {
   it("maps the one-set refusal the install throws", () => {
     expect(installSource).toContain('"RENDERER_HOST_SET_TAKEN"');
     expect(WORDED_REASONS).toContain("RENDERER_HOST_SET_TAKEN");
+  });
+
+  it("maps the 'needs a newer pod' refusal the install throws", () => {
+    expect(installSource).toContain('"RENDERER_BUNDLE_REQUIRES_UNMET"');
+    expect(WORDED_REASONS).toContain("RENDERER_BUNDLE_REQUIRES_UNMET");
+  });
+});
+
+describe("renderersUpdatesView (plan ad703ccd L2)", () => {
+  const NOW = Date.parse("2026-11-23T12:00:00.000Z");
+  const V1 = "h-111111111111";
+  const V2 = "h-222222222222";
+  const status = (version: string | null) => {
+    const s = readRenderersStatus(
+      wire(
+        version
+          ? {
+              slug: SYNAP_RENDERERS_SLUG,
+              version,
+              setSha256: "a".repeat(64),
+              reactVersion: "19.1.0",
+            }
+          : null
+      )
+    );
+    if (!s) throw new Error("fixture: not a status");
+    return s;
+  };
+  /** `renderers.updates` as the pod sends it. */
+  const updates = (over: Record<string, unknown> = {}) =>
+    readRenderersUpdates({
+      slug: SYNAP_RENDERERS_SLUG,
+      latestVersion: V2,
+      latestPublishedAt: "2026-11-23T10:00:00.000Z",
+      checkedAt: "2026-11-23T11:50:00.000Z",
+      installedRetired: false,
+      refusal: null,
+      hold: null,
+      stoppedAt: null,
+      applyAfter: null,
+      ...over,
+    });
+  const receipt = (over: Record<string, unknown> = {}): PackageUpdateReceipt =>
+    ({
+      id: "r-1",
+      slug: SYNAP_RENDERERS_SLUG,
+      kind: "renderer-bundle",
+      name: "Synap renderers",
+      fromVersion: V1,
+      toVersion: V2,
+      appliedAt: "2026-11-23T11:00:00.000Z",
+      source: "automatic" as const,
+      changes: [],
+      undoUntil: "2026-12-23T11:00:00.000Z",
+      undoneAt: null,
+      ...over,
+    }) as PackageUpdateReceipt;
+
+  it("a newer version applying on its own after its soak", () => {
+    const v = renderersUpdatesView(
+      status(V1),
+      updates({ applyAfter: "2026-11-24T10:00:00.000Z" }),
+      null,
+      NOW
+    );
+    expect(v.available).toEqual({
+      version: V2,
+      wait: "auto",
+      applyAfter: "2026-11-24T10:00:00.000Z",
+    });
+    expect(v.undoable).toBeNull();
+  });
+
+  it("why it waits for the person: stopped beats a hold beats automatic off", () => {
+    const wait = (over: Record<string, unknown>) =>
+      renderersUpdatesView(status(V1), updates(over), null, NOW).available
+        ?.wait;
+    expect(wait({})).toBe("manual");
+    const hold = { version: V2, reason: "requires", detail: "x", at: "t" };
+    expect(wait({ hold })).toBe("requires");
+    expect(wait({ hold: { ...hold, reason: "undone" } })).toBe("undone");
+    expect(wait({ hold, stoppedAt: "t" })).toBe("stopped");
+    // A hold on another version does not hold this one.
+    expect(wait({ hold: { ...hold, version: "h-0" }, applyAfter: "t" })).toBe(
+      "auto"
+    );
+  });
+
+  // Catches: "update available" for the version already installed.
+  it("up to date: nothing available", () => {
+    expect(
+      renderersUpdatesView(status(V2), updates(), null, NOW).available
+    ).toBeNull();
+  });
+
+  it("the last update can be undone while its window is open and it is still installed", () => {
+    expect(
+      renderersUpdatesView(status(V2), updates(), receipt(), NOW).undoable
+    ).toEqual({
+      receiptId: "r-1",
+      version: V2,
+      at: "2026-11-23T11:00:00.000Z",
+      automatic: true,
+    });
+    const undoable = (r: Record<string, unknown>, installed = V2) =>
+      renderersUpdatesView(status(installed), updates(), receipt(r), NOW)
+        .undoable;
+    expect(undoable({ undoneAt: "t" })).toBeNull();
+    expect(undoable({ undoUntil: "2026-11-01T00:00:00.000Z" })).toBeNull();
+    expect(undoable({}, V1)).toBeNull(); // the pod moved on
+  });
+
+  // D2: the pod's own first-sync install was refused.
+  it("a refusal the pass recorded is worded by the install's reason map", () => {
+    const v = renderersUpdatesView(
+      status(null),
+      updates({
+        latestVersion: null,
+        refusal: {
+          reasonCode: "renderer_bundle_plan_required",
+          message: "x",
+          at: "2026-11-23T11:50:00.000Z",
+        },
+      }),
+      null,
+      NOW
+    );
+    expect(v.refusal).toBe("plan_required");
+    expect(v.available).toBeNull();
+  });
+
+  it("an answer it does not know reads as nothing, never as up to date", () => {
+    expect(readRenderersUpdates(null)).toBeNull();
+    expect(readRenderersUpdates({ latestVersion: V2 })).toBeNull();
+    expect(
+      updates({ hold: { version: V2, reason: "other", at: "t" } })?.hold
+    ).toBeNull();
   });
 });
 

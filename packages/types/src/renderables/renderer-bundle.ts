@@ -17,6 +17,8 @@ import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
 } from "../cell-bridge/frame-size.js";
+import { isCellBridgeReadOp } from "../cell-bridge/read-ops.js";
+import { isCellBridgeWriteOp } from "../cell-bridge/write-ops.js";
 import { checkCellSource } from "./cell-source-checks.js";
 
 /** The bundle API this version of the contract reads. */
@@ -72,6 +74,21 @@ export interface RendererBundleDefaults {
   views?: Record<string, string>;
 }
 
+/**
+ * What a bundle needs from the pod that runs it (plan ad703ccd §3b.5a): the
+ * bundle is built against backend `main`, while a `stable` pod runs an older
+ * release. Optional, and every field optional: absent = no requirement.
+ *
+ *   bridgeOps — the cell-bridge operations its cells call (read ops of
+ *               `CELL_BRIDGE_READ_OPS`, write ops of `CELL_BRIDGE_WRITE_OPS`;
+ *               the build derives them from its trace). A pod whose contract
+ *               does not list one holds the bundle until it is updated
+ *               (`unmetRendererBundleRequirements`).
+ */
+export interface RendererBundleRequires {
+  bridgeOps?: string[];
+}
+
 /** The published definition of a renderer bundle. */
 export interface RendererBundleDefinition {
   _meta: { slug: string; version: string; kind: typeof RENDERER_BUNDLE_KIND };
@@ -85,6 +102,40 @@ export interface RendererBundleDefinition {
   hostModules: RendererBundleHostModules;
   cells: RendererBundleCell[];
   defaults: RendererBundleDefaults;
+  /** What it needs from the pod; absent = nothing beyond `bundleApi`. */
+  requires?: RendererBundleRequires;
+}
+
+/**
+ * Every requirement of a bundle that THIS build of the contract does not
+ * meet, as plain sentences; empty when the pod can run it. The pod's contract
+ * is the one compiled into it: the bundle API it reads (`RENDERER_BUNDLE_API`)
+ * and the bridge ops its hosts answer. Pure. Reads the definition loosely, so
+ * it can say why before `validateRendererBundleDefinition` refuses the shape.
+ */
+export function unmetRendererBundleRequirements(definition: unknown): string[] {
+  if (!isRecord(definition)) return [];
+  const unmet: string[] = [];
+  if (
+    typeof definition.bundleApi === "number" &&
+    definition.bundleApi !== RENDERER_BUNDLE_API
+  ) {
+    unmet.push(
+      `It is built for bundle API ${definition.bundleApi}; this pod reads bundle API ${RENDERER_BUNDLE_API}.`
+    );
+  }
+  const requires = definition.requires;
+  if (isRecord(requires) && Array.isArray(requires.bridgeOps)) {
+    const missing = requires.bridgeOps.filter(
+      (op) => !isCellBridgeReadOp(op) && !isCellBridgeWriteOp(op)
+    );
+    if (missing.length > 0) {
+      unmet.push(
+        `It calls ${missing.map(String).join(", ")}, which this pod does not answer yet.`
+      );
+    }
+  }
+  return unmet;
 }
 
 /**
@@ -259,6 +310,21 @@ export function validateRendererBundleDefinition(
           r.line ? `Line ${r.line}: ${r.message}` : r.message
         );
     });
+  }
+
+  if (d.requires !== undefined) {
+    if (!isRecord(d.requires)) add("requires", "requires must be an object.");
+    else {
+      for (const name of Object.keys(d.requires)) {
+        if (name !== "bridgeOps")
+          add(`requires.${name}`, `"${name}" is not a requirement.`);
+      }
+      if (
+        d.requires.bridgeOps !== undefined &&
+        !isStringList(d.requires.bridgeOps)
+      )
+        add("requires.bridgeOps", "bridgeOps must be a list of op names.");
+    }
   }
 
   const defaults = d.defaults;

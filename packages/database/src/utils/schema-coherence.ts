@@ -2358,6 +2358,24 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "sha256",
     addedBy: "0436_renderer_bundles.sql",
   },
+  // Renderer bundle updates (0449): every install writes the digest and the
+  // kept definition, and the after-sync pass writes its state; absence means
+  // every install and every 10-minute pass would fail (42703 / 42P01).
+  {
+    table: "renderer_bundles",
+    column: "content_hash",
+    addedBy: "0449_renderer_bundle_updates.sql",
+  },
+  {
+    table: "renderer_bundle_versions",
+    column: "definition",
+    addedBy: "0449_renderer_bundle_updates.sql",
+  },
+  {
+    table: "renderer_bundle_updates",
+    column: "apply_after",
+    addedBy: "0449_renderer_bundle_updates.sql",
+  },
 
   // Document passages (0358b) — a document body as recall-sized units, and
   // the per-document state the revision sweep reads. Absence means every

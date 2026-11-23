@@ -5431,6 +5431,40 @@ END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
   ON "renderer_host_modules" ("module");
 
+-- Renderer bundle updates (0449): the installed definition's full digest, the
+-- definitions kept for Undo (current + N-1) and what the after-sync pass
+-- learned from the control plane. Mirrors 0449.
+ALTER TABLE "renderer_bundles" ADD COLUMN IF NOT EXISTS "content_hash" text;
+
+CREATE TABLE IF NOT EXISTS "renderer_bundle_versions" (
+  "slug"         text        NOT NULL,
+  "version"      text        NOT NULL,
+  "content_hash" text        NOT NULL,
+  "definition"   jsonb       NOT NULL,
+  "installed_at" timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("slug", "version")
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_bundle_updates" (
+  "slug"                text        PRIMARY KEY,
+  "latest_version"      text,
+  "latest_content_hash" text,
+  "latest_published_at" timestamptz,
+  "checked_at"          timestamptz,
+  "installed_retired"   boolean     NOT NULL DEFAULT false,
+  "refusal_code"        text,
+  "refusal_message"     text,
+  "refused_at"          timestamptz,
+  "hold_version"        text,
+  "hold_reason"         text,
+  "hold_detail"         text,
+  "held_at"             timestamptz,
+  "apply_after"         timestamptz,
+  "stopped_at"          timestamptz,
+  "stopped_by"          text,
+  "updated_at"          timestamptz NOT NULL DEFAULT now()
+);
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
