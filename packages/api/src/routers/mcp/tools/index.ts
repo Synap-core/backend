@@ -140,6 +140,25 @@ import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 import { MOVE_HOLD_TOOL_PROPERTIES } from "../../../services/lifecycle/hold-input.js";
 
 /**
+ * A plan step's time (B5), one wire shape for start/update_session and the
+ * capture plan's `sessions[]` (`stepTimePatch` checks it, `@synap-core/types`).
+ */
+const STEP_TIME_TOOL_PROPERTIES = {
+  plannedFor: {
+    type: ["string", "null"],
+    description: "When it starts: 2027-03, 2027-03-14 or ISO; null clears.",
+  },
+  dueBy: { type: ["string", "null"], description: "Deadline, same shapes." },
+} as const;
+
+/** P4: how a step that waits is born (`stepBirthStatus`). */
+const START_NOW_TOOL_PROPERTY = {
+  type: "boolean",
+  description:
+    "With a blocker or later plannedFor it is born planned (owes nothing, starts when they clear); true starts it now.",
+} as const;
+
+/**
  * When an entity's `content` becomes a linked document rather than the inline
  * `content` property — the rule `shouldMaterializeAsDocument`
  * (`@synap-core/types`, `document-heuristic.ts`) applies, in words. One copy
@@ -2709,13 +2728,12 @@ export const tools = {
             },
             correlationId: {
               type: "string",
-              description:
-                "Optional idempotency key — same correlationId for same user+workspace returns the existing session.",
+              description: "Optional idempotency key.",
             },
             channelId: {
               type: "string",
               description:
-                "Optional channel UUID for the session to BORROW as its room (e.g. the chat it started in). Omit it and the session mints its own group room, returned as `channelId` — ask the person there.",
+                "Optional channel UUID to BORROW as its room. Omit it and the session mints its own (`channelId`): ask the person there.",
             },
             agentIds: {
               type: "array",
@@ -2745,14 +2763,14 @@ export const tools = {
               type: "string",
               format: "uuid",
               description:
-                "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings.",
+                "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited.",
             },
             targets: {
               type: "array",
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs it works on as a BATCH (one thing: subjectEntityId). Moved by this session = done, by anyone else or still open at the end = skipped. Reported on `targets`.",
             },
             blockedBySessionIds: {
               type: "array",
@@ -2769,6 +2787,8 @@ export const tools = {
               type: "array",
               items: { type: "string" },
             },
+            startNow: START_NOW_TOOL_PROPERTY,
+            ...STEP_TIME_TOOL_PROPERTIES,
             suspendedIntent: {
               type: "string",
               maxLength: 400,
@@ -2794,14 +2814,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities e.g. a decision, goals; per id on `blockerLinks` / `blockerRemovals`). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) holds: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused|forming = planned), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities e.g. a decision, goals; per id on `blockerLinks` / `blockerRemovals`). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) holds: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: {
               type: "string",
               description:
-                "The focus session UUID to update. Optional: left out, the session THIS conversation started is used when exactly one is still open (every reply then says `inferred: true` and names it in `inferredSession`); several, none, a stale one, or a key shared by several conversations is refused with the list — nothing changes. A teammate (agents spawned in one process share its conversation) ALWAYS passes sessionId.",
+                "Optional. Left out: the ONE open session this conversation started (reply: `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes sessionId.",
             },
             title: {
               type: ["string", "null"],
@@ -2815,10 +2835,11 @@ export const tools = {
             },
             status: {
               type: "string",
-              enum: ["active", "paused"],
+              enum: ["active", "paused", "forming"],
               description:
-                "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run.",
+                "New status (optional); forming plans a started step back, active starts a planned one. To CLOSE use synap_complete_session (a raw close would orphan a playbook_run).",
             },
+            ...STEP_TIME_TOOL_PROPERTIES,
             expectedStatus: {
               type: "string",
               enum: [...SESSION_STATUSES],
@@ -4573,6 +4594,8 @@ export const tools = {
                     type: "array",
                     items: { type: "string" },
                   },
+                  startNow: START_NOW_TOOL_PROPERTY,
+                  ...STEP_TIME_TOOL_PROPERTIES,
                   subjectRef: { type: "string" },
                   subjectEntityId: { type: "string" },
                   projectRef: { type: "string" },
@@ -4580,7 +4603,7 @@ export const tools = {
                   expectedOutputs: {
                     type: "array",
                     description:
-                      "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded.",
+                      "What it will PRODUCE: `{ kind, label }` each (`owner: 'human'` for one you cannot take). The definition of done.",
                     items: { type: "object" },
                   },
                   // The plan door carries them to the session door
@@ -4589,7 +4612,7 @@ export const tools = {
                   criteria: {
                     ...SESSION_CRITERIA_PROPERTY,
                     description:
-                      "The session's acceptance criteria, proposed with the plan: two to five binary, observable statements, the same shape as synap_start_session's. They land on the session when the plan is approved, so no synap_update_session is needed afterwards.",
+                      "Two to five binary, observable statements (as synap_start_session's), landed on approval.",
                   },
                 },
                 required: ["ref", "goal"],

@@ -58,6 +58,12 @@ vi.mock("../../services/focus-sessions/session-output-edges.js", () => ({
   openOutputBlockerIds: openOutputBlockerIdsMock,
 }));
 
+// The wake (planned-wake.ts) is its own seam, covered on PGlite by
+// `session-unblock-wake.pglite.test.ts`: this suite drives the notification.
+vi.mock("../../services/focus-sessions/planned-wake.js", () => ({
+  wakePlannedSession: async () => "not_planned",
+}));
+
 vi.mock("../NotificationService.js", () => ({
   NotificationService: { create: createMock },
 }));

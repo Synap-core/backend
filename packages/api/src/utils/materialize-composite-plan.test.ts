@@ -404,3 +404,82 @@ describe("materializeCompositeGraph — a plan proposes the session's criteria",
     ]);
   });
 });
+
+describe("materializeCompositeGraph — a plan step that waits is born planned (P4)", () => {
+  it("tells the session door which steps wait (blockedByRefs or a blocked_by link), and carries startNow and the step's time", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const { callers } = stubPlanCallers({
+      sessionCreate: (async (input: Record<string, unknown>) => {
+        seen.push(input);
+        return { id: `session-${seen.length}`, linked: false };
+      }) as unknown as PlanCallers["sessionCaller"]["create"],
+    });
+
+    await materializeCompositeGraph(
+      [
+        { op: "create_session", ref: "a", goal: "First" },
+        {
+          op: "create_session",
+          ref: "b",
+          goal: "Waits on a",
+          blockedByRefs: ["a"],
+          dueBy: "2027-03-31",
+        },
+        { op: "create_session", ref: "c", goal: "Linked later" },
+        {
+          op: "create_session",
+          ref: "d",
+          goal: "Waits but starts now",
+          blockedByRefs: ["a"],
+          startNow: true,
+          plannedFor: "2027-03",
+        },
+        { op: "create_link", type: "blocked_by", fromRef: "c", toRef: "a" },
+      ] as CompositeProposalOperation[],
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    );
+
+    const byGoal = Object.fromEntries(
+      seen.map((s) => [
+        s.goal,
+        {
+          awaitsBlockers: s.awaitsBlockers,
+          startNow: s.startNow,
+          plannedFor: s.plannedFor,
+          dueBy: s.dueBy,
+        },
+      ])
+    );
+    expect(byGoal).toEqual({
+      // Rules out: "only blockedByRefs waits" (c waits through a link op) and
+      // "a blocker of a waits too" (a is waited ON, it waits on nothing).
+      First: {
+        awaitsBlockers: undefined,
+        startNow: undefined,
+        plannedFor: undefined,
+        dueBy: undefined,
+      },
+      "Waits on a": {
+        awaitsBlockers: true,
+        startNow: undefined,
+        plannedFor: undefined,
+        dueBy: "2027-03-31",
+      },
+      "Linked later": {
+        awaitsBlockers: true,
+        startNow: undefined,
+        plannedFor: undefined,
+        dueBy: undefined,
+      },
+      "Waits but starts now": {
+        awaitsBlockers: true,
+        startNow: true,
+        plannedFor: "2027-03",
+        dueBy: undefined,
+      },
+    });
+  });
+});

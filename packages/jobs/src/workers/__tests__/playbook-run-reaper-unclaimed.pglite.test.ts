@@ -242,3 +242,57 @@ describe("a run nobody claims is blocked with the reason", () => {
     expect(await statusOf(run)).toBe("queued");
   });
 });
+
+/**
+ * A PLANNED step's run (founder P1/P4): its session is `forming`, so the run
+ * has not started — it is not unclaimed, not quiet, not orphaned. Every sweep
+ * leaves it until the pod wakes the step. Its twin under a started session,
+ * one fact away (the status), is reaped as before.
+ */
+describe("a planned step's run is never reaped", () => {
+  async function stepRun(
+    sessionStatus: string,
+    runStatus: "queued" | "running"
+  ): Promise<string> {
+    const sess = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at, channel_id)
+       values ($1, 'u1', 'g', $2, '{}'::jsonb, '[]'::jsonb, now() - interval '40 days', now() - interval '30 days', $3)`,
+      [sess, sessionStatus, randomUUID()]
+    );
+    const id = randomUUID();
+    await q(
+      `insert into playbook_runs (id, playbook_id, session_id, executor, status, started_at, created_by, input, holder)
+       values ($1, $2, $3, 'is-agent', $4, now() - interval '30 days', 'u1', '{}'::jsonb, $5::jsonb)`,
+      [
+        id,
+        randomUUID(),
+        sess,
+        runStatus,
+        JSON.stringify({
+          kind: "synap_ai",
+          id: null,
+          assignedAt: new Date(Date.now() - 30 * 86_400_000).toISOString(),
+          claimedAt: null,
+        }),
+      ]
+    );
+    return id;
+  }
+
+  it("leaves a planned step's queued and running runs as they are; their started twins are reaped", async () => {
+    const plannedQueued = await stepRun("forming", "queued");
+    const plannedRunning = await stepRun("forming", "running");
+    const startedQueued = await stepRun("active", "queued");
+    const startedRunning = await stepRun("active", "running");
+
+    await handlePlaybookRunReaper();
+
+    // Rules out: "a run is judged by its own clock alone".
+    expect(await statusOf(plannedQueued)).toBe("queued");
+    expect(await statusOf(plannedRunning)).toBe("running");
+    // Non-vacuity: the same runs under a started session are reaped.
+    expect(await statusOf(startedQueued)).toBe("blocked");
+    expect(await statusOf(startedRunning)).toBe("failed");
+  });
+});

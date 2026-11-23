@@ -29,6 +29,7 @@ import {
   sessionDefinitionColumns,
   derivedSessionTitle,
   ownerAndActor,
+  runBirthStatus,
   runHolder,
   starterHolder,
 } from "@synap/database";
@@ -130,6 +131,11 @@ import {
   titleSourcePatch,
   canAutoRetitle,
 } from "@synap-core/types/focus-sessions";
+import {
+  stepBirthStatus,
+  stepDateRefusal,
+  stepTimePatch,
+} from "@synap-core/types/units";
 import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
@@ -345,6 +351,25 @@ export interface CreateFocusSessionParams {
    */
   blockedByEntityIds?: string[];
   blockedByTrackIds?: string[];
+  /**
+   * BIRTH STATUS (founder decision P4, 21 Nov 2026): a step that waits at
+   * birth — a `blockedBy*Ids` given here, `awaitsBlockers`, or a
+   * `plannedFor` still to come — is born PLANNED (`forming`: owes nothing,
+   * woken by `planned-wake.ts` when its blockers deliver and its date comes)
+   * unless `startNow`. THE rule is `stepBirthStatus` (`@synap-core/types`).
+   * A planned start never adopts the conversation's auto-opened receipt:
+   * that row holds present work.
+   */
+  startNow?: boolean;
+  /** The plan door writes its blockers AFTER the row exists: say so here. */
+  awaitsBlockers?: boolean;
+  /**
+   * The step's time (B5), on `metadata` (no column): `plannedFor` (a month
+   * `2027-03`, a day, or an ISO date-time) opens its window, `dueBy` is its
+   * deadline. A malformed date is refused (BAD_REQUEST).
+   */
+  plannedFor?: string | null;
+  dueBy?: string | null;
   /**
    * Open a NEW session even when an OPEN session of the same user, normalized
    * goal and scope exists. Without it that session is returned as `deduped`.
@@ -604,6 +629,35 @@ export async function createFocusSession(
     clientKey = null,
   } = params;
   const templateId = requestedTemplateId;
+
+  // The step's time and birth status (B5, P4): refused in words before
+  // anything is read or written.
+  const stepTime = stepTimePatch({
+    ...(params.plannedFor !== undefined
+      ? { plannedFor: params.plannedFor }
+      : {}),
+    ...(params.dueBy !== undefined ? { dueBy: params.dueBy } : {}),
+  });
+  if (!stepTime.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: stepDateRefusal(stepTime.invalid),
+    });
+  }
+  // Only the dates given, never a stored `null` at birth.
+  const stepTimeMeta = Object.fromEntries(
+    Object.entries(stepTime.patch).filter(([, v]) => v !== null)
+  );
+  const bornStatus = stepBirthStatus({
+    startNow: params.startNow,
+    hasBlockers:
+      params.awaitsBlockers === true ||
+      blockedBySessionIds.length +
+        blockedByEntityIds.length +
+        blockedByTrackIds.length >
+        0,
+    plannedFor: params.plannedFor ?? null,
+  });
 
   // A caller-named id (`proposedSessionId`, a held start's replay) that already
   // names a row: the caller's own session ⇒ this start already landed (a
@@ -955,6 +1009,8 @@ export async function createFocusSession(
   const adoptId =
     clientKey &&
     params.adoptAutoOpened !== false &&
+    // A planned step is not present work: it never takes over the receipt.
+    bornStatus === "active" &&
     clientKeyScope(clientKey) === "conversation"
       ? ((
           await findClientSession(userId, clientKey, {
@@ -1102,6 +1158,11 @@ export async function createFocusSession(
       ...(blockedByTrackIds.length > 0 ? { blockedByTrackIds } : {}),
       // Same reason: written at approval through `writeSessionTargets`.
       ...(targets.length > 0 ? { targets } : {}),
+      // The birth status and the step's time ride too (P4, B5): the
+      // approved row is born planned exactly as a direct start would be.
+      ...(params.startNow === true ? { startNow: true } : {}),
+      ...(params.awaitsBlockers === true ? { awaitsBlockers: true } : {}),
+      ...stepTimeMeta,
       ...(criteria.length > 0 ? { criteria } : {}),
       // The track rides the proposal so the approved row is born inside it
       // too; `proposal.projectId` already carries the track's project.
@@ -1314,6 +1375,7 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
+              ...stepTimeMeta,
               ...(params.governance ? { governance: params.governance } : {}),
               ...playbookOptOutPatch(params.templateId),
               ...workspacePlacementPatch(workspacePlacement),
@@ -1361,6 +1423,8 @@ export async function createFocusSession(
         id: sessionId,
         userId,
         goal,
+        // P4: a step that waits at birth is born planned (see the param).
+        status: bornStatus,
         // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
         title,
         correlationId: correlationId ?? null,
@@ -1386,6 +1450,8 @@ export async function createFocusSession(
           ...playbookOptOutPatch(params.templateId),
           ...workspacePlacementPatch(workspacePlacement),
           ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
+          // The step's window and deadline (B5).
+          ...stepTimeMeta,
           // @see the adopt branch above.
           ...(paramResolution
             ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
@@ -1420,7 +1486,8 @@ export async function createFocusSession(
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: handedTo ? "queued" : "running",
+        // A planned step's run waits with it and starts when it wakes (P4).
+        status: handedTo ? "queued" : runBirthStatus(bornStatus),
         holder: handedTo
           ? runHolder("agent", handedTo)
           : starterHolder(userId, agentUserId),
