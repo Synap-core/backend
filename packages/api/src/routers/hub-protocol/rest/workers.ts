@@ -3,7 +3,12 @@
  * MCP tools call (`../worker-doors.ts`):
  *
  *   GET   /workers?trackId=…            the workers enabled on a goal (strict),
- *                                       each a GoalWorkerView (or ?projectId=…)
+ *                                       each a GoalWorkerView (or ?projectId=…,
+ *                                       or ?playbookId=… for every enablement
+ *                                       of one playbook); a scoped key's
+ *                                       left-out workers come back counted in
+ *                                       `withheld` (grant-door-fence
+ *                                       LIST_WORKERS)
  *   POST  /workers                      enable { playbookId, activatorKey |
  *                                       schedule, mode?, trackId | projectId,
  *                                       agentUserId? }
@@ -49,10 +54,19 @@ const ListQuery = z
     projectId: z.string().uuid().optional(),
     /** The workers a session started (not the caller's attribution). */
     scopeSessionId: z.string().uuid().optional(),
+    /**
+     * One playbook's workers: every enablement of it, the space-wide one
+     * included (a space-scoped worker has no goal or project to list it by).
+     */
+    playbookId: z.string().uuid().optional(),
   })
-  .refine((q) => !!q.trackId || !!q.projectId || !!q.scopeSessionId, {
-    message: "trackId (the goal), projectId or scopeSessionId is required",
-  });
+  .refine(
+    (q) => !!q.trackId || !!q.projectId || !!q.scopeSessionId || !!q.playbookId,
+    {
+      message:
+        "trackId (the goal), projectId, scopeSessionId or playbookId is required",
+    }
+  );
 
 const EnableBody = z
   .object({
@@ -124,9 +138,28 @@ async function resolveWriteAgent(
   return { ok: true, agentUserId };
 }
 
+function isDenied(
+  result: unknown
+): result is { status: "denied"; reason: string } {
+  return (
+    typeof result === "object" &&
+    result !== null &&
+    (result as { status?: unknown }).status === "denied"
+  );
+}
+
 function render<T>(c: HubContext, outcome: WorkerDoorOutcome<T>) {
   switch (outcome.kind) {
     case "result":
+      // A write the gate refused (the key's grant, the person's role) is a
+      // 403, so the Hub's denial middleware adds `code: GRANT_DENIED`, the
+      // refused action and, for a pod app that may ask for it, `ask`.
+      if (isDenied(outcome.result)) {
+        return c.json(
+          { error: outcome.result.reason, status: "denied" as const },
+          403
+        );
+      }
       return jsonGoverned(c, outcome.result);
     case "invalid":
       return c.json({ error: outcome.error }, 400);
@@ -177,6 +210,7 @@ export function registerWorkersRoutes(app: HubHono): void {
     const query = ListQuery.safeParse({
       trackId: c.req.query("trackId") || undefined,
       projectId: c.req.query("projectId") || undefined,
+      playbookId: c.req.query("playbookId") || undefined,
     });
     if (!query.success) return c.json({ error: zodError(query.error) }, 400);
     try {

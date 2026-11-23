@@ -222,6 +222,54 @@ const GET_CHANNEL = READS("channel");
  */
 const FIND = READS("tool", "command", "playbook", "automation");
 
+/**
+ * THE WORKERS READ (`listWorkersDoor`, Hub `GET /workers`): a playbook's
+ * enabled workers, each with its trigger, state, last and next run, run
+ * health and the approvals it waits on. Its playbooks are read through the
+ * `playbook` grant clause (`visiblePlaybooks`, `scopedDb`), so the door is
+ * `NARROWED("playbook", WORKER_VIEW_SUBJECTS)`: admitted on `playbook.read`,
+ * pinned or not. What a worker shows beyond its playbook lives in that
+ * playbook's space and reads no seam: its automation and runs (`automation`)
+ * and its pending approvals (`proposal`). A scoped key gets a worker only
+ * when it reads both there (`grantReadsInSpace`); the others are counted as
+ * withheld, never answered as an empty list. MCP `synap_list_workers` keeps
+ * its stricter `READS` declaration.
+ */
+export const WORKER_VIEW_SUBJECTS: readonly string[] = [
+  "automation",
+  "proposal",
+];
+const LIST_WORKERS = NARROWED("playbook", WORKER_VIEW_SUBJECTS);
+
+/**
+ * Does the grant read every one of `subjects` in space `workspaceId`? For
+ * each subject, one live scope that grants `<subject>.read` and is either
+ * unpinned or pinned to spaces that include `workspaceId` (as the grant
+ * clause reads a table with a workspace column: `grantReadClause`). A scope
+ * pinned to projects or objects never qualifies (fail closed: a space-wide
+ * row such as an automation has no project or object path), nor does any
+ * scope for a row in no space (`null`) unless it is unpinned.
+ */
+export function grantReadsInSpace(
+  grant: KeyGrant,
+  subjects: readonly string[],
+  workspaceId: string | null
+): boolean {
+  return subjects.every((subject) =>
+    grant.scopes.some((scope) => {
+      if (scope.projectIds || scope.entityIds) return false;
+      if (
+        scope.workspaceIds &&
+        (workspaceId === null || !scope.workspaceIds.includes(workspaceId))
+      )
+        return false;
+      return scope.permissions.some((p) =>
+        patternMatches(p, { subject, action: "read" })
+      );
+    })
+  );
+}
+
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
   return grant.scopes.some((scope) =>
@@ -1196,6 +1244,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/status-of\/?$/, NARROWED("entity", STATUS_OF_SUBJECTS)],
   [/^\/profiles\/?$/, LIST_PROFILES],
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
+  // A playbook's (or a goal's, a project's) workers (`listWorkersDoor`): the
+  // playbooks through the `playbook` grant clause, and a worker only where
+  // the key reads its automation and approvals too (LIST_WORKERS). A pod
+  // app's "Runs on its own" (Content Studio, plan e51783ca J2-be).
+  [/^\/workers\/?$/, LIST_WORKERS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
   [/^\/channels\/personal\/?$/, GET_CHANNEL],
   // A board's content (`readBoardScene`, services/whiteboards/): the view row
