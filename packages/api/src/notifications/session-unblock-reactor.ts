@@ -80,6 +80,16 @@
  * alone: a session can legitimately be blocked again later and unblocked again,
  * and that second unblocking is real news.
  *
+ * AN ANSWER RE-CHECKS WHAT IT NAMES (work-model W5). A slot handed to the
+ * person may say, as data, the one output or criterion of its session the
+ * answer unblocks (`unblocksTarget`, `SlotUnblocksTarget`); the answer door and
+ * the "I did this" door put it on their event. The agent declared it, so this
+ * reactor only RE-CHECKS it through the existing doors
+ * ({@link answerTargetMove}): an output's claim is read against its evidence
+ * again, a criterion's own check runs again, and a criterion the person grades
+ * gets its grade card. It NEVER writes the person's attestation or verdict
+ * (founder-visible decision, W5 review). A refusal re-checks nothing.
+ *
  * NEVER THROWS: `emitSideEffects` isolates a failing reactor, but a swallowed
  * failure here would leave no evidence that nobody was told their work can
  * resume — so failures are logged.
@@ -100,6 +110,9 @@ import {
   projects,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import { isDeclinedValue } from "@synap-core/types/ask";
+import { EVENT_GRADED_KINDS } from "../services/dev-loop/recheck-criteria.js";
+import { readCriteria, type SessionCriterion } from "@synap/playbooks";
 import {
   DEPENDENCY_LINK_TYPE,
   REPLACES_LINK_TYPE,
@@ -119,6 +132,10 @@ import {
   FOCUS_SESSION_SUBJECT_TYPE,
   FOCUS_SESSION_CLOSE_ACTION,
 } from "../services/focus-sessions/close-event.js";
+import {
+  FOCUS_SESSION_SLOT_ANSWER_ACTION,
+  FOCUS_SESSION_SLOT_ATTEST_ACTION,
+} from "../services/focus-sessions/lifecycle-events.js";
 import {
   getSessionEdgesFor,
   openBlockerIds,
@@ -191,6 +208,117 @@ function endsGoal(payload: SideEffectPayload): boolean {
   );
 }
 
+/** What a person's answer re-checks (`SlotUnblocksTarget`), decided. */
+export type AnswerTargetMove =
+  /** A criterion the person grades: its grade card is filed / brought back. */
+  | { kind: "surface_grade"; criterionKey: string }
+  /** A machine-checked criterion: its own check runs again. */
+  | { kind: "recheck_criterion"; criterionKey: string }
+  /** An output: its claim is read against its evidence again. */
+  | { kind: "recheck_output"; outputKey: string };
+
+const targetKey = (v: unknown): string | null =>
+  typeof v === "string" && v.trim() !== "" ? v.trim() : null;
+
+/**
+ * THE rule for what an answer re-checks, pure. `null` = nothing:
+ *   - a refusal (`declined`) re-checks nothing;
+ *   - a target naming anything but exactly one output or one criterion of
+ *     the session re-checks nothing;
+ *   - `{criterion}`: the person's grade card when they grade it
+ *     (`check.kind: "human"`); its own check again when an event can settle
+ *     it (evidence, capability); nothing for a judge;
+ *   - `{output}`: that output's claim against its evidence.
+ * Nothing here writes a verdict or an attestation.
+ */
+export function answerTargetMove(input: {
+  target: unknown;
+  value: unknown;
+  criteria: readonly SessionCriterion[];
+}): AnswerTargetMove | null {
+  const t = input.target;
+  if (!t || typeof t !== "object" || Array.isArray(t)) return null;
+  if (isDeclinedValue(input.value)) return null;
+  const target = t as Record<string, unknown>;
+  if (Object.keys(target).length !== 1) return null;
+  const criterionKey = targetKey(target.criterion);
+  if (criterionKey) {
+    const criterion = input.criteria.find((c) => c.key === criterionKey);
+    if (!criterion) return null;
+    if (criterion.check.kind === "human") {
+      return { kind: "surface_grade", criterionKey };
+    }
+    // The re-check door runs the checks an event can settle (evidence,
+    // capability). A judge re-grades on its own schedule (evaluate_session),
+    // so an answer re-checks nothing for it.
+    return (EVENT_GRADED_KINDS as readonly string[]).includes(
+      criterion.check.kind
+    )
+      ? { kind: "recheck_criterion", criterionKey }
+      : null;
+  }
+  const outputKey = targetKey(target.output);
+  return outputKey ? { kind: "recheck_output", outputKey } : null;
+}
+
+/** The answer or "I did this" event whose slot named what it re-checks. */
+function answerNamesTarget(payload: SideEffectPayload): boolean {
+  return (
+    payload.subjectType === FOCUS_SESSION_SUBJECT_TYPE &&
+    (payload.action === FOCUS_SESSION_SLOT_ANSWER_ACTION ||
+      payload.action === FOCUS_SESSION_SLOT_ATTEST_ACTION) &&
+    !!payload.data?.unblocksTarget
+  );
+}
+
+/** Re-check what the answer named, through the existing doors. Never throws. */
+async function answerMoved(payload: SideEffectPayload): Promise<void> {
+  const sessionId =
+    (payload.data?.sessionId as string | undefined) ?? payload.subjectId;
+  if (!sessionId) return;
+  try {
+    const [session] = await db
+      .select({
+        id: focusSessions.id,
+        userId: focusSessions.userId,
+        criteria: focusSessions.criteria,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .limit(1);
+    if (!session) return;
+    const move = answerTargetMove({
+      target: payload.data?.unblocksTarget,
+      value: payload.data?.value,
+      criteria: readCriteria(session.criteria),
+    });
+    if (!move) return;
+    if (move.kind === "surface_grade") {
+      const { fileDeclaredGradeSlots } =
+        await import("../services/focus-sessions/evaluations/record.js");
+      await fileDeclaredGradeSlots(sessionId);
+    } else if (move.kind === "recheck_criterion") {
+      const { reevaluateCriteria } =
+        await import("../services/dev-loop/session-outcome-door.js");
+      await reevaluateCriteria({
+        sessionId,
+        userId: session.userId,
+        agentUserId: null,
+        criterionKeys: [move.criterionKey],
+      });
+    } else {
+      const { satisfyClaimsByEvidence } =
+        await import("../services/focus-sessions/satisfy-expected-output.js");
+      await satisfyClaimsByEvidence({ sessionId, userId: session.userId });
+    }
+  } catch (error) {
+    logger.error(
+      { error, sessionId },
+      "Failed to re-check what a person's answer named"
+    );
+  }
+}
+
 /** The kind's OWN status move into a done category — a decision accepted. */
 function entityDelivers(payload: SideEffectPayload): boolean {
   if (payload.subjectType !== "entity" || payload.action !== "transition") {
@@ -209,7 +337,8 @@ export const sessionUnblockNotifyReactor: Reactor = {
     (payload.subjectType === FOCUS_SESSION_SUBJECT_TYPE &&
       payload.action === FOCUS_SESSION_CLOSE_ACTION) ||
     endsGoal(payload) ||
-    entityDelivers(payload),
+    entityDelivers(payload) ||
+    answerNamesTarget(payload),
   async handler(payload) {
     if (payload.subjectType === "track") {
       await goalEnded(payload);
@@ -217,6 +346,13 @@ export const sessionUnblockNotifyReactor: Reactor = {
     }
     if (payload.subjectType === "entity") {
       await entityDelivered(payload);
+      return;
+    }
+    if (
+      payload.action === FOCUS_SESSION_SLOT_ANSWER_ACTION ||
+      payload.action === FOCUS_SESSION_SLOT_ATTEST_ACTION
+    ) {
+      await answerMoved(payload);
       return;
     }
     const closedId =

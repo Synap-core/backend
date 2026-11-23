@@ -78,7 +78,7 @@ import {
   TERMINAL_SESSION_STATUSES,
   isPlannedSessionStatus,
 } from "../focus-sessions/statuses.js";
-import { deliverableOwedBy } from "../units/deliverable.js";
+import { isOwedByYouIn } from "../units/deliverable.js";
 import { runnerStateWaitKind } from "../units/runner-state.js";
 import { WAIT_KIND_BALL } from "../units/wait-kind.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
@@ -190,6 +190,8 @@ export interface NeedsYouSlotFacts {
   askedBy?: unknown;
   askCause?: unknown;
   criterionKey?: unknown;
+  /** On a criterion's grade slot: the output it grades (`isGradeAwaitingOutput`). */
+  outputKey?: unknown;
   paramName?: unknown;
   pendingRelay?: unknown;
   ask?: unknown;
@@ -233,6 +235,14 @@ export interface NeedsYouSessionFacts {
    * Absent / `false` = not measured or none: today's rule.
    */
   blocksOpenPr?: boolean;
+  /**
+   * The session's whole `expected_outputs` list, the slot included: a
+   * criterion's grade waits on the output it checks
+   * (`isGradeAwaitingOutput`). Absent = the slot is read alone, as before
+   * that rule; every pod reader passes it, as the SQL twin reads
+   * `expected_outputs` of the same row.
+   */
+  expectedOutputs?: readonly unknown[];
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -249,10 +259,17 @@ function timeOf(v: Date | string | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** Still owed by the person: THE deliverable rule (`OWED_SLOT_CLAUSES` in SQL). */
-function isOwed(slot: NeedsYouSlotFacts): boolean {
-  return (
-    deliverableOwedBy(slot as Parameters<typeof deliverableOwedBy>[0]) === "you"
+/**
+ * Still owed by the person, read in its session: THE deliverable rule
+ * (`owedSlotPredicateIn` in SQL).
+ */
+function isOwed(
+  slot: NeedsYouSlotFacts,
+  outputs: readonly unknown[] | undefined
+): boolean {
+  return isOwedByYouIn(
+    slot as Parameters<typeof isOwedByYouIn>[0],
+    outputs ?? []
   );
 }
 
@@ -386,7 +403,7 @@ export function classifyOwedAsk(
   session: NeedsYouSessionFacts,
   now: Date | number = Date.now()
 ): NeedsYouSlotClass | null {
-  if (!isOwed(slot)) return null;
+  if (!isOwed(slot, session.expectedOutputs)) return null;
   if (isPlannedSessionStatus(session.status)) return null;
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;

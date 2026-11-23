@@ -38,7 +38,7 @@ import {
 } from "@synap-core/types/needs-you/rule";
 import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import { MessageAuthorType } from "../schema/messages.js";
-import { owedSlotPredicateSql } from "./owed-slot-predicate.js";
+import { owedSlotPredicateIn } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
 
 function literals(values: readonly string[]): SQL {
@@ -216,7 +216,7 @@ export function needsYouSlotClassSql(
   ).toISOString();
   const session = needsYouSessionClassSql(s, now);
   return drizzleSql`(CASE
-      WHEN NOT (${owedSlotPredicateSql}) THEN NULL
+      WHEN NOT (${owedSlotPredicateIn(col(s, "expected_outputs"))}) THEN NULL
       WHEN ${plannedSessionSql(s)} THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
       WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL}
@@ -278,10 +278,10 @@ export function sessionStoppedOnItsAsksWhere(
 ): SQL {
   return drizzleSql`(${col(s, "status")} IN ('active', 'paused')
     AND ${needsYouSessionClassSql(s, now)} = 'stopped'
-    AND EXISTS (SELECT 1 FROM ${slotsOf(s)} WHERE ${owedSlotPredicateSql})
+    AND EXISTS (SELECT 1 FROM ${slotsOf(s)} WHERE ${owedSlotPredicateIn(col(s, "expected_outputs"))})
     AND NOT EXISTS (
       SELECT 1 FROM ${slotsOf(s)}
-      WHERE ${owedSlotPredicateSql} AND NOT ${SLOT_ENDS_WITH_SESSION_SQL}
+      WHERE ${owedSlotPredicateIn(col(s, "expected_outputs"))} AND NOT ${SLOT_ENDS_WITH_SESSION_SQL}
     )
     AND NOT ${awaitedGatePendingIn(col(s, "id"))})`;
 }
