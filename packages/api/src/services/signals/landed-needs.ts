@@ -81,7 +81,6 @@ export async function listLandedNeedsPerson(args: {
     .where(
       and(
         inArray(proposals.status, APPLIED),
-        gte(proposals.updatedAt, since),
         // Only a row that can land an automation or a playbook: its target,
         // a plan's records, or the landed stamp.
         or(
