@@ -2348,9 +2348,7 @@ export async function materializeCompositeGraph(
       );
       // A wait on a decision or a goal is a wait too (P4): a step whose ONLY
       // blocker is a cross-kind link is born planned, not active.
-      for (const e of planCrossKindEdges(operations)) {
-        if ("ref" in e.from) waiting.add(e.from.ref);
-      }
+
       // ── Plan pass PT — GOALS, parents before children ──────────────────
       // Before every session, so a session's `trackRef` resolves AT create
       // (it is born in its goal, like `start_session` + `trackId`). The goal
@@ -2567,7 +2565,6 @@ export async function materializeCompositeGraph(
           fromSessionId,
           toKind: edge.to.kind,
           toId,
-          ...(edge.option ? { option: edge.option } : {}),
         });
         crossLinkResults.push({
           opIndex: edge.opIndex,
