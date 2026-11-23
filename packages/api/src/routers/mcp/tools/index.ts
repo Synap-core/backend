@@ -155,7 +155,7 @@ const STEP_TIME_TOOL_PROPERTIES = {
 const START_NOW_TOOL_PROPERTY = {
   type: "boolean",
   description:
-    "With a blocker or a later plannedFor it is born planned (forming: owes nothing, starts itself when they clear); true starts it now.",
+    "With a blocker or later plannedFor it is born planned (owes nothing, starts when they clear); true starts it now.",
 } as const;
 
 /**
@@ -2821,7 +2821,7 @@ export const tools = {
             sessionId: {
               type: "string",
               description:
-                "The session UUID. Left out: the ONE open session this conversation started (the reply says `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes it.",
+                "Optional. Left out: the ONE open session this conversation started (the reply says `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes it.",
             },
             title: {
               type: ["string", "null"],
