@@ -46,12 +46,10 @@ describe("nextStepOf — the one act an object's next step offers", () => {
       label: "Answer: which plan?",
     };
     for (const where of ["itsPage", "elsewhere"] as const) {
-      expect(nextStepOf({ kind: "entity", id: ID }, next, where)?.act).toEqual(
-        {
-          kind: "door",
-          exit: { kind: "object", objectKind: "session", id: SESSION },
-        }
-      );
+      expect(nextStepOf({ kind: "entity", id: ID }, next, where)?.act).toEqual({
+        kind: "door",
+        exit: { kind: "object", objectKind: "session", id: SESSION },
+      });
     }
     expect(
       nextStepOf({ kind: "entity", id: ID }, next, "elsewhere")?.pill.label

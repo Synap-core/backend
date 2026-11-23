@@ -65,10 +65,7 @@ import {
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
 import { ConnectedObjects } from "../../_lib/object/connected-objects";
-import {
-  useWorkRead,
-  WorkSection,
-} from "../../_lib/object/views/work-section";
+import { useWorkRead, WorkSection } from "../../_lib/object/views/work-section";
 import { NextStepBlock } from "../../_lib/object/next-step";
 import { nextStepOf } from "../../_lib/object/next-step-model";
 import { objectPage } from "../../_lib/object/content/markdown-model";

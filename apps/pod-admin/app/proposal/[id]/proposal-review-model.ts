@@ -32,10 +32,7 @@ import {
   resolveActionLabel,
   resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
-import {
-  nextStepOf,
-  type NextStep,
-} from "../../_lib/object/next-step-model";
+import { nextStepOf, type NextStep } from "../../_lib/object/next-step-model";
 import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
@@ -170,7 +167,9 @@ const VERB_OF_ROLE: Record<ProposalLandedRole, string> = {
 };
 
 /** The "Made" rows: each landed object, its next step first among them. */
-export function madeRows(landed: readonly LandedInput[] | undefined): MadeRow[] {
+export function madeRows(
+  landed: readonly LandedInput[] | undefined
+): MadeRow[] {
   const rows = (landed ?? []).map((o) => ({
     kind: o.kind,
     id: o.id,
