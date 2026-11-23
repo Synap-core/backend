@@ -593,17 +593,24 @@ export const STATUS_OF_SUBJECTS: readonly string[] = [
 
 /**
  * The `include` parts `GET /status-of` answers a key that does not read
- * {@link STATUS_OF_SUBJECTS} unbounded. Both read only the named subject's own
- * floored record: `moves` (its step's declared options) and `history` (the
- * timeline kept to status events, its stage ledger and its wait episodes,
- * the timeline's session sources already withheld). Every other part (`work`,
- * `signals`, `links`, `rollup`, `reactions`) reads rows beyond the subject
- * (the continuation packet's proposals, links and rooms) that no grant clause
- * bounds, and is withheld.
+ * {@link STATUS_OF_SUBJECTS} unbounded. `moves` (its step's declared options)
+ * and `history` (the timeline kept to status events and its stage ledger)
+ * read only the named subject's own floored record. `work` is answered as a
+ * PROJECTION (`status-of-narrowed-work.ts`, D7, 21 Nov 2026): the sessions
+ * listed are read through the session floor, which ANDs the key's grant, and
+ * each field is an allow-listed copy of what that session row (or its stage
+ * ledger) already says; the gate proposals it names are kept only when the
+ * access layer's proposal floor (which ANDs the grant) reads them, a runner's
+ * name only when the key reads the person's agents
+ * ({@link sessionHolderReadable}); proposals, the next move, the hold's
+ * reference and the last completion are withheld. Every other part (`signals`,
+ * `links`, `rollup`, `reactions`) reads rows beyond the subject that no grant
+ * clause bounds, and is withheld.
  */
 export const STATUS_OF_NARROWED_INCLUDES: readonly string[] = [
   "moves",
   "history",
+  "work",
 ];
 
 /**
@@ -614,8 +621,9 @@ export const STATUS_OF_NARROWED_INCLUDES: readonly string[] = [
  * it cannot read is `unknown`, as one that does not exist), the answer
  * without what reads past the subject: the parts in
  * {@link STATUS_OF_NARROWED_INCLUDES} only, and no `waitingOn`, `blocker`,
- * `nextMove`, `hold`, `roles` or `account` (each reads proposals, slots,
- * holds or roles by subject id with no grant clause).
+ * `nextMove`, `hold`, `roles` or `account` on the subject itself (each reads
+ * proposals, slots, holds or roles by subject id with no grant clause); its
+ * `work` is the floored projection named on that constant.
  */
 export type StatusOfReach = { whole: true } | { whole: false };
 
