@@ -335,7 +335,13 @@ describe("GET /status-of?include=work, a key pinned to space A, end to end", () 
         [THING_A, THING_B, GOAL, S_A, S_B_ON],
         grant
       );
-      for (const leak of FOREIGN) expect(wire, leak).not.toContain(leak);
+      // The id the caller itself asked about is echoed as `unknown`: that is
+      // its own input, not a read of B.
+      const answered = wire.replace(
+        `{"id":"${S_B_ON}","type":"unknown"}`,
+        ""
+      );
+      for (const leak of FOREIGN) expect(answered, leak).not.toContain(leak);
       // The own session is there; the foreign ones are not listed.
       expect(titles(answers[0])).toEqual(["Run in A"]);
       expect(answers[0]!.work!.truncated).toBe(false);
