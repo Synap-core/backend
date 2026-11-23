@@ -13121,13 +13121,26 @@ export type PackageUpdateApplyResult = {
 };
 declare const RENDERER_BUNDLE_HOLD_REASONS: readonly [
 	"requires",
-	"undone"
+	"kit",
+	"undone",
+	"failed"
 ];
 export type RendererBundleHoldReason = (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+declare const RENDERER_BUNDLE_WAIT_REASONS: readonly [
+	"soak",
+	"auto_off",
+	"setting_unreadable",
+	"paused",
+	"held",
+	"frozen",
+	"no_owner",
+	"refused"
+];
+export type RendererBundleWaitReason = (typeof RENDERER_BUNDLE_WAIT_REASONS)[number];
 /**
  * What the pod knows about its renderer bundle's updates
- * (`renderers.updates`), written by the after-sync pass every 10
- * minutes. Dates are ISO strings.
+ * (`renderers.updates`), written by the after-sync pass every 10 minutes.
+ * Dates are ISO strings.
  */
 export interface RendererBundleUpdateState {
 	slug: string;
@@ -13136,7 +13149,7 @@ export interface RendererBundleUpdateState {
 	latestPublishedAt: string | null;
 	/** The last read of the control plane that answered. */
 	checkedAt: string | null;
-	/** Synap retired the version installed here (D8: no wait). */
+	/** Synap retired the version installed here: no wait. */
 	installedRetired: boolean;
 	/**
 	 * The last read or install refused (`reasonCode` is the pod's machine reason,
@@ -13147,19 +13160,18 @@ export interface RendererBundleUpdateState {
 		message: string;
 		reasonCode: string;
 	} | null;
-	/** The update waits for the owner (see RENDERER_BUNDLE_HOLD_REASONS). */
+	/** A hold on one version (see RENDERER_BUNDLE_HOLD_REASONS). */
 	hold: {
 		at: string;
 		detail: string;
 		reason: RendererBundleHoldReason;
 		version: string;
 	} | null;
-	/** The owner stopped updates ("Stop updates"); null = updates on. */
-	stoppedAt: string | null;
-	/**
-	 * When the waiting update applies on its own; null when it will not by
-	 * itself (automatic updates off, held, stopped, nothing waiting).
-	 */
+	/** The owner paused this bundle's updates; null = updates on. */
+	pausedAt: string | null;
+	/** Why the newest version waits; null when nothing waits. */
+	waitReason: RendererBundleWaitReason | null;
+	/** When it applies on its own (`waitReason: "soak"` only). */
 	applyAfter: string | null;
 }
 declare const SHIP_STAGES: readonly [
@@ -50929,11 +50941,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: PackageUpdateList;
 		}>;
-		stopUpdates: import("@trpc/server").TRPCMutationProcedure<{
+		pauseUpdates: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
-				kind: "renderer-bundle";
+				paused: boolean;
 				slug: string;
-				stopped: boolean;
 			};
 			meta: object;
 			output: RendererBundleUpdateState | null;
