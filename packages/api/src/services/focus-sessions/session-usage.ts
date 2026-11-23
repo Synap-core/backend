@@ -63,6 +63,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import { notExists } from "drizzle-orm";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { REFUSED_OUTCOME } from "../../lib/run-event-kinds.js";
 import {
   capabilityRunEventWhere,
@@ -467,7 +468,7 @@ async function resolvePlaybook(
     .where(
       and(
         eq(playbooks.id, playbookId),
-        userVisibleWhere(playbooks.workspaceId, userId)
+        scopedDb(AccessContext.operator({ userId })).predicate(playbooks)
       )
     )
     .limit(1);

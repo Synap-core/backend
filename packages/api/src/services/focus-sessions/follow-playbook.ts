@@ -91,7 +91,7 @@ import {
 } from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   createLinks,
   resolveGrantedCapabilities,
@@ -336,7 +336,7 @@ export async function followPlaybook(
     .where(
       and(
         eq(playbooks.id, followPlaybookId),
-        userVisibleWhere(playbooks.workspaceId, userId)
+        scopedDb(AccessContext.operator({ userId })).predicate(playbooks)
       )
     )
     .limit(1);

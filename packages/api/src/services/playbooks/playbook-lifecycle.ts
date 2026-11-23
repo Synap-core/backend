@@ -97,7 +97,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   playbookAtVersion,
   recordPlaybookVersion,
@@ -364,7 +364,7 @@ async function visibleObjectName(
     .select({ name: playbooks.name })
     .from(playbooks)
     .where(
-      and(eq(playbooks.id, id), userVisibleWhere(playbooks.workspaceId, userId))
+      and(eq(playbooks.id, id), scopedDb(AccessContext.operator({ userId })).predicate(playbooks))
     )
     .limit(1);
   return playbook?.name ?? null;

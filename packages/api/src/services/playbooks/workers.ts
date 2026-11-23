@@ -59,7 +59,6 @@ import {
   projectTracks,
   focusSessions,
   countWorkerPendingApprovalsBulk,
-  userVisibleWhere,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
@@ -200,7 +199,7 @@ async function visiblePlaybooks(input: {
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.operator({ userId: input.userId })).predicate(playbooks),
         ...(input.playbookId ? [eq(playbooks.id, input.playbookId)] : []),
         ...(input.playbookIds
           ? [inArray(playbooks.id, [...input.playbookIds])]

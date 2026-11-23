@@ -81,6 +81,7 @@ import {
   seedHostRules,
 } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import {
   NEXT_RUNG_BATCH_MAX,
   fileNextRung,
@@ -1036,7 +1037,7 @@ export const governanceRulesRouter = router({
         db.query.playbooks.findFirst({
           where: and(
             eq(playbooks.id, input.subjectId),
-            userVisibleWhere(playbooks.workspaceId, ctx.userId)
+            scopedDb(AccessContext.operator({ userId: ctx.userId })).predicate(playbooks)
           ),
           columns: {
             id: true,

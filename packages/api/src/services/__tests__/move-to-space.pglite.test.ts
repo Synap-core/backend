@@ -2,15 +2,18 @@
  * The move and share doors (`services/move-to-space.ts`) on PGlite, through
  * the real floor (`assertWorkspaceWrite`) and the real readers of "usable
  * here": the run door's refusal (`playbookRunRefusal`) and the skill floor
- * (`visibleSkillsWhere`). Only the governance gate is a seam.
+ * (`visibleSkillsWhere`), and the access registry's playbook rule. The
+ * governance gate is a seam, except in the agent case, which runs the real one.
  *
  *   - a playbook moves with the automations linked to it at its home; one
  *     linked from elsewhere stays; its grant to the new home is dropped;
  *   - a person moves or shares only into a space they write, and an agent
  *     only through its person's membership: refused before anything is filed;
- *   - an agent's move is a proposal on the destination; nothing moves;
+ *   - an agent's move is a proposal on the destination (the real gate);
+ *     nothing moves;
  *   - a name the destination already has is a conflict, nothing moves;
- *   - a share makes a playbook runnable and a skill visible in that space;
+ *   - a share makes a playbook runnable and a skill visible in that space,
+ *     and readable by a member of only that space, who still cannot edit it;
  *     revoking it takes that back.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -22,6 +25,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   checkPermission: vi.fn(),
+  realGate: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -35,12 +39,25 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db, getDb: async () => db };
 });
 
-vi.mock("../../utils/permission-check.js", () => ({
-  checkPermissionOrPropose: (...a: unknown[]) => h.checkPermission(...a),
-}));
+vi.mock("../../utils/permission-check.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../utils/permission-check.js")>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: (
+      ...a: Parameters<typeof actual.checkPermissionOrPropose>
+    ) =>
+      h.realGate
+        ? actual.checkPermissionOrPropose(...a)
+        : h.checkPermission(...a),
+  };
+});
 
-import { and, db } from "@synap/database";
-import { skills } from "@synap/database/schema";
+import { and, db, eq } from "@synap/database";
+import { playbooks, skills } from "@synap/database/schema";
+import type { Context } from "../../context.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import { playbooksRouter } from "../../routers/playbooks.js";
 import {
   allSchemaTables,
   pgliteSchemaDdl,
@@ -52,6 +69,8 @@ import { visibleSkillsWhere } from "../skills/visibility.js";
 const PERSON = randomUUID();
 const AGENT = randomUUID();
 const OUTSIDER = randomUUID();
+/** A member of the target space only. */
+const READER = randomUUID();
 let A = "";
 let B = "";
 let C = "";
@@ -145,7 +164,7 @@ const runRefusal = async (id: string, workspaceId: string) => {
 beforeEach(async () => {
   await h.client!.exec(`drop schema public cascade; create schema public;`);
   await h.client!.exec(pgliteSchemaDdl(allSchemaTables()));
-  for (const id of [PERSON, OUTSIDER]) {
+  for (const id of [PERSON, OUTSIDER, READER]) {
     await q(`insert into users (id, email, user_type) values ($1,$2,'human')`, [
       id,
       `${id}@x.test`,
@@ -156,10 +175,18 @@ beforeEach(async () => {
     [AGENT, PERSON]
   );
   A = await space("Ecosystem", [PERSON]);
-  B = await space("Reprise", [PERSON]);
+  B = await space("Reprise", [PERSON, READER]);
   C = await space("Theirs", [OUTSIDER]);
   h.checkPermission.mockReset().mockResolvedValue({ granted: true });
+  h.realGate = false;
 });
+
+/** The playbook as `userId` reads it through the access registry, or undefined. */
+const readAs = (userId: string, id: string) =>
+  scopedDb(AccessContext.operator({ userId })).findFirst<{ id: string }>(
+    playbooks,
+    { where: eq(playbooks.id, id) }
+  );
 
 describe("moveToSpace — a playbook carries its automations", () => {
   it("moves the playbook and its automations at its home; a pod-wide one linked to it stays", async () => {
@@ -227,13 +254,9 @@ describe("moveToSpace — a playbook carries its automations", () => {
     expect(h.checkPermission).not.toHaveBeenCalled();
   });
 
-  it("an agent's move into its person's space is a request on that space; nothing moves", async () => {
+  it("an agent's move into its person's space is a request on that space (the real gate); nothing moves", async () => {
     const pb = await playbook("Dossier de reprise", A);
-    h.checkPermission.mockResolvedValue({
-      granted: false,
-      proposalId: "p-1",
-      reviewUrl: "https://pod.test/open/p-1",
-    });
+    h.realGate = true;
     const out = await moveToSpace({
       userId: PERSON,
       agentUserId: AGENT,
@@ -241,14 +264,16 @@ describe("moveToSpace — a playbook carries its automations", () => {
       objectId: pb,
       workspaceId: B,
     });
-    expect(out).toEqual({
-      status: "proposed",
-      proposalId: "p-1",
-      reviewUrl: "https://pod.test/open/p-1",
-    });
-    expect(h.checkPermission).toHaveBeenCalledWith(
-      expect.objectContaining({ agentUserId: AGENT, workspaceId: B })
-    );
+    expect(out).toMatchObject({ status: "proposed" });
+    const proposalId = (out as { proposalId: string }).proposalId;
+    const [row] = (
+      await q<{ target_type: string; workspace_id: string; data: unknown }>(
+        `select target_type, workspace_id, data from proposals where id = $1`,
+        [proposalId]
+      )
+    ).rows;
+    expect(row).toMatchObject({ target_type: "workspace", workspace_id: B });
+    expect(JSON.stringify(row!.data)).toContain('"operation":"move_in"');
     expect(await homeOf("playbooks", pb)).toBe(A);
   });
 
@@ -296,6 +321,38 @@ describe("shareWithSpace — usable there, home unchanged", () => {
     expect(await runRefusal(pb, B)).toMatch(/lives in space/);
   });
 
+  it("a member of only the target space reads and runs a shared playbook, never edits it; revoking removes it", async () => {
+    const pb = await playbook("Valider une source", A);
+    expect(await readAs(READER, pb)).toBeUndefined();
+
+    await shareWithSpace({
+      userId: PERSON,
+      objectType: "playbook",
+      objectId: pb,
+      workspaceId: B,
+    });
+    expect(await readAs(READER, pb)).toMatchObject({ id: pb });
+    expect(await runRefusal(pb, B)).toBeNull();
+    const asReader = playbooksRouter.createCaller({
+      db,
+      authenticated: true,
+      userId: READER,
+      workspaceId: B,
+    } as unknown as Context);
+    await expect(
+      asReader.update({ id: pb, description: "edited from Reprise" })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    await shareWithSpace({
+      userId: PERSON,
+      objectType: "playbook",
+      objectId: pb,
+      workspaceId: B,
+      revoke: true,
+    });
+    expect(await readAs(READER, pb)).toBeUndefined();
+  });
+
   it("a person cannot share into a space they are not a member of", async () => {
     const pb = await playbook("Valider une source", A);
     await expect(
@@ -311,20 +368,21 @@ describe("shareWithSpace — usable there, home unchanged", () => {
     expect(await grants(pb)).toEqual([]);
   });
 
-  it("a shared skill is one of the space's skills", async () => {
+  it("a shared skill is one of the space's skills, for a member of only that space too", async () => {
     const skill = randomUUID();
     await q(
       `insert into skills (id, user_id, workspace_id, scope, name, slug, kind) values ($1,$2,$3,'workspace','Cession checklist','cession-checklist','instruction')`,
       [skill, PERSON, A]
     );
-    const inB = async () =>
+    const inB = async (userId: string) =>
       (
         await db
           .select({ id: skills.id })
           .from(skills)
-          .where(and(visibleSkillsWhere(PERSON, B)))
+          .where(and(visibleSkillsWhere(userId, B)))
       ).map((r) => r.id);
-    expect(await inB()).toEqual([]);
+    expect(await inB(PERSON)).toEqual([]);
+    expect(await inB(READER)).toEqual([]);
 
     await shareWithSpace({
       userId: PERSON,
@@ -332,6 +390,16 @@ describe("shareWithSpace — usable there, home unchanged", () => {
       objectId: skill,
       workspaceId: B,
     });
-    expect(await inB()).toEqual([skill]);
+    expect(await inB(PERSON)).toEqual([skill]);
+    expect(await inB(READER)).toEqual([skill]);
+
+    await shareWithSpace({
+      userId: PERSON,
+      objectType: "skill",
+      objectId: skill,
+      workspaceId: B,
+      revoke: true,
+    });
+    expect(await inB(READER)).toEqual([]);
   });
 });

@@ -7,13 +7,17 @@
  * at run.
  *
  * `workspaceId` null means "outside any space": only pod-wide objects qualify.
+ * A share also makes the object READABLE by the members of the space it is
+ * shared with ({@link sharedReadableWhere}); editing stays with its home's
+ * writers.
  * Kinds read their grants through the kind floor (`kindVisibleWhere`) and the
  * facet floor (`grantedRoleIdsForSpaces`).
  */
 import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import type { db as Db } from "../client-pg.js";
+import { db, type db as Db } from "../client-pg.js";
 import { spaceAccess, type SpaceAccessObjectType } from "../schema/profiles.js";
+import { workspaceLensWhere, type WorkspaceLens } from "./user-visible-where.js";
 
 /** A shareable object's type in `space_access` and its id column. */
 export interface SharedAs {
@@ -71,6 +75,30 @@ export async function isUsableInSpace(
       )
     );
   return grant !== undefined;
+}
+
+/**
+ * Rows shared (`space_access`) with a space `userId` can see, narrowed by
+ * `lens` the way the home is: what a share adds to an object's readers. The
+ * access registry ORs it into the home rule of a shareable table.
+ */
+export function sharedReadableWhere(
+  shared: SharedAs,
+  userId: string,
+  lens?: WorkspaceLens
+): SQL {
+  return inArray(
+    shared.id,
+    db
+      .select({ id: spaceAccess.objectId })
+      .from(spaceAccess)
+      .where(
+        and(
+          eq(spaceAccess.objectType, shared.type),
+          workspaceLensWhere(spaceAccess.workspaceId, userId, lens)
+        )
+      )
+  );
 }
 
 /** `rows` with the spaces each is shared with (`sharedWith`), in one read. */
