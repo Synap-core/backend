@@ -147,8 +147,7 @@ function AgentsInner() {
             className="flex min-h-10 items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2 text-[12.5px] text-foreground ring-1 ring-inset ring-status-stale/30 transition-colors hover:bg-status-stale/15"
           >
             <span>
-              {waiting} {waiting === 1 ? "agent is" : "agents are"} waiting for
-              your approval
+              {t("waiting", { n: waiting })}
             </span>
             <span className="inline-flex shrink-0 items-center gap-1 font-medium">
               Review
@@ -159,14 +158,14 @@ function AgentsInner() {
 
         {wakes.status === "failed" && (
           <ResourceRowError
-            message="Couldn't load whether these agents can be woken."
+            message={t("wakesFailed")}
             onRetry={() => void rosterRead.refetch()}
           />
         )}
 
         <SectionCard
-          title="Connected agents"
-          hint="Agents people brought to this pod"
+          title={t("connected.title")}
+          hint={t("connected.hint")}
           actions={
             connected.length > 0 ? (
               <span className="text-[11px] tabular text-foreground/65">
@@ -179,7 +178,7 @@ function AgentsInner() {
             <ResourceRowSkeleton count={3} />
           ) : list.isError ? (
             <ResourceRowError
-              message="Couldn't load agents."
+              message={t("connected.failed")}
               onRetry={() => void list.refetch()}
             />
           ) : connected.length === 0 ? (
@@ -203,8 +202,8 @@ function AgentsInner() {
 
         {podOwn.length > 0 && (
           <SectionCard
-            title="The pod's own agents"
-            hint="The twin, capture agents and Intelligence personas"
+            title={t("own.title")}
+            hint={t("own.hint")}
           >
             <AgentRows views={podOwn} wakes={wakes} onSelect={openAgent} />
           </SectionCard>

@@ -41,6 +41,7 @@ import { formatRelative } from "../../../lib/format";
 import { filterBySearch } from "../components/list-search";
 import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
 import { useT } from "../../../lib/i18n/locale-provider";
+import { automationsT } from "./_lib/copy";
 import { en, fr } from "../components/copy";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
@@ -121,6 +122,7 @@ function RulesInner() {
   const processFilter: ProcessFilter | null =
     searchParams.get("process") === "outside" ? "outside" : null;
   const t = useT(CATALOGS);
+  const ta = automationsT();
   const search = useDebouncedQuery();
   const utils = trpc.useUtils();
 
@@ -338,14 +340,14 @@ function RulesInner() {
       <PageHeader
         title={TITLE}
         description={DESCRIPTION}
-        actions={<ExitLink exit={appExit} label="Create in app" />}
+        actions={<ExitLink exit={appExit} label={ta("exit.create")} />}
       />
 
       <FilterRow
         filters={
           <>
             <FilterChip
-              label="Show"
+              label={ta("filter.show")}
               allLabel={null}
               param="filter"
               defaultValue="active"
@@ -402,7 +404,7 @@ function RulesInner() {
             variant="flat"
             radius="md"
           >
-            Review never-ran automations
+            {ta("callout.review")}
           </Button>
         </div>
       )}
@@ -427,7 +429,7 @@ function RulesInner() {
           <ResourceRowSkeleton count={4} />
         ) : rules.isError ? (
           <ResourceRowError
-            message="Couldn't load automations."
+            message={ta("loadFailed")}
             onRetry={() => void rules.refetch()}
           />
         ) : outsideFailed ? (
@@ -529,7 +531,7 @@ function RulesInner() {
                   radius="md"
                   onPress={() => setExpanded(true)}
                 >
-                  Show {visible.length - shown.length} more
+                  {ta("showMore", { n: visible.length - shown.length })}
                 </Button>
               </div>
             )}
@@ -538,8 +540,7 @@ function RulesInner() {
         {podRules.isError && !loading && (
           <div className="flex flex-wrap items-center gap-2 px-1 pt-3">
             <p className="text-[12px] text-foreground/65">
-              The pod’s own automations couldn’t be loaded, so they are missing
-              from this list.
+              {ta("podRulesFailed")}
             </p>
             <Button
               size="sm"
@@ -547,19 +548,18 @@ function RulesInner() {
               radius="md"
               onPress={() => void podRules.refetch()}
             >
-              Try again
+              {ta("tryAgain")}
             </Button>
           </div>
         )}
         {groups.isError && !loading && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health couldn’t be loaded, so “Failing” may be missing
-            automations.
+            {ta("healthFailed")}
           </p>
         )}
         {groupDrain.capped && (
           <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health covers the 2,000 most recently run automations.
+            {ta("healthCapped")}
           </p>
         )}
       </SectionCard>
@@ -580,29 +580,15 @@ function RulesInner() {
         }
         consequence={
           pending?.kind === "run" ? (
-            <>
-              It runs its whole flow once, as if its trigger had happened —
-              including anything it sends or changes. If the pod needs someone
-              to approve it, it is proposed instead and waits in Review.
-            </>
+<>{ta("confirm.run.body")}</>
           ) : pending?.pod && pending.kind === "turn_on" ? (
-            <>
-              From now on the pod applies it, for everyone in this pod, each
-              time its trigger happens. You can pause it here at any time.
-            </>
+<>{ta("confirm.podTurnOn.body")}</>
           ) : pending?.pod && podById.get(pending.id) ? (
             <>{reactionPauseConsequence(podById.get(pending.id)!)}</>
           ) : pending?.kind === "turn_on" ? (
-            <>
-              From now on it runs on its own each time its trigger happens,
-              including anything it sends or changes. You can pause it here at
-              any time.
-            </>
+<>{ta("confirm.turnOn.body")}</>
           ) : (
-            <>
-              It won’t start new runs until someone turns it back on. Nothing it
-              already did is undone.
-            </>
+<>{ta("confirm.pause.body")}</>
           )
         }
         confirmLabel={
@@ -672,11 +658,12 @@ function RuleActButton({
 
 /** A rule's pill, or a placeholder while its run health is read. */
 function RulePill({ pill }: { pill: RuleRowView["pill"] }) {
+  const t = automationsT();
   return pill ? (
     <StatusPill kind={pill.kind} label={pill.label} />
   ) : (
     <span
-      aria-label="Reading run health"
+      aria-label={t("reading")}
       className="inline-block h-4 w-16 rounded bg-foreground/[0.07] shimmer-pulse"
     />
   );

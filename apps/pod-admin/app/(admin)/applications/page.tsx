@@ -62,6 +62,7 @@ import {
 } from "./_lib/sign-in-requests";
 import { ViaChip } from "./_lib/via-chip";
 import { PodAppsCard } from "./_lib/pod-apps-card";
+import { applicationsT } from "./_lib/copy";
 
 const DESCRIPTION =
   "Everything that connects to your pod, and what it can reach.";
@@ -80,6 +81,7 @@ export default function ApplicationsPage() {
 }
 
 function ApplicationsInner() {
+  const t = applicationsT();
   const params = useSearchParams();
   const via: ViaFilter = parseVia(params.get("via")) ?? "all";
 
@@ -145,7 +147,7 @@ function ApplicationsInner() {
             className="min-h-9"
             startContent={<Plus className="h-3.5 w-3.5" />}
           >
-            Connect an app
+            {t("connect")}
           </Button>
         }
       />
@@ -153,8 +155,8 @@ function ApplicationsInner() {
       <FilterRow
         filters={
           <FilterChip
-            label="How it connects"
-            allLabel="All apps"
+            label={t("filter.label")}
+            allLabel={t("filter.all")}
             param="via"
             value={via === "all" ? null : via}
             allCount={loading ? null : rows.length}
@@ -175,8 +177,7 @@ function ApplicationsInner() {
           >
             <span className="min-w-0">
               <span className="font-medium">
-                {waiting.count} app request{waiting.count === 1 ? "" : "s"}{" "}
-                waiting
+                {t("waiting", { n: waiting.count })}
               </span>
               <span className="block text-foreground/65">{waiting.line}</span>
             </span>

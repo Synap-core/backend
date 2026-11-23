@@ -5,7 +5,11 @@
  * from `AGENT_WRITE_MODE_CHOICES` (@synap-core/types/agents), never from here.
  * DRAFT French ("vous"), awaiting the founder's review.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
 
 export const en = {
   "writes.title": "What agents on this computer may do",
@@ -48,6 +52,40 @@ export const en = {
   "rules.target.reversible": "Everything that can be undone",
   "rules.target.ownOrganise": "Tidying its own new work",
   "rules.target.everything": "Everything",
+  "list.key":
+    "Key",
+  "list.showThem":
+    "Show them",
+  "list.loadFailed":
+    "Couldn't load computers.",
+  "list.empty":
+    "A computer appears here the first time an agent connects from it. To add one, run this on that machine:",
+  "list.moreAgents":
+    "{n, plural, one {# more agent} other {# more agents}}",
+  "model.runsAgents":
+    "Runs {n, plural, one {# agent} other {# agents}}",
+  "model.roster":
+    "{agents, plural, one {# agent} other {# agents}} on {computers, plural, one {# computer} other {# computers}}",
+  "model.expired":
+    "{n, plural, one {One computer's key has expired} other {# computers' keys have expired}}",
+  "model.expiredReconnect":
+    "{n, plural, one {Its agents can't reach the pod until it has a fresh key. Run this on that computer:} other {Their agents can't reach the pod until each has a fresh key. Run this on each of those computers:}}",
+  "model.seedsRevoked":
+    "{n, plural, one {# approval it had inherited from its agent was taken back.} other {# approvals it had inherited from its agent were taken back.}}",
+  "obj.rename":
+    "Rename",
+  "obj.lifetime":
+    "Change key lifetime",
+  "obj.revokingWaiting":
+    "Revoking {name} is waiting for review. Nothing has been revoked yet.",
+  "obj.openReview":
+    "Open in Review",
+  "obj.belongsUnset":
+    "Not set yet. Choose one.",
+  "obj.agentsTitle":
+    "Agents on this computer",
+  "obj.showAllAgents":
+    "Show all {n} agents",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -91,4 +129,43 @@ export const fr: Catalog<typeof en> = {
   "rules.target.reversible": "Tout ce qui peut être annulé",
   "rules.target.ownOrganise": "Ranger son propre travail récent",
   "rules.target.everything": "Tout",
+  "list.key":
+    "Clé",
+  "list.showThem":
+    "Les afficher",
+  "list.loadFailed":
+    "Impossible de charger les ordinateurs.",
+  "list.empty":
+    "Un ordinateur apparaît ici dès qu’un agent s’y connecte pour la première fois. Pour en ajouter un, exécutez ceci sur cette machine :",
+  "list.moreAgents":
+    "{n, plural, one {# agent de plus} other {# agents de plus}}",
+  "model.runsAgents":
+    "Fait tourner {n, plural, one {# agent} other {# agents}}",
+  "model.roster":
+    "{agents, plural, one {# agent} other {# agents}} sur {computers, plural, one {# ordinateur} other {# ordinateurs}}",
+  "model.expired":
+    "{n, plural, one {La clé d’un ordinateur a expiré} other {Les clés de # ordinateurs ont expiré}}",
+  "model.expiredReconnect":
+    "{n, plural, one {Ses agents ne peuvent pas joindre le pod tant qu’il n’a pas une nouvelle clé. Exécutez ceci sur cet ordinateur :} other {Leurs agents ne peuvent pas joindre le pod tant que chacun n’a pas une nouvelle clé. Exécutez ceci sur chacun de ces ordinateurs :}}",
+  "model.seedsRevoked":
+    "{n, plural, one {# approbation héritée de son agent a été reprise.} other {# approbations héritées de son agent ont été reprises.}}",
+  "obj.rename":
+    "Renommer",
+  "obj.lifetime":
+    "Changer la durée de la clé",
+  "obj.revokingWaiting":
+    "La révocation de {name} attend une revue. Rien n’a encore été révoqué.",
+  "obj.openReview":
+    "Ouvrir dans Demandes",
+  "obj.belongsUnset":
+    "Pas encore défini. Choisissez-en un.",
+  "obj.agentsTitle":
+    "Agents sur cet ordinateur",
+  "obj.showAllAgents":
+    "Voir les {n} agents",
 };
+
+/** The words' translator, in the ambient catalog locale. */
+export function computersT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}
