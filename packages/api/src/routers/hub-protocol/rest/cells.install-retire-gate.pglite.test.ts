@@ -252,7 +252,14 @@ beforeAll(async () => {
   );
   await q(
     `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'agent', $3), ($4, $5, 'agent', $6)`,
-    [AGENT, "agent-cg@x.test", MEMBER, ADMIN_AGENT, "admin-agent-cg@x.test", ADMIN]
+    [
+      AGENT,
+      "agent-cg@x.test",
+      MEMBER,
+      ADMIN_AGENT,
+      "admin-agent-cg@x.test",
+      ADMIN,
+    ]
   );
   await q(
     `insert into workspaces (id, owner_id, name, system_slug) values ($1, $2, 'Pod admin', 'pod-admin'), ($3, $2, 'Space', null)`,
@@ -446,9 +453,7 @@ describe("POST /cells/install — an agent's install is a proposal", () => {
 
   it("a person: installed directly, no proposal", async () => {
     const before = (await proposalsFor("install")).length;
-    await q(
-      `delete from widget_definitions where type_key = 'cell:pkg:gauge'`
-    );
+    await q(`delete from widget_definitions where type_key = 'cell:pkg:gauge'`);
     const res = await call("POST", "/cells/install", {
       asUser: MEMBER,
       body,

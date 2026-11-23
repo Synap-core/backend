@@ -495,4 +495,3 @@ async function markApproved(
     where: eq(proposals.id, proposalId),
   });
 }
-

@@ -156,7 +156,11 @@ export async function installMarketplaceCell(input: {
     `${cpUrl}/api/marketplace/cells?q=${encodeURIComponent(cellKey)}`
   );
   if (!resp.ok) {
-    return { ok: false, status: 502, error: `CP responded with ${resp.status}` };
+    return {
+      ok: false,
+      status: 502,
+      error: `CP responded with ${resp.status}`,
+    };
   }
   const data = (await resp.json()) as { cells?: CellDef[] } | CellDef[];
   const list = Array.isArray(data)
