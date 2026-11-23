@@ -557,6 +557,18 @@ describe("kept versions (D7) and requirements", () => {
       reasonOf(await installRendererBundle(newer, opts("v-y")).catch((e) => e))
     ).toBe(RENDERER_BUNDLE_REQUIRES_UNMET);
 
+    // A newer frame contract, and a requirement this pod does not know yet.
+    for (const requires of [{ bridgeContract: 99 }, { podFeature: "x" }]) {
+      expect(
+        reasonOf(
+          await installRendererBundle(
+            { ...bundle(), requires },
+            opts("v-c")
+          ).catch((e) => e)
+        )
+      ).toBe(RENDERER_BUNDLE_REQUIRES_UNMET);
+    }
+
     // Ops this pod answers install as before.
     const met = { ...bundle(), requires: { bridgeOps: ["entities.get"] } };
     await expect(

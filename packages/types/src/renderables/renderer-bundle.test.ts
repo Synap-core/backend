@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   RENDERER_BUNDLE_MAX_MODULE_BYTES,
   rendererSetDigestText,
+  POD_BRIDGE_CONTRACT,
   unmetRendererBundleRequirements,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
@@ -191,6 +192,15 @@ describe("requires (plan ad703ccd §3b.5a)", () => {
     expect(paths({ ...bundle(), requires: { bridgeOps: [1] } })).toEqual([
       "requires.bridgeOps",
     ]);
+    expect(
+      paths({ ...bundle(), requires: { bridgeContract: 2, bridgeOps: [] } })
+    ).toEqual([]);
+    expect(paths({ ...bundle(), requires: { bridgeContract: "2" } })).toEqual([
+      "requires.bridgeContract",
+    ]);
+    expect(paths({ ...bundle(), requires: { bridgeContract: 0 } })).toEqual([
+      "requires.bridgeContract",
+    ]);
     // A requirement this pod does not know is "not yet", never invalid.
     expect(paths({ ...bundle(), requires: { podVersion: "1" } })).toEqual([]);
   });
@@ -212,6 +222,21 @@ describe("requires (plan ad703ccd §3b.5a)", () => {
     expect(unmet[0]).toContain("bundle API 2");
     expect(unmet[1]).toContain("pods.teleport");
     expect(unmet[1]).not.toContain("entities.get");
+    // The frame contract: at or below this pod's is met, above is held.
+    expect(
+      unmetRendererBundleRequirements({
+        ...bundle(),
+        requires: { bridgeContract: POD_BRIDGE_CONTRACT },
+      })
+    ).toEqual([]);
+    expect(
+      unmetRendererBundleRequirements({
+        ...bundle(),
+        requires: { bridgeContract: POD_BRIDGE_CONTRACT + 1 },
+      })
+    ).toEqual([
+      `It is built for frame contract ${POD_BRIDGE_CONTRACT + 1}; this pod answers contract ${POD_BRIDGE_CONTRACT}.`,
+    ]);
     // A requirement a newer contract added holds the bundle on this pod.
     expect(
       unmetRendererBundleRequirements({

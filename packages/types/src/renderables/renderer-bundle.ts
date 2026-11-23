@@ -19,6 +19,7 @@ import {
 } from "../cell-bridge/frame-size.js";
 import { isCellBridgeReadOp } from "../cell-bridge/read-ops.js";
 import { isCellBridgeWriteOp } from "../cell-bridge/write-ops.js";
+import * as cellBridge from "../cell-bridge/index.js";
 import { checkCellSource } from "./cell-source-checks.js";
 
 /** The bundle API this version of the contract reads. */
@@ -81,10 +82,14 @@ export interface RendererBundleDefaults {
  * know (a newer contract's) is unmet, never invalid: the bundle waits for the
  * pod to be updated instead of being refused.
  *
+ *   bridgeContract — the frame contract version it was built against
+ *               (`CELL_BRIDGE_CONTRACT_VERSION`): a param an op gained is not
+ *               a new op name, so the version says it;
  *   bridgeOps — the cell-bridge operations its cells call (read ops of
  *               `CELL_BRIDGE_READ_OPS`, write ops of `CELL_BRIDGE_WRITE_OPS`).
  */
 export interface RendererBundleRequires {
+  bridgeContract?: number;
   bridgeOps?: string[];
 }
 
@@ -113,7 +118,19 @@ export interface RendererBundleDefinition {
  * it can say why before `validateRendererBundleDefinition` refuses the shape.
  */
 /** The requirements this build of the contract can check. */
-const KNOWN_REQUIREMENTS: ReadonlySet<string> = new Set(["bridgeOps"]);
+const KNOWN_REQUIREMENTS: ReadonlySet<string> = new Set([
+  "bridgeContract",
+  "bridgeOps",
+]);
+
+/**
+ * The frame contract this pod answers. Read off the cell-bridge module so the
+ * number is the contract's own (`CELL_BRIDGE_CONTRACT_VERSION`); a build of
+ * the contract that predates the constant answers contract 1.
+ */
+export const POD_BRIDGE_CONTRACT: number =
+  (cellBridge as { CELL_BRIDGE_CONTRACT_VERSION?: number })
+    .CELL_BRIDGE_CONTRACT_VERSION ?? 1;
 
 export function unmetRendererBundleRequirements(definition: unknown): string[] {
   if (!isRecord(definition)) return [];
@@ -128,6 +145,14 @@ export function unmetRendererBundleRequirements(definition: unknown): string[] {
   }
   const requires = definition.requires;
   if (!isRecord(requires)) return unmet;
+  if (
+    typeof requires.bridgeContract === "number" &&
+    requires.bridgeContract > POD_BRIDGE_CONTRACT
+  ) {
+    unmet.push(
+      `It is built for frame contract ${requires.bridgeContract}; this pod answers contract ${POD_BRIDGE_CONTRACT}.`
+    );
+  }
   if (Array.isArray(requires.bridgeOps)) {
     const missing = requires.bridgeOps.filter(
       (op) => !isCellBridgeReadOp(op) && !isCellBridgeWriteOp(op)
@@ -333,6 +358,15 @@ export function validateRendererBundleDefinition(
         !isStringList(d.requires.bridgeOps)
       )
         add("requires.bridgeOps", "bridgeOps must be a list of op names.");
+      const contract = d.requires.bridgeContract;
+      if (
+        contract !== undefined &&
+        !(Number.isInteger(contract) && (contract as number) > 0)
+      )
+        add(
+          "requires.bridgeContract",
+          "bridgeContract must be a contract version (a whole number)."
+        );
     }
   }
 
