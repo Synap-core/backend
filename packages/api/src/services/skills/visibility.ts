@@ -31,7 +31,7 @@
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
  */
-import { and, eq, or, type SQL } from "@synap/database";
+import { and, eq, or, usableInSpaceWhere, type SQL } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
@@ -65,8 +65,9 @@ function ownUserSkillWhere(userId: string): SQL {
 }
 
 /**
- * Pod skills, the user's own, and workspace skills: of the selected workspace,
- * or of every space the user can see (`allSpaces`).
+ * Pod skills, the user's own, and workspace skills: usable in the selected
+ * workspace (homed there or shared with it), or of every space the user can
+ * see (`allSpaces`). A shared skill is read by its home's readers.
  */
 export function visibleSkillsWhere(
   userId: string,
@@ -77,7 +78,10 @@ export function visibleSkillsWhere(
     ? userVisibleWhere(skills.workspaceId, userId)
     : workspaceId
       ? and(
-          eq(skills.workspaceId, workspaceId),
+          usableInSpaceWhere(skills.workspaceId, workspaceId, {
+            type: "skill",
+            id: skills.id,
+          }),
           userVisibleWhere(skills.workspaceId, userId)
         )
       : undefined;

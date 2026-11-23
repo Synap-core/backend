@@ -26,9 +26,15 @@ const WS_A = "00000000-0000-4000-8000-00000000000a";
 const WS_B = "00000000-0000-4000-8000-00000000000b";
 const PB_ID = "00000000-0000-4000-8000-000000000091";
 
+/** The playbook, and no `space_access` grant (it is shared with no space). */
 function dbReturning(playbook: unknown) {
+  const noGrant: { from: () => unknown; where: () => Promise<never[]> } = {
+    from: () => noGrant,
+    where: async () => [],
+  };
   return {
     query: { playbooks: { findFirst: vi.fn().mockResolvedValue(playbook) } },
+    select: () => noGrant,
   };
 }
 

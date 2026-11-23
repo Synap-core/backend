@@ -12,7 +12,10 @@ import {
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
-const things = pgTable("things", { workspaceId: uuid("workspace_id") });
+const things = pgTable("things", {
+  id: uuid("id"),
+  workspaceId: uuid("workspace_id"),
+});
 const sqlOf = (space: string | null) =>
   new PgDialect().sqlToQuery(usableInSpaceWhere(things.workspaceId, space));
 
@@ -25,6 +28,30 @@ describe("usableInSpace", () => {
     ["homed, outside any space", A, null, false],
   ] as const)("%s", (_label, home, space, expected) => {
     expect(usableInSpace({ workspaceId: home }, space)).toBe(expected);
+  });
+
+  it.each([
+    ["shared with the space", [B], B, true],
+    ["shared with another space", [A], B, false],
+    ["shared, outside any space", [B], null, false],
+  ] as const)("homed elsewhere, %s", (_label, sharedWith, space, expected) => {
+    const home = "33333333-3333-4333-8333-333333333333";
+    expect(usableInSpace({ workspaceId: home, sharedWith }, space)).toBe(
+      expected
+    );
+  });
+
+  it("the SQL form with a shared object type also reads its grant to the space", () => {
+    const q = new PgDialect().sqlToQuery(
+      usableInSpaceWhere(things.workspaceId, B, {
+        type: "playbook",
+        id: things.id,
+      })
+    );
+    expect(q.sql).toContain(
+      'exists (select 1 from space_access sa where sa.object_type = $2 and sa.object_id = "things"."id" and sa.workspace_id = $3)'
+    );
+    expect(q.params).toEqual([B, "playbook", B]);
   });
 
   it("the SQL form admits pod-wide rows, and home rows only in a space", () => {

@@ -44,7 +44,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       with() {
         return this;
       },
-      select: () => chain([{ status: "pending" }]),
+      // A `space_access` grant read finds none: the playbook is not shared.
+      select: (cols?: Record<string, unknown>) =>
+        chain(cols && "objectId" in cols ? [] : [{ status: "pending" }]),
       update: () => {
         h.updates += 1;
         return chain([{ id: "claimed" }]);

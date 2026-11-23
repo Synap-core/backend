@@ -6,7 +6,9 @@
  *   rename             → `workspacesRouter.update`         (ADMIN floor)
  *   start page         → `workspacesRouter.setPrimarySurface` (ADMIN floor)
  *   move entities      → `entitiesRouter.moveToWorkspace`  (per-entity gate)
+ *   move playbooks     → `moveToSpace`                     (ADMIN floor, destination)
  *   grant kind access  → `profilesRouter.grantAccess`      (ADMIN floor)
+ *   share playbook/skill → `shareWithSpace`                (ADMIN floor, destination)
  *   file into project  → `projectsRouter.fileEntities`     (ACCESS: agent proposes;
  *                         un-file = link/delete, DESTRUCTIVE floor)
  *
@@ -27,6 +29,7 @@ import {
   eq,
   inArray,
   isNull,
+  playbooks,
   profiles,
   type WorkspacePrimarySurface,
 } from "@synap/database";
@@ -38,6 +41,7 @@ import { entitiesRouter } from "../routers/entities.js";
 import { entityWriteVisibleWhere } from "../routers/entities/helpers.js";
 import { profilesRouter } from "../routers/profiles.js";
 import { projectsRouter } from "../routers/projects.js";
+import { moveToSpace, shareWithSpace } from "./move-to-space.js";
 
 /** Who is acting — the fields every Hub / MCP door already has in hand. */
 export interface WorkspaceOpsActor {
@@ -158,6 +162,80 @@ export async function moveEntitiesDoor(
     entityIds: input.entityIds,
     workspaceId: input.workspaceId,
     ...(input.reason ? { reason: input.reason } : {}),
+  });
+}
+
+/**
+ * Move playbooks into a space, each with the automations that run it, through
+ * the one move door (`moveToSpace`, one gated move per playbook). A key bound
+ * to a space moves only its own playbooks, and only into it.
+ */
+export async function movePlaybooksDoor(
+  actor: WorkspaceOpsActor,
+  input: { playbookIds: string[]; workspaceId: string; reasoning?: string }
+) {
+  resolveConfinedWorkspace(
+    actor.keyType,
+    actor.keyWorkspaceId,
+    input.workspaceId
+  );
+  const results = [];
+  for (const playbookId of input.playbookIds) {
+    if (actor.keyWorkspaceId) {
+      const [row] = await db
+        .select({ workspaceId: playbooks.workspaceId })
+        .from(playbooks)
+        .where(eq(playbooks.id, playbookId))
+        .limit(1);
+      if (row && row.workspaceId !== actor.keyWorkspaceId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: `This key is confined to workspace ${actor.keyWorkspaceId}: every playbook it moves must be in it.`,
+        });
+      }
+    }
+    results.push(
+      await moveToSpace({
+        userId: actor.userId,
+        agentUserId: actor.agentUserId ?? null,
+        objectType: "playbook",
+        objectId: playbookId,
+        workspaceId: input.workspaceId,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      })
+    );
+  }
+  return { results };
+}
+
+/**
+ * Share a playbook or a skill with a space (or, with `revoke`, stop): it
+ * becomes usable there and keeps its home (`shareWithSpace`). Kinds share
+ * through {@link grantProfileAccessDoor}.
+ */
+export async function shareWithSpaceDoor(
+  actor: WorkspaceOpsActor,
+  input: {
+    objectType: "playbook" | "skill";
+    objectId: string;
+    targetWorkspaceId: string;
+    revoke?: boolean;
+    reasoning?: string;
+  }
+) {
+  resolveConfinedWorkspace(
+    actor.keyType,
+    actor.keyWorkspaceId,
+    input.targetWorkspaceId
+  );
+  return shareWithSpace({
+    userId: actor.userId,
+    agentUserId: actor.agentUserId ?? null,
+    objectType: input.objectType,
+    objectId: input.objectId,
+    workspaceId: input.targetWorkspaceId,
+    revoke: input.revoke === true,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
   });
 }
 

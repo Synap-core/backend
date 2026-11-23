@@ -50,6 +50,14 @@ const {
     mockWorkspacesFindFirst: workspacesFindFirst,
     mockGetDb: vi.fn(),
     mockDb: {
+      // `space_access`: the playbook is shared with no space.
+      select: () => {
+        const q: { from: () => unknown; where: () => Promise<never[]> } = {
+          from: () => q,
+          where: async () => [],
+        };
+        return q;
+      },
       query: {
         workspaceMembers: {
           findFirst: vi.fn().mockResolvedValue({ role: "editor" }),

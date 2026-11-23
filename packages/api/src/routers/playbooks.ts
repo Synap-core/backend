@@ -1933,10 +1933,10 @@ export const playbooksRouter = router({
             // Narrow-only: a specific workspace still includes pod-wide (NULL)
             // rows, mirroring `automations.listPage`.
             input?.workspaceId
-              ? or(
-                  isNull(playbooks.workspaceId),
-                  eq(playbooks.workspaceId, input.workspaceId)
-                )
+              ? usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+                  type: "playbook",
+                  id: playbooks.id,
+                })
               : undefined,
             input?.status !== undefined
               ? eq(playbooks.status, input.status)
@@ -3419,7 +3419,11 @@ export const playbooksRouter = router({
       // Usable here: refused at FILING by the run door's own rule
       // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
       // proposal is filed that could only fail once approved.
-      const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
+      const notRunnable = await playbookRunRefusal(
+        playbook,
+        runWorkspaceId,
+        database
+      );
       if (notRunnable) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

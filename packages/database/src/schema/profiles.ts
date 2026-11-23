@@ -264,13 +264,13 @@ export const insertProfileSchema = createInsertSchema(profiles);
 export const selectProfileSchema = createSelectSchema(profiles);
 
 /** The kinds of object a `space_access` row can share. */
-export const SPACE_ACCESS_OBJECT_TYPES = ["profile"] as const;
+export const SPACE_ACCESS_OBJECT_TYPES = ["profile", "playbook", "skill"] as const;
 export type SpaceAccessObjectType = (typeof SPACE_ACCESS_OBJECT_TYPES)[number];
 
 /**
  * space_access: an object homed in one space, granted to another. A kind with
- * `scope = shared` reaches its home and these spaces. Kinds only for now: the
- * share door for playbooks and skills adds its object types here. `object_id`
+ * `scope = shared` reaches its home and these spaces; a playbook or skill is
+ * usable in them (`usableInSpace`). `object_id`
  * has no foreign key: a delete trigger on each object table removes the rows
  * of a deleted object (0448).
  */

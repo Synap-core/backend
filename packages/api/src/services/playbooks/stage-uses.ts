@@ -33,6 +33,7 @@ import {
   playbooks,
   playbookVersions,
   usableInSpace,
+  withSpaceGrants,
 } from "@synap/database";
 import { loadPlaybookVersion } from "./playbook-versions.js";
 
@@ -210,7 +211,9 @@ export async function resolveStageUses<S extends StageWithUses>(input: {
     })
     .from(playbooks)
     .where(and(inArray(playbooks.id, ids), input.visibility?.()));
-  const byId = new Map(rows.map((r) => [r.id, r]));
+  const byId = new Map(
+    (await withSpaceGrants(db, "playbook", rows)).map((r) => [r.id, r])
+  );
 
   const out: S[] = [];
   for (const stage of stages) {
@@ -235,7 +238,7 @@ export async function resolveStageUses<S extends StageWithUses>(input: {
       refuse(
         input.workspaceId === null
           ? `${at} uses "${used.name}", which lives in one space; a pod-wide playbook runs in any space, so it can only use pod-wide playbooks.`
-          : `${at} uses "${used.name}", which lives in another space. A step can use a playbook of the same space, or a pod-wide one.`
+          : `${at} uses "${used.name}", which lives in another space. A step can use a playbook of the same space, one shared with it, or a pod-wide one.`
       );
     }
 

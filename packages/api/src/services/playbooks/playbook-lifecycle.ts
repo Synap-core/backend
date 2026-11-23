@@ -50,7 +50,7 @@
 
 import {
   getDb,
-  usableInSpace,
+  isUsableInSpace,
   notUsableInSpaceReason,
   eq,
   and,
@@ -595,7 +595,7 @@ export async function resolveRunnablePlaybook(input: {
     );
   }
 
-  const refusal = playbookRunRefusal(playbook, input.workspaceId);
+  const refusal = await playbookRunRefusal(playbook, input.workspaceId, db);
   if (refusal) throw new Error(refusal);
 
   return playbook;
@@ -604,16 +604,18 @@ export async function resolveRunnablePlaybook(input: {
 /**
  * Why a run of `playbook` in `workspaceId` (`null` = no space) would be
  * refused at the run door, or `null` when it runs: the one usable-in-space
- * rule (`usableInSpace`: its home, or anywhere when pod-wide),
+ * rule (`usableInSpace`: its home, the spaces it is shared with, or anywhere
+ * when pod-wide),
  * then a retired playbook (archived or paused). Exported so a door that
  * already holds the row asks it BEFORE it files anything (`playbooks.run`
  * before its gate, the `playbook/run` approval before its dispatch claim).
  */
-export function playbookRunRefusal(
+export async function playbookRunRefusal(
   playbook: Pick<Playbook, "id" | "name" | "workspaceId" | "status">,
-  workspaceId: string | null
-): string | null {
-  if (!usableInSpace(playbook, workspaceId)) {
+  workspaceId: string | null,
+  db: Awaited<ReturnType<typeof getDb>>
+): Promise<string | null> {
+  if (!(await isUsableInSpace(db, "playbook", playbook, workspaceId))) {
     return notUsableInSpaceReason("Playbook", playbook, workspaceId);
   }
   if (playbook.status === "archived" || playbook.status === "paused") {

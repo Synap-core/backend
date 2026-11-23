@@ -806,6 +806,54 @@ export function registerWorkspaceExecutors(): void {
         };
       }
 
+      // A move into this space, or a share with it (`services/move-to-space.ts`):
+      // replayed as the APPROVER through the same floor, never the gate.
+      if (inner.operation === "move_in" || inner.operation === "share") {
+        const objectId = inner.objectId;
+        const objectType = inner.objectType;
+        if (typeof objectId !== "string" || typeof objectType !== "string") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "This request does not name the object to place.",
+          });
+        }
+        const { applyMoveToSpace, applyShareWithSpace } =
+          await import("../../../services/move-to-space.js");
+        if (inner.operation === "move_in") {
+          await applyMoveToSpace({
+            userId,
+            objectType: objectType as "playbook" | "automation" | "view",
+            objectId,
+            workspaceId: targetWorkspaceId,
+          });
+        } else {
+          await applyShareWithSpace({
+            userId,
+            objectType: objectType as "playbook" | "skill",
+            objectId,
+            workspaceId: targetWorkspaceId,
+            revoke: inner.revoke === true,
+          });
+        }
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+        return { success: true, primaryId: objectId };
+      }
+
       // `workspaces.setIntelligenceService` — pin a space to a service, or
       // `null` = remove the pin (follow the pod default). REPLAYED through the
       // procedure as the APPROVER, so the owner/admin floor, the active-service

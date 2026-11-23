@@ -31,6 +31,7 @@ import {
   playbooks,
   usableInSpace,
   usableInSpaceWhere,
+  withSpaceGrants,
   type SQL,
 } from "@synap/database";
 import type { PlaybookActivator } from "@synap/playbooks";
@@ -65,7 +66,7 @@ async function linkablePlaybooks(
   workspaceId: string | null,
   only?: SQL
 ): Promise<PlaybookNode[]> {
-  return db
+  const rows = await db
     .select({
       id: playbooks.id,
       name: playbooks.name,
@@ -77,11 +78,12 @@ async function linkablePlaybooks(
     .where(
       and(
         ne(playbooks.status, "archived"),
-        usableInSpaceWhere(playbooks.workspaceId, workspaceId),
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, { type: "playbook", id: playbooks.id }),
         only
       )
     )
     .orderBy(asc(playbooks.createdAt), asc(playbooks.id));
+  return withSpaceGrants(db, "playbook", rows);
 }
 
 /**

@@ -17,8 +17,6 @@ import {
   recordSessionSpawn,
   drizzleSql,
   and,
-  or,
-  isNull,
   ne,
   playbooks,
   projectTracks,
@@ -30,6 +28,7 @@ import {
   insertFocusSessionRow,
   workspacePlacementPatchFromProposal,
   getRequestGrant,
+  usableInSpaceWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -1545,12 +1544,7 @@ async function visibleTemplateCriteria(
     .where(
       and(
         eq(playbooks.id, templateId as string),
-        workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, workspaceId)
-            )
-          : isNull(playbooks.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, { type: "playbook", id: playbooks.id })
       )
     )
     .limit(1);
