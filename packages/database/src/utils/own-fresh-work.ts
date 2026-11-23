@@ -114,7 +114,7 @@ async function planMadeSubjectIds(
     );
     const named = (data?.materialized?.[list] ?? []) as unknown[];
     for (const id of named) {
-      if (typeof id === "string" && wanted.has(id) && !edited.has(id)) {
+      if (typeof id === "string" && wanted.has(id)) {
         made.add(id);
       }
     }
