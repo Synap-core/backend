@@ -486,6 +486,14 @@ const DRAWERS = {
         ...field("description", text(p.description)),
       ])
     ),
+  tracks: ({ graph }) =>
+    (graph.tracks ?? []).map((t) =>
+      record("tracks", t.ref, "track", t.name, [
+        ...field("direction", text(t.direction)),
+        ...field("serves", text(t.parentRef ?? t.parentGoalId)),
+        ...field("waitsOn", tags(t.blockedBy)),
+      ])
+    ),
   sessions: ({ graph }) =>
     (graph.sessions ?? []).map((s) =>
       record("sessions", s.ref, "focus_session", s.displayTitle, [

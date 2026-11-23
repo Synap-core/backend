@@ -4441,13 +4441,13 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n" +
-          "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
-          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\n" +
-          "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
-          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
+          "• + `projects[]` / `tracks[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is owed, not a percentage.\n" +
+          "Call it AFTER learning something durable, unasked. Placement uses EXISTING spaces only. `global:true` stores a pod-wide runbook (text only).\n" +
+          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` (exact spellings). A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
           "\n" +
-          'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
+          'EXAMPLES: synap_load_skill("system/synap/multi-entity-capture").\n' +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug (default slugs resolve pod-wide, no `workspaceId` needed).\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
           type: "object",
@@ -4583,7 +4583,7 @@ export const tools = {
             projects: {
               type: "array",
               description:
-                "PLAN: projects to create. `ref` is how sessions/entities point at it (`projectRef`). An agent-proposed project needs ≥5 evidence entities (`evidenceRefs` of entities in this call + `evidenceEntityIds` you can see); below that the step is still filed, MARKED for the reviewer, and never auto-applies.",
+                "PLAN: projects (`projectRef`). An agent's project needs ≥5 evidence entities (`evidenceRefs` in this call + `evidenceEntityIds` you can see); below that it is filed MARKED for the reviewer and never auto-applies.",
               items: {
                 type: "object",
                 properties: {
@@ -4673,6 +4673,19 @@ export const tools = {
                   },
                 },
                 required: ["ref", "title", "content"],
+              },
+            },
+            tracks: {
+              type: "array",
+              description:
+                "PLAN: goals (start_track fields; `projectRef`, `parentRef`, `blockedByRefs`, `…Id` twins). A session joins one by `trackRef`/`trackId`.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  name: { type: "string" },
+                },
+                required: ["ref", "name"],
               },
             },
             links: {
@@ -4841,7 +4854,7 @@ export const tools = {
             global: {
               type: "boolean",
               description:
-                "GLOBAL lane: store as a pod-wide procedural runbook (knowledge_keys) instead of structuring into entities. Use for cross-project how-to / decisions / operational docs ('how we deploy', 'auth works like…'). Mirrors the CLI's `capture --global`.",
+                "GLOBAL lane: a pod-wide runbook (knowledge_keys), not entities: cross-project how-to, decisions, operational docs ('how we deploy'). Mirrors `capture --global`.",
             },
             key: {
               type: "string",

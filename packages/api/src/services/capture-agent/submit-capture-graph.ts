@@ -78,6 +78,7 @@ import {
   type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
+  type CompositeCreateTrackOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
@@ -254,6 +255,8 @@ export interface CapturePlanInput {
   /** `evidence` is server-stamped; a caller-supplied one is ignored. */
   projects?: Array<Omit<CompositeCreateProjectOp, "op" | "evidence">>;
   links?: Array<Omit<CompositeCreateLinkOp, "op">>;
+  /** Goals (`create_track`), started before the sessions that join them. */
+  tracks?: Array<Omit<CompositeCreateTrackOp, "op">>;
   /**
    * ── Rule Loop config steps (NS1) ─────────────────────────────────────
    * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
@@ -711,11 +714,24 @@ export async function buildCaptureGraphOperations(
         evidence?: unknown;
       }) => ({ op: "create_project" as const, ...p })
     ),
+    // Goals: the call-level project pin files a goal that names none.
+    ...(plan?.tracks ?? []).map((t) => ({
+      op: "create_track" as const,
+      ...t,
+      ...(!t.projectRef && !t.projectId && resolvedProjectId
+        ? { projectId: resolvedProjectId }
+        : {}),
+    })),
     ...(plan?.sessions ?? []).map((sess) => ({
       op: "create_session" as const,
       ...sess,
-      // The call-level project pin files a session that names none.
-      ...(!sess.projectRef && !sess.projectId && resolvedProjectId
+      // The call-level project pin files a session that names none — unless
+      // it joins a goal, which implies its project.
+      ...(!sess.projectRef &&
+      !sess.projectId &&
+      !sess.trackRef &&
+      !sess.trackId &&
+      resolvedProjectId
         ? { projectId: resolvedProjectId }
         : {}),
     })),
