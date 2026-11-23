@@ -4758,13 +4758,13 @@ export const tools = {
             kinds: {
               type: "array",
               description:
-                "DOMAIN: {ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
+                "{ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
               items: { type: "object" },
             },
             lifecycles: {
               type: "array",
               description:
-                "DOMAIN: {ref, kindRef | profileId, options: [{key, category}], initialStatus?}.",
+                "{ref, kindRef | profileId, options: [{key, category}], initialStatus?}.",
               items: { type: "object" },
             },
             playbooks: {
@@ -4787,13 +4787,13 @@ export const tools = {
             renderers: {
               type: "array",
               description:
-                'A cell on a page {ref, target: {kind, ref | id}, slot: "detail", scope, cellRef | cellKey}.',
+                '{ref, target: {kind, ref | id}, slot: "detail", scope, cellRef | cellKey}.',
               items: { type: "object" },
             },
             updates: {
               type: "array",
               description:
-                'Changes to rows a bundle made: {op: "update_<kind>", ref, <kind>Id, patch}.',
+                'Rewrites {op: "update_<kind>", ref, <kind>Id, patch}.',
               items: { type: "object" },
             },
             summary: {
