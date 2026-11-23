@@ -187,9 +187,10 @@ beforeAll(async () => {
     `insert into workspaces (id, name, owner_id, workspace_type, settings, archived_at) values ($1, 'Sales', $2, 'team', '{}'::jsonb, null), ($3, 'Their space', $4, 'team', '{}'::jsonb, null)`,
     [WS, HUMAN, THEIRS, STRANGER]
   );
+  // An agent holds no seat: it acts through its person's membership.
   await q(
-    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner'), ($4, $2, $5, 'editor')`,
-    [randomUUID(), WS, HUMAN, randomUUID(), AGENT]
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), WS, HUMAN]
   );
 }, 120_000);
 
