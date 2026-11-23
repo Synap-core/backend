@@ -26,9 +26,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");
+  // With the schema: the kind door reads profiles relationally.
+  const schema = await import("@synap/database/schema");
   const client = new PGlite();
   h.client = client as unknown as typeof h.client;
-  const pg = drizzle(client);
+  const pg = drizzle(client, { schema });
   return { ...actual, db: pg, getDb: async () => pg };
 });
 
