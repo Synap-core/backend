@@ -126,10 +126,9 @@ const runRefusal = async (id: string, workspaceId: string) => {
       name: string;
       workspace_id: string;
       status: "draft" | "active" | "paused" | "archived";
-    }>(
-      `select id, name, workspace_id, status from playbooks where id = $1`,
-      [id]
-    )
+    }>(`select id, name, workspace_id, status from playbooks where id = $1`, [
+      id,
+    ])
   ).rows;
   return playbookRunRefusal(
     {
