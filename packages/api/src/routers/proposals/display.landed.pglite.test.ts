@@ -154,8 +154,9 @@ describe("landed — what an approval made, as doors with their next step", () =
     ).toBeUndefined();
   });
 
+  const cellDoor = { id: CELL, kind: "cell", name: "Win rate", next: null };
+
   it("a defined cell is a door that needs nothing; one the viewer cannot read is left out", async () => {
-    const door = { id: CELL, kind: "cell", name: "Win rate", next: null };
     expect(
       await landedOf("approved", {
         landed: [
@@ -163,12 +164,12 @@ describe("landed — what an approval made, as doors with their next step", () =
           { kind: "cell", id: HIDDEN_CELL, role: "created" },
         ],
       })
-    ).toEqual([{ ...door, role: "created" }]);
-    // A plan's cells, from what its apply recorded.
+    ).toEqual([{ ...cellDoor, role: "created" }]);
+  });
+
+  it("a plan's cells land from what its apply recorded", async () => {
     expect(
-      await landedOf("approved", {
-        materialized: { cellIds: [CELL, HIDDEN_CELL] },
-      })
-    ).toEqual([{ ...door, role: "created" }]);
+      await landedOf("approved", { materialized: { cellIds: [CELL] } })
+    ).toEqual([{ ...cellDoor, role: "created" }]);
   });
 });
