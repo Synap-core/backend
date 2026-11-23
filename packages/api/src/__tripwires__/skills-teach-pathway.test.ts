@@ -39,7 +39,8 @@
  *     `baseline-drift.test.ts` and `skills-baseline-parity.test.ts`);
  *   - a paraphrase: it pins anchor tokens, so a reword goes red by design;
  *   - the plan door itself: it checks the example's criteria, dates and arm
- *     options with the pod's validators, not the whole capture preflight
+ *     options against the pod's validators and the decision's own option
+ *     list, not the whole capture preflight
  *     (refs, cycles, ownership need a database). `synap_capture` with
  *     `validate: true` on a pod is the full check;
  *   - correctness of the prose beyond those checks. It pins that the section
@@ -122,6 +123,7 @@ interface ExamplePlan {
     type: string;
     fromRef?: string;
     toEntityRef?: string;
+    option?: string;
   }>;
 }
 
@@ -228,6 +230,9 @@ describe("tripwire: the pathway is reachable from from-intent", () => {
 
   it("§2d teaches decision arms and who may set the default", () => {
     const s = sectionFrom(read("from-intent.md"), HEADING);
+    // In the plan: the link names the option (#1270); on an existing step:
+    // the `<id>:<option>` form of the session doors (#1280).
+    expect(s).toMatch(/"toEntityRef": "<decision>", "option": "/);
     expect(s).toContain("`<decision id>:<option>`");
     expect(s).toMatch(/skipped/);
     expect(s).toMatch(/no arm matches/i);
@@ -349,7 +354,7 @@ describe("tripwire: the pathway is reachable from from-intent", () => {
     expect(goalCriteria.success, goalCriteria.error?.message).toBe(true);
     // A measured milestone.
     expect(ex!.json).toContain(`"capability": "${MEASURE_CHECK_VERB}"`);
-    // A proposed decision whose options are the arms the prose names, each
+    // A proposed decision whose options are the arms the links name, each
     // arm step waiting on it through a cross-kind link.
     const decision = (plan.entities ?? []).find(
       (e) => e.profileSlug === "decision"
@@ -366,10 +371,11 @@ describe("tripwire: the pathway is reachable from from-intent", () => {
       (l) => l.type === "blocked_by" && l.toEntityRef === decision!.ref
     );
     expect(armLinks.length).toBe(options.length);
-    for (const option of options) {
-      expect(ex!.prose, `the prose names the arm :${option}`).toContain(
-        `:${option}`
-      );
+    // Each arm names a DIFFERENT option the decision lists (the door refuses
+    // one it does not list), and each arm step is a step of the plan.
+    expect(armLinks.map((l) => l.option).sort()).toEqual([...options].sort());
+    for (const link of armLinks) {
+      expect(steps.map((x) => x.ref)).toContain(link.fromRef);
     }
   });
 
