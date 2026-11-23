@@ -87,12 +87,34 @@ describe("bundleFromStorybook", () => {
     expect(b.components[2]!.props).toBeUndefined();
 
     expect(b.pages).toEqual([
-      expect.objectContaining({ key: "page:pages-desktop-home--full", title: "Desktop/Home", surface: "desktop", components: [] }),
-      expect.objectContaining({ key: "page:pages-phone-settings--page", title: "Phone/settings", surface: "phone" }),
+      expect.objectContaining({
+        key: "page:pages-desktop-home",
+        title: "Desktop/Home",
+        surface: "desktop",
+        storyIds: ["pages-desktop-home--full"],
+        components: [],
+      }),
+      expect.objectContaining({ key: "page:pages-phone-settings", title: "Phone/settings", surface: "phone" }),
     ]);
     expect(b.flows).toEqual([]);
     expect(problems.map((p) => p.code)).toEqual(["manifest-component-error"]);
     // What it builds is a valid bundle by the one validator.
+    expect(parseStorybookBundle(b).ok).toBe(true);
+  });
+
+  it("builds one page per title, its stories in index order, whatever their order", () => {
+    const index = load("index.json");
+    const full = index.entries["pages-desktop-home--full"];
+    const entries: Record<string, unknown> = {};
+    // An "Empty" state listed BEFORE "Full": the page keeps its key.
+    entries["pages-desktop-home--empty"] = { ...full, id: "pages-desktop-home--empty", name: "Empty", exportName: "Empty" };
+    for (const [k, v] of Object.entries(index.entries)) entries[k] = v;
+    index.entries = entries;
+    const b = build(index, load("components.json")).value;
+    const home = b.pages.filter((p) => p.key === "page:pages-desktop-home");
+    expect(home).toHaveLength(1);
+    expect(home[0]!.storyIds).toEqual(["pages-desktop-home--empty", "pages-desktop-home--full"]);
+    expect(home[0]!.title).toBe("Desktop/Home");
     expect(parseStorybookBundle(b).ok).toBe(true);
   });
 

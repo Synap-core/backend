@@ -10,8 +10,9 @@
  *     `component:<componentPath>#<docgen exportName>` when the index names the
  *     component file and the manifest names its export; otherwise the record
  *     falls back to `title:<story title>` (a retitle then forks it).
- *   - pages: one per page story, key `page:<storyId>`, surface `phone` for a
- *     `pages-phone-…` story (or a `phone` tag), else `desktop`.
+ *   - pages: one per page title (its stories are its states), key
+ *     `page:<titleId>`, surface `phone` for a `pages-phone-…` story (or a
+ *     `phone` tag), else `desktop`.
  *   - flows, composition, families, verdicts, screenshots: not in either file.
  *     A builder that knows them (the devbox recipe) adds them to the bundle.
  *
@@ -26,6 +27,7 @@ import {
   componentKey,
   componentTitleKey,
   pageKey,
+  pageTitleIdOf,
   parseStorybookBundle,
   type StorybookBundle,
   type StorybookBundleComponent,
@@ -228,24 +230,34 @@ export function bundleFromStorybook(
     });
   }
 
-  const pages: StorybookBundlePage[] = pageStories.map((e) => {
-    const title = (e.title ?? e.id).replace(/^Pages\//, "");
-    const state = e.name && !["Page", "Full", "Default"].includes(e.name) ? ` · ${e.name}` : "";
-    const snippet = manifestById
-      .get(componentIdOfStory(e.id) ?? "")
-      ?.stories?.find((s) => s.id === e.id)?.snippet;
-    const phone = e.id.startsWith("pages-phone-") || (e.tags?.includes("phone") ?? false);
+  // One page per title id, in index order: its stories are its states.
+  const pageGroups = new Map<string, StoryIndexEntry[]>();
+  for (const e of pageStories) {
+    const titleId = pageTitleIdOf(e.id);
+    const list = pageGroups.get(titleId);
+    if (list) list.push(e);
+    else pageGroups.set(titleId, [e]);
+  }
+  const pages: StorybookBundlePage[] = [...pageGroups].map(([titleId, stories]) => {
+    const first = stories[0]!;
+    const title = (first.title ?? titleId).replace(/^Pages\//, "");
+    const manifest = manifestById.get(componentIdOfStory(first.id) ?? "");
+    const phone = stories.some(
+      (e) => e.id.startsWith("pages-phone-") || (e.tags?.includes("phone") ?? false)
+    );
     return {
-      key: pageKey(e.id),
-      title: `${title}${state}`,
+      key: pageKey(titleId),
+      title,
       surface: phone ? "phone" : "desktop",
-      storyId: e.id,
-      sourceHash: contentHash({
-        importPath: e.importPath,
-        componentPath: e.componentPath,
-        export: e.exportName ?? e.name,
-        snippet,
-      }),
+      storyIds: stories.map((e) => e.id),
+      sourceHash: contentHash(
+        stories.map((e) => ({
+          importPath: e.importPath,
+          componentPath: e.componentPath,
+          export: e.exportName ?? e.name,
+          snippet: manifest?.stories?.find((s) => s.id === e.id)?.snippet,
+        }))
+      ),
       components: [],
     };
   });

@@ -59,11 +59,11 @@ function goodBundle(): Record<string, unknown> {
     ],
     pages: [
       {
-        key: pageKey("pages-desktop-home--full"),
+        key: pageKey("pages-desktop-home"),
         title: "Home",
         surface: "desktop",
         template: "lens",
-        storyId: "pages-desktop-home--full",
+        storyIds: ["pages-desktop-home--full", "pages-desktop-home--empty"],
         screenshot: "5c2a1e4b-8d7f-4a6b-9c3e-2f1d0a9b8c7d",
         sourceHash: "p1",
         components: [ROW],
@@ -75,7 +75,7 @@ function goodBundle(): Record<string, unknown> {
         title: "Morning check",
         need: "See what needs me",
         surface: "both",
-        steps: [{ page: pageKey("pages-desktop-home--full"), label: "Open Home" }],
+        steps: [{ page: pageKey("pages-desktop-home"), label: "Open Home" }],
       },
     ],
   };
@@ -126,6 +126,35 @@ describe("parseStorybookBundle", () => {
     const c = goodBundle();
     components(c)[2]!.key = "Legacy/Thing";
     expect(parseStorybookBundle(c).problems.map((p) => p.code)).toEqual(["key-mismatch"]);
+  });
+
+  it("keys a page by the title id its stories share, so reordering them changes nothing", () => {
+    const b = goodBundle();
+    pages(b)[0]!.storyIds = ["pages-desktop-home--empty", "pages-desktop-home--full"];
+    const read = parseStorybookBundle(b);
+    expect(read.problems).toEqual([]);
+    expect(read.ok && read.value.pages[0]!.key).toBe("page:pages-desktop-home");
+  });
+
+  it("refuses a page with no story, or a story of another title", () => {
+    const b = goodBundle();
+    pages(b)[0]!.storyIds = [];
+    expect(parseStorybookBundle(b).problems.map((p) => [p.code, p.path])).toEqual([
+      ["bad-value", "pages[0].storyIds"],
+      // The refused page leaves the flow's step pointing at nothing.
+      ["dangling-ref", "flows[0].steps[0].page"],
+    ]);
+    const c = goodBundle();
+    pages(c)[0]!.storyIds = ["pages-desktop-home--full", "pages-desktop-inbox--full"];
+    expect(parseStorybookBundle(c).problems.map((p) => [p.code, p.path])).toEqual([
+      ["bad-value", "pages[0].storyIds[1]"],
+    ]);
+    const d = goodBundle();
+    // Keyed by a story id (the old rule): refused.
+    pages(d)[0]!.key = "page:pages-desktop-home--full";
+    expect(parseStorybookBundle(d).problems.map((p) => [p.code, p.path])).toEqual(
+      expect.arrayContaining([["key-mismatch", "pages[0].key"]])
+    );
   });
 
   it("holds the identity rule for pages and flows", () => {

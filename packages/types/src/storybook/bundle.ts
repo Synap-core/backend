@@ -11,7 +11,10 @@
  *   - component  `component:<sourcePath>#<exportName>`; `title:<story title>`
  *                only when the source file or the export is not known (a
  *                retitled story then forks the record, so prefer the first).
- *   - page       `page:<storyId>`
+ *   - page       `page:<titleId>`: the Storybook title id its stories share
+ *                (the part of a story id before `--`), so reordering or
+ *                renaming one of its stories never forks the page; a flow
+ *                step names the page by the same key
  *   - flow       `flow:<flowId>`
  *
  * `sourceHash` is opaque: the sync only compares it with the hash a person
@@ -29,6 +32,7 @@ import {
   type StorybookProblem,
   type StorybookRead,
 } from "./problems.js";
+import { componentIdOfStory } from "./sources.js";
 
 export const STORYBOOK_BUNDLE_VERSION = "synap.storybook-bundle/v1";
 
@@ -130,7 +134,7 @@ export interface StorybookBundleComponent {
 }
 
 export interface StorybookBundlePage {
-  /** `page:<storyId>`. */
+  /** `page:<titleId>`, the title id every one of its stories shares. */
   key: string;
   title: string;
   surface: PageSurface;
@@ -139,7 +143,8 @@ export interface StorybookBundlePage {
   /** One of page-grammar's layouts. */
   layout?: string;
   route?: string;
-  storyId: string;
+  /** Its stories (at least one), the first the one it is shown by. */
+  storyIds: string[];
   /** A pod file id (a `file` entity). */
   screenshot?: string;
   sourceHash: string;
@@ -180,7 +185,11 @@ export const componentKey = (sourcePath: string, exportName: string): string =>
   `component:${sourcePath}#${exportName}`;
 /** The fallback external id of a component known only by its story title. */
 export const componentTitleKey = (title: string): string => `title:${title}`;
-export const pageKey = (storyId: string): string => `page:${storyId}`;
+/** A page's key, from the title id its stories share (`pages-desktop-home`). */
+export const pageKey = (titleId: string): string => `page:${titleId}`;
+/** The title id of a story id (`pages-desktop-home--full` → `pages-desktop-home`). */
+export const pageTitleIdOf = (storyId: string): string =>
+  componentIdOfStory(storyId) ?? storyId;
 export const flowKey = (flowId: string): string => `flow:${flowId}`;
 
 const UUID_RE =
@@ -427,17 +436,26 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const key = c.str(raw, "key", at);
     const title = c.str(raw, "title", at);
     const surface = c.oneOf(raw, "surface", at, PAGE_SURFACES, true);
-    const storyId = c.str(raw, "storyId", at);
+    const storyIds = c.keys(raw, "storyIds", at);
     const sourceHash = c.str(raw, "sourceHash", at);
     const template = c.optStr(raw, "template", at);
     const layout = c.optStr(raw, "layout", at);
     const route = c.optStr(raw, "route", at);
     const screenshot = c.screenshot(raw, at);
     const pageComponents = c.keys(raw, "components", at);
-    if (key !== undefined && storyId !== undefined && key !== pageKey(storyId)) {
-      c.error("key-mismatch", `${at}.key`, `a page key must be ${JSON.stringify(pageKey(storyId))}`);
+    if (raw.storyIds !== undefined && Array.isArray(raw.storyIds) && storyIds.length === 0) {
+      c.error("bad-value", `${at}.storyIds`, "a page has at least one story");
     }
-    if (key && title && surface && storyId && sourceHash) {
+    const titleId = storyIds[0] !== undefined ? pageTitleIdOf(storyIds[0]) : undefined;
+    if (key !== undefined && titleId !== undefined && key !== pageKey(titleId)) {
+      c.error("key-mismatch", `${at}.key`, `a page key must be ${JSON.stringify(pageKey(titleId))}`);
+    }
+    storyIds.forEach((id, j) => {
+      if (j > 0 && titleId !== undefined && pageTitleIdOf(id) !== titleId) {
+        c.error("bad-value", `${at}.storyIds[${j}]`, `every story of a page shares its title id ${JSON.stringify(titleId)}`);
+      }
+    });
+    if (key && title && surface && titleId && sourceHash) {
       pages.push({
         key,
         title,
@@ -445,7 +463,7 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
         ...(template ? { template } : {}),
         ...(layout ? { layout } : {}),
         ...(route ? { route } : {}),
-        storyId,
+        storyIds,
         ...(screenshot ? { screenshot } : {}),
         sourceHash,
         components: pageComponents,
