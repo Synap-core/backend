@@ -93,7 +93,6 @@ import {
   type OpenBlocker,
   type WorkLinkType,
 } from "@synap-core/types/connections";
-import { decisionRecordView } from "@synap-core/types/ask";
 import { readCriteria } from "@synap/playbooks";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
@@ -109,15 +108,13 @@ import {
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
+import { ARM_NOT_A_DECISION, armOptionProblem } from "./arm-option.js";
 import {
   closedNotDoneRecordedSql,
   notTakenRecordedSql,
 } from "../focus-sessions/session-closed-as.js";
 
 const logger = createLogger({ module: "dependency-links" });
-
-/** The kind an arm waits on (the system `decision` profile). */
-const DECISION_KIND = "decision";
 
 /** The event subject for a `links` row (`@synap-core/types/events` SUBJECT_TYPES). */
 export const LINK_EVENT_SUBJECT = "link" as const;
@@ -299,9 +296,8 @@ async function restampArmOption(
 
 /**
  * An arm (P5) is a `blocked_by` edge to a DECISION naming one of the options
- * it lists (`decisionOptions`, keyed `value ?? label`). Anything else is
- * refused in words: an arm nobody can choose would never be taken, and the
- * step would be skipped for a typo.
+ * it lists: the rule is {@link armOptionProblem} (`arm-option.ts`), read here
+ * on the stored row. Anything else is refused in words.
  */
 async function validateArmEdge(
   edge: DependencyEdgeInput,
@@ -313,27 +309,15 @@ async function validateArmEdge(
     error,
   });
   if (edge.linkType !== DEPENDENCY_LINK_TYPE || edge.toType !== "entity") {
-    return refuse("Only a wait on a decision can name an option (an arm).");
+    return refuse(ARM_NOT_A_DECISION);
   }
   const [row] = await db
     .select({ type: entities.type, properties: entities.properties })
     .from(entities)
     .where(eq(entities.id, edge.toId))
     .limit(1);
-  if (!row || row.type !== DECISION_KIND) {
-    return refuse("Only a wait on a decision can name an option (an arm).");
-  }
-  const keys = decisionRecordView(row.properties).options.map((o) => o.key);
-  if (keys.length === 0) {
-    return refuse(
-      "This decision lists no options (decisionOptions): give it its options, then name one."
-    );
-  }
-  return keys.includes(option)
-    ? null
-    : refuse(
-        `"${option}" is not an option of this decision. Its options: ${keys.map((k) => `"${k}"`).join(", ")}.`
-      );
+  const problem = armOptionProblem(row, option);
+  return problem ? refuse(problem) : null;
 }
 
 /**

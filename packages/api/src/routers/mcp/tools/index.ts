@@ -35,7 +35,10 @@ import {
   SESSION_POST_REF_KINDS,
   SESSION_POST_REFS_MAX,
 } from "@synap-core/types/agents";
-import { PROPOSAL_REJECTION_REASONS } from "@synap-core/types/proposals";
+import {
+  PROPOSAL_REJECTION_REASONS,
+  type CompositeCreateLinkOp,
+} from "@synap-core/types/proposals";
 import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
@@ -4436,26 +4439,26 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n" +
+          "THE write door for everything worth remembering, in whatever shape you have it: never classify first, send as much structure as you have.\n" +
           "• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n" +
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n" +
           "• + `projects[]` / `tracks[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
-          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is owed, not a percentage.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs`: the definition of done, so the person sees what is owed.\n" +
           "Call it AFTER learning something durable, unasked. Placement uses EXISTING spaces only. `global:true` stores a pod-wide runbook (text only).\n" +
-          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` (exact spellings). A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
+          "DEDUP signals: the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername`, spelled exactly; a URL under another key (e.g. `url`) duplicates the entity.\n" +
           "\n" +
           'EXAMPLES: synap_load_skill("system/synap/multi-entity-capture").\n' +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug (default slugs resolve pod-wide, no `workspaceId` needed).\n' +
-          'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug.\n' +
+          'A REJECTION is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
           type: "object",
           properties: {
             text: {
               type: "string",
               description:
-                "Free-form text to parse (max 8000 chars), when you have prose. Sent with `entities[]`, the structured payload is used and this text is kept as provenance.",
+                "Free-form prose to parse (max 8000 chars). With `entities[]`, kept as provenance.",
             },
             entities: {
               type: "array",
@@ -4703,9 +4706,28 @@ export const tools = {
                   fromSessionId: { type: "string" },
                   toRef: { type: "string" },
                   toSessionId: { type: "string" },
-                },
+                  toEntityRef: { type: "string" },
+                  toEntityId: { type: "string" },
+                  toTrackRef: { type: "string" },
+                  toTrackId: { type: "string" },
+                  option: { type: "string" },
+                  // Every field of a plan link and only those: a field the op
+                  // gains and this item lacks stops the build (the targets
+                  // and the arm `option` once rode the description alone).
+                } satisfies Record<
+                  Exclude<keyof CompositeCreateLinkOp, "op">,
+                  unknown
+                >,
                 required: ["type"],
               },
+            },
+            // RE-PLAN ops on existing steps, forwarded with the other plan
+            // arrays (`CAPTURE_PLAN_KEYS`); the steps live in from-intent §2d.
+            edits: {
+              type: "array",
+              description:
+                "RE-PLAN existing steps: `update_session` / `remove_link` ops (from-intent §2d).",
+              items: { type: "object" },
             },
             skills: {
               type: "array",
