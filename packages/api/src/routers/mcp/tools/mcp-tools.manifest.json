@@ -2033,7 +2033,7 @@
           },
           "startNow": {
             "type": "boolean",
-            "description": "With a blocker or a later plannedFor it is born planned (forming: owes nothing, starts itself when they clear); true starts it now."
+            "description": "With a blocker or later plannedFor it is born planned (owes nothing, starts when they clear); true starts it now."
           },
           "plannedFor": {
             "type": ["string", "null"],
@@ -2077,7 +2077,7 @@
         "properties": {
           "sessionId": {
             "type": "string",
-            "description": "The session UUID. Left out: the ONE open session this conversation started (the reply says `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes it."
+            "description": "Optional. Left out: the ONE open session this conversation started (the reply says `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes it."
           },
           "title": {
             "type": ["string", "null"],
@@ -5340,7 +5340,7 @@
                 },
                 "startNow": {
                   "type": "boolean",
-                  "description": "With a blocker or a later plannedFor it is born planned (forming: owes nothing, starts itself when they clear); true starts it now."
+                  "description": "With a blocker or later plannedFor it is born planned (owes nothing, starts when they clear); true starts it now."
                 },
                 "plannedFor": {
                   "type": ["string", "null"],
