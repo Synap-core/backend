@@ -41,10 +41,10 @@
  *     wildcard. Read from the LIVE registry after `registerApproveExecutors()`,
  *     so an executor a sibling branch adds is counted without touching this file.
  *  2. The MATERIALIZER's per-subject ACTION GUARDS, not its `case` labels. This
- *     distinction is the point: `case "workspace"` exists, but
- *     `materializeWorkspace` early-returns unless `action === "join"`, and
- *     `materializeRelation` unless `action === "create"`. Counting case labels
- *     would score three severed doors as wired.
+ *     distinction is the point: `case "link"` exists, but `materializeLink`
+ *     early-returns unless `action === "create"`, as does
+ *     `materializeRelation`. Counting case labels would score severed doors
+ *     as wired.
  *  3. The INLINE branches in `apply-approval.ts` that run BEFORE the registry
  *     (`proposal.proposalType === "governance.tighten_lane"`, ...). All five
  *     `governance.*` doors are handled there and nowhere else — a scanner that
@@ -358,15 +358,15 @@ describe("governed write doors have an approval half", () => {
     expect(proposalExecRegistry.resolveExact("entity/create")).toBeDefined();
   });
 
-  it("SELF-GUARD: the materializer parser reads NEGATIVE guards (workspace/join)", () => {
-    // `materializeWorkspace` guards with `if (action !== "join") return;`.
+  it("SELF-GUARD: the materializer parser reads NEGATIVE guards (link/create)", () => {
+    // `materializeLink` guards with `if (action !== "create") { warn; return; }`.
     // If this fails, the parser is only seeing `action === ` and is silently
     // scoring severed doors as wired.
-    expect(MATERIALIZED.has("workspace/join")).toBe(true);
+    expect(MATERIALIZED.has("link/create")).toBe(true);
     expect(
-      MATERIALIZED.has("workspace/update"),
-      'The materializer parser thinks `case "workspace"` covers every action. ' +
-        "It does not — `materializeWorkspace` handles ONLY 'join'. Reading case " +
+      MATERIALIZED.has("link/update"),
+      'The materializer parser thinks `case "link"` covers every action. ' +
+        "It does not — `materializeLink` handles ONLY 'create'. Reading case " +
         "labels instead of action guards is the exact mistake this guard exists for."
     ).toBe(false);
   });

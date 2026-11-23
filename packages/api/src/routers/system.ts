@@ -1756,7 +1756,7 @@ export const systemRouter = router({
 
         // 2. Agent users this human spawned. Identified via
         //    users.agent_metadata->>'createdByUserId' = <target.id>. Their
-        //    own memberships and api keys are cleaned up alongside.
+        //    api keys are cleaned up alongside.
         const childAgents = await tx
           .select({ id: users.id })
           .from(users)
@@ -1768,9 +1768,6 @@ export const systemRouter = router({
           );
         const childAgentIds = childAgents.map((row) => row.id);
         if (childAgentIds.length > 0) {
-          await tx
-            .delete(workspaceMembers)
-            .where(inArray(workspaceMembers.userId, childAgentIds));
           // Through the revoke door first: a hard DELETE alone leaves the
           // keys validating from the verification cache for up to 30s.
           await revokeApiKeys(tx, {

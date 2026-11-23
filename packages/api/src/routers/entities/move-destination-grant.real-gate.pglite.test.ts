@@ -2,12 +2,11 @@
  * Moving records INTO a space is a write in that space (triage finding TF-1,
  * found on ticket 703be2c7): the key's grant, its workspace binding and the
  * acting agent's own access are checked on the DESTINATION, the same way the
- * gate checks them on the source.
+ * gate checks them on the source. An agent is never a member: it moves where
+ * its person may write, within its key's grant.
  *
- * Before the fix the destination was checked only against the PERSON's
- * membership (`assertWorkspaceWrite`), and the gate ran on the source space
- * alone. So a key pinned to space A moved a record from A into any space its
- * person can write, and an agent that is no member of B moved records into B.
+ * Before the fix the gate ran on the source space alone, so a key pinned to
+ * space A moved a record from A into any space its person can write.
  *
  * Driven through the one door MCP `synap_move_entities` and Hub
  * `POST /entities/move` share (`moveEntitiesDoor`) → tRPC
@@ -23,10 +22,10 @@
  *    person is an owner of both): refused, nothing moved, nothing filed;
  *  - a key BOUND to A cannot move into C, nor move a record of C into A:
  *    refused, nothing moved (a bound key moves nothing between spaces);
- *  - an agent member of A only cannot move a record into B: the move is a
- *    pending proposal for the person (who can write in B), nothing moved;
- *  - CONTROL: an agent member of A and C, under a grant naming A and C,
- *    moves it (the checks admit what they should);
+ *  - an agent whose person is not a member of E cannot move a record into E,
+ *    though the agent holds a seat there: refused, nothing moved;
+ *  - CONTROL: an agent under a grant naming A and C moves it (the checks
+ *    admit what they should);
  *  - CONTROL: the person, signed in (no key, no agent), still moves it.
  *
  * Cannot see: production Postgres; the approval replay of the proposed move
@@ -123,10 +122,11 @@ import {
 
 const OWNER = randomUUID();
 const AGENT = randomUUID();
-/** Spaces: the person owns all three; the agent is an editor of A and C only. */
+/** Spaces: the person owns A, B, C; E is not theirs, though the agent has a seat. */
 const A = randomUUID();
 const B = randomUUID();
 const C = randomUUID();
+const E = randomUUID();
 let NOTE_PROFILE = "";
 
 const BASIC =
@@ -235,12 +235,14 @@ beforeAll(async () => {
       [randomUUID(), ws, OWNER]
     );
   }
-  for (const ws of [A, C]) {
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor')`,
-      [randomUUID(), ws, AGENT]
-    );
-  }
+  await q(
+    `insert into workspaces (id, name, owner_id, settings) values ($1, 'Epsilon', $2, '{}'::jsonb)`,
+    [E, randomUUID()]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), E, AGENT]
+  );
   const { rows } = await q<{ id: string }>(
     `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
      values (gen_random_uuid(),'note','Note','kind','system','pod',null,true,'{}'::jsonb) returning id`
@@ -300,30 +302,22 @@ describe("moving records into a space checks the destination (TF-1)", () => {
     expect(await spaceOf(id)).toBe(C);
   });
 
-  it("SECURITY: an agent that is no member of B cannot move a record into B: the person reviews the move", async () => {
+  it("SECURITY: an agent whose person is not a member of E cannot move a record into E, its own seat there counts for nothing", async () => {
     const id = await seedNote("Agent note");
 
-    const out = await runWithActingAgent(AGENT, () =>
+    const move = runWithActingAgent(AGENT, () =>
       moveEntitiesDoor(keyActor({ agentUserId: AGENT }), {
         entityIds: [id],
-        workspaceId: B,
+        workspaceId: E,
       })
     );
 
-    expect(out.moved).toEqual([]);
-    expect(out.errors).toEqual([]);
-    expect(out.proposed).toEqual([
-      { entityId: id, proposalId: expect.any(String) },
-    ]);
+    await expect(move).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await spaceOf(id)).toBe(A);
-    const filed = await proposalsOn(id);
-    expect(filed).toHaveLength(1);
-    expect(filed[0]).toMatchObject({ status: "pending", agent_user_id: AGENT });
-    // The approval replays the MOVE (executor `entity/update` reads it).
-    expect(JSON.stringify(filed[0]!.data)).toContain(`"toWorkspaceId":"${B}"`);
+    expect(await proposalsOn(id)).toEqual([]);
   });
 
-  it("CONTROL: an agent member of A and C, under a grant naming A and C, moves the record", async () => {
+  it("CONTROL: an agent under a grant naming A and C moves the record", async () => {
     const id = await seedNote("Granted both ways");
 
     const out = await runWithGrant(grantIn(A, C), () =>
@@ -356,98 +350,5 @@ describe("moving records into a space checks the destination (TF-1)", () => {
 
     expect(out).toEqual({ moved: [id], proposed: [], errors: [] });
     expect(await spaceOf(id)).toBe(B);
-  });
-});
-
-/**
- * Finding cf54ebb0: an agent that is no member of the SOURCE space moves a
- * record out of it. The source gate parks the move on a join (`workspace.join`
- * with the write kept as a deferred `entity/update` `{ id, toWorkspaceId }`).
- * Approving the join (the REAL `workspace/join` executor: membership, then the
- * replay as the agent through `replayDeferredWrites`) must MOVE the record.
- * Before the fix the replay ran the write as a field update: the agent became
- * a member and the record stayed where it was, reported "applied".
- */
-describe("a move parked on a join replays the MOVE once the join is approved (cf54ebb0)", () => {
-  it("SECURITY: the agent, no member of D, asks to move a record of D into C: a join is filed, nothing moves; approving it moves the record into C", async () => {
-    const D = randomUUID();
-    await q(
-      `insert into workspaces (id, name, owner_id, settings, archived_at) values ($1, 'Delta', $2, '{}'::jsonb, null)`,
-      [D, OWNER]
-    );
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
-      [randomUUID(), D, OWNER]
-    );
-    const id = await seedNote("A note of Delta", D);
-
-    const out = await runWithActingAgent(AGENT, () =>
-      moveEntitiesDoor(keyActor({ agentUserId: AGENT }), {
-        entityIds: [id],
-        workspaceId: C,
-      })
-    );
-    expect(out.moved).toEqual([]);
-    expect(out.errors).toEqual([]);
-    expect(out.proposed).toHaveLength(1);
-    expect(await spaceOf(id)).toBe(D);
-
-    const joins = (
-      await q<{ id: string; data: Record<string, unknown> }>(
-        `select id, data from proposals where target_type = 'workspace' and proposal_type = 'join' and workspace_id = $1 and status = 'pending'`,
-        [D]
-      )
-    ).rows;
-    expect(joins).toHaveLength(1);
-    const join = joins[0]!;
-    expect(out.proposed[0]!.proposalId).toBe(join.id);
-    const kept = join.data.deferredWrites as Array<{
-      ref: string;
-      data: Record<string, unknown>;
-    }>;
-    expect(kept).toHaveLength(1);
-    expect(kept[0]!.data).toMatchObject({ id, toWorkspaceId: C });
-
-    // The person approves the join through the real executor.
-    const { proposalExecRegistry } =
-      await import("../proposals/execution-registry.js");
-    const { registerWorkspaceExecutors } =
-      await import("../proposals/executors/workspace.js");
-    registerWorkspaceExecutors();
-    await proposalExecRegistry.resolveExact("workspace/join")!.execute({
-      proposal: {
-        id: join.id,
-        targetType: "workspace",
-        targetId: D,
-        proposalType: "join",
-        workspaceId: D,
-        sessionId: null,
-        projectId: null,
-        agentUserId: AGENT,
-        sourceMessageId: null,
-        data: join.data,
-      },
-      payload: null,
-      userId: OWNER,
-      input: { proposalId: join.id },
-      ctx: {} as never,
-      deps: {
-        emitProposalReviewed: () => undefined,
-        reportProposalOutcome: () => undefined,
-      } as never,
-    } as never);
-
-    // The agent is a member of D now, and the parked write MOVED the record.
-    expect(await spaceOf(id)).toBe(C);
-    const [after] = (
-      await q<{ status: string; data: Record<string, unknown> }>(
-        `select status, data from proposals where id = $1`,
-        [join.id]
-      )
-    ).rows;
-    expect(after!.status).toBe("approved");
-    expect(
-      (after!.data.deferredOutcomes as Record<string, unknown>)[kept[0]!.ref]
-    ).toMatchObject({ outcome: "applied", id });
   });
 });

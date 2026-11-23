@@ -61,7 +61,6 @@ import {
   playbooks,
   projects,
   projectTracks,
-  users,
   links,
   drizzleSql,
   classifyLifecycleMove,
@@ -99,7 +98,6 @@ import {
   isTrackVerdict,
   TRACK_LIFECYCLE,
   trackStatusCategory,
-  type TrackStatusIn,
   type TrackVerdict,
   deriveTrackStages,
   readTrackDirection,
@@ -214,12 +212,6 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import {
-  TRACK_SPACE_GRANT_KEY,
-  endTrackSpaceGrant,
-  resolveTrackGrantSpaces,
-  type TrackSpaceGrant,
-} from "./track-space-grant.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import {
   applyStageGate,
@@ -945,16 +937,13 @@ export interface StartTrackInput {
    */
   id?: string;
   /**
-   * ONLY the `track/create` approval replay passes it: the consent the person
-   * just gave (decision 2a). `agentUserId` is the proposing agent (the
-   * proposal's own column, never its payload); `listedWorkspaceIds` are the
-   * step spaces the proposal LISTED. The grant is the step spaces resolved
-   * now ∩ the listed ones — approval can never admit a space nobody read.
+   * ONLY the `track/create` approval replay passes it: the proposal and the
+   * agent that proposed it (the proposal's own column, never its payload),
+   * for the attribution of what the start writes.
    */
-  approvedSpaceGrant?: {
+  approval?: {
     proposalId: string;
     agentUserId: string | null;
-    listedWorkspaceIds: string[];
   };
 }
 
@@ -1103,26 +1092,6 @@ export async function startTrack(
   }
   const trackId = input.id ?? randomUUID();
 
-  // DECISION 2a / W5 — the spaces this track will work in: the project's
-  // linked spaces (+ a legacy method's step spaces). An agent's start names
-  // them in its proposal, so approving the start IS consenting to let that
-  // agent work there for this track — and nowhere else, and no longer.
-  const stepSpaces = await resolveTrackGrantSpaces(db, {
-    stages: playbook?.stages ?? [],
-    projectId: project.id,
-    userId: actor.userId,
-  });
-  const spaceGrantConsent =
-    actor.agentUserId && stepSpaces.length > 0
-      ? {
-          agentUserId: actor.agentUserId,
-          agentName: await agentDisplayName(db, actor.agentUserId),
-          spaces: stepSpaces.map(({ workspaceId, name }) => ({
-            workspaceId,
-            name,
-          })),
-        }
-      : null;
   // Refused BEFORE governance, so a malformed answer is told to its author
   // rather than filed for a human to approve.
   const trackParams =
@@ -1212,10 +1181,6 @@ export async function startTrack(
       ...(input.fromEntity ? { fromEntity: input.fromEntity } : {}),
       // Its parent goal and pillars — re-checked by the door at approval.
       ...pickGoalPlacementInput(placement),
-      // The consent the summary states ("…and let <agent> work in …").
-      ...(spaceGrantConsent
-        ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
-        : {}),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1259,7 +1224,6 @@ export async function startTrack(
         ? resolveTrackKpi(null, kpiInput, actor.agentUserId ?? actor.userId)
         : null,
       ...(goalPatch ? { goal: goalPatch } : {}),
-      ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
   );
@@ -1382,8 +1346,8 @@ async function completeTrackBirth(p: {
       },
       userId: actor.userId,
       attribution: {
-        agentUserId: input.approvedSpaceGrant?.agentUserId ?? actor.agentUserId,
-        proposalId: input.approvedSpaceGrant?.proposalId ?? null,
+        agentUserId: input.approval?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approval?.proposalId ?? null,
         sessionId: actor.sessionId ?? null,
       },
     });
@@ -1417,8 +1381,8 @@ async function completeTrackBirth(p: {
       input: p.placement,
       userId: actor.userId,
       attribution: {
-        agentUserId: input.approvedSpaceGrant?.agentUserId ?? actor.agentUserId,
-        proposalId: input.approvedSpaceGrant?.proposalId ?? null,
+        agentUserId: input.approval?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approval?.proposalId ?? null,
         sessionId: actor.sessionId ?? null,
       },
     });
@@ -1741,54 +1705,6 @@ async function loadTrackMethod(
     });
   }
   return playbook;
-}
-
-/** The agent's name for the consent sentence — never its id. */
-async function agentDisplayName(
-  db: Awaited<ReturnType<typeof getDb>>,
-  agentUserId: string
-): Promise<string> {
-  const [row] = await db
-    .select({ name: users.name })
-    .from(users)
-    .where(eq(users.id, agentUserId))
-    .limit(1);
-  return row?.name?.trim() || "the agent";
-}
-
-/**
- * The grant stamped on a NEW track (decision 2a; see `track-space-grant.ts`).
- * Approval replay ⇒ the proposing agent, resolved ∩ listed spaces. Direct
- * agent start ⇒ that agent. A person's own start ⇒ any agent acting for them
- * (`agentUserIds: null`). No space (no project link, no step space) ⇒
- * nothing stamped.
- */
-function trackSpaceGrantMetadata(
-  input: StartTrackInput,
-  stepSpaces: ReadonlyArray<{ workspaceId: string }>
-): { metadata?: Record<string, unknown> } {
-  const approved = input.approvedSpaceGrant;
-  const resolved = stepSpaces.map((s) => s.workspaceId);
-  const workspaceIds = approved
-    ? resolved.filter((w) => approved.listedWorkspaceIds.includes(w))
-    : resolved;
-  if (workspaceIds.length === 0) return {};
-  const agentUserIds = approved
-    ? approved.agentUserId
-      ? [approved.agentUserId]
-      : null
-    : input.actor.agentUserId
-      ? [input.actor.agentUserId]
-      : null;
-  const grant: TrackSpaceGrant = {
-    operatorUserId: input.actor.userId,
-    agentUserIds,
-    workspaceIds,
-    grantedBy: input.actor.userId,
-    grantedAt: new Date().toISOString(),
-    ...(approved ? { proposalId: approved.proposalId } : {}),
-  };
-  return { metadata: { [TRACK_SPACE_GRANT_KEY]: grant } };
 }
 
 // ── writes on an existing track ─────────────────────────────────────────────
@@ -2176,16 +2092,8 @@ export async function applyTrackStatus(
       hold: transition.hold,
       occurredAt: transition.occurredAt,
       appId: transition.appId,
-      // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
-      // so nothing revives it (a reopened goal is a NEW track with its own).
-      // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so
-      // resuming restores it.
       ...(terminal
         ? {
-            metadataPatch: endTrackSpaceGrant(
-              track.metadata,
-              status as TrackStatusIn<"done" | "lost">
-            ),
             // A drop with no verdict (a client shipped before verdicts)
             // stamps nothing: it reads like a track dropped before 0344.
             ...(verdict
@@ -2607,8 +2515,7 @@ export async function resolveTrackFiling(params: {
   // A closed or dropped goal takes no new work (both are final — reopen it as
   // a new version). A goal still being SHAPED (proposed · agreed · ready)
   // does: agreeing its criteria and clearing its prerequisites is work, and a
-  // session filed there is how it gets done. Its agent is not admitted to the
-  // project's spaces until it is active (`track-space-grant.ts`).
+  // session filed there is how it gets done.
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",

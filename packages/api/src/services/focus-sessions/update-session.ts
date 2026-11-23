@@ -2729,7 +2729,7 @@ export async function updateFocusSession(
   // A GRANTED filing beside other fields is applied NOW, on its own receipt,
   // and leaves the patch: the gate already minted that receipt as applied, so
   // the rest's own verdict (a criteria change that proposes, a session that
-  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // forces proposals, a cap, a denial) must not hold it back —
   // that left a receipt claiming a filing that was never written, with no
   // Undo (FB1020 w2 review M1). Its Undo restores the project and the goal
   // filing only. The own-organise class grants a PROJECT filing, or a GOAL
@@ -2920,11 +2920,9 @@ export async function updateFocusSession(
       ...(filing ? { filing } : {}),
       ...(subSessionsFiled?.length ? { subSessionsFiled } : {}),
       proposalId: perm.proposalId,
-      // The discriminator MUST cross this boundary: this door is join-gate
-      // reachable (the MCP handler threads `agentUserId`), and without it the
-      // caller cannot tell a session-update proposal from a workspace-JOIN
-      // gate filed instead of it. Its two siblings (create-session,
-      // complete-session) already forward it.
+      // The discriminator crosses this boundary, as its two siblings
+      // (create-session, complete-session) forward it: a held-writes pack is
+      // told apart from a session-update proposal.
       proposalType: perm.proposalType,
       summary: perm.summary,
       reviewPath: perm.reviewPath,

@@ -28,6 +28,7 @@ import {
   isNull,
   setChannelBranchPurpose,
   ChannelFirewallImmutableError,
+  getWorkspaceMembership,
 } from "@synap/database";
 import {
   channels,
@@ -43,7 +44,6 @@ import {
   MessageAuthorType,
   MessageCategory,
   users,
-  workspaceMembers,
   agents,
 } from "@synap/database/schema";
 
@@ -454,27 +454,23 @@ export const crudProcedures = {
 
       // Validate each participant id belongs to this workspace, and resolve its
       // kind (human vs ai_agent) from users.userType. A participant is valid iff
-      // it is a member of THIS workspace. The creator is added separately as
-      // owner, so dedupe it out of the participant list first.
+      // it is a member of THIS workspace (an agent: through its person). The
+      // creator is added separately as owner, so dedupe it out of the
+      // participant list first.
       const participantIds = Array.from(
         new Set((input.participants ?? []).filter((id) => id !== ctx.userId))
       );
 
       const memberKindById = new Map<string, ChannelMemberKind>();
       if (participantIds.length > 0) {
-        const validRows = await db
+        const rows = await db
           .select({ id: users.id, userType: users.userType })
           .from(users)
-          .innerJoin(
-            workspaceMembers,
-            and(
-              eq(workspaceMembers.userId, users.id),
-              eq(workspaceMembers.workspaceId, workspaceId)
-            )
-          )
           .where(inArray(users.id, participantIds));
 
-        for (const row of validRows) {
+        for (const row of rows) {
+          if (!(await getWorkspaceMembership(db, workspaceId, row.id)))
+            continue;
           memberKindById.set(
             row.id,
             row.userType === "agent"
@@ -1287,14 +1283,13 @@ export const crudProcedures = {
           });
         }
         if (channel.workspaceId) {
-          const wsMembership = await db.query.workspaceMembers.findFirst({
-            where: and(
-              eq(workspaceMembers.workspaceId, channel.workspaceId),
-              eq(workspaceMembers.userId, input.addAgentMemberId)
-            ),
-            columns: { id: true },
-          });
-          if (!wsMembership) {
+          if (
+            !(await getWorkspaceMembership(
+              db,
+              channel.workspaceId,
+              input.addAgentMemberId
+            ))
+          ) {
             throw new TRPCError({
               code: "FORBIDDEN",
               message: "Teammate is not a member of this channel's workspace",

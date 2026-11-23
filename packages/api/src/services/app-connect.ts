@@ -123,7 +123,6 @@ import {
   pairsWithin,
   expandAppAccess,
   parseAppAccess,
-  parsePlace,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
@@ -489,8 +488,8 @@ async function spacesOwnerMayWriteIn(
 /**
  * An owner gives an app only what they can do themselves (invariant 1 at the
  * GIVING side). `resolveRequests` bounds a request by the spaces the owner can
- * READ — member ∪ owned ∪ pod-visible — but approving a WRITE makes the app's
- * agent an `editor` member there (`syncAppAgentMemberships`). So a write
+ * READ — member ∪ owned ∪ pod-visible — but approving a WRITE lets the app's
+ * agent write there through the owner's membership. So a write
  * (anything but `…read`, `*` included) needs the owner to OWN the space or be
  * an owner / admin / editor member of it; a read stays bounded by what they
  * can read. Run when the request is filed AND when it is approved (a role can
@@ -976,87 +975,12 @@ export async function ensureAppAgent(
 }
 
 /**
- * The app agent's workspace memberships = EXACTLY the workspaces its owner
- * approved (the RBAC floor every agent write is checked against —
- * `verifyPermission` on the acting agent). The approval of `app/connect` is
- * the consent; the grant still bounds which permissions apply in each.
- * `viewer` where everything approved there is a read, else `editor`. A
- * workspace no longer approved loses the membership; `[]` removes them all
- * (revoke).
- */
-async function syncAppAgentMemberships(
-  agentUserId: string,
-  ownerUserId: string,
-  grants: readonly GrantInput[]
-): Promise<void> {
-  // The spaces its grants NAME (W3d: read from the minted scopes, so a v2
-  // access and the pairs agree): `viewer` where it only reads, `editor`
-  // where it writes. A pod-wide read names no space and a project scope is
-  // no space's membership: the grant alone carries them.
-  const roles = new Map<string, "viewer" | "editor">();
-  for (const g of grants) {
-    if (g.projectIds?.length || g.entityIds?.length) continue;
-    const reads = g.permissions.every(
-      (p) => parsePermission(p).at(-1) === "read"
-    );
-    // The spaces it names, read through THE parse (`parsePlace`).
-    const place = parsePlace(g, "app");
-    if (place.kind !== "spaces") continue;
-    for (const workspaceId of place.ids) {
-      const prior = roles.get(workspaceId);
-      roles.set(
-        workspaceId,
-        prior === "editor" || !reads ? "editor" : "viewer"
-      );
-    }
-  }
-  const current = await db
-    .select({
-      id: workspaceMembers.id,
-      workspaceId: workspaceMembers.workspaceId,
-      role: workspaceMembers.role,
-    })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, agentUserId));
-  const stale = current.filter((m) => !roles.has(m.workspaceId));
-  if (stale.length > 0) {
-    await db.delete(workspaceMembers).where(
-      inArray(
-        workspaceMembers.id,
-        stale.map((m) => m.id)
-      )
-    );
-  }
-  for (const [workspaceId, role] of roles) {
-    const held = current.find((m) => m.workspaceId === workspaceId);
-    if (held) {
-      if (held.role !== role) {
-        await db
-          .update(workspaceMembers)
-          .set({ role })
-          .where(eq(workspaceMembers.id, held.id));
-      }
-      continue;
-    }
-    await db
-      .insert(workspaceMembers)
-      .values({
-        workspaceId,
-        userId: agentUserId,
-        role,
-        invitedBy: ownerUserId,
-      })
-      .onConflictDoNothing();
-  }
-}
-
-/**
- * Make the app's reach EQUAL what its owner approved: the agent's workspace
- * memberships (the RBAC floor) and each given key's grants (one per approved
- * workspace), both derived from `approved`. The ONE derivation behind
- * `issueKey`, `adoptLegacyAppKey` and a re-approval (`applyApprovedReach`).
- * Idempotent: the memberships converge and `attachMany` replaces a key's
- * active grant set, so a re-run with the same approval changes nothing.
+ * Make the app's reach EQUAL what its owner approved: each given key's grants
+ * (one per approved workspace), derived from `approved`. The app's agent is
+ * never a space member: it acts through its owner's membership, within these
+ * grants. The ONE derivation behind `issueKey`, `adoptLegacyAppKey` and a
+ * re-approval (`applyApprovedReach`). Idempotent: `attachMany` replaces a
+ * key's active grant set, so a re-run with the same approval changes nothing.
  */
 async function setApprovedReach(args: {
   app: {
@@ -1073,7 +997,6 @@ async function setApprovedReach(args: {
   const grants = grantsForApp(args.app, {
     allProjects: await allProjectsFor(owner, args.app),
   });
-  await syncAppAgentMemberships(args.agentUserId, owner, grants);
   for (const apiKeyId of args.apiKeyIds) {
     await attachGrantsOrRevoke({
       apiKeyId,
@@ -2476,11 +2399,9 @@ export async function revokeApp(args: {
     args.ownerUserId,
     `App revoked: ${found.app.name}`
   );
-  // Its agent leaves every workspace: a revoked app reaches nothing. Its
-  // write mode goes back to ask-first (F6), so connecting it again starts
-  // where every new connection starts, never at "apply automatically".
+  // Its write mode goes back to ask-first (F6), so connecting it again
+  // starts where every new connection starts, never at "apply automatically".
   if (found.app.agentUserId) {
-    await syncAppAgentMemberships(found.app.agentUserId, args.ownerUserId, []);
     await applyAgentPosture({
       db,
       agentUserId: found.app.agentUserId,
@@ -2757,7 +2678,7 @@ export async function narrowApp(args: {
   if (keep.length === current.length) return found;
 
   const repo = new AppRepository(db);
-  const narrowed = await repo.setApprovedRequests(found.app.id, keep);
+  await repo.setApprovedRequests(found.app.id, keep);
   if (found.app.mode === "oauth") {
     // The connection's live key, whoever holds it: the person's token (every
     // pod app since 12 Nov 2026) or, for a connection not refreshed since,
@@ -2767,20 +2688,6 @@ export async function narrowApp(args: {
       args.ownerUserId,
       `Access narrowed for ${found.app.name}: the next token carries the narrower reach`
     );
-    if (found.app.agentUserId) {
-      await syncAppAgentMemberships(
-        found.app.agentUserId,
-        found.app.ownerUserId,
-        narrowed
-          ? grantsForApp(narrowed, {
-              allProjects: await allProjectsFor(
-                found.app.ownerUserId,
-                narrowed
-              ),
-            })
-          : grantsForPairs(keep)
-      );
-    }
   } else {
     await applyApprovedReach(found.app.id);
   }
@@ -4004,15 +3911,6 @@ export async function updateAppAccess(args: {
     args.ownerUserId,
     `Access changed for ${found.app.name}: the next token carries the new access`
   );
-  if (found.app.agentUserId) {
-    await syncAppAgentMemberships(
-      found.app.agentUserId,
-      found.app.ownerUserId,
-      grantsForApp(updated, {
-        allProjects: await allProjectsFor(found.app.ownerUserId, updated),
-      })
-    );
-  }
   await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.approved, {
     via: "update",
     access,

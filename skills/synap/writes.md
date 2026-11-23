@@ -90,11 +90,11 @@ the person; the answer lists `applied` / `proposed` / `denied` / `skipped` — a
 partial result is normal. Send `validate: true` first to see each verdict without
 writing, and an `idempotencyKey` so a retry never acts twice.
 
-**A write blocked on a space join is KEPT.** When you write into a space your
-agent has not joined (`synap_orient` marks it `joined: false`), the answer is
-`proposed` with `proposalType: "join"`, `deferred: true` and a `ref`: the write
-rides the join request and is replayed for you once it is approved. Do not
-resend it, and do not retry it into another space.
+**You work where your person is a member.** An agent is never a space member:
+it writes where the person it acts for is a member, within its key's grant.
+`synap_orient` marks a space they are not in `joined: false`; a write there is
+refused in words. Ask the person (an owner of the space adds them); do not
+retry it into another space.
 
 **Moving, not recreating.** A session into another space:
 `synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is

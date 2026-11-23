@@ -50,7 +50,6 @@ vi.mock("../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.gate,
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),
-  isJoinGate: vi.fn(() => false),
 }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("../../utils/split-brain-service.js", () => ({

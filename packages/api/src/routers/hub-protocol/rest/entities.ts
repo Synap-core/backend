@@ -3142,9 +3142,7 @@ export function registerEntitiesRoutes(app: HubHono): void {
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
       const resolvedAgentUserId =
         body.agentUserId ??
-        (await resolveCaptureActorUserId(c, ctxAgentUserId, {
-          workspaceId: effectiveWorkspaceId,
-        }));
+        (await resolveCaptureActorUserId(c, ctxAgentUserId));
 
       const actorResolution = await resolveActorId(resolvedAgentUserId, userId);
       if ("error" in actorResolution)

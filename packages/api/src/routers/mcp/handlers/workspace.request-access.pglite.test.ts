@@ -1,22 +1,16 @@
 /**
- * `synap_request_workspace_access` (ticket 4790c862) — an agent asks to join
- * a space BEFORE its first write, instead of learning it on that write.
+ * `synap_request_workspace_access` — an agent checks it can work in a space
+ * BEFORE its first write. An agent is never a space member: the answer is the
+ * membership of the person it acts for, within the key's grant, and nothing
+ * is ever filed.
  *
- * Driven through the REAL MCP handler, the REAL `requestWorkspaceJoin`, the
- * gate's REAL membership check and its REAL join producer
- * (`maybeCreateWorkspaceJoinProposal`), on PGlite with every table. Stubbed:
- * the event-backed proposal writer → a plain insert of the same row (the
- * event spine has its own suites).
- *
- * Rows rule out: a second join stacked for the same space (the gate's reuse),
- * a join filed for an agent that is already a member, a join filed when the
- * key's grant cannot reach the space (it would change nothing; a grant of
- * pod-wide reads only reaches none, nor does one pinned to projects or objects
- * with no space), a join into an archived space, a member
- * of an archived space told it is a member, and a join filed for a space that
- * does not exist.
+ * Driven through the REAL MCP handler, the REAL `requestWorkspaceJoin` and
+ * the gate's REAL membership check, on PGlite with every table. Rows rule
+ * out: a seat the agent still holds counting as access, a proposal filed for
+ * any answer, a grant that does not reach the space, an archived space told
+ * "member", and a space that does not exist.
  */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => ({
@@ -36,37 +30,6 @@ vi.mock("@synap/database", async (importOriginal) => {
   const db = drizzle(client, { schema });
   return { ...actual, db, getDb: async () => db };
 });
-vi.mock("../../../utils/audit-log.js", () => ({
-  auditLog: async () => ({ id: randomUUID() }),
-}));
-vi.mock("../../../utils/event-backed-proposal.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../../utils/event-backed-proposal.js")
-  >()),
-  createEventBackedProposal: async (input: Record<string, unknown>) => {
-    const id = randomUUID();
-    await h.client!.query(
-      `insert into proposals (id, status, proposal_type, target_type, target_id, workspace_id, agent_user_id, created_by, session_id, data, created_at, updated_at)
-       values ($1, 'pending', $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now(), now())`,
-      [
-        id,
-        input.proposalType,
-        input.targetType,
-        input.targetId,
-        input.workspaceId ?? null,
-        input.agentUserId ?? null,
-        input.createdBy ?? input.userId,
-        input.sessionId ?? null,
-        JSON.stringify(input.data ?? {}),
-      ]
-    );
-    return {
-      proposal: { id, data: input.data },
-      requestedEvent: null,
-      correlationId: "c",
-    };
-  },
-}));
 
 import { runWithGrant } from "@synap/database";
 import {
@@ -74,20 +37,21 @@ import {
   pgliteSchemaDdl,
 } from "../../../__tests__/pglite-ddl.js";
 import { workspaceHandlers } from "./workspace.js";
+import { AGENT_PERSON_NOT_MEMBER } from "../../../utils/permission-check.js";
 
 const HUMAN = randomUUID();
 const AGENT = randomUUID();
-const WS = randomUUID(); // the agent is not a member
-const WS_MEMBER = randomUUID(); // the agent is an editor
-const WS_ARCHIVED = randomUUID();
-const WS_ARCHIVED_MEMBER = randomUUID(); // archived; the agent is an editor
+const WS = randomUUID(); // the person is an editor
+const WS_SEAT = randomUUID(); // the person is not a member; the agent holds a seat
+const WS_ARCHIVED = randomUUID(); // archived; the person is an editor
+const WS_OWNED = randomUUID(); // the person owns it
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 beforeAll(async () => {
   await h.client!.exec(pgliteSchemaDdl(allSchemaTables()));
   await q(
-    `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
+    `insert into users (id, email, name, user_type, created_by_user_id) values ($1, 'h@x', 'Human', 'human', null), ($2, 'a@x', 'Scout', 'agent', $1)`,
     [HUMAN, AGENT]
   );
   await q(
@@ -95,24 +59,27 @@ beforeAll(async () => {
       ($1, 'Sales', $4, 'team', '{}'::jsonb, null),
       ($2, 'Builder', $4, 'team', '{}'::jsonb, null),
       ($3, 'Old', $4, 'team', '{}'::jsonb, now()),
-      ($5, 'Older', $4, 'team', '{}'::jsonb, now())`,
-    [WS, WS_MEMBER, WS_ARCHIVED, HUMAN, WS_ARCHIVED_MEMBER]
+      ($5, 'Mine', $4, 'team', '{}'::jsonb, null)`,
+    [WS, WS_SEAT, WS_ARCHIVED, randomUUID(), WS_OWNED]
   );
-  for (const ws of [WS, WS_MEMBER, WS_ARCHIVED, WS_ARCHIVED_MEMBER]) {
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
-      [randomUUID(), ws, HUMAN]
-    );
-  }
   await q(
-    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $5, $3, 'editor')`,
-    [randomUUID(), WS_MEMBER, AGENT, randomUUID(), WS_ARCHIVED_MEMBER]
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), WS_OWNED, HUMAN]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $5, $3, 'editor'), ($6, $7, $8, 'admin')`,
+    [
+      randomUUID(),
+      WS,
+      HUMAN,
+      randomUUID(),
+      WS_ARCHIVED,
+      randomUUID(),
+      WS_SEAT,
+      AGENT,
+    ]
   );
 }, 120_000);
-
-beforeEach(async () => {
-  await q(`delete from proposals`);
-});
 
 async function requestAccess(
   workspaceId: string,
@@ -134,155 +101,63 @@ async function requestAccess(
   >;
 }
 
-const joins = () =>
-  q<{ id: string; target_id: string; agent_user_id: string }>(
-    `select id, target_id, agent_user_id from proposals where target_type = 'workspace' and proposal_type = 'join'`
-  ).then((r) => r.rows);
+const proposalCount = async () => {
+  const { rows } = await q<{ n: number }>(
+    `select count(*)::int as n from proposals`
+  );
+  return rows[0]!.n;
+};
 
-describe("synap_request_workspace_access — the gate's own join, asked for on purpose", () => {
-  it("not a member ⇒ ONE join for the person to approve; asked again, the same one", async () => {
-    const first = await requestAccess(WS);
-    expect(first).toMatchObject({ status: "proposed", workspaceId: WS });
-    expect(String(first.message)).toMatch(/kept on the join and replayed/);
-    const rows = await joins();
-    expect(rows).toEqual([
-      { id: first.proposalId, target_id: WS, agent_user_id: AGENT },
-    ]);
-
-    const again = await requestAccess(WS);
-    expect(again.proposalId).toBe(first.proposalId);
-    expect(await joins()).toHaveLength(1);
+describe("synap_request_workspace_access — the person's membership, nothing filed", () => {
+  it("the person is a member ⇒ member, with the person's role", async () => {
+    expect(await requestAccess(WS)).toMatchObject({
+      status: "member",
+      workspaceId: WS,
+      role: "editor",
+    });
+    expect(await proposalCount()).toBe(0);
   });
 
-  it("already a member ⇒ its role, nothing filed", async () => {
-    expect(await requestAccess(WS_MEMBER)).toMatchObject({
+  it("the person is not a member ⇒ refused, though the agent holds a seat there", async () => {
+    const res = await requestAccess(WS_SEAT);
+    expect(res.status).toBe("refused");
+    expect(res.reason).toBe(AGENT_PERSON_NOT_MEMBER);
+    expect(await proposalCount()).toBe(0);
+  });
+
+  it("the person owns the space ⇒ the agent acts there as an editor, never an owner", async () => {
+    expect(await requestAccess(WS_OWNED)).toMatchObject({
       status: "member",
       role: "editor",
     });
-    expect(await joins()).toEqual([]);
   });
 
-  it("a key whose grant does not reach the space ⇒ refused, nothing filed", async () => {
+  it("a key whose grant does not reach the space ⇒ refused", async () => {
     const res = await requestAccess(WS, {
-      scopes: [{ permissions: ["*"], workspaceIds: [WS_MEMBER] }],
+      scopes: [{ permissions: ["*"], workspaceIds: [WS_SEAT] }],
       clientId: null,
     });
     expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(/grant does not reach this space/);
-    expect(await joins()).toEqual([]);
+    expect(String(res.reason)).toMatch(/grant does not reach this whole space/);
   });
 
-  it("control: a grant that names the space files the join", async () => {
+  it("control: a grant that names the space ⇒ member", async () => {
     const res = await requestAccess(WS, {
       scopes: [{ permissions: ["*"], workspaceIds: [WS] }],
       clientId: null,
     });
-    expect(res.status).toBe("proposed");
-    expect(await joins()).toHaveLength(1);
+    expect(res.status).toBe("member");
   });
 
-  it("an archived space ⇒ refused in words, nothing filed", async () => {
+  it("an archived space ⇒ refused as archived, never told 'member'", async () => {
     const res = await requestAccess(WS_ARCHIVED);
     expect(res.status).toBe("refused");
     expect(String(res.reason)).toMatch(/archived/);
-    expect(await joins()).toEqual([]);
   });
 
-  it("a member of an archived space ⇒ refused as archived, never told 'member'", async () => {
-    const res = await requestAccess(WS_ARCHIVED_MEMBER);
-    expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(/archived/);
-    expect(await joins()).toEqual([]);
-  });
-
-  it("a grant of pod-wide reads only reaches no space to write in ⇒ refused, nothing filed", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [{ permissions: ["entity.read"], workspaceIds: null }],
-      clientId: null,
-    });
-    expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(/grant does not reach this space/);
-    expect(await joins()).toEqual([]);
-  });
-
-  it("control: a grant on every space (no list) files the join", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [{ permissions: ["*"], workspaceIds: null }],
-      clientId: null,
-    });
-    expect(res.status).toBe("proposed");
-    expect(await joins()).toHaveLength(1);
-  });
-
-  // W3a (decision 51ad8d1e F3): a join is a membership of the WHOLE space,
-  // which a project or object pin never covers. Before, a scope pinned to
-  // projects (or objects) with no space read as reaching every space, so it
-  // filed a join anywhere. The refusal tells it the truth: a write of one of
-  // its rows there still files the join (the gate's membership miss).
-  const PINNED = /limited to projects or records, not to this whole space/;
-  const P = randomUUID();
-
-  it("a key pinned to a project, with no space ⇒ refused, told a write files the join", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [{ permissions: ["*"], workspaceIds: null, projectIds: [P] }],
-      clientId: null,
-    });
-    expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(PINNED);
-    expect(String(res.reason)).toMatch(/files the join request/);
-    expect(await joins()).toEqual([]);
-  });
-
-  it("a key pinned to objects, with no space ⇒ refused, nothing filed", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [
-        { permissions: ["*"], workspaceIds: null, entityIds: [randomUUID()] },
-      ],
-      clientId: null,
-    });
-    expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(PINNED);
-    expect(await joins()).toEqual([]);
-  });
-
-  it("a project pin beside the named space ⇒ refused too (it covers no space whole)", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [{ permissions: ["*"], workspaceIds: [WS], projectIds: [P] }],
-      clientId: null,
-    });
-    expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(PINNED);
-    expect(await joins()).toEqual([]);
-  });
-
-  it("an empty project list, or the deny-all grant ⇒ refused, nothing filed", async () => {
-    for (const scope of [
-      { permissions: ["*"], workspaceIds: null, projectIds: [] },
-      { permissions: [] },
-    ]) {
-      const res = await requestAccess(WS, { scopes: [scope], clientId: null });
-      expect(res.status).toBe("refused");
-      expect(String(res.reason)).toMatch(/grant does not reach this space/);
-    }
-    expect(await joins()).toEqual([]);
-  });
-
-  it("control: a project pin beside an UNPINNED scope files the join (the unpinned scope covers it)", async () => {
-    const res = await requestAccess(WS, {
-      scopes: [
-        { permissions: ["*"], workspaceIds: null, projectIds: [P] },
-        { permissions: ["*"], workspaceIds: null },
-      ],
-      clientId: null,
-    });
-    expect(res.status).toBe("proposed");
-    expect(await joins()).toHaveLength(1);
-  });
-
-  it("a space that does not exist ⇒ refused, nothing filed", async () => {
+  it("a space that does not exist ⇒ refused", async () => {
     const res = await requestAccess(randomUUID());
     expect(res.status).toBe("refused");
     expect(String(res.reason)).toMatch(/No space has this id/);
-    expect(await joins()).toEqual([]);
   });
 });

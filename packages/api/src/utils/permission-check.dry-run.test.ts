@@ -12,7 +12,6 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  *   - the AUTO_APPROVED receipt row (`db.insert`)
  *   - the `.requested` event append (inside the proposal transaction)
  *   - the notification fan-out (broadcast / side-effects / NotificationService)
- *   - the `workspace.join` proposal (event-backed proposal door)
  *   - the daily agent-proposal cap (neither read nor consumed)
  *
  * The commit-mode counterpart is asserted alongside each case, so a rung that
@@ -150,6 +149,7 @@ vi.mock("../lib/event-helpers.js", () => ({
 }));
 
 import {
+  AGENT_PERSON_NOT_MEMBER,
   checkPermissionOrPropose as checkPermissionOrProposeStrict,
   previewPermissionDecision as previewPermissionDecisionStrict,
 } from "./permission-check.js";
@@ -298,24 +298,15 @@ describe("previewPermissionDecision — decision-only governance door", () => {
     expectNoSideEffects();
   });
 
-  it("reports PROPOSE for an agent that is not a workspace member, without filing a join proposal", async () => {
+  it("reports DENY for an agent whose person is not a workspace member, filing nothing", async () => {
     mockVerifyPermission.mockResolvedValue({
       allowed: false,
       reason: "User is not a member of this workspace",
     });
-    // The agent-user confirmation read inside the join door returns an agent row.
-    mockDbSelect.mockImplementation(() => {
-      const b: Record<string, unknown> = {
-        from: vi.fn(() => b),
-        where: vi.fn(() => b),
-        orderBy: vi.fn(() => b),
-        limit: vi.fn().mockResolvedValue([{ userType: "agent", name: "Ada" }]),
-      };
-      return b;
-    });
 
     await expect(previewPermissionDecision(OPTS)).resolves.toEqual({
-      decision: "propose",
+      decision: "deny",
+      reason: AGENT_PERSON_NOT_MEMBER,
     });
     expectNoSideEffects();
   });

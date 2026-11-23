@@ -376,7 +376,7 @@ export const CreateEntityResponseSchema = z
       .string()
       .optional()
       .describe(
-        'Present when status is "proposed". "join" for a workspace-join gate, else "<subject>.<action>" (e.g. "entity.create").'
+        'Present when status is "proposed". "held_writes" for a write held past the daily limit, else "<subject>.<action>" (e.g. "entity.create").'
       ),
     reviewUrl: z
       .string()
@@ -388,12 +388,14 @@ export const CreateEntityResponseSchema = z
       .literal(true)
       .optional()
       .describe(
-        'Workspace-join gate only (proposalType "join"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it.'
+        'Held writes only (proposalType "held_writes"): this write was KEPT on today\'s held-writes pack and is replayed for you once it is approved — do not resend it.'
       ),
     ref: z
       .string()
       .optional()
-      .describe("With `deferred`: the kept write's ref on the join proposal."),
+      .describe(
+        "With `deferred`: the kept write's ref on the held-writes pack."
+      ),
     facets: z
       .array(
         z.object({
@@ -486,12 +488,14 @@ export const UpdateEntityResponseSchema = z
       .literal(true)
       .optional()
       .describe(
-        'Workspace-join gate only (proposalType "join"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it.'
+        'Held writes only (proposalType "held_writes"): this write was KEPT on today\'s held-writes pack and is replayed for you once it is approved — do not resend it.'
       ),
     ref: z
       .string()
       .optional()
-      .describe("With `deferred`: the kept write's ref on the join proposal."),
+      .describe(
+        "With `deferred`: the kept write's ref on the held-writes pack."
+      ),
     // ── APPLIED answer (C5): what landed, never just "Entity updated" ──
     entityId: z.string().optional(),
     title: z

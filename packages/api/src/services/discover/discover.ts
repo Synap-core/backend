@@ -451,10 +451,9 @@ interface DiscoverWorkspace {
    */
   acceptsEntities?: false;
   /**
-   * Present (and `false`) only when the calling agent is not a member: a write
-   * here files a workspace JOIN request (the write is kept and replayed once
-   * approved). A track-space grant does not count as joined. Absent = joined
-   * (or a person's own orient).
+   * Present (and `false`) only for an agent whose person is not a member: the
+   * agent cannot write here until an owner of the space adds that person.
+   * Absent = a member (or a person's own orient).
    */
   joined?: false;
   /**
@@ -873,15 +872,15 @@ export async function discover(
     needWorkspaces && lensWsIds.length
       ? loadEntityUsage({ userId, workspaceIds: lensWsIds })
       : Promise.resolve([]),
-    // The calling AGENT's own memberships: a space it is not a member of is
-    // flagged `joined: false` (a write there files a JOIN request).
+    // For an agent: the memberships of the person it acts for. A space that
+    // person is not a member of is flagged `joined: false` (no write there).
     needWorkspaces && lensWsIds.length && params.agentUserId
       ? db
           .select({ workspaceId: workspaceMembers.workspaceId })
           .from(workspaceMembers)
           .where(
             and(
-              eq(workspaceMembers.userId, params.agentUserId),
+              eq(workspaceMembers.userId, userId),
               inArray(workspaceMembers.workspaceId, lensWsIds)
             )
           )

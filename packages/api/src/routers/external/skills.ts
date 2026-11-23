@@ -15,7 +15,7 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and, or } from "@synap/database";
+import { db, eq, and, or, inArray, membershipHolderIds } from "@synap/database";
 import { skills, workspaceMembers } from "@synap/database/schema";
 import { executeCapability } from "../../services/capabilities/execute-capability.js";
 import { createLogger } from "@synap-core/core";
@@ -83,7 +83,7 @@ externalSkillsApp.get("/", externalApiKeyAuth("skills.invoke"), async (c) => {
       workspaceMembers,
       and(
         eq(workspaceMembers.workspaceId, skills.workspaceId!),
-        eq(workspaceMembers.userId, userId)
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
       )
     )
     .where(and(eq(skills.status, "active"), eq(skills.scope, "workspace")));
@@ -163,7 +163,7 @@ externalSkillsApp.post(
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, skill.workspaceId),
-          eq(workspaceMembers.userId, userId)
+          inArray(workspaceMembers.userId, membershipHolderIds(userId))
         ),
         columns: { userId: true },
       });

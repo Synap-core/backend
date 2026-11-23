@@ -596,10 +596,10 @@ describe("(4) MATERIALIZED_DOORS mirrors the materializer worker's ACTION GUARDS
   // If this reads red the parser has silently reverted to scoring whole
   // subjects as materialized, and every verdict below is worthless.
   it("SELF-GUARD: the parser reads NEGATIVE action guards", () => {
-    // `materializeWorkspace` guards `if (action !== "join") return;`.
-    expect(WORKER_PAIRS.has("workspace/join")).toBe(true);
+    // `materializeLink` guards `if (action !== "create") { warn; return; }`.
+    expect(WORKER_PAIRS.has("link/create")).toBe(true);
     expect(
-      WORKER_PAIRS.has("workspace/update"),
+      WORKER_PAIRS.has("link/update"),
       "The parser thinks a `case` label covers every action. It does not."
     ).toBe(false);
   });

@@ -15423,20 +15423,6 @@ export interface SubmitCaptureGraphResult {
 	 * can have failed. Omitted when nothing failed.
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
-	/**
-	 * The agent is not a member of a space this graph lands in, so NOTHING was
-	 * written: the whole graph is kept on that space's workspace-JOIN request
-	 * (`proposalId` names the join) and replayed, all of it, as the agent once a
-	 * person approves the join (finding 590ca76a). `deferred: false` when the
-	 * join could not keep it (the agent retries after approval). Omitted
-	 * otherwise.
-	 */
-	joinGate?: {
-		deferred: boolean;
-		message: string;
-		proposalId: string;
-		ref?: string;
-	};
 	writeReceipt: {
 		/** applied path only: fresh-created vs linked-existing counts + ids. */
 		created?: number;
@@ -15607,8 +15593,8 @@ export interface UpdateEntitiesResult {
 		reason: string;
 	}>;
 	/**
-	 * `deferred: true` = the write was KEPT on a workspace-join request and is
-	 * replayed for the caller once the join is approved — never resend it.
+	 * `deferred: true` = the write was KEPT on today's held-writes pack and is
+	 * replayed for the caller once it is approved — never resend it.
 	 */
 	skipped: Array<{
 		deferred?: true;
@@ -28730,8 +28716,8 @@ export interface OpenTarget {
  *
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
- * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * migration 0225); scope (pod-wide vs workspace) is DERIVED from the spaces of
+ * the person it acts for (none ⇒ pod-wide). Floored like the scorecard
  * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
  * another owner's agent identity to a member. A pod admin may already list
  * every space, so the space names below reveal nothing new to one.
@@ -30824,7 +30810,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: string;
 					kind: "recovery_code";
 				} | undefined;
-				role?: "admin" | "editor" | "viewer" | undefined;
 				workspaceId: string;
 				writesRequireProposal?: boolean | undefined;
 			};
@@ -40043,7 +40028,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks: RequiredLinkCheck;
 				reviewUrl: string;
@@ -40067,7 +40052,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks?: undefined;
 				reviewUrl: string;

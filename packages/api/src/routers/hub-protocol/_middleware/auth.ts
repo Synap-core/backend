@@ -659,8 +659,7 @@ export const hubAuthMiddleware = async (
         // personal agent here to stamp agentUserId — doing so would flip
         // `checkPermissionOrPropose` from the operator's RBAC + legacy
         // `source:"intelligence"` path onto the AGENT governance ladder, and a
-        // personal agent that isn't a member of the target workspace would then
-        // file a `workspace.join` proposal instead of the intended write
+        // personal agent's ladder would then decide the intended write
         // (outcome change). Attribution is instead resolved inside
         // `createProposal` (permission-check.ts) AFTER the ladder has already
         // decided on the operator — so the OUTCOME is unchanged and only the

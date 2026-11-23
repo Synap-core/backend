@@ -67,6 +67,7 @@ import {
   spaceAccess,
   users,
   workspaceMembers,
+  apiKeys,
   workspaces,
   podMembers,
   projectMembers,
@@ -116,6 +117,7 @@ beforeAll(async () => {
   for (const t of [
     users,
     workspaceMembers,
+    apiKeys,
     entities,
     entityFacets,
     profiles,

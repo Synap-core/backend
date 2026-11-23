@@ -904,9 +904,7 @@ export async function createFocusSession(
     mayPlaceIn: (candidate) =>
       gateAdmitsWorkspace({
         userId,
-        agentUserId,
         workspaceId: candidate,
-        subjectType: "focus_session",
         action: "create",
       }),
   });
@@ -1185,8 +1183,7 @@ export async function createFocusSession(
       proposalType: perm.proposalType,
       message: proposedMessageFor(
         perm.proposalType,
-        "Focus session creation proposed for review",
-        perm.deferred
+        "Focus session creation proposed for review"
       ),
       summary: perm.summary,
       reasoning: perm.reasoning,
