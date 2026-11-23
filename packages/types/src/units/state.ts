@@ -159,6 +159,8 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   stale: LIFECYCLE_CATEGORY_TONE.paused,
   // A run nobody picked up, a session waiting on another: a hold, never an error.
   blocked: LIFECYCLE_CATEGORY_TONE.paused,
+  // Ended with required work open (`statusMark` outcome): a heads-up.
+  not_done: LIFECYCLE_CATEGORY_TONE.paused,
   pending: "info",
   proposed: "info",
   review: "info",
