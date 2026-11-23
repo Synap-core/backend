@@ -367,7 +367,7 @@ async function visibleObjectName(
     .where(
       and(
         eq(playbooks.id, id),
-        scopedDb(AccessContext.operator({ userId })).predicate(playbooks)
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
       )
     )
     .limit(1);

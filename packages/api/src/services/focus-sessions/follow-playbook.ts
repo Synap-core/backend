@@ -336,7 +336,7 @@ export async function followPlaybook(
     .where(
       and(
         eq(playbooks.id, followPlaybookId),
-        scopedDb(AccessContext.operator({ userId })).predicate(playbooks)
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
       )
     )
     .limit(1);

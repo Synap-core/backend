@@ -1665,13 +1665,21 @@ export async function matchPlaybooks(
       (ent?.properties as Record<string, unknown> | null) ?? {};
   }
   const forStrip = input.purpose === "entity-actions";
-  const usableHere = forStrip
-    ? new Set(
-        (await withSpaceGrants(database, "playbook", rows as Playbook[]))
-          .filter((r) => usableInSpace(r, input.workspaceId ?? null))
-          .map((r) => r.id)
+  // Usable in the entity's space: home or pod-wide, else a share (whose
+  // grants are read only for the rows homed elsewhere).
+  const space = input.workspaceId ?? null;
+  const homedElsewhere = forStrip
+    ? (rows as Playbook[]).filter(
+        (r) => !usableInSpace({ ...r, sharedWith: null }, space)
       )
-    : null;
+    : [];
+  const sharedHere = new Set(
+    homedElsewhere.length
+      ? (await withSpaceGrants(database, "playbook", homedElsewhere))
+          .filter((r) => usableInSpace(r, space))
+          .map((r) => r.id)
+      : []
+  );
   const applicable = rows.filter((r) => {
     const row = r as Playbook;
     // A playbook dedicated to one record is offered for that record only.
@@ -1688,7 +1696,8 @@ export async function matchPlaybooks(
     if (!forStrip) return true;
     const sp = row.subjectProfile as { profileSlug?: unknown } | null;
     return (
-      usableHere!.has(row.id) &&
+      (usableInSpace({ ...row, sharedWith: null }, space) ||
+        sharedHere.has(row.id)) &&
       typeof sp?.profileSlug === "string" &&
       row.scope !== "project" &&
       (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"

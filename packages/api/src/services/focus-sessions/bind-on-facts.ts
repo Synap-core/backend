@@ -111,7 +111,7 @@ export async function loadBindingFacts(input: {
     .from(playbooks)
     .where(
       and(
-        scopedDb(AccessContext.operator({ userId: input.userId })).predicate(
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
           playbooks
         ),
         eq(playbooks.status, "active")

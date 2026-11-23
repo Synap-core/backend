@@ -3,14 +3,15 @@
  * the real floor (`assertWorkspaceWrite`) and the real readers of "usable
  * here": the run door's refusal (`playbookRunRefusal`) and the skill floor
  * (`visibleSkillsWhere`), and the access registry's playbook rule. The
- * governance gate is a seam, except in the agent case, which runs the real one.
+ * governance gate is a seam: that an agent's `workspace.update` always proposes
+ * is the ADMIN floor's (governance-policy), not this door's.
  *
  *   - a playbook moves with the automations linked to it at its home; one
  *     linked from elsewhere stays; its grant to the new home is dropped;
  *   - a person moves or shares only into a space they write, and an agent
  *     only through its person's membership: refused before anything is filed;
- *   - an agent's move is a proposal on the destination (the real gate);
- *     nothing moves;
+ *   - an agent's move is filed on the destination as the agent, and the door
+ *     writes nothing while the gate holds it;
  *   - a name the destination already has is a conflict, nothing moves;
  *   - a share makes a playbook runnable and a skill visible in that space,
  *     and readable by a member of only that space, who still cannot edit it;
@@ -25,7 +26,6 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   checkPermission: vi.fn(),
-  realGate: false,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -39,19 +39,9 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db, getDb: async () => db };
 });
 
-vi.mock("../../utils/permission-check.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../utils/permission-check.js")>();
-  return {
-    ...actual,
-    checkPermissionOrPropose: (
-      ...a: Parameters<typeof actual.checkPermissionOrPropose>
-    ) =>
-      h.realGate
-        ? actual.checkPermissionOrPropose(...a)
-        : h.checkPermission(...a),
-  };
-});
+vi.mock("../../utils/permission-check.js", () => ({
+  checkPermissionOrPropose: (...a: unknown[]) => h.checkPermission(...a),
+}));
 
 import { and, db, eq } from "@synap/database";
 import { playbooks, skills } from "@synap/database/schema";
@@ -195,7 +185,6 @@ beforeEach(async () => {
   B = await space("Reprise", [PERSON, READER]);
   C = await space("Theirs", [OUTSIDER]);
   h.checkPermission.mockReset().mockResolvedValue({ granted: true });
-  h.realGate = false;
 });
 
 /** The playbook as `userId` reads it through the access registry, or undefined. */
@@ -353,9 +342,13 @@ describe("moveToSpace — a playbook carries its automations", () => {
     expect(h.checkPermission).not.toHaveBeenCalled();
   });
 
-  it("an agent's move into its person's space is a request on that space (the real gate); nothing moves", async () => {
+  it("an agent's move into its person's space is filed on that space, as the agent; nothing moves until approved", async () => {
     const pb = await playbook("Dossier de reprise", A);
-    h.realGate = true;
+    h.checkPermission.mockResolvedValue({
+      granted: false,
+      proposalId: "p-1",
+      reviewUrl: "https://pod.test/open/p-1",
+    });
     const out = await moveToSpace({
       userId: AGENT,
       agentUserId: AGENT,
@@ -363,16 +356,20 @@ describe("moveToSpace — a playbook carries its automations", () => {
       objectId: pb,
       workspaceId: B,
     });
-    expect(out).toMatchObject({ status: "proposed" });
-    const proposalId = (out as { proposalId: string }).proposalId;
-    const [row] = (
-      await q<{ target_type: string; workspace_id: string; data: unknown }>(
-        `select target_type, workspace_id, data from proposals where id = $1`,
-        [proposalId]
-      )
-    ).rows;
-    expect(row).toMatchObject({ target_type: "workspace", workspace_id: B });
-    expect(JSON.stringify(row!.data)).toContain('"operation":"move_in"');
+    expect(out).toEqual({
+      status: "proposed",
+      proposalId: "p-1",
+      reviewUrl: "https://pod.test/open/p-1",
+    });
+    expect(h.checkPermission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentUserId: AGENT,
+        subjectType: "workspace",
+        action: "update",
+        workspaceId: B,
+        data: expect.objectContaining({ operation: "move_in", objectId: pb }),
+      })
+    );
     expect(await homeOf("playbooks", pb)).toBe(A);
   });
 
