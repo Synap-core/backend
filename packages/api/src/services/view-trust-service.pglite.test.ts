@@ -2,10 +2,12 @@
  * `resolveViewTrust` on PGlite, with real `views` and `widget_definitions`
  * rows (Surfaces P0-fix, finding d3f3e0df).
  *
- * The discriminating row is the first: a `generated` cell drawing a view the
- * acting person owns. The old rule (view ownership first) trusted it, so the
- * cell's writes skipped the propose gate; the cell's trust now bounds the
- * write. The others pin what must not change.
+ * The discriminating rows: a `generated` cell drawing a view the acting
+ * person owns (the old rule, view ownership first, trusted it, so the cell's
+ * writes skipped the propose gate; the cell's trust now bounds the write), and
+ * an `installed` cell on that view (trusted: founder decision on
+ * backend#1290, "Trusted + installed write"). The others pin what must not
+ * change.
  *
  * Does NOT cover: the doors that pass the issuer to the gate (`entities.create`
  * / `update` / `delete`, `relations.create`); those are
@@ -72,10 +74,14 @@ describe("resolveViewTrust: the cell drawing the frame bounds the write", () => 
     ).toBe(false);
   });
 
-  it("an installed (not trusted) cell on the person's own view: untrusted", async () => {
+  it("an installed cell on the person's own view: trusted (installed writes)", async () => {
     expect(await trusted({ viewId: OWN_VIEW, typeKey: "cell:pkg:board" })).toBe(
-      false
+      true
     );
+  });
+
+  it("an installed cell with no view: trusted", async () => {
+    expect(await trusted({ typeKey: "cell:pkg:board" })).toBe(true);
   });
 
   it("a cell type with no row on the person's own view: untrusted", async () => {

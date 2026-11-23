@@ -49,10 +49,12 @@ export interface ViewIdentity {
  * positively proven, and a write is as trusted as the LEAST trusted thing that
  * makes it (the view, and the cell code drawing it):
  *   1. A `typeKey` is present (a cell's code draws the frame): the backing
- *      widget definition must be marked `trust_level = "trusted"`. Owning the
- *      view does NOT lift it: a `generated` cell drawing the person's own view
- *      runs code nobody vouched for, and its writes propose (Surfaces P0-fix,
- *      finding d3f3e0df: step 1 used to short-circuit this).
+ *      widget definition must be marked `trust_level = "trusted"` or
+ *      `"installed"` (founder decision on backend#1290, 23 Nov 2026: "Trusted +
+ *      installed write"). Owning the view does NOT lift it: a `generated` cell
+ *      (or a type key with no row) drawing the person's own view runs code
+ *      nobody vouched for, and its writes propose (Surfaces P0-fix, finding
+ *      d3f3e0df: step 1 used to short-circuit this).
  *   2. No `typeKey`: the view is persisted and authored by the acting user
  *      (`views.userId === userId`).
  *
@@ -64,10 +66,10 @@ export interface ViewIdentity {
  * every synced row to `"generated"` (see the `widget_definitions` handler in
  * `sync.ts`), which is what makes the claim true. Any NEW write path into
  * `widget_definitions.trust_level` must preserve that invariant: only a human
- * approval performed ON THIS POD may set `"trusted"`.
+ * approval performed ON THIS POD may set `"trusted"` or `"installed"`.
  *
- * `installed` / `generated` definitions, unknown identities, and any resolution
- * failure all yield `{ trusted: false }` → the permission gate proposes.
+ * `generated` definitions, unknown identities, and any resolution failure all
+ * yield `{ trusted: false }` → the permission gate proposes.
  *
  * @param identity   Host-stamped view identity (NEVER from the iframe / request body).
  * @param userId     The acting operator's user id (from the auth boundary).
@@ -84,7 +86,8 @@ export async function resolveViewTrust(
     // 1. A cell's code draws the frame: its definition decides, whoever owns
     //    the view. type_key is unique within a scope (workspace row, else
     //    system NULL). Prefer the workspace-scoped row, then the system-wide
-    //    one. No row, or any level below "trusted" → untrusted.
+    //    one. "trusted" or "installed" → trusted; "generated" or no row →
+    //    untrusted.
     if (identity.typeKey) {
       const candidates = await db
         .select({
@@ -111,7 +114,8 @@ export async function resolveViewTrust(
       // Resolve the most specific row: workspace-scoped beats system-wide.
       const scoped = candidates.find((c) => c.workspaceId === workspaceId);
       const chosen = scoped ?? candidates[0];
-      return chosen?.trustLevel === "trusted"
+      const level = chosen?.trustLevel;
+      return level === "trusted" || level === "installed"
         ? { kind: "view", trusted: true }
         : untrusted;
     }
