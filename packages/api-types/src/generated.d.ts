@@ -5495,6 +5495,14 @@ declare const WORKER_SIZES: readonly [
 	"per_moment"
 ];
 export type WorkerSize = (typeof WORKER_SIZES)[number];
+declare const WORKER_ACTIVATOR_MODES: readonly [
+	"run",
+	"propose",
+	"appointment"
+];
+export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
 /**
  * "Unless the thing carries `property`": present = a value that is not null,
  * not an empty string and not an empty list. One shape on purpose: the
@@ -6141,9 +6149,9 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
 		 * which makes this a typed producer rather than an untyped passthrough.
 		 *
-		 * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
-		 * definitions, services/playbooks/cron-automation.ts) still emits no
-		 * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+		 * Remaining non-producer: a loop definition's trigger
+		 * (services/loops/create-from-definition.ts) emits no `agentType`, so a
+		 * loop-authored playbook run keeps the "meta" default.
 		 */
 		agentType?: string;
 		errorHandling?: NodeErrorHandling;
@@ -6165,11 +6173,10 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * (packages/types/src/automations/sentence.ts) and the app-side writer
 		 * (`makePlaybookRunAction`, @synap/automation-intent).
 		 *
-		 * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
-		 * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
-		 * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
-		 * to pass through, so a loop/cron-authored playbook run keeps the
-		 * playbook's own goalTemplate.
+		 * Non-producer, as with `agentType`: a loop definition's trigger emits no
+		 * goalOverride — `LoopTriggerDef` (@synap/playbooks) has no goal field to
+		 * pass through, so a loop-authored playbook run keeps the playbook's own
+		 * goalTemplate.
 		 */
 		goalOverride?: string;
 		/**
@@ -6183,8 +6190,8 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * does NOT dispatch the playbook's own executor — the named agent does the
 		 * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
 		 * Run mode only: the step refuses it beside `appointment` / `propose`.
-		 * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
-		 * `schedule.handToAgentId`. Absent ⇒ unchanged.
+		 * Producer: a schedule activator's `handToAgentId`, through the rule
+		 * grammar's `__handToAgentId` key. Absent ⇒ unchanged.
 		 */
 		handToAgentId?: string;
 		label: string;
@@ -6194,7 +6201,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * list in sync both ways):
 		 *   - absent / `"run"` — an unattended run (every pre-existing node).
 		 *   - `"appointment"` — a `scheduled` session waiting for the human
-		 *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+		 *     (a schedule activator's `mode`, through the rule grammar's `__mode`).
 		 *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
 		 *     a person approves, and approval replays `playbooks.run` →
 		 *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
@@ -6254,8 +6261,8 @@ export interface PlaybookRunWorkerSpec {
 	size: WorkerSize;
 	/** The subject kind or role the worker works on. */
 	profileSlug: string;
-	/** The status its things sit in (enters_status / count / schedule). */
-	status?: string;
+	/** The status its things sit in (enters_status / count / schedule; a list for schedule). */
+	status?: WorkerStatusSpec;
 	/** A `count` worker's threshold. */
 	minCount?: number;
 	maxPendingApprovals?: number;
@@ -11096,7 +11103,7 @@ export interface ProposalReviewGraph {
 	 * reviewer asks for a revision instead.
 	 */
 	isPlan?: true;
-	/** Number of plan steps (projects + sessions + documents + links). */
+	/** Number of plan steps (projects, goals, sessions, documents, links). */
 	planStepCount?: number;
 	projects?: Array<{
 		description?: string;
@@ -11121,6 +11128,22 @@ export interface ProposalReviewGraph {
 		subjectRef?: string;
 		/** As proposed (may be null). */
 		title: string | null;
+		trackId?: string;
+		/** In-graph goal ref (`tracks[].ref`) or an existing goal id. */
+		trackRef?: string;
+	}>;
+	/** Goals the plan starts (`create_track`), with where each sits. */
+	tracks?: Array<{
+		/** Goals it waits on: in-graph refs and existing ids. */
+		blockedBy: string[];
+		direction?: string;
+		name: string;
+		parentGoalId?: string;
+		/** The goal it serves: in-graph ref or existing id. */
+		parentRef?: string;
+		projectId?: string;
+		projectRef?: string;
+		ref: string;
 	}>;
 	documents?: Array<{
 		entityId?: string;
@@ -11805,6 +11828,13 @@ export interface CompositeCreateSessionOp {
 	/** The project it belongs to (a `create_project` ref or a real id). */
 	projectRef?: string;
 	projectId?: string;
+	/**
+	 * The goal it works toward: a `create_track` ref (created before every
+	 * session) or an existing goal id. Passed to the session door AT create,
+	 * like `start_session`'s `trackId`, which then implies the project.
+	 */
+	trackRef?: string;
+	trackId?: string;
 	/** Declared deliverables — sanitized by the session door at apply time. */
 	expectedOutputs?: Array<Record<string, unknown>>;
 	/**
@@ -11860,6 +11890,31 @@ export interface CompositeCreateProjectOp {
 	evidenceEntityIds?: string[];
 	/** Server-stamped — any caller-supplied value is overwritten. */
 	evidence?: PlanProjectEvidence;
+}
+/**
+ * A GOAL in the plan (pathway plan 368179d7, P7). Materialized through THE
+ * start-goal door (`startTrack`) as the applying person, before every session,
+ * so a session's `trackRef` resolves at create. Shape only here: the door
+ * parses `kpi` / `criteria` / `workKind` / `endState` exactly as `start_track`.
+ */
+export interface CompositeCreateTrackOp {
+	op: "create_track";
+	ref: string;
+	name: string;
+	/** A goal lives in a project: a `create_project` ref or a real id. */
+	projectRef?: string;
+	projectId?: string;
+	direction?: string;
+	kpi?: Record<string, unknown>;
+	criteria?: Array<Record<string, unknown>>;
+	workKind?: string;
+	endState?: string;
+	/** The goal it serves (`goal --serves--> parent`): a track ref or a real id. */
+	parentRef?: string;
+	parentGoalId?: string;
+	/** Goals it waits on (`goal --blocked_by--> goal`): track refs or real ids. */
+	blockedByRefs?: string[];
+	blockedByTrackIds?: string[];
 }
 declare const PLAN_LINK_TYPES: readonly [
 	"blocked_by",
@@ -11955,7 +12010,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateTrackOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -12715,7 +12770,7 @@ export interface ProcessAutomation {
 export interface ProcessWorker {
 	ruleId: string;
 	activatorKey: string;
-	mode: "propose" | "run";
+	mode: WorkerActivatorMode;
 	scope: string;
 	/** `stopped`: a session's worker whose session ended. */
 	state: "paused" | "running" | "stopped";
@@ -15138,6 +15193,16 @@ export interface MaterializeLinkResult {
 	/** The edge was already in the graph — not created by this run. */
 	preExisting?: true;
 }
+/** Per-op result for a `create_track` op (connected plan). */
+export interface MaterializeTrackResult {
+	ref: string;
+	opIndex: number;
+	trackId: string;
+	/** The start door handed back a LIVE goal of the same name — not this run's row. */
+	linked?: boolean;
+	/** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
+	blockerLinkIds?: string[];
+}
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
 	ref: string;
@@ -15197,6 +15262,8 @@ export interface MaterializeResult {
 	sessions: MaterializeSessionResult[];
 	links: MaterializeLinkResult[];
 	documents: MaterializeDocumentResult[];
+	/** Goals (`create_track`) a plan started. */
+	tracks?: MaterializeTrackResult[];
 }
 /** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
 export interface CaptureUpdateResult {
@@ -15413,7 +15480,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "binding" | "cell" | "document" | "entity" | "kind" | "lifecycle" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view" | "workspace";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "kind" | "lifecycle" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "track" | "view" | "workspace";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -16410,7 +16477,9 @@ export interface PlaybookActivator {
 	/**
 	 * `created` / `enters_status` — the thing is created / enters `status`.
 	 * `count` — at least `min` things sit in `status` (always per_moment).
-	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+	 * `schedule` — on `cron` in `timezone`, over the things in `status`: one
+	 *   run for the set (per_moment, default) or one per thing (per_thing); a
+	 *   playbook with no subject runs once per tick.
 	 * `manual` — a button, never by itself: compiles no rule.
 	 * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
 	 *   the new run works on the same subject.
@@ -16427,20 +16496,29 @@ export interface PlaybookActivator {
 	playbook?: string;
 	/** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
 	outcome?: "done" | "not_done";
-	/** Required for `enters_status` / `count`; optional for `schedule`. */
-	status?: string;
+	/** Required for `enters_status` / `count`; optional for `schedule` (a list there). */
+	status?: string | string[];
 	/** Required for `schedule`. */
 	cron?: string;
+	/** `schedule` only: the IANA zone of `cron`; absent = the owner's zone. */
+	timezone?: string;
+	/** `schedule` only: installed paused, the person turns it on. */
+	startsPaused?: true;
+	/** `schedule` in `run` mode only: the agent user id each run is handed to. */
+	handToAgentId?: string;
 	/** Required for `count` (≥ 2). */
 	min?: number;
-	/** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+	/** `per_thing` (default) or `per_moment`; count is per_moment, schedule defaults to it. */
 	size?: "per_moment" | "per_thing";
-	/** `run` starts the run; `propose` files a proposal (the public default). */
-	mode: "propose" | "run";
+	/**
+	 * `run` starts the run; `propose` files a proposal (the public default);
+	 * `appointment` (schedule only) opens a session that waits for the person.
+	 */
+	mode: "appointment" | "propose" | "run";
 	/** Pending approvals before the worker stops starting runs (default 20). */
 	maxPendingApprovals?: number;
 	/**
-	 * `created` / `enters_status` only: leave out a thing that carries this
+	 * per_thing `created` / `enters_status` / `schedule`: leave out a thing that carries this
 	 * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
 	 * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
 	 */
@@ -16449,7 +16527,7 @@ export interface PlaybookActivator {
 		property: string;
 	};
 	/**
-	 * `created` / `enters_status` only: keep only a thing whose property holds
+	 * per_thing `created` / `enters_status` / `schedule`: keep only a thing whose property holds
 	 * one of these values (trimmed, any case), e.g. `{ property: "post-format",
 	 * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
 	 * (`@synap-core/types/workers`).
@@ -18803,6 +18881,12 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	propertyDiffs?: EntityPropertyDiff[];
 	/** Connected plan: session edges created by the run. */
 	linkIds?: string[];
+	/**
+	 * Goals a plan started (`create_track`). A failed plan's compensation drops
+	 * them (`plan-callers.ts`); like the plan's sessions, a later whole revert
+	 * does not.
+	 */
+	trackIds?: string[];
 	/** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
 	projectSubjectIds?: Record<string, string>;
 	/**
@@ -18883,7 +18967,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_track" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -18910,6 +18994,8 @@ export interface MaterializedOpRecord {
 	projectId?: string;
 	documentId?: string;
 	linkId?: string;
+	/** `create_track`: the goal it started. */
+	trackId?: string;
 	/**
 	 * `update_*`: the row it changed and the fields' values before and after
 	 * (`{before, patch}` — `after` is the patch as it landed). An
@@ -41454,7 +41540,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: number;
 					workers: {
 						activatorKey: string;
-						mode: "propose" | "run";
+						mode: "appointment" | "propose" | "run";
 						projectId: string | null;
 						ruleId: string;
 						scope: "project" | "session" | "space";
@@ -51445,9 +51531,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				activators?: {
 					cron?: string | undefined;
+					handToAgentId?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode?: "propose" | "run" | undefined;
+					mode?: "appointment" | "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
@@ -51456,7 +51543,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					startsPaused?: true | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 					unless?: {
 						present: true;
 						property: string;
@@ -52080,9 +52169,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statusProperty?: string | undefined;
 					activators?: {
 						cron?: string | undefined;
+						handToAgentId?: string | undefined;
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
-						mode?: "propose" | "run" | undefined;
+						mode?: "appointment" | "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
@@ -52091,7 +52181,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
-						status?: string | undefined;
+						startsPaused?: true | undefined;
+						status?: string | string[] | undefined;
+						timezone?: string | undefined;
 						unless?: {
 							present: true;
 							property: string;
@@ -52865,9 +52957,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				activators?: {
 					cron?: string | undefined;
+					handToAgentId?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode?: "propose" | "run" | undefined;
+					mode?: "appointment" | "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
@@ -52876,7 +52969,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					startsPaused?: true | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 					unless?: {
 						present: true;
 						property: string;
@@ -53496,9 +53591,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statusProperty?: string | undefined;
 					activators?: {
 						cron?: string | undefined;
+						handToAgentId?: string | undefined;
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
-						mode?: "propose" | "run" | undefined;
+						mode?: "appointment" | "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
@@ -53507,7 +53603,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
-						status?: string | undefined;
+						startsPaused?: true | undefined;
+						status?: string | string[] | undefined;
+						timezone?: string | undefined;
 						unless?: {
 							present: true;
 							property: string;
@@ -57254,6 +57352,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					skillIds?: string[];
 					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
+					trackIds?: string[];
 					viewIds?: string[];
 					workspaceIds?: string[];
 				};
@@ -63702,12 +63801,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					cron?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode: "propose" | "run";
+					mode: "appointment" | "propose" | "run";
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 				} | null;
 				activatorKey: string;
 				automationId: string | null;
@@ -63723,7 +63823,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				lastRunAt: string | null;
 				maxPendingApprovals: number;
-				mode: "propose" | "run";
+				mode: "appointment" | "propose" | "run";
 				nextRunAt: string | null;
 				pendingApprovals: number;
 				playbookId: string;
@@ -64386,9 +64486,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbooks?: {
 						activators?: {
 							cron?: string | undefined;
+							handToAgentId?: string | undefined;
 							maxPendingApprovals?: number | undefined;
 							min?: number | undefined;
-							mode?: "propose" | "run" | undefined;
+							mode?: "appointment" | "propose" | "run" | undefined;
 							on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 							only?: {
 								in: string[];
@@ -64397,7 +64498,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							outcome?: "done" | "not_done" | undefined;
 							playbook?: string | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
-							status?: string | undefined;
+							startsPaused?: true | undefined;
+							status?: string | string[] | undefined;
+							timezone?: string | undefined;
 							unless?: {
 								present: true;
 								property: string;
@@ -65017,9 +65120,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							statusProperty?: string | undefined;
 							activators?: {
 								cron?: string | undefined;
+								handToAgentId?: string | undefined;
 								maxPendingApprovals?: number | undefined;
 								min?: number | undefined;
-								mode?: "propose" | "run" | undefined;
+								mode?: "appointment" | "propose" | "run" | undefined;
 								on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 								only?: {
 									in: string[];
@@ -65028,7 +65132,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								outcome?: "done" | "not_done" | undefined;
 								playbook?: string | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
-								status?: string | undefined;
+								startsPaused?: true | undefined;
+								status?: string | string[] | undefined;
+								timezone?: string | undefined;
 								unless?: {
 									present: true;
 									property: string;

@@ -87,6 +87,7 @@ import { evaluateSubjectFilter } from "../services/playbooks/subject-filter.js";
 import {
   carryProcessOver,
   foldProcessIntoSubjectProfile,
+  keepDeclaredZones,
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
@@ -94,7 +95,10 @@ import {
   readPlaybookProcess,
 } from "../schemas/playbook-process.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
-import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
+import {
+  playbookScheduleInputSchema,
+  retiredScheduleRefusal,
+} from "../schemas/playbook-schedule.js";
 import {
   playbookDefinitionSchema,
   playbookParamsInputSchema,
@@ -193,7 +197,6 @@ import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choi
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
-import { materializePlaybookCronAutomation } from "../services/playbooks/cron-automation.js";
 import {
   addPlaybookAutomation,
   readDriverAutomationId,
@@ -561,6 +564,15 @@ async function assertNoPlaybookLinkCycle(self: {
   }
 }
 
+/** The retired `schedule` input is refused when it could never fire. */
+function refuseUnfoldableSchedule(
+  schedule: unknown,
+  subjectProfile: unknown
+): void {
+  const reason = retiredScheduleRefusal(schedule, subjectProfile);
+  if (reason) throw new TRPCError({ code: "BAD_REQUEST", message: reason });
+}
+
 /**
  * Converge a playbook's activator rules after its definition or status landed
  * — through the ONE non-fatal wrapper (`convergePlaybookActivatorsSafely`).
@@ -607,7 +619,7 @@ export const updateInputSchema = z.object({
   activators: playbookActivatorsSchema.optional(),
   /** See `playbookDefinitionSchema.humanOnlyStatuses` — folded likewise. */
   humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
-  /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
+  /** RETIRED input, folded into a `schedule` activator (`schemas/playbook-schedule.ts`). */
   schedule: playbookScheduleInputSchema.optional(),
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
@@ -2180,6 +2192,9 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
+      if (input.schedule) {
+        refuseUnfoldableSchedule(input.schedule, input.subjectProfile ?? null);
+      }
       await assertNoPlaybookLinkCycle({
         id: input.proposedPlaybookId ?? null,
         name: input.name,
@@ -2492,18 +2507,11 @@ export const playbooksRouter = router({
       if (!reused) {
         warnUnresolvedGoalReferences(created);
 
-        // Declared activators → governed rules (the ONE rule door), linked as
-        // `activator`. After the gate, like the cron automation below.
+        // Declared activators (a retired `schedule` folded into one) →
+        // governed rules (the ONE rule door), linked as `activator`.
         await convergeActivatorsAfterWrite(created.id, {
           userId: ctx.userId,
           agentUserId: input.agentUserId,
-        });
-
-        // S1: a scheduled playbook maintains ONE backing cron automation (its
-        // `schedule` row in playbook_automations) that the cron scheduler fires.
-        await materializePlaybookCronAutomation(created, {
-          userId: ctx.userId,
-          agentUserId: owner.agentUserId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this
@@ -2620,6 +2628,18 @@ export const playbooksRouter = router({
           activators: input.activators,
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
+      }
+      if (input.subjectProfile !== undefined) {
+        input.subjectProfile = keepDeclaredZones(
+          input.subjectProfile as Record<string, unknown> | null,
+          existing.subjectProfile
+        ) as typeof input.subjectProfile;
+      }
+      if (input.schedule) {
+        refuseUnfoldableSchedule(
+          input.schedule,
+          input.subjectProfile ?? existing.subjectProfile
+        );
       }
       // 2b'. A loop of links / steps is refused (the create door's rule):
       // on a change of what it follows, its steps or its name, and when it
@@ -2905,37 +2925,12 @@ export const playbooksRouter = router({
 
       warnUnresolvedGoalReferences(updated);
 
-      // S1: re-reconcile the backing cron automation against the new schedule.
-      // Idempotent — re-points/updates the SAME row (the playbook's driver), or
-      // tears it down when the schedule was cleared/disabled.
-      //
-      // Only a schedule or status CHANGE may arm it. An adoption / metadata
-      // merge / text edit (the boot template reconcile, W7's edit in an
-      // archived space) must never flip a paused backing automation active.
-      // "Wants a live schedule" = enabled with a cron. A cron-only edit (or a
-      // template re-pointing the time) refreshes the trigger, never the state.
-      const wantsSchedule = (v: unknown): boolean => {
-        const sch = v as { enabled?: unknown; cron?: unknown } | null;
-        return (
-          sch?.enabled === true &&
-          typeof sch.cron === "string" &&
-          sch.cron.trim() !== ""
-        );
-      };
-      const armingChanged =
-        (input.schedule !== undefined &&
-          wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
-        (input.status !== undefined && input.status !== existing.status);
-      await materializePlaybookCronAutomation(updated, {
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        preserveArming: !armingChanged,
-      });
-
       // Activators live in `subjectProfile`, their rule prose names the
-      // playbook, and only an ACTIVE playbook declares them — converge when
-      // any of the three moved (idempotent otherwise).
+      // playbook, only an ACTIVE playbook declares them, and a retired
+      // `schedule` is folded into one — converge when any of them moved
+      // (idempotent otherwise).
       if (
+        input.schedule !== undefined ||
         input.subjectProfile !== undefined ||
         input.name !== undefined ||
         (input.status !== undefined && input.status !== existing.status)
@@ -3027,16 +3022,8 @@ export const playbooksRouter = router({
         .where(eq(playbooks.id, input.id))
         .returning();
 
-      // S1: an archived playbook is not live, so neither is its schedule.
-      // Materialize reads `status` and takes the teardown branch — without this
-      // call the backing cron automation stayed `active` with a live nextRunAt
-      // and kept firing a playbook nothing else would surface.
-      await materializePlaybookCronAutomation(archived as Playbook, {
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-      });
-      // Same rule for what STARTS it: an archived playbook declares no live
-      // activator, so this pass retires its activator rules.
+      // An archived playbook is not live: it declares no live activator (its
+      // schedule included), so this pass retires its activator rules.
       await convergeActivatorsAfterWrite(archived!.id, {
         userId: ctx.userId,
         agentUserId: input.agentUserId,

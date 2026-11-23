@@ -20003,14 +20003,42 @@
                                         ]
                                       },
                                       "status": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 200
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 20
+                                          }
+                                        ]
                                       },
                                       "cron": {
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 120
+                                      },
+                                      "timezone": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "startsPaused": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      },
+                                      "handToAgentId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
                                       },
                                       "min": {
                                         "type": "integer",
@@ -20032,7 +20060,11 @@
                                       },
                                       "mode": {
                                         "type": "string",
-                                        "enum": ["run", "propose"],
+                                        "enum": [
+                                          "run",
+                                          "propose",
+                                          "appointment"
+                                        ],
                                         "default": "propose"
                                       },
                                       "maxPendingApprovals": {
@@ -20119,14 +20151,42 @@
                                     ]
                                   },
                                   "status": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 200
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 20
+                                      }
+                                    ]
                                   },
                                   "cron": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "timezone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "startsPaused": {
+                                    "type": "boolean",
+                                    "enum": [true]
+                                  },
+                                  "handToAgentId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
                                   },
                                   "min": {
                                     "type": "integer",
@@ -20148,7 +20208,7 @@
                                   },
                                   "mode": {
                                     "type": "string",
-                                    "enum": ["run", "propose"],
+                                    "enum": ["run", "propose", "appointment"],
                                     "default": "propose"
                                   },
                                   "maxPendingApprovals": {
@@ -25340,14 +25400,42 @@
                                         ]
                                       },
                                       "status": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 200
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 20
+                                          }
+                                        ]
                                       },
                                       "cron": {
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 120
+                                      },
+                                      "timezone": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "startsPaused": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      },
+                                      "handToAgentId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
                                       },
                                       "min": {
                                         "type": "integer",
@@ -25369,7 +25457,11 @@
                                       },
                                       "mode": {
                                         "type": "string",
-                                        "enum": ["run", "propose"],
+                                        "enum": [
+                                          "run",
+                                          "propose",
+                                          "appointment"
+                                        ],
                                         "default": "propose"
                                       },
                                       "maxPendingApprovals": {
@@ -25456,14 +25548,42 @@
                                     ]
                                   },
                                   "status": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 200
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 20
+                                      }
+                                    ]
                                   },
                                   "cron": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "timezone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "startsPaused": {
+                                    "type": "boolean",
+                                    "enum": [true]
+                                  },
+                                  "handToAgentId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
                                   },
                                   "min": {
                                     "type": "integer",
@@ -25485,7 +25605,7 @@
                                   },
                                   "mode": {
                                     "type": "string",
-                                    "enum": ["run", "propose"],
+                                    "enum": ["run", "propose", "appointment"],
                                     "default": "propose"
                                   },
                                   "maxPendingApprovals": {
@@ -32693,14 +32813,42 @@
                               ]
                             },
                             "status": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 20
+                                }
+                              ]
                             },
                             "cron": {
                               "type": "string",
                               "minLength": 1,
                               "maxLength": 120
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "startsPaused": {
+                              "type": "boolean",
+                              "enum": [true]
+                            },
+                            "handToAgentId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
                             },
                             "min": {
                               "type": "integer",
@@ -32722,7 +32870,7 @@
                             },
                             "mode": {
                               "type": "string",
-                              "enum": ["run", "propose"],
+                              "enum": ["run", "propose", "appointment"],
                               "default": "propose"
                             },
                             "maxPendingApprovals": {
@@ -52539,7 +52687,7 @@
                                 "activatorKey": { "type": "string" },
                                 "mode": {
                                   "type": "string",
-                                  "enum": ["run", "propose"]
+                                  "enum": ["run", "propose", "appointment"]
                                 },
                                 "scope": {
                                   "type": "string",

@@ -2,12 +2,11 @@
  * A SCHEDULED playbook hands each run's session to a named agent, and that
  * agent's orient finds it (`handedToYou`) — the loop `synap worker` polls.
  *
- * Driven from the schedule, not from a hand-built node: the playbook's
- * `schedule.handToAgentId` goes through the real reconciler
- * (`materializePlaybookCronAutomation` → `buildPlaybookRunFlowDefinition`,
- * kind-bound → query → loop → playbook_run) onto a stored automation row, the
- * stored node's `data` goes WHOLE into the real `playbook_run` step
- * (`executePlaybookRun`, @synap/jobs) with a loop item as the subject, the step
+ * Driven from the schedule, not from a hand-built node: a per_thing
+ * `schedule` activator's `handToAgentId` goes through the real compiler
+ * (`activatorRuleDecl` → the rule sentence → `toFlowDefinition`), the
+ * compiled node's `data` goes WHOLE into the real `playbook_run` step
+ * (`executePlaybookRun`, @synap/jobs) with one thing of the set as the run's subject, the step
  * reaches the real spine (`runPlaybook`, registered as the runner exactly as
  * apps/api does at boot), and the session row is read back out of PGlite and
  * through the real orient read (`buildStartHere` → `handedToYou`).
@@ -99,10 +98,10 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { is } from "drizzle-orm";
 import { PgTable as PgTableClass } from "drizzle-orm/pg-core";
 import * as database from "@synap/database";
-import type { FlowDefinition } from "@synap/database";
 import { executePlaybookRun } from "@synap/jobs/workers/steps/playbook-run.js";
 import { registerPlaybookRunner } from "@synap/jobs/workers/capability-dispatch.js";
-import { materializePlaybookCronAutomation } from "../cron-automation.js";
+import { toFlowDefinition } from "@synap-core/types/automations";
+import { activatorRuleDecl } from "../playbook-activators.js";
 import { runPlaybook } from "../run-playbook.js";
 import { buildStartHere } from "../../discover/start-here.js";
 
@@ -136,44 +135,44 @@ const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 /**
- * The playbook_run node the stored SCHEDULE compiles to: the playbook's jsonb
- * `schedule` through the real reconciler (`materializePlaybookCronAutomation`
- * → `readSchedule` → `buildPlaybookRunFlowDefinition`), read back off the
- * backing automation row it writes. Kind-bound, so the node sits in a loop.
+ * The playbook_run node a per_thing SCHEDULE activator compiles to, through
+ * the real compiler (`activatorRuleDecl` → its rule sentence → the flow).
  */
-async function compiledRunNode(schedule: { handToAgentId?: string }) {
-  const automationId = await materializePlaybookCronAutomation(
-    {
-      id: PLAYBOOK,
-      workspaceId: WS,
-      name: "Weekly account review",
-      status: "active",
-      subjectProfile: { profileSlug: "company", filter: "status = active" },
-      schedule: { cron: "0 9 * * MON", enabled: true, ...schedule },
+function compiledRunNode(schedule: { handToAgentId?: string }) {
+  const decl = activatorRuleDecl({
+    activator: {
+      on: "schedule",
+      cron: "0 9 * * 1",
+      size: "per_thing",
+      mode: "run",
+      ...schedule,
     },
-    { userId: USER }
-  );
-  if (!automationId) throw new Error("no backing automation was written");
-  const row = await q<{ flow_definition: FlowDefinition }>(
-    `select flow_definition from automations where id = $1`,
-    [automationId]
-  );
-  const node = row.rows[0]?.flow_definition.nodes.find(
-    (n) => n.type === "playbook_run"
-  );
+    playbookId: PLAYBOOK,
+    playbookName: "Weekly account review",
+    profileSlug: "company",
+    statusProperty: null,
+    subject: { profileKind: "kind", lifecycleProperty: null },
+  });
+  if (!("sentence" in decl)) throw new Error("the activator did not compile");
+  const node = toFlowDefinition(
+    (decl.sentence as { actions: Parameters<typeof toFlowDefinition>[0] })
+      .actions
+  ).nodes.find((n) => n.type === "playbook_run");
   if (!node) throw new Error("compiler emitted no playbook_run node");
   return node;
 }
 
-/** One cron slot's loop iteration over COMPANY, through the real step. */
+/** One tick's run on COMPANY (one thing of the set), through the real step. */
 async function fireSlot(schedule: { handToAgentId?: string }) {
-  const node = await compiledRunNode(schedule);
+  const node = compiledRunNode(schedule);
   return executePlaybookRun(
     node.data as unknown as Parameters<typeof executePlaybookRun>[0],
     {
-      trigger: { payload: { scheduledAt: new Date().toISOString() } },
+      trigger: {
+        payload: { scheduledAt: new Date().toISOString() },
+        subject: COMPANY,
+      },
       steps: {},
-      loop: { item: { id: COMPANY }, index: 0 },
     } as unknown as Parameters<typeof executePlaybookRun>[1],
     WS,
     USER

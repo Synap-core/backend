@@ -415,6 +415,27 @@ function deriveJsonSchema(
   return derived;
 }
 
+const BOUND_KEYS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minimum",
+  "maximum",
+  "pattern",
+]);
+
+/** A derived JSON schema without its bounds (see `activators` below). */
+function withoutBounds<T>(node: T): T {
+  if (Array.isArray(node)) return node.map(withoutBounds) as T;
+  if (!node || typeof node !== "object") return node;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(([k]) => !BOUND_KEYS.has(k))
+      .map(([k, v]) => [k, withoutBounds(v)])
+  ) as T;
+}
+
 function buildOutputSlotsJsonSchema(
   description: string
 ): Record<string, unknown> {
@@ -492,9 +513,13 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
     "Slug of the subject's lifecycle property (e.g. 'post-status'). Omit it: the process follows the lifecycle the kind or role declares. If you name it, name that same property. Needs subjectProfileSlug."
   ),
-  activators: deriveJsonSchema(
-    playbookActivatorsSchema,
-    "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug; each compiles to a governed rule the owner can pause."
+  // Bounds (lengths, counts, patterns) are the parse's, not advertised: the
+  // shape is what a caller needs, the door refuses what is out of bounds.
+  activators: withoutBounds(
+    deriveJsonSchema(
+      playbookActivatorsSchema,
+      "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug (a schedule may run without); each compiles to a governed rule the owner can pause."
+    )
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -4416,13 +4441,13 @@ export const tools = {
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
           "• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n" +
-          "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
-          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\n" +
-          "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
-          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
+          "• + `projects[]` / `tracks[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
+          "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is owed, not a percentage.\n" +
+          "Call it AFTER learning something durable, unasked. Placement uses EXISTING spaces only. `global:true` stores a pod-wide runbook (text only).\n" +
+          "DEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` (exact spellings). A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n" +
           "\n" +
-          'EXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill("system/synap/multi-entity-capture").\n' +
-          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\n' +
+          'EXAMPLES: synap_load_skill("system/synap/multi-entity-capture").\n' +
+          'ALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: "proposed"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. "Queued that for your review: [Review proposal](<reviewUrl>)" — never report a proposed write as simply done, and never withhold the link.\n`status: "partial"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug (default slugs resolve pod-wide, no `workspaceId` needed).\n' +
           'THE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: "rejected"` with reason "already-known" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), "no-durable-content" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.',
         inputSchema: {
           type: "object",
@@ -4558,7 +4583,7 @@ export const tools = {
             projects: {
               type: "array",
               description:
-                "PLAN: projects to create. `ref` is how sessions/entities point at it (`projectRef`). An agent-proposed project needs ≥5 evidence entities (`evidenceRefs` of entities in this call + `evidenceEntityIds` you can see); below that the step is still filed, MARKED for the reviewer, and never auto-applies.",
+                "PLAN: projects (`projectRef`). An agent's project needs ≥5 evidence entities (`evidenceRefs` in this call + `evidenceEntityIds` you can see); below that it is filed MARKED for the reviewer and never auto-applies.",
               items: {
                 type: "object",
                 properties: {
@@ -4648,6 +4673,19 @@ export const tools = {
                   },
                 },
                 required: ["ref", "title", "content"],
+              },
+            },
+            tracks: {
+              type: "array",
+              description:
+                "PLAN: goals (start_track fields; `projectRef`, `parentRef`, `blockedByRefs`, `…Id` twins). A session joins one by `trackRef`/`trackId`.",
+              items: {
+                type: "object",
+                properties: {
+                  ref: { type: "string" },
+                  name: { type: "string" },
+                },
+                required: ["ref", "name"],
               },
             },
             links: {
@@ -4816,7 +4854,7 @@ export const tools = {
             global: {
               type: "boolean",
               description:
-                "GLOBAL lane: store as a pod-wide procedural runbook (knowledge_keys) instead of structuring into entities. Use for cross-project how-to / decisions / operational docs ('how we deploy', 'auth works like…'). Mirrors the CLI's `capture --global`.",
+                "GLOBAL lane: a pod-wide runbook (knowledge_keys), not entities: cross-project how-to, decisions, operational docs ('how we deploy'). Mirrors `capture --global`.",
             },
             key: {
               type: "string",
@@ -5395,7 +5433,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
+          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts, appointment = opens a session for the person), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5416,7 +5454,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares no workers: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares only schedules: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
         inputSchema: {
           type: "object",
           properties: {

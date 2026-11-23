@@ -113,10 +113,11 @@ describe("worker target results", () => {
 });
 
 describe("effectiveWorkerSize", () => {
-  it("count and schedule are always per_moment; default per_thing", () => {
+  it("count is always per_moment; a schedule defaults to it; default per_thing", () => {
     expect(effectiveWorkerSize({ on: "schedule", size: "per_thing" })).toBe(
-      "per_moment"
+      "per_thing"
     );
+    expect(effectiveWorkerSize({ on: "schedule" })).toBe("per_moment");
     expect(effectiveWorkerSize({ on: "count", size: "per_thing" })).toBe(
       "per_moment"
     );
