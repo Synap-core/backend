@@ -33,7 +33,15 @@
  *
  * Cannot see: a live Unipile account, the intent actions door's HTTP layer.
  */
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 const h = vi.hoisted(() => {
@@ -1294,6 +1302,19 @@ describe("LinkedIn reach: HELD when filed, released on connected, and recorded o
     );
     return id;
   }
+
+  // The send door reads the real clock for the 21-day rule (no `now` reaches
+  // it through the capability handler), so the fixture's "now" is pinned for
+  // the code under test too, or a 3-day-old request ages into "ignored" once
+  // the real date passes NOW + 18 days. Only Date is faked: PGlite and the
+  // async plumbing keep real timers.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
 
   beforeEach(async () => {
     await q(`update entities set properties = $2 where id = $1`, [
