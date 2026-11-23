@@ -19,8 +19,9 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * Derives the CALLERS by scanning `packages/api/src` and `packages/jobs/src`
  * for `enterStage(` (comments blanked) and pins the set: a new caller must be
  * added here on purpose, a removed one fails. Derives the BIRTH places too:
- * every file that writes a `playbook_runs` ledger row (`.insert(playbookRuns)`)
- * starts a run on its first stage, so each must be a caller.
+ * every file that bears a `playbook_runs` ledger row (`insertPlaybookRun(`,
+ * the one birth in @synap/database) starts a run on its first stage, so each
+ * must be a caller.
  *
  * ── What it cannot see (measured) ──────────────────────────────────────────
  * - Granularity is the FILE: a file that calls `enterStage` at one place and
@@ -63,7 +64,7 @@ const RUN_ROWS_WITH_NO_STEP: Record<string, string> = {
 };
 
 const CALL = /\benterStage\(/;
-const RUN_ROW_WRITE = /\.insert\(\s*playbookRuns\s*\)/;
+const RUN_ROW_WRITE = /\binsertPlaybookRun\(/;
 
 function tsFiles(dir: string, acc: string[] = []): string[] {
   let entries;

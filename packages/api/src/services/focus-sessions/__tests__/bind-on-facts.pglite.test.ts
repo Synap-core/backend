@@ -175,12 +175,13 @@ async function insertPlaybook(
   name: string,
   status: string,
   subjectProfile: unknown,
-  workspaceId: string | null = null
+  workspaceId: string | null = null,
+  stages: unknown[] = []
 ) {
   await q(
     `insert into playbooks
        (id, workspace_id, created_by, name, goal_template, executor, stages, criteria, expected_outputs, params, subject_profile, version, status, scope, created_at, updated_at)
-     values ($1, $7, $2, $3, $3, 'external-agent', '[]'::jsonb,
+     values ($1, $7, $2, $3, $3, 'external-agent', $8::jsonb,
              $4::jsonb, '[]'::jsonb, '[]'::jsonb, $5::jsonb, 1, $6, 'session', now(), now())`,
     [
       id,
@@ -196,6 +197,7 @@ async function insertPlaybook(
       subjectProfile === null ? null : JSON.stringify(subjectProfile),
       status,
       workspaceId,
+      JSON.stringify(stages),
     ]
   );
 }
@@ -212,12 +214,13 @@ async function entityOf(profileId: string): Promise<string> {
 
 type Row = {
   playbook_id: string | null;
+  current_stage: string | null;
   metadata: Record<string, unknown>;
 };
 const rowOf = async (id: string): Promise<Row> =>
   (
     await q<Row>(
-      `select playbook_id, metadata from focus_sessions where id = $1`,
+      `select playbook_id, current_stage, metadata from focus_sessions where id = $1`,
       [id]
     )
   ).rows[0]!;
@@ -292,7 +295,10 @@ beforeAll(async () => {
     [HOMED_PROJECT, SPACE, USER, HOMELESS_PROJECT]
   );
   await insertPlaybook(IN_SPACE, "Run a wave", "active", null, SPACE);
-  await insertPlaybook(MAIN_RED, "Fix main red", "active", null, SPACE);
+  await insertPlaybook(MAIN_RED, "Fix main red", "active", null, SPACE, [
+    { key: "claim", name: "Claim" },
+    { key: "fix", name: "Fix" },
+  ]);
   await q(
     `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by, created_at)
      values ($1, null, 'playbook', $2, 'tool', 'some-tool', 'grants', '{}'::jsonb, $3, now())`,
@@ -395,6 +401,9 @@ describe("binding reads the space the session space ladder placed (W3)", () => {
     const row = await rowOf(res.session.id);
     expect(row.playbook_id).toBe(MAIN_RED);
     expect(row.metadata.boundBy).toMatchObject({ rung: "main-red" });
+    // A bind at the start is a birth: the session is in the first stage, so
+    // its stage-gated criteria can be graded as the work moves.
+    expect(row.current_stage).toBe("claim");
   });
 
   it("a session the ladder leaves in no space never binds a space's playbook", async () => {

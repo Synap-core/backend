@@ -12,7 +12,6 @@ import {
   db,
   focusSessions,
   playbooks,
-  playbookRuns,
   eq,
   and,
   drizzleSql,
@@ -28,8 +27,7 @@ import {
   insertFocusSessionRow,
   sessionDefinitionColumns,
   derivedSessionTitle,
-  ownerAndActor,
-  runBirthStatus,
+  insertPlaybookRun,
   runHolder,
   starterHolder,
 } from "@synap/database";
@@ -885,6 +883,21 @@ export async function createFocusSession(
       { code: "BAD_REQUEST" }
     );
   }
+  // A PERSON's start that names an agent hands the run to it through the one
+  // launch path (`resolveRunChoice` → `dispatchRunOnSession`), refused by name
+  // before anything is written when the agent cannot take it. The starter's
+  // own run, and an agent's hand-off (its own governed gate), are born below.
+  const namedRunner =
+    playbook && !agentUserId ? requestedAgentIds[0]?.trim() || null : null;
+  const runChoice = namedRunner
+    ? await (
+        await import("../playbooks/run-playbook.js")
+      ).resolveRunChoice({
+        userId,
+        handToAgentId: namedRunner,
+        playbook: playbook!,
+      })
+    : null;
 
   // PROJECT LENS — derived from the context this door already holds, rather
   // than waited for. Before this, `projectId` was whatever the caller passed and
@@ -1508,24 +1521,23 @@ export async function createFocusSession(
     // The playbook_runs ledger row so the runs feed sees the session, with
     // THE shared snapshot (`buildDefinitionSnapshot`), minus the executor
     // dispatch: starting a session is "I'm working on this playbook". Its
-    // starter holds it, working from birth (`running`); a start that hands it
-    // to another agent leaves it `queued` until that agent claims it.
-    if (playbook) {
-      const owner = await ownerAndActor(tx, userId, agentUserId);
-      const handedTo =
-        handedOff[0] ?? (agentUserId ? undefined : requestedAgentIds[0]);
-      await tx.insert(playbookRuns).values({
+    // starter holds it, working from birth (`running`); an agent's hand-off
+    // leaves it `queued` until that agent claims it. A run a person handed
+    // to an agent is born by the dispatch below, once the room exists.
+    if (playbook && !runChoice) {
+      const handedTo = handedOff[0];
+      await insertPlaybookRun(tx, {
         workspaceId,
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
         // A planned step's run waits with it and starts when it wakes (P4).
-        status: handedTo ? "queued" : runBirthStatus(bornStatus),
+        sessionStatus: bornStatus,
         holder: handedTo
           ? runHolder("agent", handedTo)
           : starterHolder(userId, agentUserId),
-        createdBy: owner.ownerId,
-        agentUserId: owner.agentUserId,
+        writerUserId: userId,
+        agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }
@@ -1565,10 +1577,35 @@ export async function createFocusSession(
     agentUserId: agentUserId ?? null,
   });
 
+  // The run a person handed to an agent: dispatched to it on the session's
+  // room (a dispatch agent's provider task starts it; a pull agent finds it
+  // handed to it). The dispatch enters the first stage itself.
+  if (playbook && runChoice) {
+    if (!sessionOut.channelId) {
+      throw new Error(
+        `Session ${sessionOut.id} has no room, so its run could not be handed to the agent.`
+      );
+    }
+    const { dispatchRunOnSession } =
+      await import("../playbooks/run-playbook.js");
+    await dispatchRunOnSession({
+      playbook,
+      sessionId: sessionOut.id,
+      channelId: sessionOut.channelId,
+      actorId: userId,
+      workspaceId: sessionOut.workspaceId ?? null,
+      params: paramResolution?.declaredValues ?? {},
+      subjectId: sessionOut.subjectEntityId ?? null,
+      agentType: null,
+      handOff: runChoice.handOff,
+      runOn: runChoice.runOn,
+    });
+  }
+
   // BIRTH: a session born on a playbook starts its first stage now — the
   // stage runner records who works it (`enterStage`, spec 7111934d §3.1).
   // After the commit; never throws.
-  if (playbook && sessionOut.currentStage) {
+  if (playbook && !runChoice && sessionOut.currentStage) {
     const { enterStage } = await import("../playbooks/stage-runner.js");
     await enterStage({
       sessionId: sessionOut.id,

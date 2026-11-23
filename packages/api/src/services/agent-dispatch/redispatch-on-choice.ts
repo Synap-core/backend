@@ -30,11 +30,15 @@ import {
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { ExecutorRef, PlaybookStage, RunResult } from "@synap/playbooks";
-import type { PlaybookRun } from "@synap/database/schema";
+import type { Playbook, PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
-import { recordExecutorResult } from "../playbooks/run-playbook.js";
+import {
+  recordExecutorResult,
+  resolveRunChoice,
+  runWorkOfSession,
+} from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
 import {
   getLinksFor,
@@ -135,6 +139,28 @@ export async function redispatchRun(
     fromType: "playbook",
   });
   const snapshot = asRecord(run.definitionSnapshot);
+  // An agent's run names its agent before the executor runs: the one on its
+  // input, else the run choice over the session as it is now (its frozen
+  // runner, the stored choice, the person's answer, then the last rungs).
+  let input: Record<string, unknown> = {
+    ...asRecord(run.input),
+    runId: run.id,
+  };
+  if (executor === "external-agent" && !input.agentUserId) {
+    const { handOff, runOn } = await resolveRunChoice({
+      userId: session.userId,
+      workspaceId: run.workspaceId ?? session.workspaceId,
+      playbook: {
+        id: run.playbookId,
+        executor: "external-agent",
+        runner: (snapshot.runner ?? null) as Playbook["runner"],
+        requires: (snapshot.requires ?? []) as Playbook["requires"],
+      },
+      work: runWorkOfSession(session),
+    });
+    const agentUserId = handOff?.agentUserId ?? runOn.agentUserId;
+    if (agentUserId) input = { ...input, agentUserId };
+  }
 
   let result: RunResult;
   try {
@@ -152,7 +178,7 @@ export async function redispatchRun(
         ? (snapshot.stages as PlaybookStage[])
         : [],
       currentStage: session.currentStage,
-      input: { ...asRecord(run.input), runId: run.id },
+      input,
       capabilities,
     });
   } catch (err) {
