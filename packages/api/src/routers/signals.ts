@@ -1714,6 +1714,7 @@ function narrowAttention(
             applications: [],
             keys: [],
             connections: [],
+            landed: [],
           },
           accessRequestsTruncated: false,
           spaceInvites: [],

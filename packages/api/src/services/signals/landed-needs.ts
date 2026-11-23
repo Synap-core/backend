@@ -26,6 +26,7 @@ import {
   or,
   proposals,
 } from "@synap/database";
+import { ProposalStatus } from "@synap/database/schema";
 import type { ObjectNextAction } from "@synap-core/types/units";
 import { proposalUserFloor } from "../../routers/proposals/scope-conditions.js";
 import { resolveLandedObjects } from "../proposals/landed-read.js";
@@ -44,7 +45,7 @@ export const PERSON_ONLY_NEXT_ACTIONS = [
   "enable",
 ] as const satisfies readonly ObjectNextAction[];
 
-const APPLIED = ["approved", "auto_approved", "partially_approved"] as const;
+const APPLIED = [ProposalStatus.APPROVED, ProposalStatus.AUTO_APPROVED];
 
 const isPersonOnly = (
   action: string
@@ -77,7 +78,7 @@ export async function listLandedNeedsPerson(args: {
     .from(proposals)
     .where(
       and(
-        inArray(proposals.status, [...APPLIED]),
+        inArray(proposals.status, APPLIED),
         gte(proposals.updatedAt, since),
         or(
           eq(proposals.reviewedBy, args.userId),
