@@ -1149,7 +1149,7 @@ async function subjectProfileId(
  * playbook, its subject's kind, its project, its space), then the single
  * agent bound for dispatch, else the person chooses.
  */
-export async function routeRunAgent(p: {
+async function routeRunAgent(p: {
   ownerId: string;
   playbookId: string;
   workspaceId: string | null;

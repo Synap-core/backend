@@ -30,13 +30,13 @@ import {
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { ExecutorRef, PlaybookStage, RunResult } from "@synap/playbooks";
-import type { PlaybookRun } from "@synap/database/schema";
+import type { Playbook, PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
 import {
   recordExecutorResult,
-  routeRunAgent,
+  resolveRunChoice,
   runWorkOfSession,
 } from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
@@ -139,26 +139,27 @@ export async function redispatchRun(
     fromType: "playbook",
   });
   const snapshot = asRecord(run.definitionSnapshot);
-  // An agent-only run names its agent before the executor runs: the one on
-  // its input, the one the person answered, else the run choice's last rungs
-  // (roster, assignment, single bound agent) over the session as it is now.
+  // An agent's run names its agent before the executor runs: the one on its
+  // input, else the run choice over the session as it is now (its frozen
+  // runner, the stored choice, the person's answer, then the last rungs).
   let input: Record<string, unknown> = {
     ...asRecord(run.input),
     runId: run.id,
   };
   if (executor === "external-agent" && !input.agentUserId) {
-    const work = runWorkOfSession(session);
-    if (!work.answeredAgentUserId) {
-      const routed = await routeRunAgent({
-        ownerId: session.userId,
-        playbookId: run.playbookId,
-        workspaceId: session.workspaceId ?? run.workspaceId ?? null,
-        work,
-      });
-      if (routed.kind === "routed") {
-        input = { ...input, agentUserId: routed.agentUserId };
-      }
-    }
+    const { handOff, runOn } = await resolveRunChoice({
+      userId: session.userId,
+      workspaceId: run.workspaceId ?? session.workspaceId,
+      playbook: {
+        id: run.playbookId,
+        executor: "external-agent",
+        runner: (snapshot.runner ?? null) as Playbook["runner"],
+        requires: (snapshot.requires ?? []) as Playbook["requires"],
+      },
+      work: runWorkOfSession(session),
+    });
+    const agentUserId = handOff?.agentUserId ?? runOn.agentUserId;
+    if (agentUserId) input = { ...input, agentUserId };
   }
 
   let result: RunResult;

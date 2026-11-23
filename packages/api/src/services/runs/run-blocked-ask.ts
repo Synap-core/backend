@@ -39,6 +39,11 @@ import { a2aiTurnPendingIn } from "@synap/jobs";
 import { registerReactor, type Reactor } from "@synap/events";
 import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
 import type { RunHolder } from "@synap-core/types/units";
+import {
+  askOptionForChip,
+  askOptionKey,
+  type Ask,
+} from "@synap-core/types/ask";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { raiseRunAsk } from "./run-ask.js";
 import { rowsOf } from "../../utils/execute-rows.js";
@@ -97,6 +102,16 @@ export function blockedRunChoiceOf(value: string): BlockedRunChoice {
   return { kind: "agent", agentUserId: value };
 }
 
+/** Synap AI may run this playbook: it exists and does not run only on agents. */
+async function synapAiMayRun(playbookId: string): Promise<boolean> {
+  const [playbook] = await db
+    .select({ executor: playbooks.executor })
+    .from(playbooks)
+    .where(eq(playbooks.id, playbookId))
+    .limit(1);
+  return !!playbook && playbook.executor !== "external-agent";
+}
+
 /**
  * The card: the same runner again (recommended), the other runners that can
  * take it now, or stop.
@@ -106,11 +121,7 @@ async function askFor(
   userId: string
 ): Promise<SlotAsk> {
   const synapAi = !run.holder || run.holder.kind === "synap_ai";
-  const [playbook] = await db
-    .select({ executor: playbooks.executor })
-    .from(playbooks)
-    .where(eq(playbooks.id, run.playbookId))
-    .limit(1);
+  const offerSynapAi = !synapAi && (await synapAiMayRun(run.playbookId));
   const { readAgentsForHandoff } =
     await import("../agent-dispatch/agents-for-handoff.js");
   const others = (await readAgentsForHandoff(userId)).agents
@@ -138,7 +149,7 @@ async function askFor(
             recommended: true,
             description: "The agent gets another chance to pick it up",
           },
-      ...(!synapAi && playbook && playbook.executor !== "external-agent"
+      ...(offerSynapAi
         ? [
             {
               label: "Run it on Synap AI",
@@ -222,7 +233,35 @@ export async function askAboutBlockedRun(
   });
 }
 
-type BlockedAnswer = "restarted" | "waiting" | "cancelled" | "nothing";
+type BlockedAnswer =
+  | "restarted"
+  | "waiting"
+  | "cancelled"
+  | "refused"
+  | "nothing";
+
+/**
+ * The choice a picked chip stands for, only when the session's card OFFERED
+ * it (`askOptionForChip`): an answer naming anything else is refused.
+ */
+export async function offeredBlockedRunChoice(
+  sessionId: string,
+  chipValue: string
+): Promise<BlockedRunChoice | null> {
+  const session = await db.query.focusSessions.findFirst({
+    columns: { expectedOutputs: true },
+    where: eq(focusSessions.id, sessionId),
+  });
+  const slot = ((session?.expectedOutputs ?? []) as ExpectedOutput[]).find(
+    (o) =>
+      normalizeExpectedLabel(o?.label) ===
+      normalizeExpectedLabel(RUN_BLOCKED_SLOT_LABEL)
+  );
+  const offered = askOptionForChip(slot?.ask as Ask | undefined, {
+    value: chipValue,
+  });
+  return offered ? blockedRunChoiceOf(askOptionKey(offered)) : null;
+}
 
 async function applyToRun(
   run: PlaybookRun,
@@ -233,6 +272,9 @@ async function applyToRun(
     const { cancelRun } = await import("../agent-dispatch/cancel-run.js");
     const out = await cancelRun({ runId: run.id, userId: answeredBy });
     return out.status === "cancelled" ? "cancelled" : "nothing";
+  }
+  if (choice.kind === "synap_ai" && !(await synapAiMayRun(run.playbookId))) {
+    return "refused";
   }
   if (choice.kind === "agent") {
     const {
@@ -349,14 +391,21 @@ export const runBlockedAnswerReactor: Reactor = {
     } | null;
     const answeredBy =
       (payload.data?.answeredBy as string | undefined) ?? payload.userId;
-    const picked = value?.chip?.value ?? value?.chip?.label;
-    const choice: BlockedRunChoice | null =
-      value?.type === "chip" && picked
-        ? blockedRunChoiceOf(picked)
-        : value?.type === "confirm"
-          ? { kind: value.confirmed === true ? "same" : "stop" }
-          : null;
-    if (!choice || !answeredBy) return;
+    const picked = value?.type === "chip" ? value.chip?.value : undefined;
+    const choice: BlockedRunChoice | null = picked
+      ? await offeredBlockedRunChoice(payload.subjectId, picked)
+      : value?.type === "confirm"
+        ? { kind: value.confirmed === true ? "same" : "stop" }
+        : null;
+    if (!choice || !answeredBy) {
+      if (picked) {
+        logger.warn(
+          { sessionId: payload.subjectId, picked },
+          "a blocked run's answer named a runner its card did not offer: refused"
+        );
+      }
+      return;
+    }
     try {
       const out = await applyBlockedRunAnswer({
         sessionId: payload.subjectId,
