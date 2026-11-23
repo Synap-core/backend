@@ -68,7 +68,8 @@ export async function makeLifecyclePglite() {
     create table if not exists workspaces (id uuid primary key, owner_id text, settings jsonb);
     create table if not exists pod_members (user_id text, removed_at timestamptz);
     create table if not exists project_members (user_id text, role text);
-    create table if not exists users (id text primary key);
+    create table if not exists users (id text primary key, user_type text, created_by_user_id text);
+    create table if not exists api_keys (user_id text, linked_user_id text, is_active boolean, revoked_at timestamptz);
     create table if not exists space_access (object_type text, object_id uuid, workspace_id uuid);
   `);
   await pg.exec(MIGRATION_0319);

@@ -117,6 +117,10 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
+import {
+  WORK_GRAPH_EDGE_KINDS,
+  type WorkGraphEdgeKind,
+} from "@synap-core/types/focus-sessions";
 import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -205,23 +209,18 @@ export type {
  *   - `serves`          from = a session or a goal (`fromKind: "track"`), to =
  *                       the goal it is done for (`toKind: "track"`).
  */
-export const WORK_GRAPH_EDGE_KINDS = [
-  "blocked_by",
-  "spawned_from",
-  "orchestrated_by",
-  "waits_on_output",
-  "triggered",
-  "updated",
-  "serves",
-] as const satisfies ReadonlyArray<
+export { WORK_GRAPH_EDGE_KINDS, type WorkGraphEdgeKind };
+// The list is declared once in `@synap-core/types/focus-sessions` (the apps
+// import it); a kind this read cannot produce stops the build here.
+const _kindsKnown: ReadonlyArray<
   | "blocked_by"
   | "spawned_from"
   | "orchestrated_by"
   | "waits_on_output"
   | SessionInteractionType
   | "serves"
->;
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+> = WORK_GRAPH_EDGE_KINDS;
+void _kindsKnown;
 // A new interaction type the graph does not list stops the build: it would
 // otherwise reach the wire as an edge kind no schema declares.
 type _InteractionsCovered = [

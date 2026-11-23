@@ -1039,9 +1039,8 @@ export interface ProvisionSurfaceAgentKeyOpts {
   pendingApproval?: boolean;
   /**
    * Hook invoked once the agent-user is resolved/created and (optionally) its
-   * registry row ensured, BEFORE the idempotency check and revoke+mint. The
-   * setup/agent endpoint uses it to grant workspace membership at the exact point
-   * it did inline.
+   * registry row ensured, BEFORE the idempotency check and revoke+mint (the
+   * device flow sets the agent's write posture there).
    */
   onAgentUserResolved?: (agentUserId: string) => Promise<void>;
   /**
@@ -1123,8 +1122,8 @@ export type ProvisionSurfaceAgentKeyResult =
  *   1. find-or-create the agent user for (creator, agentType) — race-safe against
  *      the unique index (migration 0228; replaces pod-wide agentType-only 0037).
  *   2. optionally ensure the `agents` registry row (local CLI adjunct).
- *   3. `onAgentUserResolved` hook (caller-specific side effects — e.g. workspace
- *      membership) BEFORE the idempotency check and revoke+mint.
+ *   3. `onAgentUserResolved` hook (caller-specific side effects — e.g. the
+ *      agent's write posture) BEFORE the idempotency check and revoke+mint.
  *   4. idempotent short-circuit (when opts.idempotent) — a live key exists → return.
  *   5. instance-aware sibling revoke, then mint+verify via the canonical primitive.
  */

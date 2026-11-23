@@ -108,6 +108,7 @@ vi.mock("../../playbooks/playbook-lifecycle.js", () => ({
 }));
 vi.mock("../../playbooks/run-playbook.js", () => ({
   resolveRunChoice: async () => ({ handOff: null, runOn: null, persona: null }),
+  runWorkOfSession: () => ({}),
   dispatchRunOnSession: async (p: Record<string, unknown>) => {
     h.dispatched.push(p);
     return { id: NEW_RUN, status: "running" };

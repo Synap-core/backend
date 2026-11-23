@@ -8,12 +8,12 @@
  * `config.agentBinding`), whose `start` verb runs through `executeCapability`
  * — governed, and attributed to the AGENT user.
  *
- * ── Which agent (the contract order, never a silent default) ────────────────
- *   1. the run param `agentUserId` (or the same param answered onto the
- *      session's `metadata.params` through the "choose an agent" slot);
- *   2. the session roster's dispatchable agent (reach `'dispatch'`);
- *   3. THE dispatchable agent, when exactly one exists on the pod;
- *   4. otherwise the run FAILS and the person owes ONE slot, "Choose an
+ * ── Which agent (never a silent default) ────────────────────────────────────
+ *   1. the run param `agentUserId`: the agent the run choice named
+ *      (`resolveRunChoice`, whose last rungs are the roster, the assignment
+ *      and the single bound agent), or the same param answered onto the
+ *      session's `metadata.params` through the "choose an agent" slot;
+ *   2. otherwise the run FAILS and the person owes ONE slot, "Choose an
  *      agent", whose ask lists the dispatchable agents. Answering it writes
  *      `agentUserId` into the session's params; the next run uses it.
  *
@@ -52,7 +52,6 @@ import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import {
   db,
-  entities,
   focusSessions,
   playbooks,
   users,
@@ -65,7 +64,6 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
-import { isLikelyUUID } from "@synap-core/types/proposals";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { externalAgentCallFailedReason } from "@synap-core/types/agents";
 import {
@@ -73,7 +71,7 @@ import {
   resolveAgentBinding,
   type AgentBinding,
 } from "../../agent-dispatch/agent-binding.js";
-import { route } from "../../agent-dispatch/route.js";
+import { ownedCandidates, route } from "../../agent-dispatch/route.js";
 import {
   asOptionalString,
   agentDisplayName,
@@ -135,19 +133,6 @@ async function loadSession(sessionId: string): Promise<SessionRow | null> {
     projectId: row.projectId ?? null,
     workspaceId: row.workspaceId ?? null,
   };
-}
-
-/** The kind (profile row) of the run's subject, for the assignment rung. */
-async function subjectProfileId(
-  subjectId: string | undefined
-): Promise<string | null> {
-  if (!subjectId || !isLikelyUUID(subjectId)) return null;
-  const [row] = await db
-    .select({ profileId: entities.profileId })
-    .from(entities)
-    .where(eq(entities.id, subjectId))
-    .limit(1);
-  return row?.profileId ?? null;
 }
 
 /** The agent's own door key, by REFERENCE (id + prefix) — never the secret. */
@@ -345,40 +330,39 @@ export class ExternalAgentExecutor implements Executor {
       return { status: "failed", error };
     };
 
-    // 1. Which agent — THE route (`agent-dispatch/route.ts`): the param, then
-    // the roster, then the single bound one, else the person chooses.
+    // 1. Which agent — the one the run choice named (`resolveRunChoice`, on
+    // the run's input), else the one the person answered on the session.
+    // Nobody named: the person chooses among the agents bound for dispatch.
     const named = paramAgent(input, session);
-    const choice = await route({
-      ownerId,
-      accept: ["dispatch"],
-      selector: named ? { agentUserId: named } : null,
-      roster: session.agentIds,
-      // What the run is about — the assignment rung (W1b).
-      targets: {
-        playbook: ctx.playbookId ?? null,
-        profile: await subjectProfileId(ctx.subjectId),
-        project: session.projectId,
-        workspace: session.workspaceId ?? ctx.workspaceId ?? null,
-      },
-      pool: "owned",
-    });
-    if (choice.kind === "refused") {
-      return fail(
-        `${await agentDisplayName(choice.agentUserId)} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
-        "invalid-agent"
-      );
-    }
-    if (choice.kind === "choose") {
+    if (!named) {
+      const candidates = await ownedCandidates({
+        ownerId,
+        accept: ["dispatch"],
+      });
       await oweChooseAgentSlot({
         session,
-        candidates: choice.candidates,
+        candidates,
         playbookName: await playbookNameOf(ctx.playbookId),
       });
       return fail(
-        choice.candidates.length === 0
+        candidates.length === 0
           ? "no agent is bound for dispatch — bind one, then run this again"
-          : "several agents can take this work — choose one in the session, then run this again",
+          : candidates.length === 1
+            ? "the run named no agent — choose yours in the session, then run this again"
+            : "several agents can take this work — choose one in the session, then run this again",
         "choose-agent"
+      );
+    }
+    const choice = await route({
+      ownerId,
+      accept: ["dispatch"],
+      selector: { agentUserId: named },
+      pool: "owned",
+    });
+    if (choice.kind !== "routed") {
+      return fail(
+        `${await agentDisplayName(named)} is not one of your agents bound for dispatch — bind it to its provider, or choose another agent`,
+        "invalid-agent"
       );
     }
     const agentUserId = choice.agentUserId;

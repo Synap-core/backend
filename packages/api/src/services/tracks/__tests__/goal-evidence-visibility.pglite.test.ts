@@ -115,6 +115,7 @@ import {
   sessionEvaluations,
   users,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "@synap/database";
 import type { GoalCriterionView } from "@synap-core/types/units";
@@ -311,6 +312,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     projectMembers,
     links,

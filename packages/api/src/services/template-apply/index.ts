@@ -185,7 +185,7 @@ async function applyLayerTwo(args: {
   workspaceId: string;
   userId: string;
   body: PackagePostWorkspaceBody;
-  posture: { agentUserId?: string; enrollAgentUserId?: string };
+  posture: { agentUserId?: string };
   scopes: string[];
   source: string;
 }): Promise<LayerTwoReport> {
@@ -420,7 +420,7 @@ export async function applyTemplate(
   let finished: FinishTemplateApplyResult | null = null;
   const runLayerTwo = (
     body: PackagePostWorkspaceBody,
-    posture: { agentUserId?: string; enrollAgentUserId?: string }
+    posture: { agentUserId?: string }
   ) =>
     applyLayerTwo({
       workspaceId,
@@ -473,7 +473,7 @@ export async function applyTemplate(
       Record<string, unknown> | undefined;
     let body: (PackagePostWorkspaceBody & Record<string, unknown>) | null =
       callerBody;
-    let posture: { agentUserId?: string; enrollAgentUserId?: string } = {
+    let posture: { agentUserId?: string } = {
       agentUserId: actor.agentUserId,
     };
     if (catalog) {
@@ -497,7 +497,7 @@ export async function applyTemplate(
       // Approver authority covers ONLY what the server resolved from the
       // catalog: a person approved that package. Anything else is the
       // agent's own body and keeps the agent's governance.
-      if (actor.approved) posture = { enrollAgentUserId: actor.agentUserId };
+      if (actor.approved) posture = {};
     }
     if (body && (input.alwaysRunLayerTwo || declaresLayerTwo(body)))
       layer2 = await runLayerTwo(body, posture);

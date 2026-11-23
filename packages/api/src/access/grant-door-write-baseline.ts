@@ -147,7 +147,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /workspaces/:workspaceId/restore",
   "POST /workspaces/:workspaceId/retire-into",
   "POST /workspaces/:workspaceId/to-template",
-  "POST /workspaces/enroll-agent",
   "POST /workspaces/provision-agent",
   "PUT /agent-users/:agentUserId/presets/:presetKey",
   "PUT /apps/:id/redirect-uris",

@@ -2869,7 +2869,7 @@ const marketScaffoldHandler: BuiltinVerbHandler = async (params, ctx) => {
     return {
       status: proposedView.status,
       // Allocated at propose-time so the caller can reference it before
-      // approval; absent on a join gate, where no id was ever allocated.
+      // approval.
       entityId: proposedView.proposedEntityId ?? null,
       proposalId: proposedView.proposalId,
       // The door already built the review link — never rebuild it here.

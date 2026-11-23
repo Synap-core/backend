@@ -95,6 +95,8 @@ const TABLES = [
   schema.federatedIdentityLinks,
   schema.workspaces,
   schema.workspaceMembers,
+  schema.users,
+  schema.apiKeys,
   schema.sourceConfigs,
 ] as const;
 

@@ -1,29 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  TRACK_SPACE_GRANT_KEY,
-  buildTrackStartSummary,
-} from "./track-start-summary.js";
-
-const grant = {
-  [TRACK_SPACE_GRANT_KEY]: {
-    agentName: "Claude Code",
-    spaces: [{ workspaceId: "w1", name: "Strategy" }],
-  },
-};
+import { buildTrackStartSummary } from "./track-start-summary.js";
 
 describe("buildTrackStartSummary", () => {
   it("a plain start has no sentence of its own", () => {
     expect(buildTrackStartSummary("track", "create", { name: "Grow" })).toBe(
       null
-    );
-    expect(buildTrackStartSummary("track", "update", grant)).toBe(null);
-  });
-
-  it("states the space grant", () => {
-    expect(
-      buildTrackStartSummary("track", "create", { name: "Grow", ...grant })
-    ).toBe(
-      'Create Goal "Grow" and let Claude Code work in Strategy for this goal'
     );
   });
 
@@ -48,11 +29,8 @@ describe("buildTrackStartSummary", () => {
           title: "Run",
           ended: { status: "completed", verdict: "met" },
         },
-        ...grant,
       })
-    ).toBe(
-      'Create Goal "Run" from goal "Run" — Closed (Met) and let Claude Code work in Strategy for this goal'
-    );
+    ).toBe('Create Goal "Run" from goal "Run" — Closed (Met)');
     expect(
       buildTrackStartSummary("track", "create", {
         name: "Oboe",

@@ -79,6 +79,7 @@ import {
   entities,
   workspaces,
   workspaceMembers,
+  apiKeys,
   userResourceState,
   projects,
   relations,
@@ -186,6 +187,7 @@ beforeAll(async () => {
     entities,
     workspaces,
     workspaceMembers,
+    apiKeys,
     userResourceState,
     projects,
     // The listing rule (`listableEntityWhere`) reads project filings

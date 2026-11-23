@@ -68,7 +68,7 @@ describe("pickBridgeWritePayload", () => {
     });
   });
 
-  it("an update needs an id and properties; expectedStatus may be null", () => {
+  it("an update needs an id and properties or a title; expectedStatus may be null", () => {
     expect(
       pickBridgeWritePayload("update_entity", {
         id: ID,
@@ -79,10 +79,42 @@ describe("pickBridgeWritePayload", () => {
       ok: true,
       payload: { id: ID, properties: { status: "done" }, expectedStatus: null },
     });
-    expect(pickBridgeWritePayload("update_entity", { id: ID })).toEqual({
-      ok: false,
-      error: '"update_entity" needs properties.',
+    for (const nothing of [
+      { id: ID },
+      { id: ID, expectedStatus: "todo" },
+      { id: ID, title: undefined, properties: undefined },
+    ])
+      expect(pickBridgeWritePayload("update_entity", nothing)).toEqual({
+        ok: false,
+        error: '"update_entity" needs title or properties.',
+      });
+  });
+
+  it("an update may rename: a title alone, or with properties", () => {
+    expect(
+      pickBridgeWritePayload("update_entity", { id: ID, title: "Call Ada" })
+    ).toEqual({ ok: true, payload: { id: ID, title: "Call Ada" } });
+    expect(
+      pickBridgeWritePayload("update_entity", {
+        id: ID,
+        title: "Call Ada",
+        properties: { priority: "high" },
+      })
+    ).toEqual({
+      ok: true,
+      payload: { id: ID, title: "Call Ada", properties: { priority: "high" } },
     });
+    // A title is text of 1 to 500 characters: empty, too long or not text
+    // refuses the whole write.
+    for (const title of ["", "x".repeat(501), 7, null])
+      expect(
+        pickBridgeWritePayload("update_entity", {
+          id: ID,
+          title,
+          properties: { priority: "high" },
+        }).ok,
+        String(title)
+      ).toBe(false);
   });
 
   it("ids must be UUIDs; a relation type is a short slug", () => {

@@ -777,7 +777,6 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   "vault.vault.request" satisfies DirectProposalEventKey,
   "capability.capability.install" satisfies DirectProposalEventKey,
   "capability.capability.update" satisfies DirectProposalEventKey,
-  "workspace.join" satisfies DirectProposalEventKey,
   "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
   // Gate doors, live for an agent (founder, 21 Nov 2026, wave 9563b6f7): an
   // agent's tool can carry a credential (`credentialRef`), and adopting a
@@ -3028,7 +3027,6 @@ export const DIRECT_PROPOSAL_DOORS = {
   // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
   // mints the source and hands its secret to the host, never to a person.
   "webhook/inbound_source.connect": "direct",
-  "workspace/join": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by
   // `routers/proposals/executors/trusted-issuer.ts` (pod admin, a person —

@@ -96,6 +96,7 @@ const TABLES = [
   "users",
   "workspaces",
   "workspaceMembers",
+  "apiKeys",
   "podMembers",
   "playbooks",
   "governanceRules",

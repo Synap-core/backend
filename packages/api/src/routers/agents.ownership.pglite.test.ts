@@ -53,6 +53,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
   agents,
   users,
 } from "@synap/database/schema";
@@ -106,7 +107,7 @@ async function agentRow(id: string): Promise<AgentRow> {
 }
 
 beforeAll(async () => {
-  for (const t of [workspaces, workspaceMembers, agents, users])
+  for (const t of [workspaces, workspaceMembers, apiKeys, agents, users])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   for (const [id, type, createdBy] of [
     [ALICE, "human", null],

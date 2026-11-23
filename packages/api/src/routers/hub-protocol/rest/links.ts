@@ -313,6 +313,26 @@ export function registerLinksRoutes(app: HubHono): void {
         );
       }
     }
+    // `spawned_from` metadata is written ONLY by its producer
+    // (`recordSessionSpawn`), after the start door's checks: `forOutput`
+    // (W7) names the parent output a lane fills when it closes done, and is
+    // recorded only once `checkSpawnTarget` passed. A raw edge from this door
+    // (auto-approved for agents) would let a forged child fill another
+    // session's slot through the lane rollup; `suspended` would make it a
+    // detour no start asked for. Refused before governance, like blocked_by;
+    // no caller sends metadata with spawned_from.
+    if (
+      parsed.data.linkType === "spawned_from" &&
+      parsed.data.metadata !== undefined
+    ) {
+      return c.json(
+        {
+          error:
+            "spawned_from links do not support metadata: start the child with parentSessionId (and forOutput) instead",
+        },
+        400
+      );
+    }
 
     if (
       parsed.data.linkType === "uses" &&

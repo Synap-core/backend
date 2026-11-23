@@ -190,8 +190,7 @@ export async function createEntityData(
     } = ctx;
     // `lensCaller` carries the injected `?workspaceId=` lens as the AMBIENT
     // governance workspace (see above) — without it the hub picked a random
-    // membership and the caller got a `workspace.join` proposal instead of an
-    // entity proposal. It is deliberately NOT passed as the input's explicit
+    // membership. It is deliberately NOT passed as the input's explicit
     // `workspaceId` (that is a rung-1 placement pin and would workspace-pin
     // pod-scope kinds — the four-door bug).
     const profileSlug =

@@ -780,6 +780,10 @@ const ASK_PERSON_WITHHELD = [
   // The stage the caller read (W6 compare-and-set): rides with
   // `currentStage`, which this door withholds too.
   "expectedStage",
+  // A step's time (B5): schedules the work the ask lands on, which is
+  // `synap_update_session`'s job like every other field here.
+  "plannedFor",
+  "dueBy",
 ] as const;
 
 const ACKNOWLEDGED_GAPS: Gap[] = [
