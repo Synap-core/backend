@@ -1,8 +1,8 @@
 /**
  * THE RUN JOURNEY, through the real doors, read back out of PGlite:
- *   1. cron → playbook → an external agent: the playbook's schedule compiles to
- *      its backing automation (`materializePlaybookCronAutomation`), the stored
- *      node runs through the real `playbook_run` step into the one spine
+ *   1. cron → playbook → an external agent: the playbook's schedule activator
+ *      compiles through the real compiler (`activatorRuleDecl` → its rule
+ *      sentence → the flow), the node runs through the real `playbook_run` step into the one spine
  *      (`runPlaybook`, registered as apps/api does at boot), handed to the
  *      person's agent: the run is born `queued`, that agent its holder;
  *   2. the agent's first post in the session room claims it: `running`;
@@ -146,14 +146,8 @@ vi.mock("../../../utils/trigger-auto-respond.js", () => ({
 
 import { OpenAPIHono } from "@hono/zod-openapi";
 import type { PgTable } from "drizzle-orm/pg-core";
-import {
-  and,
-  claimRun,
-  drizzleSql,
-  eq,
-  playbookRuns,
-  type FlowDefinition,
-} from "@synap/database";
+import { and, claimRun, drizzleSql, eq, playbookRuns } from "@synap/database";
+import { toFlowDefinition } from "@synap-core/types/automations";
 import { executePlaybookRun } from "@synap/jobs/workers/steps/playbook-run.js";
 import { registerPlaybookRunner } from "@synap/jobs/workers/capability-dispatch.js";
 import {
@@ -161,7 +155,7 @@ import {
   pgliteTableDdl,
 } from "../../../__tests__/pglite-ddl.js";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
-import { materializePlaybookCronAutomation } from "../cron-automation.js";
+import { activatorRuleDecl } from "../playbook-activators.js";
 import { runPlaybook } from "../run-playbook.js";
 import { postChannelMessage } from "../../messaging/post-message.js";
 import { applyRunCapture } from "../../runs/apply-run-capture.js";
@@ -208,35 +202,38 @@ const sessionOf = async (id: string) =>
     )
   ).rows[0]!;
 
-/** One cron slot of the playbook's schedule, through the stored node. */
+/** One cron slot of the playbook's per_thing schedule, on COMPANY, through its compiled node. */
 async function fireSlot(schedule: { handToAgentId?: string }) {
-  const automationId = await materializePlaybookCronAutomation(
-    {
-      id: PLAYBOOK,
-      workspaceId: WS,
-      name: "Weekly account review",
-      status: "active",
-      subjectProfile: { profileSlug: "company", filter: "status = active" },
-      schedule: { cron: "0 9 * * MON", enabled: true, ...schedule },
+  const decl = activatorRuleDecl({
+    activator: {
+      on: "schedule",
+      cron: "0 9 * * 1",
+      size: "per_thing",
+      mode: "run",
+      ...schedule,
     },
-    { userId: USER }
-  );
-  if (!automationId) throw new Error("no backing automation was written");
-  const row = await q<{ flow_definition: FlowDefinition }>(
-    `select flow_definition from automations where id = $1`,
-    [automationId]
-  );
-  const node = row.rows[0]?.flow_definition.nodes.find(
-    (n) => n.type === "playbook_run"
-  );
+    playbookId: PLAYBOOK,
+    playbookName: "Weekly account review",
+    profileSlug: "company",
+    statusProperty: null,
+    subject: { profileKind: "kind", lifecycleProperty: null },
+  });
+  if (!("sentence" in decl)) throw new Error("the activator did not compile");
+  const node = toFlowDefinition(
+    (decl.sentence as { actions: Parameters<typeof toFlowDefinition>[0] })
+      .actions
+  ).nodes.find((n) => n.type === "playbook_run");
   if (!node) throw new Error("compiler emitted no playbook_run node");
+  const automationId = randomUUID();
   const automationRunId = randomUUID();
   return executePlaybookRun(
     node.data as unknown as Parameters<typeof executePlaybookRun>[0],
     {
-      trigger: { payload: { scheduledAt: new Date().toISOString() } },
+      trigger: {
+        payload: { scheduledAt: new Date().toISOString() },
+        subject: COMPANY,
+      },
       steps: {},
-      loop: { item: { id: COMPANY }, index: 0 },
     } as unknown as Parameters<typeof executePlaybookRun>[1],
     WS,
     USER,
