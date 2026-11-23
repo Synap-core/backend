@@ -11003,12 +11003,7 @@
           "required": false,
           "description": "Entity UUIDs to move (1-500)."
         },
-        {
-          "name": "playbookIds",
-          "type": "array<string>",
-          "required": false,
-          "description": "Playbook UUIDs to move."
-        },
+        { "name": "playbookIds", "type": "array<string>", "required": false },
         {
           "name": "workspaceId",
           "type": "string",
@@ -11036,11 +11031,7 @@
             "items": { "type": "string" },
             "description": "Entity UUIDs to move (1-500)."
           },
-          "playbookIds": {
-            "type": "array",
-            "items": { "type": "string" },
-            "description": "Playbook UUIDs to move."
-          },
+          "playbookIds": { "type": "array", "items": { "type": "string" } },
           "workspaceId": {
             "type": "string",
             "description": "Destination workspace UUID."
@@ -11314,7 +11305,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another Space (workspace) see and use a SHARED kind (profile), or use a playbook or skill (`playbookId` / `skillId`; `revoke` stops it). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
       "parameters": [
         {
           "name": "profileId",
@@ -11322,24 +11313,9 @@
           "required": false,
           "description": "Profile UUID."
         },
-        {
-          "name": "playbookId",
-          "type": "string",
-          "required": false,
-          "description": "Playbook UUID."
-        },
-        {
-          "name": "skillId",
-          "type": "string",
-          "required": false,
-          "description": "Skill UUID."
-        },
-        {
-          "name": "revoke",
-          "type": "boolean",
-          "required": false,
-          "description": "Playbook or skill: stop sharing it."
-        },
+        { "name": "playbookId", "type": "string", "required": false },
+        { "name": "skillId", "type": "string", "required": false },
+        { "name": "revoke", "type": "boolean", "required": false },
         {
           "name": "targetWorkspaceId",
           "type": "string",
@@ -11369,12 +11345,9 @@
         "type": "object",
         "properties": {
           "profileId": { "type": "string", "description": "Profile UUID." },
-          "playbookId": { "type": "string", "description": "Playbook UUID." },
-          "skillId": { "type": "string", "description": "Skill UUID." },
-          "revoke": {
-            "type": "boolean",
-            "description": "Playbook or skill: stop sharing it."
-          },
+          "playbookId": { "type": "string" },
+          "skillId": { "type": "string" },
+          "revoke": { "type": "boolean" },
           "targetWorkspaceId": {
             "type": "string",
             "description": "Workspace UUID that gains access."

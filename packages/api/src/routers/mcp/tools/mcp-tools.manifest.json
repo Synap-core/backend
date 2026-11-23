@@ -7242,8 +7242,7 @@
             "type": "array",
             "items": {
               "type": "string"
-            },
-            "description": "Playbook UUIDs to move."
+            }
           },
           "workspaceId": {
             "type": "string",
@@ -7425,7 +7424,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another Space (workspace) see and use a SHARED kind (profile), or use a playbook or skill (`playbookId` / `skillId`; `revoke` stops it). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -7434,16 +7433,13 @@
             "description": "Profile UUID."
           },
           "playbookId": {
-            "type": "string",
-            "description": "Playbook UUID."
+            "type": "string"
           },
           "skillId": {
-            "type": "string",
-            "description": "Skill UUID."
+            "type": "string"
           },
           "revoke": {
-            "type": "boolean",
-            "description": "Playbook or skill: stop sharing it."
+            "type": "boolean"
           },
           "targetWorkspaceId": {
             "type": "string",
