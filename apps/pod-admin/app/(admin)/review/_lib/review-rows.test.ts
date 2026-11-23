@@ -489,10 +489,7 @@ describe("chips, views and focus", () => {
       changes: 2,
       asks: 1,
     });
-    expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual([
-      "c1",
-      "c2",
-    ]);
+    expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual(["c1", "c2"]);
     expect(rowsInView(rows, "all")).toHaveLength(5);
   });
 
@@ -522,7 +519,9 @@ describe("chips, views and focus", () => {
   });
 
   it("All says the pod's count, Review later included; groups count the page", () => {
-    expect(reviewChipCounts(rows, { needsYou: 3, reviewLater: 2, truncated: false })).toEqual({
+    expect(
+      reviewChipCounts(rows, { needsYou: 3, reviewLater: 2, truncated: false })
+    ).toEqual({
       all: "5",
       access: "2",
       changes: "2",
@@ -536,7 +535,9 @@ describe("chips, views and focus", () => {
       Array.from({ length: NEEDS_YOU_PAGE_LIMIT }, (_, i) => cluster(`f${i}`)),
       new Map()
     );
-    expect(reviewChipCounts(full, { needsYou: 140, reviewLater: 9, truncated: true })).toEqual({
+    expect(
+      reviewChipCounts(full, { needsYou: 140, reviewLater: 9, truncated: true })
+    ).toEqual({
       all: "149+",
       access: undefined,
       changes: "100+",

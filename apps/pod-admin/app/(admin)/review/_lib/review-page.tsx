@@ -397,9 +397,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
   // page says only that its read hit the limit.
   // Every row the read carried, Review later included (the chip's All).
   const shown = reviewCounts(rows).all;
-  const waiting = count.data
-    ? count.data.needsYou + count.data.reviewLater
-    : 0;
+  const waiting = count.data ? count.data.needsYou + count.data.reviewLater : 0;
   const shownOfTotal = sessionId
     ? rows.length >= NEEDS_YOU_PAGE_LIMIT
       ? `Showing the newest ${rows.length} from this session.`
