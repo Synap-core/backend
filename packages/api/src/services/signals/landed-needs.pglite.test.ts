@@ -134,6 +134,22 @@ describe("what the viewer's recent approvals landed that only they can take on",
     expect(JSON.stringify(rows)).not.toContain("Someone else");
   });
 
+  it("another person's approval is not the viewer's to take on", async () => {
+    const { rows } = await listLandedNeedsPerson({
+      userId: VIEWER,
+      roster: false,
+    });
+    expect(rows.map((r) => r.id)).not.toContain(THEIRS);
+  });
+
+  it("an approval older than the window is not read", async () => {
+    const { rows } = await listLandedNeedsPerson({
+      userId: VIEWER,
+      roster: false,
+    });
+    expect(rows.map((r) => r.id)).not.toContain(OLD);
+  });
+
   it("draws as an access-request row whose door is the object", () => {
     const need = {
       kind: "automation" as const,

@@ -33,14 +33,12 @@ async function planMadeSession(opts: {
   key: string;
   status?: string;
   personEditAfter?: boolean;
-  hoursAgo?: number;
 }): Promise<string> {
   const session = randomUUID();
   const proposal = randomUUID();
-  const made = new Date(Date.now() - (opts.hoursAgo ?? 0) * 3_600_000);
   await q(
-    `insert into focus_sessions (id, user_id, goal, status, metadata, created_at, updated_at) values ($1, $2, 'Plan step', 'active', '{}'::jsonb, $3, $3)`,
-    [session, HUMAN, made]
+    `insert into focus_sessions (id, user_id, goal, status, metadata, created_at, updated_at) values ($1, $2, 'Plan step', 'active', '{}'::jsonb, now(), now())`,
+    [session, HUMAN]
   );
   await q(
     `insert into proposals (id, status, proposal_type, target_type, target_id, agent_user_id, api_key_id, created_by, data, created_at, updated_at)
@@ -105,7 +103,14 @@ describe("what an agent's approved plan made is its own fresh work", () => {
   });
 
   it("fresh is the pod's own-work window, not a constant", async () => {
-    const twoHoursOld = await planMadeSession({ key: KEY, hoursAgo: 2 });
+    // A session this key opened (its client key), not a plan's: the window
+    // is the only thing this case reads.
+    const twoHoursOld = randomUUID();
+    const made = new Date(Date.now() - 2 * 3_600_000);
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, metadata, created_at, updated_at) values ($1, $2, 'Own step', 'active', $3::jsonb, $4, $4)`,
+      [twoHoursOld, HUMAN, JSON.stringify({ clientKey: `key:${KEY}` }), made]
+    );
     expect(await own(twoHoursOld)).toBe(true);
     await setPodNumberSetting(db as never, {
       key: "governance.own_work_fresh_hours",
