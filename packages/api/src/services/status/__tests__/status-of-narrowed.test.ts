@@ -460,7 +460,7 @@ describe("narrowStatusOfWork (a key narrowed by its grant)", () => {
     // and timeline doors): no kind, no wait kind, no time, no reason.
     expect(shut.holder).toMatchObject({ status: "withheld" });
     expect(shut.live).toMatchObject({ status: "withheld" });
-    expect(wireOf(shut.holder)).not.toContain("agent\"");
+    expect(wireOf(shut.holder)).not.toContain('agent"');
     expect(wireOf(shut)).not.toContain("Scribe");
     expect(wireOf(shut)).not.toContain("lastActivityAt");
   });

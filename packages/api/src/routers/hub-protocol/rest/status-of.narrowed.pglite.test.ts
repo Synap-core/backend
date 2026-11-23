@@ -200,16 +200,32 @@ beforeAll(async () => {
     subject: THING_A,
     gated: true,
   });
-  await session(S_B_ON, { workspace: B, title: "Secret run in B", subject: THING_A });
-  await session(S_POD_ON, { workspace: null, title: "Secret pod-wide run", subject: THING_A });
+  await session(S_B_ON, {
+    workspace: B,
+    title: "Secret run in B",
+    subject: THING_A,
+  });
+  await session(S_POD_ON, {
+    workspace: null,
+    title: "Secret pod-wide run",
+    subject: THING_A,
+  });
   await session(S_PROJECT_ON, {
     workspace: null,
     title: "Secret project-only run",
     subject: THING_A,
     project: PROJECT,
   });
-  await session(S_A_GOAL, { workspace: A, title: "Goal run in A", track: GOAL });
-  await session(S_B_GOAL, { workspace: B, title: "Secret goal run in B", track: GOAL });
+  await session(S_A_GOAL, {
+    workspace: A,
+    title: "Goal run in A",
+    track: GOAL,
+  });
+  await session(S_B_GOAL, {
+    workspace: B,
+    title: "Secret goal run in B",
+    track: GOAL,
+  });
 
   await q(
     `insert into playbook_runs (id, playbook_id, session_id, executor, status, input, created_by, definition_snapshot, started_at)
@@ -257,7 +273,12 @@ const pin = (...permissions: string[]): KeyGrant => ({
   scopes: [{ permissions, workspaceIds: [A] }],
   clientId: null,
 });
-const PIN_ALL = pin("entity.read", "session.read", "track.read", "proposal.read");
+const PIN_ALL = pin(
+  "entity.read",
+  "session.read",
+  "track.read",
+  "proposal.read"
+);
 const PIN_NO_PROPOSAL = pin("entity.read", "session.read", "track.read");
 const PIN_AGENTS = pin(
   "entity.read",
@@ -284,7 +305,11 @@ async function ask(
     : app(agentUserId).request(path));
   expect(res.status).toBe(200);
   const body = (await res.json()) as { statusOf: Answer[]; withheld?: unknown };
-  return { answers: body.statusOf, wire: JSON.stringify(body), withheld: body.withheld };
+  return {
+    answers: body.statusOf,
+    wire: JSON.stringify(body),
+    withheld: body.withheld,
+  };
 }
 
 const titles = (a: Answer | undefined) =>
@@ -337,10 +362,7 @@ describe("GET /status-of?include=work, a key pinned to space A, end to end", () 
       );
       // The id the caller itself asked about is echoed as `unknown`: that is
       // its own input, not a read of B.
-      const answered = wire.replace(
-        `{"id":"${S_B_ON}","type":"unknown"}`,
-        ""
-      );
+      const answered = wire.replace(`{"id":"${S_B_ON}","type":"unknown"}`, "");
       for (const leak of FOREIGN) expect(answered, leak).not.toContain(leak);
       // The own session is there; the foreign ones are not listed.
       expect(titles(answers[0])).toEqual(["Run in A"]);
@@ -397,8 +419,7 @@ describe("GET /status-of?include=work, a key pinned to space A, end to end", () 
     const asPerson = await ask([THING_A], PIN_ALL);
     const asAgent = await ask([THING_A], PIN_ALL, AGENT);
     expect(titles(asAgent.answers[0])).toEqual(titles(asPerson.answers[0]));
-    for (const leak of FOREIGN)
-      expect(asAgent.wire, leak).not.toContain(leak);
+    for (const leak of FOREIGN) expect(asAgent.wire, leak).not.toContain(leak);
     const g = asAgent.answers[0]!.work!.items[0]!.gates.items as Array<
       Record<string, any>
     >;
