@@ -128,7 +128,6 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   won: "success",
   pass: "success",
   // Failed / broken
-  blocked: "error",
   error: "error",
   failed: "error",
   approval_failed: "error",
@@ -158,6 +157,8 @@ export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   // On hold, or awaiting a decision
   paused: LIFECYCLE_CATEGORY_TONE.paused,
   stale: LIFECYCLE_CATEGORY_TONE.paused,
+  // A run nobody picked up, a session waiting on another: a hold, never an error.
+  blocked: LIFECYCLE_CATEGORY_TONE.paused,
   pending: "info",
   proposed: "info",
   review: "info",
@@ -493,7 +494,8 @@ export const RUN_STATUS_WAITING_ON_YOU = "waiting_on_you";
 /**
  * A RUN's lifecycle status (`automation_runs` / `playbook_runs` / the unified
  * runs read) as a unit-state input — so a run wears the same mark a session
- * does. `waiting_on_you` is your turn (`needs_you`), never a failure;
+ * does. `waiting_on_you` and `blocked` (nobody claimed it) are your turn
+ * (`needs_you`), never a failure; `queued` has not started;
  * `blocked_by_policy` is `blocked` (a rule stopped it); `paused` and `stale`
  * are `paused`; an unknown or absent status is `unmeasured`, never a guess at
  * calm.
@@ -504,12 +506,17 @@ export function unitStateInputOfRunStatus(
   switch (status) {
     case "failed":
       return { failed: true };
+    // `blocked`: nobody claimed it, the person chooses who runs it
+    // (`run-blocked-ask`).
     case RUN_STATUS_WAITING_ON_YOU:
+    case "blocked":
       return { waitingOnYou: true };
     case "running":
     case "pending":
-    case "queued":
       return { running: true };
+    // Handed to a runner that has not claimed it: not at work yet.
+    case "queued":
+      return { everStarted: false };
     // A governance rule refused the run's effect. Not a failure (nothing
     // broke), not done (the effect never landed), not your turn (there is no
     // answer owed): it is BLOCKED ON A RULE — "waiting on X is not waiting on

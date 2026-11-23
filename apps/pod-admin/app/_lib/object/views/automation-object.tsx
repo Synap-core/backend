@@ -30,7 +30,7 @@ import {
   ResourceRowSkeleton,
 } from "../../../(admin)/components/resource-row";
 import { ErrorNote, errorDetail } from "../../copy-button";
-import { statusPillFor } from "../../../(admin)/components/status-tone";
+import { machinePill } from "../../../(admin)/components/status-tone";
 import {
   automationSummary,
   runLine,
@@ -109,7 +109,7 @@ export function AutomationObject({
           noun: "Rule",
           title: rule.name,
           summary: automationSummary(rule),
-          status: statusPillFor(rule.status),
+          status: machinePill("automation", rule.status),
           breadcrumb: frame.breadcrumb?.(rule.name),
           primaryAction: canPause ? (
             <Button
@@ -212,7 +212,7 @@ export function AutomationObject({
                       Icon={Play}
                       primary={line.primary}
                       secondary={line.secondary}
-                      status={statusPillFor(run.status) ?? undefined}
+                      status={machinePill("run", run.status) ?? undefined}
                       onSelect={
                         onOpenRun
                           ? () => onOpenRun({ id: run.id, flowName: rule.name })

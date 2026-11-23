@@ -5,7 +5,7 @@ import {
   PROCESS_HEALTH_STATES,
   processHealthUnitInput,
 } from "@synap-core/types/processes";
-import { unitTonePill } from "./status-tone";
+import { machinePill, unitTonePill } from "./status-tone";
 
 /**
  * The one unit-tone → pill map. "Your turn" (waiting on you, a check gate,
@@ -47,5 +47,30 @@ describe("unitTonePill", () => {
         ) === "healthy"
     );
     expect(healthy).toEqual(["running"]);
+  });
+});
+
+describe("machinePill", () => {
+  it("draws a run nobody picked up as waiting, never down", () => {
+    expect(machinePill("run", "blocked")).toEqual({
+      kind: "stale",
+      label: "Blocked",
+    });
+  });
+
+  it("draws a turn that changed nothing apart from a failure", () => {
+    expect(machinePill("run", "failed", { stopReason: "no_effect" })).toEqual({
+      kind: "stale",
+      label: "No change",
+    });
+    expect(machinePill("run", "failed")!.kind).toBe("down");
+  });
+
+  it("keeps a running run healthy and a queued one quiet", () => {
+    expect(machinePill("run", "running")!.kind).toBe("healthy");
+    expect(machinePill("run", "queued")).toEqual({
+      kind: "unknown",
+      label: "Queued",
+    });
   });
 });

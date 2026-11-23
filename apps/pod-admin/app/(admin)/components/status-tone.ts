@@ -15,8 +15,18 @@
  */
 
 import type { AgentMarkTone } from "@synap-core/types/agents";
-import type { UnitTone } from "@synap-core/types/units";
-import { getEnumTone, type EnumTone } from "@synap-core/types/property-render";
+import {
+  statusMark,
+  type StatusMachine,
+  type StatusMark,
+  type StatusMarkFacts,
+  type UnitTone,
+} from "@synap-core/types/units";
+import {
+  getEnumTone,
+  unitToneEnum,
+  type EnumTone,
+} from "@synap-core/types/property-render";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { HealthStatus } from "../home/_lib/needs-you";
 import type { StatusKind } from "./status-pill";
@@ -48,6 +58,27 @@ export function statusPillFor(
     kind: statusKindForTone(getEnumTone(raw)),
     label: resolveStatusLabel(raw),
   };
+}
+
+/** A machine status's mark (`statusMark`) as a pill. */
+export function statusMarkPill(mark: StatusMark): {
+  kind: StatusKind;
+  label: string;
+} {
+  return {
+    kind: statusKindForTone(unitToneEnum(mark.tone)),
+    label: mark.label,
+  };
+}
+
+/** Pill props for a status of a declared machine (`statusMark`), or null. */
+export function machinePill(
+  machine: StatusMachine,
+  status: string | null | undefined,
+  facts?: StatusMarkFacts
+): { kind: StatusKind; label: string } | null {
+  const mark = statusMark(machine, status, facts);
+  return mark ? statusMarkPill(mark) : null;
 }
 
 export const AGENT_MARK_STATUS: Record<AgentMarkTone, StatusKind> = {

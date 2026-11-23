@@ -30,15 +30,17 @@
  */
 
 import {
+  closedNotDoneRecorded,
   isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
-  type SessionStatus,
 } from "@synap-core/types/focus-sessions";
 import { getEnumTone } from "@synap-core/types/property-render";
 import {
   isDeliverableDelivered,
+  statusMark,
   type DeliverableFacts,
+  type StatusMark,
 } from "@synap-core/types/units";
 import {
   resolveActionLabel,
@@ -46,8 +48,9 @@ import {
   resolveStatusLabel,
 } from "@synap-core/types/vocabulary";
 import {
+  machinePill,
   statusKindForTone,
-  statusPillFor,
+  statusMarkPill,
 } from "../../(admin)/components/status-tone";
 import type { StatusKind } from "../../(admin)/components/status-pill";
 
@@ -57,16 +60,25 @@ import type { StatusKind } from "../../(admin)/components/status-pill";
 export type SessionGlyph =
   "draft" | "moving" | "paused" | "scheduled" | "done" | "stopped" | "failed";
 
-const GLYPH: Record<SessionStatus, SessionGlyph> = {
-  active: "moving",
-  forming: "moving",
-  paused: "paused",
-  stale: "paused",
-  scheduled: "scheduled",
-  closed: "done",
-  cancelled: "stopped",
-  failed: "failed",
-};
+/** The glyph of where it stands: how it ended, else its category. */
+function glyphOf(mark: StatusMark): SessionGlyph | null {
+  switch (mark.outcome ?? mark.category) {
+    case "open":
+      return "scheduled";
+    case "active":
+      return "moving";
+    case "paused":
+      return "paused";
+    case "done":
+      return "done";
+    case "failed":
+      return "failed";
+    case null:
+      return null;
+    default:
+      return "stopped";
+  }
+}
 
 export interface SessionStatusMark {
   kind: StatusKind;
@@ -79,6 +91,8 @@ export interface SessionStatusMark {
 /** The fields the mark and the moves read off a `focusSessions.get` row. */
 export interface SessionStatusFacts {
   status: string;
+  /** Holds the close door's not-done record when it closed with work open. */
+  verificationReport?: unknown;
   triage?: { pending?: boolean | null } | null;
   /** `owner` | `member` — a member reads, never writes (decision C). */
   viewerRole?: string | null;
@@ -104,15 +118,11 @@ export function sessionStatusMark(
       draft: true,
     };
   }
-  const pill = statusPillFor(s.status);
-  if (!pill) return null;
-  return {
-    ...pill,
-    glyph: Object.hasOwn(GLYPH, s.status)
-      ? GLYPH[s.status as SessionStatus]
-      : null,
-    draft: false,
-  };
+  const mark = statusMark("session", s.status, {
+    closedNotDone: closedNotDoneRecorded(s.verificationReport),
+  });
+  if (!mark) return null;
+  return { ...statusMarkPill(mark), glyph: glyphOf(mark), draft: false };
 }
 
 // ─── The moves ───────────────────────────────────────────────────────────────
@@ -492,7 +502,7 @@ export function lineageRow(s: LinkedSessionLike): LineageRow {
     key: s.id,
     id: s.id,
     title: s.title.trim() || "Untitled session",
-    mark: statusPillFor(s.status),
+    mark: machinePill("session", s.status),
   };
 }
 

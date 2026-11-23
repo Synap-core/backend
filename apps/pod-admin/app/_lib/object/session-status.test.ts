@@ -64,6 +64,20 @@ describe("sessionStatusMark — a draft is its own mark", () => {
     }
   });
 
+  it("does not draw a session closed with required work open as done", () => {
+    const report = { closedNotDone: { reason: "out of time" } };
+    const notDone = sessionStatusMark({
+      status: "closed",
+      verificationReport: report,
+    })!;
+    expect(notDone).toMatchObject({ label: "Not done", glyph: "stopped" });
+    expect(notDone.kind).not.toBe("healthy");
+    expect(sessionStatusMark({ status: "closed" })).toMatchObject({
+      kind: "healthy",
+      glyph: "done",
+    });
+  });
+
   it("keeps the dot for a status this build does not know", () => {
     expect(sessionStatusMark({ status: "teleported" })!.glyph).toBeNull();
     expect(sessionStatusMark({ status: "" })).toBeNull();
