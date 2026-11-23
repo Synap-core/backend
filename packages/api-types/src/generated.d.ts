@@ -12111,6 +12111,19 @@ export interface ReversibleDefaultState {
 	/** The active row, so a surface can open it; null when off. */
 	ruleId: string | null;
 }
+declare const POD_NUMBER_SETTINGS: {
+	readonly "governance.own_work_fresh_hours": {
+		readonly default: 24;
+		readonly max: 168;
+		readonly min: 1;
+	};
+	readonly "governance.project_evidence_min": {
+		readonly default: 5;
+		readonly max: 50;
+		readonly min: 0;
+	};
+};
+export type PodNumberSettingKey = keyof typeof POD_NUMBER_SETTINGS;
 declare const SPACE_BRIEF_SEEDED_FIELDS: readonly [
 	"purpose",
 	"goal",
@@ -26068,6 +26081,11 @@ export interface SettingsUpdateProposalData {
 	capabilityId?: string | null;
 	text?: string;
 	posture?: "auto" | "propose";
+	/** A pod number the governance reads (`POD_NUMBER_SETTINGS`), versioned. */
+	podSetting?: {
+		key: PodNumberSettingKey;
+		value: number;
+	};
 	targetId?: string;
 	agentName?: string | null;
 	currentLimit?: number;
@@ -54346,7 +54364,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			} | {
 				action: {
 					input: unknown;
-					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
+					path: "agentUsers.create" | "agentUsers.setPosture" | "agentUsers.update" | "apiKeys.adminCreateServiceKey" | "apiKeys.beginMcpConnect" | "apiKeys.connectIntegration" | "apiKeys.create" | "apiKeys.createForWorkspace" | "apiKeys.createSystemKey" | "apiKeys.rotate" | "apiKeys.setGrants" | "apiKeys.setMachineDefaults" | "apps.issueKey" | "apps.setRedirectUris" | "apps.setSignInPolicy" | "apps.setWriteMode" | "apps.updateAccess" | "connectors.setKeepSyncing" | "govConfig.set" | "governanceRules.create" | "governanceRules.proposeNextRung" | "governanceRules.setActionMode" | "governanceRules.setOwnOrganiseDefault" | "governanceRules.setPodFloorDefault" | "governanceRules.setPodSetting" | "governanceRules.setReversibleDefault" | "governanceRules.widenCell" | "intelligence.registerCustomService" | "intelligenceRegistry.register" | "intelligenceRegistry.rotateKey" | "intelligenceRegistry.update" | "machines.setBelongsTo" | "machines.setHostsServices" | "machines.setKeyTtl" | "machines.setRunsScripts" | "machines.setWakesAgents" | "secretsVault.reveal" | "trustedIssuers.adminRegister";
 				};
 			} | {
 				oauthConsent: {
@@ -56851,7 +56869,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identities?: ProposalExecutorResult["identities"];
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
+					outcome?: "applied" | "failed" | "not_attempted" | "queued";
 					proposalId: string;
+					queued?: true;
 					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
@@ -56921,7 +56941,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					identities?: ProposalExecutorResult["identities"];
 					identity?: ProposalExecutorResult["identity"];
 					opRef?: string;
+					outcome?: "applied" | "failed" | "not_attempted" | "queued";
 					proposalId: string;
+					queued?: true;
 					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
 					refusals?: ProposalExecutorResult["refusals"];
 					relationsFailed?: ProposalExecutorResult["relationsFailed"];
