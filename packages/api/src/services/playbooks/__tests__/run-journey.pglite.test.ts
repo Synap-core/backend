@@ -280,6 +280,10 @@ beforeAll(async () => {
   await h.client!.exec(
     `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
   );
+  // A session room enrolls its members on the real unique pair.
+  await h.client!.exec(
+    `create unique index on channel_members (channel_id, member_id)`
+  );
   await q(
     `insert into users (id, email, name, timezone, user_type, agent_type) values
       ($1, 'a@x.test', 'Antoine', 'UTC', 'human', null),
