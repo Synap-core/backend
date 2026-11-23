@@ -489,33 +489,40 @@ describe("chips, views and focus", () => {
       changes: 2,
       asks: 1,
     });
-    expect(rowsInView(rows, "changes").headline.map((r) => r.key)).toEqual([
+    expect(rowsInView(rows, "changes").map((r) => r.key)).toEqual([
       "c1",
       "c2",
     ]);
-    expect(rowsInView(rows, "all").headline).toHaveLength(5);
+    expect(rowsInView(rows, "all")).toHaveLength(5);
   });
 
-  it("Review later is its own fold, out of the headline and every count", () => {
-    // Rules out "a stale row is just an older row": the badge leaves it out,
-    // so a chip that counted it would say a number the badge cannot explain.
+  it("Review later stays in the one list, counted and selectable", () => {
+    // Rules out the old fold (founder, 23 Nov 2026): a stale row is a row like
+    // any other on the console, so a pile is selected and approved in one batch.
     const later = reviewRows(
       [cluster("fresh"), cluster("stale", { reviewLater: true })],
       new Map([facts("fresh-p1"), facts("stale-p1")])
     );
     expect(reviewCounts(later)).toEqual({
-      all: 1,
+      all: 2,
       access: 0,
-      changes: 1,
+      changes: 2,
       asks: 0,
     });
-    const view = rowsInView(later, "all");
-    expect(view.headline.map((r) => r.key)).toEqual(["fresh"]);
-    expect(view.reviewLater.map((r) => r.key)).toEqual(["stale"]);
+    expect(rowsInView(later, "all").map((r) => r.key)).toEqual([
+      "fresh",
+      "stale",
+    ]);
+    const stale = later.find((r) => r.key === "stale")!;
+    expect(stale.reviewLater).toBe(true);
+    expect(stale.batchIds).not.toBeNull();
+    expect(
+      batchOf(later, new Set(["fresh", "stale"])).rows.map((r) => r.key)
+    ).toEqual(["fresh", "stale"]);
   });
 
-  it("All says the pod's count, the nav badge's; groups count the page", () => {
-    expect(reviewChipCounts(rows, { needsYou: 5, truncated: false })).toEqual({
+  it("All says the pod's count, Review later included; groups count the page", () => {
+    expect(reviewChipCounts(rows, { needsYou: 3, reviewLater: 2, truncated: false })).toEqual({
       all: "5",
       access: "2",
       changes: "2",
@@ -529,7 +536,7 @@ describe("chips, views and focus", () => {
       Array.from({ length: NEEDS_YOU_PAGE_LIMIT }, (_, i) => cluster(`f${i}`)),
       new Map()
     );
-    expect(reviewChipCounts(full, { needsYou: 149, truncated: true })).toEqual({
+    expect(reviewChipCounts(full, { needsYou: 140, reviewLater: 9, truncated: true })).toEqual({
       all: "149+",
       access: undefined,
       changes: "100+",
