@@ -23,10 +23,13 @@
 
 import {
   db,
+  and,
+  eq,
   workspaces,
   capabilities,
   readTemplateState,
 } from "@synap/database";
+import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { rendererBundles } from "@synap/database/schema";
 import {
   contentHashVersion,
@@ -42,7 +45,10 @@ import {
   type InstalledStandaloneRow,
 } from "../capabilities/reconcile-standalone-configs-to-templates.js";
 import { readRendererBundleLatest } from "../renderers/renderer-bundle-updates.js";
-import { rendererBundleName } from "../renderers/official-renderer-bundle.js";
+import {
+  rendererBundleName,
+  SYNAP_RENDERERS_SLUG,
+} from "../renderers/official-renderer-bundle.js";
 import {
   readOverlayLedger,
   resolveTemplateCatalog,
@@ -313,15 +319,20 @@ const RENDERERS_NOT_READ =
   "This pod has not read its control plane's renderers yet: it does every 10 minutes.";
 
 /**
- * Renderer bundles: the installed version (`renderer_bundles.version`, the
- * control plane row's) against the newest one the after-sync pass read
- * (`renderer_bundle_updates`, `?meta=1`). A pass that was refused leaves the
- * last version it read, else says why there is none.
+ * Synap's renderer bundle (the only one the after-sync pass reads): the
+ * installed version against the newest one the pass read. A pass that was
+ * refused leaves the last version it read, else says why there is none.
  */
 async function rendererBundlePackages(): Promise<InstalledPackage[]> {
   const rows = await db
     .select({ slug: rendererBundles.slug, version: rendererBundles.version })
-    .from(rendererBundles);
+    .from(rendererBundles)
+    .where(
+      and(
+        eq(rendererBundles.slug, SYNAP_RENDERERS_SLUG),
+        eq(rendererBundles.source, OFFICIAL_SOURCE_ID)
+      )
+    );
   if (rows.length === 0) return [];
   const latest = await readRendererBundleLatest();
   return rows.map((row) => {

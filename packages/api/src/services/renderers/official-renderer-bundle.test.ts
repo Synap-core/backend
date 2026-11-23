@@ -69,6 +69,10 @@ vi.mock("@synap-core/core/control-plane-url", () => ({
 vi.mock("./install-renderer-bundle.js", () => ({
   installRendererBundle: h.install,
 }));
+// The update row is the install doors' bookkeeping (its own pglite tests).
+vi.mock("./renderer-bundle-update-state.js", () => ({
+  clearAfterRendererBundleInstall: async () => undefined,
+}));
 
 import { officialContentHash } from "@synap/jobs/workers/marketplace-source-verify.js";
 import {

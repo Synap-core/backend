@@ -1,26 +1,26 @@
 "use client";
 
 /**
- * Pod updates › Renderers: whether Synap's renderers are on this pod, and the
- * one action that fits (Install, or Reinstall latest). A refusal stays on the
- * row with its reason and next step until the next try (rule
- * feedback-and-forms §1); a failed read is an error with Retry, never "Not
- * installed". Rules: `renderers-model.ts`.
- *
- * Updates (plan ad703ccd L2) through the pod's package updates: a newer
- * version and why it has not applied yet, "Update" (`packageUpdates.applyUpdate`,
- * the same door as Marketplace › Updates), the last update with Undo
- * (`packageUpdates.undo`) and Stop / Resume updates
- * (`packageUpdates.stopUpdates`). A refusal the pod's own pass recorded (its
- * first-sync install, D2) shows with the same words as an install's.
+ * Pod updates › Renderers: whether Synap's renderers are on this pod and
+ * where their updates stand, drawn from ONE pure view (`renderersCardView`):
+ * a mark, a short line, the quiet lines under it, ONE primary act and a ⋯
+ * menu. A refusal stays on the card as an ErrorNote until the next act; a
+ * failed read is a ResourceRowError with Retry, never a state the card did not
+ * read (rule feedback-and-forms §1, §4).
  */
 
-import { Button } from "@heroui/react";
-import { ArrowRight, Shapes } from "lucide-react";
+import {
+  Button,
+  Dropdown,
+  DropdownItem,
+  DropdownMenu,
+  DropdownTrigger,
+} from "@heroui/react";
+import { ArrowRight, MoreHorizontal, Shapes } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
-import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import { formatRelative, formatUntil } from "@synap-core/types/value-format";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
 import { navHref } from "../../../../lib/console-nav";
 import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
@@ -33,17 +33,17 @@ import {
   ResourceRowError,
   ResourceRowSkeleton,
 } from "../../components/resource-row";
-import type { StatusKind } from "../../components/status-pill";
 import { en, fr } from "./copy";
 import {
   SYNAP_RENDERERS_SLUG,
   readRenderersUpdates,
+  renderersActFailureOf,
+  renderersCardView,
   renderersRefusalOf,
-  renderersRowView,
-  renderersUpdatesView,
-  type RenderersRefusal,
-  type RenderersRowView,
-  type RenderersUpdatesView,
+  type RenderersCardView,
+  type RenderersLast,
+  type RenderersLine,
+  type RenderersUpdatesRead,
 } from "./renderers-model";
 
 const CATALOGS = { en, fr };
@@ -51,43 +51,39 @@ const CATALOGS = { en, fr };
 /** The command that enrolls a pod's key with its control plane. */
 const ENROLL_COMMAND = "synap pod-key enroll";
 
-/** What the last install answered in this visit, if anything. */
-export type RenderersLast =
-  | { kind: "refused"; refusal: RenderersRefusal; detail: string }
-  | { kind: "proposed"; proposalId: string }
-  | { kind: "installed" }
-  | null;
+/** The cards on this page the Renderers card links to (`page.tsx`). */
+export const AUTO_UPDATE_ANCHOR = "auto-update";
+export const UPDATE_NOW_ANCHOR = "update-now";
 
-/** What the last update act answered in this visit, if anything. */
-export type RenderersUpdateLast =
-  "undone" | "update_failed" | "undo_failed" | "stop_failed" | null;
-
-/** The row's updates, when the pod could say (absent: nothing to draw). */
-export interface RenderersUpdatesState {
-  view: RenderersUpdatesView;
-  /** The read of the pod's update state failed (never "up to date"). */
-  failed: boolean;
-  last: RenderersUpdateLast;
-  busy: boolean;
-  onUpdate: () => void;
-  onUndo: () => void;
-  onToggleStop: () => void;
-}
+/** Which act is running, for its button's spinner. */
+export type RenderersPending =
+  "install" | "reinstall" | "update" | "undo" | "pause" | null;
 
 export type RenderersBodyState =
   | { kind: "loading" }
   | { kind: "failed"; onRetry: () => void }
   | {
       kind: "ready";
-      view: RenderersRowView;
-      last: RenderersLast;
-      installing: boolean;
+      view: RenderersCardView;
+      pending: RenderersPending;
       onInstall: () => void;
-      updates?: RenderersUpdatesState;
+      onReinstall: () => void;
+      onUpdate: (version: string) => void;
+      onUndo: (receiptId: string) => void;
+      onPause: (paused: boolean) => void;
+      onRetryUpdates: () => void;
     };
+
+/** A tRPC error the pod answered 403 (not a pod admin): omit, never fail. */
+function isForbidden(err: unknown): boolean {
+  const data = (err as { data?: { code?: unknown; httpStatus?: unknown } })
+    ?.data;
+  return data?.code === "FORBIDDEN" || data?.httpStatus === 403;
+}
 
 export function RenderersCard() {
   const utils = trpc.useUtils();
+  const locale = useConsoleLocale();
   // Same query (and cache) as the object frame (`useObjectRenderer`).
   const status = trpc.renderers.status.useQuery(undefined, { retry: false });
   const updatesRead = trpc.renderers.updates.useQuery(undefined, {
@@ -100,117 +96,135 @@ export function RenderersCard() {
   const install = trpc.marketplace.install.useMutation();
   const apply = trpc.packageUpdates.applyUpdate.useMutation();
   const undo = trpc.packageUpdates.undo.useMutation();
-  const stop = trpc.packageUpdates.stopUpdates.useMutation();
+  const pause = trpc.packageUpdates.pauseUpdates.useMutation();
   const [last, setLast] = useState<RenderersLast>(null);
-  const [updateLast, setUpdateLast] = useState<RenderersUpdateLast>(null);
+  const [pending, setPending] = useState<RenderersPending>(null);
 
   const parsed = readRenderersStatus(status.data);
 
-  /** After an update act: this row, every frame, and the Updates list. */
+  /** After any act: this card, every frame, and the Updates list. */
   function refresh() {
     void utils.renderers.invalidate();
     void utils.packageUpdates.invalidate();
   }
 
-  async function run(
-    act: () => Promise<unknown>,
-    failed: Exclude<RenderersUpdateLast, "undone" | null>,
-    done: RenderersUpdateLast = null
+  async function act(
+    which: Exclude<RenderersPending, null>,
+    run: () => Promise<RenderersLast>,
+    onError: (err: unknown) => RenderersLast
   ) {
-    setUpdateLast(null);
+    setLast(null);
+    setPending(which);
     try {
-      await act();
-      setUpdateLast(done);
-    } catch {
-      setUpdateLast(failed);
+      setLast(await run());
+    } catch (err) {
+      setLast(onError(err));
     } finally {
+      setPending(null);
       refresh();
     }
   }
 
-  const updatesView =
-    parsed &&
-    renderersUpdatesView(
-      parsed,
-      readRenderersUpdates(updatesRead.data),
-      history.data?.[0] ?? null,
-      Date.now()
-    );
-  const updates: RenderersUpdatesState | undefined = updatesView
-    ? {
-        view: updatesView,
-        failed: updatesRead.isError || history.isError,
-        last: updateLast,
-        busy: apply.isPending || undo.isPending || stop.isPending,
-        onUpdate: () => {
-          const version = updatesView.available?.version;
-          if (!version) return;
-          void run(
-            () =>
-              apply.mutateAsync({
-                slug: SYNAP_RENDERERS_SLUG,
-                expectedVersion: version,
-                choices: {},
-              }),
-            "update_failed"
-          );
-        },
-        onUndo: () => {
-          const receiptId = updatesView.undoable?.receiptId;
-          if (!receiptId) return;
-          void run(
-            () => undo.mutateAsync({ receiptId }),
-            "undo_failed",
-            "undone"
-          );
-        },
-        onToggleStop: () =>
-          void run(
-            () =>
-              stop.mutateAsync({
-                kind: "renderer-bundle",
-                slug: SYNAP_RENDERERS_SLUG,
-                stopped: !updatesView.stopped,
-              }),
-            "stop_failed"
-          ),
-      }
-    : undefined;
-
-  async function runInstall() {
-    setLast(null);
-    try {
-      const outcome = await install.mutateAsync({
-        kind: "renderer-bundle",
-        slug: SYNAP_RENDERERS_SLUG,
-      });
-      setLast(
-        outcome.status === "proposed"
+  const installAct = (which: "install" | "reinstall") =>
+    void act(
+      which,
+      async () => {
+        const outcome = await install.mutateAsync({
+          kind: "renderer-bundle",
+          slug: SYNAP_RENDERERS_SLUG,
+        });
+        return outcome.status === "proposed"
           ? { kind: "proposed", proposalId: outcome.proposalId }
-          : { kind: "installed" }
-      );
-      // The status here and every frame that draws with the bundle.
-      void utils.renderers.invalidate();
-    } catch (err) {
-      setLast({
+          : { kind: "installed" };
+      },
+      (err) => ({
         kind: "refused",
         refusal: renderersRefusalOf(err),
         detail: errorDetail(err),
-      });
-    }
-  }
+      })
+    );
 
+  const failedAct =
+    (which: "update" | "undo" | "pause") =>
+    (err: unknown): RenderersLast => ({
+      kind: "act-failed",
+      act: which,
+      failure: renderersActFailureOf(err),
+      detail: errorDetail(err),
+    });
+
+  const updates: RenderersUpdatesRead =
+    updatesRead.isLoading || history.isLoading
+      ? { read: "loading" }
+      : isForbidden(updatesRead.error) || isForbidden(history.error)
+        ? { read: "forbidden" }
+        : updatesRead.isError || history.isError
+          ? { read: "failed" }
+          : { read: "ok", state: readRenderersUpdates(updatesRead.data) };
+
+  const now = Date.now();
   const state: RenderersBodyState = status.isLoading
     ? { kind: "loading" }
     : status.isError || !parsed
       ? { kind: "failed", onRetry: () => void status.refetch() }
       : {
           kind: "ready",
-          view: renderersRowView(parsed),
-          last,
-          installing: install.isPending,
-          onInstall: () => void runInstall(),
-          updates,
+          view: renderersCardView({
+            status: parsed,
+            updates,
+            receipt: history.data?.[0] ?? null,
+            last,
+            now,
+            when: {
+              until: (iso) => formatUntil(iso, now, { locale }),
+              since: (iso) => formatRelative(iso, now, { locale }),
+            },
+          }),
+          pending,
+          onInstall: () => installAct("install"),
+          onReinstall: () => installAct("reinstall"),
+          onUpdate: (version) =>
+            void act(
+              "update",
+              async () => {
+                const result = await apply.mutateAsync({
+                  slug: SYNAP_RENDERERS_SLUG,
+                  expectedVersion: version,
+                  choices: {},
+                });
+                return result.status === "proposed" && result.proposalIds[0]
+                  ? { kind: "proposed", proposalId: result.proposalIds[0] }
+                  : null;
+              },
+              failedAct("update")
+            ),
+          onUndo: (receiptId) =>
+            void act(
+              "undo",
+              async () => {
+                const result = await undo.mutateAsync({ receiptId });
+                return result.status === "proposed" && result.proposalIds[0]
+                  ? { kind: "proposed", proposalId: result.proposalIds[0] }
+                  : { kind: "undone" };
+              },
+              failedAct("undo")
+            ),
+          onPause: (paused) =>
+            void act(
+              "pause",
+              async () => {
+                await pause.mutateAsync({
+                  slug: SYNAP_RENDERERS_SLUG,
+                  paused,
+                });
+                return null;
+              },
+              failedAct("pause")
+            ),
+          onRetryUpdates: () => {
+            void updatesRead.refetch();
+            void history.refetch();
+          },
         };
 
   return <RenderersBody state={state} />;
@@ -243,188 +257,206 @@ function ReadyRow({
   state: Extract<RenderersBodyState, { kind: "ready" }>;
 }) {
   const t = useT(CATALOGS);
-  const { view, last, installing, onInstall, updates } = state;
-  const s = view.state;
-  // A refusal of this visit's install, else the one the pod's pass recorded.
-  const refusal: RenderersRefusal | null =
-    last?.kind === "refused"
-      ? last.refusal
-      : s.kind === "none"
-        ? (updates?.view.refusal ?? null)
-        : null;
-
-  const mark: { kind: StatusKind; label: string } =
-    s.kind === "installed"
-      ? { kind: "healthy", label: resolveActionLabel("install", "past") }
-      : s.kind === "other"
-        ? { kind: "unknown", label: t("renderers.state.other") }
-        : { kind: "unknown", label: t("renderers.state.none") };
-
-  const secondary =
-    s.kind === "installed"
-      ? t(
-          last?.kind === "installed"
-            ? "renderers.version.justInstalled"
-            : "renderers.version",
-          { version: s.version }
-        )
-      : s.kind === "other"
-        ? t("renderers.other", { slug: s.slug, version: s.version })
-        : t("renderers.none");
-
-  const action = view.action ? (
-    <Button
-      size="sm"
-      radius="md"
-      color={view.action === "install" ? "primary" : "default"}
-      variant={view.action === "install" ? "solid" : "flat"}
-      isLoading={installing}
-      onPress={onInstall}
-    >
-      {view.action === "install"
-        ? resolveActionLabel("install", "imperative")
-        : t("renderers.action.reinstall")}
-    </Button>
-  ) : undefined;
+  const locale = useConsoleLocale();
+  // A line's key and params come from the model, typed against this catalog.
+  const say = (l: RenderersLine) =>
+    (t as unknown as (k: string, p?: Record<string, string>) => string)(
+      l.key,
+      l.params
+    );
+  const { view, pending } = state;
+  const busy = pending !== null;
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3" aria-busy={busy || undefined}>
       <ResourceRow
         Icon={Shapes}
         primary={t("renderers.name")}
-        secondary={secondary}
-        status={mark}
-        actions={action}
+        secondary={say(view.secondary)}
+        status={
+          view.mark
+            ? { kind: view.mark.kind, label: say(view.mark.label) }
+            : undefined
+        }
+        actions={<Actions state={state} />}
         wrap
       />
-      {refusal && (
-        <div className="flex flex-col gap-2 px-3">
-          <ErrorNote
-            message={t(`renderers.refused.${refusal}`)}
-            detail={last?.kind === "refused" ? last.detail : undefined}
-          />
-          {refusal === "pod_not_enrolled" && (
-            <CommandLine command={ENROLL_COMMAND} />
+      {(view.notes.length > 0 || view.door) && (
+        <div className="flex flex-col gap-1 px-3">
+          {view.notes.map((n) => (
+            <p key={n.key} className="text-[12.5px] text-foreground/75">
+              {say(n)}
+            </p>
+          ))}
+          {view.door === "auto-update" && (
+            <a
+              href={`#${AUTO_UPDATE_ANCHOR}`}
+              className="inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+            >
+              {t("renderers.update.autoOff.door")} <ArrowRight size={13} />
+            </a>
           )}
         </div>
       )}
-      {updates && s.kind === "installed" && <UpdatesPart updates={updates} />}
-      {last?.kind === "proposed" && (
-        <div className="flex flex-col gap-1.5 px-3">
-          <p className="text-[12.5px] text-foreground/75">
-            {t("renderers.proposed")}
-          </p>
-          <Link
-            href={navHref("review", { focus: last.proposalId })}
-            className="inline-flex w-fit items-center gap-1.5 rounded-sm text-[12.5px] font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          >
-            {t("renderers.proposed.open")} <ArrowRight size={13} />
-          </Link>
+      {view.error && (
+        <div className="flex flex-col gap-2 px-3">
+          {view.error.byPassAt && (
+            <p className="text-[12px] text-foreground/65">
+              {t("renderers.refused.byPass", {
+                when: formatRelative(view.error.byPassAt, Date.now(), {
+                  locale,
+                }),
+              })}
+            </p>
+          )}
+          <ErrorNote
+            message={say(view.error.line)}
+            detail={view.error.detail}
+          />
+          {view.error.enroll && <CommandLine command={ENROLL_COMMAND} />}
         </div>
+      )}
+      {view.proposalId && (
+        <p className="px-3 text-[12.5px] text-foreground/75">
+          {t("renderers.proposed")}
+        </p>
+      )}
+      {view.updates === "failed" && (
+        <ResourceRowError
+          message={t("renderers.updates.failed")}
+          onRetry={state.onRetryUpdates}
+        />
       )}
     </div>
   );
 }
 
-/** Why a newer version waits, but its own soak (which names a time). */
-const WAIT_KEYS = {
-  manual: "renderers.update.manual",
-  stopped: "renderers.update.stopped",
-  requires: "renderers.update.requires",
-  undone: "renderers.update.undone",
-} as const;
-
-/** A newer version and why it waits, the last update with Undo, Stop/Resume. */
-function UpdatesPart({ updates }: { updates: RenderersUpdatesState }) {
+/** ONE primary act, and the ⋯ menu when it holds anything. */
+function Actions({
+  state,
+}: {
+  state: Extract<RenderersBodyState, { kind: "ready" }>;
+}) {
   const t = useT(CATALOGS);
-  const locale = useConsoleLocale();
-  const { view, failed, last, busy } = updates;
-  const now = Date.now();
-  const available = view.available;
+  const { view, pending } = state;
+  const busy = pending !== null;
+  const p = view.primary;
 
-  return (
-    <div className="flex flex-col gap-2 px-3">
-      {failed && (
-        <p role="alert" className="text-[12.5px] text-status-stale">
-          {t("renderers.updates.failed")}
-        </p>
-      )}
-      {available && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="min-w-0 flex-1 text-[12.5px] text-foreground/80">
-            {t("renderers.update.available", { version: available.version })}{" "}
-            {available.wait === "auto"
-              ? t("renderers.update.auto", {
-                  when: formatUntil(available.applyAfter ?? now, now, {
-                    locale,
-                  }),
-                })
-              : t(WAIT_KEYS[available.wait])}
-          </p>
+  const primary = !p ? null : p.kind === "install" ? (
+    <Button
+      size="sm"
+      radius="md"
+      color="primary"
+      isLoading={pending === "install"}
+      isDisabled={busy}
+      onPress={state.onInstall}
+    >
+      {resolveActionLabel("install", "imperative")}
+    </Button>
+  ) : p.kind === "open-request" ? (
+    <Button
+      as={Link}
+      href={navHref("review", { focus: p.proposalId })}
+      size="sm"
+      radius="md"
+      variant="flat"
+    >
+      {t("renderers.proposed.open")}
+    </Button>
+  ) : p.kind === "update" ? (
+    <Button
+      size="sm"
+      radius="md"
+      color="primary"
+      isLoading={pending === "update"}
+      isDisabled={busy}
+      onPress={() => state.onUpdate(p.version)}
+    >
+      {resolveActionLabel("update", "imperative")}
+    </Button>
+  ) : p.kind === "update-pod" ? (
+    <Button
+      as="a"
+      href={`#${UPDATE_NOW_ANCHOR}`}
+      size="sm"
+      radius="md"
+      variant="light"
+    >
+      {t("renderers.action.updatePod")}
+    </Button>
+  ) : p.kind === "undo" ? (
+    <Button
+      size="sm"
+      radius="md"
+      variant="flat"
+      isLoading={pending === "undo"}
+      isDisabled={busy}
+      aria-label={t("renderers.action.undo.label", { version: p.version })}
+      onPress={() => state.onUndo(p.receiptId)}
+    >
+      {resolveActionLabel("undo", "imperative")}
+    </Button>
+  ) : (
+    <Button
+      size="sm"
+      radius="md"
+      variant="flat"
+      isLoading={pending === "pause"}
+      isDisabled={busy}
+      onPress={() => state.onPause(false)}
+    >
+      {t("renderers.action.resume")}
+    </Button>
+  );
+
+  const menu =
+    view.overflow.length > 0 ? (
+      <Dropdown>
+        <DropdownTrigger>
           <Button
+            isIconOnly
             size="sm"
-            radius="md"
-            color="primary"
+            variant="light"
+            radius="full"
+            isLoading={
+              pending === "reinstall" ||
+              (pending === "pause" && p?.kind !== "resume")
+            }
             isDisabled={busy}
-            onPress={updates.onUpdate}
+            aria-label={t("renderers.action.more")}
+            className="text-foreground/55"
           >
-            {resolveActionLabel("update", "imperative")}
+            <MoreHorizontal className="h-3.5 w-3.5" />
           </Button>
-        </div>
-      )}
-      {view.undoable && (
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="min-w-0 flex-1 text-[12.5px] text-foreground/75">
-            {t(
-              view.undoable.automatic
-                ? "renderers.updated.auto"
-                : "renderers.updated.person",
-              {
-                version: view.undoable.version,
-                when: formatRelative(view.undoable.at, now, { locale }),
+        </DropdownTrigger>
+        <DropdownMenu aria-label={t("renderers.action.more")}>
+          {view.overflow.map((item) => (
+            <DropdownItem
+              key={item}
+              onPress={
+                item === "reinstall"
+                  ? state.onReinstall
+                  : () => state.onPause(item === "pause")
               }
-            )}
-          </p>
-          <Button
-            size="sm"
-            radius="md"
-            variant="flat"
-            isDisabled={busy}
-            onPress={updates.onUndo}
-          >
-            {resolveActionLabel("undo", "imperative")}
-          </Button>
-        </div>
-      )}
-      {last === "undone" && (
-        <p role="status" className="text-[12.5px] text-foreground/75">
-          {t("renderers.undone")}
-        </p>
-      )}
-      {last && last !== "undone" && (
-        <p role="alert" className="text-[12.5px] text-status-down">
-          {t(
-            last === "update_failed"
-              ? "renderers.update.failed"
-              : last === "undo_failed"
-                ? "renderers.undo.failed"
-                : "renderers.stop.failed"
-          )}
-        </p>
-      )}
-      <div>
-        <Button
-          size="sm"
-          radius="md"
-          variant="light"
-          isDisabled={busy}
-          onPress={updates.onToggleStop}
-        >
-          {t(
-            view.stopped ? "renderers.action.resume" : "renderers.action.stop"
-          )}
-        </Button>
-      </div>
+            >
+              {t(
+                item === "reinstall"
+                  ? "renderers.action.reinstall"
+                  : item === "pause"
+                    ? "renderers.action.pause"
+                    : "renderers.action.resume"
+              )}
+            </DropdownItem>
+          ))}
+        </DropdownMenu>
+      </Dropdown>
+    ) : null;
+
+  if (!primary && !menu) return null;
+  return (
+    <div className="flex items-center gap-1">
+      {primary}
+      {menu}
     </div>
   );
 }

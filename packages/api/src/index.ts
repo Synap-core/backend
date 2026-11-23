@@ -122,8 +122,7 @@ export {
   notifyCapabilityUpdatesAvailable,
   CAPABILITY_UPDATE_GROUP_KEY,
 } from "./services/capabilities/notify-capability-updates.js";
-// The renderer bundle's update pass, after each official catalog sync
-// (plan ad703ccd L2).
+// The renderer bundle's update pass, after each official catalog sync.
 export {
   syncRendererBundleUpdates,
   type RendererBundleSyncOutcome,

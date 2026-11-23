@@ -1,25 +1,24 @@
 /**
  * Renderer bundle UPDATES on real rows (PGlite, the real 0436 + 0449
  * migrations, the real install, receipts, standing and Undo), with the
- * control plane faked at `fetch` under the lane I1 contract
- * (`GET /internal/renderer-bundles/:slug[/:version]?meta=1` →
- * `{ package: { slug, version, contentHash, publishedAt, retired } }`):
+ * control plane faked at `fetch` under its `?meta=1` contract
+ * (`{ package: { slug, version, contentHash, publishedAt, retired } }`):
  *
- *   - D2: a pod with no bundle installs it on its first pass; a refusal (no
+ *   - a pod with no bundle installs it on its first pass; a refusal (no
  *     plan) is recorded with the pod's machine reason, nothing installed;
- *   - D1: a newer version waits for its soak (1 h fast, 24 h stable, from its
- *     publish) and then applies on its own, as the pod owner, with a receipt
- *     `source: automatic`; automatic updates off, or "Stop updates", leave it
- *     for the person;
- *   - D8: a retired installed version skips the soak;
- *   - plan point 5: a version whose `requires` this pod does not meet is held
- *     for the owner, never installed;
- *   - the package-updates doors: the standing lists the bundle with its
- *     verdict, a person's apply writes a receipt, an agent's is filed through
- *     the `market.install` door;
- *   - D7: Undo re-installs the version kept on the pod after re-checking its
- *     recorded digest (a tampered copy is refused, nothing written), and the
- *     undone version does not come back on its own.
+ *   - a newer version waits for its soak (1 h fast, 24 h stable, from its
+ *     publish), then applies on its own as the owner, receipt `automatic`;
+ *     automatic updates off or unreadable, a pause, a frozen catalog leave it
+ *     for the person, and the row says why (`waitReason`);
+ *   - a retired installed version skips the soak;
+ *   - HOLDS: a version whose `requires` this pod does not meet, one that drops
+ *     a kit export another frame cell imports, one whose apply on its own
+ *     failed: never installed on their own, never fetched again by the pass;
+ *   - the package-updates doors: the standing lists Synap's bundle, a
+ *     person's apply writes a receipt, an agent's is filed through
+ *     `market.install`; pausing is a person's act, written to the log;
+ *   - Undo re-installs the version kept on the pod after re-checking its
+ *     recorded digest, and the undone version does not come back by itself.
  */
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -34,6 +33,7 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
   },
   owner: "owner-1" as string | null,
+  blocked: null as string | null,
   marketInstalls: [] as Array<Record<string, unknown>>,
 }));
 
@@ -71,6 +71,19 @@ vi.mock("@synap-core/core/control-plane-url", () => ({
 vi.mock("../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: () => undefined,
 }));
+// The signature standing (its own tests cover when the catalog is frozen).
+vi.mock(
+  "../capabilities/official-catalog-trust.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    officialCatalogStandingNow: async () => ({
+      mode: "unsigned",
+      verified: false,
+      blocked: h.blocked,
+      notice: null,
+    }),
+  })
+);
 vi.mock("../capabilities/pod-owner.js", () => ({
   resolvePodOwnerUserId: async () => h.owner,
 }));
@@ -97,7 +110,7 @@ import {
 } from "./install-renderer-bundle.js";
 import {
   readRendererBundleUpdateState,
-  setRendererBundleUpdatesStopped,
+  setRendererBundleUpdatesPaused,
   syncRendererBundleUpdates,
 } from "./renderer-bundle-updates.js";
 import { listInstalledPackages } from "../package-updates/standing.js";
@@ -146,17 +159,20 @@ const sha = (s: string) => createHash("sha256").update(s, "utf8").digest("hex");
 const mod = (source: string) => ({ source, sha256: sha(source) });
 
 /** A valid bundle; `tokens` makes each build a different version. */
-function bundle(tokens: string, requires?: Record<string, unknown>) {
+function bundle(
+  tokens: string,
+  requires?: Record<string, unknown>,
+  kit: string = "Card"
+) {
   const hostModules = {
     react: mod("export default {};"),
     reactDom: mod("export default { dom: true };"),
     reactDomClient: mod("export const createRoot = () => null;"),
     jsxRuntime: mod("export const jsx = () => null;"),
-    kit: mod("export const Card = () => null;"),
+    kit: mod(`export const ${kit} = () => null;`),
     tokensCss: mod(tokens),
   };
-  const card =
-    'import { Card } from "@synap/kit";\nexport default function C() { return null; }';
+  const card = `import { ${kit} } from "@synap/kit";\nexport default function C() { return null; }`;
   return {
     _meta: { slug: SLUG, version: "build", kind: "renderer-bundle" as const },
     bundleApi: 1 as const,
@@ -166,7 +182,7 @@ function bundle(tokens: string, requires?: Record<string, unknown>) {
         Object.entries(hostModules).map(([k, v]) => [k, v.sha256])
       )
     ),
-    kitExports: ["Card"],
+    kitExports: [kit],
     hostModules,
     cells: [
       {
@@ -175,7 +191,7 @@ function bundle(tokens: string, requires?: Record<string, unknown>) {
         code: card,
         sha256: sha(card),
         contentKind: "entity-card",
-        kitImports: ["Card"],
+        kitImports: [kit],
       },
     ],
     defaults: { "entity-card": "entity-card" },
@@ -198,6 +214,8 @@ const cp = {
   rows: [] as CpRow[],
   refuse: null as null | string,
   calls: [] as string[],
+  /** The definition read answers 500 (a failed apply). */
+  failDefinition: false,
 };
 function publish(
   definition: Record<string, unknown>,
@@ -245,6 +263,7 @@ const fakeCp = vi.fn(async (input: string | URL) => {
       },
     });
   }
+  if (cp.failDefinition) return json(500, { error: "boom" });
   return json(200, {
     package: { slug, version: row.version, definition: row.definition },
   });
@@ -270,6 +289,13 @@ const person = (): Context =>
 const agent = (): Context =>
   ({ ...person(), agentUserId: randomUUID() }) as unknown as Context;
 const auto = { auto: true, channel: "stable" as const };
+const waits = (latest: string, reason: string, extra = {}) => ({
+  kind: "waits",
+  latest,
+  reason,
+  ...extra,
+});
+const definitionReads = () => cp.calls.filter((c) => !c.includes("meta=1"));
 
 beforeAll(async () => {
   const skip = new Set([
@@ -303,6 +329,8 @@ beforeEach(async () => {
   cp.refuse = null;
   cp.calls = [];
   h.owner = "owner-1";
+  h.blocked = null;
+  cp.failDefinition = false;
   h.marketInstalls = [];
   fakeCp.mockClear();
   vi.stubGlobal("fetch", fakeCp);
@@ -319,7 +347,7 @@ async function installedV1ThenV2(ageOfV2: number) {
   return { v1, v2 };
 }
 
-describe("the first pass (D2)", () => {
+describe("the first pass", () => {
   it("a plan pod with no bundle installs it, with no receipt (nothing to undo)", async () => {
     const v1 = publish(bundle(":root{}"), NOW);
     const out = await syncRendererBundleUpdates({ settings: auto, now: NOW });
@@ -380,22 +408,23 @@ describe("the first pass (D2)", () => {
   });
 });
 
-describe("a newer version (D1, D8)", () => {
+describe("a newer version", () => {
   it("waits for its soak (stable 24 h from its publish), then applies on its own with a receipt", async () => {
     const { v1, v2 } = await installedV1ThenV2(2 * HOUR);
     const waiting = await syncRendererBundleUpdates({
       settings: auto,
       now: NOW,
     });
-    expect(waiting).toEqual({
-      kind: "waiting",
-      latest: v2.version,
-      applyAfter: new Date(v2.publishedAt.getTime() + 24 * HOUR),
-    });
-    expect(await installedVersion()).toBe(v1.version);
-    expect((await readRendererBundleUpdateState())?.applyAfter).toBe(
-      new Date(v2.publishedAt.getTime() + 24 * HOUR).toISOString()
+    expect(waiting).toEqual(
+      waits(v2.version, "soak", {
+        applyAfter: new Date(v2.publishedAt.getTime() + 24 * HOUR),
+      })
     );
+    expect(await installedVersion()).toBe(v1.version);
+    expect(await readRendererBundleUpdateState()).toMatchObject({
+      waitReason: "soak",
+      applyAfter: new Date(v2.publishedAt.getTime() + 24 * HOUR).toISOString(),
+    });
 
     const later = new Date(v2.publishedAt.getTime() + 24 * HOUR + 1);
     expect(
@@ -420,7 +449,10 @@ describe("a newer version (D1, D8)", () => {
         },
       ],
     });
-    expect((await readRendererBundleUpdateState())?.applyAfter).toBeNull();
+    expect(await readRendererBundleUpdateState()).toMatchObject({
+      waitReason: null,
+      applyAfter: null,
+    });
   });
 
   it("the fast channel waits 1 h", async () => {
@@ -433,42 +465,66 @@ describe("a newer version (D1, D8)", () => {
     ).toEqual({ kind: "updated", from: expect.any(String), to: v2.version });
   });
 
-  it("automatic updates off: it waits for the person", async () => {
+  it("automatic updates off, or unreadable: it waits for the person, and says which", async () => {
     const { v1, v2 } = await installedV1ThenV2(72 * HOUR);
     expect(
       await syncRendererBundleUpdates({
         settings: { auto: false, channel: "stable" },
         now: NOW,
       })
-    ).toEqual({ kind: "manual", latest: v2.version });
-    // An unreadable setting is not a yes.
+    ).toEqual(waits(v2.version, "auto_off"));
+    expect((await readRendererBundleUpdateState())?.waitReason).toBe(
+      "auto_off"
+    );
+    // An unreadable setting is not a yes, and not "off" either.
     expect(
       await syncRendererBundleUpdates({ settings: null, now: NOW })
-    ).toEqual({ kind: "manual", latest: v2.version });
+    ).toEqual(waits(v2.version, "setting_unreadable"));
     expect(await installedVersion()).toBe(v1.version);
   });
 
-  it('"Stop updates": it waits for the person; back on, it applies', async () => {
-    const { v2 } = await installedV1ThenV2(72 * HOUR);
-    await setRendererBundleUpdatesStopped({
-      slug: SLUG,
-      stopped: true,
-      userId: "owner-1",
-    });
+  // Catches: the pass fetching (and the CP recording) while the catalog is frozen.
+  it("a frozen catalog: it waits, and the definition is not fetched", async () => {
+    const { v1, v2 } = await installedV1ThenV2(72 * HOUR);
+    h.blocked = "Synap's catalog signature expired.";
+    cp.calls = [];
     expect(
       await syncRendererBundleUpdates({ settings: auto, now: NOW })
-    ).toEqual({ kind: "stopped", latest: v2.version });
-    await setRendererBundleUpdatesStopped({
+    ).toEqual(waits(v2.version, "frozen"));
+    expect(definitionReads()).toEqual([]);
+    expect(await installedVersion()).toBe(v1.version);
+  });
+
+  it("paused: it waits for the person; resumed, it applies; each is a person's act on the log", async () => {
+    const { v2 } = await installedV1ThenV2(72 * HOUR);
+    await expect(
+      setRendererBundleUpdatesPaused(agent(), { slug: SLUG, paused: true })
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const paused = await setRendererBundleUpdatesPaused(person(), {
       slug: SLUG,
-      stopped: false,
-      userId: "owner-1",
+      paused: true,
     });
+    expect(paused?.pausedAt).not.toBeNull();
+    expect(
+      await syncRendererBundleUpdates({ settings: auto, now: NOW })
+    ).toEqual(waits(v2.version, "paused"));
+    await setRendererBundleUpdatesPaused(person(), {
+      slug: SLUG,
+      paused: false,
+    });
+    const logged = await q<{ type: string; subject_id: string }>(
+      `select type, subject_id from events where type like 'package.updates_%' order by timestamp`
+    );
+    expect(logged.rows).toEqual([
+      { type: "package.updates_paused", subject_id: SLUG },
+      { type: "package.updates_resumed", subject_id: SLUG },
+    ]);
     expect(
       (await syncRendererBundleUpdates({ settings: auto, now: NOW })).kind
     ).toBe("updated");
   });
 
-  // D8: Synap retired the version this pod runs.
+  // Synap retired the version this pod runs.
   it("a retired installed version converges without waiting", async () => {
     const { v1, v2 } = await installedV1ThenV2(5 * 60 * 1000);
     cp.rows.find((r) => r.version === v1.version)!.retired = true;
@@ -480,7 +536,7 @@ describe("a newer version (D1, D8)", () => {
     );
   });
 
-  // Plan point 5: built for a newer pod.
+  // Built for a newer pod.
   it("a version this pod cannot run is held for the owner, never installed", async () => {
     const v1 = publish(bundle(":root{}"), new Date(NOW.getTime() - 72 * HOUR));
     await syncRendererBundleUpdates({ settings: auto, now: NOW });
@@ -490,7 +546,7 @@ describe("a newer version (D1, D8)", () => {
     );
     expect(
       await syncRendererBundleUpdates({ settings: auto, now: NOW })
-    ).toEqual({ kind: "held", latest: v2.version, reason: "requires" });
+    ).toEqual(waits(v2.version, "held", { hold: "requires" }));
     expect(await installedVersion()).toBe(v1.version);
     const state = await readRendererBundleUpdateState();
     expect(state?.hold).toMatchObject({
@@ -502,9 +558,9 @@ describe("a newer version (D1, D8)", () => {
     // Held: the next pass does not fetch the definition again.
     cp.calls = [];
     expect(
-      (await syncRendererBundleUpdates({ settings: auto, now: NOW })).kind
-    ).toBe("held");
-    expect(cp.calls.some((c) => !c.includes("meta=1"))).toBe(false);
+      await syncRendererBundleUpdates({ settings: auto, now: NOW })
+    ).toEqual(waits(v2.version, "held", { hold: "requires" }));
+    expect(definitionReads()).toEqual([]);
 
     // A person's apply is refused the same way, nothing written.
     const err = await applyPackageUpdate(person(), {
@@ -515,6 +571,92 @@ describe("a newer version (D1, D8)", () => {
       RENDERER_BUNDLE_REQUIRES_UNMET
     );
     expect(await installedVersion()).toBe(v1.version);
+  });
+});
+
+describe("holds that keep the pass from fetching again", () => {
+  /** A person's own frame cell on the pod, importing `name` from the kit. */
+  async function personCellImporting(name: string) {
+    await q(
+      `insert into widget_definitions (id, type_key, name, renderer_type, is_active, renderer_source)
+       values (gen_random_uuid(), 'cell:mine:chart', 'Mine', 'frame', true, $1)`,
+      [`import { ${name} } from "@synap/kit";\nexport default () => null;`]
+    );
+  }
+
+  // Catches: a bundle dropping a kit export another cell imports, applied on its own.
+  it("a version that drops a kit export another cell imports is held ('kit'); a person may apply it", async () => {
+    const v1 = publish(bundle(":root{}"), new Date(NOW.getTime() - 96 * HOUR));
+    await syncRendererBundleUpdates({ settings: auto, now: NOW });
+    await personCellImporting("Card");
+    const v2 = publish(
+      bundle(":root{--v:2}", undefined, "Board"),
+      new Date(NOW.getTime() - 72 * HOUR)
+    );
+    expect(
+      await syncRendererBundleUpdates({ settings: auto, now: NOW })
+    ).toEqual(waits(v2.version, "held", { hold: "kit" }));
+    expect(await installedVersion()).toBe(v1.version);
+    expect((await readRendererBundleUpdateState())?.hold?.detail).toContain(
+      "Card"
+    );
+    cp.calls = [];
+    await syncRendererBundleUpdates({ settings: auto, now: NOW });
+    expect(definitionReads()).toEqual([]);
+
+    // The person's apply is their consent: it lands, and the hold goes.
+    await applyPackageUpdate(person(), {
+      slug: SLUG,
+      expectedVersion: v2.version,
+    });
+    expect(await installedVersion()).toBe(v2.version);
+    expect((await readRendererBundleUpdateState())?.hold).toBeNull();
+  });
+
+  it("a dropped kit export no other cell imports does not hold", async () => {
+    publish(bundle(":root{}"), new Date(NOW.getTime() - 96 * HOUR));
+    await syncRendererBundleUpdates({ settings: auto, now: NOW });
+    await personCellImporting("Something");
+    const v2 = publish(
+      bundle(":root{--v:2}", undefined, "Board"),
+      new Date(NOW.getTime() - 72 * HOUR)
+    );
+    expect(
+      (await syncRendererBundleUpdates({ settings: auto, now: NOW })).kind
+    ).toBe("updated");
+    expect(await installedVersion()).toBe(v2.version);
+  });
+
+  // Catches: a failed apply refetching ~3 MB (and a CP delivery row) every pass.
+  it("a failed apply on its own holds that version: not fetched again until a newer one", async () => {
+    const { v1, v2 } = await installedV1ThenV2(72 * HOUR);
+    cp.failDefinition = true;
+    expect(
+      await syncRendererBundleUpdates({ settings: auto, now: NOW })
+    ).toEqual(waits(v2.version, "held", { hold: "failed" }));
+    expect(await installedVersion()).toBe(v1.version);
+    cp.calls = [];
+    await syncRendererBundleUpdates({ settings: auto, now: NOW });
+    expect(definitionReads()).toEqual([]);
+
+    cp.failDefinition = false;
+    const v3 = publish(
+      bundle(":root{--v:3}"),
+      new Date(NOW.getTime() - 48 * HOUR)
+    );
+    expect(
+      await syncRendererBundleUpdates({ settings: auto, now: NOW })
+    ).toEqual({ kind: "updated", from: v1.version, to: v3.version });
+  });
+
+  it("a refusal on an installed pod is recorded too, and says why the update waits", async () => {
+    await installedV1ThenV2(72 * HOUR);
+    cp.refuse = "OFFICIAL_BUNDLE_POD_NOT_LIVE";
+    await syncRendererBundleUpdates({ settings: auto, now: NOW });
+    expect(await readRendererBundleUpdateState()).toMatchObject({
+      waitReason: "refused",
+      refusal: { reasonCode: "renderer_bundle_pod_not_live" },
+    });
   });
 });
 
@@ -580,7 +722,7 @@ describe("the package-updates doors", () => {
   });
 });
 
-describe("Undo (D7)", () => {
+describe("Undo", () => {
   async function updated() {
     const { v1, v2 } = await installedV1ThenV2(72 * HOUR);
     await syncRendererBundleUpdates({ settings: auto, now: NOW });
@@ -604,7 +746,7 @@ describe("Undo (D7)", () => {
     // The undone version does not come back on its own…
     expect(
       await syncRendererBundleUpdates({ settings: auto, now: NOW })
-    ).toEqual({ kind: "held", latest: v2.version, reason: "undone" });
+    ).toEqual(waits(v2.version, "held", { hold: "undone" }));
     expect(await installedVersion()).toBe(v1.version);
     // …a newer one does.
     const v3 = publish(

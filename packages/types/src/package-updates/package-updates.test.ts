@@ -10,7 +10,7 @@ import {
   packageUpdateReviewPath,
   INSTALLED_PACKAGE_KINDS,
   RENDERER_BUNDLE_SOAK_MS,
-  stopPackageUpdatesInputSchema,
+  pausePackageUpdatesInputSchema,
 } from "./index.js";
 
 describe("packageHasUpdate — THE rule, every kind, every surface", () => {
@@ -96,18 +96,14 @@ describe("package updates contract", () => {
       stable: 24 * 60 * 60 * 1000,
     });
     expect(
-      stopPackageUpdatesInputSchema.safeParse({
-        kind: "renderer-bundle",
+      pausePackageUpdatesInputSchema.safeParse({
         slug: "synap-renderers",
-        stopped: true,
+        paused: true,
       }).success
     ).toBe(true);
     expect(
-      stopPackageUpdatesInputSchema.safeParse({
-        kind: "skill",
-        slug: "x",
-        stopped: true,
-      }).success
+      pausePackageUpdatesInputSchema.safeParse({ slug: "", paused: true })
+        .success
     ).toBe(false);
   });
 

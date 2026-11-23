@@ -24,9 +24,9 @@
  * contract (`unmetRendererBundleRequirements`: the bundle API, the bridge ops
  * its cells call): one this pod does not meet is refused PRECONDITION_FAILED
  * `RENDERER_BUNDLE_REQUIRES_UNMET`, nothing written (the update pass holds it
- * for the owner instead, plan ad703ccd §3b.5a).
+ * for the owner instead: the bundle is built against backend `main`).
  *
- * KEPT VERSIONS (0449, D7). The same transaction records the definition with
+ * KEPT VERSIONS (0449). The same transaction records the definition with
  * the digest computed here (`officialContentHash`, what Synap's index lists)
  * in `renderer_bundle_versions` and on the bundle row, and keeps only the new
  * version and the one it replaced (N-1): Undo re-installs N-1 from the pod,

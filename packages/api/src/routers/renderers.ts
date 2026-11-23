@@ -9,10 +9,10 @@
  *                caller already holds `knownSetSha256`; NOT_FOUND
  *                (`reasonCode: NO_RENDERER_BUNDLE`) when none is installed
  *   updates      (pod admins) what the 10-minute pass last read about the
- *                bundle's updates: the newest version, when it applies on its
- *                own, a hold, a refusal, "Stop updates"; null = never read
- *                (`renderer-bundle-updates.ts`). Applying, Undo and "Stop
- *                updates" are `packageUpdates.*`.
+ *                bundle's updates: the newest version, why it waits, a hold,
+ *                a refusal, a pause; null = never read
+ *                (`renderer-bundle-updates.ts`). Applying, Undo and Pause
+ *                are `packageUpdates.*`.
  *
  * A cell's source stays on `widgetDefinitions.get`. The Hub REST mirror of
  * `hostModules` is `GET /api/hub/renderers/host-modules` (ETag / 304).

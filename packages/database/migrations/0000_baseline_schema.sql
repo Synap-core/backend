@@ -5448,7 +5448,6 @@ CREATE TABLE IF NOT EXISTS "renderer_bundle_versions" (
 CREATE TABLE IF NOT EXISTS "renderer_bundle_updates" (
   "slug"                text        PRIMARY KEY,
   "latest_version"      text,
-  "latest_content_hash" text,
   "latest_published_at" timestamptz,
   "checked_at"          timestamptz,
   "installed_retired"   boolean     NOT NULL DEFAULT false,
@@ -5459,9 +5458,9 @@ CREATE TABLE IF NOT EXISTS "renderer_bundle_updates" (
   "hold_reason"         text,
   "hold_detail"         text,
   "held_at"             timestamptz,
+  "wait_reason"         text,
   "apply_after"         timestamptz,
-  "stopped_at"          timestamptz,
-  "stopped_by"          text,
+  "paused_at"           timestamptz,
   "updated_at"          timestamptz NOT NULL DEFAULT now()
 );
 

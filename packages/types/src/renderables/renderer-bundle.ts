@@ -75,15 +75,14 @@ export interface RendererBundleDefaults {
 }
 
 /**
- * What a bundle needs from the pod that runs it (plan ad703ccd §3b.5a): the
- * bundle is built against backend `main`, while a `stable` pod runs an older
- * release. Optional, and every field optional: absent = no requirement.
+ * What a bundle needs from the pod that runs it: the bundle is built against
+ * backend `main`, while a `stable` pod runs an older release. Optional, every
+ * field optional; absent = no requirement. A requirement this pod does not
+ * know (a newer contract's) is unmet, never invalid: the bundle waits for the
+ * pod to be updated instead of being refused.
  *
  *   bridgeOps — the cell-bridge operations its cells call (read ops of
- *               `CELL_BRIDGE_READ_OPS`, write ops of `CELL_BRIDGE_WRITE_OPS`;
- *               the build derives them from its trace). A pod whose contract
- *               does not list one holds the bundle until it is updated
- *               (`unmetRendererBundleRequirements`).
+ *               `CELL_BRIDGE_READ_OPS`, write ops of `CELL_BRIDGE_WRITE_OPS`).
  */
 export interface RendererBundleRequires {
   bridgeOps?: string[];
@@ -113,6 +112,9 @@ export interface RendererBundleDefinition {
  * and the bridge ops its hosts answer. Pure. Reads the definition loosely, so
  * it can say why before `validateRendererBundleDefinition` refuses the shape.
  */
+/** The requirements this build of the contract can check. */
+const KNOWN_REQUIREMENTS: ReadonlySet<string> = new Set(["bridgeOps"]);
+
 export function unmetRendererBundleRequirements(definition: unknown): string[] {
   if (!isRecord(definition)) return [];
   const unmet: string[] = [];
@@ -125,7 +127,8 @@ export function unmetRendererBundleRequirements(definition: unknown): string[] {
     );
   }
   const requires = definition.requires;
-  if (isRecord(requires) && Array.isArray(requires.bridgeOps)) {
+  if (!isRecord(requires)) return unmet;
+  if (Array.isArray(requires.bridgeOps)) {
     const missing = requires.bridgeOps.filter(
       (op) => !isCellBridgeReadOp(op) && !isCellBridgeWriteOp(op)
     );
@@ -134,6 +137,14 @@ export function unmetRendererBundleRequirements(definition: unknown): string[] {
         `It calls ${missing.map(String).join(", ")}, which this pod does not answer yet.`
       );
     }
+  }
+  const unknown = Object.keys(requires).filter(
+    (name) => !KNOWN_REQUIREMENTS.has(name)
+  );
+  if (unknown.length > 0) {
+    unmet.push(
+      `It needs ${unknown.join(", ")}, which this pod does not know yet.`
+    );
   }
   return unmet;
 }
@@ -315,10 +326,8 @@ export function validateRendererBundleDefinition(
   if (d.requires !== undefined) {
     if (!isRecord(d.requires)) add("requires", "requires must be an object.");
     else {
-      for (const name of Object.keys(d.requires)) {
-        if (name !== "bridgeOps")
-          add(`requires.${name}`, `"${name}" is not a requirement.`);
-      }
+      // An unknown requirement is unmet (`unmetRendererBundleRequirements`),
+      // not invalid.
       if (
         d.requires.bridgeOps !== undefined &&
         !isStringList(d.requires.bridgeOps)

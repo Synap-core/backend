@@ -89,8 +89,8 @@ export const rendererHostModules = pgTable(
 /**
  * 0449: the definitions this pod installed, the current one and N-1, each
  * with the digest recorded at its install. Undo re-installs N-1 from here
- * after re-checking that digest (plan ad703ccd D7). Written only by
- * `installRendererBundle`, which keeps at most two rows per slug.
+ * after re-checking that digest. Written only by `installRendererBundle`,
+ * which keeps at most two rows per slug.
  */
 export const rendererBundleVersions = pgTable(
   "renderer_bundle_versions",
@@ -109,12 +109,11 @@ export const rendererBundleVersions = pgTable(
 /**
  * 0449: what the 10-minute after-sync pass learned about a bundle's updates
  * (`services/renderers/renderer-bundle-updates.ts`), one row per slug, which
- * exists before any install (a refusal is shown on a pod with no bundle).
+ * exists before any install (a refusal shows on a pod with no bundle).
  */
 export const rendererBundleUpdates = pgTable("renderer_bundle_updates", {
   slug: text("slug").primaryKey(),
   latestVersion: text("latest_version"),
-  latestContentHash: text("latest_content_hash"),
   latestPublishedAt: timestamp("latest_published_at", {
     mode: "date",
     withTimezone: true,
@@ -125,13 +124,14 @@ export const rendererBundleUpdates = pgTable("renderer_bundle_updates", {
   refusalMessage: text("refusal_message"),
   refusedAt: timestamp("refused_at", { mode: "date", withTimezone: true }),
   holdVersion: text("hold_version"),
-  /** `requires` | `undone` (RENDERER_BUNDLE_HOLD_REASONS). */
+  /** RENDERER_BUNDLE_HOLD_REASONS. */
   holdReason: text("hold_reason"),
   holdDetail: text("hold_detail"),
   heldAt: timestamp("held_at", { mode: "date", withTimezone: true }),
+  /** RENDERER_BUNDLE_WAIT_REASONS. */
+  waitReason: text("wait_reason"),
   applyAfter: timestamp("apply_after", { mode: "date", withTimezone: true }),
-  stoppedAt: timestamp("stopped_at", { mode: "date", withTimezone: true }),
-  stoppedBy: text("stopped_by"),
+  pausedAt: timestamp("paused_at", { mode: "date", withTimezone: true }),
   updatedAt: timestamp("updated_at", { mode: "date", withTimezone: true })
     .defaultNow()
     .notNull(),

@@ -191,9 +191,8 @@ describe("requires (plan ad703ccd §3b.5a)", () => {
     expect(paths({ ...bundle(), requires: { bridgeOps: [1] } })).toEqual([
       "requires.bridgeOps",
     ]);
-    expect(paths({ ...bundle(), requires: { podVersion: "1" } })).toEqual([
-      "requires.podVersion",
-    ]);
+    // A requirement this pod does not know is "not yet", never invalid.
+    expect(paths({ ...bundle(), requires: { podVersion: "1" } })).toEqual([]);
   });
 
   it("names what this pod's contract does not meet", () => {
@@ -213,6 +212,13 @@ describe("requires (plan ad703ccd §3b.5a)", () => {
     expect(unmet[0]).toContain("bundle API 2");
     expect(unmet[1]).toContain("pods.teleport");
     expect(unmet[1]).not.toContain("entities.get");
+    // A requirement a newer contract added holds the bundle on this pod.
+    expect(
+      unmetRendererBundleRequirements({
+        ...bundle(),
+        requires: { contractVersion: 3 },
+      })
+    ).toEqual(["It needs contractVersion, which this pod does not know yet."]);
   });
 });
 

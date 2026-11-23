@@ -613,9 +613,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           // skip them.
           await installOfficialAgentTemplates();
           await selfHealAgentTemplateLinks();
-          // The renderer bundle (plan ad703ccd L2): installed on a plan pod's
-          // first sync (D2), updated under the pod's ONE update setting after
-          // its soak (D1). Its own failure never stops the capability converge.
+          // Synap's renderer bundle: installed on a plan pod's first sync,
+          // updated under the pod's ONE update setting after its soak. Its
+          // own failure never stops the capability converge.
           try {
             let settings: { auto: boolean; channel: "stable" | "fast" } | null =
               null;

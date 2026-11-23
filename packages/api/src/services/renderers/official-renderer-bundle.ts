@@ -44,13 +44,22 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { podCpAuthHeaders } from "@synap/database";
+import {
+  podCpAuthHeaders,
+  getDb,
+  and,
+  eq,
+  like,
+  notLike,
+} from "@synap/database";
+import { rendererBundles, widgetDefinitions } from "@synap/database/schema";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 import { OFFICIAL_SOURCE_ID } from "@synap-core/types/marketplace-source";
 import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import type { PackageUpdateReceipt } from "@synap-core/types/package-updates";
 import { assertOfficialDefinition } from "../capabilities/official-catalog-trust.js";
 import { recordPackageUpdateReceipt } from "../package-updates/receipts.js";
+import { clearAfterRendererBundleInstall } from "./renderer-bundle-update-state.js";
 import {
   installRendererBundle,
   type InstalledRendererBundle,
@@ -134,7 +143,7 @@ export interface RendererBundleMeta {
   contentHash: string;
   /** When the row was published (the soak counts from it). */
   publishedAt: Date;
-  /** Synap retired this row (D8: a pod holding it converges without waiting). */
+  /** Synap retired this row: a pod holding it converges without waiting. */
   retired: boolean;
 }
 
@@ -335,12 +344,63 @@ export async function admitOfficialRendererBundle(input: {
   });
 }
 
+export const RENDERER_BUNDLE_KIT_REMOVED =
+  "RENDERER_BUNDLE_KIT_REMOVED" as const;
+
 /**
- * Fetch, admit and install the official bundle: the `market.install` door, a
- * person's or the after-sync pass's update (`package-updates`). When it
- * replaced another version, the install is an UPDATE: it writes one receipt
+ * The kit exports `definition` drops that another frame cell on this pod may
+ * still use. Installed cells do not record their kit imports, so a dropped
+ * name counts as used when it appears in the source of any active frame cell
+ * that is not this bundle's own (`cell:<slug>:*`) and imports `@synap/kit`:
+ * an over-count (a word in a comment) holds an update, it never breaks a cell.
+ */
+export async function kitExportsStillUsed(
+  slug: string,
+  definition: Record<string, unknown>
+): Promise<string[]> {
+  const db = await getDb();
+  const [row] = await db
+    .select({ kitExports: rendererBundles.kitExports })
+    .from(rendererBundles)
+    .where(eq(rendererBundles.slug, slug))
+    .limit(1);
+  const next = new Set(
+    Array.isArray(definition.kitExports)
+      ? definition.kitExports.filter((n): n is string => typeof n === "string")
+      : []
+  );
+  const dropped = (row?.kitExports ?? []).filter((n) => !next.has(n));
+  if (dropped.length === 0) return [];
+  const others = await db
+    .select({ source: widgetDefinitions.rendererSource })
+    .from(widgetDefinitions)
+    .where(
+      and(
+        eq(widgetDefinitions.rendererType, "frame"),
+        eq(widgetDefinitions.isActive, true),
+        notLike(widgetDefinitions.typeKey, `cell:${slug}:%`),
+        like(widgetDefinitions.rendererSource, "%@synap/kit%")
+      )
+    );
+  return dropped.filter((name) => {
+    const word = new RegExp(
+      `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
+    );
+    return others.some((c) => word.test(c.source ?? ""));
+  });
+}
+
+/**
+ * Fetch, admit and install the official bundle: the `market.install` door and
+ * the update doors (a person's apply, the after-sync pass). An install that
+ * replaced another version is an UPDATE: it writes one receipt
  * (`package.updated`, its one change the bundle's `version`), which Undo takes
- * back within 30 days from the version kept on the pod (D7).
+ * back within 30 days from the version kept on the pod. Any landed install
+ * clears the bundle's hold, refusal and wait.
+ *
+ * `holdKitRemoval` (the pass, applying on its own): a version that drops kit
+ * exports another frame cell may use is refused `RENDERER_BUNDLE_KIT_REMOVED`
+ * before anything is written, so it waits for a person.
  */
 export async function installOfficialRendererBundle(input: {
   slug: string;
@@ -348,16 +408,28 @@ export async function installOfficialRendererBundle(input: {
   userId: string;
   /** Who applied it, on the receipt: a person (default) or the after-sync pass. */
   appliedBy?: "person" | "automatic";
+  holdKitRemoval?: boolean;
 }): Promise<
   InstalledRendererBundle & { receipt: PackageUpdateReceipt | null }
 > {
   const fetched = await fetchOfficialRendererBundle(input);
   await admitOfficialRendererBundle({ ...input, fetched });
+  if (input.holdKitRemoval) {
+    const used = await kitExportsStillUsed(input.slug, fetched.definition);
+    if (used.length > 0) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `This version drops ${used.join(", ")} from the kit, which another cell on this pod may use. It waits for a person to apply it. Nothing was installed.`,
+        cause: { reasonCode: RENDERER_BUNDLE_KIT_REMOVED, names: used },
+      });
+    }
+  }
   const installed = await installRendererBundle(fetched.definition, {
     userId: input.userId,
     source: OFFICIAL_SOURCE_ID,
     version: fetched.version,
   });
+  await clearAfterRendererBundleInstall(installed.slug);
   const from = installed.previousVersion;
   const receipt =
     from && from !== installed.version

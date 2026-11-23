@@ -18,7 +18,6 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { getActingAgentUserId } from "@synap/database";
 import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import {
   applyPackageUpdateInputSchema,
@@ -44,21 +43,13 @@ import {
 import type { Context } from "../../types/context.js";
 import { planPackageRows, type PlannedRow } from "./plan.js";
 import { applyWholePackageUpdate } from "./apply-whole.js";
-import { packageUpdateRefusal } from "./refusals.js";
+import { actingAgentOf, packageUpdateRefusal } from "./refusals.js";
 import { listInstalledPackages } from "./standing.js";
 import {
   getPackageUpdateReceipt,
   recordPackageUpdateReceipt,
   recordPackageUpdateUndone,
 } from "./receipts.js";
-
-/** The acting agent, the way the governed doors derive it. */
-function actingAgentOf(ctx: Context): string | undefined {
-  return (
-    getActingAgentUserId() ??
-    ((ctx as { agentUserId?: string | null }).agentUserId || undefined)
-  );
-}
 
 /**
  * `views.update` has no agent gate today: an agent's write through it would
@@ -70,7 +61,7 @@ function refuseUngovernedAgentWrite(
   slug: string,
   kinds: Iterable<StandaloneKind>
 ): void {
-  if (!actingAgentOf(ctx)) return;
+  if (!actingAgentOf(ctx as { agentUserId?: string | null })) return;
   for (const kind of kinds) {
     if (kind === "view") {
       throw packageUpdateRefusal(

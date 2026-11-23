@@ -16,7 +16,7 @@ import { getActingAgentUserId } from "@synap/database";
 import {
   applyPackageUpdateInputSchema,
   detachPackageInputSchema,
-  stopPackageUpdatesInputSchema,
+  pausePackageUpdatesInputSchema,
   undoPackageUpdateInputSchema,
 } from "@synap-core/types/package-updates";
 
@@ -35,14 +35,7 @@ import {
 } from "../services/package-updates/apply.js";
 import { listPackageUpdateReceipts } from "../services/package-updates/receipts.js";
 import { detachStandaloneConfigSource } from "../services/capabilities/reconcile-standalone-configs-to-templates.js";
-import { setRendererBundleUpdatesStopped } from "../services/renderers/renderer-bundle-updates.js";
-
-/** A config-lifecycle act is a person's: refuse an agent credential. */
-function refuseAgent(ctx: { agentUserId?: string | null }, message: string) {
-  if (getActingAgentUserId() ?? ctx.agentUserId) {
-    throw new TRPCError({ code: "FORBIDDEN", message });
-  }
-}
+import { setRendererBundleUpdatesPaused } from "../services/renderers/renderer-bundle-updates.js";
 
 export const packageUpdatesRouter = router({
   /** Every installed package whose catalog moved, and those it could not read. */
@@ -110,22 +103,11 @@ export const packageUpdatesRouter = router({
     }),
 
   /**
-   * "Stop updates" for a package that stays installed from the catalog (a
-   * renderer bundle: its code is the catalog's, so it cannot become the
-   * person's), and back on. Stopped, a new version waits for the person: it is
-   * still listed, and applies only when they apply it.
+   * Pause a renderer bundle's updates, or resume them (its code stays the
+   * catalog's, so it cannot be detached as rows are). Paused, a newer version
+   * waits for a person. A person's act, written to the log.
    */
-  stopUpdates: podAdminProcedure
-    .input(stopPackageUpdatesInputSchema)
-    .mutation(({ ctx, input }) => {
-      refuseAgent(
-        ctx as { agentUserId?: string | null },
-        "An agent credential cannot stop or resume a package's updates. Run it from a human/operator session."
-      );
-      return setRendererBundleUpdatesStopped({
-        slug: input.slug,
-        stopped: input.stopped,
-        userId: ctx.userId as string,
-      });
-    }),
+  pauseUpdates: podAdminProcedure
+    .input(pausePackageUpdatesInputSchema)
+    .mutation(({ ctx, input }) => setRendererBundleUpdatesPaused(ctx, input)),
 });
