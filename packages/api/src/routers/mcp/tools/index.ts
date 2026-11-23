@@ -140,6 +140,25 @@ import { TRACK_PARTICIPANT_ACTIONS } from "../handlers/track-participants.js";
 import { MOVE_HOLD_TOOL_PROPERTIES } from "../../../services/lifecycle/hold-input.js";
 
 /**
+ * A plan step's time (B5), one wire shape for start/update_session and the
+ * capture plan's `sessions[]` (`stepTimePatch` checks it, `@synap-core/types`).
+ */
+const STEP_TIME_TOOL_PROPERTIES = {
+  plannedFor: {
+    type: ["string", "null"],
+    description: "When it starts: 2027-03, 2027-03-14 or ISO; null clears.",
+  },
+  dueBy: { type: ["string", "null"], description: "Deadline, same shapes." },
+} as const;
+
+/** P4: how a step that waits is born (`stepBirthStatus`). */
+const START_NOW_TOOL_PROPERTY = {
+  type: "boolean",
+  description:
+    "With a blocker or later plannedFor it is born planned (owes nothing, starts when they clear); true starts it now.",
+} as const;
+
+/**
  * When an entity's `content` becomes a linked document rather than the inline
  * `content` property — the rule `shouldMaterializeAsDocument`
  * (`@synap-core/types`, `document-heuristic.ts`) applies, in words. One copy
@@ -1717,7 +1736,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Change up to 500 existing entities in ONE call — retitles, property fixes, status moves. Use it for any change set; never script many single updates or Hub REST calls. Each item is {id, patch, expected?}; patch fields: title, description, properties, deleteProperties, expectedStatus (no kind change, no body — use synap_update_entity / synap_update_document for those). Governance is per item: each is written now (when it would auto-approve), or collected into ONE review for the person, or denied, or skipped (not found, changed since you read it, nothing to change). The answer lists applied, proposed {proposalId, count, reviewUrl}, denied, skipped, plus items[] with each verdict — a partial result is normal. 'proposed' is success: do not resend those items; a skipped item with `deferred: true` was kept on a space-join request and is replayed for you. Pass validate:true first to see the verdicts without writing. Pass an idempotencyKey so a retried call returns the first answer instead of acting twice.",
+          "Change up to 500 existing entities in ONE call — retitles, property fixes, status moves. Use it for any change set; never script many single updates or Hub REST calls. Each item is {id, patch, expected?}; patch fields: title, description, properties, deleteProperties, expectedStatus (no kind change, no body — use synap_update_entity / synap_update_document for those). Governance is per item: each is written now (when it would auto-approve), or collected into ONE review for the person, or denied, or skipped (not found, changed since you read it, nothing to change). The answer lists applied, proposed {proposalId, count, reviewUrl}, denied, skipped, plus items[] with each verdict — a partial result is normal. 'proposed' is success: do not resend those items; a skipped item with `deferred: true` was held with today's writes past your daily limit and is replayed for you once approved. Pass validate:true first to see the verdicts without writing. Pass an idempotencyKey so a retried call returns the first answer instead of acting twice.",
         inputSchema: {
           type: "object",
           properties: {
@@ -2709,13 +2728,12 @@ export const tools = {
             },
             correlationId: {
               type: "string",
-              description:
-                "Optional idempotency key — same correlationId for same user+workspace returns the existing session.",
+              description: "Optional idempotency key.",
             },
             channelId: {
               type: "string",
               description:
-                "Optional channel UUID for the session to BORROW as its room (e.g. the chat it started in). Omit it and the session mints its own group room, returned as `channelId` — ask the person there.",
+                "Optional channel UUID to BORROW as its room. Omit it and the session mints its own (`channelId`): ask the person there.",
             },
             agentIds: {
               type: "array",
@@ -2745,14 +2763,14 @@ export const tools = {
               type: "string",
               format: "uuid",
               description:
-                "Optional UUID of this session's PARENT — this session is a child: a detour (something blocked the parent's work and this clears it) or a planned sub-session of a larger piece of work. Records `session --spawned_from--> session`; the parent stays OPEN and lists its children (closing a child never closes the parent, and the parent never auto-closes). Must be a session you own; if it cannot be linked, the result's `parentLink` says why. The child does NOT inherit the parent's governance settings.",
+                "Optional UUID of its PARENT (yours): this session is a detour or a planned sub-session (`spawned_from`). The parent stays open, lists its children and never auto-closes; a failed link is said on `parentLink`. No governance is inherited.",
             },
             targets: {
               type: "array",
               items: { type: "string", format: "uuid" },
               maxItems: 100,
               description:
-                "Optional entity UUIDs this session works on as a BATCH (one thing: subjectEntityId). Each gets a result when it moves: moved by this session = done, by anyone else = skipped; still open at the end = skipped (a session's end moves nothing). Each must be an entity you can see. Reported on `targets` (added | already).",
+                "Optional entity UUIDs it works on as a BATCH (one thing: subjectEntityId). Moved by this session = done, by anyone else or still open at the end = skipped. Reported on `targets`.",
             },
             blockedBySessionIds: {
               type: "array",
@@ -2769,11 +2787,19 @@ export const tools = {
               type: "array",
               items: { type: "string" },
             },
+            startNow: START_NOW_TOOL_PROPERTY,
+            ...STEP_TIME_TOOL_PROPERTIES,
             suspendedIntent: {
               type: "string",
               maxLength: 400,
               description:
                 "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent.",
+            },
+            forOutput: {
+              type: "string",
+              maxLength: 120,
+              description:
+                "With parentSessionId: the parent's outcome key you deliver; met when you close done with your same-key outcome delivered.",
             },
             expectedOutputs: {
               type: "array",
@@ -2794,14 +2820,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities e.g. a decision, goals; per id on `blockerLinks` / `blockerRemovals`). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) holds: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+          "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused|forming = planned), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities e.g. a decision, goals; per id on `blockerLinks` / `blockerRemovals`). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) holds: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
         inputSchema: {
           type: "object",
           properties: {
             sessionId: {
               type: "string",
               description:
-                "The focus session UUID to update. Optional: left out, the session THIS conversation started is used when exactly one is still open (every reply then says `inferred: true` and names it in `inferredSession`); several, none, a stale one, or a key shared by several conversations is refused with the list — nothing changes. A teammate (agents spawned in one process share its conversation) ALWAYS passes sessionId.",
+                "Optional. Left out: the ONE open session this conversation started (reply: `inferred: true`); several or none is refused with the list. A teammate ALWAYS passes sessionId.",
             },
             title: {
               type: ["string", "null"],
@@ -2815,10 +2841,11 @@ export const tools = {
             },
             status: {
               type: "string",
-              enum: ["active", "paused"],
+              enum: ["active", "paused", "forming"],
               description:
-                "New lifecycle status (optional). To CLOSE a session use synap_complete_session — update_session cannot close, since a raw close would orphan a running playbook_run.",
+                "New status (optional); forming plans a started step back, active starts a planned one. To CLOSE use synap_complete_session (a raw close would orphan a playbook_run).",
             },
+            ...STEP_TIME_TOOL_PROPERTIES,
             expectedStatus: {
               type: "string",
               enum: [...SESSION_STATUSES],
@@ -4574,6 +4601,8 @@ export const tools = {
                     type: "array",
                     items: { type: "string" },
                   },
+                  startNow: START_NOW_TOOL_PROPERTY,
+                  ...STEP_TIME_TOOL_PROPERTIES,
                   subjectRef: { type: "string" },
                   subjectEntityId: { type: "string" },
                   projectRef: { type: "string" },
@@ -4581,7 +4610,7 @@ export const tools = {
                   expectedOutputs: {
                     type: "array",
                     description:
-                      "What this session will PRODUCE — `{ kind, label }` per deliverable (`owner: 'human'` for one you cannot take). Declare them: the plan's own object list is the definition of done, so progress is derivable from unfilled slots rather than self-graded.",
+                      "What it will PRODUCE: `{ kind, label }` each (`owner: 'human'` for one you cannot take). The definition of done.",
                     items: { type: "object" },
                   },
                   // The plan door carries them to the session door
@@ -4590,7 +4619,7 @@ export const tools = {
                   criteria: {
                     ...SESSION_CRITERIA_PROPERTY,
                     description:
-                      "The session's acceptance criteria, proposed with the plan: two to five binary, observable statements, the same shape as synap_start_session's. They land on the session when the plan is approved, so no synap_update_session is needed afterwards.",
+                      "Two to five binary, observable statements (as synap_start_session's), landed on approval.",
                   },
                 },
                 required: ["ref", "goal"],
@@ -5737,13 +5766,13 @@ export const tools = {
       {
         name: "synap_request_workspace_access",
         annotations: {
-          title: "Request space access",
+          title: "Check space access",
           readOnlyHint: false,
           destructiveHint: false,
           openWorldHint: false,
         },
         description:
-          "Ask to join a space BEFORE you work in it, instead of finding out on your first write. Already a member: `status: member` with your `role`, nothing filed. Not a member: files ONE join request for the person to approve (`proposed` is success; a pending one is reused); writes you make there meanwhile are kept on it and replayed when it is approved. Refused, nothing filed, when this key's grant does not reach the space or the space is archived.",
+          "Check you can work in a space BEFORE you write there. An agent is never a space member: it works where the person it acts for is a member, within its key's grant. `status: member` with the person's `role`; `refused` with the reason (the person is not a member: an owner of the space adds them; the key's grant does not reach the space; the space is archived). Files nothing.",
         inputSchema: {
           type: "object",
           properties: {

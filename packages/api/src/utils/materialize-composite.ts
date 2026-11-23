@@ -850,6 +850,15 @@ export interface PlanCallers {
        * goal, space). P2 still writes the `spawned_from` edge, idempotently.
        */
       parentSessionId?: string | null;
+      /**
+       * P4 / B5: the step's birth and time. `awaitsBlockers` = this plan links
+       * a `blocked_by` FROM it in P2 (after every session exists), so the
+       * door births it planned as a start that names its blockers would be.
+       */
+      startNow?: boolean;
+      awaitsBlockers?: boolean;
+      plannedFor?: string | null;
+      dueBy?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
   };
@@ -2194,6 +2203,13 @@ export async function materializeCompositeGraph(
     }
 
     if (planCallers) {
+      // The steps that WAIT on something in this plan (a `blocked_by` FROM
+      // them, P2 below): born planned unless they say startNow (P4).
+      const waiting = new Set(
+        planSessionEdges(operations)
+          .filter((e) => e.type === "blocked_by")
+          .flatMap((e) => ("ref" in e.from ? [e.from.ref] : []))
+      );
       // ── Plan pass P1 — SESSIONS, parents before children ───────────────
       for (const i of sessionOpsRootFirst(operations)) {
         const op = operations[i];
@@ -2224,6 +2240,10 @@ export async function materializeCompositeGraph(
           expectedOutputs: op.expectedOutputs ?? [],
           criteria: op.criteria ?? [],
           parentSessionId,
+          ...(op.startNow === true ? { startNow: true } : {}),
+          ...(waiting.has(op.ref) ? { awaitsBlockers: true } : {}),
+          ...(op.plannedFor ? { plannedFor: op.plannedFor } : {}),
+          ...(op.dueBy ? { dueBy: op.dueBy } : {}),
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({

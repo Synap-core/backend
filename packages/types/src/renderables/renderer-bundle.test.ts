@@ -4,6 +4,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
+  RENDERER_BUNDLE_KIT_BUDGET_BYTES,
   RENDERER_BUNDLE_MAX_MODULE_BYTES,
   rendererSetDigestText,
   validateRendererBundleDefinition,
@@ -95,6 +96,22 @@ describe("validateRendererBundleDefinition", () => {
     d.cells[0]!.code = `export default 1;//${"x".repeat(2 * 1024 * 1024)}`;
     d.hostModules.react = mod("x".repeat(RENDERER_BUNDLE_MAX_MODULE_BYTES + 1));
     expect(paths(d)).toEqual(["hostModules.react", "cells[0].code"]);
+  });
+
+  it("the kit's budget sits between the kit as last measured and the ceiling", () => {
+    // 2,864,519 bytes on 22 Nov 2026 (plan cb8470f2): a budget under the
+    // measure would refuse today's build; at the ceiling it would budget nothing.
+    expect(RENDERER_BUNDLE_KIT_BUDGET_BYTES).toBeGreaterThan(2_864_519);
+    expect(RENDERER_BUNDLE_KIT_BUDGET_BYTES).toBeLessThan(
+      RENDERER_BUNDLE_MAX_MODULE_BYTES
+    );
+    // The budget is the official build's, not an install rule: a kit over
+    // it but under the ceiling still installs.
+    const d = bundle();
+    d.hostModules.kit = mod(
+      `export const Card = () => null;//${"x".repeat(RENDERER_BUNDLE_KIT_BUDGET_BYTES)}`
+    );
+    expect(paths(d)).toEqual([]);
   });
 
   it("required host modules, hashes, unique keys and defaults that name a cell", () => {

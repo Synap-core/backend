@@ -7,7 +7,12 @@ import { getTypesenseAdminClient } from "../client.js";
 import type { SearchResult } from "../types/index.js";
 import type { MultiSearchRequestSchema } from "../types/index.js";
 import { POD_WIDE_WORKSPACE_SCOPE } from "../utils/workspace-scope.js";
-import { getDb, eq, podVisibleWorkspaceWhere } from "@synap/database";
+import {
+  getDb,
+  inArray,
+  membershipHolderIds,
+  podVisibleWorkspaceWhere,
+} from "@synap/database";
 import * as schema from "@synap/database/schema";
 
 export interface UnifiedSearchOptions {
@@ -376,7 +381,10 @@ export class SearchService {
   private async resolveVisibleWorkspaceIds(userId: string): Promise<string[]> {
     const db = await getDb();
     const memberRows = await db.query.workspaceMembers.findMany({
-      where: eq(schema.workspaceMembers.userId, userId),
+      where: inArray(
+        schema.workspaceMembers.userId,
+        membershipHolderIds(userId)
+      ),
       columns: { workspaceId: true },
     });
     const ids = new Set(memberRows.map((r) => r.workspaceId));

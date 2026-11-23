@@ -111,7 +111,8 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
   const result = cap.result as { bookings?: CalBookingPayload[] } | undefined;
   const bookings = Array.isArray(result?.bookings) ? result!.bookings : [];
 
-  const actor = (await getCaptureAgentUserId()) ?? owner;
+  // Capture acts, through the membership of the tool's person.
+  const captureAgentId = await getCaptureAgentUserId();
   // Keys added by THIS run only — the DB write below merges them into the
   // live column value in-statement, so a webhook firing mid-run can't be
   // clobbered by a whole-map snapshot write.
@@ -149,7 +150,8 @@ export async function runCalBackfill(): Promise<RunCalBackfillResult> {
       }
       await submitCaptureGraph({
         sourceDocumentIds: rawStaged.sourceDocumentIds,
-        userId: actor,
+        userId: owner,
+        ...(captureAgentId ? { agentUserId: captureAgentId } : {}),
         workspaceId,
         entities: graphEntities,
         relations,

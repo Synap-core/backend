@@ -138,7 +138,7 @@ describe("tripwire: guest containment covers every Hub REST route and MCP", () =
     // Measured 2026-09-27: several hundred method+path pairs.
     expect(unique.length).toBeGreaterThan(200);
     const keys = unique.map((r) => `${r.method} ${r.path}`);
-    expect(keys).toContain("POST /workspaces/enroll-agent");
+    expect(keys).toContain("POST /workspaces/provision-agent");
     expect(keys).toContain("GET /users/me");
     expect(keys.some((k) => k.startsWith("GET /entities"))).toBe(true);
   });

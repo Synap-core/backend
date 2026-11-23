@@ -76,6 +76,7 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  apiKeys,
 } from "@synap/database/schema";
 import { db } from "@synap/database";
 import { focusSessionsRouter } from "./focus-sessions.js";
@@ -164,6 +165,7 @@ beforeAll(async () => {
     projectMembers,
     workspaces,
     workspaceMembers,
+    apiKeys,
   ]) {
     await h.client!.exec(ddlFor(table as PgTable));
   }

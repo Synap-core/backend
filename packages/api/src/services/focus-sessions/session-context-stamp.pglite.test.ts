@@ -64,6 +64,8 @@ import {
   channels,
   focusSessions,
   workspaceMembers,
+  users,
+  apiKeys,
   workspaces,
 } from "@synap/database";
 import { BUILTIN_VERBS } from "../capabilities/builtin-verbs.js";
@@ -103,7 +105,14 @@ let client: PGlite;
 
 beforeEach(async () => {
   client = new PGlite();
-  for (const t of [channels, focusSessions, workspaceMembers, workspaces]) {
+  for (const t of [
+    channels,
+    focusSessions,
+    workspaceMembers,
+    workspaces,
+    users,
+    apiKeys,
+  ]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
   holder.db = drizzle(client, {

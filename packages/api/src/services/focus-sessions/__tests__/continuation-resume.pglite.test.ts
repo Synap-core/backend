@@ -88,6 +88,7 @@ import {
   messages,
   workspaces,
   workspaceMembers,
+  apiKeys,
   recordSessionSpawn,
   eq,
 } from "@synap/database";
@@ -169,6 +170,7 @@ beforeAll(async () => {
     messages,
     workspaces,
     workspaceMembers,
+    apiKeys,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

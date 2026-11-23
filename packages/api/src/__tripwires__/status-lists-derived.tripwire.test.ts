@@ -77,7 +77,7 @@ const BASELINE: Record<string, { count: number; why: string }> = {
   },
   "api/src/routers/mcp/tools/index.ts": {
     count: 1,
-    why: "update_session's MCP status enum (active | paused, the agent-settable moves)",
+    why: "update_session's MCP status enum (active | paused | forming, the agent-settable moves)",
   },
   "api/src/routers/proposals/executors/playbook-stage-gate.ts": {
     count: 1,

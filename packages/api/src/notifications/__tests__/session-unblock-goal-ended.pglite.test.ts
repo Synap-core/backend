@@ -51,6 +51,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   trackParticipants,
@@ -161,6 +162,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     projectMembers,
     // The waiting goal's owner seat (`goalOwnerToAsk`).

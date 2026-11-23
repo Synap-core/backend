@@ -35,6 +35,9 @@
  *     when its OWN run has ended: the automation run or every playbook run is
  *     terminal, or the intake is idle with nothing left to review (the receipt
  *     rule). The work reaper never stales a run (`runSessionWhere`, below).
+ *  5. A PLANNED step (`forming`) whose blockers delivered and whose date came
+ *     WAKES to active (`planned-wake.ts`, founder P3): the net under the
+ *     unblock reactor, and the only waker of a date.
  *
  * Nothing here closes a session that owes the person something: every
  * selection carries the owed / waiting-on-person predicate the needs-you tray
@@ -455,6 +458,8 @@ export interface SessionLifecycleSweepResult {
   runsClosed: number;
   /** `forEach` steps with a batch whose run never started, pumped again. */
   fanOutsPumped: number;
+  /** Planned steps (`forming`) whose blockers delivered and date came, woken. */
+  plannedWoken: number;
   failed: string[];
 }
 
@@ -466,6 +471,7 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     longStaleCancelled: 0,
     runsClosed: 0,
     fanOutsPumped: 0,
+    plannedWoken: 0,
     failed: [],
   };
   const step = async (
@@ -488,6 +494,12 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     (n) => (result.fanOutsPumped = n)
   );
   await step("met", closeMetWorkSessions, (n) => (result.metClosed = n));
+  await step(
+    "planned-wake",
+    async () =>
+      (await import("./planned-wake.js")).sweepPlannedSessions(new Date()),
+    (n) => (result.plannedWoken = n)
+  );
   await step(
     "merge-hold",
     holdSessionsWaitingOnMerge,

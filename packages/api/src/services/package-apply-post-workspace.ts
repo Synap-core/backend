@@ -527,17 +527,6 @@ export interface ApplyPackagePostWorkspaceInput {
   body: PackagePostWorkspaceBody;
   userId: string;
   agentUserId?: string;
-  /**
-   * An agent to ENROLL in the workspace without making it the acting identity
-   * of the layer writes. The approve executor passes the proposing agent here
-   * and NO `agentUserId`: a person approved the package — its capabilities,
-   * playbooks and automations included — so the layers apply under that
-   * approval instead of each re-filing a proposal of its own (which left an
-   * approved template update with its new playbook still pending). The agent
-   * is still enrolled, so its follow-on writes do not collapse to join
-   * proposals. Defaults to `agentUserId`.
-   */
-  enrollAgentUserId?: string;
   /** Hub API scopes; approve path may pass []. */
   scopes?: string[];
 }
@@ -555,29 +544,8 @@ export async function applyPackagePostWorkspace(
   input: ApplyPackagePostWorkspaceInput
 ): Promise<Record<string, unknown>> {
   const { workspaceId, body, userId, agentUserId } = input;
-  const enrollAgentUserId = input.enrollAgentUserId ?? agentUserId;
   const scopes = input.scopes ?? [];
   const result: Record<string, unknown> = {};
-
-  // ── Enroll acting agent ─────────────────────────────────────────────────
-  // createWorkspaceFromDefinition adds ONLY the human owner. Without this,
-  // the agent's follow-on writes collapse into contentless workspace.join
-  // proposals. Idempotent; only for the brand-new workspace this apply owns.
-  if (enrollAgentUserId) {
-    try {
-      const { enrollAgentInWorkspace } =
-        await import("./enroll-agent-in-workspace.js");
-      result.agentMembership = await enrollAgentInWorkspace({
-        workspaceId,
-        agentUserId: enrollAgentUserId,
-      });
-    } catch (e) {
-      result.agentMembership = {
-        status: "error",
-        message: (e as Error).message,
-      };
-    }
-  }
 
   const ctx = await createHubProtocolCallerContext(
     userId,
@@ -1008,7 +976,7 @@ export async function applyPackagePostWorkspace(
           agentUserId,
           // AI provenance only when an agent acts. With no agent the write is
           // the person's: a person applying on pod admin, or the approver of
-          // an agent's update (`enrollAgentUserId`, no `agentUserId`). Branded
+          // an agent's update (no `agentUserId`). Branded
           // "intelligence" anyway, `playbooks.create` took it for an
           // unattributed AI write, and the gate's anonymous path floored it
           // (2.09 AGENT_STRUCTURE_WRITE): the template's NEW playbook was

@@ -144,6 +144,11 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
           ...(input.parentSessionId
             ? { parentSessionId: input.parentSessionId }
             : {}),
+          // P4 / B5: born planned when it waits; its window and deadline.
+          ...(input.startNow ? { startNow: true } : {}),
+          ...(input.awaitsBlockers ? { awaitsBlockers: true } : {}),
+          ...(input.plannedFor ? { plannedFor: input.plannedFor } : {}),
+          ...(input.dueBy ? { dueBy: input.dueBy } : {}),
           title: input.title,
           goal: input.goal,
           ...(input.expectedOutputs.length > 0

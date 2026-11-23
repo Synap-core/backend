@@ -42,7 +42,7 @@ import {
   startedByAgentPatch,
   setRunStatus,
   claimedHolderSql,
-  ownerAndActor,
+  insertPlaybookRun,
   runHolder,
   uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
@@ -85,6 +85,7 @@ import {
   runPromptFor,
   resolveRunnablePlaybook,
   resolveGoal,
+  RUN_PARAMS_METADATA_KEY,
 } from "./playbook-lifecycle.js";
 import { playbookAtVersion } from "./playbook-versions.js";
 import {
@@ -111,7 +112,8 @@ import {
 } from "../agent-dispatch/route.js";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
 import { resolveRunner } from "../agent-dispatch/runner.js";
-import type { RunOn } from "@synap-core/types/agents";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import { isLikelyUUID } from "@synap-core/types/proposals";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
@@ -1078,11 +1080,93 @@ export interface ResolvedRunChoice {
   /** Recorded on the run (`playbook_runs.run_on`). */
   runOn: RunOn;
   /**
+   * An agent-only run no rung could give to an agent: the agents the person
+   * would choose among (empty = none can take it).
+   */
+  agentCandidates?: string[];
+  /**
    * Synap AI named by the playbook's runner as a persona
    * (`{ synapAi: { persona } }`): the run's `agentType` when the caller gave
    * none.
    */
   persona?: string | null;
+}
+
+/**
+ * What the run is about, for the run choice's last rungs: the session's
+ * roster, its subject, its project, and the agent the person answered on it
+ * ("Choose an agent"). A run not born yet passes what its session will carry.
+ */
+export interface RunWork {
+  roster?: readonly string[];
+  /** The session's space (else the run's `workspaceId`). */
+  workspaceId?: string | null;
+  subjectId?: string | null;
+  projectId?: string | null;
+  answeredAgentUserId?: string | null;
+}
+
+/** A live session's {@link RunWork}, as it stands. */
+export function runWorkOfSession(session: {
+  agentIds?: string[] | null;
+  workspaceId?: string | null;
+  subjectEntityId?: string | null;
+  projectId?: string | null;
+  metadata?: unknown;
+}): RunWork {
+  const params = (session.metadata as Record<string, unknown> | null)?.[
+    RUN_PARAMS_METADATA_KEY
+  ] as Record<string, unknown> | undefined;
+  const answered = params?.agentUserId;
+  return {
+    roster: Array.isArray(session.agentIds) ? session.agentIds : [],
+    workspaceId: session.workspaceId ?? null,
+    subjectId: session.subjectEntityId ?? null,
+    projectId: session.projectId ?? null,
+    answeredAgentUserId:
+      typeof answered === "string" && answered.trim() !== "" ? answered : null,
+  };
+}
+
+/** The kind (profile row) of the run's subject, for the assignment rung. */
+async function subjectProfileId(
+  subjectId: string | null | undefined
+): Promise<string | null> {
+  if (!subjectId || !isLikelyUUID(subjectId)) return null;
+  const db = await getDb();
+  const [row] = await db
+    .select({ profileId: entities.profileId })
+    .from(entities)
+    .where(eq(entities.id, subjectId))
+    .limit(1);
+  return row?.profileId ?? null;
+}
+
+/**
+ * The run choice's last rungs for an agent-only run nothing above gave to an
+ * agent: THE route (`agent-dispatch/route.ts`) for dispatch reach, over the
+ * session's roster, then the agent assigned to what the run is about (its
+ * playbook, its subject's kind, its project, its space), then the single
+ * agent bound for dispatch, else the person chooses.
+ */
+async function routeRunAgent(p: {
+  ownerId: string;
+  playbookId: string;
+  workspaceId: string | null;
+  work?: RunWork;
+}) {
+  return route({
+    ownerId: p.ownerId,
+    accept: ["dispatch"],
+    roster: p.work?.roster ?? [],
+    targets: {
+      playbook: p.playbookId,
+      profile: await subjectProfileId(p.work?.subjectId),
+      project: p.work?.projectId ?? null,
+      workspace: p.workspaceId,
+    },
+    pool: "owned",
+  });
 }
 
 /**
@@ -1108,7 +1192,10 @@ export interface ResolvedRunChoice {
  *                `external-agent`), and the run says which agent was passed
  *                over and why;
  *   5. default   nothing chosen (or a choice the playbook cannot use): the
- *                playbook's own executor, exactly as before.
+ *                playbook's own executor. For an agent-only playbook, the
+ *                agent the person answered on the session, else
+ *                {@link routeRunAgent} (roster, assignment, single bound
+ *                agent); nobody ⇒ no agent, with the candidates.
  * A playbook that only runs on agents (`external-agent`) never falls to Synap
  * AI: its remembered agent takes it awake or not, as an assignment did.
  * A playbook with no `runner` decides exactly as before rung 2 existed.
@@ -1124,6 +1211,8 @@ export async function resolveRunChoice(
       Partial<Pick<Playbook, "runner" | "requires">>;
     /** The run's space: a `need:` entry of `requires` names its bound provider. */
     workspaceId?: string | null;
+    /** What the run is about, for the last rungs ({@link RunWork}). */
+    work?: RunWork;
   }
 ): Promise<ResolvedRunChoice> {
   // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
@@ -1239,6 +1328,43 @@ export async function resolveRunChoice(
     handOff: null,
     runOn: { executor, agentUserId: null, via: "default", passedOver: null },
   });
+  /** Rung 5; for an agent-only run, its last rungs. */
+  const byDefault = async (): Promise<ResolvedRunChoice> => {
+    if (executor !== "external-agent") return fallbackDefault;
+    const answered = input.work?.answeredAgentUserId?.trim() || null;
+    if (answered) {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "external-agent",
+          agentUserId: answered,
+          via: "named",
+          passedOver: null,
+        },
+      });
+    }
+    const routed = await routeRunAgent({
+      ownerId: input.userId,
+      playbookId: input.playbook.id,
+      workspaceId: input.work?.workspaceId ?? input.workspaceId ?? null,
+      work: input.work,
+    });
+    if (routed.kind === "routed") {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "external-agent",
+          agentUserId: routed.agentUserId,
+          via: "default",
+          passedOver: null,
+        },
+      });
+    }
+    return {
+      ...fallbackDefault,
+      agentCandidates: routed.kind === "choose" ? routed.candidates : [],
+    };
+  };
   const stored = await readStoredRunChoice({
     ownerId: input.userId,
     playbookId: input.playbook.id,
@@ -1256,7 +1382,7 @@ export async function resolveRunChoice(
             passedOver: null,
           },
         })
-      : fallbackDefault;
+      : byDefault();
   }
 
   // The remembered agent is read through THE route's assigned rung, as a run
@@ -1270,7 +1396,7 @@ export async function resolveRunChoice(
   const agentUserId =
     handOff?.agentUserId ??
     (stored?.executor === "external-agent" ? stored.agentUserId : null);
-  if (!agentUserId) return fallbackDefault;
+  if (!agentUserId) return byDefault();
   const storedRunOn = (h: RunHandOff): RunOn => ({
     executor: "external-agent",
     agentUserId: h.agentUserId,
@@ -1281,7 +1407,7 @@ export async function resolveRunChoice(
   if (!synapAiAllowed) {
     return handOff
       ? decided({ handOff, runOn: storedRunOn(handOff) })
-      : fallbackDefault;
+      : byDefault();
   }
   // Presence: only an agent that is awake NOW takes it; anything else would
   // leave the run waiting for an agent nothing runs (slice 1's wake rule).
@@ -1386,9 +1512,10 @@ export async function refuseUnattendedRunIfSkillsOff(input: {
 
 /**
  * The propose-mode rule's readiness gate (the `registerPlaybookReadinessGate`
- * slot, @synap/jobs): the same playbook resolution as {@link runPlaybook}, then
- * the same unattended rule. Without it an automation filed run proposals that
- * could only fail on approval while the owner's manual run was blocked.
+ * slot, @synap/jobs): the same playbook resolution and runner choice as
+ * {@link runPlaybook}, then the same unattended rule. Without it an
+ * automation filed run proposals that could only fail on approval: skills
+ * off, or no runner at all (an agent-only playbook no agent can take).
  */
 export async function checkUnattendedPlaybookReadiness(input: {
   playbookId?: string;
@@ -1401,6 +1528,12 @@ export async function checkUnattendedPlaybookReadiness(input: {
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  const nobody = await refuseRunNobodyCanTake({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (nobody) return { ready: false, message: nobody };
   const message = await refuseUnattendedRunIfSkillsOff({
     playbook,
     userId: input.userId,
@@ -1408,6 +1541,30 @@ export async function checkUnattendedPlaybookReadiness(input: {
     agentUserId: null,
   });
   return message ? { ready: false, message } : { ready: true };
+}
+
+/**
+ * The refusal of a run no runner can take, `null` when one can: the runner
+ * choice ({@link resolveRunChoice}) left an agent-only playbook with no agent
+ * and nobody to choose among.
+ */
+export async function refuseRunNobodyCanTake(input: {
+  playbook: Playbook;
+  userId: string;
+  workspaceId: string;
+}): Promise<string | null> {
+  const { runOn, agentCandidates } = await resolveRunChoice({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    playbook: input.playbook,
+  });
+  if (agentCandidates === undefined || agentCandidates.length > 0) {
+    return null;
+  }
+  const passed = (runOn.runnerPassedOver ?? [])
+    .map((p) => passedOverLine(p))
+    .join("; ");
+  return `Nothing filed: "${input.playbook.name}" runs only on an agent, and none of your agents can take it${passed ? ` (${passed})` : ""}. Bind an agent to its provider in Settings, Agents.`;
 }
 
 /**
@@ -1505,8 +1662,13 @@ export async function runPlaybook(
         handToAgentId: input.handToAgentId,
         runOn: input.runOn,
         playbook,
+        work: {
+          roster: startRosterOf(input) ?? [],
+          subjectId: input.subjectId ?? null,
+          projectId: filing.projectId ?? null,
+        },
       });
-  const { handOff, runOn } = choice;
+  let { handOff, runOn } = choice;
   // The playbook's runner named a Synap AI persona: it answers this run,
   // unless the caller named one.
   if (choice.persona && !input.agentType) {
@@ -1581,6 +1743,26 @@ export async function runPlaybook(
         chosen.subjectId
       ),
     };
+    // An agent-only run's last rungs read the subject's kind: ask them
+    // again with the subject the pin chose.
+    if (
+      !handOff &&
+      runOn.executor === "external-agent" &&
+      runOn.via === "default" &&
+      chosen.subjectId !== input.subjectId
+    ) {
+      ({ handOff, runOn } = await resolveRunChoice({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        agentUserId: input.agentUserId,
+        playbook,
+        work: {
+          roster: startRosterOf(input) ?? [],
+          subjectId: chosen.subjectId,
+          projectId: filing.projectId ?? null,
+        },
+      }));
+    }
   }
 
   // The subject must be the kind the playbook runs on: checked after the
@@ -1732,6 +1914,18 @@ function trialRunInput(input: RunPlaybookInput): RunPlaybookInput {
   return { ...input, runOn: "synap_ai" };
 }
 
+/** The roster a run's session is born with: the agent that started it first. */
+function startRosterOf(
+  input: Pick<RunPlaybookInput, "agentUserId" | "agentIds">
+): string[] | undefined {
+  return input.agentUserId
+    ? [
+        input.agentUserId,
+        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
+      ]
+    : input.agentIds;
+}
+
 /**
  * Execute ONE playbook run for a single resolved param payload: instantiate a
  * session, create the run channel, record the run ledger row, and dispatch to
@@ -1768,12 +1962,7 @@ async function executeSingleRun(
   const startedByAgent = !!input.agentUserId;
   const preApprovedRuleId =
     preApproval?.runs === true ? preApproval.ruleId : null;
-  const startRoster = input.agentUserId
-    ? [
-        input.agentUserId,
-        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
-      ]
-    : input.agentIds;
+  const startRoster = startRosterOf(input);
   // A handed run's roster carries the agent it is handed to, from birth.
   const rosterAgentIds = handOff
     ? [...new Set([...(startRoster ?? []), handOff.agentUserId])]
@@ -2315,34 +2504,29 @@ export async function dispatchRunOnSession(p: {
     where: eq(focusSessions.id, p.sessionId),
   })) as FocusSession;
   const subjectId = p.subjectId ?? undefined;
-  const owner = await ownerAndActor(db, actorId, p.agentUserId);
 
-  // 4. Insert the run ledger row, `queued` with its holder: it is `running`
-  // only once that holder claims it (the IS turn starting, the agent's
-  // provider task, its first write). Snapshot the resolved definition (D3c)
-  // so "what ran" survives later edits to the playbook config.
-  const [run] = await db
-    .insert(playbookRuns)
-    .values({
-      workspaceId: p.workspaceId,
-      playbookId: playbook.id,
-      sessionId: session.id,
-      executor: executorRef,
-      ...(p.runOn ? { runOn: p.runOn } : {}),
-      status: "queued",
-      holder: handOff
-        ? runHolder("agent", handOff.agentUserId)
-        : executorRef === "external-agent"
-          ? runHolder("agent", p.runOn?.agentUserId ?? null)
-          : runHolder("synap_ai", null),
-      input: p.stageRunners
-        ? { ...params, stageRunners: p.stageRunners }
-        : params,
-      createdBy: owner.ownerId,
-      agentUserId: owner.agentUserId,
-      definitionSnapshot: buildDefinitionSnapshot(playbook),
-    })
-    .returning();
+  // 4. The run ledger row, `queued` with its holder: it is `running` only
+  // once that holder claims it (the IS turn starting, the agent's provider
+  // task, its first write). Snapshot the resolved definition (D3c) so "what
+  // ran" survives later edits to the playbook config.
+  const run = await insertPlaybookRun(db, {
+    workspaceId: p.workspaceId,
+    playbookId: playbook.id,
+    sessionId: session.id,
+    executor: executorRef,
+    ...(p.runOn ? { runOn: p.runOn } : {}),
+    holder: handOff
+      ? runHolder("agent", handOff.agentUserId)
+      : executorRef === "external-agent"
+        ? runHolder("agent", p.runOn?.agentUserId ?? null)
+        : runHolder("synap_ai", null),
+    input: p.stageRunners
+      ? { ...params, stageRunners: p.stageRunners }
+      : params,
+    writerUserId: actorId,
+    agentUserId: p.agentUserId,
+    definitionSnapshot: buildDefinitionSnapshot(playbook),
+  });
 
   // 4b. Enroll the subject entity in the playbook so running a playbook FOR an
   // entity also populates its funnel/cohort. Only when the playbook actually has
@@ -2447,7 +2631,9 @@ export async function dispatchRunOnSession(p: {
             input: {
               ...params,
               runId: run.id,
-              ...(handOff ? { agentUserId: handOff.agentUserId } : {}),
+              ...(handOff || p.runOn?.agentUserId
+                ? { agentUserId: handOff?.agentUserId ?? p.runOn!.agentUserId }
+                : {}),
             },
             capabilities,
           });
@@ -2505,6 +2691,7 @@ export async function startHeldRun(
     handToAgentId: held.handToAgentId ?? null,
     runOn: held.runOn,
     playbook,
+    work: runWorkOfSession(session),
   });
   const [claimed] = await db
     .update(focusSessions)

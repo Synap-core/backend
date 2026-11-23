@@ -91,6 +91,10 @@ function makeDb() {
         },
       };
     },
+    // The run birth's owner read: no users row, so the writer owns it.
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
     update() {
       // `.set().where()` is awaited on its own in one place and chained into
       // `.returning()` in another, so `where` must be BOTH a thenable and a

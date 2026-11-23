@@ -55,7 +55,6 @@ vi.mock("../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.gate,
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),
-  isJoinGate: vi.fn(() => false),
 }));
 vi.mock("@synap/database/agent-governance", async (importOriginal) => ({
   ...(await importOriginal<

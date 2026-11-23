@@ -21,6 +21,8 @@ import {
   workspaceMembers,
   workspaces,
 } from "../schema/workspaces.js";
+import { apiKeys } from "../schema/api-keys.js";
+import { users } from "../schema/users.js";
 import { projects } from "../schema/projects.js";
 import { projectMembers } from "../schema/project-members.js";
 import { hasActivePodAccess, readPodUserAccess } from "./pod-user-access.js";
@@ -30,6 +32,8 @@ const db = drizzle(client, {
   schema: {
     podMembers,
     workspaceMembers,
+    apiKeys,
+    users,
     workspaces,
     projects,
     projectMembers,
@@ -63,6 +67,8 @@ beforeAll(async () => {
   for (const t of [
     podMembers,
     workspaceMembers,
+    apiKeys,
+    users,
     workspaces,
     projects,
     projectMembers,

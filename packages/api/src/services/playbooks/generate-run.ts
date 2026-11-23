@@ -41,7 +41,7 @@ import {
   entities,
   getDb,
   isNull,
-  ownerAndActor,
+  insertPlaybookRun,
   playbookRuns,
   proposals,
   runHolder,
@@ -704,26 +704,20 @@ export async function executeGenerateRun(
       });
       if (open) return { kind: "open" as const, run: open };
     }
-    const owner = await ownerAndActor(tx, input.userId);
-    const [inserted] = await tx
-      .insert(playbookRuns)
-      .values({
-        workspaceId: input.workspaceId,
-        playbookId: playbook.id,
-        sessionId: null,
-        executor: "generate",
-        ...(input.runOn ? { runOn: input.runOn } : {}),
-        // The pod makes the one call itself, now: it holds the run at once.
-        status: "running",
-        holder: runHolder("machine", null, true),
-        input: resolution.values,
-        createdBy: owner.ownerId,
-        agentUserId: owner.agentUserId,
-        definitionSnapshot: buildDefinitionSnapshot(playbook),
-        generation: base,
-      })
-      .returning();
-    return { kind: "new" as const, run: inserted! as PlaybookRun };
+    const inserted = await insertPlaybookRun(tx, {
+      workspaceId: input.workspaceId,
+      playbookId: playbook.id,
+      sessionId: null,
+      executor: "generate",
+      ...(input.runOn ? { runOn: input.runOn } : {}),
+      // The pod makes the one call itself, now: it holds the run at once.
+      holder: runHolder("machine", null, true),
+      input: resolution.values,
+      writerUserId: input.userId,
+      definitionSnapshot: buildDefinitionSnapshot(playbook),
+      generation: base,
+    });
+    return { kind: "new" as const, run: inserted as PlaybookRun };
   });
   if (claimed.kind === "open") {
     const open = claimed.run;

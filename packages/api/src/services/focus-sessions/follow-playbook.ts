@@ -69,7 +69,7 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   listHolds,
-  ownerAndActor,
+  insertPlaybookRun,
   starterHolder,
   setRunStatus,
 } from "@synap/database";
@@ -457,6 +457,7 @@ export async function followPlaybook(
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
           currentStage: focusSessions.currentStage,
+          status: focusSessions.status,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -557,22 +558,19 @@ export async function followPlaybook(
 
       // The ledger row, WITH the definition pinned: a run executes what it
       // started with. The live session's worker holds it, working already.
-      const owner = await ownerAndActor(tx, userId, agentUserId);
-      const [run] = await tx
-        .insert(playbookRuns)
-        .values({
-          workspaceId: session.workspaceId,
-          playbookId: playbook.id,
-          sessionId,
-          executor: playbook.executor,
-          status: "running",
-          holder: starterHolder(userId, agentUserId),
-          createdBy: owner.ownerId,
-          agentUserId: owner.agentUserId,
-          // THE helper, not a hand-written field list (`run-playbook.ts`).
-          definitionSnapshot: buildDefinitionSnapshot(playbook),
-        })
-        .returning({ id: playbookRuns.id });
+      const run = await insertPlaybookRun(tx, {
+        workspaceId: session.workspaceId,
+        playbookId: playbook.id,
+        sessionId,
+        executor: playbook.executor,
+        holder: starterHolder(userId, agentUserId),
+        // A planned step's run waits with it and starts when it wakes (P4).
+        sessionStatus: locked?.status,
+        writerUserId: userId,
+        agentUserId,
+        // THE helper, not a hand-written field list (`run-playbook.ts`).
+        definitionSnapshot: buildDefinitionSnapshot(playbook),
+      });
 
       return {
         updated: row,

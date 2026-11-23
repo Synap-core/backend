@@ -62,7 +62,9 @@ import {
 import { Button } from "@heroui/react";
 import { Maximize2 } from "lucide-react";
 import { useTheme } from "next-themes";
+import type { Locale } from "@synap-core/types/i18n";
 import { trpc } from "../../../../lib/trpc";
+import { useConsoleLocale } from "../../../../lib/i18n/locale-provider";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { showReceipt } from "../../receipt/decision-receipt-toast";
 import { typedDetail, type Receipt } from "../../receipt/decision-receipt";
@@ -104,6 +106,8 @@ export function createModuleFrameHost(options: {
   lens: CellFrameLens;
   identity: ModuleFrameIdentity;
   theme: () => "light" | "dark";
+  /** The console's language: the frame's words follow it (`synap:init` `locale`). */
+  locale?: () => Locale;
   /** `page` refuses every write (a stored HTML page's rule). Default `module`. */
   mechanism?: "module" | "page";
   onStatus?: (status: CellFrameStatus) => void;
@@ -135,6 +139,7 @@ export function createModuleFrameHost(options: {
       ...(identity.entityId ? { entityId: identity.entityId } : {}),
       ...(identity.profileSlug ? { profileSlug: identity.profileSlug } : {}),
       theme: options.theme(),
+      ...(options.locale ? { locale: options.locale() } : {}),
     }),
     read: (op, params) =>
       readForPage(client, op, params, { workspaceId: lens.workspaceId }),
@@ -246,6 +251,17 @@ export function readsToRefresh(
     entityIds: [...ids],
     ...(identity.viewId ? { viewId: identity.viewId } : {}),
   };
+}
+
+/**
+ * What the frame's status makes the host draw: the cell, the failed state,
+ * or (a cell that says it does not draw this object) the page's own content.
+ */
+export function moduleFrameStatusOf(
+  status: CellFrameStatus
+): "ready" | "failed" | "not-drawn" {
+  if (status.state === "ready") return "ready";
+  return status.reason === "not-drawn" ? "not-drawn" : "failed";
 }
 
 /** The reader's theme as the frame takes it. */
@@ -469,6 +485,7 @@ export function ModuleFrame({
   refusedAction,
   subject = "cell",
   cover,
+  notDrawn,
 }: {
   code: string;
   deps?: Record<string, string>;
@@ -485,6 +502,12 @@ export function ModuleFrame({
   subject?: RendererWordSubject;
   /** Drawn until the cell is ready (default: the skeleton). */
   cover?: ReactNode;
+  /**
+   * What the host shows when the cell says it does not draw this object
+   * (`synap:error` reason `not-drawn`): the page's own content, as with no
+   * renderer. Absent: the failed state.
+   */
+  notDrawn?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const client = utils.client;
@@ -492,14 +515,19 @@ export function ModuleFrame({
   const loads = useRef(0);
   const [run, setRun] = useState(0);
   const [left, setLeft] = useState(false);
-  const [status, setStatus] = useState<"starting" | "ready" | "failed">(
-    "starting"
-  );
+  const [status, setStatus] = useState<
+    "starting" | "ready" | "failed" | "not-drawn"
+  >("starting");
   const [height, setHeight] = useState<number | undefined>(undefined);
   const { resolvedTheme } = useTheme();
   const theme = frameTheme(resolvedTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  // A change of language remounts the console's pages (`ConsoleLocaleProvider`),
+  // so the frame is rebuilt and reads the new one at its next init.
+  const locale = useConsoleLocale();
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
   const area = useFocusAfterRetry<HTMLDivElement>();
   const near = useNearViewport(area.ref);
   const fillHeight = useFillHeight(area.ref, fill);
@@ -543,7 +571,8 @@ export function ModuleFrame({
       lens: { workspaceId: lensKey || null },
       identity: frameIdentity,
       theme: () => themeRef.current,
-      onStatus: (s) => setStatus(s.state === "ready" ? "ready" : "failed"),
+      locale: () => localeRef.current,
+      onStatus: (s) => setStatus(moduleFrameStatusOf(s)),
       onResize: (h) => setHeight(h),
       onWriteAnswer: (result, request) => {
         const receipt = writeReceipt(result);
@@ -625,7 +654,8 @@ export function ModuleFrame({
       />
     );
   }
-  if (left || status === "failed") {
+  if (status === "not-drawn" && notDrawn !== undefined) return <>{notDrawn}</>;
+  if (left || status === "failed" || status === "not-drawn") {
     return (
       <div className="flex flex-col items-center gap-1">
         <ResourceRowError

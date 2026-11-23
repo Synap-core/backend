@@ -38,7 +38,7 @@ describe("workspace/create approve executor registration", () => {
     // from the stored definition.
     const createBlock = src.slice(
       src.indexOf('key: "workspace/create"'),
-      src.indexOf('key: "workspace/join"')
+      src.indexOf('key: "workspace/declare_source"')
     );
     expect(createBlock).toMatch(/execute:\s*executeTemplateApplyApproval\b/);
     const body = src.slice(

@@ -567,6 +567,29 @@ describe("POST /links — blocked_by goes through the session blocker floor", ()
     expect(calls.createLink).not.toHaveBeenCalled();
   });
 
+  it("refuses metadata sent with spawned_from (a forged lane target, W7), before governance, writing nothing", async () => {
+    for (const metadata of [{ forOutput: "pr" }, { suspended: "x" }, {}]) {
+      const res = await postLinks(buildTestApp(), {
+        workspaceId: CONSUMER_WS,
+        fromType: "session",
+        fromId: MY_SESSION,
+        toType: "session",
+        toId: MY_OTHER_SESSION,
+        linkType: "spawned_from",
+        metadata,
+      });
+
+      expect(res.status, JSON.stringify(metadata)).toBe(400);
+      expect(await res.json()).toMatchObject({
+        error: expect.stringContaining("spawned_from links do not support"),
+      });
+    }
+    const calls = await writeCalls();
+    expect(calls.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(calls.addSessionBlocker).not.toHaveBeenCalled();
+    expect(calls.createLink).not.toHaveBeenCalled();
+  });
+
   it("governs an agent-attributed blocked_by with userId = the human and agentUserId = the agent, never the agent as userId", async () => {
     const AGENT_USER_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 

@@ -6,12 +6,9 @@
  *    hard-purged it with the pod-wide entities filed into it. It now needs
  *    the project's creator or a workspace owner/admin — the same rule as
  *    POST /workspaces/:id/purge and its own "you do not own" message.
- *  - POST /workspaces/enroll-agent — enrolled ANY agent of the pod, at a role
- *    above the caller's own (a viewer enrolled an agent as admin), and let an
- *    agent key enroll ITSELF. Now: the agent must be the caller's
- *    (`agentBelongsTo`), never the acting agent itself, and the role may not
- *    exceed the caller's role in that workspace (a workspace above it is
- *    skipped, as a non-member one already was).
+ *  - POST /workspaces/enroll-agent — gave an agent a seat of its own. Gone:
+ *    an agent acts through its person's membership, and the route writes no
+ *    membership.
  *  - POST /workspaces/provision-agent — idempotent on the agent, so naming
  *    SOMEONE ELSE's agent made the caller admin of that agent's existing
  *    space. Now the agent must be the caller's.
@@ -283,47 +280,15 @@ describe("POST /projects/:id/purge — creator or workspace owner/admin", () => 
   });
 });
 
-describe("POST /workspaces/enroll-agent — your own agent, at most your role", () => {
-  it("a member cannot enroll SOMEONE ELSE's agent (403, not a member)", async () => {
+describe("POST /workspaces/enroll-agent — gone: an agent holds no seat", () => {
+  it("an older CLI's enrolment of the owner's own agent writes no membership", async () => {
     const res = await call(
       "/workspaces/enroll-agent",
       { agentUserId: OWNER_AGENT, workspaceId: WS, role: "admin" },
-      { userId: EDITOR }
-    );
-    expect(res.status).toBe(403);
-    expect(await roleOf(OWNER_AGENT)).toBeUndefined();
-  });
-
-  it("a VIEWER cannot enroll their own agent above viewer (skipped)", async () => {
-    const res = await call(
-      "/workspaces/enroll-agent",
-      { agentUserId: VIEWER_AGENT, workspaceId: WS, role: "admin" },
-      { userId: VIEWER }
-    );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ enrolled: [], skipped: [WS] });
-    expect(await roleOf(VIEWER_AGENT)).toBeUndefined();
-  });
-
-  it("an agent key cannot enroll ITSELF (403)", async () => {
-    const res = await call(
-      "/workspaces/enroll-agent",
-      { agentUserId: OWNER_AGENT, workspaceId: WS, role: "admin" },
-      { userId: OWNER, agentUserId: OWNER_AGENT }
-    );
-    expect(res.status).toBe(403);
-    expect(await roleOf(OWNER_AGENT)).toBeUndefined();
-  });
-
-  it("CONTROL — the owner enrolls their own agent (the CLI connect flow)", async () => {
-    const res = await call(
-      "/workspaces/enroll-agent",
-      { agentUserId: OWNER_AGENT },
       { userId: OWNER }
     );
-    expect(res.status).toBe(200);
-    expect(await res.json()).toMatchObject({ enrolled: [WS] });
-    expect(await roleOf(OWNER_AGENT)).toBe("editor");
+    expect(res.status).not.toBe(200);
+    expect(await roleOf(OWNER_AGENT)).toBeUndefined();
   });
 });
 

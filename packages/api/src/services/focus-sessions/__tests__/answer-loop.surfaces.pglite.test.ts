@@ -72,6 +72,7 @@ import {
   messages,
   workspaces,
   workspaceMembers,
+  apiKeys,
   eq,
 } from "@synap/database";
 import { projectContinuationPacket } from "../continuation-packet.js";
@@ -132,6 +133,7 @@ beforeAll(async () => {
     messages,
     workspaces,
     workspaceMembers,
+    apiKeys,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

@@ -338,7 +338,7 @@ const WorkGraphWireSchema = z.object({
       reviewDue: z.boolean(),
     })
   ),
-  /** The goals (tracks) the nodes are filed into. */
+  /** The goals (tracks) the nodes are filed into or serve. */
   goals: z.array(
     z.object({
       id: z.string(),
@@ -494,6 +494,14 @@ const CreateBodySchema = z
      * parent link lands.
      */
     suspendedIntent: z.string().min(1).max(2000).optional(),
+    /**
+     * With parentSessionId: the key of the parent's output this child
+     * delivers (W7). Recorded on the edge only when the caller may write the
+     * parent (roster, and the key's grant) and the parent declares it with no
+     * required criterion checking it; `parentLink.forOutput` says which.
+     * Without parentSessionId, or blank, the start is refused (400).
+     */
+    forOutput: z.string().min(1).max(120).optional(),
     /**
      * Sessions this one waits on — `session --blocked_by--> session` edges,
      * validated and written through the same door as POST /links, each outcome
@@ -2137,9 +2145,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Capture agent so focus_session.create auto-approves; otherwise keep the
       // caller's own agent identity (normal governance).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
       const result = await createFocusSession({
         userId,
         workspaceId,
@@ -2184,6 +2190,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
+        forOutput: body.forOutput ?? null,
         blockedBySessionIds: body.blockedBySessionIds ?? [],
         targets: body.targets,
         forceCreate: body.forceCreate,
@@ -2485,9 +2492,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const agentUserId =
         patch.agentUserId !== undefined
           ? resolvedAgentUserId
-          : await resolveCaptureActorUserId(c, resolvedAgentUserId, {
-              workspaceId,
-            });
+          : await resolveCaptureActorUserId(c, resolvedAgentUserId);
 
       // W4: what a pause waits on, and when it happened — refused up front.
       const moveRefusal = sessionMoveRefusal(
@@ -3279,12 +3284,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
 
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
 
       const result = await completeFocusSession({
         sessionId: id,
@@ -3418,11 +3421,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
       const agentUserId = await resolveCaptureActorUserId(
         c,
-        c.get("agentUserId") as string | undefined,
-        { workspaceId }
+        c.get("agentUserId") as string | undefined
       );
 
       const { cancelSession } =

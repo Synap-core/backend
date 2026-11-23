@@ -50,6 +50,7 @@ import {
   chatTurns,
   workspaces,
   workspaceMembers,
+  apiKeys,
   channels,
   channelMembers,
   podMembers,
@@ -116,6 +117,7 @@ describe("focusSessions.get projects the rerun door's own availability", () => {
       chatTurns,
       workspaces,
       workspaceMembers,
+      apiKeys,
       // The session read predicate's roster branch joins these (decision C).
       channels,
       channelMembers,
