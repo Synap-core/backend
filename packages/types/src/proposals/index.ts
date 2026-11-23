@@ -1077,7 +1077,7 @@ export interface CompositeCreatePlaybookOp {
 }
 
 /**
- * ── Domain ops (a plan builds a domain, 2026-11-22) ──────────────────────────
+ * ── Domain ops (a plan builds a domain) ──────────────────────────────────────
  *
  * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
  * the playbooks, automations, views and cells that use them, so the person
@@ -1488,6 +1488,17 @@ export function isUpdateOperation(
   return (UPDATE_OPERATION_KINDS as readonly string[]).includes(op.op);
 }
 
+/** The op kinds that build a domain: a person's review, never auto-applied. */
+export const DOMAIN_OPERATION_KINDS = [
+  "create_workspace",
+  "define_kind",
+  "declare_lifecycle",
+] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
+
+export function isDomainOperation(op: CompositeProposalOperation): boolean {
+  return (DOMAIN_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
 /** The op kinds that make a composite a PLAN (all-or-none on apply). */
 export const PLAN_OPERATION_KINDS = [
   "create_session",
@@ -1566,9 +1577,7 @@ const _RESILIENT_OPERATION_KINDS = [
   "create_playbook",
   // A domain's space, kinds and lifecycles: an op naming one that failed is
   // skipped, named, like a binding whose cell did not land.
-  "create_workspace",
-  "define_kind",
-  "declare_lifecycle",
+  ...DOMAIN_OPERATION_KINDS,
   // A list over the bundle's things: a failed list must not discard them.
   "create_view",
   // A playbook's UI: a cell that fails leaves the views beside it, and a
@@ -2018,49 +2027,6 @@ export function resolveCompositeRef(
   throw new Error(
     `resolveCompositeRef: unknown reference "${ref}" — not an in-proposal op ref and not a valid entity UUID`
   );
-}
-
-/**
- * A string value inside a `create_automation` flow that names an op of the
- * same batch (`"$ref:pb1"`): replaced by that op's real id at apply time, so a
- * flow can run a playbook the plan creates.
- */
-export const FLOW_REF_PREFIX = "$ref:" as const;
-
-/** Every op ref a flow names through {@link FLOW_REF_PREFIX}, once each. */
-export function flowRefsOf(flow: unknown): string[] {
-  const refs = new Set<string>();
-  const walk = (value: unknown): void => {
-    if (typeof value === "string") {
-      if (value.startsWith(FLOW_REF_PREFIX))
-        refs.add(value.slice(FLOW_REF_PREFIX.length));
-    } else if (Array.isArray(value)) {
-      value.forEach(walk);
-    } else if (value && typeof value === "object") {
-      Object.values(value).forEach(walk);
-    }
-  };
-  walk(flow);
-  return [...refs];
-}
-
-/** A copy of `flow` with each {@link FLOW_REF_PREFIX} string resolved. */
-export function resolveFlowRefs(
-  flow: unknown,
-  resolve: (ref: string) => string
-): unknown {
-  if (typeof flow === "string") {
-    return flow.startsWith(FLOW_REF_PREFIX)
-      ? resolve(flow.slice(FLOW_REF_PREFIX.length))
-      : flow;
-  }
-  if (Array.isArray(flow)) return flow.map((v) => resolveFlowRefs(v, resolve));
-  if (flow && typeof flow === "object") {
-    return Object.fromEntries(
-      Object.entries(flow).map(([k, v]) => [k, resolveFlowRefs(v, resolve)])
-    );
-  }
-  return flow;
 }
 
 // ---------------------------------------------------------------------------

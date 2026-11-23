@@ -4739,7 +4739,7 @@ export const tools = {
             playbooks: {
               type: "array",
               description:
-                '{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; a flow runs it by "$ref:<ref>".',
+                "{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; a flow runs it by `playbookName`.",
               items: { type: "object" },
             },
             views: {

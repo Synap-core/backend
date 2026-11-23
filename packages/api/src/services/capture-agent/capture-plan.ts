@@ -18,7 +18,7 @@
 import {
   BIND_RENDERER_TARGET_KINDS,
   COMPOSITE_VIEW_TYPES,
-  flowRefsOf,
+  isDomainOperation,
   isLikelyUUID,
   isPlanOperation,
   isUpdateOperation,
@@ -221,9 +221,7 @@ export function hasComposedSteps(
       op.op === "create_view" ||
       op.op === "create_cell" ||
       op.op === "bind_renderer" ||
-      op.op === "create_workspace" ||
-      op.op === "define_kind" ||
-      op.op === "declare_lifecycle" ||
+      isDomainOperation(op) ||
       isUpdateOperation(op)
   );
 }
@@ -680,13 +678,6 @@ export function validatePlanOperations(
             push(i, "flowDefinition.nodes must be an array");
           if (!Array.isArray(flow.edges))
             push(i, "flowDefinition.edges must be an array");
-          for (const ref of flowRefsOf(flow)) {
-            if (!kinds.has(ref))
-              push(
-                i,
-                `flowDefinition names "$ref:${ref}", which names no step of this plan`
-              );
-          }
           // An EVENT rule matches on `triggerConfig.eventPattern`, which the
           // automation door reads off the flow (the op has no field of its
           // own). Without it the automation lands, but can never fire — a

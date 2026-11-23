@@ -23,7 +23,6 @@ import {
   opRef,
   registerEntityRef,
   resolveCompositeRef,
-  resolveFlowRefs,
   type CompositeCreateEntityOp,
   type CompositeProposalOperation,
   type CompositeUpdateOperation,
@@ -1527,8 +1526,9 @@ export async function materializeCompositeGraph(
 
     // ── Pass 0p — PROCESSES (`create_playbook`) ───────────────────────────
     // Before the automations, so a flow may run a playbook this batch makes
-    // (`$ref:<ref>`). Through the EXISTING `playbooks.create` door, which
-    // decides the status. Per-op resilient like the Rule Loop config ops.
+    // by its name (`playbookName`, stamped to its id by the automation door).
+    // Through the EXISTING `playbooks.create` door, which decides the status.
+    // Per-op resilient like the Rule Loop config ops.
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       if (op.op !== "create_playbook") continue;
@@ -1592,9 +1592,7 @@ export async function materializeCompositeGraph(
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          flowDefinition: resolveFlowRefs(op.flowDefinition, (ref) =>
-            resolveCompositeRef(refToRealId, ref)
-          ),
+          flowDefinition: op.flowDefinition,
           ...(op.enabled === undefined ? {} : { enabled: op.enabled }),
           ...(workspaceId ? { workspaceId } : {}),
         });

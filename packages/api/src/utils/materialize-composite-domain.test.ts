@@ -1,20 +1,17 @@
 /**
  * A plan builds a DOMAIN in one approval: its space (`create_workspace`), a
  * kind (`define_kind`) and its lifecycle (`declare_lifecycle`), the playbook
- * that runs on the kind, an automation that runs the playbook, a pipeline and
- * a cell on the playbook's page, every step naming the others by ref. Through
- * every seam except the database:
+ * that runs on the kind, an automation that runs the playbook by its name, a
+ * pipeline and a cell on the playbook's page, every step naming the others by
+ * ref. Through the validator, the governance keys, the materializer, the
+ * receipt, the review and the capture door's step arrays. The callers are
+ * recorders here; their doors are driven for real in
+ * `materialize-composite-domain.pglite.test.ts`.
  *
- *   validate (capture-plan) → govern (capture-graph-policy) → materialize
- *   (domain first, playbooks before automations, refs resolved) → receipt
- *   (`byOp`, `workspaceIds`, `profileIds`, landed) → review render → the
- *   capture door's step arrays.
- *
- * Rows chosen where naive implementations DISAGREE: steps sent in REVERSE
- * dependency order (the pod applies them in its own order); a flow naming the
- * playbook by `$ref:` (must reach the automation door as the real id); a
- * binding whose target is a playbook of the same plan; a space that fails
- * (the kind in it is skipped and named, the step beside it still lands).
+ * One test per rule, so reverting ONE rule turns ONE test red: the apply
+ * order, each ref kind (workspaceRef, kindRef, subjectProfileRef,
+ * target.ref), the domain gate pairs. Steps are sent in REVERSE dependency
+ * order, where a naive materializer that follows the array disagrees.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -24,6 +21,7 @@ import {
   landedFromRecord,
   type CompositeProposalOperation,
 } from "@synap-core/types/proposals";
+import { deriveGatePairFromOperations } from "@synap/governance-policy";
 import {
   materializeCompositeGraph,
   type AutomationCreateCaller,
@@ -50,6 +48,19 @@ const DEF = "33333333-3333-4333-8333-333333333333";
 const PB = "44444444-4444-4444-8444-444444444444";
 const AUTO = "55555555-5555-4555-8555-555555555555";
 const VIEW = "66666666-6666-4666-8666-666666666666";
+
+const FLOW = {
+  triggerConfig: { eventPattern: "entity.create.completed" },
+  nodes: [
+    { id: "start", type: "trigger", data: {} },
+    {
+      id: "run",
+      type: "playbook_run",
+      data: { playbookName: "Qualify a target" },
+    },
+  ],
+  edges: [{ id: "e1", source: "start", target: "run" }],
+};
 
 /** The whole domain, sent in REVERSE dependency order. */
 const DOMAIN: CompositeProposalOperation[] = [
@@ -83,24 +94,13 @@ const DOMAIN: CompositeProposalOperation[] = [
     name: "Qualify each new target",
     triggerType: "event",
     workspaceRef: "ws",
-    flowDefinition: {
-      triggerConfig: { eventPattern: "entity.create.completed" },
-      nodes: [
-        { id: "start", type: "trigger", data: {} },
-        {
-          id: "run",
-          type: "playbook_run",
-          data: { playbookId: "$ref:qualify" },
-        },
-      ],
-      edges: [{ id: "e1", source: "start", target: "run" }],
-    },
+    flowDefinition: FLOW,
   },
   {
     op: "create_playbook",
     ref: "qualify",
     name: "Qualify a target",
-    goalTemplate: "Decide whether to pursue it",
+    goalTemplate: "Decide whether to pursue this target",
     subjectProfile: {},
     subjectProfileRef: "target",
     workspaceRef: "ws",
@@ -130,7 +130,7 @@ function callers(order: string[], failSpace = false) {
   const workspaceCaller: WorkspaceCreateCaller = {
     create: vi.fn(async () => {
       order.push("workspace");
-      if (failSpace) throw new Error("a space of this domain already exists");
+      if (failSpace) throw new Error("a space of this name is not yours");
       return { id: WS, linked: false };
     }),
   };
@@ -196,31 +196,53 @@ function callers(order: string[], failSpace = false) {
 const noEntities = { create: vi.fn() };
 const noRelations = { create: vi.fn() };
 
+async function run(failSpace = false) {
+  const order: string[] = [];
+  const c = callers(order, failSpace);
+  const result = await materializeCompositeGraph(
+    DOMAIN,
+    noEntities,
+    noRelations,
+    undefined,
+    c
+  );
+  return { order, c, result };
+}
+
 describe("a domain plan — the ops", () => {
-  it("is a composite, validates whole, and every domain op is governed", () => {
+  it("is a composite and validates whole", () => {
     expect(isCompositeProposalData({ operations: DOMAIN })).toBe(true);
     for (const op of ["create_workspace", "define_kind", "declare_lifecycle"])
       expect(COMPOSITE_OPERATION_KINDS).toContain(op);
     expect(validatePlanOperations(DOMAIN, { workspaceId: null })).toEqual([]);
-    expect(captureGraphEventKeys(DOMAIN)).toEqual(
-      expect.arrayContaining([
-        { subjectType: "workspace", action: "create" },
-        { subjectType: "profile", action: "create" },
-      ])
-    );
   });
 
-  it("refuses refs that name nothing, or the wrong kind of step", () => {
+  it("each domain op is judged on its door's own key, never a softer one", () => {
+    for (const [op, pair] of [
+      ["create_workspace", { subjectType: "workspace", action: "create" }],
+      ["define_kind", { subjectType: "profile", action: "create" }],
+      ["declare_lifecycle", { subjectType: "profile", action: "create" }],
+    ] as const) {
+      const one = DOMAIN.filter((o) => o.op === op);
+      expect(captureGraphEventKeys(one), op).toEqual([pair]);
+      // Beside a view (an auto-approvable key), the batch is gated as the
+      // domain op: never the softer member.
+      expect(
+        deriveGatePairFromOperations([...one, { op: "create_view" }]),
+        op
+      ).toEqual(pair);
+    }
+  });
+
+  it("refuses a ref that names the wrong kind of step or no step", () => {
     const bad: CompositeProposalOperation[] = [
       { op: "create_workspace", ref: "ws", name: "Acquisitions" },
-      // A lifecycle names a kind, not a space.
       {
         op: "declare_lifecycle",
         ref: "lc",
         kindRef: "ws",
         options: [{ key: "a", category: "open" }],
       },
-      // A playbook on a kind the plan does not define.
       {
         op: "create_playbook",
         ref: "pb",
@@ -230,55 +252,48 @@ describe("a domain plan — the ops", () => {
         subjectProfileRef: "nope",
         workspaceRef: "ws",
       },
-      // A flow naming a step that is not in the plan.
-      {
-        op: "create_automation",
-        ref: "a",
-        name: "A",
-        triggerType: "manual",
-        flowDefinition: {
-          nodes: [
-            {
-              id: "n",
-              type: "playbook_run",
-              data: { playbookId: "$ref:ghost" },
-            },
-          ],
-          edges: [],
-        },
-      },
-      // A binding naming its target twice.
       {
         op: "bind_renderer",
         ref: "b",
+        target: { kind: "view", ref: "pb" },
+        slot: "detail",
+        scope: "pod",
+        cellKey: "generated:x",
+      },
+      {
+        op: "bind_renderer",
+        ref: "b2",
         target: { kind: "playbook", ref: "pb", id: PB },
         slot: "detail",
         scope: "pod",
         cellKey: "generated:x",
       },
+      {
+        op: "create_view",
+        ref: "v",
+        name: "V",
+        viewType: "table",
+        scopeProfileSlugs: ["x"],
+        workspaceRef: "lc",
+      },
     ];
     const problems = validatePlanOperations(bad, { workspaceId: null });
-    expect(problems.map((p) => p.opIndex).sort()).toEqual([1, 2, 3, 4]);
-    expect(problems.find((p) => p.opIndex === 1)!.message).toMatch(
-      /names a workspace, but must name a kind/
-    );
-    expect(problems.find((p) => p.opIndex === 3)!.message).toMatch(
-      /\$ref:ghost/
-    );
+    const fieldsAt = (i: number) =>
+      problems
+        .filter((p) => p.opIndex === i)
+        .map((p) => p.message.split(" ")[0]);
+    expect(fieldsAt(0)).toEqual([]);
+    expect(fieldsAt(1)).toEqual(["kindRef"]);
+    expect(fieldsAt(2)).toEqual(["subjectProfileRef"]);
+    expect(fieldsAt(3)).toEqual(["target.ref"]);
+    expect(problems.filter((p) => p.opIndex === 4)).toHaveLength(1);
+    expect(fieldsAt(5)).toEqual(["workspaceRef"]);
   });
 });
 
-describe("a domain plan — the materializer", () => {
-  it("applies the domain first and playbooks before automations, every ref resolved", async () => {
-    const order: string[] = [];
-    const c = callers(order);
-    const result = await materializeCompositeGraph(
-      DOMAIN,
-      noEntities,
-      noRelations,
-      undefined,
-      c
-    );
+describe("a domain plan — the materializer, one rule each", () => {
+  it("apply order: the domain first, playbooks before automations", async () => {
+    const { order } = await run();
     expect(order).toEqual([
       "workspace",
       "kind",
@@ -289,34 +304,52 @@ describe("a domain plan — the materializer", () => {
       "cell",
       "renderer",
     ]);
-    expect(c.kindCaller.define).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WS, slug: "acquisition-target" })
-    );
+  });
+
+  it("workspaceRef: every step placed in the space lands in the space made", async () => {
+    const { c } = await run();
+    for (const call of [
+      vi.mocked(c.kindCaller.define).mock.calls[0]![0],
+      vi.mocked(c.playbookCaller.create).mock.calls[0]![0],
+      vi.mocked(c.automationCaller.create).mock.calls[0]![0],
+      vi.mocked(c.viewCaller.create).mock.calls[0]![0],
+      vi.mocked(c.cellCaller.define).mock.calls[0]![0],
+    ]) {
+      expect(call.workspaceId).toBe(WS);
+    }
+  });
+
+  it("kindRef: the lifecycle is declared on the kind the plan defined", async () => {
+    const { c } = await run();
     expect(c.lifecycleCaller.declare).toHaveBeenCalledWith(
       expect.objectContaining({ profileId: KIND, initialStatus: "spotted" })
     );
+  });
+
+  it("subjectProfileRef: the playbook runs on the kind's stored slug", async () => {
+    const { c } = await run();
     expect(c.playbookCaller.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        workspaceId: WS,
         subjectProfile: { profileSlug: "acquisition-target" },
       })
     );
-    const automation = vi.mocked(c.automationCaller.create).mock.calls[0]![0];
-    expect(automation.workspaceId).toBe(WS);
-    expect(JSON.stringify(automation.flowDefinition)).toContain(
-      `"playbookId":"${PB}"`
-    );
-    expect(JSON.stringify(automation.flowDefinition)).not.toContain("$ref:");
-    expect(c.viewCaller.create).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WS })
-    );
-    expect(c.cellCaller.define).toHaveBeenCalledWith(
-      expect.objectContaining({ workspaceId: WS })
-    );
+  });
+
+  it("target.ref: the cell binds to the playbook the plan made", async () => {
+    const { c } = await run();
     expect(c.rendererCaller.bind).toHaveBeenCalledWith(
       expect.objectContaining({ targetKind: "playbook", targetId: PB })
     );
+  });
 
+  it("a flow names the playbook by name; the automation door stamps its id", async () => {
+    const { c } = await run();
+    const automation = vi.mocked(c.automationCaller.create).mock.calls[0]![0];
+    expect(automation.flowDefinition).toEqual(FLOW);
+  });
+
+  it("the receipt names the space, kind and lifecycle; landed opens the space", async () => {
+    const { result } = await run();
     const record = buildMaterializedRecord(result);
     expect(record.workspaceIds).toEqual([WS]);
     expect(record.profileIds).toEqual([KIND]);
@@ -339,18 +372,8 @@ describe("a domain plan — the materializer", () => {
     );
   });
 
-  it("a space that fails skips what lives in it, named; the rest still lands", async () => {
-    const order: string[] = [];
-    const c = callers(order, true);
-    const result = await materializeCompositeGraph(
-      DOMAIN,
-      noEntities,
-      noRelations,
-      undefined,
-      c
-    );
-    // Every step placed in the space (`workspaceRef`) is skipped: none of
-    // them reached its door with a space that does not exist.
+  it("a space that fails skips every step placed in it", async () => {
+    const { c, result } = await run(true);
     expect(c.kindCaller.define).not.toHaveBeenCalled();
     expect(c.playbookCaller.create).not.toHaveBeenCalled();
     expect(c.automationCaller.create).not.toHaveBeenCalled();
@@ -375,7 +398,7 @@ describe("a domain plan — the materializer", () => {
 });
 
 describe("a domain plan — review and the capture door", () => {
-  it("the review draws the space, the kind, its lifecycle, and the playbook on that kind", () => {
+  it("the review draws the domain, each step's space, and what approval turns on", () => {
     const graph = buildProposalGraph({ operations: DOMAIN } as never);
     expect(graph.workspaces).toEqual([{ ref: "ws", name: "Acquisitions" }]);
     expect(graph.kinds).toEqual([
@@ -393,8 +416,13 @@ describe("a domain plan — review and the capture door", () => {
     expect(graph.playbooks?.[0]).toMatchObject({
       subjectProfileSlug: "acquisition-target",
       bornStatus: "active",
+      workspaceRef: "ws",
     });
-    expect(graph.automations?.[0]?.bornEnabled).toBe(true);
+    expect(graph.automations?.[0]).toMatchObject({
+      bornEnabled: true,
+      workspaceRef: "ws",
+    });
+    expect(graph.views?.[0]?.workspaceRef).toBe("ws");
   });
 
   it("the capture door files every step array as its op", async () => {

@@ -131,44 +131,49 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   };
 
   return {
-    // A domain's SPACE, through the ONE template apply the
-    // `synap_create_workspace` door and the `workspace/create` executor run,
-    // as the approver. Keyed by the proposal and the op, so a retried
-    // approval reuses the space its first attempt made; a space of that name
-    // that is somebody else's refuses (one space per domain).
+    // A domain's SPACE, through the one plain space door (`workspaces.create`,
+    // as the approver: the creator becomes its owner). One space per domain:
+    // a space of that name already there is reused when the approver is in
+    // it (a retried approval finds the space its first attempt made), and
+    // refused when it is anybody else's.
     workspaceCaller: {
-      create: async ({ ref, name }) => {
-        const proposalId = domainProposalId("create_workspace");
-        const idempotencyKey = `${proposalId}:${ref}`;
-        const { checkOneSpacePerDomain } =
-          await import("../services/workspace-creation-service.js");
-        const verdict = await checkOneSpacePerDomain({
-          userId,
-          idempotencyKey,
-          workspaceName: name,
-        });
-        if (verdict.action === "refuse") {
+      create: async ({ name }) => {
+        domainProposalId("create_workspace");
+        const { findWorkspaceIdentityConflict, getWorkspaceMembership } =
+          await import("@synap/database");
+        const held = await findWorkspaceIdentityConflict(
+          database as Parameters<typeof findWorkspaceIdentityConflict>[0],
+          { name }
+        );
+        if (held) {
+          const member = await getWorkspaceMembership(
+            database as Parameters<typeof getWorkspaceMembership>[0],
+            held.existingWorkspaceId,
+            userId
+          );
+          if (!member) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `create_workspace "${name}": a space of this name already exists and is not yours`,
+            });
+          }
+          return { id: held.existingWorkspaceId, linked: true };
+        }
+        const { workspacesRouter } = await import("../routers/workspaces.js");
+        const out = await workspacesRouter
+          .createCaller({
+            db: database,
+            authenticated: true as const,
+            userId,
+          } as unknown as Parameters<typeof workspacesRouter.createCaller>[0])
+          .create({ name });
+        if (out.status !== "created") {
           throw new TRPCError({
-            code: "CONFLICT",
-            message: `create_workspace "${name}": a space of this domain already exists`,
+            code: "INTERNAL_SERVER_ERROR",
+            message: `create_workspace "${name}" did not apply (${out.status})`,
           });
         }
-        const { applyTemplate } =
-          await import("../services/template-apply/index.js");
-        const applied = await applyTemplate({
-          definition: {} as Parameters<typeof applyTemplate>[0]["definition"],
-          actor: { userId },
-          source: auditSource,
-          identity: {
-            proposalId: idempotencyKey,
-            workspaceName: name,
-            createdBy: "provisioning",
-          },
-        });
-        return {
-          id: applied.workspaceId,
-          linked: applied.materializeStatus !== "created",
-        };
+        return { id: out.workspaceId, linked: false };
       },
     },
 

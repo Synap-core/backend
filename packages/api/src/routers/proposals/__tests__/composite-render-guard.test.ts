@@ -108,7 +108,7 @@ describe("buildProposalGraph — refusal guard", () => {
           name: "Daily nudge",
           triggerType: "cron",
           flowDefinition: {},
-          // A person's approval keeps the status asked for (#1242).
+          // A person's approval keeps the status asked for.
           enabled: false,
         },
       ] as CompositeProposalOperation[])

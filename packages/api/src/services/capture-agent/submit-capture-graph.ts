@@ -60,6 +60,7 @@ import {
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
 import { createLogger } from "@synap-core/core";
 import {
+  isDomainOperation,
   type HubWriteSource,
   type CompositeProposalOperation,
   type CompositeCreateAutomationOp,
@@ -1616,9 +1617,7 @@ export async function submitCaptureGraph(
   const planNeedsReview = operations.some(
     (op) =>
       (op.op === "create_project" && op.evidence?.belowAgentFloor === true) ||
-      op.op === "create_workspace" ||
-      op.op === "define_kind" ||
-      op.op === "declare_lifecycle"
+      isDomainOperation(op)
   );
 
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the

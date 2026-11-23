@@ -3107,7 +3107,7 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_skill: { subjectType: "skill", action: "create" },
   create_automation: { subjectType: "automation", action: "create" },
   create_rule: { subjectType: "rule", action: "create" },
-  // A DRAFT process from a capture — the `playbooks.create` door.
+  // A process — the `playbooks.create` door.
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
@@ -3152,9 +3152,9 @@ export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
 const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_rule: 4,
   create_skill: 3,
-  // A process is configuration like an automation, and is likewise born
-  // inert (always `draft`); it outranks the automation because a process,
-  // once completed, ORCHESTRATES runs, sessions and their outputs.
+  // A process is configuration like an automation, born by the same rule
+  // (`statusAtCreate`); it outranks the automation because a process
+  // ORCHESTRATES runs, sessions and their outputs.
   create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
