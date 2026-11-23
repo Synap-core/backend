@@ -179,7 +179,6 @@ beforeAll(async () => {
       s.projectMembers!,
       s.governanceRules!,
       s.cpCatalogCache!,
-      s.spaceAccess!,
     ])
   );
   await q(`insert into users (id, email) values ($1,'u@x'), ($2,'v@x')`, [

@@ -129,7 +129,6 @@ beforeAll(async () => {
   await h.client!.exec(
     pgliteSchemaDdl([
       s.skills!,
-      s.spaceAccess!,
       s.workspaces!,
       s.workspaceMembers!,
       s.apiKeys!,
