@@ -9393,7 +9393,8 @@
                               "view",
                               "skill",
                               "automation",
-                              "agent"
+                              "agent",
+                              "renderer-bundle"
                             ]
                           },
                           "name": { "type": "string" },

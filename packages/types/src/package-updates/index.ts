@@ -485,7 +485,7 @@ export type RendererBundleHoldReason =
 
 /**
  * What the pod knows about its renderer bundle's updates
- * (`renderers.status.updates`), written by the after-sync pass every 10
+ * (`renderers.updates`), written by the after-sync pass every 10
  * minutes. Dates are ISO strings.
  */
 export interface RendererBundleUpdateState {
