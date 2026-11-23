@@ -64,11 +64,15 @@
  *     above write through the pod's governed doors, never around them.
  */
 
+export { CELL_BRIDGE_CONTRACT_VERSION } from "./contract-version.js";
 export {
   CELL_BRIDGE_READ_OPS,
   CELL_BRIDGE_READ_OP_NAMES,
   CELL_BRIDGE_SPACE_READ_OPS,
+  CELL_BRIDGE_VIEW_OFFSET_MAX,
+  CELL_BRIDGE_VIEW_PAGE_MAX,
   cellBridgeReadRefusal,
+  cellBridgeViewPage,
   isCellBridgeReadOp,
   pickBridgeParams,
   projectPillarsAnswer,
@@ -159,10 +163,12 @@ export {
   type CellModuleFrameInput,
 } from "./module-frame.js";
 export {
+  CELL_FRAME_ERROR_REASONS,
   CELL_FRAME_MAX_ERROR_CHARS,
   CELL_FRAME_MAX_HEIGHT,
   CELL_FRAME_MAX_TOAST_CHARS,
   parseCellFrameMessage,
+  type CellFrameErrorReason,
   type CellFrameHostMessage,
   type CellFrameNavigationTarget,
   type CellFrameSurfaceRequest,

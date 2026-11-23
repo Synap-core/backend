@@ -85,6 +85,9 @@ const WA = randomUUID();
 const KIND = randomUUID();
 /** Five rows, newest first (the default order is `created_at desc`). */
 const ROWS = Array.from({ length: 5 }, () => randomUUID());
+/** A kind whose nine rows share ONE creation time (one import, one transaction). */
+const TIED_KIND = randomUUID();
+const TIED = Array.from({ length: 9 }, () => randomUUID());
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 const caller = () =>
@@ -103,12 +106,15 @@ async function page(
   return { ids: res.entities.map((e) => e.id), hasMore: res.hasMore };
 }
 
-async function insertList(query: Record<string, unknown>): Promise<string> {
+async function insertList(
+  query: Record<string, unknown>,
+  kind = KIND
+): Promise<string> {
   const id = randomUUID();
   await q(
     `insert into views (id, workspace_id, user_id, name, type, scope_profile_ids, query, config, metadata)
      values ($1, $2, $3, 'Things', 'list', $4::uuid[], $5::jsonb, '{}'::jsonb, '{}'::jsonb)`,
-    [id, WA, A, `{${KIND}}`, JSON.stringify(query)]
+    [id, WA, A, `{${kind}}`, JSON.stringify(query)]
   );
   return id;
 }
@@ -141,6 +147,17 @@ beforeAll(async () => {
     `insert into profiles (id, slug, display_name, profile_kind, scope) values ($1,'thing','Thing','kind','system')`,
     [KIND]
   );
+  await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope) values ($1,'tied','Tied','kind','system')`,
+    [TIED_KIND]
+  );
+  for (const id of TIED) {
+    await q(
+      `insert into entities (id, user_id, workspace_id, profile_id, title, properties, created_at)
+       values ($1,$2,$3,$4,'t','{}'::jsonb, '2026-01-01T00:00:00Z')`,
+      [id, A, WA, TIED_KIND]
+    );
+  }
   // Distinct creation times, so the order (and so each page) is fixed.
   for (const [i, id] of ROWS.entries()) {
     await q(
@@ -183,6 +200,18 @@ describe("views.execute — one page of a saved view", () => {
   it("a stored pair written as text is still read as numbers", async () => {
     const view = await insertList({ limit: "2", offset: "1" });
     expect(await page(view)).toEqual({ ids: ROWS.slice(1, 3), hasMore: true });
+  });
+
+  it("rows that tie on the sort keep one order: pages never skip or repeat them", async () => {
+    const view = await insertList({}, TIED_KIND);
+    const pages = [
+      await page(view, { limit: 4, offset: 0 }),
+      await page(view, { limit: 4, offset: 4 }),
+      await page(view, { limit: 4, offset: 8 }),
+    ];
+    // The tie is broken by the id, ascending: every row once, in one order.
+    expect(pages.flatMap((p) => p.ids)).toEqual([...TIED].sort());
+    expect(pages.map((p) => p.hasMore)).toEqual([true, true, false]);
   });
 
   it("refuses a page over the cap or below one row", async () => {

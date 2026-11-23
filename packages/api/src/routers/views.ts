@@ -221,8 +221,8 @@ import {
 const logger = createLogger({ module: "views" });
 
 /** `views.execute`: the largest page a caller may ask for, and the deepest offset. */
-export const VIEW_EXECUTE_MAX_LIMIT = 500;
-export const VIEW_EXECUTE_MAX_OFFSET = 100_000;
+const VIEW_EXECUTE_MAX_LIMIT = 500;
+const VIEW_EXECUTE_MAX_OFFSET = 100_000;
 
 /**
  * Validate filters a client sends back for a view (a save, or ephemeral
@@ -1315,9 +1315,8 @@ export const viewsRouter = router({
         /**
          * EPHEMERAL page: when present, they replace the stored query's
          * `limit` / `offset` for this execution only (the stored pair is
-         * pagination, not part of what the view shows). A frame reads past
-         * the first page with them (`views.execute` bridge op, plan
-         * cb8470f2). `hasMore` in the answer says whether a next page exists.
+         * pagination, not part of what the view shows). `hasMore` in the
+         * answer says whether a next page exists.
          */
         limit: z.number().int().min(1).max(VIEW_EXECUTE_MAX_LIMIT).optional(),
         offset: z.number().int().min(0).max(VIEW_EXECUTE_MAX_OFFSET).optional(),
@@ -1610,7 +1609,10 @@ export const viewsRouter = router({
         .orderBy(
           ...(orderByClause.length > 0
             ? orderByClause
-            : [desc(entities.createdAt)])
+            : [desc(entities.createdAt)]),
+          // A unique last key: rows that tie on the sort (one import shares
+          // one created_at) keep one order, so no page skips or repeats them.
+          asc(entities.id)
         )
         // One row past the page: it says whether a next page exists, and
         // is never returned.

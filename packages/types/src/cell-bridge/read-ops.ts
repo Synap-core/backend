@@ -142,6 +142,33 @@ export function projectPillarsAnswer(answer: unknown): {
   };
 }
 
+/** The largest page of a view's rows a frame reads at once (`views.execute` `limit`). */
+export const CELL_BRIDGE_VIEW_PAGE_MAX = 100;
+/** The deepest row a frame pages to (`views.execute` `offset`). */
+export const CELL_BRIDGE_VIEW_OFFSET_MAX = 100_000;
+
+/**
+ * The page a frame asked `views.execute` for, as every host forwards it:
+ * whole numbers CLAMPED into range (`limit` 1 to `CELL_BRIDGE_VIEW_PAGE_MAX`,
+ * `offset` 0 to `CELL_BRIDGE_VIEW_OFFSET_MAX`), a missing or non-number one
+ * left out so the view's stored pair applies.
+ */
+export function cellBridgeViewPage(params: Record<string, unknown>): {
+  limit?: number;
+  offset?: number;
+} {
+  const clamp = (v: unknown, min: number, max: number): number | undefined =>
+    typeof v === "number" && Number.isFinite(v)
+      ? Math.min(max, Math.max(min, Math.trunc(v)))
+      : undefined;
+  const limit = clamp(params.limit, 1, CELL_BRIDGE_VIEW_PAGE_MAX);
+  const offset = clamp(params.offset, 0, CELL_BRIDGE_VIEW_OFFSET_MAX);
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(offset !== undefined ? { offset } : {}),
+  };
+}
+
 /** A param value a host forwards: a primitive, nothing nested. */
 export type CellBridgeParamValue = string | number | boolean;
 

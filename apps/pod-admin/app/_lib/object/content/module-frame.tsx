@@ -253,6 +253,17 @@ export function readsToRefresh(
   };
 }
 
+/**
+ * What the frame's status makes the host draw: the cell, the failed state,
+ * or (a cell that says it does not draw this object) the page's own content.
+ */
+export function moduleFrameStatusOf(
+  status: CellFrameStatus
+): "ready" | "failed" | "not-drawn" {
+  if (status.state === "ready") return "ready";
+  return status.reason === "not-drawn" ? "not-drawn" : "failed";
+}
+
 /** The reader's theme as the frame takes it. */
 function frameTheme(resolved: string | undefined): "light" | "dark" {
   return resolved === "dark" ? "dark" : "light";
@@ -474,6 +485,7 @@ export function ModuleFrame({
   refusedAction,
   subject = "cell",
   cover,
+  notDrawn,
 }: {
   code: string;
   deps?: Record<string, string>;
@@ -490,6 +502,12 @@ export function ModuleFrame({
   subject?: RendererWordSubject;
   /** Drawn until the cell is ready (default: the skeleton). */
   cover?: ReactNode;
+  /**
+   * What the host shows when the cell says it does not draw this object
+   * (`synap:error` reason `not-drawn`): the page's own content, as with no
+   * renderer. Absent: the failed state.
+   */
+  notDrawn?: ReactNode;
 }) {
   const utils = trpc.useUtils();
   const client = utils.client;
@@ -497,9 +515,9 @@ export function ModuleFrame({
   const loads = useRef(0);
   const [run, setRun] = useState(0);
   const [left, setLeft] = useState(false);
-  const [status, setStatus] = useState<"starting" | "ready" | "failed">(
-    "starting"
-  );
+  const [status, setStatus] = useState<
+    "starting" | "ready" | "failed" | "not-drawn"
+  >("starting");
   const [height, setHeight] = useState<number | undefined>(undefined);
   const { resolvedTheme } = useTheme();
   const theme = frameTheme(resolvedTheme);
@@ -554,7 +572,7 @@ export function ModuleFrame({
       identity: frameIdentity,
       theme: () => themeRef.current,
       locale: () => localeRef.current,
-      onStatus: (s) => setStatus(s.state === "ready" ? "ready" : "failed"),
+      onStatus: (s) => setStatus(moduleFrameStatusOf(s)),
       onResize: (h) => setHeight(h),
       onWriteAnswer: (result, request) => {
         const receipt = writeReceipt(result);
@@ -636,7 +654,8 @@ export function ModuleFrame({
       />
     );
   }
-  if (left || status === "failed") {
+  if (status === "not-drawn" && notDrawn !== undefined) return <>{notDrawn}</>;
+  if (left || status === "failed" || status === "not-drawn") {
     return (
       <div className="flex flex-col items-center gap-1">
         <ResourceRowError

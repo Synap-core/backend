@@ -26,6 +26,8 @@
  *                  hand-off card can say it to a pod admin
  *   refused        the cell needs the network or a module the bundle lacks
  *                  (`ModuleFrame`'s own state)
+ *   not drawn      the cell says it does not draw this object: the page's
+ *                  own content, as with no renderer
  */
 
 import { useMemo, type ReactNode } from "react";
@@ -110,6 +112,7 @@ export function ModuleCell({
   door,
   subject = "cell",
   cover,
+  notDrawn,
 }: {
   source: ModuleCellSource;
   identity: ModuleFrameIdentity;
@@ -122,6 +125,8 @@ export function ModuleCell({
   subject?: RendererWordSubject;
   /** Drawn while it loads and starts (default: the skeleton). */
   cover?: ReactNode;
+  /** The page's own content, when the cell says it does not draw this object. */
+  notDrawn?: ReactNode;
 }) {
   const modules = useHostModules();
   const t = frameT();
@@ -154,6 +159,7 @@ export function ModuleCell({
           refusedAction={door}
           subject={subject}
           cover={cover}
+          notDrawn={notDrawn}
         />
       );
   }
@@ -218,6 +224,7 @@ export function CellByKey({
         fill={fill}
         subject={subject}
         cover={cover}
+        notDrawn={fallback}
       />
       {/* The door stays under the cell in every state it draws. */}
       {footer && <div className="flex justify-end">{footer}</div>}

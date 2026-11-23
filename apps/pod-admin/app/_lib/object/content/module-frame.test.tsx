@@ -31,6 +31,7 @@ import {
   ModuleSandbox,
   RendererSkeleton,
   createModuleFrameHost,
+  moduleFrameStatusOf,
   observeNear,
   readsToRefresh,
   writeErrorReceipt,
@@ -269,6 +270,22 @@ describe("createModuleFrameHost — which messages count", () => {
     expect(
       (none.posted[0]!.message as { context: Record<string, unknown> }).context
     ).not.toHaveProperty("locale");
+  });
+});
+
+describe("moduleFrameStatusOf — what a frame's status draws", () => {
+  it("ready draws the cell; an error the failed state; not-drawn the page's own content", () => {
+    expect(moduleFrameStatusOf({ state: "ready" })).toBe("ready");
+    expect(moduleFrameStatusOf({ state: "error", message: "boom" })).toBe(
+      "failed"
+    );
+    expect(
+      moduleFrameStatusOf({
+        state: "error",
+        message: "Not a list",
+        reason: "not-drawn",
+      })
+    ).toBe("not-drawn");
   });
 });
 

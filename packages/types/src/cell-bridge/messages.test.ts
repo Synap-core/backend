@@ -48,6 +48,27 @@ describe("the module frame's messages", () => {
     });
   });
 
+  it("an error keeps a known reason and drops any other", () => {
+    expect(
+      parseCellFrameMessage({
+        type: "synap:error",
+        message: "Not a list",
+        reason: "not-drawn",
+      })
+    ).toEqual({
+      type: "synap:error",
+      message: "Not a list",
+      reason: "not-drawn",
+    });
+    expect(
+      parseCellFrameMessage({
+        type: "synap:error",
+        message: "x",
+        reason: "evil",
+      })
+    ).toEqual({ type: "synap:error", message: "x" });
+  });
+
   it("navigate carries a typed target, nothing else", () => {
     expect(
       parseCellFrameMessage({

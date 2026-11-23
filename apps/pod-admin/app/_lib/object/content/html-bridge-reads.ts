@@ -18,6 +18,7 @@
 
 import {
   cellBridgeReadRefusal,
+  cellBridgeViewPage,
   narrowHomeToSpace,
   projectPillarsAnswer,
   type CellBridgeParamValue,
@@ -253,15 +254,12 @@ export async function readForPage(
         id: required(op, "an id", str(p.id)),
       });
     case "views.execute":
-      // One page of the stored query (`limit` 1-100, `offset`): absent, the
-      // view's own stored pair. `hasMore` in the answer says a next page exists.
-      return client.views.execute.query(
-        defined({
-          id: required(op, "an id", str(p.id)),
-          limit: int(p.limit, 1, 100),
-          offset: int(p.offset, 0, 100_000),
-        })
-      );
+      // One page of the stored query (`cellBridgeViewPage`, the one parser
+      // every host uses); absent, the view's own stored pair.
+      return client.views.execute.query({
+        id: required(op, "an id", str(p.id)),
+        ...cellBridgeViewPage(p),
+      });
     case "profiles.get":
       return client.profiles.get.query(
         defined({

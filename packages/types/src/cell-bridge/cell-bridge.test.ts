@@ -21,6 +21,9 @@ import {
   pickBridgeParams,
   projectPillarsAnswer,
   wrapHtmlForFrame,
+  CELL_BRIDGE_VIEW_OFFSET_MAX,
+  CELL_BRIDGE_VIEW_PAGE_MAX,
+  cellBridgeViewPage,
 } from "./index.js";
 
 /** The policy as directive → sources, parsed from the built string. */
@@ -492,6 +495,22 @@ describe("the read allowlist", () => {
         projectId: "p",
       })
     ).toEqual({ id: "v1", limit: 100, offset: 200 });
+  });
+
+  it("every host forwards a page the same way: clamped into range, a missing one left out", () => {
+    expect(cellBridgeViewPage({ limit: 50, offset: 100 })).toEqual({
+      limit: 50,
+      offset: 100,
+    });
+    expect(cellBridgeViewPage({ limit: 5000, offset: 10 ** 9 })).toEqual({
+      limit: CELL_BRIDGE_VIEW_PAGE_MAX,
+      offset: CELL_BRIDGE_VIEW_OFFSET_MAX,
+    });
+    expect(cellBridgeViewPage({ limit: 0, offset: -3.7 })).toEqual({
+      limit: 1,
+      offset: 0,
+    });
+    expect(cellBridgeViewPage({ limit: "100", offset: NaN })).toEqual({});
   });
 
   it("a kind is read by identifier, with its fields' fill on request (a table's derived columns)", () => {
