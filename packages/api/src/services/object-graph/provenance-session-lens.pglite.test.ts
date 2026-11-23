@@ -80,7 +80,12 @@ const ENTITY_E2 = randomUUID(); // made by proposal R, filed in P
 const PROPOSAL_R = randomUUID();
 const P_GOAL = "Première validation : la source qui agrège la plupart";
 const Q_GOAL = "Draft the pricing memo";
-const SCOPE = { kind: "all" } as never;
+/** The reader's real facet scope under the lens of space B. */
+const scopeOf = (userId: string) => ({
+  userId,
+  workspaceId: SPACE_B,
+  allowedWorkspaceIds: [SPACE_A, SPACE_B],
+});
 
 const sessionRows = (out: GraphNeighbor[], sid: string) =>
   out.filter((n) => n.kind === "session" && n.id === sid);
@@ -199,7 +204,7 @@ describe("owner, under the lens of another space: the session is named", () => {
       OWNER,
       "entity",
       ENTITY_E,
-      SCOPE,
+      scopeOf(OWNER),
       SPACE_B
     );
     const [produced] = sessionRows(out, SESSION_P);
@@ -219,7 +224,7 @@ describe("owner, under the lens of another space: the session is named", () => {
       OWNER,
       "entity",
       ENTITY_E,
-      SCOPE,
+      scopeOf(OWNER),
       SPACE_B
     );
     const [row] = sessionRows(out, SESSION_P);
@@ -232,7 +237,7 @@ describe("owner, under the lens of another space: the session is named", () => {
       OWNER,
       "entity",
       ENTITY_E2,
-      SCOPE,
+      scopeOf(OWNER),
       SPACE_B
     );
     // Non-vacuity: the receipt itself came back, so the session row is the
@@ -248,7 +253,7 @@ describe("owner, under the lens of another space: the session is named", () => {
       OWNER,
       "proposal",
       PROPOSAL_R,
-      SCOPE,
+      scopeOf(OWNER),
       SPACE_B
     );
     expect(out.some((n) => n.kind === "entity")).toBe(true);
@@ -269,7 +274,7 @@ describe("a member who cannot read the session: privacy unchanged", () => {
       MEMBER,
       "entity",
       ENTITY_E,
-      SCOPE,
+      scopeOf(MEMBER),
       SPACE_B
     );
     const [produced] = sessionRows(out, SESSION_P);
@@ -283,7 +288,7 @@ describe("a member who cannot read the session: privacy unchanged", () => {
       MEMBER,
       "entity",
       ENTITY_E,
-      SCOPE,
+      scopeOf(MEMBER),
       SPACE_B
     );
     expect(sessionRows(temporal, SESSION_P)).toEqual([]);
@@ -291,7 +296,7 @@ describe("a member who cannot read the session: privacy unchanged", () => {
       MEMBER,
       "proposal",
       PROPOSAL_R,
-      SCOPE,
+      scopeOf(MEMBER),
       SPACE_B
     );
     // The member reads the proposal (space B), so the fold ran.
