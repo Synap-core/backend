@@ -8646,7 +8646,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). Pass evidenceEntityIds: existing entity ids that would belong to this project (the evidence count this pod sets, 5 by default); with fewer the create is still filed for review, MARKED for the reviewer, and never auto-applies. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status=\"proposed\" is SUCCESS — say it is awaiting review, do not retry.",
+      "description": "Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). Pass evidenceEntityIds: ≥5 existing entity ids that would belong to it; with fewer it is filed for review, marked. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status=\"proposed\" is SUCCESS — say it is awaiting review, do not retry.",
       "parameters": [
         {
           "name": "reasoning",
@@ -8671,7 +8671,7 @@
           "name": "evidenceEntityIds",
           "type": "array<string>",
           "required": false,
-          "description": "For agents: existing, visible entity ids that would belong to this project (its gravity; the pod's evidence count, 5 by default). Fewer ⇒ filed for review, marked, never auto-applied: store it as an entity or reuse an existing project instead when it is not a commitment."
+          "description": "For agents: ≥5 existing, visible entity ids that would belong to this project (its gravity). Fewer ⇒ filed for review, marked; or store it as an entity, or reuse a project."
         },
         {
           "name": "usedWorkspaceIds",
@@ -8714,7 +8714,7 @@
           "evidenceEntityIds": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "For agents: existing, visible entity ids that would belong to this project (its gravity; the pod's evidence count, 5 by default). Fewer ⇒ filed for review, marked, never auto-applied: store it as an entity or reuse an existing project instead when it is not a commitment."
+            "description": "For agents: ≥5 existing, visible entity ids that would belong to this project (its gravity). Fewer ⇒ filed for review, marked; or store it as an entity, or reuse a project."
           },
           "usedWorkspaceIds": {
             "type": "array",

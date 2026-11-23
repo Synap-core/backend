@@ -1584,11 +1584,13 @@ export interface NeedsYouAccessRequest {
 	 * `capability`: one of the person's OWN tool connections broke (every
 	 * connection of that tool needs a sign-in again, `secrets.connection_state
 	 * = 'needs_reauth'`); the ask is to reconnect it, read for its person.
+	 * `automation` / `playbook`: something a recent approval of the person's
+	 * landed whose next step is theirs alone (turn it on, enable what it uses).
 	 */
-	subject: "api_key" | "application" | "capability" | "issuer";
-	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name). */
+	subject: "api_key" | "application" | "automation" | "capability" | "issuer" | "playbook";
+	/** The asker's display name (the issuer's host, the app's name; a key's requested name; the broken tool's name; the landed object's name). */
 	name: string;
-	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection. */
+	/** Where it asks from: the issuer URL, the app's requested origin, the computer asking for a key; "" for a broken connection or a landed object. */
 	from: string;
 }
 /**
@@ -11836,12 +11838,12 @@ export interface CompositeCreateDocumentOp {
 export interface PlanProjectEvidence {
 	/** In-plan entity refs + existing, caller-visible evidence entities. */
 	counted: number;
-	/** The agent floor a direct `projects.create` enforces. */
+	/** The pod's evidence count (`governance.project_evidence_min`, 5 by default). */
 	minimum: number;
 	/**
-	 * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
-	 * visible to the reviewer with this marker, and an agent-mode plan carrying
-	 * it can never auto-apply.
+	 * True when `counted < minimum`. NOT a refusal, in a plan or on a direct
+	 * `projects.create`: the step stays visible to the reviewer with this
+	 * marker, and an agent's create carrying it can never auto-apply.
 	 */
 	belowAgentFloor: boolean;
 }
@@ -30092,6 +30094,20 @@ export interface BrokenConnectionSignalInput {
 	/** When it broke: the newest auth failure, else the connection's last change. */
 	brokenAt: Date;
 }
+/**
+ * An object a recent approval landed whose next step only the person takes,
+ * as `listLandedNeedsPerson` reads it (`landed-needs.ts`).
+ */
+export interface LandedNeedSignalInput {
+	kind: "automation" | "playbook";
+	id: string;
+	/** The object's own name; "" when it has none. */
+	name: string;
+	/** Its next step (`objectNextOf`): turn it on, or enable what it uses. */
+	action: "enable" | "turn_on";
+	/** When the approval that landed it was applied. */
+	landedAt: Date;
+}
 /** An open invite to another space, as `listOpenSpaceInvites` reads it. */
 export interface SpaceInviteSignalInput {
 	id: string;
@@ -30160,7 +30176,7 @@ export interface ReviewSessionRow {
 	trackId: string | null;
 }
 /** A sub-read's name — what `unreadable` reports. */
-export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
+export type SignalSubRead = "activity" | "app-requests" | "broken-connections" | "captures" | "convertible-goals" | "drafts" | "events" | "invites" | "issuers" | "key-requests" | "landed-needs" | "liveness" | "notifications" | "outputs" | "owed" | "permission" | "proposals" | "review";
 /** One class of the lens page. */
 export interface LensClassWire {
 	/** The first `cap` rows, in the class's own order. */
@@ -45363,6 +45379,20 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 			};
 		}>;
+		podFloorDefaults: import("@trpc/server").TRPCQueryProcedure<{
+			input: void;
+			meta: object;
+			output: {
+				canManage: boolean;
+				families: {
+					actions: readonly string[];
+					enabled: boolean;
+					pattern: "@agent-builds-structure" | "@agent-defines-kinds";
+					ruleId: string | null;
+				}[];
+				settings: Record<"governance.own_work_fresh_hours" | "governance.project_evidence_min", number>;
+			};
+		}>;
 		proposeNextRung: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
 				itemRef: {
@@ -45508,6 +45538,84 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			};
 			meta: object;
 			output: ReversibleDefaultState;
+		}>;
+		setPodFloorDefault: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				enabled: boolean;
+				pattern: "@agent-builds-structure" | "@agent-defines-kinds";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+			};
+			meta: object;
+			output: ReversibleDefaultState;
+		}>;
+		setPodSetting: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				key: "governance.own_work_fresh_hours" | "governance.project_evidence_min";
+				presence?: {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				} | undefined;
+				value: number;
+			};
+			meta: object;
+			output: {
+				value: number;
+			};
 		}>;
 		setReversibleDefault: import("@trpc/server").TRPCMutationProcedure<{
 			input: {
@@ -59312,6 +59420,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						connections: BrokenConnectionSignalInput[];
 						issuers: PendingIssuerSignalInput[];
 						keys: PendingKeyRequestSignalInput[];
+						landed: LandedNeedSignalInput[];
 					};
 					accessRequestsTruncated: boolean;
 					allNotifications: (NotificationSignalInput & {
