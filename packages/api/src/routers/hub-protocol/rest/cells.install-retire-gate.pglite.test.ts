@@ -395,6 +395,10 @@ describe("POST /cells/install — an agent's install is a proposal", () => {
   beforeAll(() => {
     process.env.CONTROL_PLANE_URL = "https://cp.example.test";
     vi.stubGlobal("fetch", async (url: string) => {
+      // Only the marketplace counts: the realtime bridge posts here too.
+      if (!String(url).startsWith("https://cp.example.test/")) {
+        return new Response("{}", { status: 200 });
+      }
       h.fetches.push(String(url));
       return new Response(
         JSON.stringify({
