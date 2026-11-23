@@ -25857,6 +25857,65 @@ export type ProposeRetireResult = {
 	reasons: string[];
 	status: "refused";
 };
+/**
+ * What a frame is ABOUT, and the brand it draws in (frame contract v3).
+ *
+ * Every frame that runs stored code (a stored HTML page, a module cell, a
+ * renderer bundle cell) sits on something: an entity, a project, a session.
+ * The host knows that anchor, the space and project it belongs to, the goal
+ * a session serves, and the project's brand; the frame asks for them with one
+ * call:
+ *
+ *   window.synap.context() → Promise<SurfaceContext>
+ *
+ * which posts `synap:context` and resolves with the matching
+ * `synap:context:result` (`sdk.ts`). A module frame also receives the same
+ * fields in its `synap:init` context (`CellFrameInitContext`,
+ * `surfaceContextInitFields`).
+ *
+ * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
+ * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
+ * projection) with `brandFrameCss`, and written AFTER the host's tokens
+ * (`frameTokensWithBrand`), so a name the brand does not set keeps the
+ * host's value. No brand (no project, or a project with no token set) is
+ * `brand: null`, never a failure.
+ *
+ * Pure, like the rest of this leaf: no DOM, no fetch.
+ */
+/**
+ * The object a frame is anchored to. Structurally the same as
+ * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
+ * workspace, project, track, playbook, session); a host that renders a
+ * document or a view with no other anchor names that body itself
+ * (`document`, `view`).
+ */
+export interface SurfaceContextAnchor {
+	kind: string;
+	id: string;
+}
+/** The project's brand, as CSS the host writes after its own tokens. */
+export interface SurfaceContextBrand {
+	/** The brand identity's id (the record the brand door chose). */
+	id: string;
+	/** The brand token set's hash: a new one means new values. */
+	hash: string;
+	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
+	css: string;
+}
+/** Everything a frame may know about where it is (frame contract v3). */
+export interface SurfaceContext {
+	anchor: SurfaceContextAnchor | null;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The goal (track) the anchor serves, when it serves one. */
+	goalId: string | null;
+	/** The host's filters on what the frame shows (a bound view's), JSON only. */
+	filters: Record<string, unknown>;
+	brand: SurfaceContextBrand | null;
+	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
+	locale: string;
+	theme: "dark" | "light";
+}
 /** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
 export type RendererBindingStore = "profile" | "view" | "workspace";
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
@@ -60782,6 +60841,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		context: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				kind: "document" | "entity" | "playbook" | "profile" | "project" | "session" | "track" | "view" | "workspace";
+				locale?: string | undefined;
+				projectId?: string | undefined;
+				theme?: "dark" | "light" | undefined;
+			};
+			meta: object;
+			output: SurfaceContext;
+		}>;
+	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cellKey?: string | undefined;

@@ -22,7 +22,7 @@ import {
  */
 const RECORDED_SHAPES: Record<number, string> = {
   2: "8e24b5185ac8d9d03739fc7af589ec8801e6f9da758a4125a7fd1c2dcb87b70b",
-  3: "RECORD_ME",
+  3: "bb0cb24f896deb40614855a370d227a32114bfd2b2690a0a90ba4af2ea6f75c4",
 };
 
 describe("the frame contract's version", () => {
