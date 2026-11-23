@@ -992,12 +992,12 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
     }
   });
 
-  it("actor without its workspace membership ⇒ refused (no join-proposal spam)", async () => {
+  it("an actor whose owner left the space ⇒ refused (it holds no seat of its own)", async () => {
     const out = await withActor(
       `update workspace_members set workspace_id=$2 where user_id=$1`,
-      [actorId, randomUUID()],
+      [A, randomUUID()],
       `update workspace_members set workspace_id=$2 where user_id=$1`,
-      [actorId, W]
+      [A, W]
     );
     expect(out).toBe("actor_refused");
   });
