@@ -91,6 +91,83 @@ describe("sessionCriterionSchema", () => {
   });
 });
 
+// P8 (pathways): a KPI the pod measures rides on a capability criterion.
+describe("sessionCriterionSchema — check.params (measure.check)", () => {
+  const measured = {
+    key: "ten-meetings",
+    statement: "Ten meetings are logged",
+    check: {
+      kind: "capability",
+      capability: "measure.check",
+      params: {
+        op: "entities.list",
+        params: { profileSlug: "meeting" },
+        threshold: 10,
+        comparator: "gte",
+      },
+    },
+  };
+
+  it("keeps a capability check's params, measure arguments included", () => {
+    const parsed = sessionCriterionSchema.safeParse(measured);
+    expect(parsed.success && parsed.data.check).toEqual(measured.check);
+    const other = sessionCriterionSchema.safeParse({
+      ...ok,
+      check: { kind: "capability", capability: "smoke.run", params: { n: 1 } },
+    });
+    expect(other.success && other.data.check.params).toEqual({ n: 1 });
+  });
+
+  it("refuses params on a check that runs no verb", () => {
+    expect(
+      sessionCriterionSchema.safeParse({
+        ...ok,
+        check: { kind: "judge", hint: "x", params: { n: 1 } },
+      }).success
+    ).toBe(false);
+  });
+
+  it("refuses a measure that would read something else, or nothing", () => {
+    const withMeasure = (params: unknown) =>
+      sessionCriterionSchema.safeParse({
+        ...measured,
+        check: { ...measured.check, params },
+      }).success;
+    // An op outside the measure ops, a param the op does not take, a
+    // misspelled comparator, no threshold, a board with no kind.
+    expect(withMeasure({ op: "entities.get", threshold: 1 })).toBe(false);
+    expect(
+      withMeasure({
+        op: "entities.list",
+        params: { profileslug: "meeting" },
+        threshold: 1,
+      })
+    ).toBe(false);
+    expect(
+      withMeasure({ op: "entities.list", threshold: 1, comparater: "lt" })
+    ).toBe(false);
+    expect(withMeasure({ op: "entities.list" })).toBe(false);
+    expect(withMeasure({ op: "lifecycle.board", threshold: 1 })).toBe(false);
+    expect(withMeasure(undefined)).toBe(false);
+    // The space is never a param: the run stamps it.
+    expect(
+      withMeasure({
+        op: "entities.list",
+        params: { workspaceId: "w" },
+        threshold: 1,
+      })
+    ).toBe(false);
+    expect(
+      withMeasure({
+        op: "lifecycle.board",
+        params: { profileSlug: "deal", column: "won" },
+        threshold: 3,
+        comparator: "gte",
+      })
+    ).toBe(true);
+  });
+});
+
 describe("sessionCriteriaSchema", () => {
   it("refuses more than MAX_SESSION_CRITERIA", () => {
     const list = (n: number) =>
