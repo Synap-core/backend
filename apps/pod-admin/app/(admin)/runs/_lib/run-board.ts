@@ -11,6 +11,8 @@
 
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
+import { statusMark } from "@synap-core/types/units";
+import { statusMarkPill } from "../../components/status-tone";
 import {
   formatRelative,
   isUuid,
@@ -87,16 +89,9 @@ export function flowHealthPill(
   status: string | null,
   group: FlowHealthFacts | null | undefined
 ): { kind: StatusKind; label: string } {
-  switch (status) {
-    case "error":
-      return { kind: "down", label: "Stopped on error" };
-    case "paused":
-      return { kind: "unknown", label: "Paused" };
-    case "draft":
-      return { kind: "unknown", label: "Draft" };
-    case "archived":
-      return { kind: "unknown", label: "Archived" };
-  }
+  if (status === "error") return { kind: "down", label: "Stopped on error" };
+  const own = statusMark("automation", status);
+  if (own?.category && own.category !== "active") return statusMarkPill(own);
   if (!group) return { kind: "unknown", label: "Never ran" };
   if (group.latestStatus === "failed") {
     return { kind: "down", label: "Failed last run" };

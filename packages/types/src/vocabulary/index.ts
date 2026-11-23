@@ -1949,6 +1949,9 @@ const STATUS_LABEL_ROWS = {
   // operation COMPLETED and deliberately changed nothing (an acknowledged
   // no-op door, an idempotent re-apply that matched 0 rows). Not a failure.
   no_effect: "No change",
+  // A session closed with required work still open (`sessionClosedAs`
+  // not_done): it ended, it did not deliver.
+  not_done: "Not done",
   // A run or step whose effect a GOVERNANCE verdict refused
   // (`automation_runs.status`, `automation_step_runs.status`): a calm outcome,
   // not a failure; its unit state is `blocked` on a rule (`units/state.ts`).

@@ -294,6 +294,13 @@ describe("resolveRunUnitState — a run's status wears the unit mark", () => {
     expect(resolveRunUnitState("blocked_by_policy").state).toBe("blocked");
   });
 
+  it("a queued run has not started; a run nobody claimed is your turn", () => {
+    // Rules out "queued = working": nothing claimed it yet.
+    expect(resolveRunUnitState("queued").state).toBe("not_started");
+    // Rules out the unmeasured fallthrough: the person chooses its runner.
+    expect(resolveRunUnitState("blocked").state).toBe("needs_you");
+  });
+
   it("paused and the reaper's stale read PAUSED — never stopped, never unmeasured", () => {
     // Rules out "stale = cancelled" (the run feed's old reading) and the
     // unmeasured fallthrough a new `paused` feed word would otherwise get.

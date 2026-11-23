@@ -43,7 +43,7 @@ import { useConsoleLocale, useT } from "../../../../lib/i18n/locale-provider";
 import { ResourceRow } from "../../../(admin)/components/resource-row";
 import { SectionCard } from "../../../(admin)/components/section-card";
 import { StatusPill } from "../../../(admin)/components/status-pill";
-import { statusPillFor } from "../../../(admin)/components/status-tone";
+import { machinePill } from "../../../(admin)/components/status-tone";
 import { processSummary } from "../../../(admin)/processes/_lib/summary";
 import { CATALOGS } from "../../../(admin)/processes/_lib/copy";
 import {
@@ -722,7 +722,7 @@ function AutomationRow({
 }: {
   automation: ProcessRead["when"]["automations"][number];
 }) {
-  const pill = statusPillFor(automation.status);
+  const pill = machinePill("automation", automation.status);
   return (
     <div className="flex min-h-12 items-center justify-between gap-3 px-3 py-2">
       <Link
