@@ -31,7 +31,7 @@
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
  */
-import { and, eq, inArray, or, type SQL } from "@synap/database";
+import { and, eq, or, type SQL } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";
@@ -45,56 +45,47 @@ export interface SkillVisibilityOptions {
    */
   includeExpired?: boolean;
   /**
-   * A second owner whose user-scope skills are visible too: the agent that
-   * authored an automation, whose run resolves skills as its owner (the
-   * person). Without it a skill the agent made for itself fails mid-run.
+   * The pod-wide lens: every workspace skill of every space the user can see
+   * (with no workspace and no `allSpaces`, workspace skills are left out). A
+   * pod-wide reader (the shadow detector, diagnose by id) needs it.
    */
-  alsoUserId?: string | null;
+  allSpaces?: boolean;
 }
 
+/**
+ * A user-scope skill is visible to its owner and to the agent that wrote it:
+ * an agent acting as itself (a key that acts for nobody) keeps the skills its
+ * person now owns.
+ */
+function ownUserSkillWhere(userId: string): SQL {
+  return and(
+    eq(skills.scope, "user"),
+    or(eq(skills.userId, userId), eq(skills.agentUserId, userId))
+  )!;
+}
+
+/**
+ * Pod skills, the user's own, and workspace skills: of the selected workspace,
+ * or of every space the user can see (`allSpaces`).
+ */
 export function visibleSkillsWhere(
   userId: string,
   workspaceId?: string,
   options?: SkillVisibilityOptions
 ): SQL {
-  const own = options?.alsoUserId
-    ? inArray(skills.userId, [userId, options.alsoUserId])
-    : eq(skills.userId, userId);
-  const tiers = !workspaceId
-    ? or(eq(skills.scope, "pod"), and(eq(skills.scope, "user"), own))!
-    : or(
-        eq(skills.scope, "pod"),
-        and(eq(skills.scope, "user"), own),
-        and(
-          eq(skills.scope, "workspace"),
+  const inSpace = options?.allSpaces
+    ? userVisibleWhere(skills.workspaceId, userId)
+    : workspaceId
+      ? and(
           eq(skills.workspaceId, workspaceId),
           userVisibleWhere(skills.workspaceId, userId)
         )
-      )!;
-
-  return options?.includeExpired ? tiers : and(tiers, ruleNotExpiredWhere())!;
-}
-
-/**
- * Every skill the user can see in ANY workspace they can see — the pod-wide
- * lens. `visibleSkillsWhere(userId)` without a workspace is NOT this: its
- * workspace tier needs a selected workspace, so it drops every
- * `scope:"workspace"` skill. A pod-wide reader (the shadow detector, diagnose
- * by id) that used it was blind to them — five stale workspace-scoped
- * `ingest_message` copies stayed invisible and their Discord tools could never
- * be removed (2026-09-25).
- */
-export function visibleSkillsAnyWorkspaceWhere(
-  userId: string,
-  options?: SkillVisibilityOptions
-): SQL {
+      : undefined;
   const tiers = or(
     eq(skills.scope, "pod"),
-    and(eq(skills.scope, "user"), eq(skills.userId, userId)),
-    and(
-      eq(skills.scope, "workspace"),
-      userVisibleWhere(skills.workspaceId, userId)
-    )
+    ownUserSkillWhere(userId),
+    inSpace ? and(eq(skills.scope, "workspace"), inSpace) : undefined
   )!;
+
   return options?.includeExpired ? tiers : and(tiers, ruleNotExpiredWhere())!;
 }

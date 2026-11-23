@@ -1250,9 +1250,10 @@ type AccountRow = {
  * The `serves` edges of the asked goals and sessions, both ways, each end
  * the reader may see (a session through THE session read rule, a goal
  * through the goal visibility rule); an end it may not see is left out,
- * never named. THROWS.
+ * never named. THROWS. Also the work graph's `serves` edges
+ * (`work-graph-nodes.ts`): one reader of the edge, never two.
  */
-async function readServes(
+export async function readServes(
   userId: string,
   ids: readonly string[]
 ): Promise<Map<string, StatusOfLinks>> {

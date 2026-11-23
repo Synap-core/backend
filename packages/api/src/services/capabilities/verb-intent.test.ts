@@ -160,7 +160,49 @@ describe("foldVerbsByIntent", () => {
     ]);
     const matches = index.get("send_message") ?? [];
     expect(matches).toHaveLength(1);
-    expect(matches[0]?.granted).toBe(true);
+    expect(matches[0]?.capabilityId).toBe("t2");
+  });
+
+  it("says whether the pod has a verb on and what a run meets, never a grant", () => {
+    const index = foldVerbsByIntent([
+      {
+        id: "s1",
+        name: "web.read",
+        kind: "skill",
+        governance: "auto",
+        enabled: true,
+        skillKind: "builtin",
+        verbs: [
+          {
+            id: "web.read",
+            label: "web.read",
+            kind: "read",
+            intent: "search_web",
+            granted: false,
+            govDefault: "propose",
+            effectiveExecMode: "propose",
+            declaredReadOnly: true,
+            backingSkillExecutable: true,
+          },
+        ],
+      } as unknown as RegistryCapability,
+      cap(
+        "t1",
+        "apify",
+        [
+          {
+            id: "apify_run",
+            intent: "send_message",
+            blocked: "not_enabled",
+          } as never,
+        ],
+        { enabled: true }
+      ),
+    ]);
+    const read = index.get("search_web")?.[0];
+    expect(read).toMatchObject({ enabled: true, runPosture: "auto" });
+    expect(read).not.toHaveProperty("granted");
+    expect(index.get("send_message")?.[0]?.enabled).toBe(false);
   });
 });
 

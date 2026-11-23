@@ -21,6 +21,7 @@ import { ProfileScope } from "../schema/profiles.js";
 /** The fields the precedence rule reads — a full `Profile` satisfies it. */
 export interface SlugPrecedenceRow {
   scope: string;
+  workspaceId?: string | null;
   profileKind?: string | null;
   entityScope?: string | null;
   createdAt: Date;
@@ -38,7 +39,9 @@ export type SlugLens = "workspace" | "pod";
  * Rank a candidate row for a slug lookup. LOWER wins; `createdAt` ASC breaks
  * ties (see {@link compareForSlug}).
  *
- * Workspace lens: workspace > shared > system (unchanged).
+ * Workspace lens: the lens's own row > the caller's user row > shared >
+ * system > a pod-wide kind homed in another space (it resolves everywhere, but
+ * never over a row of the lens).
  *
  * Pod lens (no workspace):
  *  - `user` first, for kinds AND roles. A user-scope row is the caller's own
@@ -65,12 +68,20 @@ export type SlugLens = "workspace" | "pod";
  */
 export function slugPrecedenceRank(
   row: SlugPrecedenceRow,
-  lens: SlugLens
+  lens: SlugLens,
+  lensWorkspaceId?: string
 ): number {
   if (lens === "workspace") {
-    if (row.scope === ProfileScope.WORKSPACE) return 0;
-    if (row.scope === ProfileScope.SHARED) return 1;
-    return 2;
+    if (row.scope === ProfileScope.WORKSPACE) {
+      return lensWorkspaceId === undefined ||
+        row.workspaceId === undefined ||
+        row.workspaceId === lensWorkspaceId
+        ? 0
+        : 4;
+    }
+    if (row.scope === ProfileScope.USER) return 1;
+    if (row.scope === ProfileScope.SHARED) return 2;
+    return 3;
   }
   if (row.scope === ProfileScope.USER) return 0;
   const isRole = row.profileKind === "role";
@@ -84,10 +95,12 @@ export function slugPrecedenceRank(
 
 /** Sort comparator: precedence, then oldest first. */
 export function compareForSlug(
-  lens: SlugLens
+  lens: SlugLens,
+  lensWorkspaceId?: string
 ): (a: SlugPrecedenceRow, b: SlugPrecedenceRow) => number {
   return (a, b) =>
-    slugPrecedenceRank(a, lens) - slugPrecedenceRank(b, lens) ||
+    slugPrecedenceRank(a, lens, lensWorkspaceId) -
+      slugPrecedenceRank(b, lens, lensWorkspaceId) ||
     a.createdAt.getTime() - b.createdAt.getTime();
 }
 

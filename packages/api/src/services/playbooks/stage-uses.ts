@@ -32,6 +32,7 @@ import {
   inArray,
   playbooks,
   playbookVersions,
+  usableInSpace,
 } from "@synap/database";
 import { loadPlaybookVersion } from "./playbook-versions.js";
 
@@ -230,7 +231,7 @@ export async function resolveStageUses<S extends StageWithUses>(input: {
         `${at} uses playbook ${uses.playbookId}, which ${used ? "is archived" : "does not exist"}. Use a playbook id from synap_list_playbooks.`
       );
     }
-    if (used.workspaceId !== null && used.workspaceId !== input.workspaceId) {
+    if (!usableInSpace(used, input.workspaceId)) {
       refuse(
         input.workspaceId === null
           ? `${at} uses "${used.name}", which lives in one space; a pod-wide playbook runs in any space, so it can only use pod-wide playbooks.`

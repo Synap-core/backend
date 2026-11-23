@@ -8,7 +8,8 @@
  * the template-rule applier and the capture "Always propose this" chip use), so
  * an activator is governed exactly like every other installed rule: an agent
  * caller files a proposal, a human/installer caller creates directly, and an
- * agent-authored rule's automation lands `draft` (the rule door's own floor).
+ * agent-authored rule's automation no person approved is born `draft`
+ * (`automationStatusAtCreate`).
  * No new runtime engine: the compiled automation is an ordinary
  * `entity.create|update` → `playbook_run` rule the matcher already fires.
  *

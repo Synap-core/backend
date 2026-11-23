@@ -41,6 +41,7 @@ export * from "./types/index.js";
 export {
   A2AI_TRIGGER_QUEUE,
   A2AI_TRIGGER_JOB_OPTIONS,
+  a2aiTurnPendingIn,
   type A2AIResponseTriggerData,
 } from "./workers/a2ai-response-trigger.js";
 

@@ -56,6 +56,8 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  usableInSpace,
+  notUsableInSpaceReason,
   focusSessions,
   playbooks,
   playbookRuns,
@@ -67,6 +69,8 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   listHolds,
+  ownerAndActor,
+  starterHolder,
   setRunStatus,
 } from "@synap/database";
 import type { FocusSession } from "@synap/database";
@@ -342,17 +346,12 @@ export async function followPlaybook(
       reason: `No playbook ${followPlaybookId} you can access.`,
     };
   }
-  // The write-side IDOR floor `resolveRunnablePlaybook` applies, stated here
-  // rather than borrowed: a workspace-scoped playbook may not be bound to a
-  // session living in a different workspace.
-  if (
-    playbook.workspaceId &&
-    session.workspaceId &&
-    playbook.workspaceId !== session.workspaceId
-  ) {
+  // The run door's rule: a session in a space follows only a playbook usable
+  // there. A session in no space is not checked (it runs nowhere yet).
+  if (session.workspaceId && !usableInSpace(playbook, session.workspaceId)) {
     return {
       status: "refused",
-      reason: `Playbook ${playbook.id} belongs to another workspace than this session.`,
+      reason: notUsableInSpaceReason("Playbook", playbook, session.workspaceId),
     };
   }
 
@@ -556,8 +555,9 @@ export async function followPlaybook(
         .where(eq(focusSessions.id, sessionId))
         .returning();
 
-      // The ledger row, WITH the definition pinned. Same five snapshot fields
-      // `create-session.ts` writes — a run executes what it started with.
+      // The ledger row, WITH the definition pinned: a run executes what it
+      // started with. The live session's worker holds it, working already.
+      const owner = await ownerAndActor(tx, userId, agentUserId);
       const [run] = await tx
         .insert(playbookRuns)
         .values({
@@ -566,12 +566,10 @@ export async function followPlaybook(
           sessionId,
           executor: playbook.executor,
           status: "running",
-          createdBy: agentUserId ?? userId,
-          // THE helper, not a seventh hand-written field list
-          // (`run-playbook.ts`). `create-session.ts` still inlines FIVE of its
-          // six fields — it omits `criteria` — which is exactly the drift a
-          // second copy produces; routing that call site through this helper
-          // belongs to whoever next touches it.
+          holder: starterHolder(userId, agentUserId),
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
+          // THE helper, not a hand-written field list (`run-playbook.ts`).
           definitionSnapshot: buildDefinitionSnapshot(playbook),
         })
         .returning({ id: playbookRuns.id });

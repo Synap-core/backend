@@ -135,6 +135,8 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
+A **one-off long plan** (lived once: steps that wait on each other, choices on the way) is not a noun either: it is a root session, child sessions linked by `blocked_by`, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
+
 How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
@@ -371,6 +373,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
 | **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
+| **one-off plan** | a long plan lived once: steps that wait on each other, choices on the way ("fund the company to seed") | §2d: ONE `synap_capture`, a root session and one child session per step (`blockedByRefs`), choices as `decision` entities. Repeated work is a playbook; a lasting aim is a goal. |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -479,6 +482,33 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 **A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
 **Legacy only: goals with steps.** Goals have no stages. A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
+
+### 2d. A one-off long plan
+
+Use this when the person wants a plan they will live once: many steps, some that wait on others, choices to make on the way, an end state. "Lay out how we fund the company to seed." "Plan the move to the new office."
+
+Tell it apart first. Ask yourself: "If we did this again next month, would the steps be the same, with other names?"
+
+| The work                                            | It is                                          |
+| --------------------------------------------------- | ---------------------------------------------- |
+| the same steps each time, with a new subject        | a playbook: a template that sessions follow    |
+| one bounded piece of work                           | a session                                      |
+| a lasting aim, closed with a verdict                | a goal (§2c); the plan's steps may serve it    |
+| lived once, long, with dependent steps and choices  | a one-off long plan: this section              |
+
+Never write a playbook for work nobody will repeat. Never make each step a goal.
+
+**Lay it out in ONE `synap_capture`**, so the person reviews one plan, not a pile of cards:
+
+- `sessions[]`: one root session for the whole plan, and one child session per step (`parentRef` = the root). A step that cannot start before others lists ALL of them in `blockedByRefs`. Give each step 2 to 5 `criteria` and its `expectedOutputs`. A step about a thing (an investor, a deal, a contract) names it: `subjectEntityId`, or `subjectRef` for a thing created in the same call.
+- `entities[]`: each choice the person must make is a `decision` with `decisionStatus: "proposed"`, its `decisionOptions` and one `recommendedOption` (fields: `writes`). A proposed decision that an agent wrote asks the person by itself: it becomes an ask they owe (wait kind `decide`). The `decisions` number in needs-you counts pending proposals, not these asks.
+- The sessions and their links ARE the plan. A document may explain it; never put a step only in prose.
+
+**How a step waits.** `blocked_by` clears when the step it waits on is delivered. A blocker that ends cancelled or failed does not clear: the step holds until you re-plan it with `synap_update_session` (`removeBlockedBySessionIds`, plus `addBlockedBySessionIds` for a retry).
+
+**Declare the person's part only when a step can start.** In the 21 Nov 2026 test, a step a year away topped the person's needs-you because it declared, at plan time, an output owed by the person (`owner: "human"`, "Term sheet"). So: declare person-owed outputs and asks on a step only when it can start. On later steps, keep outputs agent-owned or leave them undeclared; add the person's part with `synap_update_session` `outcomes` when the step's blockers are delivered.
+
+Example, "fund the company to seed": a root session "Fund to seed"; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both), "Negotiate the term sheet" (waits on the meetings); one decision "Raise from angels or a fund". Today the person owes only that decision; no later step declares an output owed by the person. The full call: `multi-entity-capture`, second plan example.
 
 ### 3. Which skill to load next
 
@@ -1660,6 +1690,37 @@ directive swallows what follows). Keep the finding itself in the prose AFTER the
 embed; the fallback is a short, qualitative description of the object, not the
 place for numbers that go stale.
 
+### Asking the person: a `synap-ask` block, not a prose question
+
+When the document needs the person's decision or input, embed an ASK instead of writing the question in prose ("Which option do you prefer?" under "Open questions"). The block files a real question on YOUR focus session (start one first: `synap_start_session`) and the document keeps a live card the person answers in one tap, on the phone, in the app or in the browser. A prose question can only be answered by typing somewhere else.
+
+A definition is a ```json block FIRST in the directive (`ask` plus an optional `key` slug and `label`), then the question as the fallback prose that exports and old readers show. Shapes and every mode: `synap_load_skill("system/synap/asks")`.
+
+````
+:::synap-ask
+```json
+{"key":"ship-today","label":"Ship today?","ask":{"mode":"confirm","prompt":"Ship the change today?","yes":{"description":"Goes live at 9:00","recommended":true},"no":{"description":"Stays in review"}}}
+```
+
+Ship the change today?
+:::
+
+:::synap-ask
+```json
+{"key":"database","label":"Which database?","ask":{"mode":"choose","options":[{"label":"PostgreSQL","recommended":true,"description":"Already in the pod"},{"label":"SQLite","description":"One more thing to run"}]}}
+```
+
+Which database should the service use?
+:::
+````
+
+On write the pod rewrites each definition to its reference form (`sessionId` + `slot`); the answer comes back on your session like any ask (`synap_wait_for_answer`, or the session room).
+
+- **Use an ask** for one real decision or one missing fact that changes what happens next: a choice between options, a go/no-go, a value only the person has. Mark exactly ONE option `recommended` when you have a view.
+- **Do not**: write the question in prose; put many asks in one document (a handful of related questions is a form, one `mode:"form"` ask; more than that is a conversation, not a document); ask something whose answer changes nothing; ask what you can read in the pod (`synap_ask`) or decide by a stated default (name the default in the prose instead).
+- A document written WITHOUT a session of yours cannot file the question: the write is refused with the fix.
+- After a prose question under a "Questions" or "Decisions" heading with no ask block, the write receipt carries a one-line `nudge`; it is advisory and the write is kept.
+
 ### Charts: snapshot or live (decision D2)
 
 A `chart-*` cell draws its data one of two ways, chosen per embed:
@@ -2020,6 +2081,11 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 { "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\n…", "sessionRef": "s1" } ] }
 ```
 
+**PLAN EXAMPLE 2: a one-off long plan, with a root session, four steps that wait on each other and one decision** (when to use it: `from-intent` §2d). Each step lists ALL the steps it waits on in `blockedByRefs`. The decision is `proposed`, so the person is asked to choose. No step declares an output owed by the person: the term sheet is months away, and the person's part is added to a step only when it can start.
+```json
+{ "sessions": [ { "ref": "root", "title": "Fund to seed", "goal": "The seed round is closed and the money is in the bank" }, { "ref": "list", "title": "Build the investor list", "goal": "Forty investors who fit our stage, each with a ticket size", "parentRef": "root", "criteria": [ { "key": "forty-fit", "statement": "The list holds 40 investors, each with stage and ticket size", "check": { "kind": "evidence", "evidenceKey": "investor-list" } } ], "expectedOutputs": [ { "kind": "document", "label": "Investor list" } ] }, { "ref": "deck", "title": "Write the deck", "goal": "A deck ready to send", "parentRef": "root", "blockedByRefs": ["list"], "criteria": [ { "key": "deck-ready", "statement": "The deck covers problem, traction, team and the ask", "check": { "kind": "evidence", "evidenceKey": "deck" } } ], "expectedOutputs": [ { "kind": "document", "label": "Pitch deck" } ] }, { "ref": "meet", "title": "Run the first meetings", "goal": "Ten first meetings held and logged", "parentRef": "root", "blockedByRefs": ["list", "deck"], "criteria": [ { "key": "ten-meetings", "statement": "Ten meetings are logged, each with a next step", "check": { "kind": "evidence", "evidenceKey": "meeting-log" } } ], "expectedOutputs": [ { "kind": "document", "label": "Meeting log" } ] }, { "ref": "terms", "title": "Negotiate the term sheet", "goal": "One term sheet we can sign", "parentRef": "root", "blockedByRefs": ["meet"], "criteria": [ { "key": "terms-compared", "statement": "Every offer received is compared on valuation, amount and control", "check": { "kind": "evidence", "evidenceKey": "offer-table" } } ], "expectedOutputs": [ { "kind": "document", "label": "Offer comparison" } ] } ], "entities": [ { "ref": "route", "profileSlug": "decision", "title": "Raise from angels or a fund", "properties": { "decisionStatus": "proposed", "summary": "Angels close faster; a fund brings a lead and a bigger round.", "decisionOptions": [ { "label": "Angels", "value": "angels" }, { "label": "A fund", "value": "fund" } ], "recommendedOption": "angels" } } ] }
+```
+
 **EXAMPLE 1 — raw text**
 ```json
 { "text": "Met Ada Lovelace of Acme at the conference — she owns their data platform and wants a demo in March." }
@@ -2312,7 +2378,7 @@ A **focus session** is a named, multi-step work room where you and AI agents col
 
 **Declare your OUTCOMES** — a new session you start must declare at least one fact (or a deliverable with `verify`), or the start is refused (`NO_CRITERIA`); continuing an existing one needs none. `outcomes: [{ key?, label, kind, verify?, owner? }]` on `synap_start_session` / `synap_update_session` (Hub: the same field on `POST`/`PATCH /focus-sessions`). One list of what the work must yield, each one verifiable. Two kinds:
 
-- **A fact** (`kind: 'fact'`) — your definition of done, a binary, observable statement ("Typecheck passes with 0 errors"), checked by `verify` (`capability` → `judge` → `human`; default `judge`) through `synap_evaluate_session`. Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged.
+- **A fact** (`kind: 'fact'`) — your definition of done, a binary, observable statement ("Typecheck passes with 0 errors"), checked by `verify` (`capability` → `judge` → `human`; default `judge`) through `synap_evaluate_session`. A number the pod can count is measured, never typed: `verify: { kind: 'capability', capability: 'measure.check', params: { op, params, threshold, comparator } }`, op `entities.list` · `lifecycle.board` · `lifecycle.throughput` · `attention.count` (e.g. `{ op: 'lifecycle.board', params: { profileSlug: 'deal', column: 'won' }, threshold: 3 }`, comparator default `gte`). The pod reads it as the session owner and records the count as evidence. Two to five, not a checklist. **Propose them yourself and let the person validate or rewrite them**; they may equally be written by the person, but a session with none can only be reported on by opinion. Closing never blocks on them; unmet ones are flagged.
 - **A deliverable** (`kind: 'document'`, `'report'`, `'code'`, `'decision'`…). **Declare what the work will produce** — the documents, entities and decisions this session owes. That list is what makes "done" derivable instead of announced, and it is what the person's board shows as still outstanding. Give each a `key` (or one is derived from the label) and name it by that key from then on.
 
 **Criteria hang on outputs.** Declare the outputs first, then the checks on each one: a deliverable's `verify` beyond evidence (`judge`, `capability`, `human`) is stored as a criterion that names it (`outputKey`), and a criterion you write yourself names the output it checks with `outputKey: '<output key>'`. An output's checks all count: it is met when the person or a door delivers it, or when every one of its required checks passes, and the session shows the checks under it. A criterion that only SHARES an output's key does not check it; a criterion about how the work is done (`about: 'method'`, as the criteria a goal carries into its runs) names no output. Never repeat an output as a criterion of its own.
@@ -2879,7 +2945,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
    | one playbook's page           | `{ target: { kind: "playbook", id }, slot: "detail", cellKey }`                   | `detail`                              |
    | one view's page               | `{ target: { kind: "view", id }, slot: "detail", cellKey }`                       | `detail`                              |
 
-   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind it in the same breath). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
+   `scope`: `workspace` (default, needs `workspaceId`) = in that space only; `pod` = everywhere (for one object: its own page, the usual choice); `user` = only you (not for a capability). The cell must exist (yours from `synap_create_cell` may still be pending: bind the `typeKey` its reply returns, in the same breath; an accented name is folded, `Page cédant` -> `generated:page-cedant`). `clear: true` (no `cellKey`) unbinds the slot. An applied bind replies `nowBound`, what the page shows now; an agent's bind is a proposal.
 
 5. An agent's define lands as a proposal: `status: "proposed"` is success; pass on `reviewUrl`, never retry.
 
@@ -3394,21 +3460,21 @@ playbook, kind or automation an agent creates on a pod (`synap_create_playbook`,
 on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
 proposal; the review is the catalog commit.
 
-| Field                           | Where                          | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                  |
-| `stages[].subjectStatus`        | stage                          | The IN-PROGRESS status (In Draft, Review): entering the stage moves the subject to it, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                          |
-| `stages[].onApproved`           | stage                          | The RESULT status (Scripted, Published, sent, won): reached when the stage's work is APPROVED — its `expectedOutputs` all delivered, else the next stage's gate passing. The subject holding it means the run stands at the NEXT stage. With neither, nothing writes it: whoever finishes the stage moves the subject. Must be an **existing option**.                                                                                |
-| `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                |
-| `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                               |
-| `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                 |
-| `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                  |
-| Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`. |
-| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual`. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition.                          |
-| `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                 |
-| `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                  |
-| `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                   |
+| Field                           | Where                          | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `stages[].subjectStatus`        | stage                          | The IN-PROGRESS status (In Draft, Review): entering the stage moves the subject to it, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `stages[].onApproved`           | stage                          | The RESULT status (Scripted, Published, sent, won): reached when the stage's work is APPROVED — its `expectedOutputs` all delivered, else the next stage's gate passing. The subject holding it means the run stands at the NEXT stage. With neither, nothing writes it: whoever finishes the stage moves the subject. Must be an **existing option**.                                                                                                                                                                                                                                                              |
+| `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                                                                                                                                                                                              |
+| `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`.                                                                                                                                                                               |
+| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition. |
+| `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Human moments use an `ask` on an owed slot: `confirm` / `choose` (one `recommended`) / `form` / `act` / `provide`
 (connection, file or secret through the vault). Never ask for a secret in a form.
@@ -3486,19 +3552,19 @@ All three are optional: without them a playbook runs exactly as before.
   - `{ "role": "<agent role or preset key>", "computer"?: "<name or id>" }`;
   - `{ "engine": "<e.g. claude-code>", "computer"?: "<name or id>" }`;
   - on a stage only, `"self"`: the run's own agent (the default).
-  Example: render on the Mac, else the devbox:
-  `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
-  `null` clears a playbook's runner. A choice made when running it comes
-  first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
-  list is resolved then, and nobody it names → refused), then the playbook's
-  runner, then the person's remembered choice.
-  A stage's runner can be chosen too: for a whole run,
-  `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
-  working, `synap_update_session { currentStage, stageRunner }` for the stage
-  you enter (`"self"` = you do it; naming another agent asks the person
-  first). A step with another runner gives that agent a turn on the same
-  session; the reply's `stageRun` says who has it and whether it waits on
-  tools.
+    Example: render on the Mac, else the devbox:
+    `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
+    `null` clears a playbook's runner. A choice made when running it comes
+    first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+    list is resolved then, and nobody it names → refused), then the playbook's
+    runner, then the person's remembered choice.
+    A stage's runner can be chosen too: for a whole run,
+    `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+    working, `synap_update_session { currentStage, stageRunner }` for the stage
+    you enter (`"self"` = you do it; naming another agent asks the person
+    first). A step with another runner gives that agent a turn on the same
+    session; the reply's `stageRun` says who has it and whether it waits on
+    tools.
 - `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
   its own plus the playbook's. They are checked on the runner's computer
   before a step is handed over.
@@ -3517,8 +3583,8 @@ All three are optional: without them a playbook runs exactly as before.
   `post_in_room`, long runs); the pod closes its session when the turn ends
   and raises a stage's `endAsk`.
 - `uses` (a stage): `{ "playbookId": "<id>", "version"?: n, "with"?: { "<its
-  param>": "<this run's param or subject path>" }, "outputs"?: { "<this
-  stage's slot label>": "<its output label>" } }`. Omit `version` to pin
+param>": "<this run's param or subject path>" }, "outputs"?: { "<this
+stage's slot label>": "<its output label>" } }`. Omit `version` to pin
   the playbook's current one: the pin holds when that playbook changes. The
   used playbook must be in the same space or pod-wide; a chain of steps that
   are playbooks has no loop and is at most 3 deep.

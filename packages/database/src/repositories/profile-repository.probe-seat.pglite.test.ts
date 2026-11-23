@@ -85,7 +85,7 @@ beforeAll(async () => {
   await pg.exec(ddlFor(profiles as unknown as PgTable));
   await pg.exec(ddlFor(entities as unknown as PgTable));
   // `getBySlugForWorkspace` left-joins the shared-profile access table.
-  await pg.exec(ddlFor(schema.profileWorkspaceAccess as unknown as PgTable));
+  await pg.exec(ddlFor(schema.spaceAccess as unknown as PgTable));
   // The partial unique indexes the seat logic mirrors (baseline 419-429).
   await pg.exec(`
     create unique index profiles_slug_system_shared_uniq on profiles (slug) where scope in ('system','shared');

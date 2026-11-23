@@ -965,7 +965,14 @@ export type StartTrackResult = (
       /** `null` for a stage-less track started with no method. */
       playbook: { id: string; name: string; version: number } | null;
     }
-  | ProposedOutcome
+  | (ProposedOutcome & {
+      /**
+       * The id the goal WILL have once the person approves: minted before the
+       * proposal is filed and replayed by its approval (`id` above). Not a
+       * goal yet: no door accepts it as a `trackId` until it is approved.
+       */
+      pendingTrackId: string;
+    })
 ) & {
   /**
    * Stage domains (workspace template slugs) with no live workspace the
@@ -1224,6 +1231,9 @@ export async function startTrack(
           objectName: trackName,
         }) + " — proposed for review"
       ),
+      // The id the proposal was filed under, so the caller can wait on the
+      // approval and name the goal afterwards.
+      pendingTrackId: trackId,
       missingDomains,
     };
   }

@@ -31,11 +31,15 @@ describe("sessionCriterionSchema", () => {
     }
   });
 
-  it("refuses an evidence check with no evidenceKey, a capability check with no verb", () => {
-    expect(
-      sessionCriterionSchema.safeParse({ ...ok, check: { kind: "evidence" } })
-        .success
-    ).toBe(false);
+  it("posts an evidence check with no evidenceKey under the criterion's key; refuses a capability check with no verb", () => {
+    const parsed = sessionCriterionSchema.safeParse({
+      ...ok,
+      check: { kind: "evidence" },
+    });
+    expect(parsed.success && parsed.data.check).toEqual({
+      kind: "evidence",
+      evidenceKey: ok.key,
+    });
     expect(
       sessionCriterionSchema.safeParse({ ...ok, check: { kind: "capability" } })
         .success
@@ -84,6 +88,83 @@ describe("sessionCriterionSchema", () => {
     expect(
       sessionCriterionSchema.safeParse({ ...ok, key: "Has Spaces" }).success
     ).toBe(false);
+  });
+});
+
+// P8 (pathways): a KPI the pod measures rides on a capability criterion.
+describe("sessionCriterionSchema — check.params (measure.check)", () => {
+  const measured = {
+    key: "ten-meetings",
+    statement: "Ten meetings are logged",
+    check: {
+      kind: "capability",
+      capability: "measure.check",
+      params: {
+        op: "entities.list",
+        params: { profileSlug: "meeting" },
+        threshold: 10,
+        comparator: "gte",
+      },
+    },
+  };
+
+  it("keeps a capability check's params, measure arguments included", () => {
+    const parsed = sessionCriterionSchema.safeParse(measured);
+    expect(parsed.success && parsed.data.check).toEqual(measured.check);
+    const other = sessionCriterionSchema.safeParse({
+      ...ok,
+      check: { kind: "capability", capability: "smoke.run", params: { n: 1 } },
+    });
+    expect(other.success && other.data.check.params).toEqual({ n: 1 });
+  });
+
+  it("refuses params on a check that runs no verb", () => {
+    expect(
+      sessionCriterionSchema.safeParse({
+        ...ok,
+        check: { kind: "judge", hint: "x", params: { n: 1 } },
+      }).success
+    ).toBe(false);
+  });
+
+  it("refuses a measure that would read something else, or nothing", () => {
+    const withMeasure = (params: unknown) =>
+      sessionCriterionSchema.safeParse({
+        ...measured,
+        check: { ...measured.check, params },
+      }).success;
+    // An op outside the measure ops, a param the op does not take, a
+    // misspelled comparator, no threshold, a board with no kind.
+    expect(withMeasure({ op: "entities.get", threshold: 1 })).toBe(false);
+    expect(
+      withMeasure({
+        op: "entities.list",
+        params: { profileslug: "meeting" },
+        threshold: 1,
+      })
+    ).toBe(false);
+    expect(
+      withMeasure({ op: "entities.list", threshold: 1, comparater: "lt" })
+    ).toBe(false);
+    expect(withMeasure({ op: "entities.list" })).toBe(false);
+    expect(withMeasure({ op: "lifecycle.board", threshold: 1 })).toBe(false);
+    expect(withMeasure(undefined)).toBe(false);
+    // The space is never a param: the run stamps it.
+    expect(
+      withMeasure({
+        op: "entities.list",
+        params: { workspaceId: "w" },
+        threshold: 1,
+      })
+    ).toBe(false);
+    expect(
+      withMeasure({
+        op: "lifecycle.board",
+        params: { profileSlug: "deal", column: "won" },
+        threshold: 3,
+        comparator: "gte",
+      })
+    ).toBe(true);
   });
 });
 

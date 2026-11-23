@@ -21,7 +21,7 @@
  *      site that forgets to wire cannot re-open the fork silently.
  *
  * Each caller routes to its EXISTING canonical door — `insertSkillGoverned`,
- * `materializeApprovedAutomation`, `createRuleGoverned`. They are lazily
+ * `materializeAutomationForPrincipal`, `createRuleGoverned`. They are lazily
  * imported so this module keeps no static edge to the skills / automations
  * routers (both import back into proposals).
  */
@@ -40,10 +40,10 @@ import type {
 } from "./materialize-composite.js";
 import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
-import type { materializeApprovedAutomation } from "../routers/automations.js";
+import type { materializeAutomationForPrincipal } from "../routers/automations.js";
 
 type AutomationDatabase = Parameters<
-  typeof materializeApprovedAutomation
+  typeof materializeAutomationForPrincipal
 >[0]["database"];
 
 export interface RuleLoopCallerContext {
@@ -63,11 +63,12 @@ export interface RuleLoopCallerContext {
   /** Audit provenance, e.g. "rule_loop_approval" / "rule_loop_capture". */
   auditSource: string;
   /**
-   * Who AUTHORED the batch's skills, and whether a person approved it. The
-   * writes above run as `userId` with no agent, so the born-approved rule
-   * (`skillBornApproved`) must be told the real author: an agent's skill in a
-   * batch that auto-applied (a governance rule, its own space) is born
-   * unapproved, exactly as the direct `skills.create` door leaves it. Required,
+   * Who AUTHORED the batch's skills and automations, and whether a person
+   * approved it. The writes above run as `userId` with no agent, so the
+   * born-approved rule (`skillBornApproved`) and the automation status
+   * (`automationStatusAtCreate`) must be told the real author: an agent's
+   * skill or automation in a batch that auto-applied (a governance rule, its
+   * own space) is born off, exactly as the direct doors leave it. Required,
    * so no call site can forget it: an absent author read as "a trusted human"
    * was the bypass.
    */
@@ -272,24 +273,17 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
 
     automationCaller: {
       create: async (automationOp) => {
-        const { materializeApprovedAutomation } =
+        const { materializeAutomationForPrincipal } =
           await import("../routers/automations.js");
-        // `materializeApprovedAutomation` runs
-        // `prepareAutomationForMaterialization` — the ONE existing flow
-        // validator (services/automations/validate-flow.ts). An invalid
-        // flowDefinition throws here.
-        //
-        // The `status: "draft"` stated below IS the "materialize DISABLED"
-        // guarantee: `automations.status` (not an `enabled` column) decides
-        // whether a trigger can fire. `materializeApprovedAutomation` keeps a
-        // STATED status (it no longer forces draft), so this call must state it.
+        // The op carries its trigger config INSIDE the flow
+        // (`flowDefinition.triggerConfig`). The preflight
+        // (`validatePlanOperations`) refuses an EVENT automation without
+        // `triggerConfig.eventPattern`, so `{}` here is only ever a cron /
+        // webhook / manual trigger that needs none.
         const flow = automationOp.flowDefinition as {
-          nodes?: unknown;
-          edges?: unknown;
           triggerConfig?: Record<string, unknown>;
         } | null;
-        const stableId = randomUUID();
-        const created = await materializeApprovedAutomation({
+        const created = await materializeAutomationForPrincipal({
           database,
           definition: {
             workspaceId,
@@ -298,21 +292,25 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
               ? { description: automationOp.description }
               : {}),
             triggerType: automationOp.triggerType,
-            // The op carries its trigger config INSIDE the flow
-            // (`flowDefinition.triggerConfig`). The preflight
-            // (`validatePlanOperations`) refuses an EVENT automation without
-            // `triggerConfig.eventPattern`, so `{}` here is only ever a
-            // cron / webhook / manual trigger that needs none.
             triggerConfig: flow?.triggerConfig ?? {},
             flowDefinition: automationOp.flowDefinition as {
               nodes: Array<Record<string, unknown>>;
               edges: Array<Record<string, unknown>>;
             },
-            status: "draft",
+            // A batch no person reviewed (a direct capture, an import) writes
+            // drafts: its ops may be structured from pasted content.
+            status: !skillAuthor.personApproved
+              ? "draft"
+              : automationOp.enabled === undefined
+                ? undefined
+                : automationOp.enabled
+                  ? "active"
+                  : "draft",
           },
-          ownerId: ownerUserId,
+          createdBy: ownerUserId,
           agentUserId: skillAuthor.agentUserId,
-          stableId,
+          personApproved: skillAuthor.personApproved,
+          stableId: randomUUID(),
         });
         if (!created) {
           throw new TRPCError({

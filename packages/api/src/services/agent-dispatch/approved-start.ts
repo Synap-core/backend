@@ -24,6 +24,7 @@ import {
   drizzleSql,
   playbookRuns,
   setRunStatus,
+  claimedHolderSql,
 } from "@synap/database";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
@@ -129,7 +130,13 @@ export async function recordApprovedAgentStart(p: {
       to: "running",
       actor: { kind: "system" },
       reason: `Approved: handed to the ${service} agent.`,
-      set: { completedAt: null, summary, externalAgent: ref },
+      set: {
+        completedAt: null,
+        summary,
+        externalAgent: ref,
+        // The provider took the task: the agent's claim.
+        holder: claimedHolderSql({ kind: "agent", id: agentUserId }),
+      },
     });
     if (claimed.length === 0) {
       return {

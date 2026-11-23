@@ -26,7 +26,9 @@ import {
   desc,
   inArray,
   getActingAgentUserId,
+  ownerAndActor,
   userVisibleWhere,
+  type OwnerAndActor,
   type SQL,
 } from "@synap/database";
 import { skills, tools } from "@synap/database/schema";
@@ -38,10 +40,7 @@ import {
   deleteLink,
 } from "../services/links/links-service.js";
 import { requireUserId } from "../utils/user-scoped.js";
-import {
-  visibleSkillsAnyWorkspaceWhere,
-  visibleSkillsWhere,
-} from "../services/skills/visibility.js";
+import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   assertMayChangeSkill,
   defaultSkillScope,
@@ -348,6 +347,13 @@ export type InsertSkillGovernedInput = typeof skills.$inferInsert & {
    * anyone else's row there ⇒ a fresh id. `id` itself stays ignored.
    */
   adoptId?: string;
+  /**
+   * Who the row is stamped for when this door runs as someone else: an
+   * approval replays as the approver, but the person it was filed for owns
+   * the skill and the agent that wrote it is its actor. Stamping only: the
+   * gate and the born-approved rule still read `userId` / `agentUserId`.
+   */
+  owner?: OwnerAndActor;
   /** Folded into the audit-log `data` for observability, e.g. "install_from_url". */
   auditSource: string;
 };
@@ -374,6 +380,7 @@ export async function insertSkillGoverned(
     presence,
     auditSource,
     adoptId,
+    owner: stampFor,
     id: _ignoredId,
     approved: _ignoredApproved,
     status: _ignoredStatus,
@@ -387,7 +394,7 @@ export async function insertSkillGoverned(
       .from(skills)
       .where(eq(skills.id, adoptId))
       .limit(1);
-    if (taken?.userId === values.userId) {
+    if (taken?.userId === (stampFor?.ownerId ?? values.userId)) {
       return { status: "installed", skill: taken };
     }
     if (!taken) adoptedId = adoptId;
@@ -463,11 +470,15 @@ export async function insertSkillGoverned(
         })
       : bornOn;
 
+  const owner =
+    stampFor ?? (await ownerAndActor(db, values.userId, authorAgentUserId));
   const [skill] = await db
     .insert(skills)
     .values({
       ...values,
       id: skillId,
+      userId: owner.ownerId,
+      agentUserId: owner.agentUserId,
       status: "active",
       approved,
     })
@@ -546,7 +557,7 @@ export const skillsRouter = router({
           /** When true, return only approved skills (the agent-tool loader uses this). */
           approved: z.boolean().optional(),
           /**
-           * Every space the reader can see, not one (`visibleSkillsAnyWorkspaceWhere`):
+           * Every space the reader can see, not one (`visibleSkillsWhere` with `allSpaces`):
            * the pod-wide lens of a control-plane list. Without it and without
            * `workspaceId`, a space's skills are not listed. Wins over `workspaceId`.
            */
@@ -562,7 +573,7 @@ export const skillsRouter = router({
 
       conditions.push(
         input?.allSpaces
-          ? visibleSkillsAnyWorkspaceWhere(userId)
+          ? visibleSkillsWhere(userId, undefined, { allSpaces: true })
           : visibleSkillsWhere(userId, input?.workspaceId)
       );
       // An EXPIRED rule must stop acting. This is the read the IS
@@ -620,7 +631,7 @@ export const skillsRouter = router({
         where: and(
           eq(skills.id, input.id),
           input.allSpaces
-            ? visibleSkillsAnyWorkspaceWhere(userId)
+            ? visibleSkillsWhere(userId, undefined, { allSpaces: true })
             : visibleSkillsWhere(userId, input.workspaceId)
         ),
       });
@@ -1505,9 +1516,9 @@ export const skillsRouter = router({
           ...(requiredToolIds.length
             ? { requiredToolIds, requiredToolNames }
             : {}),
-          // A box skill's declaration (packages, hosts, limits) IS what the
-          // person approves with the code, and what the approved row runs.
-          ...(input.executionMode === "box" && metadata ? { metadata } : {}),
+          // What the approved row stores, as the direct insert below does: a
+          // box declaration or a `readOnly` is what the person approves.
+          ...(metadata ? { metadata } : {}),
         },
         agentUserId: input.agentUserId,
       });
@@ -1536,11 +1547,13 @@ export const skillsRouter = router({
       //    become the bypass the shared door exists to prevent. Normally an agent create
       //    returns `proposed` before reaching here — this closes the case where
       //    a governance rule has widened `skill/create` to auto for an agent.
+      const owner = await ownerAndActor(db, userId, input.agentUserId);
       const [skill] = await db
         .insert(skills)
         .values({
           id: skillId,
-          userId,
+          userId: owner.ownerId,
+          agentUserId: owner.agentUserId,
           // Pod-wide by default: only stamp a workspace when the caller explicitly
           // narrows to one. No workspace context → pod-wide (NULL).
           workspaceId: input.workspaceId ?? null,

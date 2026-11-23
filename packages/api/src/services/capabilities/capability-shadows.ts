@@ -39,7 +39,7 @@ import {
 } from "@synap/database";
 import { revokeHostSeeds } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface ShadowPart {
   id: string;
@@ -187,7 +187,7 @@ export async function findCapabilityShadows(
         // Only an ACTIVE skill can answer a verb, so only an active one shadows.
         .where(
           and(
-            visibleSkillsAnyWorkspaceWhere(userId),
+            visibleSkillsWhere(userId, undefined, { allSpaces: true }),
             eq(skills.status, "active")
           )
         ),

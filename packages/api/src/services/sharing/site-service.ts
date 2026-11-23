@@ -76,7 +76,7 @@ import {
 } from "@synap/database";
 import {
   entities,
-  profileWorkspaceAccess,
+  spaceAccess,
   profiles,
   projects,
   relations,
@@ -364,14 +364,15 @@ async function validateConfig(
         workspaceId: profiles.workspaceId,
         profileKind: profiles.profileKind,
         entityScope: profiles.entityScope,
-        grantedTo: profileWorkspaceAccess.workspaceId,
+        grantedTo: spaceAccess.workspaceId,
       })
       .from(profiles)
       .leftJoin(
-        profileWorkspaceAccess,
+        spaceAccess,
         and(
-          eq(profileWorkspaceAccess.profileId, profiles.id),
-          eq(profileWorkspaceAccess.workspaceId, source)
+          eq(spaceAccess.objectType, "profile"),
+          eq(spaceAccess.objectId, profiles.id),
+          eq(spaceAccess.workspaceId, source)
         )
       )
       .where(eq(profiles.slug, key));

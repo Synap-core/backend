@@ -239,6 +239,10 @@ describe("W6 read/resolve verbs — registry", () => {
       // the refresher flow.
       "lens.page",
       "market.search",
+      // measure.check — one cell-bridge read op under the caller's floor,
+      // compared with a criterion's bar; writes nothing. The evaluator runs
+      // it with suppressProposal, so it must auto-run.
+      "measure.check",
       // message.interpret files a human-governed PENDING proposal and never a
       // direct graph write (no agentUserId is threaded, so submitCaptureGraph
       // always proposes). Governance lives on the proposal it emits, not on

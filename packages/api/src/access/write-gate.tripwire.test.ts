@@ -166,10 +166,6 @@ const KNOWN_UNGATED_ROUTES = new Map<string, string>([
     "rest/threads.ts POST /threads/{threadId}/messages",
     "posts a chat message (outside the gate like every channel message)",
   ],
-  [
-    "rest/workspaces.ts POST /workspaces/provision-agent",
-    "adds the provisioned agent as a workspace member",
-  ],
 ]);
 
 // Handlers that write raw WITHOUT the gate by design. Each also carries a

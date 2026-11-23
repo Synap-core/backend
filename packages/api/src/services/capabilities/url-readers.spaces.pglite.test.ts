@@ -17,7 +17,7 @@
  *
  * NOT covered, measured: bypassing ONLY the tools floor in the registry's
  * allSpaces read stays green here — a reader's URLs live on its SKILL, whose
- * own floor (`visibleSkillsAnyWorkspaceWhere`) still hides T's verb. Bypassing
+ * own floor (`visibleSkillsWhere` with `allSpaces`) still hides T's verb. Bypassing
  * the skills floor goes red (3 tests).
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";

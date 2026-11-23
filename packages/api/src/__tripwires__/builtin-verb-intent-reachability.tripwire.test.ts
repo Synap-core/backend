@@ -362,6 +362,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Writes an advisory diagnostics stamp onto a pod-local document.",
   "lens.page":
     "Reads the lens page the pod already computes for a scope. Pod-local, writes nothing, no artifact produced for a consumer.",
+  "measure.check":
+    "Counts what one pod read op answers and compares it with a criterion's bar. Pod-local, writes nothing; reached by name from a capability criterion, never by intent.",
   // ── configuration revision: the pod administering itself ───────────────
   "playbook.update": "Revises a playbook definition stored in the pod.",
   "playbook.archive": "Retires a playbook stored in the pod.",

@@ -28,6 +28,9 @@ import {
   insertFocusSessionRow,
   sessionDefinitionColumns,
   derivedSessionTitle,
+  ownerAndActor,
+  runHolder,
+  starterHolder,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -99,6 +102,10 @@ import {
   addCreateTimeBlockers,
   type CreateTimeBlockerReport,
 } from "./session-blocked-by.js";
+import {
+  applyUnitBlockerEdits,
+  type UnitBlockerReport,
+} from "../links/unit-blockers.js";
 import {
   findOpenSessionTwin,
   sessionTwinLockKey,
@@ -330,6 +337,15 @@ export interface CreateFocusSessionParams {
    */
   blockedBySessionIds?: string[];
   /**
+   * Entities (a decision) and goals this one is BLOCKED BY, declared at birth:
+   * the cross-kind `session --blocked_by--> entity | track` edge, written
+   * through THE governed dependency door (`unit-blockers.ts`) after the row
+   * exists and reported on `blockerLinks` beside the sessions. On the PROPOSED
+   * path they ride the proposal, like `blockedBySessionIds`.
+   */
+  blockedByEntityIds?: string[];
+  blockedByTrackIds?: string[];
+  /**
    * Open a NEW session even when an OPEN session of the same user, normalized
    * goal and scope exists. Without it that session is returned as `deduped`.
    */
@@ -474,8 +490,8 @@ export type CreateFocusSessionResult =
       blockGuidelines?: BlockGuidance;
       /** Present iff a `parentSessionId` was given. */
       parentLink?: CreateTimeParentLink;
-      /** Present iff `blockedBySessionIds` was non-empty — one entry per id. */
-      blockerLinks?: CreateTimeBlockerReport[];
+      /** Present iff a `blockedBy*Ids` list was non-empty — one entry per id. */
+      blockerLinks?: Array<CreateTimeBlockerReport | UnitBlockerReport>;
       /** Near-goal OPEN sessions in the same scope — suggested, never blocking. */
       candidates?: SessionTwinCandidate[];
       /**
@@ -583,6 +599,8 @@ export async function createFocusSession(
     parentSessionId = null,
     suspendedIntent = null,
     blockedBySessionIds = [],
+    blockedByEntityIds = [],
+    blockedByTrackIds = [],
     clientKey = null,
   } = params;
   const templateId = requestedTemplateId;
@@ -1080,6 +1098,8 @@ export async function createFocusSession(
       ...(suspendedIntent ? { suspendedIntent } : {}),
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
+      ...(blockedByEntityIds.length > 0 ? { blockedByEntityIds } : {}),
+      ...(blockedByTrackIds.length > 0 ? { blockedByTrackIds } : {}),
       // Same reason: written at approval through `writeSessionTargets`.
       ...(targets.length > 0 ? { targets } : {}),
       ...(criteria.length > 0 ? { criteria } : {}),
@@ -1386,21 +1406,26 @@ export async function createFocusSession(
       });
     }
 
-    // The playbook_runs ledger row (status "running") so the runs feed sees the
-    // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
-    // definition snapshot), minus the executor dispatch — starting a session is
-    // "I'm working on this playbook", not a full executor run. The snapshot is
-    // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
-    // froze no `subjectProfile` (so no lifecycle), criteria or
-    // tools, and a later edit of the playbook then decided this run.
+    // The playbook_runs ledger row so the runs feed sees the session, with
+    // THE shared snapshot (`buildDefinitionSnapshot`), minus the executor
+    // dispatch: starting a session is "I'm working on this playbook". Its
+    // starter holds it, working from birth (`running`); a start that hands it
+    // to another agent leaves it `queued` until that agent claims it.
     if (playbook) {
+      const owner = await ownerAndActor(tx, userId, agentUserId);
+      const handedTo =
+        handedOff[0] ?? (agentUserId ? undefined : requestedAgentIds[0]);
       await tx.insert(playbookRuns).values({
         workspaceId,
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: "running",
-        createdBy: agentUserId ?? userId,
+        status: handedTo ? "queued" : "running",
+        holder: handedTo
+          ? runHolder("agent", handedTo)
+          : starterHolder(userId, agentUserId),
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }
@@ -1542,7 +1567,7 @@ export async function createFocusSession(
 
   // Create-time blockers, after the row exists, each reported per id. The
   // governance judgement for an agent caller is the helper's (same as POST /links).
-  const blockerLinks =
+  const sessionBlockerLinks =
     blockedBySessionIds.length > 0
       ? await addCreateTimeBlockers({
           sessionId: sessionOut.id,
@@ -1550,7 +1575,22 @@ export async function createFocusSession(
           userId,
           agentUserId,
         })
-      : undefined;
+      : [];
+  // A decision or a goal it waits on: the same governed dependency door.
+  const unitBlockers =
+    blockedByEntityIds.length > 0 || blockedByTrackIds.length > 0
+      ? await applyUnitBlockerEdits({
+          from: { type: "session", id: sessionOut.id },
+          add: { entity: blockedByEntityIds, track: blockedByTrackIds },
+          remove: { entity: [], track: [] },
+          userId,
+          agentUserId,
+          sessionId: sessionOut.id,
+          door: "createFocusSession",
+        })
+      : { links: [] };
+  const allBlockerLinks = [...sessionBlockerLinks, ...unitBlockers.links];
+  const blockerLinks = allBlockerLinks.length > 0 ? allBlockerLinks : undefined;
 
   // The TARGETS, after the row exists, through THE writer a worker's batch
   // uses: the start already passed the gate, as `spawned_from` above.

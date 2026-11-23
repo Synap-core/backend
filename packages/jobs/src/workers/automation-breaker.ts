@@ -36,6 +36,7 @@ import {
   automations,
   automationRuns,
   drizzleSql,
+  setAutomationStatus,
 } from "@synap/database";
 import { GOAL_WORKER_FAILURE_LIMIT } from "@synap-core/types/workers/health";
 import { logger } from "./automation-executor-logger.js";
@@ -143,23 +144,15 @@ export async function tripNeverWorkedBreaker(input: {
     const failureCount = input.failureCount - (budget?.stops ?? 0);
     if (!shouldTripNeverWorkedBreaker({ ...input, failureCount })) return false;
 
-    const flipped = await db
-      .update(automations)
-      .set({
-        status: "error",
-        errorMessage: breakerErrorMessage(failureCount, input.reason),
-        updatedAt: new Date(),
-      })
-      // Re-assert both floors in the WHERE so a concurrent human edit (pause,
-      // archive, or a fix that produced a success) wins over this write.
-      .where(
-        and(
-          eq(automations.id, input.automationId),
-          eq(automations.status, "active"),
-          drizzleSql`COALESCE(${automations.successCount}, 0) = 0`
-        )
-      )
-      .returning({ id: automations.id });
+    // A concurrent human edit (pause, archive, or a fix that produced a
+    // success) wins over this write.
+    const flipped = await setAutomationStatus(db, {
+      id: input.automationId,
+      from: "active",
+      to: "error",
+      set: { errorMessage: breakerErrorMessage(failureCount, input.reason) },
+      where: drizzleSql`COALESCE(${automations.successCount}, 0) = 0`,
+    });
 
     if (flipped.length === 0) return false;
 
@@ -266,21 +259,13 @@ export async function tripBrokeAfterWorkingBreaker(input: {
     ) {
       return false;
     }
-    const flipped = await db
-      .update(automations)
-      .set({
-        status: "error",
-        errorMessage: brokeAfterWorkingMessage(input.reason),
-        updatedAt: new Date(),
-      })
-      // A concurrent human edit (pause, archive) wins over this write.
-      .where(
-        and(
-          eq(automations.id, input.automationId),
-          eq(automations.status, "active")
-        )
-      )
-      .returning({ id: automations.id });
+    // A concurrent human edit (pause, archive) wins over this write.
+    const flipped = await setAutomationStatus(db, {
+      id: input.automationId,
+      from: "active",
+      to: "error",
+      set: { errorMessage: brokeAfterWorkingMessage(input.reason) },
+    });
     if (flipped.length === 0) return false;
     logger.error(
       {
@@ -373,20 +358,12 @@ export async function tripGoalWorkerBreaker(input: {
     ) {
       return false;
     }
-    const flipped = await db
-      .update(automations)
-      .set({
-        status: "error",
-        errorMessage: goalWorkerOffMessage(input.reason),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(automations.id, input.automationId),
-          eq(automations.status, "active")
-        )
-      )
-      .returning({ id: automations.id });
+    const flipped = await setAutomationStatus(db, {
+      id: input.automationId,
+      from: "active",
+      to: "error",
+      set: { errorMessage: goalWorkerOffMessage(input.reason) },
+    });
     if (flipped.length === 0) return false;
     logger.error(
       { automationId: input.automationId, limit: GOAL_WORKER_FAILURE_LIMIT },

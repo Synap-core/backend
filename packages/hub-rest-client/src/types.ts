@@ -1436,7 +1436,7 @@ export interface GetWorkGraphOptions {
   rootSessionId?: string;
 }
 
-/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator. */
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator; `serves` from a session or goal to the goal it is done for. */
 export interface HubWorkGraphEdge {
   kind:
     | "blocked_by"
@@ -1444,12 +1444,53 @@ export interface HubWorkGraphEdge {
     | "orchestrated_by"
     | "waits_on_output"
     | "triggered"
-    | "updated";
+    | "updated"
+    | "serves";
   from: string;
   to: string;
+  /** Absent = `from` is a session. `track` = a goal in `goals`. */
+  fromKind?: "track";
+  /** Absent = `to` is a session. `entity` = in `decisions` or `entities`; `track` = in `goals`. */
+  toKind?: "entity" | "track";
   entityId?: string;
   count?: number;
   lastAt?: string | null;
+  /** `serves`: the goal criterion served, when the edge names one. */
+  criterionKey?: string;
+}
+
+/** A decision a node waits on or is about. Absent from an older pod. */
+export interface HubWorkGraphDecision {
+  id: string;
+  title: string | null;
+  /** proposed | accepted | superseded | rejected; null = unset. */
+  status: string | null;
+  category: string | null;
+  /** Each option with its marks; [] = a yes/no decision. */
+  options: Array<{
+    key: string;
+    label: string;
+    description: string | null;
+    recommended: boolean;
+    chosen: boolean;
+  }>;
+  recommendedOption: string | null;
+  chosenOption: string | null;
+  /** answered | asked (an owed question asks the person) | not_asked. */
+  answer: "answered" | "asked" | "not_asked";
+  /** With `asked`: the session whose owed question asks it. */
+  askSessionId: string | null;
+  sourceSessionId: string | null;
+}
+
+/** Another thing a node waits on or is about (its subject). Absent from an older pod. */
+export interface HubWorkGraphEntity {
+  id: string;
+  title: string | null;
+  /** The thing's kind (profile slug). */
+  kind: string;
+  status: string | null;
+  category: string | null;
 }
 
 /** `unavailable` = the read FAILED: no edge of that kind was drawn, which is not "none". */
@@ -1518,6 +1559,10 @@ export interface HubWorkGraph {
   pullRequests: HubWorkGraphPullRequest[];
   holds: HubWorkGraphHold[];
   goals: HubWorkGraphGoal[];
+  /** Absent from an older pod. */
+  decisions?: HubWorkGraphDecision[];
+  /** Absent from an older pod. */
+  entities?: HubWorkGraphEntity[];
   sections: {
     blockedBy: HubWorkGraphSection;
     orchestration: HubWorkGraphSection;
@@ -1527,10 +1572,17 @@ export interface HubWorkGraph {
     pullRequests: HubWorkGraphSection;
     holds: HubWorkGraphSection;
     goals: HubWorkGraphSection;
+    /** Absent from an older pod: then these were not read. */
+    crossKind?: HubWorkGraphSection;
+    serves?: HubWorkGraphSection;
+    decisions?: HubWorkGraphSection;
+    entities?: HubWorkGraphSection;
   };
   window: {
     since: string;
     hours: number;
+    /** True under trackId / rootSessionId: settled work of any age is in. Absent from an older pod. */
+    allSettled?: boolean;
     ceiling: number;
     truncated: boolean;
     omitted: number;
@@ -1583,6 +1635,11 @@ export interface HubSessionCriterion {
     capability?: string;
     evidenceKey?: string;
     hint?: string;
+    /**
+     * kind=capability: the verb's arguments. A KPI the pod measures:
+     * `capability: "measure.check"`, `params: { op, params, threshold, comparator }`.
+     */
+    params?: Record<string, unknown>;
   };
   stageKey?: string;
   /**

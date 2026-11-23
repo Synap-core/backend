@@ -258,7 +258,7 @@ describe("resolveProfileForApply — template dedup + guard", () => {
 
   it("does NOT swallow the load-bearing grant on a pod-wide reuse", async () => {
     // Fix 4 — this branch is reached only because the profile is NOT accessible
-    // here, and a `shared` row is reachable ONLY via profile_workspace_access. So
+    // here, and a `shared` row is reachable ONLY via space_access. So
     // this grant IS the reuse. Swallowing it reported `reused: true` and a
     // successful provision while leaving the workspace holding a profile it
     // cannot resolve — its entities would come up schema-less.

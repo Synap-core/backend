@@ -335,7 +335,7 @@ describe("profiles.createProfile writes nothing outside the grant (W2a)", () => 
       })
     ).rejects.toMatchObject(GRANT_DENIED);
     const { rows } = await q(
-      `select profile_id from profile_workspace_access where workspace_id = $1`,
+      `select object_id as profile_id from space_access where object_type = 'profile' and workspace_id = $1`,
       [OTHER_WS]
     );
     expect(rows).toHaveLength(0);

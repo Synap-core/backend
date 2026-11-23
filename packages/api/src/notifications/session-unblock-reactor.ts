@@ -44,6 +44,18 @@
  * A `track.update` with no status move (direction, loop, a stage) never
  * matches.
  *
+ * AN ENTITY DELIVERING IS ONE MORE BLOCKER ENDING (pathway doors, 21 Nov
+ * 2026). A session can wait on an entity (a decision: `session --blocked_by-->
+ * entity`). The status door's `entity.transition` carries the kind's own move
+ * (`to`, `category`); when it moves the entity into a DONE category (a
+ * decision accepted), the same "last open blocker" rule runs and the waiting
+ * session gets `session.unblocked`. Notification only: nothing is moved or
+ * woken. An entity that ends LOST (a decision rejected) did not deliver: it
+ * holds the session until its owner re-plans, which the session's own reads
+ * already say (`blocker_dropped`); no notification type says it for an
+ * entity yet, so none is sent. A role's move never matches (the dependency
+ * rule reads the kind's own status).
+ *
  * IDEMPOTENT on `(dependent, closed blocker)`, keyed on the durable
  * notification row's `groupKey` rather than on ordering — a re-delivered or
  * replayed close event is a no-op. Deliberately NOT keyed on the dependent
@@ -72,6 +84,8 @@ import {
   eq,
   inArray,
   focusSessions,
+  entities,
+  isLifecycleCategory,
   links,
   notifications,
   projectTracks,
@@ -286,16 +300,33 @@ async function answerMoved(payload: SideEffectPayload): Promise<void> {
   }
 }
 
+/** The kind's OWN status move into a done category — a decision accepted. */
+function entityDelivers(payload: SideEffectPayload): boolean {
+  if (payload.subjectType !== "entity" || payload.action !== "transition") {
+    return false;
+  }
+  const d = payload.data ?? {};
+  if (d.role != null) return false;
+  const to = typeof d.to === "string" ? d.to : null;
+  const category = isLifecycleCategory(d.category) ? d.category : null;
+  return classifyDependencyBlocker("entity", to, category) === "delivered";
+}
+
 export const sessionUnblockNotifyReactor: Reactor = {
   id: "session-unblock-notify",
   match: (payload) =>
     (payload.subjectType === FOCUS_SESSION_SUBJECT_TYPE &&
       payload.action === FOCUS_SESSION_CLOSE_ACTION) ||
     endsGoal(payload) ||
+    entityDelivers(payload) ||
     answerNamesTarget(payload),
   async handler(payload) {
     if (payload.subjectType === "track") {
       await goalEnded(payload);
+      return;
+    }
+    if (payload.subjectType === "entity") {
+      await entityDelivered(payload);
       return;
     }
     if (
@@ -629,6 +660,137 @@ async function goalEnded(payload: SideEffectPayload): Promise<void> {
       logger.error(
         { error, dependent: dep, goalId: goal.id },
         "Failed to notify that a goal it waited on ended"
+      );
+    }
+  }
+}
+
+/**
+ * An entity DELIVERED (a decision accepted): the sessions that waited on it
+ * (directly, or on an entity it replaced) are told once nothing else holds
+ * them — the rule every blocker follows.
+ */
+async function entityDelivered(payload: SideEffectPayload): Promise<void> {
+  const entityId = payload.subjectId;
+  if (!entityId) return;
+
+  // THE ROW is the authority: it must have delivered NOW (a redelivered event
+  // about an entity reopened since reads its real status here).
+  const [entity] = await db
+    .select({
+      id: entities.id,
+      title: entities.title,
+      status: entities.status,
+      statusCategory: entities.statusCategory,
+      deletedAt: entities.deletedAt,
+    })
+    .from(entities)
+    .where(eq(entities.id, entityId))
+    .limit(1);
+  if (!entity || entity.deletedAt) return;
+  const category = isLifecycleCategory(entity.statusCategory)
+    ? entity.statusCategory
+    : null;
+  if (
+    classifyDependencyBlocker("entity", entity.status, category) !== "delivered"
+  ) {
+    return;
+  }
+
+  // Waiting on this entity: directly, or on an entity it replaced.
+  const replaced = (
+    await db
+      .select({ id: links.toId })
+      .from(links)
+      .where(
+        and(
+          eq(links.linkType, REPLACES_LINK_TYPE),
+          eq(links.fromType, "entity"),
+          eq(links.fromId, entity.id),
+          eq(links.toType, "entity")
+        )
+      )
+  ).map((r) => r.id);
+  const waiting = await db
+    .select({ id: links.fromId })
+    .from(links)
+    .where(
+      and(
+        eq(links.linkType, DEPENDENCY_LINK_TYPE),
+        eq(links.fromType, "session"),
+        eq(links.toType, "entity"),
+        inArray(links.toId, [entity.id, ...replaced])
+      )
+    );
+  const sessionIds = [...new Set(waiting.map((w) => w.id))];
+  if (sessionIds.length === 0) return;
+
+  const sessions = await db
+    .select({
+      id: focusSessions.id,
+      title: focusSessions.title,
+      goal: focusSessions.goal,
+      status: focusSessions.status,
+      userId: focusSessions.userId,
+      workspaceId: focusSessions.workspaceId,
+    })
+    .from(focusSessions)
+    .where(inArray(focusSessions.id, sessionIds));
+
+  for (const dep of sessions) {
+    if (isDependencyEnded("session", dep.status)) continue;
+    try {
+      if ((await openBlockerIds(dep.id)).length > 0) continue;
+      if ((await openOutputBlockerIds(dep.id, dep.userId)).length > 0) {
+        continue;
+      }
+      const groupKey = unblockGroupKey(dep.id, entity.id);
+      const [already] = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.userId, dep.userId),
+            eq(notifications.type, SESSION_UNBLOCKED_NOTIFICATION_TYPE),
+            eq(notifications.groupKey, groupKey)
+          )
+        )
+        .limit(1);
+      if (already) continue;
+      // Named only when the person waiting may see it.
+      const [visible] = await db
+        .select({ id: entities.id })
+        .from(entities)
+        .where(
+          and(
+            eq(entities.id, entity.id),
+            scopedDb(AccessContext.operator({ userId: dep.userId })).predicate(
+              entities
+            )
+          )
+        )
+        .limit(1);
+      await NotificationService.create({
+        type: SESSION_UNBLOCKED_NOTIFICATION_TYPE,
+        userId: dep.userId,
+        workspaceId: dep.workspaceId,
+        sourceType: "system",
+        sourceId: dep.id,
+        groupKey,
+        data: {
+          sessionId: dep.id,
+          sessionTitle: resolveSessionTitle(dep),
+          blockerEntityId: entity.id,
+          blockerTitle:
+            visible && entity.title
+              ? entity.title
+              : "Something it was waiting on",
+        },
+      });
+    } catch (error) {
+      logger.error(
+        { error, sessionId: dep.id, blockerEntityId: entity.id },
+        "Failed to notify session unblocked by an entity"
       );
     }
   }

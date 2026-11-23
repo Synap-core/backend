@@ -92,6 +92,10 @@ import {
   type IntakeSourceMetadata,
 } from "../intake/stage-intake-source.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
+import {
+  classifyAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
 
 const logger = createLogger({ module: "rerun-session" });
 
@@ -146,6 +150,12 @@ export interface RerunItemResult {
   proposalId?: string;
   reviewUrl?: string;
   reason?: string;
+  /**
+   * Why the AI did not structure it, as the one failure door classed it
+   * (`utils/ai-failure.ts`), when there was evidence: a degraded structure
+   * call's `degradedDetail`, or the error a replay threw.
+   */
+  failureClass?: AiFailureClass;
 }
 
 export interface RerunPlan {
@@ -817,9 +827,11 @@ async function settle(
       { err },
       "rerun: one source failed to replay (others continue)"
     );
+    const failureClass = classifyAiFailure(err);
     return {
       outcome: "failed",
       reason: err instanceof Error ? err.message : String(err),
+      ...(failureClass !== "unknown" ? { failureClass } : {}),
     };
   }
 }
@@ -1134,6 +1146,7 @@ export async function replayCaptureSource(
       followUp?: unknown;
       degraded?: unknown;
       degradedReason?: unknown;
+      degradedDetail?: { failureClass?: AiFailureClass };
     };
     if (r.followUp) {
       return {
@@ -1149,6 +1162,9 @@ export async function replayCaptureSource(
           : r.degraded === true
             ? "degraded"
             : "nothing to propose",
+      ...(r.degradedDetail?.failureClass
+        ? { failureClass: r.degradedDetail.failureClass }
+        : {}),
     };
   }
   const { entities, relations } = toGraph.captureStructureToGraph(plan);

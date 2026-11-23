@@ -51,6 +51,7 @@ import {
   ProjectMemberRepository,
   WorkspaceRepository,
   getActingAgentUserId,
+  personOfOwner,
 } from "@synap/database";
 import {
   entities,
@@ -1416,7 +1417,11 @@ async function assertWorkspaceOwner(
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
   if (!ws) throw notFound("Workspace");
-  if (ws.ownerId !== userId) {
+  // An agent principal stands for its person, who owns the space.
+  if (
+    ws.ownerId !== userId &&
+    (await personOfOwner(database, userId)) !== ws.ownerId
+  ) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "Only the workspace owner can see or change what it shares.",

@@ -11,6 +11,9 @@
  *   plan   tier, status, trial end — answered by the CP (`GET /internal/plan`),
  *          pulled by `@synap/jobs` `cp-entitlement-sync` into the singleton
  *          `pod_settings.settings.controlPlaneEntitlement`.
+ *   AI     availability — the owner's billing block, answered by the CP
+ *          (`GET /internal/ai-availability`), pulled by the same job into
+ *          `pod_settings.settings.aiAvailability`.
  *
  * Pod-level facts never live in a workspace's settings. The pre-July record
  * `workspaces.settings.controlPlane` lost its writers in bda48e071 (2026-07-14)
@@ -23,7 +26,7 @@
  * or "no plan".
  */
 
-import { asc, eq, sql as drizzleSql } from "drizzle-orm";
+import { and, asc, eq, sql as drizzleSql } from "drizzle-orm";
 
 import { db } from "../index.js";
 import { workspaces } from "../schema/workspaces.js";
@@ -31,7 +34,9 @@ import {
   podSettings,
   type ControlPlaneEntitlement,
   type ControlPlaneEntitlementSync,
+  type PodAiAvailability,
 } from "../schema/pod-settings.js";
+import { resolveAiAvailability } from "@synap-core/types/ai-availability";
 import { readPodEnrollment } from "./pod-cp-auth.js";
 import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 
@@ -181,17 +186,153 @@ export async function recordControlPlaneEntitlement(
   } satisfies ControlPlaneEntitlementSync);
 }
 
+/** A failed attempt, counted on from the previous one (the pull's backoff). */
+function failedAttempt(
+  previous: ControlPlaneEntitlementSync | null | undefined,
+  outcome: Exclude<ControlPlaneEntitlementSync["outcome"], "ok">,
+  message: string,
+  now: Date
+): ControlPlaneEntitlementSync {
+  return {
+    lastAttemptAt: now.toISOString(),
+    outcome,
+    message,
+    failures: (previous?.outcome === "ok" ? 0 : (previous?.failures ?? 0)) + 1,
+  };
+}
+
 /** Record a FAILED pull. The last good plan is left exactly as it was. */
 export async function recordControlPlaneEntitlementFailure(
   outcome: Exclude<ControlPlaneEntitlementSync["outcome"], "ok">,
   message: string,
   now: Date = new Date()
 ): Promise<void> {
-  await writePodSettingsKey("controlPlaneEntitlementSync", {
-    lastAttemptAt: now.toISOString(),
-    outcome,
-    message,
-  } satisfies ControlPlaneEntitlementSync);
+  const previous = (await readPodSettingsBlob())?.controlPlaneEntitlementSync;
+  await writePodSettingsKey(
+    "controlPlaneEntitlementSync",
+    failedAttempt(previous, outcome, message, now)
+  );
+}
+
+/** This pod's AI availability and the last attempt to pull it. Throws on a failed read. */
+export async function readPodAiAvailability(): Promise<{
+  /** Absent = never answered; `null` = the CP has no availability door. */
+  availability: PodAiAvailability | null | undefined;
+  sync: ControlPlaneEntitlementSync | null;
+}> {
+  const blob = await readPodSettingsBlob();
+  return {
+    availability: blob?.aiAvailability,
+    sync: blob?.aiAvailabilitySync ?? null,
+  };
+}
+
+/** What a recorded pull changed, for the side effects its caller owes. */
+export interface PodAiAvailabilityChange {
+  previous: PodAiAvailability | null | undefined;
+  current: PodAiAvailability;
+  /** AI is available now and was not on the previous answer (or there was none). */
+  becameAvailable: boolean;
+  /**
+   * The answer was computed BEFORE the one already stored (two pulls raced,
+   * e.g. a tick and a re-check): nothing was written but the attempt, and
+   * `current` is what is stored.
+   */
+  stale: boolean;
+}
+
+/**
+ * Record a SUCCESSFUL pull of the AI availability: the answer and an "ok"
+ * attempt. `availableSince` is the pulls' memory of availability: carried
+ * while AI stays available, stamped `now` when it becomes available, cleared
+ * when it is not. Available = AI runs: the composer is not blocked
+ * (`blocksComposer`), so low credits count, as in the apps. A billing read
+ * the CP could not make says nothing either way, so it carries the memory
+ * unchanged.
+ *
+ * ONE guarded write: an answer the CP computed before the stored one (two
+ * pulls raced) never replaces it, and is reported `stale`.
+ */
+export async function recordPodAiAvailability(
+  answer: Pick<PodAiAvailability, "billing" | "checkedAt">,
+  now: Date = new Date()
+): Promise<PodAiAvailabilityChange> {
+  const previous = (await readPodSettingsBlob())?.aiAvailability;
+  const at = now.toISOString();
+  const wasAvailable = previous?.availableSince != null;
+  const available = answer.billing.readFailed
+    ? wasAvailable
+    : !resolveAiAvailability({ billing: answer.billing }).blocksComposer;
+  const current: PodAiAvailability = {
+    ...answer,
+    availableSince: available
+      ? wasAvailable
+        ? previous!.availableSince
+        : at
+      : null,
+  };
+  const sync: ControlPlaneEntitlementSync = {
+    lastAttemptAt: at,
+    outcome: "ok",
+    message: null,
+  };
+  const id = await podSettingsRowId();
+  if (!id) {
+    await db.insert(podSettings).values({
+      settings: { aiAvailability: current, aiAvailabilitySync: sync },
+    });
+  } else {
+    const stored = drizzleSql`(${podSettings.settings}->'aiAvailability'->>'checkedAt')`;
+    const written = await db
+      .update(podSettings)
+      .set({
+        settings: drizzleSql`coalesce(${podSettings.settings}, '{}'::jsonb) || ${JSON.stringify({ aiAvailability: current, aiAvailabilitySync: sync })}::jsonb`,
+        updatedAt: now,
+      })
+      .where(
+        and(
+          eq(podSettings.id, id),
+          drizzleSql`(${stored} IS NULL OR ${stored}::timestamptz <= ${answer.checkedAt}::timestamptz)`
+        )
+      )
+      .returning({ id: podSettings.id });
+    if (written.length === 0) {
+      await writePodSettingsKey("aiAvailabilitySync", sync);
+      const kept = (await readPodSettingsBlob())?.aiAvailability ?? current;
+      return {
+        previous: kept,
+        current: kept,
+        becameAvailable: false,
+        stale: true,
+      };
+    }
+  }
+  return {
+    previous,
+    current,
+    becameAvailable: available && !wasAvailable,
+    stale: false,
+  };
+}
+
+/**
+ * Record a FAILED pull. The CP has no availability door (`unsupported`, an
+ * older CP): the availability becomes UNKNOWN (`null`), never the last answer
+ * of a door that is gone. Any other failure leaves the last answer as it was.
+ */
+export async function recordPodAiAvailabilityFailure(
+  outcome: Exclude<ControlPlaneEntitlementSync["outcome"], "ok">,
+  message: string,
+  now: Date = new Date()
+): Promise<void> {
+  if (outcome === "unsupported") {
+    await writePodSettingsKey("aiAvailability", null);
+  }
+  const previous = (await readPodSettingsBlob())?.aiAvailabilitySync;
+  await writePodSettingsKey(
+    "aiAvailabilitySync",
+    failedAttempt(previous, outcome, message, now)
+  );
 }
 
 export interface LegacyControlPlaneMigration {

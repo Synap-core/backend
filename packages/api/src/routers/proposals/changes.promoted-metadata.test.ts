@@ -34,9 +34,38 @@ describe("buildProposalChanges — a promotion never hides the rest of the bag",
       "update"
     );
     expect(changes.map((c) => c.path)).toEqual([
-      "metadata.allowedHosts",
       "metadata.readOnly",
+      "metadata.allowedHosts",
     ]);
-    expect(changes[1]).toMatchObject({ after: true });
+    expect(changes[0]).toMatchObject({
+      label: "Runs without review once approved",
+    });
+  });
+
+  it("a read-only verb names the consequence on its own row, never a bare metadata blob", () => {
+    const changes = buildProposalChanges(
+      {
+        name: "fr_company_lookup",
+        kind: "declarative",
+        metadata: { readOnly: true, marketSource: { slug: "x" } },
+      },
+      "create"
+    );
+    const paths = changes.map((c) => c.path);
+    expect(paths[0]).toBe("metadata.readOnly");
+    expect(paths).not.toContain("metadata");
+    expect(changes.find((c) => c.path === "metadata.readOnly")).toMatchObject({
+      label: "Runs without review once approved",
+      after: "Yes: declared read-only, so every agent run skips review",
+    });
+    expect(paths).toContain("metadata.marketSource");
+  });
+
+  it("readOnly false is not promoted", () => {
+    const paths = buildProposalChanges(
+      { metadata: { readOnly: false } },
+      "create"
+    ).map((c) => c.path);
+    expect(paths).not.toContain("metadata.readOnly");
   });
 });

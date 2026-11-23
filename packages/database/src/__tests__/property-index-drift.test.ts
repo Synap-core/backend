@@ -19,14 +19,14 @@ import {
   type WorkspaceDefinitionInput,
 } from "../utils/create-workspace-from-definition.js";
 import { rebuildEntityProjections } from "../scripts/rebuild-property-index.js";
-import { profileWorkspaceAccess } from "../schema/profiles.js";
+import { spaceAccess } from "../schema/profiles.js";
 
 // The schema module graph has a circular import (profiles ↔ workspaces) that
 // vite's SSR transform (vitest) leaves with undefined table bindings; a native
-// ESM harness resolves it. `profileWorkspaceAccess` being defined is the probe:
+// ESM harness resolves it. `spaceAccess` being defined is the probe:
 // truthy → run against Postgres; falsy → skip cleanly (also how this suite
 // no-ops when Postgres is absent).
-const SCHEMA_LOADS = !!profileWorkspaceAccess;
+const SCHEMA_LOADS = !!spaceAccess;
 
 const suf = crypto.randomUUID().slice(0, 8);
 const userId = `test-pidrift-${suf}`;

@@ -15,7 +15,7 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { db, eq, artifacts } from "@synap/database";
+import { db, eq, artifacts, ownerAndActor } from "@synap/database";
 import {
   checkPermissionOrPropose,
   proposedMessageFor,
@@ -359,6 +359,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
         });
       }
 
+      const owner = await ownerAndActor(db, userId, agentUserId);
       const [created] = await db
         .insert(artifacts)
         .values({
@@ -368,7 +369,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
           // creating a desk artifact is always acting inside a lens; that is a
           // door policy, not a column constraint. Confined value.
           workspaceId,
-          userId,
+          userId: owner.ownerId,
           kind: body.kind,
           refId: body.refId ?? null,
           cellKey: body.cellKey ?? null,
@@ -376,7 +377,7 @@ export function registerArtifactsRoutes(app: HubHono): void {
           title: body.title,
           // Hub-authenticated requests are from agents — default originKind='agent'
           originKind: body.originKind,
-          actorId: body.actorId ?? null,
+          actorId: owner.agentUserId ?? body.actorId ?? null,
           sessionId: body.sessionId ?? null,
           state: "working",
           placement: body.placement ?? "desk",

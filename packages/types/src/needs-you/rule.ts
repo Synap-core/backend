@@ -40,6 +40,13 @@
  * age), so one row has exactly one class. "Ended" is the terminal set
  * (`TERMINAL_SESSION_STATUSES`): a forming or scheduled session is not ended.
  *
+ * A PLANNED step (`forming`, founder P2, 21 Nov 2026) owes nothing YET: its
+ * slots are in no list (`null`, like a done slot) until it starts. Not a
+ * fold — a step a year away is not "review later", it is not asked yet. It
+ * is the same rule as the owed-slot predicate's session clause
+ * (`owedSlotWhere`, `@synap/database`). A `scheduled` appointment keeps its
+ * asks: a playbook's params are asked before the slot opens.
+ *
  * ── THE SQL TWIN ────────────────────────────────────────────────────────────
  * `needsYouSlotClassSql` (`@synap/database`, `needs-you-predicate.ts`) is this
  * rule in SQL, for the reapers (jobs cannot import api). The PGlite parity
@@ -67,7 +74,10 @@
 import { askEndsWithSession } from "../ask/ends-with-session.js";
 import { isSetAside } from "./set-aside.js";
 import type { AskCardSlot } from "../ask/card.js";
-import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
+import {
+  TERMINAL_SESSION_STATUSES,
+  isPlannedSessionStatus,
+} from "../focus-sessions/statuses.js";
 import { isOwedByYouIn } from "../units/deliverable.js";
 import { runnerStateWaitKind } from "../units/runner-state.js";
 import { WAIT_KIND_BALL } from "../units/wait-kind.js";
@@ -383,7 +393,8 @@ export function needsYouAgentWorking(
 
 /**
  * THE rule for one slot on its session. `null` when the slot is not owed by
- * the person at all (done, retired, optional, the agent's): it is in no list.
+ * the person at all (done, retired, optional, the agent's) or its session is
+ * a planned step that has not started (P2): it is in no list.
  * On a stopped session only the agent's own question is Stopped; a person
  * deliverable goes on to the age clause.
  */
@@ -393,6 +404,7 @@ export function classifyOwedAsk(
   now: Date | number = Date.now()
 ): NeedsYouSlotClass | null {
   if (!isOwed(slot, session.expectedOutputs)) return null;
+  if (isPlannedSessionStatus(session.status)) return null;
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
   // The person's own Later wins until its time, like a request's

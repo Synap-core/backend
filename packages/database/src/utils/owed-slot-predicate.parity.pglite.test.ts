@@ -49,8 +49,16 @@ import { join, relative } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql } from "drizzle-orm";
-import { OWED_SLOT_CLAUSES, owedSlotExistsIn } from "./owed-slot-predicate.js";
+import {
+  OWED_SLOT_CLAUSES,
+  owedSlotExistsIn,
+  owedSlotWhere,
+} from "./owed-slot-predicate.js";
 import { deliverableOwedBy, isOwedByYouIn } from "@synap-core/types/units";
+import {
+  SESSION_STATUSES,
+  isPlannedSessionStatus,
+} from "@synap-core/types/focus-sessions";
 
 const STAMP = "2026-09-08T13:00:00.000Z";
 /** An answer as the answer door stores it (trimmed to what the rule reads). */
@@ -477,5 +485,49 @@ describe("no second copy of the owed-slot clauses in pod source", () => {
       .filter((f) => /slot->>?'retiredAt'/.test(readFileSync(f, "utf8")))
       .map((f) => relative(PACKAGES, f));
     expect(hits).toEqual(["database/src/utils/owed-slot-predicate.ts"]);
+  });
+});
+
+/**
+ * THE SESSION CLAUSE (founder P2, 21 Nov 2026): a PLANNED step (`forming`)
+ * owes nothing until it starts. `owedSlotWhere` (every count and the
+ * needs-you read) runs on a real `focus_sessions` row for every stored
+ * status; its TypeScript twin is "not planned AND the slot rule"
+ * (`projectOwedSlots` in api, `classifyOwedAsk` in types).
+ */
+describe("owedSlotWhere: a planned step owes nothing (P2)", () => {
+  beforeAll(async () => {
+    await client.exec(
+      `create table focus_sessions (id text primary key, status text, expected_outputs jsonb)`
+    );
+  });
+
+  it("agrees with the rule for every stored status, owed slot or not", async () => {
+    expect(SESSION_STATUSES).toContain("forming");
+    const where = dialect.sqlToQuery(owedSlotWhere());
+    let owedRows = 0;
+    for (const status of SESSION_STATUSES) {
+      for (const slot of [{ owner: "human" }, { owner: "agent" }]) {
+        const id = `${status}:${slot.owner}`;
+        await client.query(
+          `insert into focus_sessions (id, status, expected_outputs) values ($1, $2, $3::jsonb)`,
+          [id, status, JSON.stringify([slot])]
+        );
+        const res = await client.query<{ id: string }>(
+          `select id from focus_sessions where id = $${where.params.length + 1} and ${where.sql}`,
+          [...(where.params as unknown[]), id]
+        );
+        const expected =
+          !isPlannedSessionStatus(status) &&
+          deliverableOwedBy(slot as never) === "you";
+        if (expected) owedRows += 1;
+        expect({ id, owed: res.rows.length === 1 }).toEqual({
+          id,
+          owed: expected,
+        });
+      }
+    }
+    // Non-vacuity: every other status still owes its human slot.
+    expect(owedRows).toBe(SESSION_STATUSES.length - 1);
   });
 });

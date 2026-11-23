@@ -13,7 +13,7 @@
  *              decision, so the agent gravity gate does not re-run here; it
  *              was surfaced to the reviewer at propose time instead)
  *   session  → `createFocusSession` (no agentUserId: the approval is the human
- *              decision)
+ *              decision), with the parent passed at create when it exists
  *   edge     → `addSessionBlocker` (`blocked_by`) / `recordSessionSpawn`
  *              (`spawned_from`) — the same producers `POST /links` and the
  *              create doors use, floored on the plan's session OWNER
@@ -81,6 +81,11 @@ async function linkIdFor(
 
 export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
   const { database, userId, sessionOwnerUserId, workspaceId } = ctx;
+  // `child>parent` of each `spawned_from` edge the session door wrote AT
+  // create in this run. P2 then meets the edge already there; it is still this
+  // run's row (the child did not exist before), so it is reported as created
+  // and plan undo removes it.
+  const spawnedAtCreate = new Set<string>();
 
   const routerCtx = (): Context =>
     ({
@@ -134,6 +139,11 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
           workspaceId,
           projectId: input.projectId,
           subjectEntityId: input.subjectEntityId,
+          // The parent AT create, as a direct start passes it: the door derives
+          // the project, goal and space from it and writes `spawned_from`.
+          ...(input.parentSessionId
+            ? { parentSessionId: input.parentSessionId }
+            : {}),
           title: input.title,
           goal: input.goal,
           ...(input.expectedOutputs.length > 0
@@ -156,6 +166,11 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
             : {}),
         });
         if (out.status === "created") {
+          if (out.parentLink?.status === "linked") {
+            spawnedAtCreate.add(
+              `${out.session.id}>${out.parentLink.parentSessionId}`
+            );
+          }
           return { id: out.session.id, linked: false };
         }
         // The door reuses an OPEN session of the same goal and scope. Not this
@@ -219,7 +234,9 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
               toId: toSessionId,
               type,
             })),
-          preExisting: existedBefore !== null,
+          preExisting:
+            existedBefore !== null &&
+            !spawnedAtCreate.has(`${fromSessionId}>${toSessionId}`),
         };
       },
     },

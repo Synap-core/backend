@@ -5,6 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import {
+  LIVE_RUN_STATUSES,
   PLAYBOOK_RUN_STATUSES,
   RUN_STATUS_DECLARATION,
   runStatusCategory,
@@ -29,12 +30,22 @@ describe("run lifecycle (D9)", () => {
     expect(runStatusCategory("proposed")).toBe("paused");
     expect(runStatusCategory("waiting_on_you")).toBe("paused");
     expect(runStatusCategory("stale")).toBe("paused");
+    expect(runStatusCategory("blocked")).toBe("paused");
+    expect(runStatusCategory("queued")).toBe("open");
     expect(runStatusCategory("running")).toBe("active");
     expect(runStatusCategory("completed")).toBe("done");
     expect(runStatusCategory("failed")).toBe("lost");
     expect(runStatusCategory("cancelled")).toBe("lost");
     expect(runStatusCategory("nope")).toBeNull();
     expect(runStatusCategory(null)).toBeNull();
+  });
+});
+
+describe("a run is live from birth until its verdict", () => {
+  it("queued and blocked are live; proposed is not", () => {
+    expect([...LIVE_RUN_STATUSES].sort()).toEqual(
+      ["blocked", "queued", "running", "stale", "waiting_on_you"].sort()
+    );
   });
 });
 

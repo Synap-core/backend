@@ -58,6 +58,10 @@ import {
 } from "../../../utils/ai-failure.js";
 import { executeCapability } from "../../capabilities/execute-capability.js";
 import {
+  describeMeasure,
+  isMeasureDetail,
+} from "../../capabilities/measure-check.js";
+import {
   CHECK_GATE_METADATA_KEY,
   checkGateFailing,
 } from "../../playbooks/stage-gate.js";
@@ -176,11 +180,29 @@ export function pendingCriteria(
  */
 export function capabilityVerdict(
   result: Awaited<ReturnType<typeof executeCapability>>
-): { verdict: EvaluationVerdict; rationale: string } {
+): {
+  verdict: EvaluationVerdict;
+  rationale: string;
+  /** A structured `detail` (a measure's value and bar), kept as the grade's evidence. */
+  evidence?: Record<string, unknown>;
+} {
   if (result.kind === "run") {
     const passed = (result.result as { passed?: unknown } | null)?.passed;
     if (typeof passed === "boolean") {
       const detail = (result.result as { detail?: unknown }).detail;
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        // `measure.check` (P8): `{ value, threshold, comparator, op }`. The
+        // sentence is the grade's rationale and its evidence `detail` (what
+        // the scorecard shows); the numbers stay beside it.
+        const rationale = isMeasureDetail(detail)
+          ? describeMeasure(detail)
+          : `passed: ${passed}`;
+        return {
+          verdict: passed ? "pass" : "fail",
+          rationale,
+          evidence: { detail: rationale, result: detail },
+        };
+      }
       return {
         verdict: passed ? "pass" : "fail",
         rationale: typeof detail === "string" ? detail : `passed: ${passed}`,
@@ -343,6 +365,9 @@ export async function evaluateSession(
       const run = await executeCapability({
         verbId,
         parameters: {
+          // The criterion's own arguments (`check.params`, P8: a measure's
+          // op, params and bar) first, so the evaluator's own keys win.
+          ...(c.check.params ?? {}),
           sessionId,
           criterionKey: c.key,
           // The outcome this criterion checks (`outputKey`), with its `ref`,
@@ -359,8 +384,12 @@ export async function evaluateSession(
         observability: "mirror",
         sessionId,
       });
-      const { verdict, rationale } = capabilityVerdict(run);
-      await record(c, verdict, { evaluatorId: verbId, rationale });
+      const { verdict, rationale, evidence } = capabilityVerdict(run);
+      await record(c, verdict, {
+        evaluatorId: verbId,
+        rationale,
+        ...(evidence ? { evidence } : {}),
+      });
     } else if (c.check.kind === "judge") {
       judged.push(c);
     }
@@ -469,10 +498,19 @@ export async function evaluateSession(
           for (const c of group) {
             const v = byKey.get(c.key);
             if (judgement.decider === "none" || !judgement.model || !v) {
+              // The judge answered without a verdict (its only model is the
+              // one that did the work, or it named none for this criterion):
+              // the judge could not run, which is not a verdict on the work.
+              // It carries a class like every could-not-run, so a check gate
+              // holds on it instead of sending the run back (decision 8:
+              // nothing is failed by a judge that did not answer). No failure
+              // class names this case; `unknown` is the one that claims no
+              // cause.
               results.push({
                 key: c.key,
                 status: "skipped",
-                reason: v?.rationale || "No judge could grade this criterion.",
+                reason: `The AI judge could not run: ${v?.rationale || "no judge could grade this criterion."}`,
+                failureClass: "unknown",
               });
               continue;
             }

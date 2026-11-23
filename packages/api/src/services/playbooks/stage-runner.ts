@@ -49,6 +49,7 @@ import {
   playbookRuns,
   setSessionStatus,
   drizzleSql,
+  SESSION_STARTED_BY_AGENT_KEY,
   users,
 } from "@synap/database";
 import {
@@ -58,7 +59,11 @@ import {
   type SessionStageRun,
   type StageRunnerVia,
 } from "@synap/database/schema";
-import type { RunOn, RunnerPassedOver } from "@synap-core/types/agents";
+import {
+  passedOverLine,
+  type RunOn,
+  type RunnerPassedOver,
+} from "@synap-core/types/agents";
 import {
   runnerChoices,
   type ExpectedOutput,
@@ -101,7 +106,10 @@ export interface EnterStageResult {
   runnerAgentUserId?: string | null;
   via?: StageRunnerVia;
   handOff?: StageHandOff;
-  /** The hand-off's proposal, or why it was refused. */
+  /**
+   * The hand-off's proposal, or why it was refused, or why the step stayed
+   * with the agent already working the session (no second worker, 44af412e).
+   */
   proposalId?: string;
   reason?: string;
   /** A step that `uses` a playbook: the child run's session that works it. */
@@ -290,10 +298,7 @@ async function askWhoWorksIt(p: {
   );
   if (!declared) return;
   const why = `None of the runners step ${p.stageName} names can take it now (${p.passedOver
-    .map(
-      (o) =>
-        `${o.name ?? "choice " + (o.choice + 1)}: ${o.why.replace(/_/g, " ")}`
-    )
+    .map(passedOverLine)
     .join("; ")}).`;
   const ask: SlotAsk = {
     mode: "confirm",
@@ -446,6 +451,54 @@ export async function enterStage(p: {
   }
 }
 
+/**
+ * The agent ALREADY WORKING this session, when the step would hand its child
+ * run to a second agent of the same kind (finding 44af412e).
+ *
+ * A session a coding agent started (`metadata.startedByAgentId`) is worked by
+ * that agent. A step that `uses` a playbook handed to a runner of the same
+ * kind (the same `agentType`, or that very agent) would start a second worker
+ * on the same work. On 20 Nov 2026 "Fix a finding" did this four times under
+ * sessions a Claude Code lane had started to fix the finding by hand: two
+ * duplicate PRs (backend#1216), and the lane's own session paused waiting on
+ * its double. A session a person started (no stamp) still gets the worker. So
+ * does a step handed to another kind of runner (Synap AI, another engine).
+ * Null when nothing is already working it. Never throws: a failed read is
+ * "not known", and the step goes to its runner as before.
+ */
+export async function agentAlreadyWorking(p: {
+  metadata: unknown;
+  handTo: string | null;
+}): Promise<{ agentUserId: string; name: string | null } | null> {
+  const starter = (p.metadata as Record<string, unknown> | null)?.[
+    SESSION_STARTED_BY_AGENT_KEY
+  ];
+  if (typeof starter !== "string" || !starter || !p.handTo) return null;
+  try {
+    const rows = await db
+      .select({ id: users.id, name: users.name, agentType: users.agentType })
+      .from(users)
+      .where(inArray(users.id, [...new Set([starter, p.handTo])]));
+    const started = rows.find((r) => r.id === starter);
+    const runner = rows.find((r) => r.id === p.handTo);
+    if (!started) return null;
+    const sameKind =
+      starter === p.handTo ||
+      (!!started.agentType &&
+        !!runner?.agentType &&
+        started.agentType === runner.agentType);
+    return sameKind
+      ? { agentUserId: starter, name: started.name?.trim() || null }
+      : null;
+  } catch (err) {
+    logger.warn(
+      { err, starter, handTo: p.handTo },
+      "stage runner: could not read who already works the session"
+    );
+    return null;
+  }
+}
+
 async function enterStageUnsafe(p: {
   sessionId: string;
   stageKey: string;
@@ -461,6 +514,7 @@ async function enterStageUnsafe(p: {
       title: true,
       status: true,
       playbookId: true,
+      metadata: true,
     },
     where: eq(focusSessions.id, p.sessionId),
   });
@@ -630,6 +684,26 @@ async function enterStageUnsafe(p: {
     }
   }
 
+  // A step that `uses` a playbook under a session its own coding agent is
+  // working: that agent keeps the step, and no second worker is started
+  // (finding 44af412e). Decided before the row, so the row names who works it.
+  const alreadyWorking =
+    stage.uses && !stage.forEach && !synapAiChosen && handOff === "attached"
+      ? await agentAlreadyWorking({
+          metadata: session.metadata,
+          handTo: holder,
+        })
+      : null;
+  if (alreadyWorking) {
+    holder = alreadyWorking.agentUserId;
+    computerUserId = runOn?.computerUserId ?? null;
+    presetKey = null;
+    holderReach = null;
+    handOff = "none";
+    report = {};
+    reason = `${alreadyWorking.name ?? "The agent"} that started this session is already working it, so no second worker was started for step ${stageName}.`;
+  }
+
   const missingTools = Object.entries(report)
     .filter(([, e]) => e.state === "missing")
     .map(([k]) => k);
@@ -675,7 +749,9 @@ async function enterStageUnsafe(p: {
   // (the re-check starts it) nor while nobody can take it (the person picks)
   // or a hand-off waits for the person. A step that runs once per batch of
   // items (`forEach`) is worked by child runs, on the same conditions.
-  if (stage.forEach && handOff !== "nobody" && handOff !== "proposed") {
+  if (alreadyWorking) {
+    await roomLine(session, reason!, `stage-runner:${stageRunId}`);
+  } else if (stage.forEach && handOff !== "nobody" && handOff !== "proposed") {
     if (!waitsOnTools) {
       const { startStageForEach } = await import("./stage-for-each.js");
       const out = await startStageForEach({ session, stage, stageRunId });
@@ -777,13 +853,14 @@ async function enterStageUnsafe(p: {
     // answers it, and the step is checked again then.
     if (
       proposals[0] &&
-      (session.status === "active" || session.status === "forming")
+      // A planned step (`forming`) has not started: never paused here (P1).
+      session.status === "active"
     ) {
       // Best effort: a pause the hold rule refuses leaves the step waiting
       // (its row says so) and the session as it was.
       await setSessionStatus(db, {
         sessionId: session.id,
-        from: ["active", "forming"],
+        from: "active",
         to: "paused",
         actor: { kind: "system", userId: session.userId },
         reason: `Step ${stageName} waits for ${missingTools.join(", ")}.`,

@@ -42,6 +42,7 @@ import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
 import { findInFlightRunSession } from "../../utils/run-in-flight.js";
 import { linkWouldLoop } from "../../utils/link-lineage.js";
 import { logger } from "../automation-executor-logger.js";
+import { runEntityVisibilityWhere } from "../entity-query-scope.js";
 import { isUuid } from "@synap-core/types/property-render";
 import type {
   StepContext,
@@ -287,21 +288,22 @@ export async function executePlaybookRun(
     (context.trigger.payload.subjectId as string | undefined) ??
     null;
 
-  // Bind the subject ONLY if it's an entity the run can legitimately see — its
-  // own workspace OR a pod-wide (workspaceId NULL) entity. A crafted
-  // paramsMapping / trigger payload must not bind a session to an entity in
-  // another workspace (write-side IDOR guard; the column has no FK).
+  // Bind the subject ONLY if the run's owner can read it in the run's space
+  // (a run's entity floor, `runEntityVisibilityWhere`: this space's records
+  // and the owner's pod-wide ones). A crafted paramsMapping or
+  // trigger payload must not bind a session to an entity of another space or
+  // person (write-side IDOR guard; the column has no FK).
   let resolvedSubjectId: string | undefined;
   let subjectProperties: Record<string, unknown> | null = null;
   if (candidateSubjectId) {
     const subj = await db.query.entities.findFirst({
-      columns: { id: true, workspaceId: true, properties: true },
-      where: eq(entities.id, candidateSubjectId),
+      columns: { id: true, properties: true },
+      where: and(
+        eq(entities.id, candidateSubjectId),
+        runEntityVisibilityWhere(workspaceId, ownerId)
+      ),
     });
-    if (
-      subj &&
-      (subj.workspaceId === workspaceId || subj.workspaceId === null)
-    ) {
+    if (subj) {
       resolvedSubjectId = subj.id;
       subjectProperties =
         (subj.properties as Record<string, unknown> | null) ?? null;

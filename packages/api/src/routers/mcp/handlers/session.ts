@@ -87,6 +87,11 @@ import {
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  hasBlockerEdits,
+  parseBlockerEdits,
+  readBlockerIds,
+} from "./blocker-args.js";
 import { SESSION_TARGETS_MAX } from "../../../services/focus-sessions/session-targets-wire.js";
 
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
@@ -191,45 +196,6 @@ async function parseOutcomesArg(raw: unknown): Promise<
   return { list: parsed.data };
 }
 
-/** At most this many ids per blocker list — the same bound start's `blockedBySessionIds` has. */
-const BLOCKER_IDS_MAX = 20;
-
-/**
- * The mid-flight blocker edits on `synap_update_session` — `addBlockedBySessionIds`
- * / `removeBlockedBySessionIds`, each an array of session UUIDs. Refused whole
- * (nothing changed) when malformed, or when one id is in both lists: an add
- * and a remove of the same edge in one call has no honest order.
- */
-function parseBlockerEdits(
-  args: Record<string, unknown>
-): { add: string[]; remove: string[] } | { error: string } {
-  const read = (key: string): string[] | { error: string } => {
-    const raw = args[key];
-    if (raw === undefined || raw === null) return [];
-    if (
-      !Array.isArray(raw) ||
-      raw.length > BLOCKER_IDS_MAX ||
-      !raw.every((id) => typeof id === "string" && isUuid(id))
-    ) {
-      return {
-        error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} session UUIDs — NOTHING WAS CHANGED.`,
-      };
-    }
-    return raw as string[];
-  };
-  const add = read("addBlockedBySessionIds");
-  if ("error" in add) return add;
-  const remove = read("removeBlockedBySessionIds");
-  if ("error" in remove) return remove;
-  const both = add.filter((id) => remove.includes(id));
-  if (both.length > 0) {
-    return {
-      error: `${both.join(", ")} is in both addBlockedBySessionIds and removeBlockedBySessionIds — NOTHING WAS CHANGED. Send one of the two.`,
-    };
-  }
-  return { add, remove };
-}
-
 /**
  * Args that never ask `updateFocusSession` for anything: the target, the
  * blocker edits (their own door), and `workspaceId` — the MCP URL lens injects
@@ -240,6 +206,10 @@ const NOT_A_FIELD_UPDATE = new Set([
   "workspaceId",
   "addBlockedBySessionIds",
   "removeBlockedBySessionIds",
+  "addBlockedByEntityIds",
+  "removeBlockedByEntityIds",
+  "addBlockedByTrackIds",
+  "removeBlockedByTrackIds",
   "alsoServesTrackIds",
 ]);
 
@@ -599,6 +569,15 @@ export const sessionHandlers: McpHandlerMap = {
           "blockedBySessionIds must be an array of at most 20 session UUIDs — sessions you own that this one waits on.",
       });
     }
+    // A decision (entity) or a goal it waits on: the cross-kind edge.
+    const blockedByEntityIds = readBlockerIds(
+      args,
+      "blockedByEntityIds",
+      "entity"
+    );
+    if ("error" in blockedByEntityIds) return ok(blockedByEntityIds);
+    const blockedByTrackIds = readBlockerIds(args, "blockedByTrackIds", "goal");
+    if ("error" in blockedByTrackIds) return ok(blockedByTrackIds);
     // The batch it works on: entity handles, refused here in words. The
     // visibility floor is the service's (`createFocusSession`).
     const targetsArg = readTargetsArg(args.targets);
@@ -735,6 +714,8 @@ export const sessionHandlers: McpHandlerMap = {
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
           : [],
+        blockedByEntityIds,
+        blockedByTrackIds,
         ...(targetsArg ? { targets: targetsArg } : {}),
         forceCreate: args.forceCreate === true,
       });
@@ -1532,6 +1513,8 @@ export const sessionHandlers: McpHandlerMap = {
       pullRequests: graph.pullRequests,
       holds: graph.holds,
       goals: graph.goals,
+      decisions: graph.decisions,
+      entities: graph.entities,
       sections: graph.sections,
       window: graph.window,
     });
@@ -1692,9 +1675,7 @@ export const sessionHandlers: McpHandlerMap = {
     // the dependency door with its own governance: applied together, after
     // the owner floor, and reported per id.
     const editsLinks =
-      blockerEdits.add.length > 0 ||
-      blockerEdits.remove.length > 0 ||
-      servesEdits.add.length > 0;
+      hasBlockerEdits(blockerEdits) || servesEdits.add.length > 0;
 
     /**
      * BLOCKERS ON A RUNNING SESSION — "this session now waits on that one",
@@ -1704,31 +1685,54 @@ export const sessionHandlers: McpHandlerMap = {
      * `addCreateTimeBlockers` (owner floor on both sessions, cycle refused),
      * removes through `removeSessionBlockers` (the governed delete). Reported
      * per id, never folded: `blockerLinks` (linked | proposed | failed) and
-     * `blockerRemovals` (removed | absent | proposed | failed).
+     * `blockerRemovals` (removed | absent | proposed | failed). A decision
+     * (entity) or a goal it waits on goes through THE governed dependency
+     * door (`unit-blockers.ts`) and is reported in the same two lists.
      */
     const applyBlockerEdits = async (): Promise<Record<string, unknown>> => {
       if (!editsLinks) return {};
       const { addCreateTimeBlockers, removeSessionBlockers } =
         await import("../../../services/focus-sessions/session-blocked-by.js");
+      const { applyUnitBlockerEdits } =
+        await import("../../../services/links/unit-blockers.js");
       const sessionId = args.sessionId as string;
-      const blockerLinks =
-        blockerEdits.add.length > 0
+      const sessionLinks =
+        blockerEdits.session.add.length > 0
           ? await addCreateTimeBlockers({
               sessionId,
-              blockerSessionIds: blockerEdits.add,
+              blockerSessionIds: blockerEdits.session.add,
               userId,
               agentUserId,
             })
-          : undefined;
-      const blockerRemovals =
-        blockerEdits.remove.length > 0
+          : [];
+      const sessionRemovals =
+        blockerEdits.session.remove.length > 0
           ? await removeSessionBlockers({
               sessionId,
-              blockerSessionIds: blockerEdits.remove,
+              blockerSessionIds: blockerEdits.session.remove,
               userId,
               agentUserId,
             })
-          : undefined;
+          : [];
+      const units = await applyUnitBlockerEdits({
+        from: { type: "session", id: sessionId },
+        add: {
+          entity: blockerEdits.entity.add,
+          track: blockerEdits.track.add,
+        },
+        remove: {
+          entity: blockerEdits.entity.remove,
+          track: blockerEdits.track.remove,
+        },
+        userId,
+        agentUserId,
+        sessionId,
+        door: "mcp:synap_update_session",
+      });
+      const links = [...sessionLinks, ...units.links];
+      const removals = [...sessionRemovals, ...units.removals];
+      const blockerLinks = links.length > 0 ? links : undefined;
+      const blockerRemovals = removals.length > 0 ? removals : undefined;
       // The goals it also serves (`session --serves--> track`).
       const servesLinks =
         servesEdits.add.length > 0

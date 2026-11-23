@@ -733,7 +733,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours with synap_revise_proposal; another's, file the fix with `supersedes` = this id (capture, create/update_entity, run_capability). Take back yours with synap_reject_proposal (unscored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned.",
+      "description": "Read ONE proposal in full — the door for \"why did my write not land?\". Returns the row a reviewer sees: `status`, the whole `data` payload (the operations that would apply), `summary`, provenance, and — when an approve was attempted and FAILED (`status: 'approval_failed'`) — `rejectionReason` (the classified sentence) plus `data.failure` { errorClass, providerRef, missingFields }: the fields naming what to fix. Use it after a write comes back `proposed` and the user reports a problem approving it, then REPAIR it: yours with synap_revise_proposal; another's, file the fix with `supersedes` = this id (capture, create/update_entity, run_capability). Take back yours with synap_reject_proposal (unscored). A proposal still `pending` after a failed approve attempt recorded nothing — read `data` and check the ops yourself. The raw upstream error text is deliberately NOT returned. Once applied, `landed` = the objects it made, each with `next` (what it still needs, e.g. `turn_on`).",
       "parameters": [
         {
           "name": "proposalId",
@@ -3168,7 +3168,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBySessionIds (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
+      "description": "Create a focus session — a goal-bound work session — to declare 'I'm starting work on X'. File it in a project (projectId) or a goal (trackId); unless you pin workspaceId, a session's space comes from its playbook, subject, parent session, project or your focus. A goal (track): pass trackId (synap_list_tracks), which implies the project. Give a short `title` (the name) and a `goal` (the outcome, one sentence). Decompose with parentSessionId (children of a root) and blockedBy*Ids (ordering), never by writing a chain into the goal; a prerequisite the goal cannot proceed without is a CHILD with parentSessionId AND suspendedIntent (one line: what the parent was about to do), which blocks the parent until it closes. `parentLink` and `blockerLinks` report a failed edge, never silently. An open session with the same goal in this scope is returned with status 'deduped': continue it. DEFAULTS: your writes are grouped into this conversation's session automatically (one per project; `attribution.filed` names it); calling this names it (an auto-opened one is ADOPTED, `adopted: true`). Another conversation's session is joined only by passing its id as `sessionId`. PLAYBOOKS BIND ON FACTS, never on words: templateId; else the one active playbook for the subject's kind; else the parent's; else the main-red playbook for a `main red:` title; the `binding` line says which. Without templateId, `playbooks` ranks candidates (suggestions, nothing applied); follow or release one later with synap_update_session followPlaybookId (null releases); templateId: null skips the ranking. `offers` (suggestions, nothing applied) lists open `goals` when you named no trackId (file with synap_update_session trackId), open `sessions` on close work (continue instead of duplicating), or `homes` for a start in no project. SIZE it from the work: one session per thing that needs its own thinking, one per batch of interchangeable items. With a subject, the session's step IS the subject's status: move the thing (synap_update_entity + expectedStatus), the step follows. DECLARE at least one criterion, or an outcome with `verify`: without one the start is refused (reasonCode NO_CRITERIA, nothing created); continuing needs none. Propose two to five binary, observable statements for the person to validate. Declare `outcomes` for what the session will produce, so 'done' is derivable from unfilled slots.",
       "parameters": [
         {
           "name": "forceCreate",
@@ -3282,7 +3282,18 @@
           "name": "blockedBySessionIds",
           "type": "array<string>",
           "required": false,
-          "description": "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker is closed — delivered; a cancelled or failed blocker holds, marked dropped, until you re-plan). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason)."
+          "description": "Sessions (yours) it waits on: closed clears; cancelled or failed holds until you re-plan."
+        },
+        {
+          "name": "blockedByEntityIds",
+          "type": "array<string>",
+          "required": false,
+          "description": "e.g. a decision: accepted clears, rejected holds."
+        },
+        {
+          "name": "blockedByTrackIds",
+          "type": "array<string>",
+          "required": false
         },
         {
           "name": "suspendedIntent",
@@ -3391,7 +3402,7 @@
                 },
                 "verify": {
                   "type": "object",
-                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` to post a named proof instead) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
                   "properties": {
                     "kind": {
                       "type": "string",
@@ -3399,7 +3410,8 @@
                     },
                     "capability": { "type": "string" },
                     "evidenceKey": { "type": "string" },
-                    "hint": { "type": "string" }
+                    "hint": { "type": "string" },
+                    "params": { "type": "object" }
                   },
                   "required": ["kind"]
                 },
@@ -3557,9 +3569,17 @@
           },
           "blockedBySessionIds": {
             "type": "array",
-            "items": { "type": "string", "format": "uuid" },
-            "maxItems": 20,
-            "description": "Optional UUIDs of sessions this one WAITS ON — each becomes a `session --blocked_by--> session` edge (blocked-ness is derived: it clears when the blocker is closed — delivered; a cancelled or failed blocker holds, marked dropped, until you re-plan). Every id must be a session you own. Reported per id on the result's `blockerLinks` (linked | proposed | failed with a reason)."
+            "items": { "type": "string" },
+            "description": "Sessions (yours) it waits on: closed clears; cancelled or failed holds until you re-plan."
+          },
+          "blockedByEntityIds": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "e.g. a decision: accepted clears, rejected holds."
+          },
+          "blockedByTrackIds": {
+            "type": "array",
+            "items": { "type": "string" }
           },
           "suspendedIntent": {
             "type": "string",
@@ -3589,7 +3609,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBySessionIds` / `removeBlockedBySessionIds` — each id reported on `blockerLinks` / `blockerRemovals`). When a blocker ENDED WITHOUT DELIVERING (cancelled, failed), it does not clear: the session's next move is `blocker_dropped` — re-plan: remove that blocker if the work no longer needs it, or remove it and add the session that retries it, in one call. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
+      "description": "Update an in-flight focus session WHILE working: title (the name), goal, status (active|paused), progress, subject (`subjectEntityId` re-points what the work is ABOUT, null clears), project (`projectId` files the session into a project — a proposal, except your OWN session from the last 24 h, untouched by the person, into your declared focus project: then it applies with an Undo; null unfiles, always a proposal), space (`moveToWorkspaceId` moves it into another Space — always a proposal), track (`trackId` ADOPTS existing work into a track — always a proposal; trackId null unfiles; `trackStage` only for a legacy staged track), deliverables (`outcomes`/`addOutput` add or update — never delete; `completeOutput` CLAIMS one by key — evidence or review marks it met; `retireOutput` withdraws one), roster (`addAgentId` appends one agent, idempotently), the playbook it FOLLOWS (`followPlaybookId` merges in its criteria + deliverables; the session stays your work and shows in that playbook's runs; null releases it), and what it WAITS ON (`addBlockedBy*Ids` / `removeBlockedBy*Ids`: sessions, entities e.g. a decision, goals; per id on `blockerLinks` / `blockerRemovals`). A blocker that ENDED WITHOUT DELIVERING (cancelled, failed, a decision rejected) holds: next move `blocker_dropped`, re-plan. Cannot close — use synap_complete_session for that. Record a PR as an outcome: `outcomes: [{ key: 'pr-<repo>-<n>', kind: 'pull_request', label, ref: { url } }]`. The reply may carry `nudges` — what the session still owes (ungraded criteria, `currentStage` unset, outputs owed by the person, once: playbooks that fit an unbound session) and `readyToClose` once everything declared is produced and nothing is owed (grade, then synap_complete_session); act on them. It may also carry `warnings[]`: an `ask` on a slot that is not `owner:'human'` is dropped and reported there.",
       "parameters": [
         {
           "name": "sessionId",
@@ -3768,13 +3788,33 @@
           "name": "addBlockedBySessionIds",
           "type": "array<string>",
           "required": false,
-          "description": "Declare MID-FLIGHT that this session now WAITS ON these sessions (UUIDs of sessions you own) — the same `session --blocked_by--> session` edge start's `blockedBySessionIds` writes, with the same governance. Refused per id when it would make the two wait on each other (`cycle`). Reported per id on `blockerLinks` (linked | proposed | failed with a reason). A call with only blocker changes edits nothing else."
+          "description": "Sessions (yours) it now waits on; a cycle is refused."
         },
         {
           "name": "removeBlockedBySessionIds",
           "type": "array<string>",
           "required": false,
-          "description": "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call."
+          "description": "Re-plan: stop waiting; add the retry in the same call."
+        },
+        {
+          "name": "addBlockedByEntityIds",
+          "type": "array<string>",
+          "required": false
+        },
+        {
+          "name": "removeBlockedByEntityIds",
+          "type": "array<string>",
+          "required": false
+        },
+        {
+          "name": "addBlockedByTrackIds",
+          "type": "array<string>",
+          "required": false
+        },
+        {
+          "name": "removeBlockedByTrackIds",
+          "type": "array<string>",
+          "required": false
         },
         {
           "name": "alsoServesTrackIds",
@@ -3871,7 +3911,7 @@
                 },
                 "verify": {
                   "type": "object",
-                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` to post a named proof instead) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
                   "properties": {
                     "kind": {
                       "type": "string",
@@ -3879,7 +3919,8 @@
                     },
                     "capability": { "type": "string" },
                     "evidenceKey": { "type": "string" },
-                    "hint": { "type": "string" }
+                    "hint": { "type": "string" },
+                    "params": { "type": "object" }
                   },
                   "required": ["kind"]
                 },
@@ -4097,15 +4138,29 @@
           },
           "addBlockedBySessionIds": {
             "type": "array",
-            "items": { "type": "string", "format": "uuid" },
-            "maxItems": 20,
-            "description": "Declare MID-FLIGHT that this session now WAITS ON these sessions (UUIDs of sessions you own) — the same `session --blocked_by--> session` edge start's `blockedBySessionIds` writes, with the same governance. Refused per id when it would make the two wait on each other (`cycle`). Reported per id on `blockerLinks` (linked | proposed | failed with a reason). A call with only blocker changes edits nothing else."
+            "items": { "type": "string" },
+            "description": "Sessions (yours) it now waits on; a cycle is refused."
           },
           "removeBlockedBySessionIds": {
             "type": "array",
-            "items": { "type": "string", "format": "uuid" },
-            "maxItems": 20,
-            "description": "Stop waiting on these sessions — how you RE-PLAN when a blocker was dropped (cancelled / failed), or when it is no longer needed. Reported per id on `blockerRemovals` (removed | absent — there was no such edge | proposed | failed with a reason). To wait on a retry instead, remove the old one and add the retry (`addBlockedBySessionIds`) in the same call."
+            "items": { "type": "string" },
+            "description": "Re-plan: stop waiting; add the retry in the same call."
+          },
+          "addBlockedByEntityIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "removeBlockedByEntityIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "addBlockedByTrackIds": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "removeBlockedByTrackIds": {
+            "type": "array",
+            "items": { "type": "string" }
           },
           "alsoServesTrackIds": {
             "type": "array",
@@ -4139,7 +4194,7 @@
           "name": "evidence",
           "type": "object",
           "required": false,
-          "description": "Evidence keyed by each criterion's evidenceKey (e.g. { typecheck: { passed: true, detail: \"0 errors\" } })."
+          "description": "Evidence keyed by each criterion's evidenceKey, which defaults to its key (e.g. { typecheck: { passed: true, detail: \"0 errors\" } })."
         }
       ],
       "inputSchema": {
@@ -4151,7 +4206,7 @@
           },
           "evidence": {
             "type": "object",
-            "description": "Evidence keyed by each criterion's evidenceKey (e.g. { typecheck: { passed: true, detail: \"0 errors\" } }).",
+            "description": "Evidence keyed by each criterion's evidenceKey, which defaults to its key (e.g. { typecheck: { passed: true, detail: \"0 errors\" } }).",
             "additionalProperties": {
               "type": "object",
               "properties": {
@@ -4715,7 +4770,7 @@
           "name": "quote",
           "type": "string",
           "required": false,
-          "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+          "description": "The person's own words, verbatim. Required with 'answered'. Over 2000 chars: kept as a document (`quoteDocumentId`)."
         },
         {
           "name": "text",
@@ -4765,8 +4820,8 @@
           },
           "quote": {
             "type": "string",
-            "maxLength": 2000,
-            "description": "The person's own words, verbatim, as they typed them. Required with 'answered'."
+            "maxLength": 50000,
+            "description": "The person's own words, verbatim. Required with 'answered'. Over 2000 chars: kept as a document (`quoteDocumentId`)."
           },
           "text": {
             "type": "string",
@@ -5047,7 +5102,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.",
+      "description": "What REALLY needs the person right now, classified by the pod's one needs-you rule — read-only. `rows.needs_you` is the headline: a real asker, live work no agent is working on right now, under 7 days old or a commitment. Everything else is in a named fold, never dropped: `working` (an agent is on it: it asks when they can), `stopped` (no agent moved the session for 7 days: resume or close it), `review_later` (a real ask over 7 days), `from_system` (no real asker raised it), `changes_to_review` (pending proposals nothing waits on). `count` carries the numbers, `count.folds` per fold. `count.decisions` is pending proposals only: a `proposed` decision you create asks as an owed-slot row (`waitKind: 'decide'`, in `count.blocked`). Read this instead of re-deriving 'needs you' from session reads; point the person at the headline first.",
       "parameters": [
         {
           "name": "workspaceId",
@@ -5404,13 +5459,13 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "The map of YOUR work in one read — read-only: every OPEN session, every session settled in the last `windowHours` (default 72), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `spawned_from` child→parent, `orchestrated_by` child→orchestrator, `waits_on_output`, `triggered`, `updated`), `pullRequests` (with state), `holds`, `goals` (with their method: `playbookId`, `currentStage`, `stages`), `sections` (a FAILED read is `unavailable`, never empty) and `window` (`truncated` + `omitted` past the 500-session ceiling). Use it instead of one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
+      "description": "The map of YOUR work in one read, read-only: every OPEN session, every session settled in the last `windowHours` (any age for a goal or wave), and the far end of every edge. `nodes`, flat `edges` (`blocked_by` waiter→blocker, `serves` →goal, `spawned_from`, `orchestrated_by`, `waits_on_output`, `triggered`, `updated`; `fromKind`/`toKind` when an end is not a session), `pullRequests`, `holds`, `goals` (with method), `decisions` (options, answer), `entities` (subjects), `sections` (a FAILED read is `unavailable`, never empty), `window` (`truncated` past 500). Use it, not one `synap_get_session` per session. Pod-wide unless narrowed by workspace, project, goal, wave, playbook or thing.",
       "parameters": [
         {
           "name": "windowHours",
           "type": "number",
           "required": false,
-          "description": "Settled sessions from this many hours back, 1–720. Open ones are always in."
+          "description": "Settled sessions from this many hours back, 1–720. Open ones always in."
         },
         {
           "name": "workspaceId",
@@ -5476,7 +5531,7 @@
           "windowHours": {
             "type": "number",
             "default": 72,
-            "description": "Settled sessions from this many hours back, 1–720. Open ones are always in."
+            "description": "Settled sessions from this many hours back, 1–720. Open ones always in."
           },
           "workspaceId": {
             "type": "string",
@@ -5986,7 +6041,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Call this to discover what already exists BEFORE improvising a new process. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes); or detail:'full' with a small limit for complete rows. Launch one via synap_run_playbook.",
+      "description": "List playbooks (reusable process/session templates) visible to you across the pod — every member workspace plus pod-wide templates. Check here BEFORE improvising one. Optional workspaceId only narrows (still includes pod-wide). Each row is a DIGEST: id, name, status, executor, version, workspaceId, description (capped), param names (requiredParams = the ones a run must answer), activator keys and how its runs went. Pass playbookId to read ONE playbook in full plus `process`, the playbook seen whole (load_skill system/synap/processes). Launch one via synap_run_playbook.",
       "parameters": [
         {
           "name": "workspaceId",
@@ -6005,7 +6060,7 @@
           "name": "limit",
           "type": "number",
           "required": false,
-          "description": "Page size (1–100, default 25)."
+          "description": "Page size (1–100, default 25). With playbookId: stages per page (6)."
         },
         {
           "name": "cursor",
@@ -6014,10 +6069,16 @@
           "description": "nextCursor of the prior reply"
         },
         {
+          "name": "offset",
+          "type": "number",
+          "required": false,
+          "description": "With playbookId: first stage (nextOffset)."
+        },
+        {
           "name": "playbookId",
           "type": "string",
           "required": false,
-          "description": "Read ONE playbook in full (its whole definition and its `process`), instead of listing."
+          "description": "Read ONE playbook whole (with `process` and `stagesRevision`)."
         },
         {
           "name": "detail",
@@ -6041,15 +6102,19 @@
           },
           "limit": {
             "type": "number",
-            "description": "Page size (1–100, default 25)."
+            "description": "Page size (1–100, default 25). With playbookId: stages per page (6)."
           },
           "cursor": {
             "type": "string",
             "description": "nextCursor of the prior reply"
           },
+          "offset": {
+            "type": "number",
+            "description": "With playbookId: first stage (nextOffset)."
+          },
           "playbookId": {
             "type": "string",
-            "description": "Read ONE playbook in full (its whole definition and its `process`), instead of listing."
+            "description": "Read ONE playbook whole (with `process` and `stagesRevision`)."
           },
           "detail": {
             "type": "string",
@@ -6242,7 +6307,7 @@
           "name": "criteria",
           "type": "array<object>",
           "required": false,
-          "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }."
+          "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }."
         },
         {
           "name": "guidance",
@@ -6770,7 +6835,7 @@
           },
           "criteria": {
             "type": "array",
-            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
             "items": { "type": "object" }
           },
           "guidance": {
@@ -6806,7 +6871,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook: the same field shapes, the subject kind must resolve, and a goalTemplate {name} must be declared in params (only placeholders this edit introduces are refused). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
+      "description": "Edit an EXISTING playbook's definition: pass `playbookId` (from synap_list_playbooks) and ONLY the fields to change; a list you pass (stages, params, criteria, guidance, expectedOutputs, activators, triggers) REPLACES the stored one. Validated like synap_create_playbook. An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. To change a playbook proposal that is still PENDING, revise it with synap_revise_proposal (patch {kind:'inner', fields}) instead. Edits it on this pod only; an official template is changed in the catalog.",
       "parameters": [
         {
           "name": "playbookId",
@@ -6839,6 +6904,18 @@
           "description": "Ordered stages. Each: { key, name, category, description?, goal?, suggestedTasks?, position?, indefinite?, subjectStatus?, onApproved?, gate?, onFail?, expectedOutputs?, criteria?, tier?, forEach?, when?, runner?, uses?, requires?, tools? }. `category` (REQUIRED) is the rollup axis a cross-playbook board groups on, since stage `key`s are this playbook's own. Stage keys are unique within the playbook."
         },
         {
+          "name": "stageEdits",
+          "type": "array<object>",
+          "required": false,
+          "description": "Edit stages by key, in order: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears) | {op:'remove', key}."
+        },
+        {
+          "name": "stagesRevision",
+          "type": "string",
+          "required": false,
+          "description": "Needed with `stages`: from an unpaged read; else use stageEdits."
+        },
+        {
           "name": "params",
           "type": "array<object>",
           "required": false,
@@ -6848,7 +6925,7 @@
           "name": "criteria",
           "type": "array<object>",
           "required": false,
-          "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }."
+          "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }."
         },
         {
           "name": "guidance",
@@ -6874,7 +6951,7 @@
           "name": "subjectProfileSlug",
           "type": "string",
           "required": false,
-          "description": "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused."
+          "description": "The kind or role it runs ON (must resolve)."
         },
         {
           "name": "statusProperty",
@@ -6911,14 +6988,14 @@
           "name": "scope",
           "type": "enum",
           "required": false,
-          "description": "What the playbook instantiates. 'session': a template for ONE bounded focus session. 'project': LEGACY — a staged method a track runs.",
+          "description": "'session': one focus session. 'project': LEGACY, a staged method a track runs.",
           "enum": ["session", "project"]
         },
         {
           "name": "reasoning",
           "type": "string",
           "required": false,
-          "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+          "description": "Why, in the person's words: shown to the reviewer. One line."
         },
         {
           "name": "sessionId",
@@ -7186,6 +7263,15 @@
               "required": ["key", "name", "category"]
             }
           },
+          "stageEdits": {
+            "type": "array",
+            "description": "Edit stages by key, in order: {op:'add', stage, after?} | {op:'update', key, fields} (merged; null clears) | {op:'remove', key}.",
+            "items": { "type": "object" }
+          },
+          "stagesRevision": {
+            "type": "string",
+            "description": "Needed with `stages`: from an unpaged read; else use stageEdits."
+          },
           "params": {
             "type": "array",
             "description": "What the method needs to know. A required param left unanswered when synap_start_track runs becomes a question owed to the person (answer later with synap_set_track_params); optional ones fall back to their default.",
@@ -7217,7 +7303,7 @@
           },
           "criteria": {
             "type": "array",
-            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'), hint? }, stageKey? }.",
+            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
             "items": { "type": "object" }
           },
           "guidance": {
@@ -7237,7 +7323,7 @@
           },
           "subjectProfileSlug": {
             "type": "string",
-            "description": "Repoint the kind or role this playbook runs ON. A slug that resolves to no profile is refused."
+            "description": "The kind or role it runs ON (must resolve)."
           },
           "statusProperty": {
             "type": "string",
@@ -7438,11 +7524,11 @@
           "scope": {
             "type": "string",
             "enum": ["session", "project"],
-            "description": "What the playbook instantiates. 'session': a template for ONE bounded focus session. 'project': LEGACY — a staged method a track runs."
+            "description": "'session': one focus session. 'project': LEGACY, a staged method a track runs."
           },
           "reasoning": {
             "type": "string",
-            "description": "Why you are making this write, in the person's words — shown to the human who reviews it. One line."
+            "description": "Why, in the person's words: shown to the reviewer. One line."
           },
           "sessionId": {
             "type": "string",
@@ -7682,7 +7768,7 @@
           "name": "documents",
           "type": "array<object>",
           "required": false,
-          "description": "PLAN: documents to create (markdown). Attach one as an entity's body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`)."
+          "description": "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`)."
         },
         {
           "name": "links",
@@ -7700,7 +7786,7 @@
           "name": "automations",
           "type": "array<object>",
           "required": false,
-          "description": "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). ALWAYS materialized DISABLED (draft): approving the proposal creates it, it never arrives already running — switch it on yourself afterwards. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves."
+          "description": "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). Approving the proposal creates it ACTIVE; with no person's approval it is born a draft. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves."
         },
         {
           "name": "rules",
@@ -7973,7 +8059,8 @@
                           },
                           "capability": { "type": "string" },
                           "evidenceKey": { "type": "string" },
-                          "hint": { "type": "string" }
+                          "hint": { "type": "string" },
+                          "params": { "type": "object" }
                         },
                         "required": ["kind"]
                       },
@@ -8004,7 +8091,7 @@
           },
           "documents": {
             "type": "array",
-            "description": "PLAN: documents to create (markdown). Attach one as an entity's body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
+            "description": "PLAN: documents to create (markdown). Attach one as an entity's ONE body (`entityRef`/`entityId`) and/or record it as a session's output (`sessionRef`/`sessionId`).",
             "items": {
               "type": "object",
               "properties": {
@@ -8072,7 +8159,7 @@
           },
           "automations": {
             "type": "array",
-            "description": "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). ALWAYS materialized DISABLED (draft): approving the proposal creates it, it never arrives already running — switch it on yourself afterwards. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves.",
+            "description": "RULE LOOP: automations to create — the BEHAVIOUR half, what RUNS when the world changes. `ref` is how a `rules[]` step points at it (`behaviourRefs`). Approving the proposal creates it ACTIVE; with no person's approval it is born a draft. A flow node may name a skill THIS SAME call creates: skills are applied before automations, so the reference resolves.",
             "items": {
               "type": "object",
               "properties": {
@@ -8672,7 +8759,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions that follow a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry. Otherwise status='started' with the track.",
+      "description": "Start a GOAL on a project (a TRACK in tool and field names — say 'goal' to the person), pass a `name` in the person's words, an `endState` (what done looks like, a short paragraph) and 2 to 5 `criteria` (binary checks) — or no criteria for a goal kept open as long as it matters ('keep the newsletter growing'): it then steers by its `direction` (one line) and, only if the person names a number, a `kpi`. Propose the `workKind` and `uncertainty` too: the person confirms them. List the project's tracks first (synap_list_tracks) and resume a running one rather than starting a twin. Work in it = synap_start_session with its trackId, one session per sitting. A person closes it with a verdict once its criteria are met; a number never closes it. Repeatable work under it = sessions on a playbook, or workers a status starts. While the track is active, its agent may work in the spaces the project links. Idempotent per track NAME: a live track of that name comes back with status='exists'; a live track of another method holding the name is refused. Governed: status='proposed' is SUCCESS — say it awaits review, pass on reviewUrl, do not retry; `pendingTrackId`: its id once approved, not before (hold on `proposal:<proposalId>`). Else status='started' with the track.",
       "parameters": [
         {
           "name": "projectId",
@@ -8720,7 +8807,7 @@
           "name": "criteria",
           "type": "array | null",
           "required": false,
-          "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them."
+          "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them."
         },
         {
           "name": "dropConditions",
@@ -8827,7 +8914,7 @@
           "criteria": {
             "type": ["array", "null"],
             "maxItems": 5,
-            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.",
             "items": {
               "type": "object",
               "properties": {
@@ -8849,7 +8936,8 @@
                     },
                     "capability": { "type": "string" },
                     "evidenceKey": { "type": "string" },
-                    "hint": { "type": "string" }
+                    "hint": { "type": "string" },
+                    "params": { "type": "object" }
                   },
                   "required": ["kind"]
                 },
@@ -9788,7 +9876,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Set what a goal holds: its DIRECTION (one line), its KPI (the number it steers by), its endState, criteria (none, or 2 to 5), dropConditions, and the kind of work and uncertainty you propose (the person confirms them). Every field but kpi is written WHOLE; null clears it. kpi is MERGED onto the stored one: pass { current } to state the value (stamped: STATED, never measured), { target } to move the goal, a whole { label, unit?, target, current? } to define one, or null to clear it. A KPI needs a label and a target. Reaching the target NUDGES the person; never move the target or close the goal yourself. Governed: status='proposed' is SUCCESS — pass on reviewUrl, do not retry.",
+      "description": "Set what a goal holds: DIRECTION (one line), KPI (the number it steers by) and each field below. All but kpi are written WHOLE; null clears. kpi MERGES: { current } states it (STATED, never measured), { target } moves it, { label, unit?, target, current? } defines one, null clears. A KPI needs a label and a target. Reaching the target NUDGES the person: never move it or close the goal yourself. status='proposed' is SUCCESS: pass on reviewUrl, never retry.",
       "parameters": [
         {
           "name": "trackId",
@@ -9818,7 +9906,7 @@
           "name": "criteria",
           "type": "array | null",
           "required": false,
-          "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them."
+          "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them."
         },
         {
           "name": "dropConditions",
@@ -9875,6 +9963,17 @@
           "description": "Project spaces it advances, the whole list; one primary, default the first."
         },
         {
+          "name": "addBlockedByTrackIds",
+          "type": "array<string>",
+          "required": false,
+          "description": "Goals it WAITS ON (`blocked_by`); per id on blockerLinks / blockerRemovals."
+        },
+        {
+          "name": "removeBlockedByTrackIds",
+          "type": "array<string>",
+          "required": false
+        },
+        {
           "name": "reasoning",
           "type": "string",
           "required": false,
@@ -9912,7 +10011,7 @@
           "criteria": {
             "type": ["array", "null"],
             "maxItems": 5,
-            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.",
             "items": {
               "type": "object",
               "properties": {
@@ -9934,7 +10033,8 @@
                     },
                     "capability": { "type": "string" },
                     "evidenceKey": { "type": "string" },
-                    "hint": { "type": "string" }
+                    "hint": { "type": "string" },
+                    "params": { "type": "object" }
                   },
                   "required": ["kind"]
                 },
@@ -10017,6 +10117,15 @@
                 "primary": { "type": "boolean" }
               }
             }
+          },
+          "addBlockedByTrackIds": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Goals it WAITS ON (`blocked_by`); per id on blockerLinks / blockerRemovals."
+          },
+          "removeBlockedByTrackIds": {
+            "type": "array",
+            "items": { "type": "string" }
           },
           "reasoning": {
             "type": "string",
@@ -11257,7 +11366,7 @@
           "name": "config",
           "type": "object",
           "required": false,
-          "description": "View configuration (groupBy, sortBy, filters, etc.)"
+          "description": "View configuration. Table columns: visibleColumns (property slugs, in order), hiddenColumns, columnWidths; grouping: groupByField."
         },
         {
           "name": "initialContent",
@@ -11323,7 +11432,7 @@
           },
           "config": {
             "type": "object",
-            "description": "View configuration (groupBy, sortBy, filters, etc.)"
+            "description": "View configuration. Table columns: visibleColumns (property slugs, in order), hiddenColumns, columnWidths; grouping: groupByField."
           },
           "initialContent": {
             "type": "object",
@@ -12345,7 +12454,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `granted`/`effectiveExecMode` (an ungranted verb is PROPOSED for review when run, not refused). A verb carrying `blocked: \"not_enabled\"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:\"builtin-tool\" or kind:\"teaching-doc\" to list them here instead, or synap_load_skill(\"catalog\") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:\"send email\"). A run refused with DENIED_BY_RULE: the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed. Only a pod admin can take that back, in pod admin Settings.",
+      "description": "Discover what the user can actually DO. Returns a SECTIONED view: `integrations` (their connected services + tools, one per name, each with its `verbs` nested — e.g. google → gmail_send, gmail_search, calendar_list; the verb `id` is what you pass to synap_run_capability), `skills` (standalone runnable skills), and `commands`. Each integration shows `connection.connected` (needs connecting if false) and each verb shows `effectiveExecMode` (propose = your run is filed for review, not refused). A verb carrying `blocked: \"not_enabled\"` is installed but switched off: synap_run_capability WILL refuse it, so do not run it first — hand the user its `enable.url` to turn it on. Core built-in tools (already available to you directly as MCP tools) and teaching docs are folded out of this actionable view BY DEFAULT and only COUNTED under `excluded` — pass kind:\"builtin-tool\" or kind:\"teaching-doc\" to list them here instead, or synap_load_skill(\"catalog\") for every teaching doc grouped by topic. Pass `query` to search across integrations/verbs/skills (e.g. query:\"send email\"). A run refused with DENIED_BY_RULE: the person said never for this agent and this kind of act. It was not done. Do not retry it or do it another way; ask the person if it is needed. Only a pod admin can take that back, in pod admin Settings.",
       "parameters": [
         {
           "name": "workspaceId",
@@ -12375,7 +12484,7 @@
           "name": "intent",
           "type": "string",
           "required": false,
-          "description": "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this."
+          "description": "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability), each with `enabled` (switched on in the pod) and `runPosture` (auto runs now, propose files a review). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this."
         },
         {
           "name": "limit",
@@ -12408,7 +12517,7 @@
           },
           "intent": {
             "type": "string",
-            "description": "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this."
+            "description": "Reverse lookup by INTENT slug — what you want to DO, without knowing the vendor. A registry slug (the seed includes search_external, send_message, capture_into_pod, and the rest of the original 13). Returns the concrete verb ids that serve it (pass one to synap_run_capability), each with `enabled` (switched on in the pod) and `runPosture` (auto runs now, propose files a review). Takes precedence over `query`/`kind`/`limit`. An unknown slug is an error from the registry, not an empty list. An empty match list means the slug is known and nothing installed declares it yet — scan without `intent` before concluding the pod cannot do this."
           },
           "limit": {
             "type": "number",
@@ -12682,7 +12791,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool — e.g. teach 'apify_api' a new 'apify_search_reddit_actors' verb without a dev-session/redeploy. Creates a kind='declarative' skill only; rejects any request implying code/instruction/builtin execution. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
+      "description": "Add a new DECLARATIVE verb (a deterministic provider HTTP call — no code execution) to an ALREADY-INSTALLED, already-credentialed tool. Creates a kind='declarative' skill only. `toolName` MUST already exist (installed + visible to the caller) or this is refused — it never creates a new tool/connection as a side effect. Governed the same as every other write: may return status='proposed' for review. Discover installed tools with synap_list_capabilities first.",
       "parameters": [
         {
           "name": "reasoning",
@@ -12746,6 +12855,12 @@
           "description": "The verb's own runtime parameter schema using the shorthand type system, e.g. { query: \"string\", limit: \"number?\" }."
         },
         {
+          "name": "readOnly",
+          "type": "boolean",
+          "required": false,
+          "description": "true when the call changes nothing (a lookup, even over POST): once approved, agent runs skip review. Turning it on later needs approval again."
+        },
+        {
           "name": "workspaceId",
           "type": "string",
           "required": false,
@@ -12801,6 +12916,10 @@
           "parameters": {
             "type": "object",
             "description": "The verb's own runtime parameter schema using the shorthand type system, e.g. { query: \"string\", limit: \"number?\" }."
+          },
+          "readOnly": {
+            "type": "boolean",
+            "description": "true when the call changes nothing (a lookup, even over POST): once approved, agent runs skip review. Turning it on later needs approval again."
           },
           "workspaceId": {
             "type": "string",
@@ -14166,7 +14285,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name`, and for a CODE skill its `code`, `parameters`, `timeoutSeconds` and `requiredTools` — by `slug` (the ref synap_load_skill resolves) or `id`. Use it when a skill you authored goes stale or its code has a bug; never create a second skill under the same name or a new slug as a twin. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body, and any change to what a code skill runs (code, parameters, timeout, a tool added to requiredTools), leaves it UNAPPROVED until the owner approves it again — so do not report it as live: synap_list_capabilities shows it `not_enabled` with the link to hand the person.",
+      "description": "Revise an existing skill on this pod — its `body` (the teaching prose), `description` or `name`, and for a CODE skill its `code`, `parameters`, `timeoutSeconds` and `requiredTools` — by `slug` or `id`. Use it when a skill goes stale or its code breaks; never create a twin under another name or slug. Governed like every write: status='proposed' is success. An agent rewrite of a skill's body, and any change to what a code skill runs (code, parameters, timeout, a tool added to requiredTools), leaves it UNAPPROVED until the owner approves it again — do not report it as live; synap_list_capabilities shows it `not_enabled`.",
       "parameters": [
         {
           "name": "reasoning",
@@ -14209,6 +14328,12 @@
           "type": "string",
           "required": false,
           "description": "'rule' = pushed into all work in scope"
+        },
+        {
+          "name": "agentTypes",
+          "type": "array | null",
+          "required": false,
+          "description": "Agent types; null = every agent"
         },
         {
           "name": "code",
@@ -14268,6 +14393,11 @@
           "category": {
             "type": "string",
             "description": "'rule' = pushed into all work in scope"
+          },
+          "agentTypes": {
+            "type": ["array", "null"],
+            "items": { "type": "string" },
+            "description": "Agent types; null = every agent"
           },
           "code": {
             "type": "string",

@@ -1,7 +1,9 @@
 /**
- * The agent-workspace preset: the keys provisioning stamps on an agent-owned
- * workspace. Applied on every (re-)provision, because a workspace created
- * before the preset existed must be fixed too.
+ * The agent-workspace preset: the keys provisioning stamps on an agent's
+ * workspace (owned by its person). Applied on every (re-)provision, because a
+ * workspace created before the preset existed must be fixed too. It never
+ * stamps `governanceMode`: that is the person's dial (absent = standard), and
+ * a re-provision must not loosen what they tightened.
  *
  * MERGED into the stored settings, never a replace. The blob also carries keys
  * the owner or the Control Plane set (the sharing policy, `controlPlane`, …);
@@ -15,7 +17,6 @@ export function agentWorkspacePresetSettings(agentUserId: string) {
   return {
     workspaceType: "agent",
     linkedAgentId: agentUserId,
-    governanceMode: "standard",
   };
 }
 

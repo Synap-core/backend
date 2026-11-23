@@ -7,7 +7,6 @@
 
 import { z } from "zod";
 import { withoutServerOwnedAutomationMetadata } from "../services/automations/server-metadata.js";
-import { createLogger } from "@synap-core/core";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { automationGoalsAndHealth } from "../services/playbooks/workers.js";
@@ -23,8 +22,6 @@ import {
 } from "../utils/permission-check.js";
 import { stableStringify } from "../utils/stable-stringify.js";
 import { stampPlaybookRunIds } from "../services/automations/playbook-run-ids.js";
-import { playbookNotInSpaceReason } from "../services/playbooks/playbook-lifecycle.js";
-import { findNonArchivedAutomationByName } from "../services/playbooks/cron-automation.js";
 import { normalizeEventSource } from "../lib/event-helpers.js";
 import { getDefaultActiveService } from "../utils/intelligence-routing.js";
 // Import from events/unified sub-path because tsup's code-splitting drops
@@ -80,6 +77,8 @@ import {
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
 import {
   getDb,
+  usableInSpace,
+  notUsableInSpaceReason,
   eq,
   ne,
   and,
@@ -103,10 +102,13 @@ import {
   ChannelRepository,
   getActingAgentUserId,
   getRequestGrant,
-  isUniqueViolation,
   ownerAndActor,
+  insertAutomation,
+  setAutomationStatus,
 } from "@synap/database";
 import type {
+  AutomationColumnsPatch,
+  InsertedAutomation,
   AutomationTriggerConfig,
   OwnerAndActor,
   FlowDefinition,
@@ -138,8 +140,6 @@ import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
-
-const logger = createLogger({ module: "automations-router" });
 
 const automationDataContractItemBase = {
   id: z.string().min(1),
@@ -508,28 +508,36 @@ async function loadFlowValidationResolvers(
           )
       : [];
 
-  const playbookRows =
-    playbookReferenceIds.length > 0 || playbookReferenceNames.length > 0
-      ? await scopedDb(playbookValidationAccess(userId, workspaceId)).findMany<{
-          id: string;
-          name: string;
-          workspaceId: string | null;
-        }>(playbooks, {
-          columns: { id: true, name: true, workspaceId: true },
-          where: and(
-            // Archived playbooks are not referenceable, matching the OFFER door.
-            ne(playbooks.status, "archived"),
-            playbookReferenceIds.length > 0 && playbookReferenceNames.length > 0
-              ? or(
-                  inArray(playbooks.id, playbookReferenceIds),
-                  inArray(playbooks.name, playbookReferenceNames)
-                )
-              : playbookReferenceIds.length > 0
-                ? inArray(playbooks.id, playbookReferenceIds)
-                : inArray(playbooks.name, playbookReferenceNames)
-          ),
-        })
-      : [];
+  // By id: any playbook the author can see (usability in the automation's
+  // space is placement's question, `placeFlowByPlaybooks`, which names the
+  // fix). By name: the lens, as the run resolves a name in its own space.
+  const readPlaybooks = (
+    lens: string | null | undefined,
+    where: ReturnType<typeof inArray>
+  ) =>
+    scopedDb(playbookValidationAccess(userId, lens)).findMany<{
+      id: string;
+      name: string;
+      workspaceId: string | null;
+    }>(playbooks, {
+      columns: { id: true, name: true, workspaceId: true },
+      // Archived playbooks are not referenceable, matching the OFFER door.
+      where: and(ne(playbooks.status, "archived"), where),
+    });
+  const playbookRows = [
+    ...(playbookReferenceIds.length > 0
+      ? await readPlaybooks(
+          undefined,
+          inArray(playbooks.id, playbookReferenceIds)
+        )
+      : []),
+    ...(playbookReferenceNames.length > 0
+      ? await readPlaybooks(
+          workspaceId,
+          inArray(playbooks.name, playbookReferenceNames)
+        )
+      : []),
+  ];
 
   const foundSkillIds = new Set(skillRows.map((skill) => skill.id));
   const foundSkillNames = new Set(skillRows.map((skill) => skill.name));
@@ -556,26 +564,27 @@ async function loadFlowValidationResolvers(
 
 /**
  * The space a flow's playbooks run in, for an automation filed in `workspaceId`
- * (`null` = pod-wide). A playbook runs only in its home space (the run door's
- * rule, `playbookNotInSpaceReason`), so a pod-wide automation naming a
- * space-scoped playbook would fire runs that are refused everywhere but there
- * (ticket 6c15da33).
+ * (`null` = pod-wide). A playbook runs only where it is usable (the run door's
+ * rule, `usableInSpace`: its home, or anywhere when pod-wide), so a pod-wide
+ * automation naming a space playbook would fire runs that are refused
+ * everywhere but there.
  *
  *  - every playbook usable in `workspaceId` → `workspaceId` (nothing moves);
- *  - a pod-wide automation whose space-scoped playbooks share ONE home → that
- *    home (`adopted`): the automation is filed where its playbooks run;
+ *  - a pod-wide automation whose space playbooks share ONE home → that home
+ *    (`adopted`): the automation is filed where its playbooks run;
  *  - anything else → a refusal naming the fix.
  *
  * Only playbooks named BY ID are placed: a name-only node is resolved by name
- * in the run's own space when it runs (`resolveRunnablePlaybook`).
+ * in the run's own space when it runs (`resolveRunnablePlaybook`). An update
+ * never moves a stored automation (`adopt: false`): it is refused instead.
  */
 function placeFlowByPlaybooks(
   referenced: ReferencedPlaybook[],
-  workspaceId: string | null
+  workspaceId: string | null,
+  { adopt }: { adopt: boolean }
 ): { workspaceId: string | null; adopted: boolean } {
-  if (referenced.every((pb) => !playbookNotInSpaceReason(pb, workspaceId))) {
-    return { workspaceId, adopted: false };
-  }
+  const away = referenced.filter((pb) => !usableInSpace(pb, workspaceId));
+  if (away.length === 0) return { workspaceId, adopted: false };
   const homes = [
     ...new Set(
       referenced
@@ -583,18 +592,15 @@ function placeFlowByPlaybooks(
         .filter((id): id is string => id !== null)
     ),
   ];
-  if (workspaceId === null && homes.length === 1) {
+  if (adopt && workspaceId === null && homes.length === 1) {
     return { workspaceId: homes[0]!, adopted: true };
   }
-  const away = referenced
-    .map((pb) => playbookNotInSpaceReason(pb, workspaceId))
-    .find((reason): reason is string => reason !== null)!;
   throw new TRPCError({
     code: "BAD_REQUEST",
     message:
       homes.length > 1
-        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only in its own space: make one automation per space.`
-        : `${away} Create this automation in that space (workspaceId ${homes[0]}).`,
+        ? `This automation names playbooks of ${homes.length} spaces (${homes.join(", ")}), and a playbook runs only where it is usable: make one automation per space.`
+        : `${notUsableInSpaceReason("Playbook", away[0]!, workspaceId)} Or create this automation in that space (workspaceId ${homes[0]}).`,
   });
 }
 
@@ -779,7 +785,13 @@ async function prepareAutomationForMaterialization(
   assertFilteredAiFanout(input.flowDefinition);
   // Filed where its playbooks run (6c15da33): BEFORE the gate, RBAC and the
   // insert read `input.workspaceId`, so all of them see the adopted space.
-  const placed = placeFlowByPlaybooks(playbooksById, input.workspaceId ?? null);
+  const placed = placeFlowByPlaybooks(
+    playbooksById,
+    input.workspaceId ?? null,
+    {
+      adopt: true,
+    }
+  );
   if (placed.adopted) input.workspaceId = placed.workspaceId;
 
   // Normalize template-friendly skill names before either proposal storage or
@@ -927,25 +939,22 @@ async function gateAgentAutomationChange(
   return null;
 }
 
+/** Why a status move wrote nothing: the row moved meanwhile, or it is archived. */
+function automationStatusConflict(read: string): string {
+  return read === "archived"
+    ? "This automation is archived: switch it on again (activate) first. Nothing was changed."
+    : `This automation is no longer ${read}; read it again. Nothing was changed.`;
+}
+
 async function insertAutomationAfterGovernance(
   database: AutomationDatabase,
   input: AutomationMaterializationInput,
   /** From `ownerAndActor`: never an agent as the owner. */
   owner: OwnerAndActor,
   stableId?: string,
-  /**
-   * P2-3 (draft-state remedy): true for every agent-originated create — the
-   * auto-approved direct path (`automation.create` ∈ DEFAULT_AUTO_APPROVE)
-   * AND the proposal-approved materialize path. `automation.create` stays
-   * auto-approved (no proposal friction for the proactive-bridge roadmap),
-   * but a planted WHEN-trigger from a prompt-injected agent must not be able
-   * to FIRE unreviewed — so an agent-authored automation always lands
-   * `draft` regardless of the `status` it requested. A human's OWN direct
-   * create (no agentUserId) is never forced — it keeps its requested status.
-   */
-  forceDraft = false
-): Promise<string | null> {
-  const status = forceDraft ? "draft" : (input.status ?? "draft");
+  /** A person approved this exact definition (a proposal's review). */
+  personApproved = false
+): Promise<InsertedAutomation | null> {
   // After governance (every caller of this door has passed it): a declared
   // inbound webhook source binds here — `webhookSource.name` → this space's
   // source of that name, when it exists (services/webhooks/inbound-source.ts;
@@ -956,137 +965,69 @@ async function insertAutomationAfterGovernance(
     triggerType: input.triggerType,
     triggerConfig: input.triggerConfig,
   });
-  const nextRunAt =
-    status === "active" && input.triggerType === "cron"
-      ? nextCronRunAtFor(input.triggerConfig, new Date())
-      : null;
-
-  // Insert with 23505 recovery against automations_workspace_name_active_uq
-  // (0230). Re-authoring the same automation (MCP create_automation, a capability
-  // re-seeding "Enrich the lead" on reconcile) used to clone a 2nd row — the
-  // name-unique index makes the loser a unique-violation, and we return the
-  // existing winner instead of a 500 or a duplicate (mirrors playbooks.create).
-  // onConflictDoNothing({target: id}) still absorbs the stableId re-materialize
-  // retry (same primary key); the name index is a DIFFERENT constraint, so a
-  // same-name / different-id clone throws 23505 and is caught below.
-  try {
-    const [row] = await database
-      .insert(automations)
-      .values({
-        ...(stableId ? { id: stableId } : {}),
-        workspaceId: input.workspaceId ?? null,
-        createdBy: owner.ownerId,
-        agentUserId: owner.agentUserId,
-        name: input.name,
-        description: input.description,
-        triggerType: input.triggerType,
-        triggerConfig,
-        flowDefinition: input.flowDefinition as unknown as FlowDefinition,
-        status,
-        ...(nextRunAt ? { nextRunAt } : {}),
-        state: input.state ?? {},
-        metadata: {
-          ...(withoutServerOwnedAutomationMetadata(input.metadata) ?? {}),
-          createdVia:
-            input.source === "agent" || input.source === "ai"
-              ? ("ai" as const)
+  return insertAutomation(database, {
+    values: {
+      workspaceId: input.workspaceId ?? null,
+      name: input.name,
+      description: input.description,
+      triggerType: input.triggerType,
+      triggerConfig,
+      flowDefinition: input.flowDefinition as unknown as FlowDefinition,
+      state: input.state ?? {},
+      metadata: {
+        ...(withoutServerOwnedAutomationMetadata(input.metadata) ?? {}),
+        createdVia:
+          input.source === "agent" || input.source === "ai"
+            ? ("ai" as const)
+            : input.source === "system"
+              ? ("template" as const)
               : ("manual" as const),
-        },
-      })
-      .onConflictDoNothing({ target: automations.id })
-      .returning({ id: automations.id });
-
-    // row is undefined only when onConflictDoNothing swallowed a primary-key
-    // conflict (stableId re-materialize) — the row already exists under stableId.
-    return row?.id ?? stableId ?? null;
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    const winner = await findNonArchivedAutomationByName(
-      database,
-      input.workspaceId ?? null,
-      input.name
-    );
-    if (!winner) throw err;
-    logger.info(
-      {
-        automationId: winner.id,
-        workspaceId: input.workspaceId ?? null,
-        name: input.name,
       },
-      "automations.create: unique violation — returning existing non-archived automation"
-    );
-    return winner.id;
-  }
+    },
+    requested: input.status,
+    personApproved,
+    owner,
+    stableId,
+  });
 }
 
 /**
  * THE materialization door for a caller outside this router — validate, then
- * insert, with the draft floor DERIVED FROM THE PRINCIPAL rather than passed in.
- *
- * `agentUserId` present ⇒ `status: "draft"`, always. That is the P2-3 guarantee
- * (see `insertAutomationAfterGovernance`) and it is decided HERE, inside the
- * door, precisely so a new caller cannot forget to ask for it: a planted
- * WHEN-trigger from a prompt-injected agent must not be able to fire unreviewed.
- * A human's own create keeps its requested status.
- *
- * Every non-router caller (rule compilation, proposal approval) goes through
- * this one function. Do NOT add a second `db.insert(automations)`.
+ * insert with the status `automationStatusAtCreate` decides from who wrote it
+ * and whether a person approved it. Every non-router caller (rule compilation,
+ * proposal approval, a capture plan, a playbook schedule) goes through this
+ * one function. Do NOT add a second `db.insert(automations)`.
  */
 export async function materializeAutomationForPrincipal(input: {
   database: AutomationDatabase;
   definition: AutomationMaterializationInput;
   /** Who it is for; an agent id is stored as its person (`ownerAndActor`). */
   createdBy: string;
-  /** The authoring agent (the actor). An agent author ⇒ `draft`, unless `approved`. */
-  agentUserId?: string | undefined;
-  /**
-   * A person APPROVED this exact definition (proposal approval): the approval
-   * is the review the draft floor stands in for, so the author's status is
-   * kept. Set only by `materializeApprovedAutomation`.
-   */
-  approved?: boolean | undefined;
+  /** The authoring agent (the actor). */
+  agentUserId?: string | null | undefined;
+  /** A person approved this exact definition (`personIsApproving`). */
+  personApproved?: boolean | undefined;
   /** Converge retries on a caller-owned id (proposal target, rule id). */
   stableId?: string | undefined;
 }): Promise<string | null> {
   const owner = await ownerAndActor(
     input.database,
     input.createdBy,
-    input.agentUserId
+    input.agentUserId ?? undefined
   );
   await prepareAutomationForMaterialization(
     input.database,
     input.definition,
     owner.ownerId
   );
-  return insertAutomationAfterGovernance(
+  const inserted = await insertAutomationAfterGovernance(
     input.database,
     input.definition,
     owner,
     input.stableId,
-    Boolean(owner.agentUserId) && !input.approved
+    input.personApproved === true
   );
-}
-
-/**
- * Materialize an approved AI proposal: re-validate, own it by the person it
- * was filed for (`proposals.subject_user_id`, never the approver), record the
- * agent as actor, converge retries on the proposal's target id.
- */
-export async function materializeApprovedAutomation(input: {
-  database: AutomationDatabase;
-  definition: AutomationMaterializationInput;
-  ownerId: string;
-  agentUserId: string | null;
-  stableId: string;
-}): Promise<string | null> {
-  return materializeAutomationForPrincipal({
-    database: input.database,
-    definition: input.definition,
-    createdBy: input.ownerId,
-    agentUserId: input.agentUserId ?? undefined,
-    approved: true,
-    stableId: input.stableId,
-  });
+  return inserted?.id ?? null;
 }
 
 // ============================================================================
@@ -2511,8 +2452,8 @@ export const automationsRouter = router({
             edges: z.array(z.record(z.string(), z.unknown())),
           }),
           // No schema default: an unstated status stays unstated in a
-          // proposal's stored data so approval can activate it; the direct
-          // insert lands `draft` (`insertAutomationAfterGovernance`).
+          // proposal's stored data so approval can activate it
+          // (`automationStatusAtCreate`).
           status: z.enum(["draft", "active", "paused", "error"]).optional(),
           metadata: z.record(z.string(), z.unknown()).optional(),
           /** Per-automation persistent config/state — resolves {{automation.state.*}}. */
@@ -2626,20 +2567,13 @@ export const automationsRouter = router({
         }
       }
 
-      // P2-3 (draft-state remedy): reaching here with `agentUserId` set means
-      // `automation.create` auto-approved (the proposal branch above already
-      // returned) — an agent-authored automation must never fall straight
-      // through to a firing state, so force draft regardless of the
-      // requested `status`. The operator's own direct create (no
-      // agentUserId) keeps its requested status untouched.
-      const forceDraft = Boolean(owner.agentUserId);
-      const automationId = await insertAutomationAfterGovernance(
+      // No person reviewed this write: an agent's automation is born `draft`.
+      const inserted = await insertAutomationAfterGovernance(
         database,
         input,
-        owner,
-        undefined,
-        forceDraft
+        owner
       );
+      const automationId = inserted?.id ?? null;
 
       // The source it listens to, so the caller can point the sender at it —
       // or, when the space has none yet, what binds it. Never a secret: a
@@ -2659,9 +2593,7 @@ export const automationsRouter = router({
       return {
         status: "created" as const,
         id: automationId,
-        message: `Automation "${input.name}" created as ${
-          forceDraft ? "draft" : (input.status ?? "draft")
-        }${placedNote}`,
+        message: `Automation "${input.name}" created as ${inserted?.status ?? "draft"}${placedNote}`,
         proposalId: null as string | null,
         ...(source
           ? {
@@ -2824,6 +2756,9 @@ export const automationsRouter = router({
           });
         }
         assertFilteredAiFanout(input.flowDefinition);
+        placeFlowByPlaybooks(updateFlow.playbooksById, existing.workspaceId, {
+          adopt: false,
+        });
 
         // Keep the template-friendly skillName form executable on update too,
         // matching create's pre-persist normalization.
@@ -2896,7 +2831,16 @@ export const automationsRouter = router({
         }
       }
 
-      const updates: Record<string, unknown> = {
+      // A status move on an archived automation is `activate`'s (it resets
+      // the error and stamps the next slot); never a revival through `update`.
+      if (input.status !== undefined && existing.status === "archived") {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: automationStatusConflict(existing.status),
+        });
+      }
+
+      const updates: AutomationColumnsPatch = {
         updatedAt: new Date(),
       };
       if (input.name !== undefined) updates.name = input.name;
@@ -2905,10 +2849,10 @@ export const automationsRouter = router({
       if (input.triggerType !== undefined)
         updates.triggerType = input.triggerType;
       if (input.triggerConfig !== undefined)
-        updates.triggerConfig = input.triggerConfig;
+        updates.triggerConfig = input.triggerConfig as AutomationTriggerConfig;
       if (input.flowDefinition !== undefined)
-        updates.flowDefinition = input.flowDefinition;
-      if (input.status !== undefined) updates.status = input.status;
+        updates.flowDefinition =
+          input.flowDefinition as unknown as FlowDefinition;
       if (input.metadata !== undefined) updates.metadata = effectiveMetadata;
       if (input.state !== undefined) updates.state = input.state;
 
@@ -2940,7 +2884,7 @@ export const automationsRouter = router({
             triggerType: input.triggerType ?? existing.triggerType,
             triggerConfig: input.triggerConfig,
           })
-        ).triggerConfig;
+        ).triggerConfig as AutomationTriggerConfig;
       }
 
       // Bump the monotonic definition version when a definition-affecting
@@ -2970,7 +2914,7 @@ export const automationsRouter = router({
       if (
         triggerChanged &&
         storedTriggerType === "cron" &&
-        (updates.status ?? existing.status) === "active"
+        (input.status ?? existing.status) === "active"
       ) {
         updates.nextRunAt = nextCronRunAtFor(
           updates.triggerConfig ?? existing.triggerConfig,
@@ -2978,10 +2922,25 @@ export const automationsRouter = router({
         );
       }
 
-      await database
-        .update(automations)
-        .set(updates)
-        .where(eq(automations.id, input.id));
+      if (input.status !== undefined) {
+        const moved = await setAutomationStatus(database, {
+          id: input.id,
+          from: existing.status,
+          to: input.status,
+          set: updates,
+        });
+        if (moved.length === 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: automationStatusConflict(existing.status),
+          });
+        }
+      } else {
+        await database
+          .update(automations)
+          .set(updates)
+          .where(eq(automations.id, input.id));
+      }
 
       return {
         status: "updated",
@@ -3088,10 +3047,18 @@ export const automationsRouter = router({
         if (proposed) return proposed;
       }
 
-      await database
-        .update(automations)
-        .set({ status: "archived", nextRunAt: null, updatedAt: new Date() })
-        .where(eq(automations.id, input.id));
+      const archived = await setAutomationStatus(database, {
+        id: input.id,
+        from: existing.status,
+        to: "archived",
+        set: { nextRunAt: null },
+      });
+      if (archived.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: automationStatusConflict(existing.status),
+        });
+      }
 
       return {
         status: "archived" as const,
@@ -3143,15 +3110,18 @@ export const automationsRouter = router({
           ? nextCronRunAtFor(existing.triggerConfig, new Date())
           : null;
 
-      await database
-        .update(automations)
-        .set({
-          status: "active",
-          updatedAt: new Date(),
-          errorMessage: null,
-          ...(nextRunAt ? { nextRunAt } : {}),
-        })
-        .where(eq(automations.id, input.id));
+      const activated = await setAutomationStatus(database, {
+        id: input.id,
+        from: existing.status,
+        to: "active",
+        set: { errorMessage: null, ...(nextRunAt ? { nextRunAt } : {}) },
+      });
+      if (activated.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `This automation is no longer ${existing.status}; read it again. Nothing was changed.`,
+        });
+      }
 
       return { status: "activated", nextRunAt: nextRunAt?.toISOString() };
     }),
@@ -3194,10 +3164,17 @@ export const automationsRouter = router({
         workspaceId: existing.workspaceId,
       });
 
-      await database
-        .update(automations)
-        .set({ status: "paused", updatedAt: new Date() })
-        .where(eq(automations.id, input.id));
+      const paused = await setAutomationStatus(database, {
+        id: input.id,
+        from: existing.status,
+        to: "paused",
+      });
+      if (paused.length === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: automationStatusConflict(existing.status),
+        });
+      }
 
       return { status: "paused" };
     }),

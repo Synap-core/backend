@@ -56,6 +56,32 @@ describe("synthesizeAnswer — IS failure envelope", () => {
     expect(res.answer).toBeNull();
     expect(res.error).toBe("synthesis_unavailable");
     expect(res.failureClass).toBe("plan_quota");
+    // The envelope itself is kept beside the class: it carries the payer
+    // action a door's words end with (`describeAiFailure`'s `envelope`).
+    expect(res.failure).toEqual({
+      code: "quota_exhausted",
+      message: "budget",
+      retryable: false,
+    });
+  });
+
+  it("the payer action the IS stated reaches the words through the kept envelope", async () => {
+    isResponds(402, {
+      failure: {
+        code: "credits_empty",
+        retryable: false,
+        actor: "payer",
+        action: "top_up",
+      },
+    });
+
+    const res = await synthesizeAnswer([], "q", ["structured"], null);
+
+    const d = describeAiFailure(res.failureClass, { envelope: res.failure });
+    expect(d.action).toBe("top_up");
+    expect(d.message).toMatch(/Top up credits to continue\./);
+    // The class alone (what the doors passed before) loses it.
+    expect(describeAiFailure(res.failureClass).message).not.toMatch(/Top up/);
   });
 
   it("a non-2xx WITHOUT an envelope still classifies from the status", async () => {
@@ -97,8 +123,8 @@ describe("synthesizeAnswer — IS failure envelope", () => {
     const d = describeAiFailure(res.failureClass);
     expect(d.code).toBe("account_quota_exceeded");
     expect(d.retryable).toBe(false);
-    expect(d.message).toMatch(/monthly AI quota/);
-    expect(d.message).not.toMatch(/rate-limit|try again/i);
+    expect(d.message).toMatch(/out of AI credits/);
+    expect(d.message).not.toMatch(/rate-limit|try again|month/i);
   });
 
   it("a not-entitled 403 says the plan does not include it — not 'credentials'", async () => {
