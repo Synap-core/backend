@@ -3684,6 +3684,8 @@ export interface ObjectNext {
 	reason: string;
 	/** Where it is taken when not on the object: the session that owes it. */
 	sessionId?: string;
+	/** A `review` move: the request that waits for a decision. */
+	proposalId?: string;
 	/** A thing's or a session's next move, in the status read's words. */
 	label?: string;
 }
@@ -18038,6 +18040,8 @@ export interface ProposalObjectRef {
 /** One landed object as a row carries it. */
 export interface ProposalLandedObject extends ProposalObjectRef {
 	role: ProposalLandedRole;
+	/** An entity's kind (its profile slug): what it is called and drawn as. */
+	profileSlug?: string;
 	/** Its next step; null = it needs nothing; absent = not read. */
 	next?: ObjectNext | null;
 }

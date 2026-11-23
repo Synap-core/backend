@@ -1,14 +1,11 @@
 "use client";
 
 /**
- * The way into the object a proposal UPDATES: "Open document". The review page is not the object's page (it shows a proposed
- * change, not the thing), so a reviewer who wants the whole picture needs a
- * door to the real object, at every status: the question comes before the
- * decision, and an approved change is read against the object it changed.
- *
- * The twin of `CreatedDoor`, which names what an approval MADE once it exists.
- * The verb takes its mood from the status (what approving WILL do while it is
- * open, what it DID once approved), from the vocabulary door.
+ * The way into the object a request is ABOUT (`aboutObject`: the thing an
+ * update or a delete names, a merge's survivor, a facet's entity): "Open
+ * document". The review page shows a proposed change, not the thing, so the
+ * reviewer gets a door to the real object before deciding. Once applied, what
+ * it touched is a "Made" row instead (`MadeSection`).
  */
 
 import {
@@ -19,7 +16,6 @@ import {
 import { ExitLink } from "../../../lib/exit-link";
 import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
-import type { UpdatedObject } from "./proposal-review-model";
 
 /**
  * The door's words: ONE catalog message carrying the verb and the noun bundle
@@ -28,7 +24,7 @@ import type { UpdatedObject } from "./proposal-review-model";
  * (`kind`, a profile slug), never by its table ("Open entity").
  */
 export function updatedDoorLabel(
-  updated: Pick<UpdatedObject, "kind">,
+  updated: { kind: string },
   kind?: string | null
 ): string {
   return proposalPageT()("updated.open", {
@@ -41,7 +37,7 @@ export function UpdatedDoor({
   updated,
   kind,
 }: {
-  updated: UpdatedObject;
+  updated: { kind: string; id: string };
   /** The object's own kind (a profile slug: `finding`), when the pod named it. */
   kind?: string | null;
 }) {
