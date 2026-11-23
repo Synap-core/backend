@@ -318,6 +318,7 @@ describe("runs.getRun — exact lookup is independent from feed windows", () => 
       workspaceId: "workspace-1",
       subjectEntityId: null,
       error: null,
+      stopReason: "budget",
       outputSummary: { summary: "Done" },
       triggeredBy: "event",
       stepsCompleted: 1,
@@ -348,6 +349,8 @@ describe("runs.getRun — exact lookup is independent from feed windows", () => 
     });
 
     expect(detail?.run.id).toBe(oldRunId);
+    // The row's stop reason reaches the wire (a no-change turn reads so).
+    expect(detail?.run.stopReason).toBe("budget");
     // The detail query is a direct by-id lookup, not "newest 100 then filter".
     expect(exactRunQuery.limit).toHaveBeenCalledWith(1);
     const where = exactRunQuery._captured.where as {
