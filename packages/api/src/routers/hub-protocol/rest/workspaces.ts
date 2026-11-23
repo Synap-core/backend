@@ -490,11 +490,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
     method: "post",
     path: "/workspaces/provision-agent",
     tags: ["Workspaces"],
-    summary: "Provision an agent-owned workspace (idempotent)",
+    summary: "Provision an agent's workspace (idempotent)",
     description:
-      "Idempotently provisions a workspace owned by an agent user. " +
+      "Idempotently provisions a workspace for one of the caller's agents. " +
+      "The calling user owns it; the agent is its admin member. " +
       "Sets wide autoApproveFor so the agent can write freely within it. " +
-      "The calling user is added as admin so they can see the agent's work. " +
       "Requires hub-protocol.write scope.",
     request: {
       body: zOpenapi.object({
@@ -850,8 +850,8 @@ export function registerWorkspacesRoutes(app: HubHono): void {
   /**
    * POST /workspaces/provision-agent
    *
-   * Idempotently provisions an agent-owned workspace. The agent user owns it
-   * with a wide autoApproveFor list; the calling human is added as admin.
+   * Idempotently provisions an agent's workspace. The calling person owns it;
+   * the agent is its admin member with a wide autoApproveFor list.
    * Registered BEFORE /workspaces/from-definition and /:workspaceId routes.
    */
   app.post("/workspaces/provision-agent", async (c) => {
@@ -941,12 +941,13 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       // under its key, has no layer 2 to run, and the finisher marks it active.
       const applied = await applyTemplate({
         definition: {} as WorkspaceDefinitionInput,
-        actor: { userId: agentUserId },
+        actor: { userId: callerId },
         source: "hub.workspaces.provision-agent",
         identity: {
           proposalId,
           workspaceName: name,
           workspaceType: "agent",
+          linkedAgentId: agentUserId,
           createdBy: "provisioning",
         },
       });
@@ -955,10 +956,9 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         created: applied.materializeStatus === "created",
       };
 
-      // The wide preset an agent-owned workspace grants its agent. CONTRACT
-      // PHASE (Governance Convergence): this is mirrored into `governance_rules`
-      // (below) — NOT stored in the retired `settings.aiGovernance.autoApproveFor`
-      // JSONB sub-key. Floor-covered verbs (search.*, entity.create, …) are
+      // The wide preset an agent's workspace grants its agent, mirrored into
+      // `governance_rules` (below) — NOT stored in the retired
+      // `settings.aiGovernance.autoApproveFor` JSONB sub-key. Floor-covered verbs (search.*, entity.create, …) are
       // dropped by `syncAutoApproveRules`; only genuine widenings become rows.
       const agentWorkspaceAutoApprove = [
         "search.*",
@@ -1010,17 +1010,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
         });
       }
 
-      // Add calling user as admin so they see the agent's work (idempotent)
-      if (callerId !== agentUserId) {
-        await db
-          .insert(workspaceMembers)
-          .values({
-            workspaceId: result.workspaceId,
-            userId: callerId,
-            role: "admin",
-          })
-          .onConflictDoNothing();
-      }
+      await enrollAgentInWorkspace({
+        workspaceId: result.workspaceId,
+        agentUserId,
+        role: "admin",
+      });
 
       return c.json(
         { workspaceId: result.workspaceId, created: result.created },

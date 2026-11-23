@@ -357,16 +357,8 @@ export interface MaterializeAutomationResult {
   ref: string;
   opIndex: number;
   automationId: string;
-  /** What the op ASKED for. */
+  /** What the op ASKED for (`enabled: true`). */
   enabledRequested: boolean;
-  /**
-   * What was actually materialized. ALWAYS false: approve-first means an
-   * automation never arrives already running, so the op's `enabled` is
-   * overridden here and the override is REPORTED rather than swallowed.
-   */
-  enabled: false;
-  /** True when the op said `enabled: true` and we forced it off. */
-  enabledOverridden: boolean;
 }
 
 /** Per-op result for a `create_rule` op. */
@@ -623,8 +615,12 @@ export type AutomationCreateCaller = {
     description?: string;
     triggerType: "event" | "cron" | "webhook" | "manual";
     flowDefinition: unknown;
-    /** Always false — the materializer never asks for a running automation. */
-    enabled: false;
+    /**
+     * The status asked for: true = active, false = draft, absent = none
+     * stated. The door decides (`automationStatusAtCreate`): a person's
+     * approval of the batch activates it.
+     */
+    enabled?: boolean;
   }) => Promise<{ id: string }>;
 };
 
@@ -773,6 +769,14 @@ export interface PlanCallers {
        * plan door exists to remove.
        */
       criteria: Array<Record<string, unknown>>;
+      /**
+       * The step's parent when it already exists at this point: an existing
+       * session (`parentSessionId`) or one this plan created earlier (P1 runs
+       * parents first). Passed AT create, like a direct `start_session`, so the
+       * child is born with what the door derives from its parent (project,
+       * goal, space). P2 still writes the `spawned_from` edge, idempotently.
+       */
+      parentSessionId?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
   };
@@ -1302,32 +1306,20 @@ export async function materializeCompositeGraph(
           "materializeCompositeGraph: create_automation op reached pass execution with no automationCaller (preflight bypassed)"
         );
       }
-      const enabledRequested = op.enabled === true;
       try {
-        // FORCED DISABLED. Approve-first: an automation never arrives already
-        // running, even when the op says `enabled: true`. The override is
-        // reported on the result rather than swallowed.
         const created = await options.automationCaller.create({
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
           flowDefinition: op.flowDefinition,
-          enabled: false,
+          ...(op.enabled === undefined ? {} : { enabled: op.enabled }),
         });
-        if (enabledRequested) {
-          logger.info(
-            { ref: op.ref, name: op.name, automationId: created.id },
-            "create_automation asked for enabled:true — materialized DISABLED (approve-first)"
-          );
-        }
         registerEntityRef(refToRealId, i, op.ref, created.id, false);
         automationResults.push({
           ref: op.ref,
           opIndex: i,
           automationId: created.id,
-          enabledRequested,
-          enabled: false,
-          enabledOverridden: enabledRequested,
+          enabledRequested: op.enabled === true,
         });
       } catch (err) {
         logger.warn(
@@ -1925,6 +1917,15 @@ export async function materializeCompositeGraph(
         const op = operations[i];
         if (op.op !== "create_session") continue;
         currentOpIndex = i;
+        // The parent, when it exists already: an existing id, or an in-plan
+        // session created earlier in this pass (looked up among the sessions
+        // only, so a ref naming another kind never reaches the door). A parent
+        // not created yet falls back to the P2 edge alone.
+        const inPlanParent = op.parentRef
+          ? sessionResults.find((s) => s.ref === op.parentRef)
+          : undefined;
+        const parentSessionId =
+          op.parentSessionId ?? inPlanParent?.sessionId ?? null;
         const session = await planCallers.sessionCaller.create({
           title: op.title ?? null,
           goal: op.goal,
@@ -1940,6 +1941,7 @@ export async function materializeCompositeGraph(
               : null),
           expectedOutputs: op.expectedOutputs ?? [],
           criteria: op.criteria ?? [],
+          parentSessionId,
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({

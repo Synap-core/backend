@@ -124,6 +124,7 @@ import {
   buildMaterializedRecord,
   stampMaterialized,
 } from "../../services/proposals/stamp-materialized.js";
+import { stampLanded } from "../../services/proposals/stamp-landed.js";
 import {
   attachSourceBlob,
   discardProposalSourceBlob,
@@ -627,6 +628,12 @@ export async function applyProposalApproval(args: {
    * else may pass it: the tripwire `presence-gate-every-door` pins its callers.
    */
   presenceChecked?: "oauth.consent";
+  /**
+   * The approval also sets the run mode the person ticked ("allow without
+   * review" on an agent-made verb, `services/governance/verb-allow.ts`): the
+   * presence gate then asks what `governanceRules.setActionMode` asks.
+   */
+  setsActionMode?: boolean;
 }): Promise<ProposalExecutorResult> {
   // Approval is the human step — an agent caller (agent key, the IS internal
   // key, or an acting agent in the ALS) never applies one, whichever door.
@@ -657,6 +664,7 @@ export async function applyProposalApproval(args: {
       proposal: args.proposal,
       proof: args.presence,
       door: args.door ?? "applyProposalApproval",
+      ...(args.setsActionMode ? { setsActionMode: true } : {}),
     });
   }
 
@@ -702,6 +710,7 @@ export async function completeProposalApproval(
   // before the stamps below, so a failure here stamps no deliverable.
   if (result.success && !result.queued) {
     await assertApprovalLanded(args.proposal, args.userId);
+    await stampLanded(args.proposal.id, result);
   }
 
   // VISIBLE: an approval made inside an app is recorded as such on the
@@ -1194,13 +1203,16 @@ async function applyProposalApprovalInner(
             // The proposal's author (the actor `compositeCtx` already
             // carries), and whether a PERSON is approving (`personIsApproving`,
             // the reading the `skill/create` executor uses too), so an agent's
-            // skill is born approved only by a person's approval of the batch
-            // that carries it. Read only when the batch creates a skill.
+            // skill is born approved, and its automation born active, only by
+            // a person's approval of the batch that carries it. Read only when
+            // the batch creates one.
             skillAuthor: {
               agentUserId: compositeCtx.agentUserId,
               personApproved:
-                reconciledOperations.some((op) => op.op === "create_skill") &&
-                (await personIsApproving(ctx, userId)),
+                reconciledOperations.some(
+                  (op) =>
+                    op.op === "create_skill" || op.op === "create_automation"
+                ) && (await personIsApproving(ctx, userId)),
             },
             // A `bind_renderer` op's binding names the proposal that made it.
             sourceProposalId: proposal.id,

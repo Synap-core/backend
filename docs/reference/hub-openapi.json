@@ -2339,7 +2339,8 @@
               "cause": { "type": "string" },
               "status": { "type": "integer" },
               "attempts": { "type": "integer" },
-              "failureClass": { "type": "string" }
+              "failureClass": { "type": "string" },
+              "action": { "type": "string" }
             },
             "required": ["cause", "attempts", "failureClass"]
           },
@@ -3671,6 +3672,16 @@
           "supersededBy": { "type": "string" }
         },
         "required": ["substrate", "id", "title", "supersededBy"]
+      },
+      "KnowledgeAnswerExcerpt": {
+        "type": "object",
+        "properties": {
+          "substrate": { "type": "string" },
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "text": { "type": "string" }
+        },
+        "required": ["substrate", "id", "title", "text"]
       },
       "FindResult": {
         "type": "object",
@@ -8825,8 +8836,8 @@
     "/workspaces/provision-agent": {
       "post": {
         "tags": ["Workspaces"],
-        "summary": "Provision an agent-owned workspace (idempotent)",
-        "description": "Idempotently provisions a workspace owned by an agent user. Sets wide autoApproveFor so the agent can write freely within it. The calling user is added as admin so they can see the agent's work. Requires hub-protocol.write scope.",
+        "summary": "Provision an agent's workspace (idempotent)",
+        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent is its admin member. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -12268,7 +12279,7 @@
       "post": {
         "tags": ["Capture"],
         "summary": "AI-structure raw input into entity proposals",
-        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
+        "description": "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result), an Intelligence Service refusal code for an AI availability state (credits_empty, account_quota_exceeded, llm_budget_exceeded, …), or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). Refusals and configuration states are not outages; do not tell a user to retry.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -18721,6 +18732,10 @@
                                             "hint": {
                                               "type": "string",
                                               "maxLength": 1000
+                                            },
+                                            "params": {
+                                              "type": "object",
+                                              "additionalProperties": {}
                                             }
                                           },
                                           "required": ["kind"],
@@ -19959,6 +19974,10 @@
                                       "hint": {
                                         "type": "string",
                                         "maxLength": 1000
+                                      },
+                                      "params": {
+                                        "type": "object",
+                                        "additionalProperties": {}
                                       }
                                     },
                                     "required": ["kind"],
@@ -24050,6 +24069,10 @@
                                             "hint": {
                                               "type": "string",
                                               "maxLength": 1000
+                                            },
+                                            "params": {
+                                              "type": "object",
+                                              "additionalProperties": {}
                                             }
                                           },
                                           "required": ["kind"],
@@ -25288,6 +25311,10 @@
                                       "hint": {
                                         "type": "string",
                                         "maxLength": 1000
+                                      },
+                                      "params": {
+                                        "type": "object",
+                                        "additionalProperties": {}
                                       }
                                     },
                                     "required": ["kind"],
@@ -27815,6 +27842,12 @@
                         "owedByPerson",
                         "openSessions"
                       ]
+                    },
+                    "excerpts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/KnowledgeAnswerExcerpt"
+                      }
                     },
                     "error": { "type": "string" },
                     "failure": {
@@ -31595,6 +31628,10 @@
                                   "hint": {
                                     "type": "string",
                                     "maxLength": 1000
+                                  },
+                                  "params": {
+                                    "type": "object",
+                                    "additionalProperties": {}
                                   }
                                 },
                                 "required": ["kind"],
@@ -32872,7 +32909,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"],
                           "additionalProperties": false
@@ -40157,6 +40198,48 @@
         }
       }
     },
+    "/status-of": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Where each id stands, per subject (narrowed for scoped keys)",
+        "description": "?ids=a,b (at most 10) and ?include=moves,history,... answer where each thing, goal, session or run stands, through the same reader as `GET /orient?statusOf=`. Every id is read through the floors that AND the key's grant: an id it cannot read answers `unknown`, as one that does not exist. A key that does not read every subject unbounded (a pod app pinned to spaces) is answered the status, `moves` and `history` only; `withheld` names the parts left out.",
+        "security": [{ "bearerAuth": [] }],
+        "responses": {
+          "200": {
+            "description": "One answer per id",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object", "additionalProperties": {} }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/pod/config": {
       "get": {
         "tags": ["System"],
@@ -41140,7 +41223,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"]
                         },
@@ -42638,6 +42725,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "confirmedAt": { "type": "string" },
                             "askFingerprint": {
                               "type": "string",
@@ -43214,6 +43305,10 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
+                              "quoteDocumentId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
                               "confirmedAt": { "type": "string" },
                               "askFingerprint": {
                                 "type": "string",
@@ -43528,6 +43623,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "relayedAt": { "type": "string" }
                           },
                           "required": ["text", "relayedBy", "relayedAt"]
@@ -44420,11 +44519,6 @@
                     "minLength": 1,
                     "maxLength": 2000
                   },
-                  "forOutput": {
-                    "type": "string",
-                    "minLength": 1,
-                    "maxLength": 120
-                  },
                   "blockedBySessionIds": {
                     "type": "array",
                     "items": { "type": "string", "format": "uuid" },
@@ -44703,6 +44797,11 @@
                           },
                           "from": { "type": "string" },
                           "to": { "type": "string" },
+                          "fromKind": { "type": "string", "enum": ["track"] },
+                          "toKind": {
+                            "type": "string",
+                            "enum": ["entity", "track"]
+                          },
                           "entityId": { "type": "string" },
                           "count": { "type": "number" },
                           "lastAt": { "type": ["string", "null"] },
@@ -44802,6 +44901,78 @@
                         ]
                       }
                     },
+                    "decisions": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "title": { "type": ["string", "null"] },
+                          "status": { "type": ["string", "null"] },
+                          "category": { "type": ["string", "null"] },
+                          "options": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "key": { "type": "string" },
+                                "label": { "type": "string" },
+                                "description": { "type": ["string", "null"] },
+                                "recommended": { "type": "boolean" },
+                                "chosen": { "type": "boolean" }
+                              },
+                              "required": [
+                                "key",
+                                "label",
+                                "description",
+                                "recommended",
+                                "chosen"
+                              ]
+                            }
+                          },
+                          "recommendedOption": { "type": ["string", "null"] },
+                          "chosenOption": { "type": ["string", "null"] },
+                          "answer": {
+                            "type": "string",
+                            "enum": ["answered", "asked", "not_asked"]
+                          },
+                          "askSessionId": { "type": ["string", "null"] },
+                          "sourceSessionId": { "type": ["string", "null"] }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "status",
+                          "category",
+                          "options",
+                          "recommendedOption",
+                          "chosenOption",
+                          "answer",
+                          "askSessionId",
+                          "sourceSessionId"
+                        ]
+                      }
+                    },
+                    "entities": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "title": { "type": ["string", "null"] },
+                          "kind": { "type": "string" },
+                          "status": { "type": ["string", "null"] },
+                          "category": { "type": ["string", "null"] }
+                        },
+                        "required": [
+                          "id",
+                          "title",
+                          "kind",
+                          "status",
+                          "category"
+                        ]
+                      }
+                    },
                     "sections": {
                       "type": "object",
                       "properties": {
@@ -44893,7 +45064,40 @@
                           },
                           "required": ["status"]
                         },
+                        "crossKind": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
                         "serves": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "decisions": {
+                          "type": "object",
+                          "properties": {
+                            "status": {
+                              "type": "string",
+                              "enum": ["ok", "unavailable"]
+                            },
+                            "reason": { "type": "string" }
+                          },
+                          "required": ["status"]
+                        },
+                        "entities": {
                           "type": "object",
                           "properties": {
                             "status": {
@@ -44914,7 +45118,10 @@
                         "pullRequests",
                         "holds",
                         "goals",
-                        "serves"
+                        "crossKind",
+                        "serves",
+                        "decisions",
+                        "entities"
                       ]
                     },
                     "window": {
@@ -44922,6 +45129,7 @@
                       "properties": {
                         "since": { "type": "string" },
                         "hours": { "type": "number" },
+                        "allSettled": { "type": "boolean" },
                         "ceiling": { "type": "number" },
                         "truncated": { "type": "boolean" },
                         "omitted": { "type": "number" },
@@ -44930,6 +45138,7 @@
                       "required": [
                         "since",
                         "hours",
+                        "allSettled",
                         "ceiling",
                         "truncated",
                         "omitted",
@@ -44943,6 +45152,8 @@
                     "pullRequests",
                     "holds",
                     "goals",
+                    "decisions",
+                    "entities",
                     "sections",
                     "window"
                   ]
@@ -45340,7 +45551,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"]
                         },
@@ -46838,6 +47053,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "confirmedAt": { "type": "string" },
                             "askFingerprint": {
                               "type": "string",
@@ -47414,6 +47633,10 @@
                                 "maxLength": 64
                               },
                               "quote": { "type": "string", "maxLength": 2000 },
+                              "quoteDocumentId": {
+                                "type": "string",
+                                "format": "uuid"
+                              },
                               "confirmedAt": { "type": "string" },
                               "askFingerprint": {
                                 "type": "string",
@@ -47728,6 +47951,10 @@
                               "maxLength": 64
                             },
                             "quote": { "type": "string", "maxLength": 2000 },
+                            "quoteDocumentId": {
+                              "type": "string",
+                              "format": "uuid"
+                            },
                             "relayedAt": { "type": "string" }
                           },
                           "required": ["text", "relayedBy", "relayedAt"]
@@ -48658,7 +48885,11 @@
                               "minLength": 1,
                               "maxLength": 80
                             },
-                            "hint": { "type": "string", "maxLength": 1000 }
+                            "hint": { "type": "string", "maxLength": 1000 },
+                            "params": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            }
                           },
                           "required": ["kind"],
                           "additionalProperties": false
@@ -50578,7 +50809,7 @@
                     "minLength": 1,
                     "maxLength": 500
                   },
-                  "quote": { "type": "string", "maxLength": 2000 },
+                  "quote": { "type": "string", "maxLength": 50000 },
                   "text": { "type": "string", "maxLength": 2000 },
                   "value": {
                     "oneOf": [

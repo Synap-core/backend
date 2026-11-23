@@ -301,10 +301,14 @@ const WorkGraphWireSchema = z.object({
       kind: z.enum(WORK_GRAPH_EDGE_KINDS),
       from: z.string(),
       to: z.string(),
+      /** Absent = `from` is a session. `track` = a goal in `goals`. */
+      fromKind: z.enum(["track"]).optional(),
+      /** Absent = `to` is a session. `entity` = in `decisions` or `entities`; `track` = in `goals`. */
+      toKind: z.enum(["entity", "track"]).optional(),
       entityId: z.string().optional(),
       count: z.number().optional(),
       lastAt: z.string().nullable().optional(),
-      /** `serves`: the goal's criterion the session works, when it names one. */
+      /** `serves`: the goal criterion served, when the edge names one. */
       criterionKey: z.string().optional(),
     })
   ),
@@ -356,6 +360,44 @@ const WorkGraphWireSchema = z.object({
       ),
     })
   ),
+  /** The decisions the nodes wait on (`blocked_by`) or are about. */
+  decisions: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().nullable(),
+      /** proposed | accepted | superseded | rejected; null = unset. */
+      status: z.string().nullable(),
+      category: z.string().nullable(),
+      /** Each option with its marks; [] = a yes/no decision. */
+      options: z.array(
+        z.object({
+          key: z.string(),
+          label: z.string(),
+          description: z.string().nullable(),
+          recommended: z.boolean(),
+          chosen: z.boolean(),
+        })
+      ),
+      recommendedOption: z.string().nullable(),
+      chosenOption: z.string().nullable(),
+      /** answered | asked (an owed question asks the person) | not_asked. */
+      answer: z.enum(["answered", "asked", "not_asked"]),
+      /** With `asked`: the session whose owed question asks it. */
+      askSessionId: z.string().nullable(),
+      sourceSessionId: z.string().nullable(),
+    })
+  ),
+  /** The other things the nodes wait on or are about (their subjects). */
+  entities: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().nullable(),
+      /** The thing's kind (profile slug). */
+      kind: z.string(),
+      status: z.string().nullable(),
+      category: z.string().nullable(),
+    })
+  ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
     orchestration: WorkGraphSectionWireSchema,
@@ -365,11 +407,16 @@ const WorkGraphWireSchema = z.object({
     pullRequests: WorkGraphSectionWireSchema,
     holds: WorkGraphSectionWireSchema,
     goals: WorkGraphSectionWireSchema,
+    crossKind: WorkGraphSectionWireSchema,
     serves: WorkGraphSectionWireSchema,
+    decisions: WorkGraphSectionWireSchema,
+    entities: WorkGraphSectionWireSchema,
   }),
   window: z.object({
     since: z.string(),
     hours: z.number(),
+    /** True under trackId / rootSessionId: settled work of any age is in; since/hours limit nothing. */
+    allSettled: z.boolean(),
     ceiling: z.number(),
     truncated: z.boolean(),
     omitted: z.number(),
@@ -2896,6 +2943,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // A gate wrote the row after this call's write (its pause, its
+        // `checkGate` record, an `onFail` return): read it back, so the reply
+        // and its nudges read the gate as stored (finding 2c63fc36).
+        if (advance.gated) {
+          const stored = await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, updated.id),
+          });
+          if (stored) updated = stored as typeof updated;
+        }
         // What the advance did to the subject (the MCP door's `subjectMove`).
         const { reportedSubjectMove } =
           await import("../../../services/focus-sessions/stage-subject-status.js");

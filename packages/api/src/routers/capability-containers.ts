@@ -295,7 +295,8 @@ export const capabilityContainersRouter = router({
       // container instead of raising 23505 at the caller.
       const { container: cap, status } = await resolveOrCreateContainer(db, {
         workspaceId: input.workspaceId ?? null,
-        createdBy: input.agentUserId ?? userId,
+        createdBy: userId,
+        agentUserId: input.agentUserId,
         name: input.name,
         description: input.description,
         templateKey: input.templateKey ?? null,

@@ -713,6 +713,28 @@ describe("marketplace.install", () => {
     );
   });
 
+  // Catches: Pod updates' Renderers row with no person door (before, only an
+  // agent's `market.install` could ask for Synap's renderers).
+  it("a person installs Synap's renderer bundle through the same core", async () => {
+    m.run.mockResolvedValue({
+      status: "installed",
+      result: { kind: "renderer-bundle", slug: "synap-renderers" },
+    });
+    const out = await caller().install({
+      kind: "renderer-bundle",
+      slug: "synap-renderers",
+    });
+    expect(out.status).toBe("installed");
+    expect(m.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "renderer-bundle",
+        slug: "synap-renderers",
+        userId: "user-1",
+        agentUserId: null,
+      })
+    );
+  });
+
   it("refuses any other key before the install core runs", async () => {
     const err = await caller({ keyType: "service", session: null })
       .install({ kind: "capability", slug: "gmail" })

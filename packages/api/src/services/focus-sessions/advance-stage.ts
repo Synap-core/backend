@@ -206,7 +206,18 @@ export interface AdvanceSessionStageResult {
    * A `check` gate's outcome: whether the left stage's required criteria pass,
    * and which do not. Present only when the stage entered is check-gated.
    */
-  check?: { passed: boolean; failing: string[] };
+  check?: {
+    passed: boolean;
+    failing: string[];
+    /**
+     * Held only because the AI judge could not run (`CheckMeasure.notJudged`):
+     * nothing failed. `reason` then says why in words and how the owner moves
+     * it on, so a door that reports the hold does not call it a failed check.
+     */
+    notJudged?: true;
+    /** Why the check held, in words, when the gate said (`CheckGateResult.reason`). */
+    reason?: string;
+  };
   /**
    * The forward half of stage ↔ subject status: what happened to the entered
    * stage's `subjectStatus` (written / proposed / skipped + why / failed).
@@ -485,7 +496,12 @@ export async function advanceSessionStage(
       changed: true,
       gated: true,
       paused: gate.paused,
-      check: { passed: gate.passed, failing: gate.failing },
+      check: {
+        passed: gate.passed,
+        failing: gate.failing,
+        ...(gate.notJudged ? { notJudged: true as const } : {}),
+        ...(gate.reason ? { reason: gate.reason } : {}),
+      },
       ...slots,
     };
     if (!gate.paused) {
@@ -576,8 +592,12 @@ async function staleStage(
     : null;
 }
 
-/** Session statuses process-sync's follow moves (`IN_FLIGHT_SESSION_STATUSES`). */
-const SUBJECT_LEADS_STATUSES = new Set(["active", "forming"]);
+/**
+ * The status in which an entered stage moves the subject first: a RUNNING
+ * session. Not `paused` (a held run moves nothing), and not `forming` — a
+ * planned step has not started (P1, 21 Nov 2026).
+ */
+const SUBJECT_LEADS_STATUS = "active";
 
 /**
  * STEP = STATUS: when the entered stage is one the subject's status leads,
@@ -612,8 +632,7 @@ async function moveSubjectFirst(
       .from(focusSessions)
       .where(eq(focusSessions.id, session.id))
       .limit(1);
-    if (!row || !SUBJECT_LEADS_STATUSES.has(row.status as string))
-      return undefined;
+    if (!row || row.status !== SUBJECT_LEADS_STATUS) return undefined;
     return await writeStageSubjectStatus({
       session,
       toStage,
@@ -662,9 +681,11 @@ async function mergeStageSlotsOnEntry(
  * The `onFail` return for a check gate that held: resolve the entered stage's
  * `onFail.toStage` (key or name), un-pause the run (guarded on `paused`), and
  * advance it there through THIS door with `viaOnFail` set. Returns the stage it
- * went to, or null when the stage declares no (resolvable) `onFail`.
+ * went to, or null when the stage declares no (resolvable) `onFail`. Also the
+ * re-graded AI hold's way back (`ai-held-gate.ts`): a check that held while AI
+ * was out and really fails once it is back goes where a fresh fail goes.
  */
-async function returnToOnFailStage(
+export async function returnToOnFailStage(
   input: AdvanceSessionStageInput & { fromStage: string | null }
 ): Promise<string | null> {
   const { session, toStage } = input;

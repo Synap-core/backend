@@ -35,9 +35,9 @@ describe("RUN_SESSION_NOT_ACTIVE exemption predicate", () => {
 });
 
 describe("reaper constants", () => {
-  it("uses a generous 24h stale window and a ~30min cron", () => {
+  it("uses a generous 24h stale window and a 5-minute cron (the Synap AI claim window)", () => {
     expect(PLAYBOOK_RUN_REAPER_STALE_HOURS).toBe(24);
-    expect(PLAYBOOK_RUN_REAPER_CRON).toBe("*/30 * * * *");
+    expect(PLAYBOOK_RUN_REAPER_CRON).toBe("*/5 * * * *");
   });
 });
 

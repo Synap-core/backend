@@ -190,7 +190,7 @@ export function projectRow(
  * THIS workspace" can no longer be read off the facet. The record still
  * qualifies ONLY when BOTH hold:
  *   - the role is available in this workspace (system, owned by it, or shared
- *     to it via `profile_workspace_access`) and is not a per-workspace
+ *     to it via `space_access`) and is not a per-workspace
  *     membership role (those keep their lens and match the branch above);
  *   - the ENTITY itself is stamped in this workspace.
  * A pod-wide entity wearing a pod-wide shared-role facet is NOT published: no
@@ -205,9 +205,10 @@ function sharedRoleFacetPublishedBy(workspaceId: string) {
     drizzleSql`${profiles.roleCategory} IS DISTINCT FROM ${WORKSPACE_MEMBERSHIP_ROLE_CATEGORY}`,
     drizzleSql`(${profiles.scope} = 'system'
       OR ${profiles.workspaceId} = ${workspaceId}
-      OR EXISTS (SELECT 1 FROM profile_workspace_access pwa
-                 WHERE pwa.profile_id = ${profiles.id}
-                   AND pwa.workspace_id = ${workspaceId}))`
+      OR EXISTS (SELECT 1 FROM space_access sa
+                 WHERE sa.object_type = 'profile'
+                   AND sa.object_id = ${profiles.id}
+                   AND sa.workspace_id = ${workspaceId}))`
   );
 }
 

@@ -18,6 +18,17 @@
  *    that never sent back fails this);
  *  - the owner grades the held criterion: the gate resumes.
  *
+ * And when AI comes back by itself (W3): the hold of an AVAILABILITY failure
+ * also waits on `ai:available`; the pod's pull recording AI available again
+ * and the REAL hold-resume worker (its devFact wake and its hourly sweep,
+ * with the REAL regrader in its slot) grade the gate again:
+ *  - the judge now passes: the run moves on by itself;
+ *  - AI is still refused: it stays held, the same hold;
+ *  - the judge now says fail: the check's own hold, and back to `onFail`;
+ *  - AI available BEFORE the pause began is no news: nothing runs;
+ *  - a judge failure that is not about availability (a 5xx) holds for the
+ *    owner's grade only, with no wait on AI.
+ *
  * Stubbed, and why: the IS service lookup (`resolveIntelligenceService`) and
  * the produced-work read (`loadProducedMaterial`, its own suite in
  * `judge-material.test.ts`), the subject-status writers (the session has no
@@ -108,6 +119,12 @@ vi.mock("@synap/intelligence-client", async (importOriginal) => ({
 import { pgliteAllTablesDdl } from "../../../__tests__/pglite-ddl.js";
 import { advanceSessionStage } from "../advance-stage.js";
 import { gradeCriterionAsOwner } from "../evaluations/evaluate.js";
+import { regradeAiHeldGate } from "../ai-held-gate.js";
+import { listHolds, recordPodAiAvailability } from "@synap/database";
+import {
+  handleHoldResume,
+  registerAiHeldGateRegrader,
+} from "@synap/jobs/workers/hold-resume.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -144,6 +161,23 @@ const QUOTA_429 = () =>
     }),
     { status: 429, statusText: "Too Many Requests" }
   );
+
+/**
+ * The judge answered with no verdict: the only model left to grade is the
+ * one that did the work (`decider: "none"`, IS judge.ts).
+ */
+const NO_DECIDER = () =>
+  Response.json({
+    decider: "none",
+    verdicts: [
+      {
+        key: "audit",
+        verdict: "unmeasured",
+        rationale:
+          "The only available judge is the model that did the work — it may not grade itself.",
+      },
+    ],
+  });
 
 const VERDICT = (verdict: "pass" | "fail") => () =>
   Response.json({
@@ -266,7 +300,7 @@ describe("a check gate whose AI judge could not run", () => {
       reason?: string;
     };
     expect(gate.reason).toContain("The AI judge could not run");
-    expect(gate.reason).toContain("monthly AI quota");
+    expect(gate.reason).toContain("out of AI credits");
     expect(gate.reason).toContain('the owner can grade "audit" by hand');
     expect(gate.reason).not.toContain("HTTP 429");
   });
@@ -291,6 +325,29 @@ describe("a check gate whose AI judge could not run", () => {
   });
 });
 
+describe("a check gate whose judge answered with no decider", () => {
+  it("holds at the gate like any judge that could not run, and never moves to onFail", async () => {
+    h.judge = NO_DECIDER;
+    const sessionId = await sessionAtWork();
+
+    const res = await advanceToReview(sessionId);
+
+    expect(res).toMatchObject({ gated: true, paused: true });
+    expect(res.onFail).toBeUndefined();
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    const gate = (await sessionOf(sessionId))!.metadata?.checkGate as {
+      reason?: string;
+    };
+    expect(gate.reason).toContain(
+      "The AI judge could not run: The only available judge is the model that did the work"
+    );
+    expect(gate.reason).toContain('the owner can grade "audit" by hand');
+  });
+});
+
 describe("a check gate whose judge ran and said fail", () => {
   it("still sends the run back to its onFail stage", async () => {
     h.judge = VERDICT("fail");
@@ -303,5 +360,191 @@ describe("a check gate whose judge ran and said fail", () => {
       status: "active",
       current_stage: "work",
     });
+  });
+});
+
+/** The session's current hold, as the transition log records it. */
+const holdOf = async (sessionId: string) =>
+  (
+    await listHolds((await h.init()) as Parameters<typeof listHolds>[0], {
+      subjects: [{ subjectType: "focus_session", subjectId: sessionId }],
+    })
+  )[0]?.hold;
+
+/** The pod's pull records an answer from the CP at `at`. */
+const pulled = (state: "ok" | "empty", at: Date) =>
+  recordPodAiAvailability(
+    {
+      billing: {
+        readFailed: false,
+        state,
+        threshold: null,
+        dismissKey: null,
+        resetsAt: null,
+        viewerRole: "pod_owner",
+        canTopUp: true,
+        action: state === "ok" ? "none" : "top_up",
+        actionUrl: state === "ok" ? null : "https://cp.example/credits",
+      },
+      checkedAt: at.toISOString(),
+    },
+    at
+  );
+
+/** A UPSTREAM fault, not an availability state. */
+const UPSTREAM_502 = () =>
+  new Response(JSON.stringify({ error: "Bad gateway" }), { status: 502 });
+
+/** The AI service's own spend guard: an operator state the pull cannot see. */
+const BUDGET_503 = () =>
+  new Response(
+    JSON.stringify({
+      error: "Budget exceeded",
+      failure: { code: "llm_budget_exceeded", retryable: false },
+    }),
+    { status: 503 }
+  );
+
+/** A sweep this long after now: past any retry date the gate wrote. */
+const later = (ms: number) => new Date(Date.now() + ms);
+
+describe("a check gate held because AI was not available grades again when AI is back", () => {
+  beforeAll(() => {
+    registerAiHeldGateRegrader((held) => regradeAiHeldGate(held));
+  });
+  beforeEach(async () => {
+    await q(`delete from pod_settings`);
+    // AI was out before the pause: the pull's memory says not available.
+    await pulled("empty", new Date(Date.now() - 60_000));
+  });
+
+  /** Credits empty at the advance: held on the check AND on AI. */
+  async function heldOnAi(): Promise<string> {
+    h.judge = QUOTA_429;
+    const sessionId = await sessionAtWork();
+    await advanceToReview(sessionId);
+    return sessionId;
+  }
+
+  it("holds on ai:available with the payer's wait, and a pass after AI is back moves on by itself", async () => {
+    const sessionId = await heldOnAi();
+    expect(await holdOf(sessionId)).toMatchObject({
+      on: "external",
+      ref: "check:review",
+      until: { moves: "ai:available" },
+    });
+
+    // The credits came back: the pull sees it, the wake runs the worker.
+    h.judge = VERDICT("pass");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "review",
+    });
+    expect(await holdOf(sessionId)).toBeUndefined();
+  });
+
+  it("the hourly sweep re-checks it too", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("pass");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({});
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("AI still refused when it is graded again: it stays held, the same hold", async () => {
+    const sessionId = await heldOnAi();
+    const before = await holdOf(sessionId);
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    expect(await holdOf(sessionId)).toEqual(before);
+  });
+
+  it("the judge says fail once AI is back: the check's own hold, then back to onFail", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("fail");
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "work",
+    });
+  });
+
+  it("an answer computed before the pause says nothing about it: nothing is graded", async () => {
+    await pulled("ok", new Date(Date.now() - 30_000));
+    const sessionId = await heldOnAi();
+    h.judge = VERDICT("pass");
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+  });
+
+  it("AI back by the pull before the regrade could pass is still met on a later wake (met while true)", async () => {
+    const sessionId = await heldOnAi();
+    // The pull saw AI come back, but the AI service still refused (its
+    // entitlement cache): held.
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+    // A later wake (a tick, or the delayed re-wake), no new transition: met.
+    h.judge = VERDICT("pass");
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("a judge failure that is not about availability holds for the owner's grade, with a dated retry", async () => {
+    h.judge = UPSTREAM_502;
+    const sessionId = await sessionAtWork();
+    const res = await advanceToReview(sessionId);
+    expect(res).toMatchObject({ gated: true, paused: true });
+    expect(res.onFail).toBeUndefined();
+    const hold = await holdOf(sessionId);
+    expect(hold).toMatchObject({ on: "thing", ref: "check:review" });
+    const until = hold?.until as { date?: string } | undefined;
+    expect(Date.parse(until?.date ?? "")).toBeGreaterThan(Date.now());
+
+    // The date comes and the judge still fails: the same hold, still held.
+    await handleHoldResume({}, later(2 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "paused" });
+    expect(await holdOf(sessionId)).toEqual(hold);
+
+    // A later sweep, the judge runs and passes: the run moves on.
+    h.judge = VERDICT("pass");
+    await handleHoldResume({}, later(3 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "active",
+      current_stage: "review",
+    });
+  });
+
+  it("the AI service's own state (budget, provider, service) retries on a date, never on ai:available", async () => {
+    h.judge = BUDGET_503;
+    const sessionId = await sessionAtWork();
+    await advanceToReview(sessionId);
+    const hold = await holdOf(sessionId);
+    expect(hold).toMatchObject({ on: "external", ref: "check:review" });
+    expect(hold?.until).toHaveProperty("date");
+
+    h.judge = VERDICT("pass");
+    await handleHoldResume({}, later(2 * 3_600_000));
+    expect(await sessionOf(sessionId)).toMatchObject({ status: "active" });
+  });
+
+  it("a payer hold whose judge now fails for the AI service's own reason is re-held on a date", async () => {
+    const sessionId = await heldOnAi();
+    h.judge = BUDGET_503;
+    await pulled("ok", new Date(Date.now() + 1_000));
+    await handleHoldResume({ devFact: "ai:available" });
+    expect(await sessionOf(sessionId)).toMatchObject({
+      status: "paused",
+      current_stage: "review",
+    });
+    expect((await holdOf(sessionId))?.until).toHaveProperty("date");
   });
 });

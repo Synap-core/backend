@@ -16,8 +16,11 @@
  *   - `waits_on_output` the session taking an output → the session producing it;
  *   - `triggered`       the session whose write fired a run → the run;
  *   - `updated`         the producer → the session that wrote to its output;
- *   - `serves`          the session → the GOAL (track) it works for; the only
- *                       kind whose far end is a goal, not a session.
+ *   - `serves`          a session or a goal → the GOAL (track) it is done for.
+ * An end that is not a session (a goal, a decision, a thing) is named by the
+ * edge's `fromKind` / `toKind` and is one of the read's `goals`,
+ * `decisions` or `entities`, never a node: a reader that keeps the edges
+ * between kept nodes keeps those by their session end.
  *
  * Zero imports: safe in browser, Electron, React Native, Node and CLI.
  */

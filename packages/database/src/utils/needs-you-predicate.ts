@@ -36,6 +36,7 @@ import {
   NEEDS_YOU_STOPPED_AFTER_MS,
   NEEDS_YOU_WORKING_WINDOW_MS,
 } from "@synap-core/types/needs-you/rule";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import { MessageAuthorType } from "../schema/messages.js";
 import { owedSlotPredicateSql } from "./owed-slot-predicate.js";
 import { awaitedGatePendingIn } from "./awaited-gate-wait.js";
@@ -58,22 +59,45 @@ function at(ms: number): SQL {
 }
 
 /**
- * SQL timestamptz: the newest agent evidence on the session aliased `s`, or
- * NULL when there is none (`GREATEST` skips NULLs).
+ * SQL timestamptz: the newest WRITE an agent filed in the session aliased
+ * `s` (a proposal, applied or pending, or an event: outputs included), or
+ * NULL.
  */
-export function sessionLastAgentActivitySql(s: string): SQL {
+export function sessionLastAgentWriteSql(s: string): SQL {
   return drizzleSql`GREATEST(
-    (SELECT max(ny_m.timestamp) FROM messages ny_m
-       WHERE ny_m.channel_id = ${col(s, "channel_id")}
-         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
-    (SELECT max(ny_t.updated_at) FROM chat_turns ny_t
-       WHERE ny_t.channel_id = ${col(s, "channel_id")}),
     (SELECT max(ny_p.created_at) FROM proposals ny_p
        WHERE ny_p.session_id = ${col(s, "id")}
          AND ny_p.agent_user_id IS NOT NULL),
     (SELECT max(ny_e.timestamp) FROM events ny_e
        WHERE ny_e.session_id = ${col(s, "id")}
          AND ny_e.agent_user_id IS NOT NULL)
+  )`;
+}
+
+/**
+ * SQL timestamptz: the newest MARK an agent left on the session aliased `s`
+ * — its writes ({@link sessionLastAgentWriteSql}) and its room messages — or
+ * NULL.
+ */
+export function sessionLastAgentMarkSql(s: string): SQL {
+  return drizzleSql`GREATEST(
+    (SELECT max(ny_m.timestamp) FROM messages ny_m
+       WHERE ny_m.channel_id = ${col(s, "channel_id")}
+         AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
+    ${sessionLastAgentWriteSql(s)}
+  )`;
+}
+
+/**
+ * SQL timestamptz: the newest agent evidence on the session aliased `s` — its
+ * marks ({@link sessionLastAgentMarkSql}) and its turns — or NULL when there
+ * is none (`GREATEST` skips NULLs).
+ */
+export function sessionLastAgentActivitySql(s: string): SQL {
+  return drizzleSql`GREATEST(
+    ${sessionLastAgentMarkSql(s)},
+    (SELECT max(ny_t.updated_at) FROM chat_turns ny_t
+       WHERE ny_t.channel_id = ${col(s, "channel_id")})
   )`;
 }
 
@@ -125,6 +149,14 @@ export function needsYouSessionClassSql(s: string, now: Date): SQL {
       ELSE 'live'
     END FROM (SELECT ${sessionLastAgentActivitySql(s)} AS at,
                      ${sessionLastAgentWorkSql(s)} AS work) ny_la)`;
+}
+
+/**
+ * SQL boolean: the session aliased `s` is a PLANNED step that has not
+ * started (`isPlannedSessionStatus`, P2): it owes nothing yet. Never NULL.
+ */
+function plannedSessionSql(s: string): SQL {
+  return drizzleSql`coalesce(${col(s, "status")} = ${PLANNED_SESSION_STATUS}, false)`;
 }
 
 /** SQL text: the cause kind on `slot` (`needsYouAskCauseKind`), or NULL. */
@@ -185,6 +217,7 @@ export function needsYouSlotClassSql(
   const session = needsYouSessionClassSql(s, now);
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateSql}) THEN NULL
+      WHEN ${plannedSessionSql(s)} THEN NULL
       WHEN NOT ${realAskerSql()} THEN 'from_system'
       WHEN ${session} = 'stopped' AND ${SLOT_ENDS_WITH_SESSION_SQL}
         AND NOT coalesce(${blocksOpenPr}, false) THEN 'stopped'

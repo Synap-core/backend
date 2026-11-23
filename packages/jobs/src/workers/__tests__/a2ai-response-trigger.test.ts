@@ -44,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   updateSets: [] as Array<Record<string, unknown>>,
   /** Inputs handed to the ONE notification write door. */
   notificationInserts: [] as Array<Record<string, unknown>>,
+  /** The run claims the turn made (`claimRun`). */
+  claims: [] as Array<Record<string, unknown>>,
 }));
 
 // `notifyA2AIFailure` no longer inserts into `notifications` itself: it goes
@@ -97,6 +99,12 @@ vi.mock("@synap/database", () => ({
   gte: () => ({}),
   persistAssistantReply: (...args: unknown[]) =>
     mocks.persistAssistantReply(...args),
+  claimRun: async (_db: unknown, input: Record<string, unknown>) => {
+    mocks.claims.push(input);
+    return { rows: [], transitions: [] };
+  },
+  drizzleSql: () => ({}),
+  playbookRuns: { sessionId: "session_id", holder: "holder" },
   agentOverridesForTurn: (...args: unknown[]) =>
     mocks.agentOverridesForTurn(...args),
   db: {
@@ -186,6 +194,7 @@ beforeEach(() => {
   mocks.messageLookup = undefined;
   mocks.updateSets.length = 0;
   mocks.notificationInserts.length = 0;
+  mocks.claims.length = 0;
   mocks.agentOverridesForTurn.mockResolvedValue(null);
   mocks.persistAssistantReply.mockResolvedValue({
     assistantId: assistantMessageId,
@@ -215,6 +224,26 @@ describe("handleA2AIResponseTrigger", () => {
         collectSteps: true,
       })
     );
+  });
+
+  it("the turn starting is Synap AI's claim on its session's queued run; a turn with no session claims nothing", async () => {
+    mocks.insertReturning = [runningTurn()];
+    mocks.requestHeadlessChatText.mockResolvedValue({
+      text: "on it",
+      error: null,
+      steps: [],
+    });
+    await handleA2AIResponseTrigger(baseJob({ focusSessionId: "sess-1" }));
+    expect(mocks.claims).toEqual([
+      expect.objectContaining({
+        holder: { kind: "synap_ai", id: "agent-user" },
+      }),
+    ]);
+
+    mocks.claims.length = 0;
+    mocks.insertReturning = [runningTurn()];
+    await handleA2AIResponseTrigger(baseJob());
+    expect(mocks.claims).toEqual([]);
   });
 
   it("forwards a server-built turnContext (a comment's resolved anchor) to the IS", async () => {

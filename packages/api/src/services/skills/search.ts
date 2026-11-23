@@ -40,10 +40,7 @@ import {
   sqlTermMatch,
   type TermMatch,
 } from "../../utils/term-match.js";
-import {
-  visibleSkillsAnyWorkspaceWhere,
-  visibleSkillsWhere,
-} from "./visibility.js";
+import { visibleSkillsWhere } from "./visibility.js";
 import { linkedRowSlugs } from "./template-skills.js";
 
 export interface InstructionSkillSearchInput {
@@ -56,7 +53,7 @@ export interface InstructionSkillSearchInput {
   system?: boolean;
   /**
    * With no `workspaceId`: read every skill the user can see in ANY workspace
-   * they can see (`visibleSkillsAnyWorkspaceWhere`), not only pod and user
+   * they can see (`visibleSkillsWhere` with `allSpaces`), not only pod and user
    * skills. `visibleSkillsWhere` without a workspace drops every
    * `scope:"workspace"` skill and rule, which is right for a lensed catalog and
    * wrong for a pod-wide search (`synap_find`). Ignored when a workspace is set.
@@ -105,7 +102,7 @@ export async function searchInstructionSkills(
     // Three-tier visibility AND rule expiry (enforced by default — this is an
     // agent-facing catalog, so it must never waive `includeExpired`).
     !input.workspaceId && input.anyWorkspace
-      ? visibleSkillsAnyWorkspaceWhere(input.userId)
+      ? visibleSkillsWhere(input.userId, undefined, { allSpaces: true })
       : visibleSkillsWhere(input.userId, input.workspaceId || undefined),
     eq(skills.kind, "instruction"),
     eq(skills.status, "active"),

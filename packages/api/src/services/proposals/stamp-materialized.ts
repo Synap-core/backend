@@ -68,27 +68,12 @@ const logger = createLogger({ module: "stamp-materialized" });
 
 /**
  * The complete created-rows record. Extends the shared
- * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
- * api writes and reads today.
+ * `ProposalMaterializedRecord` (`@synap-core/types`, which carries every id
+ * list a reader needs) with the fields only the api writes and reads.
  */
 export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   /** Facets attached by the run (revert re-checks each row's lineage). */
   facetIds?: string[];
-  /** Rule Loop config rows created by the run. */
-  skillIds?: string[];
-  automationIds?: string[];
-  /** Rules are `skills` rows (`kind: "rule"`). */
-  ruleIds?: string[];
-  /** DRAFT playbooks created by `create_playbook` ops (revert archives them). */
-  playbookIds?: string[];
-  /** Lists created by `create_view` ops (revert deletes them while untouched). */
-  viewIds?: string[];
-  /**
-   * Cells a `create_cell` op CREATED (`widget_definitions` ids). Revert deletes
-   * one while it is untouched and nothing else shows it. A cell the door
-   * updated instead was never this run's, and is not listed.
-   */
-  cellIds?: string[];
   /** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
   rendererBindingIds?: string[];
   /**
@@ -99,9 +84,7 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   entityDocumentIds?: string[];
   /** What merges overwrote on PRE-EXISTING entities, with prior values. */
   propertyDiffs?: EntityPropertyDiff[];
-  /** Connected plan: focus sessions, projects and session edges created by the run. */
-  sessionIds?: string[];
-  projectIds?: string[];
+  /** Connected plan: session edges created by the run. */
   linkIds?: string[];
   /** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
   projectSubjectIds?: Record<string, string>;

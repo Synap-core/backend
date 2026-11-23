@@ -387,6 +387,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
       // through the same executor path, idempotently.
       api.registerAgentChoiceRedispatchReactor();
+      // A run nobody claimed was blocked by the run reaper ⇒ its person is
+      // asked; their answer starts it again, keeps waiting, or stops it.
+      api.registerRunBlockedReactors();
       // The self-healing card's answer links each agent to its program (D10).
       api.registerAgentTemplateAnswerReactor();
       // Same close event again: a session that ENDED with required criteria
@@ -672,6 +675,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/mail-feed-cron.js");
         const { registerCalBackfillRunner } =
           await import("@synap/jobs/workers/cal-backfill-cron.js");
+        const { registerDegradedCaptureSweepRunner } =
+          await import("@synap/jobs/workers/degraded-capture-sweep.js");
         const {
           registerFirefliesIngestRunner,
           registerFirefliesBackfillRunner,
@@ -723,7 +728,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/utils/proactive-post.js");
         const { registerSessionCloser, registerStoppedSessionStaler } =
           await import("@synap/jobs/utils/session-close.js");
-        const { registerHoldResumeFollowUp } =
+        const { registerHoldResumeFollowUp, registerAiHeldGateRegrader } =
           await import("@synap/jobs/workers/hold-resume.js");
         const { registerReactionEffect } =
           await import("@synap/jobs/utils/reaction-effects.js");
@@ -733,6 +738,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
           await import("@synap/jobs/utils/stage-advance.js");
+        const { registerRunTurnPersisted } =
+          await import("@synap/jobs/utils/run-turn-persisted.js");
         const { registerSessionOutcomeDoor } =
           await import("@synap/jobs/utils/session-outcome-door.js");
         const { registerServiceHealthNotifier } =
@@ -781,6 +788,15 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
+        // A check gate held because AI was not available grades again when
+        // the pod sees AI come back: a pass moves on (never a bare resume).
+        registerAiHeldGateRegrader((held) => api.regradeAiHeldGate(held));
+        // The payers' notice when the pulled AI availability changes.
+        const { registerAiAvailabilityNotifier } =
+          await import("@synap/jobs/workers/cp-entitlement-sync.js");
+        registerAiAvailabilityNotifier(async (change) => {
+          await api.notifyAiAvailabilityChange(change);
+        });
         // The reactions reactor: the effect whose door is api-side — an outcome
         // met wherever it was filed (pod default 3) goes through THE done door.
         // Unfilled, its writes are skipped and logged `effect_unavailable`.
@@ -807,6 +823,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // unregistered it throws rather than advancing ungated — so this
         // registration is what makes the automation stage-advance work at all.
         registerStageAdvancer((input) => api.advanceSessionStage(input));
+        // A run turn's reply is saved: the pod judges what the turn did now,
+        // when the turn's end was reported before its reply landed.
+        registerRunTurnPersisted((input) => api.settleRunTurnPersisted(input));
         // ONE set of session outcome doors (plan v5 T2): an automation's
         // GRANTED complete_outcome / post_evidence / reevaluate_criterion
         // reaches the same api functions the approval executor applies.
@@ -822,6 +841,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerAgentWaker((req) => api.triggerAutoRespond(req));
         registerMailFeedRunner(() => api.runMailFeed());
         registerCalBackfillRunner(() => api.runCalBackfill());
+        // Captures saved without AI, structured once it answers again.
+        registerDegradedCaptureSweepRunner(() => api.sweepDegradedCaptures());
         // Fireflies: webhook-triggered ingest + the backfill safety net both
         // delegate to api-side runners (executeCapability + recordInboundMessage).
         registerFirefliesIngestRunner((input) => api.runFirefliesIngest(input));

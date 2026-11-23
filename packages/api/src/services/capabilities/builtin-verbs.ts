@@ -41,8 +41,7 @@ import { TRPCError } from "@trpc/server";
 import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../capture-agent/capture-degraded-guidance.js";
 import {
   db,
@@ -73,6 +72,8 @@ import {
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
+import { measureCheckParams } from "./measure-check.js";
+import { runMeasureCheck } from "./measure-check-read.js";
 // Type-only imports (erased at runtime). The heavy access layer + the channel
 // util are LAZY-imported inside the read/write handlers (mirroring how
 // channelCreateHandler lazy-imports channelsRouter), so this module's load graph
@@ -804,6 +805,7 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       reason === "degraded" && Array.isArray(structured?.entities)
         ? (structured.entities as Array<Record<string, unknown>>)
         : undefined;
+    const degradedWords = describeDegradedCapture(degradedReason);
 
     return {
       status: "no_proposal",
@@ -819,8 +821,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
         ? {
             degraded: true as const,
             ...(degradedReason ? { degradedReason } : {}),
-            degradedMessage: describeDegradedForAgent(degradedReason),
-            degradedRetryable: isDegradedReasonRetryable(degradedReason),
+            degradedMessage: degradedWords.message,
+            degradedRetryable: degradedWords.retryable,
           }
         : {}),
       ...(salvagedEntities?.length
@@ -1932,6 +1934,19 @@ const lensPageHandler: BuiltinVerbHandler = async (params, ctx) => {
   } as unknown as Context);
   return caller.list(lensPageListInput(input));
 };
+
+/**
+ * measure.check — a criterion's KPI, MEASURED: one existing cell-bridge read
+ * op (`entities.list`, `lifecycle.board`, `lifecycle.throughput`,
+ * `attention.count`) read as the caller in the run's space, its one number
+ * compared with a bar. Returns `{ passed, detail: { value, threshold,
+ * comparator, op } }`, which the evaluator records as the grade and its
+ * evidence. The read and the procedures it reuses: `measure-check-read.ts`;
+ * the arguments, the number per op and the comparison: `measure-check.ts`.
+ * Read-only.
+ */
+const measureCheckHandler: BuiltinVerbHandler = (params, ctx) =>
+  runMeasureCheck(params, ctx);
 
 // ── Kind + Facets (roles) ─────────────────────────────────────────────────────
 //
@@ -3896,9 +3911,8 @@ const automationRecommendHealthHandler: BuiltinVerbHandler = async (
 // The substrate could BUILD config (playbook.create / automation.create) but
 // never REVISE it: a live playbook whose `subjectProfile` pointed at a kind
 // that no longer exists could not be repaired from any agent surface, and an
-// agent-authored automation — which ALWAYS lands `draft`
-// (`insertAutomationAfterGovernance`'s `forceDraft`) — could never be switched
-// on. These four verbs close that, each delegating to the EXISTING governed
+// agent-authored automation no person approved — born `draft`
+// (`automationStatusAtCreate`) — could never be switched on. These four verbs close that, each delegating to the EXISTING governed
 // tRPC procedure exactly like `entity.update` does. No logic is re-implemented
 // here, and every return is surfaced VERBATIM so a `{ status: "proposed" }`
 // outcome is reported as the success it is.
@@ -5144,6 +5158,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "document.stamp_diagnostics": documentStampDiagnosticsHandler,
   // D4 — a refresher's grounding read: the lens page, as the widgets read it.
   "lens.page": lensPageHandler,
+  "measure.check": measureCheckHandler,
   // Kind + Facets — role attach/update/detach/list over the one facet door.
   "entity_facet.attach": entityFacetAttachHandler,
   "entity_facet.update": entityFacetUpdateHandler,
@@ -5197,7 +5212,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.recommend_health": automationRecommendHealthHandler,
   // Config REVISION (see the section above): the substrate could build a
   // playbook/automation but never revise one, and an agent-authored automation
-  // always lands `draft` with no door to switch it on.
+  // no person approved is born `draft` with no door to switch it on.
   "playbook.update": playbookUpdateHandler,
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,
@@ -5274,6 +5289,7 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "document.freeze_charts": documentFreezeChartsParams,
   "document.stamp_diagnostics": documentStampDiagnosticsParams,
   "lens.page": lensPageParams,
+  "measure.check": measureCheckParams,
   "entity_facet.attach": entityFacetAttachParams,
   "entity_facet.update": entityFacetUpdateParams,
   "entity_facet.detach": entityFacetDetachParams,
@@ -5382,6 +5398,12 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // nothing. Must auto-run inside a refresher flow (a propose verdict would
   // stall it before the document.update it grounds).
   "lens.page",
+  // measure.check — one cell-bridge read op (entities.list, lifecycle.board,
+  // lifecycle.throughput, attention.count) under the caller's floor, compared
+  // with a bar; writes nothing. Must auto-run: the evaluator runs it for a
+  // capability criterion with suppressProposal, and a propose verdict would
+  // leave the criterion unmeasured.
+  "measure.check",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is

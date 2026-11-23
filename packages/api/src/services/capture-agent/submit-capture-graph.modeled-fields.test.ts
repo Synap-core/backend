@@ -49,6 +49,12 @@ effectiveProps.set("offer", [
 ]);
 effectiveProps.set("decision", [def("summary", "string", { maxLength: 500 })]);
 effectiveProps.set("finding", []);
+effectiveProps.set("verdict", [
+  {
+    ...def("verdictStatus", "string", { enum: ["go", "stop"] }),
+    isLifecycle: true,
+  },
+]);
 
 const fakeDb = {
   query: { relationDefs: { findMany: async () => [] } },
@@ -125,5 +131,49 @@ describe("capture dry run — what each kind models", () => {
         ],
       },
     ]);
+  });
+
+  it("moves the kind's status sent under another key to its field, and says so", async () => {
+    const out = await run([
+      {
+        ref: "v",
+        profileSlug: "verdict",
+        title: "Go",
+        properties: { status: "go" },
+      },
+      {
+        ref: "w",
+        profileSlug: "verdict",
+        title: "Maybe",
+        properties: { status: "maybe" },
+      },
+    ]);
+    expect(out.unmodeledProperties).toEqual([
+      {
+        label: "Go",
+        profileSlug: "verdict",
+        unmodeled: [
+          {
+            key: "status",
+            didYouMean: "verdictStatus",
+            movedTo: "verdictStatus",
+          },
+        ],
+      },
+      {
+        label: "Maybe",
+        profileSlug: "verdict",
+        unmodeled: [
+          {
+            key: "status",
+            didYouMean: "verdictStatus",
+            movedTo: "verdictStatus",
+          },
+        ],
+      },
+    ]);
+    // Moved, so it is validated as the field: only the value outside the
+    // field's options is refused.
+    expect(out.invalidEntities.map((e) => e.label)).toEqual(["Maybe"]);
   });
 });

@@ -593,8 +593,8 @@ describe("automations flow catalog validation", () => {
 });
 
 /**
- * A playbook runs only in its home space (`playbookNotInSpaceReason`, the run
- * door's rule), so a POD-WIDE automation naming a space-scoped playbook fired
+ * A playbook runs only where it is usable (`usableInSpace`, the run door's
+ * rule), so a POD-WIDE automation naming a space-scoped playbook fired
  * runs refused everywhere but there (ticket 6c15da33). Create now files it
  * where its playbooks run, or refuses with the fix.
  */
@@ -653,6 +653,41 @@ describe("a pod-wide automation naming a space-scoped playbook (6c15da33)", () =
     expect(result.message).not.toContain("filed in space");
     expect(h.permissionArgs[0]).toMatchObject({ workspaceId: null });
     expect(h.insertValues[0]?.workspaceId ?? null).toBeNull();
+  });
+
+  it("update refuses a playbook of another space, naming the fix, and moves nothing", async () => {
+    h.selectResults.push([]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Weekly radar",
+      workspaceId: OTHER,
+    });
+
+    await expect(
+      caller().update({
+        id: h.existing.id as string,
+        flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining(`run it in space ${OTHER}.`),
+    });
+    expect(h.updateSets).toHaveLength(0);
+  });
+
+  it("CONTROL: update keeps a playbook of the automation's own space", async () => {
+    h.selectResults.push([]);
+    h.playbookRows.push({
+      id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      name: "Weekly radar",
+      workspaceId: h.existing.workspaceId as string,
+    });
+
+    await caller().update({
+      id: h.existing.id as string,
+      flowDefinition: UNKNOWN_PLAYBOOK_ONLY_FLOW,
+    });
+    expect(h.updateSets).toHaveLength(1);
   });
 
   it("playbooks of two spaces: refused with the fix, nothing filed", async () => {

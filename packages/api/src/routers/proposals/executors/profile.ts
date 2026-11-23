@@ -22,6 +22,7 @@ import { createLogger } from "@synap-core/core";
 import {
   createAndLinkPropertyDef,
   type CreateAndLinkPropertyDefInput,
+  type CreateAndLinkPropertyDefResult,
 } from "../../../services/profiles/create-and-link-property-def.js";
 import { ProposedKindFieldSchema } from "../../../services/profiles/proposed-kind-field.js";
 
@@ -189,6 +190,8 @@ export function registerProfileExecutors(): void {
         slug: string | null;
         outcome: "created" | "refused";
         reason?: string;
+        /** The slug matched a pod-wide field: reused, or the kind got its own. */
+        globalField?: CreateAndLinkPropertyDefResult["globalField"];
       }> = [];
       if (landedOnExisting) {
         for (const raw of rawFields) {
@@ -226,7 +229,7 @@ export function registerProfileExecutors(): void {
           }
           const field = parsed.data;
           try {
-            await createAndLinkPropertyDef({
+            const written = await createAndLinkPropertyDef({
               userId,
               workspaceId,
               profileId: createdProfileId,
@@ -240,7 +243,13 @@ export function registerProfileExecutors(): void {
               defaultValue: field.defaultValue,
               displayOrder: field.displayOrder,
             });
-            fieldOutcomes.push({ slug: field.slug, outcome: "created" });
+            fieldOutcomes.push({
+              slug: field.slug,
+              outcome: "created",
+              ...(written?.globalField
+                ? { globalField: written.globalField }
+                : {}),
+            });
           } catch (err) {
             // One field never undoes the kind or its siblings.
             fieldOutcomes.push({

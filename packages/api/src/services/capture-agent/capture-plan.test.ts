@@ -227,3 +227,63 @@ describe("plan edges and order", () => {
     expect(sessionOpsRootFirst(ops)).toEqual([1, 0]);
   });
 });
+
+/**
+ * ONE body per entity (ticket 9fd9c3d5): an entity whose long `content`
+ * becomes its body, plus a document step attached to it, failed at approval
+ * and rolled the whole plan back. Refused at filing, naming what to keep.
+ */
+describe("validatePlanOperations — one body per entity", () => {
+  const LONG = "A finding worth a page. ".repeat(40);
+  const report = (content?: string): CompositeProposalOperation => ({
+    op: "create_entity",
+    ref: "report",
+    profileSlug: "note",
+    title: "Report",
+    ...(content !== undefined ? { content } : {}),
+  });
+  const doc = (ref: string, target: Record<string, string>) =>
+    ({
+      op: "create_document",
+      ref,
+      title: ref,
+      content: "evidence",
+      ...target,
+    }) as CompositeProposalOperation;
+
+  it("refuses a document body for an entity whose long content is its body, saying which to keep", () => {
+    const problems = validatePlanOperations([
+      report(LONG),
+      doc("evidence", { entityRef: "report" }),
+    ]);
+    expect(problems).toEqual([
+      expect.objectContaining({
+        opIndex: 1,
+        ref: "evidence",
+        message: expect.stringMatching(/ONE body.*`content`.*sessionRef/),
+      }),
+    ]);
+  });
+
+  it("refuses a second document body for one entity", () => {
+    const problems = validatePlanOperations([
+      report(),
+      doc("a", { entityRef: "report" }),
+      doc("b", { entityRef: "report" }),
+      doc("c", { entityId: UUID }),
+      doc("d", { entityId: UUID }),
+    ]);
+    expect(problems.map((p) => p.opIndex)).toEqual([2, 4]);
+  });
+
+  it("lets a short inline content, a session document and a single body through", () => {
+    expect(
+      validatePlanOperations([
+        report("one line"),
+        doc("body", { entityRef: "report" }),
+        { op: "create_session", ref: "s", goal: "g" },
+        doc("onSession", { sessionRef: "s" }),
+      ])
+    ).toEqual([]);
+  });
+});

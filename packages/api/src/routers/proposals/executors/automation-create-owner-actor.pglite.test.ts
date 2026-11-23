@@ -5,7 +5,7 @@
  * agent — and records the agent as its ACTOR (`agent_user_id`).
  *
  * Real: the `automation/create` executor (resolved through the registry, as
- * approval does), `materializeApprovedAutomation`, the owner door
+ * approval does), `materializeAutomationForPrincipal`, the owner door
  * `ownerAndActor`, the insert, `transitionProposal`. PGlite tables derived
  * from the Drizzle schema. Stubbed: side-effect events.
  *

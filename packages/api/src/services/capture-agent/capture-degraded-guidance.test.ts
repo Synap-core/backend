@@ -18,6 +18,7 @@ import { join } from "node:path";
 import {
   buildDegradedNextStep,
   classifyDegradedReason,
+  describeDegradedCapture,
   describeDegradedForAgent,
   isDegradedReasonRetryable,
 } from "./capture-degraded-guidance.js";
@@ -73,6 +74,44 @@ describe("degraded reason → permanence class", () => {
       expect(msg.toLowerCase()).not.toContain("temporar");
     }
   );
+
+  // An IS refusal for an AI availability state (credits, plan, payment, a
+  // provider or service state), reported by its own code
+  // (`degradedReasonForFailure`, routers/capture.ts). The set is the deck's
+  // classification, never a hand list here.
+  it.each([
+    "credits_empty",
+    "account_quota_exceeded",
+    "not_entitled",
+    "access_suspended",
+    "account_inactive",
+    "insufficient_credit",
+  ])(
+    "%s is an AVAILABILITY refusal: not retryable, in the deck's words",
+    (reason) => {
+      expect(classifyDegradedReason(reason)).toBe("availability");
+      expect(isDegradedReasonRetryable(reason)).toBe(false);
+      const msg = describeDegradedForAgent(reason);
+      expect(msg).toContain(`(${reason})`);
+      expect(msg).toMatch(
+        /Retrying will not help until AI is available again\./
+      );
+      expect(msg).not.toMatch(/did not say why|operator|month/i);
+    }
+  );
+
+  it("an availability refusal ends with the action the IS stated, and invents none", () => {
+    expect(describeDegradedForAgent("credits_empty", "ask_admin")).toMatch(
+      /Captures still save\. Ask an admin to top up credits\./
+    );
+    expect(describeDegradedForAgent("credits_empty")).not.toMatch(
+      /Top up|Ask an admin/
+    );
+  });
+
+  it("a transient refusal code is not an availability state", () => {
+    expect(classifyDegradedReason("rate_limit")).toBe("unknown");
+  });
 
   it("an unrelated extraction_error is still UNKNOWN (the budget match is exact)", () => {
     expect(classifyDegradedReason("extraction_error: TypeError")).toBe(
@@ -157,7 +196,7 @@ describe("the WIRE: both agent doors forward the salvage", () => {
     // straight through to a bare `c.json(result)` with neither.
     expect(source).toMatch(/degraded\s*\)?\s*===\s*true/);
     expect(source).toContain('status: "not_structured"');
-    expect(source).toContain("describeDegradedForAgent(");
+    expect(source).toContain("describeDegradedCapture(");
     expect(source).toContain("salvagedEntities");
     expect(source).toContain("buildDegradedNextStep(");
   });
@@ -167,7 +206,7 @@ describe("the WIRE: both agent doors forward the salvage", () => {
       join(API_SRC, "services", "capabilities", "builtin-verbs.ts"),
       "utf8"
     );
-    expect(source).toContain("describeDegradedForAgent(");
+    expect(source).toContain("describeDegradedCapture(");
     expect(source).toContain("buildDegradedNextStep(");
     // EMISSION, not mention. A bare `toContain("salvagedEntities")` passes on a
     // file that merely DECLARES the local const and never puts it on the
@@ -199,5 +238,31 @@ describe("the WIRE: both agent doors forward the salvage", () => {
     ]) {
       expect(block).toContain(`${field}:`);
     }
+  });
+});
+
+describe("describeDegradedCapture: the one composer every capture door uses", () => {
+  it("the pod's failure class outranks a transient reason token", () => {
+    const words = describeDegradedCapture("is_invalid_response", {
+      failureClass: "quota",
+    });
+    expect(words.retryable).toBe(false);
+    expect(words.message).toMatch(/AI provider is having trouble/);
+  });
+
+  it("closes an account refusal with the stated action", () => {
+    const words = describeDegradedCapture("credits_empty", {
+      failureClass: "credits_empty",
+      action: "ask_admin",
+    });
+    expect(words).toMatchObject({ retryable: false });
+    expect(words.message).toMatch(/Ask an admin to top up credits\./);
+  });
+
+  it("without a class, the reason token decides", () => {
+    expect(describeDegradedCapture("is_invalid_response")).toEqual({
+      message: describeDegradedForAgent("is_invalid_response"),
+      retryable: true,
+    });
   });
 });

@@ -152,6 +152,18 @@ vi.mock("../../decisions/decision-entity-door.js", () => ({
   },
 }));
 
+// The whole words of a long relay (ticket 2771d2bc): the document writer is
+// CAPTURED (object storage is its own suite's); its id is what the answer names.
+const docs = vi.hoisted(() => ({
+  written: [] as Array<Record<string, unknown>>,
+}));
+vi.mock("../../proposals/materialize-approved-document.js", () => ({
+  materializeApprovedDocument: async (input: Record<string, unknown>) => {
+    docs.written.push(input);
+    return { id: input.documentId as string };
+  },
+}));
+
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { allSchemaTables } from "../../../__tests__/pglite-ddl.js";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
@@ -408,6 +420,45 @@ describe("the relay door", () => {
       relayQuote: "the EU one obviously",
     });
     expect(h.triggers).toHaveLength(0);
+  });
+
+  it("LONG words are kept whole as a document the answer names; the answer holds their start (ticket 2771d2bc)", async () => {
+    docs.written.length = 0;
+    const { sessionId, channelId } = await seed();
+    const qid = await ask(channelId, { slotLabel: LABEL, ask: CHOOSE });
+    const words = `the EU one. ${"Because the film needs room to breathe. ".repeat(110)}`;
+    expect(words.length).toBeGreaterThan(4000);
+    const res = await relay(sessionId, {
+      disposition: "answered",
+      messageId: qid,
+      quote: words,
+      value: EU,
+    });
+    expect(res.status).toBe(200);
+    expect(docs.written).toHaveLength(1);
+    expect(docs.written[0]).toMatchObject({
+      content: words.trim(),
+      userId: OWNER,
+    });
+    const s = await slot(sessionId);
+    expect(s.answer!.quoteDocumentId).toBe(docs.written[0]!.documentId);
+    const kept = String(s.answer!.quote);
+    expect(kept.length).toBeLessThanOrEqual(2000);
+    expect(kept.startsWith("the EU one.")).toBe(true);
+
+    // Short words write no document.
+    const short = await seed();
+    const q2 = await ask(short.channelId, { slotLabel: LABEL, ask: CHOOSE });
+    await relay(short.sessionId, {
+      disposition: "answered",
+      messageId: q2,
+      quote: "the EU one",
+      value: EU,
+    });
+    expect(docs.written).toHaveLength(1);
+    expect(
+      (await slot(short.sessionId)).answer!.quoteDocumentId
+    ).toBeUndefined();
   });
 
   it("COMMITMENT: never answers, never unblocks, never files, never wakes — it waits for the tap, and the needs-you row carries it", async () => {

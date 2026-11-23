@@ -3,7 +3,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SESSION_STATUSES } from "@synap-core/types/focus-sessions";
-import { PLAYBOOK_RUN_STATUSES } from "@synap-core/types/units";
+import {
+  AUTOMATION_RUN_STATUSES,
+  CHAT_TURN_STATUSES,
+  PLAYBOOK_RUN_STATUSES,
+  STAGE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { stripComments } from "../../../../scripts/strip-comments.mjs";
 
 /**
@@ -21,8 +26,9 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * ── WHAT IT SEES ────────────────────────────────────────────────────────────
  * After comments are stripped (`scripts/strip-comments.mjs`): an array
  * literal of TWO OR MORE quoted strings, EVERY one a stored session or
- * playbook-run status (the vocabulary is DERIVED from `SESSION_STATUSES` +
- * `PLAYBOOK_RUN_STATUSES`, so a new stored word joins the scan by existing).
+ * playbook-run status, or a run-like machine's (automation run, stage run,
+ * chat turn): the vocabulary is DERIVED from the declarations, so a new stored
+ * word joins the scan by existing.
  * A category argument (`sessionStatusesIn(["active", "paused"])`) is not a
  * hand list — `active` and `paused` are also category names — and is skipped.
  *
@@ -51,6 +57,7 @@ const PACKAGES = join(HERE, "../../..");
 const DECLARATIONS = new Set([
   "types/src/focus-sessions/statuses.ts",
   "types/src/units/run-status.ts",
+  "types/src/units/machines.ts",
   "database/src/schema/focus-sessions.ts",
   "database/src/schema/playbook-runs.ts",
 ]);
@@ -80,10 +87,6 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "a worker's own status vocabulary (running, paused)",
   },
-  "api/src/services/focus-sessions/advance-stage.ts": {
-    count: 1,
-    why: "SUBJECT_LEADS (active, forming) differs from IN_FLIGHT_SESSION_STATUSES on `paused`; needs a decision, not a guess",
-  },
   "api/src/services/focus-sessions/session-status-filter.ts": {
     count: 1,
     why: "WINDOWED (stale, closed): admitted by recency, a deliberate pair across categories",
@@ -96,25 +99,25 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     count: 1,
     why: "an inline filter (closed, failed): cancelled left out on purpose",
   },
-  "api/src/services/playbooks/stage-child.ts": {
-    count: 1,
-    why: "a transition `from:` guard (W2)",
-  },
   "api/src/services/playbooks/stage-for-each.ts": {
     count: 1,
-    why: "a transition `from:` guard (W2)",
+    why: "ENTERABLE_STATUSES (running, waiting_tools): the step statuses a fan-out may claim",
   },
   "api/src/services/playbooks/stage-runner.ts": {
     count: 1,
-    why: "a transition `from:` guard (W2)",
+    why: "the open steps a new step closes (OPEN_STAGE_RUN_STATUSES minus waiting_child, whose child settles it)",
   },
   "api/src/services/pod-hygiene/cleanup-pack.ts": {
     count: 1,
     why: "an inline filter (closed, failed): cancelled left out on purpose",
   },
+  "api/src/services/proposals/approval-runs.ts": {
+    count: 1,
+    why: "an approval run's own vocabulary (queued, running), not a playbook run's",
+  },
   "api/src/services/signal/channel-stack.ts": {
     count: 1,
-    why: "automations.status (active, paused): another machine, undeclared until W2",
+    why: "automations.status (active, paused): the switched-on rules, a filter over AUTOMATION_STATUS_DECLARATION's active + paused minus error",
   },
   "database/src/schema/command-runs.ts": {
     count: 1,
@@ -122,7 +125,31 @@ const BASELINE: Record<string, { count: number; why: string }> = {
   },
   "jobs/src/workers/automation-breaker.ts": {
     count: 1,
-    why: "automation run statuses: undeclared until W2",
+    why: "STREAK_STATUSES (completed, failed): the settled runs a streak counts; a skip or a policy block neither breaks nor heals it",
+  },
+  "jobs/src/utils/automation-parent-settle.ts": {
+    count: 1,
+    why: "RESETTLEABLE (completed, blocked_by_policy): the settled parents a child's failure re-settles, AUTOMATION_RUN_TRANSITIONS' moves into failed",
+  },
+  "jobs/src/workers/steps/ledger-query.ts": {
+    count: 1,
+    why: "the ledger query step's accepted run filter values (a wire vocabulary)",
+  },
+  "api/src/services/runs/types.ts": {
+    count: 1,
+    why: "RUN_STATUSES: the run feed's wire vocabulary over two machines (playbook and automation runs)",
+  },
+  "api/src/services/focus-sessions/session-lifecycle-sweep.ts": {
+    count: 1,
+    why: "AUTOMATION_RUN_ENDED: done + lost plus blocked_by_policy (paused on a rule, but the run is over for the sweep)",
+  },
+  "api/src/routers/hub-protocol/rest/messaging.ts": {
+    count: 1,
+    why: "a messaging sync's own status enum (running, paused, done): another machine",
+  },
+  "database/src/utils/stage-run-waiting.ts": {
+    count: 1,
+    why: "WAITING_STAGE_RUN_STATUSES: the paused step statuses that wait on something (unreached is a failed delivery, not a wait)",
   },
   "jobs/src/workers/focus-session-reaper.ts": {
     count: 2,
@@ -137,8 +164,8 @@ const BASELINE: Record<string, { count: number; why: string }> = {
     why: "the session verbs' `from:` table: the transition table W2 derives",
   },
   "types/src/units/session.ts": {
-    count: 2,
-    why: "the session mark's own sets (running, cadence): W2's statusMark",
+    count: 1,
+    why: "the session mark's cadence set (scheduled, paused): W2's statusMark",
   },
   "types/src/units/track-step.ts": {
     count: 1,
@@ -146,9 +173,16 @@ const BASELINE: Record<string, { count: number; why: string }> = {
   },
 };
 
+// The run-like machines' words join; automations', playbooks' and
+// installations' do not: draft / active / paused / archived are also the words
+// of projects, feeds, sources and a dozen other columns this scan cannot tell
+// apart (adding them flagged 30+ files of other machines).
 const STATUS_WORDS = new Set<string>([
   ...SESSION_STATUSES,
   ...PLAYBOOK_RUN_STATUSES,
+  ...AUTOMATION_RUN_STATUSES,
+  ...STAGE_RUN_STATUSES,
+  ...CHAT_TURN_STATUSES,
 ]);
 const ARRAY = /\[([^[\]]*)\]/g;
 const QUOTED = /^(["'])([a-z_]+)\1$/;

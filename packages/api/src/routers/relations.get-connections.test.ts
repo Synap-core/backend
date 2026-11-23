@@ -5,6 +5,7 @@ const {
   mockChannelVisibilityWhere,
   mockDb,
   mockLoadFacetSlugsBatch,
+  mockOwnerPrivateVisibleWhere,
   mockWorkspaceLensWhere,
 } = vi.hoisted(() => ({
   mockAccessScopeWhere: vi.fn(() => ({ access: true })),
@@ -19,6 +20,7 @@ const {
     select: vi.fn(),
   },
   mockLoadFacetSlugsBatch: vi.fn(),
+  mockOwnerPrivateVisibleWhere: vi.fn(() => ({ ownerPrivate: true })),
   mockWorkspaceLensWhere: vi.fn(() => ({ workspace: true })),
 }));
 
@@ -56,6 +58,7 @@ vi.mock("../utils/channel-visibility.js", async (importOriginal) => ({
 }));
 vi.mock("../utils/user-visible-where.js", () => ({
   workspaceLensWhere: mockWorkspaceLensWhere,
+  ownerPrivateVisibleWhere: mockOwnerPrivateVisibleWhere,
 }));
 vi.mock("../utils/workspace-membership.js", () => ({
   resolveFacetVisibilityScope: vi.fn().mockResolvedValue({ userId: "user-1" }),
@@ -198,10 +201,13 @@ describe("relations.getConnections", () => {
     expect(
       result.connections.map((connection) => connection.entityId)
     ).not.toContain(HIDDEN);
-    expect(mockWorkspaceLensWhere).toHaveBeenCalledWith(
+    // Relations: the lensed owner-private floor (pod-wide edges stay their
+    // author's).
+    expect(mockOwnerPrivateVisibleWhere).toHaveBeenCalledWith(
+      expect.anything(),
       expect.anything(),
       "user-1",
-      WORKSPACE
+      { lens: WORKSPACE }
     );
     expect(mockAccessScopeWhere).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", workspaceLens: WORKSPACE })

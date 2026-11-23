@@ -1096,6 +1096,8 @@ export interface SlotAnswerProvenance {
   relaySurface?: string;
   /** The person's own words, verbatim. */
   quote?: string;
+  /** The document holding `quote` whole when it was too long: `quote` is its start. */
+  quoteDocumentId?: string;
   /** The person confirmed a relayed answer (set with `via: 'tap'` only). */
   confirmedAt?: string;
 }
@@ -1111,6 +1113,7 @@ export interface SlotPendingRelay {
   relayedBy: string;
   relaySurface?: string;
   quote?: string;
+  quoteDocumentId?: string;
   relayedAt: string;
 }
 
@@ -1880,6 +1883,12 @@ export interface SessionCriterion {
     evidenceKey?: string;
     /** kind=judge: what the judge should look at. */
     hint?: string;
+    /**
+     * kind=capability: the arguments the verb runs with, beside the ones the
+     * evaluator always passes (`sessionId`, `criterionKey`, `outcome`). A
+     * measure is `{ op, params, threshold, comparator }` for `measure.check`.
+     */
+    params?: Record<string, unknown>;
   };
   /** Set when copied from a stage. */
   stageKey?: string;
@@ -1922,6 +1931,14 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const capability = optionalString(check!.capability);
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
+    // A plain object only (a measure's arguments); anything else is dropped,
+    // the criterion is kept.
+    const params =
+      check!.params &&
+      typeof check!.params === "object" &&
+      !Array.isArray(check!.params)
+        ? (check!.params as Record<string, unknown>)
+        : undefined;
     const stageKey = optionalString(e.stageKey);
     const outputKey = optionalString(e.outputKey);
     // Closed sets: an unknown meaning or `about` is dropped (the criterion is
@@ -1944,6 +1961,7 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
         ...(capability ? { capability } : {}),
         ...(evidenceKey ? { evidenceKey } : {}),
         ...(hint ? { hint } : {}),
+        ...(params ? { params } : {}),
       },
       ...(stageKey ? { stageKey } : {}),
       ...(checkKind ? { checkKind } : {}),
@@ -2376,13 +2394,16 @@ export interface RunContext {
 
 export interface RunResult {
   /**
-   * Terminal: completed | failed | proposed. Non-terminal: `running` — the
-   * executor dispatched the work but it finishes ASYNCHRONOUSLY (e.g. the
-   * is-agent posts into a channel and the IS responds out-of-band; the
-   * external-agent fires a BYOA webhook and the agent captures back later).
-   * The runner records the run as-is and the run is closed via capture-back.
+   * Terminal: completed | failed | proposed. Non-terminal, the work finishes
+   * ASYNCHRONOUSLY and the run is closed via capture-back:
+   *   `queued`  — handed over, its holder has not taken it yet (the is-agent
+   *               posted the kickoff and enqueued the IS turn; a pull
+   *               hand-off waits for the agent). The holder's claim makes it
+   *               `running`;
+   *   `running` — the executor SAW the holder take it (the external agent's
+   *               provider started a task): this is the claim.
    */
-  status: "running" | "completed" | "failed" | "proposed";
+  status: "queued" | "running" | "completed" | "failed" | "proposed";
   summary?: string;
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];

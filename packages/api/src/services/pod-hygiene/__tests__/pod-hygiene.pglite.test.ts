@@ -182,7 +182,7 @@ import {
   workspaces,
   workspaceMembers,
   relationDefs,
-  profileWorkspaceAccess,
+  spaceAccess,
   db,
   ProfileRepository,
   readProfileRetirement,
@@ -383,7 +383,7 @@ beforeAll(async () => {
     workspaces,
     workspaceMembers,
     relationDefs,
-    profileWorkspaceAccess,
+    spaceAccess,
     podMembers,
     projectMembers,
   ]) {
@@ -407,7 +407,7 @@ beforeEach(async () => {
     "workspaces",
     "workspace_members",
     "relation_defs",
-    "profile_workspace_access",
+    "space_access",
   ]) {
     await q(`delete from ${t}`);
   }

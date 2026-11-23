@@ -29,6 +29,10 @@ const h = vi.hoisted(() => ({
   asked: [] as Array<{ endedSessionId: string; playbookId: string }>,
 }));
 
+// The run floor is SQL; this suite stubs the database.
+vi.mock("../../entity-query-scope.js", () => ({
+  runEntityVisibilityWhere: () => undefined,
+}));
 vi.mock("@synap/database", () => ({
   db: {
     query: {

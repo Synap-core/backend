@@ -28,8 +28,14 @@
  *     a thing (subject, worker target) beside one on another thing; a goal
  *     with a staged method; a live runner on an agent's session.
  *
- * Stubbed: nothing on the read path except one switch that makes
- * `attachSessionEdges` throw, to prove a failed edge read is `unavailable`.
+ *   - PATH: a pathway (B4) — a root whose steps wait on decisions (one open
+ *     and asked, one answered, one the reader cannot see), on a goal, and
+ *     serve a goal; a step closed 60 days ago; a goal waiting on a goal; a
+ *     step about a thing.
+ *
+ * Stubbed: nothing on the read path except two switches that make
+ * `attachSessionEdges` / `readGraphThings` throw, to prove a failed read is
+ * `unavailable`.
  * `@synap/database`'s own client module is routed onto the same PGlite, so
  * the lineage read inside that package runs for real too.
  */
@@ -46,13 +52,17 @@ const h = vi.hoisted(() => {
     db: null as unknown,
     prReaders: [] as { lens?: unknown }[],
     failEdges: false,
+    failThings: false,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
         const { drizzle } = await import("drizzle-orm/pglite");
+        // The schema too: the goal reads behind `serves` (`readServes`) go
+        // through the access layer's relational `findMany`.
+        const schema = await import("@synap/database/schema");
         const client = new PGlite();
         state.client = client as unknown as typeof state.client;
-        state.db = drizzle(client);
+        state.db = drizzle(client, { schema });
       }
       return state.db;
     },
@@ -110,6 +120,19 @@ vi.mock("./session-blocked-by.js", async (importOriginal) => {
   };
 });
 
+vi.mock("./work-graph-nodes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./work-graph-nodes.js")>();
+  return {
+    ...actual,
+    readGraphThings: async (
+      ...args: Parameters<typeof actual.readGraphThings>
+    ) => {
+      if (h.failThings) throw new Error("entities read failed (test)");
+      return actual.readGraphThings(...args);
+    },
+  };
+});
+
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
@@ -157,13 +180,6 @@ const S = {
   unrelated: randomUUID(), // WAVE's session outside the wave
 };
 const WAVE = "user-wave";
-// SERVES: a session working for two goals, one the person cannot see.
-const SERVER = "user-serves";
-const SV_PROJECT = randomUUID();
-const SV_TRACK = randomUUID(); // SERVER's goal; the session serves it
-const HIDDEN_PROJECT = randomUUID(); // OTHER's project
-const HIDDEN_TRACK = randomUUID(); // OTHER's goal; the session "serves" it too
-const SV_SESSION = randomUUID();
 const PROJECT = randomUUID();
 const TRACK = randomUUID();
 const PR_URL = "https://github.com/Synap-core/backend/pull/7";
@@ -476,24 +492,6 @@ beforeAll(async () => {
     ]
   );
 
-  // SERVES.
-  await q(
-    `insert into projects (id, name, user_id) values ($1, 'p', $2), ($3, 'p', $4)`,
-    [SV_PROJECT, SERVER, HIDDEN_PROJECT, OTHER]
-  );
-  await q(
-    `insert into project_tracks (id, project_id, user_id, name, status) values
-       ($1, $2, $3, 'Serve the goal', 'active'), ($4, $5, $6, 'Hidden goal', 'active')`,
-    [SV_TRACK, SV_PROJECT, SERVER, HIDDEN_TRACK, HIDDEN_PROJECT, OTHER]
-  );
-  await session(SV_SESSION, SERVER, "active", { hoursAgo: 1 });
-  await q(
-    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at) values
-       ($1, 'session', $2, 'track', $3, 'serves', '{"criterionKey":"c1"}'::jsonb, now()),
-       ($4, 'session', $2, 'track', $5, 'serves', '{}'::jsonb, now())`,
-    [randomUUID(), SV_SESSION, SV_TRACK, randomUUID(), HIDDEN_TRACK]
-  );
-
   // BIG: one more than the ceiling of OPEN work, plus 3 recently closed.
   await q(
     `insert into focus_sessions (id, user_id, goal, status, expected_outputs, agent_ids, metadata, started_at, created_at, updated_at)
@@ -744,18 +742,6 @@ describe("buildWorkGraph — PRs, holds and goals", () => {
     const theirs = await graph(USER);
     expect(theirs.goals).toEqual([]);
   });
-
-  it("draws the goals a session serves, never one the reader cannot see", async () => {
-    const g = await graph(SERVER);
-    expect(g.edges.filter((e) => e.kind === "serves")).toEqual([
-      { kind: "serves", from: SV_SESSION, to: SV_TRACK, criterionKey: "c1" },
-    ]);
-    // The goal at the far end is read with the others, under the track floor:
-    // the hidden goal is neither drawn nor named.
-    expect(g.goals.map((x) => x.id)).toEqual([SV_TRACK]);
-    expect(JSON.stringify(g)).not.toContain(HIDDEN_TRACK);
-    expect(g.sections.serves).toEqual({ status: "ok" });
-  });
 });
 
 describe("buildWorkGraph — by playbook (founder decision D2)", () => {
@@ -867,5 +853,275 @@ describe("buildWorkGraph — where the holder runs", () => {
       status: "ok",
       holder: { kind: "nobody", runner: null },
     });
+  });
+});
+
+// ── PATH: a pathway (B4) ────────────────────────────────────────────────────
+const PATH = "user-path";
+const PATH_PROJECT = randomUUID();
+const G = {
+  filed: randomUUID(), // stepA is filed in it; it waits on `blocker`
+  blocker: randomUUID(), // stepA and `filed` wait on it
+  served: randomUUID(), // stepA serves it (criterion `seed-closed`)
+};
+const R = {
+  root: randomUUID(), // the pathway's root; asks the open decision
+  old: randomUUID(), // a step closed 60 days ago
+  stepA: randomUUID(), // waits on D.open, D.hidden and G.blocker; serves G.served
+  stepB: randomUUID(), // waits on D.done; about THING_PATH
+};
+const D = {
+  open: randomUUID(), // proposed, asked in R.root
+  done: randomUUID(), // accepted, "Yes go" chosen
+  hidden: randomUUID(), // OTHER's: the reader cannot see it
+};
+const THING_PATH = randomUUID();
+
+const linkAny = (
+  fromType: string,
+  from: string,
+  toType: string,
+  to: string,
+  linkType: string,
+  metadata: Record<string, unknown> = {}
+) =>
+  q(
+    `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, now())`,
+    [
+      randomUUID(),
+      fromType,
+      from,
+      toType,
+      to,
+      linkType,
+      JSON.stringify(metadata),
+    ]
+  );
+
+const entity = (
+  id: string,
+  user: string,
+  type: string,
+  title: string,
+  status: string,
+  category: string,
+  properties: Record<string, unknown>
+) =>
+  q(
+    `insert into entities (id, user_id, type, title, status, status_category, properties, created_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, now(), now())`,
+    [id, user, type, title, status, category, JSON.stringify(properties)]
+  );
+
+describe("buildWorkGraph — a pathway (B4)", () => {
+  beforeAll(async () => {
+    await q(`insert into projects (id, name, user_id) values ($1, 'p', $2)`, [
+      PATH_PROJECT,
+      PATH,
+    ]);
+    for (const [id, name] of [
+      [G.filed, "Close the seed"],
+      [G.blocker, "Build the deck"],
+      [G.served, "Fund Synap"],
+    ] as const) {
+      await q(
+        `insert into project_tracks (id, project_id, user_id, name, status) values ($1, $2, $3, $4, 'active')`,
+        [id, PATH_PROJECT, PATH, name]
+      );
+    }
+    await session(R.root, PATH, "active", {
+      hoursAgo: 24 * 90,
+      outputs: [
+        {
+          key: "seed-or-not",
+          kind: "decision",
+          label: "Seed or not",
+          owner: "human",
+          blockedReason: "decision",
+          status: "pending",
+          decisionId: D.open,
+        },
+      ],
+    });
+    await session(R.old, PATH, "closed", {
+      hoursAgo: 24 * 61,
+      closedHoursAgo: 24 * 60,
+    });
+    await session(R.stepA, PATH, "active", { hoursAgo: 1, trackId: G.filed });
+    await session(R.stepB, PATH, "active", { hoursAgo: 1 });
+    await q(`update focus_sessions set subject_entity_id = $1 where id = $2`, [
+      THING_PATH,
+      R.stepB,
+    ]);
+    for (const step of [R.old, R.stepA, R.stepB])
+      await link(step, R.root, "spawned_from");
+
+    await entity(
+      D.open,
+      PATH,
+      "decision",
+      "Raise a seed?",
+      "proposed",
+      "open",
+      {
+        decisionStatus: "proposed",
+        decisionOptions: [
+          { label: "Raise a seed" },
+          { label: "Bootstrap", recommended: true },
+        ],
+        sourceSessionId: R.root,
+      }
+    );
+    await entity(D.done, PATH, "decision", "Go?", "accepted", "done", {
+      decisionStatus: "accepted",
+      decisionOptions: [{ label: "Yes go" }, { label: "Not now" }],
+      recommendedOption: "Yes go",
+      chosenOption: "Yes go",
+    });
+    await entity(D.hidden, OTHER, "decision", "Theirs", "proposed", "open", {
+      decisionStatus: "proposed",
+    });
+    await entity(THING_PATH, PATH, "task", "Term sheet", "todo", "open", {});
+
+    await linkAny("session", R.stepA, "entity", D.open, "blocked_by");
+    await linkAny("session", R.stepA, "entity", D.hidden, "blocked_by");
+    await linkAny("session", R.stepA, "track", G.blocker, "blocked_by");
+    await linkAny("session", R.stepA, "track", G.served, "serves", {
+      criterionKey: "seed-closed",
+    });
+    await linkAny("session", R.stepB, "entity", D.done, "blocked_by");
+    await linkAny("track", G.filed, "track", G.blocker, "blocked_by");
+  });
+
+  it("keeps every step of a wave whatever its age, and says the window is lifted", async () => {
+    const wave = await graph(PATH, { focus: { rootSessionId: R.root } });
+    expect(
+      wave.nodes
+        .filter((n) => n.inWindow)
+        .map((n) => n.id)
+        .sort()
+    ).toEqual([R.root, R.old, R.stepA, R.stepB].sort());
+    expect(wave.window.allSettled).toBe(true);
+    expect(wave.window.truncated).toBe(false);
+    // Without a focus the settle window still holds: the old step is out.
+    const fleet = await graph(PATH);
+    expect(fleet.nodes.map((n) => n.id)).not.toContain(R.old);
+    expect(fleet.window.allSettled).toBe(false);
+  });
+
+  it("draws a step's waits on a decision and a goal, a goal's wait on a goal, and what a step serves", async () => {
+    const g = await graph(PATH, { focus: { rootSessionId: R.root } });
+    expect(g.edges).toEqual(
+      expect.arrayContaining([
+        { kind: "blocked_by", from: R.stepA, to: D.open, toKind: "entity" },
+        { kind: "blocked_by", from: R.stepA, to: G.blocker, toKind: "track" },
+        { kind: "blocked_by", from: R.stepB, to: D.done, toKind: "entity" },
+        {
+          kind: "blocked_by",
+          from: G.filed,
+          fromKind: "track",
+          to: G.blocker,
+          toKind: "track",
+        },
+        {
+          kind: "serves",
+          from: R.stepA,
+          to: G.served,
+          toKind: "track",
+          criterionKey: "seed-closed",
+        },
+        // Session to session edges are unchanged: no kind named.
+        { kind: "spawned_from", from: R.stepA, to: R.root },
+      ])
+    );
+    // A decision the reader cannot see: no node, no edge, never its title.
+    expect(g.edges.some((e) => e.to === D.hidden)).toBe(false);
+    expect(g.decisions.map((d) => d.id)).not.toContain(D.hidden);
+    // Every edge end is a node the read holds.
+    const held = new Set([
+      ...g.nodes.map((n) => `session:${n.id}`),
+      ...g.goals.map((x) => `track:${x.id}`),
+      ...g.decisions.map((x) => `entity:${x.id}`),
+      ...g.entities.map((x) => `entity:${x.id}`),
+    ]);
+    for (const e of g.edges) {
+      expect(held.has(`${e.fromKind ?? "session"}:${e.from}`)).toBe(true);
+      expect(held.has(`${e.toKind ?? "session"}:${e.to}`)).toBe(true);
+    }
+    // The goals at the far end of a goal edge come back, one hop.
+    expect(g.goals.map((x) => x.id).sort()).toEqual(
+      [G.filed, G.blocker, G.served].sort()
+    );
+    for (const k of ["crossKind", "serves", "decisions", "entities"] as const)
+      expect(g.sections[k]).toEqual({ status: "ok" });
+  });
+
+  it("carries each decision's options, marks and the person's answer", async () => {
+    const g = await graph(PATH, { focus: { rootSessionId: R.root } });
+    const open = g.decisions.find((d) => d.id === D.open);
+    expect(open).toEqual({
+      id: D.open,
+      title: "Raise a seed?",
+      status: "proposed",
+      category: "open",
+      options: [
+        {
+          key: "Raise a seed",
+          label: "Raise a seed",
+          description: null,
+          recommended: false,
+          chosen: false,
+        },
+        {
+          key: "Bootstrap",
+          label: "Bootstrap",
+          description: null,
+          recommended: true,
+          chosen: false,
+        },
+      ],
+      recommendedOption: "Bootstrap",
+      chosenOption: null,
+      answer: "asked",
+      askSessionId: R.root,
+      sourceSessionId: R.root,
+    });
+    expect(g.decisions.find((d) => d.id === D.done)).toMatchObject({
+      status: "accepted",
+      category: "done",
+      chosenOption: "Yes go",
+      answer: "answered",
+      askSessionId: null,
+    });
+    // A step's subject is a node too.
+    expect(g.entities).toEqual([
+      {
+        id: THING_PATH,
+        title: "Term sheet",
+        kind: "task",
+        status: "todo",
+        category: "open",
+      },
+    ]);
+  });
+
+  it("a failed decision read is `unavailable`, never an empty pathway", async () => {
+    h.failThings = true;
+    try {
+      const g = await graph(PATH, { focus: { rootSessionId: R.root } });
+      const unavailable = { status: "unavailable", reason: expect.any(String) };
+      expect(g.sections.decisions).toEqual(unavailable);
+      expect(g.sections.entities).toEqual(unavailable);
+      expect(g.decisions).toEqual([]);
+      // No line to a decision it could not read; the rest still draws.
+      expect(g.edges.some((e) => e.toKind === "entity")).toBe(false);
+      expect(g.edges).toContainEqual(
+        expect.objectContaining({ from: R.stepA, to: G.blocker })
+      );
+      expect(g.sections.crossKind).toEqual({ status: "ok" });
+    } finally {
+      h.failThings = false;
+    }
   });
 });

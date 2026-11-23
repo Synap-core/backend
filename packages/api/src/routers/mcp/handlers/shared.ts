@@ -993,6 +993,13 @@ export const AUTOMATIONS_PAGE_DEFAULT = 25;
 export const PLAYBOOKS_PAGE_DEFAULT = 25;
 export const WIDGETS_PAGE_DEFAULT = 15;
 export const CAPABILITIES_PAGE_DEFAULT = 20;
+/**
+ * One playbook's stages, paged (`synap_list_playbooks {playbookId, limit,
+ * offset}`): a stage measured ~1,800 chars on the founder's pod (14 stages,
+ * 25 KB), so a default page of 6 fits the cap.
+ */
+export const PLAYBOOK_STAGES_PAGE_DEFAULT = 6;
+export const PLAYBOOK_STAGES_PAGE_MAX = 100;
 
 export const REASONING_MAX_CHARS = 2000;
 

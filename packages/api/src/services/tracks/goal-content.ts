@@ -260,6 +260,9 @@ function sameCriterionContract(a: SessionCriterion, b: SessionCriterion) {
     a.check.kind === b.check.kind &&
     (a.check.capability ?? null) === (b.check.capability ?? null) &&
     (a.check.evidenceKey ?? null) === (b.check.evidenceKey ?? null) &&
+    // A measure's bar is part of the contract (P8).
+    JSON.stringify(a.check.params ?? null) ===
+      JSON.stringify(b.check.params ?? null) &&
     (a.required !== false) === (b.required !== false)
   );
 }

@@ -500,11 +500,22 @@ export {
 } from "./services/lifecycle/session-status.js";
 export {
   RUN_PAUSE_DEFAULT_HOLD,
+  claimRun,
+  claimRunAsAgent,
+  claimedHolderSql,
+  runHolder,
+  starterHolder,
   setRunStatus,
   type RunColumnsPatch,
   type SetRunStatusInput,
   type SetRunStatusResult,
 } from "./services/lifecycle/run-status.js";
+export {
+  setAutomationStatus,
+  type AutomationColumnsPatch,
+  type AutomationStatusWriter,
+  type SetAutomationStatusInput,
+} from "./services/lifecycle/automation-status.js";
 export {
   REACTION_LOG_SUBJECT_TYPE,
   REACTION_OUTCOMES,
@@ -609,7 +620,9 @@ export * from "./projectors/index.js";
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
+export * from "./utils/insert-automation.js";
 export * from "./utils/owner-person.js";
+export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";
 
 // Export sync materializer (shared between API receive + pull worker)

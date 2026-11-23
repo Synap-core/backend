@@ -112,3 +112,22 @@ export function entityQueryVisibilityWhere(args: {
   // owner is unknown (never emit an un-floored NULL-workspace read).
   return podWide ? or(workspaceOwn, podWide)! : workspaceOwn;
 }
+
+/**
+ * A run's entity floor: the records of its space and the owner's pod-wide
+ * ones; a run in no space reads only the owner's pod-wide records. The one
+ * floor a run's subject and its pinned records are read through (the
+ * automation step and the `playbooks.run` door alike).
+ */
+export function runEntityVisibilityWhere(
+  workspaceId: string | null,
+  ownerId: string
+): SQL {
+  return workspaceId
+    ? entityQueryVisibilityWhere({ workspaceId, ownerId })
+    : entityQueryVisibilityWhere({
+        workspaceId: ownerId,
+        ownerId,
+        podOnly: true,
+      });
+}

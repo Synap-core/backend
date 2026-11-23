@@ -17,7 +17,10 @@
  *   - a cause read by truthiness (`askCause: {}`, an array, an empty asker);
  *   - `owedSince` aged off a non-canonical stamp (a SQL cast would THROW on
  *     `0000-00-00`; the rule keeps it);
- *   - a commitment aged into Review later (stakes, a secret, a gate, a relay).
+ *   - a commitment aged into Review later (stakes, a secret, a gate, a relay);
+ *   - a PLANNED step (forming, P2) read as owing: every class on it is NULL,
+ *     before the machine and commitment arms (a gate, a decision ask no
+ *     agent filed, a person deliverable, a stopped session).
  *
  * TEST-ONLY relative import of the authored rule, the
  * `owed-slot-predicate.parity.pglite.test.ts` pattern.
@@ -361,6 +364,29 @@ const ROWS: ReadonlyArray<{
     session: { ...LIVE, status },
     slot: ASK,
   })),
+  ...(
+    [
+      [
+        "a planned gate read as a commitment",
+        { askCause: { kind: "gate" }, askedBy: undefined },
+      ],
+      [
+        "a planned machine ask read as From the system",
+        { askCause: { kind: "decision" }, askedBy: undefined },
+      ],
+      ["a planned person deliverable read as owed", { ask: { mode: "act" } }],
+      ["a planned old ask read as Review later", { owedSince: ago(9 * DAY) }],
+    ] as const
+  ).map(([rulesOut, over]) => ({
+    rulesOut,
+    session: { ...LIVE, status: "forming" },
+    slot: { ...ASK, ...over },
+  })),
+  {
+    rulesOut: "a planned step on a quiet session read as Stopped",
+    session: { startedAt: ago(20 * DAY), status: "forming" },
+    slot: ASK,
+  },
   {
     rulesOut: "machine beaten by stopped",
     session: { startedAt: ago(20 * DAY) },
@@ -557,7 +583,7 @@ beforeAll(async () => {
     create table focus_sessions (id uuid primary key, status text, expected_outputs jsonb, channel_id uuid, started_at timestamptz, updated_at timestamptz);
     create table messages (id uuid primary key, channel_id uuid, author_type text, timestamp timestamptz, metadata jsonb);
     create table chat_turns (id uuid primary key, channel_id uuid, status text, updated_at timestamptz);
-    create table proposals (id uuid primary key, session_id uuid, agent_user_id text, created_at timestamptz, status text, proposal_type text);
+    create table proposals (id uuid primary key, session_id uuid, agent_user_id text, created_at timestamptz, status text, proposal_type text, target_type text);
     create table events (id uuid primary key, session_id uuid, agent_user_id text, timestamp timestamptz, type text);
   `);
 }, 60_000);

@@ -93,17 +93,14 @@ describe("signalsFromExplicit", () => {
 describe("resolveRolePayload", () => {
   /**
    * Minimal db stub for `ProfileRepository.getBySlugForWorkspace`:
-   * select → from → leftJoin → where resolves to `{ p, accessWorkspaceId }`
-   * rows. The repository's priority sort runs for real on whatever we return.
+   * select → from → where resolves to `{ p }` rows. The repository's priority
+   * sort runs for real on whatever we return.
    */
   const dbReturning = (rows: Array<Record<string, unknown>>) =>
     ({
       select: () => ({
         from: () => ({
-          leftJoin: () => ({
-            where: async () =>
-              rows.map((p) => ({ p, accessWorkspaceId: null })),
-          }),
+          where: async () => rows.map((p) => ({ p })),
         }),
       }),
       query: {

@@ -6,6 +6,7 @@ import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import {
   deriveWorkspacePlacementView,
   type CapturePlacement,
+  type IsFailureAction,
 } from "@synap-core/types";
 import { pendingSwitchFromPlacement } from "../../../lib/workspace-decision.js";
 import { z } from "zod";
@@ -28,9 +29,9 @@ import { captureStatusForReceiptState } from "../../../services/capture-agent/ca
 import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../../../services/capture-agent/capture-degraded-guidance.js";
+import type { AiFailureClass } from "../../../utils/ai-failure.js";
 import {
   submitCaptureGraph,
   CaptureGraphValidationError,
@@ -166,7 +167,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result), an Intelligence Service refusal code for an AI availability state (credits_empty, account_quota_exceeded, llm_budget_exceeded, …), or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). Refusals and configuration states are not outages; do not tell a user to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -876,6 +877,17 @@ export function registerCaptureRoutes(app: HubHono): void {
         const reason =
           typeof degradedReason === "string" ? degradedReason : undefined;
         const salvage = (result as { proposals?: unknown }).proposals;
+        const words = describeDegradedCapture(
+          reason,
+          (
+            result as {
+              degradedDetail?: {
+                failureClass?: AiFailureClass;
+                action?: IsFailureAction;
+              };
+            }
+          ).degradedDetail
+        );
         return c.json({
           ...(result as unknown as Record<string, unknown>),
           // NOT a receipt status: no graph was submitted, so there is no
@@ -884,8 +896,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           // never happened. Mirrors the sibling `needs_input` literal, which is
           // a caller-state word for the same reason.
           status: "not_structured",
-          degradedMessage: describeDegradedForAgent(reason),
-          degradedRetryable: isDegradedReasonRetryable(reason),
+          degradedMessage: words.message,
+          degradedRetryable: words.retryable,
           // Echoed under an explicit name so the agent does not have to know
           // that a degraded `proposals` is a fallback rather than a real plan.
           // Already `/capture/execute`-shaped (tempId/profileSlug/title/…) —

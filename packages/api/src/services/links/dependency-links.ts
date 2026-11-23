@@ -41,12 +41,16 @@
  * any kind — by OPEN blockers, and by DROPPED ones (ended without delivering:
  * cancelled, failed, archived, lost), which hold their dependent until it
  * re-plans. Only a DELIVERED blocker clears (`classifyDependencyBlocker`).
- * The `session.unblocked` notification fires only for SESSION
- * dependents, on a SESSION close (`session-unblock-reactor.ts`), and its
- * "still open" test now spans every blocker kind. An entity or track that
- * clears does NOT notify anyone yet: there is no close event for an entity
- * status change or a track completion wired to a reactor here — their
- * dependents read as unblocked the next time they are read.
+ * Who is TOLD (`session-unblock-reactor.ts`, the one producer), each time
+ * by the same "nothing else holds it" rule over every blocker kind: a
+ * session close tells its SESSION dependents (`session.unblocked`); a goal
+ * ending tells the sessions and goals waiting on it (`session.unblocked`
+ * when it delivered, else `session.blocker_goal_ended` /
+ * `track.blocker_ended`); an entity's own move into a done category (a
+ * decision accepted) tells the SESSIONS waiting on it (`session.unblocked`).
+ * Not told yet: an entity that ends lost, and a goal or entity waiting on an
+ * entity; they read as still blocked (or unblocked) the next time they are
+ * read. Telling never moves anything: no status change, no wake.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -1301,6 +1305,13 @@ export interface DependencyFacts {
    * count; one the reader cannot see still does (a number, never a name).
    */
   unblocks: number;
+  /**
+   * Every DECLARED blocker (its outgoing `blocked_by` edges, before
+   * `replaces` following), open or cleared, whatever its kind:
+   * {@link DependencyState.declared}, batched. The work graph draws its
+   * cross-kind edges from it (a step waiting on a decision or a goal).
+   */
+  declared: DependencyNodeRef[];
 }
 
 /**
@@ -1383,6 +1394,9 @@ export async function readDependencyFacts(
       openBlockers: blockers.length,
       blockers,
       unblocks: waiting.size,
+      declared: declaredRows
+        .filter((r) => r.fromType === node.kind && r.fromId === node.id)
+        .map((r) => ({ kind: r.toType as string, id: r.toId })),
     });
   }
   return out;

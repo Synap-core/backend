@@ -17,6 +17,10 @@ const h = vi.hoisted(() => ({
   },
   emitted: [] as Array<Record<string, unknown>>,
   followUps: [] as Array<Record<string, unknown>>,
+  /** The pod's latest pulled AI availability (`aiHoldMet`). */
+  latest: null as null | { availableSince: string | null; checkedAt: string },
+  sent: [] as Array<{ queue: string; data: unknown; options: unknown }>,
+  regraded: [] as Array<{ sessionId: string; userId: string; until?: unknown }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -29,6 +33,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: drizzle(client, { schema }),
+    // The pod's AI availability, as its pull recorded it.
+    readPodAiAvailability: async () => ({
+      availability: h.latest ?? undefined,
+      sync: null,
+    }),
     // The goal's receipt (`track.update.completed`) needs no log here.
     EventRepository: class {
       async append() {
@@ -39,6 +48,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 
 vi.mock("@synap/events", () => ({
+  getBoss: () => ({
+    send: async (queue: string, data: unknown, options: unknown) => {
+      h.sent.push({ queue, data, options });
+      return "job";
+    },
+  }),
   dispatchLifecycleTransition: vi.fn(async () => true),
   emitSideEffects: vi.fn(async (p: Record<string, unknown>) => {
     h.emitted.push(p);
@@ -62,9 +77,11 @@ import {
   TrackRepository,
 } from "@synap/database";
 import {
+  AI_HOLD_RETRY_AFTER_S,
   HOLD_RESUME_QUEUE,
   handleHoldResume,
   holdResumeReactor,
+  registerAiHeldGateRegrader,
   registerHoldResumeFollowUp,
 } from "./hold-resume.js";
 
@@ -450,6 +467,112 @@ describe("a dev fact (until.moves = pr: / main: / job:)", () => {
 
 // Plan 07f8a997 "Agents wait on anything", W1 part C: an agent asks, pauses
 // with `until: answer:<session>/<slot>` or `proposal:<id>`, and sleeps.
+describe("AI available again (until.moves = ai:available)", () => {
+  async function pausedOnAi(ref?: string): Promise<string> {
+    const id = await session();
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: {
+        on: "external",
+        ...(ref ? { ref } : {}),
+        until: { moves: "ai:available" },
+      },
+    });
+    return id;
+  }
+
+  const at = (ms: number) => new Date(Date.now() + ms).toISOString();
+
+  it("resumes a pause on AI while the latest pull reads available, checked after it began", async () => {
+    // Available for a while, but the answer was computed before the pause.
+    h.latest = { availableSince: at(-3_600_000), checkedAt: at(-60_000) };
+    const waiter = await pausedOnAi();
+    expect((await handleHoldResume({ devFact: "ai:available" })).resumed).toBe(
+      0
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("paused");
+
+    // Not available, checked after the pause: still held.
+    h.latest = { availableSince: null, checkedAt: at(1_000) };
+    expect((await handleHoldResume({ devFact: "ai:available" })).resumed).toBe(
+      0
+    );
+
+    // Available since BEFORE the pause, checked after it: met (the recovery
+    // may have been seen before the hold could be graded).
+    h.latest = { availableSince: at(-3_600_000), checkedAt: at(1_000) };
+    expect((await handleHoldResume({ devFact: "ai:available" })).resumed).toBe(
+      1
+    );
+    expect(await statusOf("focus_sessions", waiter)).toBe("active");
+    expect(await lastOwed(waiter)).toMatchObject({
+      actorKind: "system",
+      reason: "What it waited on (ai:available) is in.",
+    });
+  });
+
+  it("a check gate held on AI is graded again through the api's slot, never un-paused here; still held, it is woken again after the AI service's cache", async () => {
+    registerAiHeldGateRegrader(async (held) => {
+      h.regraded.push(held);
+      return "held";
+    });
+    h.sent = [];
+    const gated = await pausedOnAi("check:review");
+    h.latest = { availableSince: at(1_000), checkedAt: at(1_000) };
+    // The hourly sweep finds it too, as a dev hold.
+    await handleHoldResume({});
+    expect(h.regraded).toContainEqual({
+      sessionId: gated,
+      userId: "u1",
+      until: { moves: "ai:available" },
+    });
+    expect(await statusOf("focus_sessions", gated)).toBe("paused");
+    expect(h.sent).toEqual([
+      {
+        queue: HOLD_RESUME_QUEUE,
+        data: { devFact: "ai:available" },
+        options: {
+          startAfter: AI_HOLD_RETRY_AFTER_S,
+          singletonKey: "hold-resume:ai-retry",
+          singletonSeconds: AI_HOLD_RETRY_AFTER_S,
+        },
+      },
+    ]);
+    expect(AI_HOLD_RETRY_AFTER_S).toBeGreaterThanOrEqual(120);
+  });
+
+  it("a check gate on a dated retry is graded again when the date comes, never un-paused here", async () => {
+    const regraded: string[] = [];
+    registerAiHeldGateRegrader(async (held) => {
+      regraded.push(held.sessionId);
+      return "held";
+    });
+    h.sent = [];
+    // AI not available: the earlier tests' AI holds stay out of this sweep.
+    h.latest = null;
+    const id = await session();
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: "active",
+      to: "paused",
+      actor: HUMAN,
+      hold: {
+        on: "external",
+        ref: "check:review",
+        until: { date: at(60_000) },
+      },
+    });
+    await handleHoldResume({}, new Date(Date.now() + 120_000));
+    expect(regraded).toContain(id);
+    expect(await statusOf("focus_sessions", id)).toBe("paused");
+    // A dated retry is retried by the sweep, not by an AI wake.
+    expect(h.sent).toEqual([]);
+  });
+});
+
 describe("a wait on the person (until.moves = answer: / proposal:)", () => {
   const SLOT = {
     key: "host",

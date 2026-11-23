@@ -43,3 +43,27 @@ export function categoryOf(
     ? declaration[status]!.category
     : null;
 }
+
+/** A machine's transition table: from → the statuses it may move to. */
+export type StatusTransitions<S extends string> = {
+  readonly [K in S]: readonly S[];
+};
+
+/** May a row in `from` move to `to` under `table`? A move not listed is never written. */
+export function canTransition<S extends string>(
+  table: StatusTransitions<S>,
+  from: S,
+  to: S
+): boolean {
+  return table[from]?.includes(to) ?? false;
+}
+
+/** Every status `table` lets reach `to`. */
+export function statusesThatMayBecome<S extends string>(
+  table: StatusTransitions<S>,
+  to: S
+): S[] {
+  return (Object.keys(table) as S[]).filter((from) =>
+    canTransition(table, from, to)
+  );
+}
