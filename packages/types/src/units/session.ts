@@ -377,8 +377,6 @@ export type BlockerEdges =
         title: string;
         status: string;
         closedAs?: SessionClosedAs | null;
-        /** Ended as a decision's arm not taken (P5): holds nobody. */
-        skipped?: boolean;
       }>;
     }
   | { status: "unavailable" }
@@ -402,8 +400,7 @@ export function openBlockersOf(
       "session",
       item.status,
       null,
-      item.closedAs,
-      item.skipped
+      item.closedAs
     );
     return outcome === "delivered"
       ? []
@@ -529,10 +526,7 @@ export interface StepReadinessFacts {
   status: string;
   /** How it ended (`sessionClosedAs`); absent on a closed step reads done. */
   closedAs?: SessionClosedAs | null;
-  /**
-   * It ended as a decision's arm not taken (P5): the session's
-   * `verification_report.notTaken`, read as `skipped` by the dependency read.
-   */
+  /** It ended as a decision's arm not taken (P5; nothing sets it yet). */
   skipped?: boolean;
   /**
    * The blockers that still hold it, after `replaces` — the output of THE

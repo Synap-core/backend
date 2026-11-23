@@ -529,10 +529,6 @@ export const SYSTEM_PROFILE_PROPERTY_LINKS: ReadonlyArray<{
       { slug: "answeredVia", required: false, displayOrder: 16 },
       { slug: "relayedBy", required: false, displayOrder: 17 },
       { slug: "relayQuote", required: false, displayOrder: 18 },
-      // The timeout arm (P5): by `answerBy`, the default the PERSON set
-      // applies (api `decision-timeout.ts`); one an agent set only reminds.
-      { slug: "answerBy", required: false, displayOrder: 19 },
-      { slug: "defaultOption", required: false, displayOrder: 20 },
     ],
   },
   // Question — what the user is investigating.
@@ -1637,29 +1633,6 @@ export async function ensureSystemProfiles(): Promise<EnsureSystemProfilesResult
         valueType: PropertyValueType.STRING,
         constraints: { maxLength: 5000 },
         uiHints: { label: "Their words", inputType: "text" },
-      },
-      // The timeout arm of a decision (see the decision link list above).
-      {
-        slug: "answerBy",
-        valueType: PropertyValueType.DATE,
-        constraints: {},
-        uiHints: {
-          label: "Answer by",
-          inputType: "date",
-          helpText:
-            "When this decision is due. Past it, the default you set applies; without one, you are reminded.",
-        },
-      },
-      {
-        slug: "defaultOption",
-        valueType: PropertyValueType.STRING,
-        constraints: { maxLength: 500 },
-        uiHints: {
-          label: "Default if no answer",
-          inputType: "text",
-          helpText:
-            "The option (its value, else its label) taken at the answer-by date. Only a default you set applies on its own.",
-        },
       },
       {
         slug: "viewCount",

@@ -294,8 +294,6 @@ const WorkGraphWireSchema = z.object({
        * far ends. Absent without the narrow.
        */
       playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
-      /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
-      skipped: z.literal(true).optional(),
     })
   ),
   edges: z.array(
@@ -312,8 +310,6 @@ const WorkGraphWireSchema = z.object({
       lastAt: z.string().nullable().optional(),
       /** `serves`: the goal criterion served, when the edge names one. */
       criterionKey: z.string().optional(),
-      /** `blocked_by` to a decision: the option this step is the arm of. Absent = a plain wait. */
-      option: z.string().optional(),
     })
   ),
   /** One per PR a node recorded; `prState` absent = the pod recorded no fact about it. */

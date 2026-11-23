@@ -66,14 +66,6 @@
  * finds the notice already sent still wakes a step a failed write left
  * planned.
  *
- * A DECISION'S ARMS (founder decision P5). Before the "last open blocker"
- * rule runs for an accepted decision, its arms are settled
- * (`resolveDecisionArms`, `decision-arms.ts`): a step on an arm NOT taken is
- * closed as skipped (THE close door, whose own close event then reaches its
- * dependents here: a skipped step holds nobody); with no arm for the choice,
- * nothing is skipped and the owner is told. The arm taken is unblocked below
- * like any wait. Never throws: a failed settle is logged, the sweep retries.
- *
  * IDEMPOTENT on `(dependent, closed blocker)`, keyed on the durable
  * notification row's `groupKey` rather than on ordering — a re-delivered or
  * replayed close event is a no-op. Deliberately NOT keyed on the dependent
@@ -580,21 +572,6 @@ async function entityDelivered(payload: SideEffectPayload): Promise<void> {
     classifyDependencyBlocker("entity", entity.status, category) !== "delivered"
   ) {
     return;
-  }
-
-  // Its arms first (P5): the branches not taken are skipped, or the owner is
-  // told no branch matches. The arm taken goes on below.
-  try {
-    // Lazy: the arm settle reaches the close door, which this module's other
-    // paths never need.
-    const { resolveDecisionArms } =
-      await import("../services/focus-sessions/decision-arms.js");
-    await resolveDecisionArms(entity.id);
-  } catch (error) {
-    logger.error(
-      { error, decisionId: entity.id },
-      "Failed to settle a decision's arms — the sweep retries"
-    );
   }
 
   // Waiting on this entity: directly, or on an entity it replaced.
