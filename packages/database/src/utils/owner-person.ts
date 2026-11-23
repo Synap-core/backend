@@ -22,7 +22,16 @@
  * acts through NO membership ({@link membershipHolderIds}), while the rows it
  * writes are owned by the pod owner ({@link ownerAndActor}).
  */
-import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNull,
+  ne,
+  sql,
+  type AnyColumn,
+} from "drizzle-orm";
 import { apiKeys, podMembers, users } from "../schema/index.js";
 
 type OwnerRow = {
@@ -72,9 +81,11 @@ export async function personOfOwner(
  * person. The role it gets there is capped (`agentRoleCap`, permissions.ts).
  *
  * Plain table names, never column objects: a relational query re-aliases the
- * columns of a raw fragment to its own table.
+ * columns of a raw fragment to its own table. `userId` may be an outer query's
+ * column (a correlated audience read): the inner tables are aliased, so it
+ * names the outer row.
  */
-export function membershipHolderIds(userId: string) {
+export function membershipHolderIds(userId: string | AnyColumn) {
   return sql`(SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active WHERE u.id = ${userId} AND u.user_type = 'agent' UNION ALL SELECT ${userId} WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = ${userId} AND a.user_type = 'agent'))`;
 }
 
