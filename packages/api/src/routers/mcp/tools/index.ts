@@ -5996,11 +5996,7 @@ export const tools = {
               items: { type: "string" },
               description: "Entity UUIDs to move (1-500).",
             },
-            playbookIds: {
-              type: "array",
-              items: { type: "string" },
-              description: "Playbook UUIDs to move.",
-            },
+            playbookIds: { type: "array", items: { type: "string" } },
             workspaceId: {
               type: "string",
               description: "Destination workspace UUID.",
@@ -6171,17 +6167,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Let another Space (workspace) see and use a SHARED kind (profile), or use a playbook or skill (`playbookId` / `skillId`; `revoke` stops it). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+          "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
         inputSchema: {
           type: "object",
           properties: {
             profileId: { type: "string", description: "Profile UUID." },
-            playbookId: { type: "string", description: "Playbook UUID." },
-            skillId: { type: "string", description: "Skill UUID." },
-            revoke: {
-              type: "boolean",
-              description: "Playbook or skill: stop sharing it.",
-            },
+            playbookId: { type: "string" },
+            skillId: { type: "string" },
+            revoke: { type: "boolean" },
             targetWorkspaceId: {
               type: "string",
               description: "Workspace UUID that gains access.",
