@@ -37,6 +37,16 @@ vi.mock("./playbook-lifecycle.js", async (importOriginal) => ({
   }),
   instantiateSession,
 }));
+// The runner choice reads the stored choice and the route from the db, which
+// is absent here: no stored choice, nobody assigned.
+vi.mock("../agent-dispatch/agent-assignment.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  readStoredRunChoice: async () => null,
+}));
+vi.mock("../agent-dispatch/route.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  route: async () => ({ kind: "none" }),
+}));
 vi.mock("./playbook-skill-preflight.js", () => ({
   findUnenabledPlaybookSkills,
 }));

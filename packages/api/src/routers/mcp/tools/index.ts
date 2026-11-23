@@ -2781,7 +2781,8 @@ export const tools = {
             blockedByEntityIds: {
               type: "array",
               items: { type: "string" },
-              description: "e.g. a decision: accepted clears, rejected holds.",
+              description:
+                "e.g. a decision: accepted clears, rejected holds. <id>:<option> waits on that arm; other arms are skipped.",
             },
             blockedByTrackIds: {
               type: "array",
@@ -2967,6 +2968,7 @@ export const tools = {
             addBlockedByEntityIds: {
               type: "array",
               items: { type: "string" },
+              description: "<id>:<option> = one arm of a decision.",
             },
             removeBlockedByEntityIds: {
               type: "array",

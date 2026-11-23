@@ -95,7 +95,10 @@ import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
-import { closedNotDoneRecordedSql } from "./session-closed-as.js";
+import {
+  closedNotDoneRecordedSql,
+  notTakenRecordedSql,
+} from "./session-closed-as.js";
 import { projectTriage } from "./triage.js";
 import { stagesLeft } from "../runs/stages-left.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
@@ -303,6 +306,7 @@ async function readEdges(
       goal: focusSessions.goal,
       status: focusSessions.status,
       closedNotDone: closedNotDoneRecordedSql().as("closed_not_done"),
+      skipped: notTakenRecordedSql().as("not_taken"),
       rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${statusOrder}, ${focusSessions.createdAt} asc)`.as(
         "rn"
       ),
@@ -337,6 +341,7 @@ async function readEdges(
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
       closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })
   );
 }

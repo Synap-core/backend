@@ -44712,7 +44712,8 @@
                           "playbookMatch": {
                             "type": ["string", "null"],
                             "enum": ["session", "goal", null]
-                          }
+                          },
+                          "skipped": { "type": "boolean", "enum": [true] }
                         },
                         "required": [
                           "id",
@@ -44766,7 +44767,8 @@
                           "entityId": { "type": "string" },
                           "count": { "type": "number" },
                           "lastAt": { "type": ["string", "null"] },
-                          "criterionKey": { "type": "string" }
+                          "criterionKey": { "type": "string" },
+                          "option": { "type": "string" }
                         },
                         "required": ["kind", "from", "to"]
                       }

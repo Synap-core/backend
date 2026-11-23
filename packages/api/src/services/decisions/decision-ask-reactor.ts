@@ -75,6 +75,7 @@ import {
   OPEN_SESSION_STATUSES,
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
+import { stampDefaultOptionAuthor } from "./decision-timeout.js";
 import { reconcileOwedSince } from "../focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import {
@@ -606,6 +607,14 @@ export const decisionAskReactor: Reactor = {
     try {
       const decision = await loadDecision(payload.subjectId);
       if (!decision) return;
+      // Who set its default (the timeout arm, P5): the pod's own fact, read
+      // off this write's `events` row.
+      if (
+        payload.action === "create" ||
+        payload.data?.["changed.defaultOption"] === true
+      ) {
+        await stampDefaultOptionAuthor(decision.id, payload.eventId);
+      }
       if (decision.properties.decisionStatus === "proposed") {
         if (entersProposed(payload) && decisionHasAgentAuthor(decision)) {
           await ensureDecisionAsk(decision, payload.sessionId ?? null);

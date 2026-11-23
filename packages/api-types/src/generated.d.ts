@@ -20577,6 +20577,11 @@ export interface OpenBlocker extends DependencyNodeRef {
 	 * or link a replacement.
 	 */
 	dropped: boolean;
+	/**
+	 * With `dropped`: the step is an arm of this decision that was NOT taken
+	 * (P5). It holds until the pod closes the step as skipped.
+	 */
+	notTaken?: true;
 	/** Its own raw status, when the reader may see it. */
 	status?: string | null;
 	/** Its display name, when the reader may see it. */
@@ -21268,6 +21273,11 @@ export interface PacketChildItem {
 	 * ended. Absent on items of other sections.
 	 */
 	closedAs?: SessionClosedAs | null;
+	/**
+	 * It ended as a decision's arm not taken (P5): it holds none of its
+	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
+	 */
+	skipped?: true;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -27103,6 +27113,12 @@ export interface WorkGraphEdge {
 	lastAt?: string | null;
 	/** `serves`: the goal criterion the session serves, when the edge names one. */
 	criterionKey?: string;
+	/**
+	 * `blocked_by` to a decision (`toKind: "entity"`): the option this step is
+	 * the ARM of (`links.metadata.option`, decision arms P5). Taken when the
+	 * decision chooses it; another choice skips the step. Absent = a plain wait.
+	 */
+	option?: string;
 }
 export type WorkGraphSection = {
 	status: "ok";
@@ -27176,6 +27192,11 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	 * narrowed). ABSENT without the narrow: there is nothing to match.
 	 */
 	playbookMatch?: WorkGraphPlaybookMatch | null;
+	/**
+	 * It ended as a decision's arm NOT taken (P5, `notTakenRecorded`): the
+	 * readiness rule's `skipped`, never a plain cancel. Absent otherwise.
+	 */
+	skipped?: true;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
@@ -27619,6 +27640,7 @@ export interface SessionTargetsWrite {
 export type BlockerKey = {
 	blockerEntityId: string;
 	blockerTrackId?: never;
+	option?: string;
 } | {
 	blockerEntityId?: never;
 	blockerTrackId: string;

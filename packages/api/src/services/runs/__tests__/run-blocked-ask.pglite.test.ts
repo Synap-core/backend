@@ -1,7 +1,7 @@
 /**
  * A run nobody claimed is the person's to decide: the pod asks them with the
  * reason, one card per automation, and their answer starts it again, keeps
- * waiting, or stops it (`run-blocked-ask.ts`). The REAL status writes on
+ * waiting, hands it to another runner, or stops it (`run-blocked-ask.ts`). The REAL status writes on
  * PGlite; the ask door, the re-dispatch and the cancel door are CAPTURED
  * (their own suites cover them).
  */
@@ -39,6 +39,42 @@ vi.mock("../../agent-dispatch/redispatch-on-choice.js", () => ({
     return "queued";
   },
 }));
+vi.mock("../../agent-dispatch/agents-for-handoff.js", () => ({
+  readAgentsForHandoff: async () => ({
+    agents: [
+      // The run's own agent is the "same runner" option, not another.
+      {
+        agentUserId: "agent-1",
+        name: "Claude Code",
+        canTakeYourWork: true,
+        reach: "dispatch",
+        wake: { state: "awake" },
+      },
+      {
+        agentUserId: "agent-2",
+        name: "Codex",
+        canTakeYourWork: true,
+        reach: "dispatch",
+        wake: { state: "awake" },
+      },
+      {
+        agentUserId: "agent-3",
+        name: "Asleep",
+        canTakeYourWork: true,
+        reach: "dispatch",
+        wake: { state: "asleep" },
+      },
+      {
+        agentUserId: "agent-4",
+        name: "Pull only",
+        canTakeYourWork: true,
+        reach: "pull",
+        wake: { state: "awake" },
+      },
+    ],
+    computers: [],
+  }),
+}));
 vi.mock("../../agent-dispatch/cancel-run.js", () => ({
   cancelRun: async (p: Record<string, unknown>) => {
     h.cancelled.push(p);
@@ -53,6 +89,7 @@ import {
   RUN_BLOCKED_SLOT_LABEL,
   applyBlockedRunAnswer,
   askAboutBlockedRun,
+  offeredBlockedRunChoice,
 } from "../run-blocked-ask.js";
 
 const q = <T>(sql: string, params?: unknown[]) =>
@@ -61,10 +98,20 @@ const q = <T>(sql: string, params?: unknown[]) =>
 async function blockedRun(
   kind: "synap_ai" | "agent",
   status = "blocked",
-  opts: { automationId?: string; carded?: boolean } = {}
+  opts: {
+    automationId?: string;
+    carded?: boolean;
+    playbookExecutor?: string;
+  } = {}
 ): Promise<{ sessionId: string; runId: string }> {
   const sessionId = randomUUID();
   const runId = randomUUID();
+  const playbookId = randomUUID();
+  await q(
+    `insert into playbooks (id, created_by, name, goal_template, executor, status, version, created_at, updated_at)
+     values ($1, 'u1', 'Enrich', 'Enrich it', $2, 'active', 1, now(), now())`,
+    [playbookId, opts.playbookExecutor ?? "is-agent"]
+  );
   await q(
     `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at)
      values ($1, 'u1', 'g', 'active', $2::jsonb, $3::jsonb, now(), now())`,
@@ -91,7 +138,7 @@ async function blockedRun(
      values ($1, $2, $3, $4, $5, now() - interval '1 hour', 'u1', '{}'::jsonb, $6::jsonb)`,
     [
       runId,
-      randomUUID(),
+      playbookId,
       sessionId,
       kind === "synap_ai" ? "is-agent" : "external-agent",
       status,
@@ -110,12 +157,23 @@ const runOf = async (id: string) =>
   (
     await q<{
       status: string;
+      executor: string;
+      input: Record<string, unknown>;
       holder: { kind: string; id: string | null; assignedAt: string };
-    }>(`select status, holder from playbook_runs where id = $1`, [id])
+    }>(
+      `select status, executor, input, holder from playbook_runs where id = $1`,
+      [id]
+    )
   ).rows[0]!;
+
+const values = (ask: unknown) =>
+  ((ask as { options?: Array<{ value: string }> }).options ?? []).map(
+    (o) => o.value
+  );
 
 beforeAll(async () => {
   for (const t of [
+    schema.playbooks,
     schema.focusSessions,
     schema.playbookRuns,
     schema.lifecycleTransitionOutbox,
@@ -129,7 +187,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    "delete from focus_sessions; delete from playbook_runs; delete from pgboss.job;"
+    "delete from focus_sessions; delete from playbook_runs; delete from playbooks; delete from pgboss.job;"
   );
   h.asks.length = 0;
   h.redispatched.length = 0;
@@ -148,9 +206,35 @@ describe("a blocked run asks its person, with the reason", () => {
         session: expect.objectContaining({ id: sessionId }),
         why: reason,
         slot: expect.objectContaining({ label: RUN_BLOCKED_SLOT_LABEL }),
-        ask: expect.objectContaining({ prompt: "Try Synap AI again?" }),
+        ask: expect.objectContaining({ mode: "choose" }),
       }),
     ]);
+    // The same runner first, then the awake dispatch agents, then stop.
+    expect(values(h.asks[0]!.ask)).toEqual([
+      "same",
+      "agent-1",
+      "agent-2",
+      "stop",
+    ]);
+  });
+
+  it("an agent's run offers Synap AI when its playbook allows it, never its own agent twice", async () => {
+    const { runId } = await blockedRun("agent");
+    await askAboutBlockedRun(runId, "x");
+    expect(values(h.asks[0]!.ask)).toEqual([
+      "same",
+      "synap_ai",
+      "agent-2",
+      "stop",
+    ]);
+  });
+
+  it("an agent-only playbook never offers Synap AI", async () => {
+    const { runId } = await blockedRun("agent", "blocked", {
+      playbookExecutor: "external-agent",
+    });
+    await askAboutBlockedRun(runId, "x");
+    expect(values(h.asks[0]!.ask)).toEqual(["same", "agent-2", "stop"]);
   });
 
   it("one card per automation: a second blocked run of it asks nothing", async () => {
@@ -178,7 +262,7 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId,
         answeredBy: "u1",
-        confirmed: true,
+        choice: { kind: "same" },
       })
     ).toEqual(["restarted"]);
     const run = await runOf(runId);
@@ -193,7 +277,7 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId,
         answeredBy: "u1",
-        confirmed: true,
+        choice: { kind: "same" },
       })
     ).toEqual(["waiting"]);
     const run = await runOf(runId);
@@ -208,10 +292,94 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId,
         answeredBy: "u1",
-        confirmed: false,
+        choice: { kind: "stop" },
       })
     ).toEqual(["cancelled"]);
     expect(h.cancelled).toEqual([{ runId, userId: "u1" }]);
+  });
+
+  it("another agent picked: queued for it and dispatched to it", async () => {
+    const { sessionId, runId } = await blockedRun("synap_ai");
+    expect(
+      await applyBlockedRunAnswer({
+        sessionId,
+        answeredBy: "u1",
+        choice: { kind: "agent", agentUserId: "agent-2" },
+      })
+    ).toEqual(["restarted"]);
+    const run = await runOf(runId);
+    expect(run.status).toBe("queued");
+    expect(run.holder).toMatchObject({ kind: "agent", id: "agent-2" });
+    expect(run.executor).toBe("external-agent");
+    expect(run.input).toMatchObject({ agentUserId: "agent-2" });
+    expect(h.redispatched).toEqual([{ runId, executor: "external-agent" }]);
+  });
+
+  it("Synap AI picked for an agent's run: queued for Synap AI and dispatched to it", async () => {
+    const { sessionId, runId } = await blockedRun("agent");
+    expect(
+      await applyBlockedRunAnswer({
+        sessionId,
+        answeredBy: "u1",
+        choice: { kind: "synap_ai" },
+      })
+    ).toEqual(["restarted"]);
+    const run = await runOf(runId);
+    expect(run.holder).toMatchObject({ kind: "synap_ai", id: null });
+    expect(run.executor).toBe("is-agent");
+    expect(h.redispatched).toEqual([{ runId, executor: "is-agent" }]);
+  });
+
+  it("Synap AI picked on a playbook that runs only on agents is refused, the run stays blocked", async () => {
+    const { sessionId, runId } = await blockedRun("agent", "blocked", {
+      playbookExecutor: "external-agent",
+    });
+    expect(
+      await applyBlockedRunAnswer({
+        sessionId,
+        answeredBy: "u1",
+        choice: { kind: "synap_ai" },
+      })
+    ).toEqual(["refused"]);
+    expect((await runOf(runId)).status).toBe("blocked");
+    expect(h.redispatched).toEqual([]);
+  });
+
+  it("an answer counts only as one of the options its card offered", async () => {
+    const sessionId = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, goal, status, metadata, expected_outputs, started_at, updated_at)
+       values ($1, 'u1', 'g', 'active', '{}'::jsonb, $2::jsonb, now(), now())`,
+      [
+        sessionId,
+        JSON.stringify([
+          {
+            label: RUN_BLOCKED_SLOT_LABEL,
+            owner: "human",
+            status: "blocked",
+            ask: {
+              mode: "choose",
+              options: [
+                { label: "Keep waiting for its agent", value: "same" },
+                { label: "Codex", value: "agent-2" },
+                { label: "Stop the run", value: "stop" },
+              ],
+            },
+          },
+        ]),
+      ]
+    );
+    expect(await offeredBlockedRunChoice(sessionId, "agent-2")).toEqual({
+      kind: "agent",
+      agentUserId: "agent-2",
+    });
+    expect(await offeredBlockedRunChoice(sessionId, "stop")).toEqual({
+      kind: "stop",
+    });
+    // Not offered: another agent, Synap AI, a label.
+    expect(await offeredBlockedRunChoice(sessionId, "agent-9")).toBeNull();
+    expect(await offeredBlockedRunChoice(sessionId, "synap_ai")).toBeNull();
+    expect(await offeredBlockedRunChoice(sessionId, "Codex")).toBeNull();
   });
 
   it("a run that is no longer blocked is left as it is", async () => {
@@ -220,7 +388,7 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId,
         answeredBy: "u1",
-        confirmed: true,
+        choice: { kind: "same" },
       })
     ).toEqual([]);
     expect((await runOf(runId)).status).toBe("running");
@@ -236,7 +404,7 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId,
         answeredBy: "u1",
-        confirmed: true,
+        choice: { kind: "same" },
       })
     ).toEqual(["waiting"]);
     expect((await runOf(runId)).status).toBe("queued");
@@ -252,7 +420,7 @@ describe("the person's answer", () => {
       await applyBlockedRunAnswer({
         sessionId: a.sessionId,
         answeredBy: "u1",
-        confirmed: true,
+        choice: { kind: "same" },
       })
     ).toEqual(["waiting", "waiting"]);
     expect((await runOf(b.runId)).status).toBe("queued");
