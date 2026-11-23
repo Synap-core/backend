@@ -5,7 +5,7 @@ import {
   PROCESS_HEALTH_STATES,
   processHealthUnitInput,
 } from "@synap-core/types/processes";
-import { machinePill, unitTonePill } from "./status-tone";
+import { machinePill, statusPillFor, unitTonePill } from "./status-tone";
 
 /**
  * The one unit-tone → pill map. "Your turn" (waiting on you, a check gate,
@@ -59,10 +59,11 @@ describe("machinePill", () => {
   });
 
   it("draws a turn that changed nothing apart from a failure", () => {
-    expect(machinePill("run", "failed", { stopReason: "no_effect" })).toEqual({
-      kind: "stale",
-      label: "No change",
-    });
+    // The status tone table's calm `no_effect`, the write receipt's too.
+    const noEffect = machinePill("run", "failed", { stopReason: "no_effect" })!;
+    expect(noEffect.label).toBe("No change");
+    expect(noEffect.kind).toBe(statusPillFor("no_effect")!.kind);
+    expect(noEffect.kind).not.toBe("down");
     expect(machinePill("run", "failed")!.kind).toBe("down");
   });
 

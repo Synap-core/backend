@@ -1,8 +1,8 @@
 /**
  * THE MARK OF A STORED STATUS: its word, its category and its tone, read off
- * the machine's own declaration. The tone comes from the category
- * ({@link LIFECYCLE_CATEGORY_TONE}); a thing that ended takes it from HOW it
- * ended ({@link StatusOutcome}), so a cancel stays calm, a turn that changed
+ * the machine's own declaration. The tone is the one status tone table's
+ * ({@link resolveStatusTone}) for its category, or for a thing that ended,
+ * for HOW it ended ({@link StatusOutcome}), so a cancel stays calm, a turn that changed
  * nothing is not drawn as a crash, and a session closed with required work
  * open is not drawn as delivered. A paused status (a run nobody picked up, a
  * rule holding it, the person's turn) is a hold, never an error.
@@ -15,7 +15,7 @@ import {
 } from "../focus-sessions/statuses.js";
 import { resolveStatusLabel } from "../vocabulary/index.js";
 import type { Locale } from "../i18n/locale.js";
-import { LIFECYCLE_CATEGORY_TONE, type UnitTone } from "./state.js";
+import { resolveStatusTone, type UnitTone } from "./state.js";
 import { RUN_STATUS_DECLARATION } from "./run-status.js";
 import { PROPOSAL_STATUS_DECLARATION } from "./proposal-status.js";
 import { TRACK_STATUS_DECLARATION } from "./track-status.js";
@@ -60,14 +60,6 @@ export const STATUS_OUTCOMES = [
   "cancelled",
 ] as const;
 export type StatusOutcome = (typeof STATUS_OUTCOMES)[number];
-
-const OUTCOME_TONE = {
-  done: LIFECYCLE_CATEGORY_TONE.done,
-  not_done: LIFECYCLE_CATEGORY_TONE.paused,
-  no_effect: LIFECYCLE_CATEGORY_TONE.paused,
-  failed: LIFECYCLE_CATEGORY_TONE.lost,
-  cancelled: "textMuted",
-} as const satisfies Record<StatusOutcome, UnitTone>;
 
 /** What the row says beyond its status word. */
 export interface StatusMarkFacts {
@@ -129,10 +121,6 @@ export function statusMark(
     category,
     outcome,
     label: resolveStatusLabel(labelWord, facts.locale),
-    tone: outcome
-      ? OUTCOME_TONE[outcome]
-      : category
-        ? LIFECYCLE_CATEGORY_TONE[category]
-        : "textMuted",
+    tone: resolveStatusTone(outcome ?? category),
   };
 }

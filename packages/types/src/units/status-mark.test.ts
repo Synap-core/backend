@@ -47,6 +47,8 @@ describe("statusMark", () => {
 
   it("a failed run whose turn changed nothing reads as no change, not a crash", () => {
     const noEffect = statusMark("run", "failed", { stopReason: "no_effect" })!;
+    // One tone table: the same tone as the write receipt's "No change".
+    expect(noEffect.tone).toBe(resolveStatusTone("no_effect"));
     expect(noEffect).toMatchObject({
       outcome: "no_effect",
       label: "No change",
