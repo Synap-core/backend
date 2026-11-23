@@ -26,6 +26,12 @@
  *      RE-CAPTURED again for 0357 (founder Q-B1): each `pod_members` probe
  *      gained `and "pod_members"."removed_at" is null` (`livePodMemberWhere`:
  *      a removed person's row is not membership). No param moved.
+ *      RE-CAPTURED when agents came to act through their person: each
+ *      membership probe keyed on the caller (`workspace_members` /
+ *      `project_members` `user_id`) became `user_id in
+ *      (<membershipHolderIds>)`: an agent maps to its person, anyone else
+ *      to itself (three bound copies of the id per probe). The pod-level
+ *      reader probes did not move.
  *   2. RESTRICTION — a floor restricted to `["visible_to"]` admits exposure
  *      ONLY through visible_to edges: `belongs_to_project` is absent from the
  *      bound params, so a row whose only path is a belongs_to_project edge
@@ -64,7 +70,7 @@ const entityArgs = {
 // Representative calls: bare floor, and the fully-lensed shape (workspace +
 // project lens) that entities.list / the registry produce.
 const BASELINE_BARE_SQL =
-  '((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where ("pod_members"."user_id" = $4 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $7) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $8) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $9 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $10) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $11)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $12 and "project_members"."role" = $13)) and exists (select 1 from "users" where "users"."id" = $14))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $15 and "project_members"."role" IS DISTINCT FROM $16)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($17, $18) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $19 and "project_members"."role" IS DISTINCT FROM $20)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $22 and "project_members"."role" = $23))))))';
+  '((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where ("pod_members"."user_id" = $4 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $7 AND u.user_type = \'agent\' UNION ALL SELECT $8 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $9 AND a.user_type = \'agent\'))) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $10) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $11 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $12) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $13)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $14 and "project_members"."role" = $15)) and exists (select 1 from "users" where "users"."id" = $16))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $17 AND u.user_type = \'agent\' UNION ALL SELECT $18 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $19 AND a.user_type = \'agent\')) and "project_members"."role" IS DISTINCT FROM $20)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21, $22) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $23 AND u.user_type = \'agent\' UNION ALL SELECT $24 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $25 AND a.user_type = \'agent\')) and "project_members"."role" IS DISTINCT FROM $26)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($27) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $28 AND u.user_type = \'agent\' UNION ALL SELECT $29 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $30 AND a.user_type = \'agent\')) and "project_members"."role" = $31))))))';
 const BASELINE_BARE_PARAMS = [
   "user-A",
   "user-A",
@@ -78,20 +84,28 @@ const BASELINE_BARE_PARAMS = [
   "user-A",
   "user-A",
   "user-A",
+  "user-A",
+  "user-A",
   "guest",
+  "user-A",
+  "user-A",
   "user-A",
   "user-A",
   "guest",
   "belongs_to_project",
   "visible_to",
   "user-A",
+  "user-A",
+  "user-A",
   "guest",
   "visible_to",
+  "user-A",
+  "user-A",
   "user-A",
   "guest",
 ];
 const BASELINE_LENSED_SQL =
-  '(((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where ("pod_members"."user_id" = $4 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $7) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $8) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $9 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $10) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $11)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $12 and "project_members"."role" = $13)) and exists (select 1 from "users" where "users"."id" = $14))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $15 and "project_members"."role" IS DISTINCT FROM $16)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($17, $18) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $19 and "project_members"."role" IS DISTINCT FROM $20)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" = $22 and "project_members"."role" = $23)))))) and ("entities"."workspace_id" = $24 and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" = $25) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $26) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $27 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $28) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $29)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $30 and "project_members"."role" = $31)) and exists (select 1 from "users" where "users"."id" = $32))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) and ("entities"."id" in ($33) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($34, $35) and "relations"."target_entity_id" in ($36)))))';
+  '(((("entities"."workspace_id" is null and "entities"."user_id" = $1) and not (exists (select 1 from "project_members" where ("project_members"."user_id" = $2 and "project_members"."role" = $3)) and not (exists (select 1 from "pod_members" where ("pod_members"."user_id" = $4 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $5) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $6)))) or ("entities"."workspace_id" is not null and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $7 AND u.user_type = \'agent\' UNION ALL SELECT $8 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $9 AND a.user_type = \'agent\'))) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $10) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $11 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $12) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $13)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $14 and "project_members"."role" = $15)) and exists (select 1 from "users" where "users"."id" = $16))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) or ("entities"."id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $17 AND u.user_type = \'agent\' UNION ALL SELECT $18 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $19 AND a.user_type = \'agent\')) and "project_members"."role" IS DISTINCT FROM $20)) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($21, $22) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $23 AND u.user_type = \'agent\' UNION ALL SELECT $24 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $25 AND a.user_type = \'agent\')) and "project_members"."role" IS DISTINCT FROM $26)))) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($27) and "relations"."target_entity_id" in (select "project_id" from "project_members" where ("project_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $28 AND u.user_type = \'agent\' UNION ALL SELECT $29 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $30 AND a.user_type = \'agent\')) and "project_members"."role" = $31)))))) and ("entities"."workspace_id" = $32 and ("entities"."workspace_id"::uuid in (select "workspace_id" from "workspace_members" where "workspace_members"."user_id" in (SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = $33 AND u.user_type = \'agent\' UNION ALL SELECT $34 WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = $35 AND a.user_type = \'agent\'))) or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."owner_id" = $36) or (((exists (select 1 from "pod_members" where ("pod_members"."user_id" = $37 and "pod_members"."removed_at" is null)) or exists (select 1 from "workspace_members" where "workspace_members"."user_id" = $38) or exists (select 1 from "workspaces" where "workspaces"."owner_id" = $39)) or (not exists (select 1 from "project_members" where ("project_members"."user_id" = $40 and "project_members"."role" = $41)) and exists (select 1 from "users" where "users"."id" = $42))) and ("entities"."workspace_id" is null or "entities"."workspace_id"::uuid in (select "id" from "workspaces" where "workspaces"."settings"->>\'workspaceVisibility\' IN (\'pod_visible\',\'pod_joinable\')))))) and ("entities"."id" in ($43) or "entities"."id" in (select "source_entity_id" from "relations" where ("relations"."type" in ($44, $45) and "relations"."target_entity_id" in ($46)))))';
 const BASELINE_LENSED_PARAMS = [
   "user-A",
   "user-A",
@@ -105,18 +119,28 @@ const BASELINE_LENSED_PARAMS = [
   "user-A",
   "user-A",
   "user-A",
+  "user-A",
+  "user-A",
   "guest",
+  "user-A",
+  "user-A",
   "user-A",
   "user-A",
   "guest",
   "belongs_to_project",
   "visible_to",
   "user-A",
+  "user-A",
+  "user-A",
   "guest",
   "visible_to",
   "user-A",
+  "user-A",
+  "user-A",
   "guest",
   "ws-1",
+  "user-A",
+  "user-A",
   "user-A",
   "user-A",
   "user-A",
@@ -192,18 +216,26 @@ describe("restriction — a visible_to-only floor does NOT admit belongs_to_proj
       "user-A",
       "user-A",
       "user-A",
+      "user-A",
+      "user-A",
       "guest",
+      "user-A",
+      "user-A",
       "user-A",
       "user-A",
       "guest",
       "visible_to",
       "user-A",
+      "user-A",
+      "user-A",
       "guest",
       "visible_to",
+      "user-A",
+      "user-A",
       "user-A",
       "guest",
     ]);
-    expect(q.sql).toContain('"relations"."type" in ($17)');
+    expect(q.sql).toContain('"relations"."type" in ($21)');
     expect(q.params).not.toContain(BELONGS_TO_PROJECT);
   });
 

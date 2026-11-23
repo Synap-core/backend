@@ -1391,17 +1391,7 @@ describe("do not contact: the CRM app sets the flag at once; only the person lif
     doNotContactSince: "2026-11-17",
   };
 
-  // A write grant makes the app's agent an editor of its space
-  // (`syncAppAgentMemberships`, services/app-connect.ts); this file's other
-  // rows never needed it (every agent write there is proposed), so it is
-  // granted here and taken back after.
-  const agentMembership = randomUUID();
-
   beforeAll(async () => {
-    await q(
-      `insert into workspace_members (id, workspace_id, user_id, role) values ($1,$2,$3,'editor')`,
-      [agentMembership, CRM, AGENT]
-    );
     for (const [id, ws, kind, kindId, props] of [
       [DNC_A, null, "person", PERSON_KIND, { email: "a@example.test" }],
       [DNC_B, null, "person", PERSON_KIND, { email: "b@example.test" }],
@@ -1429,9 +1419,7 @@ describe("do not contact: the CRM app sets the flag at once; only the person lif
     }
   });
 
-  afterAll(async () => {
-    await q(`delete from workspace_members where id = $1`, [agentMembership]);
-  });
+  afterAll(async () => {});
 
   const patch = (key: KeyName, id: string, body: unknown) =>
     send(key, "PATCH", `/entities/${id}`, body);

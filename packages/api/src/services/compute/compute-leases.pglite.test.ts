@@ -154,6 +154,7 @@ beforeAll(async () => {
     schema.links,
     schema.workspaces,
     schema.workspaceMembers,
+    schema.apiKeys,
     schema.podMembers,
     schema.users,
     schema.computeLeases,

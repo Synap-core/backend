@@ -110,6 +110,7 @@ import { workspaceMembers, workspaces } from "../schema/workspaces.js";
 import { users } from "../schema/users.js";
 import type { db as Db } from "../client-pg.js";
 import { podGuestWhere } from "./pod-membership.js";
+import { membershipHolderIds } from "./owner-person.js";
 
 /** Shared-type channels that are visible to all members of their workspace. */
 const SHARED_CHANNEL_TYPES = [
@@ -215,7 +216,7 @@ function objectRoomBranch(userId: string | AnyColumn): SQL | undefined {
         .where(
           and(
             drizzleSql`${workspaceMembers.workspaceId}::text = ${lensOf()}`,
-            eq(workspaceMembers.userId, userId)
+            inArray(workspaceMembers.userId, membershipHolderIds(userId))
           )
         )
     ),
@@ -293,7 +294,7 @@ export function channelVisibilityWhere(userId: string | AnyColumn): SQL {
     .where(
       and(
         eq(workspaceMembers.workspaceId, channels.workspaceId),
-        eq(workspaceMembers.userId, userId)
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
       )
     );
   const ownerOfWs = qb

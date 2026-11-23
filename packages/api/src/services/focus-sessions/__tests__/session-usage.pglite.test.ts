@@ -53,6 +53,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
 } from "@synap/database/schema";
@@ -187,6 +188,7 @@ beforeAll(async () => {
   for (const tbl of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     focusSessions,
     proposals,
     events,

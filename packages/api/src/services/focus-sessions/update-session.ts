@@ -32,6 +32,7 @@ import {
   writeSessionPatch,
   personTouchedSubjectIds,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import {
   lifecycleConflictOf,
   type LifecycleConflictResult,
@@ -83,6 +84,8 @@ import type {
 } from "@synap/playbooks";
 import {
   criteriaNamingNoOutput,
+  stepDateRefusal,
+  stepTimePatch,
   type ThingBlockerBlocks,
   type ThingBlockerClearedBy,
 } from "@synap-core/types/units";
@@ -160,7 +163,9 @@ import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
+  PLANNED_SESSION_STATUS,
   SESSION_STATUS_DECLARATION,
+  UNDERWAY_SESSION_STATUSES,
   SESSION_TITLE_MAX,
   titleSourcePatch,
   type SessionStatus,
@@ -181,7 +186,18 @@ export interface UpdateFocusSessionParams {
   /** Rename. Blank or `null` CLEARS (untitled ⇒ goal's first line is shown). */
   title?: string | null;
   goal?: string;
-  status?: "active" | "paused";
+  /**
+   * `forming` PLANS a started step back (it owes nothing and the pod wakes it
+   * when its blockers deliver and its date comes, P1/P3); `active` starts a
+   * planned one. Only a started session is planned back.
+   */
+  status?: "active" | "paused" | "forming";
+  /**
+   * The step's window and deadline (B5), on `metadata`: a month, a day or an
+   * ISO date-time; `null` clears. A malformed value is refused.
+   */
+  plannedFor?: string | null;
+  dueBy?: string | null;
   /**
    * With `status`: the status the caller SAW. A session that moved meanwhile
    * answers `conflict` and nothing is written (compare-and-set), like an
@@ -2169,6 +2185,23 @@ export function ownCriteriaChangeLine(input: {
   return `The agent changed this session's criteria (its own session, so the change applied directly). Before: ${list(input.before)}. Now: ${list(input.after)}.${undo}`;
 }
 
+/**
+ * SQL: the session's `metadata` with `patch` merged in; a key set to `null`
+ * is REMOVED (a cleared step date), never stored as `null`. Shared by this
+ * door and the `focus_session/update` approval replay.
+ */
+export function mergeSessionMetadataSql(patch: Record<string, unknown>): SQL {
+  const drop = Object.keys(patch).filter((k) => patch[k] === null);
+  const keep = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== null)
+  );
+  const base = drop.reduce<SQL>(
+    (acc, key) => drizzleSql`(${acc} - ${key}::text)`,
+    drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb)`
+  );
+  return drizzleSql`${base} || ${JSON.stringify(keep)}::jsonb`;
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -2209,6 +2242,27 @@ export async function updateFocusSession(
   // carries the hold it had there).
   const moveRefusal = sessionMoveRefusal(existing.status, params, agentUserId);
   if (moveRefusal) return { status: "denied", reason: moveRefusal };
+  // PLAN BACK (P1): only a started session becomes a planned step again.
+  if (
+    params.status === PLANNED_SESSION_STATUS &&
+    existing.status !== PLANNED_SESSION_STATUS &&
+    !(UNDERWAY_SESSION_STATUSES as readonly string[]).includes(existing.status)
+  ) {
+    return {
+      status: "denied",
+      reason: `Only a started session (active, paused, stale) is planned back; this one is ${existing.status}.`,
+    };
+  }
+  // The step's time (B5): refused in words before anything is filed.
+  const stepTime = stepTimePatch({
+    ...(params.plannedFor !== undefined
+      ? { plannedFor: params.plannedFor }
+      : {}),
+    ...(params.dueBy !== undefined ? { dueBy: params.dueBy } : {}),
+  });
+  if (!stepTime.ok) {
+    return { status: "denied", reason: stepDateRefusal(stepTime.invalid) };
+  }
 
   // A `projectId` equal to the one the session already has is NOT a filing:
   // dropped here, before every floor and the membrane, so it never forces a
@@ -2699,7 +2753,7 @@ export async function updateFocusSession(
   // A GRANTED filing beside other fields is applied NOW, on its own receipt,
   // and leaves the patch: the gate already minted that receipt as applied, so
   // the rest's own verdict (a criteria change that proposes, a session that
-  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // forces proposals, a cap, a denial) must not hold it back —
   // that left a receipt claiming a filing that was never written, with no
   // Undo (FB1020 w2 review M1). Its Undo restores the project and the goal
   // filing only. The own-organise class grants a PROJECT filing, or a GOAL
@@ -2815,6 +2869,8 @@ export async function updateFocusSession(
           ...(params.expectedStatus
             ? { expectedStatus: params.expectedStatus }
             : {}),
+          // The step's time (B5): applied by the approval replay too.
+          ...stepTime.patch,
           ...(params.hold ? { hold: params.hold } : {}),
           ...(params.occurredAt ? { occurredAt: params.occurredAt } : {}),
           ...(params.progress !== undefined
@@ -2888,11 +2944,9 @@ export async function updateFocusSession(
       ...(filing ? { filing } : {}),
       ...(subSessionsFiled?.length ? { subSessionsFiled } : {}),
       proposalId: perm.proposalId,
-      // The discriminator MUST cross this boundary: this door is join-gate
-      // reachable (the MCP handler threads `agentUserId`), and without it the
-      // caller cannot tell a session-update proposal from a workspace-JOIN
-      // gate filed instead of it. Its two siblings (create-session,
-      // complete-session) already forward it.
+      // The discriminator crosses this boundary, as its two siblings
+      // (create-session, complete-session) forward it: a held-writes pack is
+      // told apart from a session-update proposal.
       proposalType: perm.proposalType,
       summary: perm.summary,
       reviewPath: perm.reviewPath,
@@ -2909,11 +2963,17 @@ export async function updateFocusSession(
   if (params.goal !== undefined) set.goal = params.goal;
   if (params.title !== undefined) {
     set.title = normalizeSessionTitle(params.title);
-    // An agent's rename is never overwritten by the background titler; a
-    // CLEAR hands the name back to it. Merged, never assigned over metadata.
-    set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
-      titleSourcePatch(set.title ? "agent" : "derived")
-    )}::jsonb`;
+  }
+  // An agent's rename is never overwritten by the background titler; a CLEAR
+  // hands the name back to it. The step's time rides the same merge (B5).
+  // Merged, never assigned over metadata.
+  if (params.title !== undefined || Object.keys(stepTime.patch).length > 0) {
+    set.metadata = mergeSessionMetadataSql({
+      ...(params.title !== undefined
+        ? titleSourcePatch(set.title ? "agent" : "derived")
+        : {}),
+      ...stepTime.patch,
+    });
   }
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;

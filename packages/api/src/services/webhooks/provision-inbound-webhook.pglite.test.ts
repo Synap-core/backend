@@ -140,6 +140,7 @@ beforeAll(async () => {
     schema.tools,
     schema.workspaces,
     schema.workspaceMembers,
+    schema.apiKeys,
     schema.projects,
     schema.projectMembers,
     schema.podMembers,

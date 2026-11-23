@@ -164,6 +164,7 @@ import {
   STAGE_MET_REACTION_ID,
 } from "@synap/jobs/utils/reactions.js";
 import { advanceStageReactionEffect } from "../../reactions/advance-stage-effect.js";
+import { rollUpLane } from "../lane-rollup.js";
 
 // apps/api fills the effect's slot at boot; here, once.
 registerReactionEffect(advanceStageReactionEffect);
@@ -445,6 +446,65 @@ describe("the last required output met moves the step on, by itself", () => {
     expect(await movesOf(post)).toEqual([
       { to: "Scripted", sid: id, rid: STAGE_MET_REACTION_ID },
     ]);
+  });
+});
+
+describe("a lane's rolled-up output moves its parent's step (W7)", () => {
+  /** A closed lane of `parent`, spawned for `forOutput`, that delivered `spec`. */
+  async function closedLane(parent: string, forOutput: string | null) {
+    const child = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, title, goal, status, expected_outputs, criteria, metadata, agent_ids, started_at, created_at, updated_at, closed_at)
+       values ($1, $2, 'Lane', 'Lane', 'closed', $3::jsonb, '[]'::jsonb, '{}'::jsonb, '{}', now(), now(), now(), now())`,
+      [
+        child,
+        USER,
+        JSON.stringify([
+          spec({
+            key: "spec",
+            status: "done",
+            satisfiedByEvidence: {
+              kind: "ref",
+              id: "https://example.com/spec",
+              at: new Date().toISOString(),
+            },
+          }),
+        ]),
+      ]
+    );
+    await q(
+      `insert into links (id, from_type, from_id, to_type, to_id, link_type, metadata, created_at)
+       values ($1, 'session', $2, 'session', $3, 'spawned_from', $4::jsonb, now())`,
+      [
+        randomUUID(),
+        child,
+        parent,
+        JSON.stringify(forOutput ? { forOutput } : {}),
+      ]
+    );
+    return child;
+  }
+  const owedSpec = { kind: "document", label: "Spec", status: "pending" };
+
+  it("the lane meets the step's last required output: build → review, through the same rule", async () => {
+    const id = await runAt({ stage: "build", outputs: [owedSpec] });
+    const lane = await closedLane(id, "spec");
+    expect(await rollUpLane(lane, "done")).toMatchObject({
+      status: "rolled_up",
+      satisfied: ["spec"],
+    });
+    await react(id);
+    const s = await sessionOf(id);
+    expect(s.current_stage).toBe("review");
+    expect(s.status).toBe("active");
+  });
+
+  it("NEGATIVE: a lane spawned for no output moves nothing", async () => {
+    const id = await runAt({ stage: "build", outputs: [owedSpec] });
+    const lane = await closedLane(id, null);
+    expect(await rollUpLane(lane, "done")).toEqual({ status: "no_target" });
+    await react(id);
+    expect((await sessionOf(id)).current_stage).toBe("build");
   });
 });
 

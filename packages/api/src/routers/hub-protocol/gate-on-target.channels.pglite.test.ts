@@ -181,7 +181,7 @@ beforeAll(async () => {
     if (is(value, PgTable)) await h.client!.exec(ddlFor(value));
   }
   await q(
-    `insert into users (id, email, user_type) values ($1, $2, 'human'), ($3, $4, 'agent')`,
+    `insert into users (id, email, user_type, created_by_user_id) values ($1, $2, 'human', null), ($3, $4, 'agent', $1)`,
     [USER, `${USER}@x`, AGENT, `${AGENT}@x`]
   );
   for (const ws of [WS, OTHER_WS]) {

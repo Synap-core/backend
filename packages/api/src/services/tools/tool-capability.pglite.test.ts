@@ -31,6 +31,7 @@ import {
   projectMembers,
   users,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "@synap/database/schema";
 import { toolCapabilityForReader } from "./tool-capability.js";
@@ -84,6 +85,7 @@ beforeAll(async () => {
   for (const table of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     users,
     projectMembers,

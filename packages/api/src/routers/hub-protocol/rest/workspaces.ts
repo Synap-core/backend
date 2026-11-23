@@ -65,7 +65,6 @@ import {
   ComposeOverlayError,
   DependencyResolutionError,
 } from "../../../services/workspace-materialization-service.js";
-import { enrollAgentInWorkspace } from "../../../services/enroll-agent-in-workspace.js";
 import { agentBelongsTo } from "../agent-belongs-to.js";
 import {
   buildDigestSummary,
@@ -214,14 +213,6 @@ const eveProviderRoutingPolicySchema = z.object({
     .optional(),
   syncToSynap: z.boolean().optional(),
 });
-
-/** Workspace role order for the enroll ceiling (an agent never outranks its enroller). */
-const ENROLL_ROLE_RANK: Record<string, number> = {
-  viewer: 1,
-  editor: 2,
-  admin: 3,
-  owner: 4,
-};
 
 export function registerWorkspacesRoutes(app: HubHono): void {
   // ── OpenAPI metadata ─────────────────────────────────────────────────────
@@ -454,46 +445,12 @@ export function registerWorkspacesRoutes(app: HubHono): void {
 
   registerOpenApi(app, {
     method: "post",
-    path: "/workspaces/enroll-agent",
-    tags: ["Workspaces"],
-    summary: "Enroll an agent user into the caller's workspaces",
-    description:
-      "Adds the given agent user as a member to all workspaces the calling " +
-      "user belongs to (or just one, when workspaceId is supplied). " +
-      "Idempotent — safe to call on reconnect. Used by `synap connect` " +
-      "when 'All workspaces' is selected to give the agent key pod-wide access.",
-    request: {
-      body: zOpenapi.object({
-        agentUserId: zOpenapi.string().uuid(),
-        workspaceId: zOpenapi.string().uuid().optional(),
-        role: zOpenapi.enum(["viewer", "editor", "admin"]).optional(),
-      }),
-    },
-    responses: {
-      200: {
-        description: "List of workspace IDs the agent was enrolled into",
-        schema: zOpenapi.object({
-          enrolled: zOpenapi.array(zOpenapi.string()),
-          skipped: zOpenapi.array(zOpenapi.string()),
-        }),
-      },
-      400: {
-        description: "Invalid body or agentUserId not an agent user",
-        schema: ErrorSchema,
-      },
-      403: { description: "Forbidden", schema: ErrorSchema },
-      500: { description: "Internal error", schema: ErrorSchema },
-    },
-  });
-
-  registerOpenApi(app, {
-    method: "post",
     path: "/workspaces/provision-agent",
     tags: ["Workspaces"],
     summary: "Provision an agent's workspace (idempotent)",
     description:
       "Idempotently provisions a workspace for one of the caller's agents. " +
-      "The calling user owns it; the agent is its admin member. " +
+      "The calling user owns it; the agent works there through that membership. " +
       "Sets wide autoApproveFor so the agent can write freely within it. " +
       "Requires hub-protocol.write scope.",
     request: {
@@ -731,127 +688,11 @@ export function registerWorkspacesRoutes(app: HubHono): void {
   });
 
   /**
-   * POST /workspaces/enroll-agent
-   *
-   * Adds an agent user as a member of all workspaces the calling user belongs
-   * to (or one specific workspace). Idempotent. Called by `synap connect` when
-   * the user picks "All workspaces" so the agent key sees every workspace.
-   *
-   * Registered BEFORE /:workspaceId dynamic routes.
-   */
-  app.post("/workspaces/enroll-agent", async (c) => {
-    const stale = refuseStaleDeviceSession(c);
-    if (stale) return stale;
-    const scopes = c.get("scopes") as string[];
-    if (!hasScope(scopes, "hub-protocol.write")) {
-      return c.json(
-        { error: "Insufficient scope: hub-protocol.write required" },
-        403
-      );
-    }
-
-    const callerId = c.get("userId") as string;
-
-    let body: unknown;
-    try {
-      body = await c.req.json();
-    } catch {
-      return c.json({ error: "Invalid JSON body" }, 400);
-    }
-
-    const parsed = z
-      .object({
-        agentUserId: z.string().uuid(),
-        workspaceId: z.string().uuid().optional(),
-        role: z.enum(["viewer", "editor", "admin"]).default("editor"),
-      })
-      .safeParse(body);
-
-    if (!parsed.success) {
-      return c.json(
-        { error: "Invalid body", details: parsed.error.issues },
-        400
-      );
-    }
-
-    const { agentUserId, workspaceId, role } = parsed.data;
-
-    // Verify agentUserId is a real agent user
-    const agentRow = await db.query.users.findFirst({
-      where: eq(users.id, agentUserId),
-      columns: { id: true, userType: true },
-    });
-    if (!agentRow || agentRow.userType !== "agent") {
-      return c.json(
-        {
-          error: `agentUserId '${agentUserId}' is not an agent user on this pod`,
-        },
-        400
-      );
-    }
-    // SECURITY — only YOUR agent, and never the acting agent itself. This used
-    // to enroll any agent of the pod into the caller's workspaces, and an
-    // agent key could enroll ITSELF (at admin) into every workspace of its
-    // human. `synap connect` enrolls the human's own freshly provisioned
-    // agent (created by the human), which `agentBelongsTo` admits.
-    if (agentUserId === (c.get("agentUserId") as string | undefined)) {
-      return c.json({ error: "An agent cannot enroll itself." }, 403);
-    }
-    if (!(await agentBelongsTo(callerId, agentUserId))) {
-      return c.json({ error: "This agent is not yours to enroll." }, 403);
-    }
-
-    try {
-      // Resolve target workspaces: one specific workspace or all caller's workspaces
-      const targetIds = workspaceId
-        ? [workspaceId]
-        : await getUserAccessibleWorkspaceIds(callerId);
-
-      const enrolled: string[] = [];
-      const skipped: string[] = [];
-
-      for (const wsId of targetIds) {
-        // Verify caller is a member (skip workspaces they don't belong to),
-        // and never grant above the caller's own role there — a viewer used
-        // to enroll an agent as admin (no escalation by enrolling).
-        const membership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, wsId),
-            eq(workspaceMembers.userId, callerId)
-          ),
-          columns: { id: true, role: true },
-        });
-        if (
-          !membership ||
-          (ENROLL_ROLE_RANK[membership.role] ?? 0) < ENROLL_ROLE_RANK[role]
-        ) {
-          skipped.push(wsId);
-          continue;
-        }
-
-        await enrollAgentInWorkspace({ workspaceId: wsId, agentUserId, role });
-        enrolled.push(wsId);
-      }
-
-      return c.json({ enrolled, skipped }, 200);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error(
-        { err, callerId, agentUserId },
-        "POST /workspaces/enroll-agent failed"
-      );
-      return c.json(
-        { error: `Enroll failed: ${message}` },
-        httpStatusForTrpcError(err)
-      );
-    }
-  });
-
-  /**
    * POST /workspaces/provision-agent
    *
    * Idempotently provisions an agent's workspace. The calling person owns it;
-   * the agent is its admin member with a wide autoApproveFor list.
+   * the agent works there through that membership, with a wide autoApproveFor
+   * list.
    * Registered BEFORE /workspaces/from-definition and /:workspaceId routes.
    */
   app.post("/workspaces/provision-agent", async (c) => {
@@ -1009,12 +850,6 @@ export function registerWorkspacesRoutes(app: HubHono): void {
           createdBy: callerId,
         });
       }
-
-      await enrollAgentInWorkspace({
-        workspaceId: result.workspaceId,
-        agentUserId,
-        role: "admin",
-      });
 
       return c.json(
         { workspaceId: result.workspaceId, created: result.created },

@@ -32,6 +32,7 @@ import {
   actorsOfSamePerson,
   personsOfOwners,
   podWideAutomationAnswersTo,
+  membershipHolderIds,
 } from "@synap/database";
 import type { AutomationTriggerConfig } from "@synap/database";
 import { matchMessageShape, type MessageEnvelope } from "@synap/database";
@@ -1168,8 +1169,8 @@ export async function resolveEventProjectIds(input: {
 
 /**
  * Workspace-ID floor for a pod-wide (null-workspace) inbound: the acting user's
- * accessible workspaces — explicit memberships PLUS pod-visible / pod-joinable
- * source workspaces. Mirrors `getUserAccessibleWorkspaceIds`
+ * accessible workspaces — explicit memberships (an agent's are its person's,
+ * `membershipHolderIds`) PLUS pod-visible / pod-joinable source workspaces. Mirrors `getUserAccessibleWorkspaceIds`
  * (@synap/api → hub-protocol/rest/_shared), which is NOT importable from
  * @synap/jobs without a circular @synap/api ← @synap/jobs dependency, so the
  * canonical predicate is replicated here against the same tables.
@@ -1178,7 +1179,7 @@ async function getAccessibleWorkspaceFloor(userId: string): Promise<string[]> {
   const memberRows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(userId)));
   const ids = new Set(memberRows.map((r) => r.workspaceId));
 
   const podReadable = await db
@@ -1424,11 +1425,12 @@ export async function handleAutomationTriggerMatch(job: {
 
   // A POD-WIDE SUBJECT announced from a space (`podWideSubject`: a shared role
   // such as `client`, attached from the CRM) is matched in that space AND
-  // across the actor's floor, as a pod-wide event is. The lens stays in the set
-  // even when the actor is no member of it (an agent's write), so every rule
-  // that fired before still fires; the floor adds the other spaces that react
-  // to the role (Operations' « Onboard a client »). Each match runs in its own
-  // space (`fireAutomation`), so no space's rule reads another space.
+  // across the actor's floor (an agent's: its person's spaces), as a pod-wide
+  // event is. The lens stays in the set even when the actor's person is no
+  // member of it, so every rule that fired before still fires; the floor adds
+  // the other spaces that react to the role (Operations' « Onboard a
+  // client »). Each match runs in its own space (`fireAutomation`), so no
+  // space's rule reads another space.
   const podWideSubject = job.data.podWideSubject === true;
   const workspaceMatch =
     workspaceId != null && !podWideSubject

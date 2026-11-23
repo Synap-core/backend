@@ -57,6 +57,7 @@ import {
   links,
   channelMembers,
   workspaceMembers,
+  apiKeys,
   users,
 } from "@synap/database";
 import {
@@ -180,6 +181,7 @@ beforeAll(async () => {
     links,
     channelMembers,
     workspaceMembers,
+    apiKeys,
     users,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));

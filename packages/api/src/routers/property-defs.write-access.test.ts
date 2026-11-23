@@ -58,6 +58,11 @@ async function makeFakeDb(members: typeof h.members) {
               { workspaceId: "workspaceId", userId: "userId" },
               {
                 eq: (col: string, val: unknown) => ({ [col]: val }),
+                // The membership holder subquery: no agent here, so the
+                // user itself (its first bound param).
+                inArray: (col: string, holder: unknown) => ({
+                  [col]: dialect.sqlToQuery(holder as never).params[0],
+                }),
                 and: (...parts: object[]) => Object.assign({}, ...parts),
               }
             ) as { workspaceId: string; userId: string };

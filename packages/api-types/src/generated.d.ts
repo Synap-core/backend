@@ -11687,6 +11687,16 @@ export interface CompositeCreateSessionOp {
 	/** `blocked_by` edges declared at birth. */
 	blockedByRefs?: string[];
 	blockedBySessionIds?: string[];
+	/**
+	 * P4 (21 Nov 2026): a step that waits at birth (a `blocked_by` edge in this
+	 * plan, or a `plannedFor` to come) is born PLANNED (`forming`) unless
+	 * `startNow`; `stepBirthStatus` (`@synap-core/types/units`) decides.
+	 */
+	startNow?: boolean;
+	/** B5: when its window opens (a month, a day or an ISO date-time). */
+	plannedFor?: string;
+	/** B5: its deadline (same shapes). */
+	dueBy?: string;
 	/** The entity this session is about (a `create_entity` ref or a real id). */
 	subjectRef?: string;
 	subjectEntityId?: string;
@@ -13256,6 +13266,16 @@ export interface WorkReleaseRead {
 	/** Present only when the caller's grant narrowed the read. */
 	narrowed?: WorkReleaseNarrowing;
 }
+declare const WORK_GRAPH_EDGE_KINDS: readonly [
+	"blocked_by",
+	"spawned_from",
+	"orchestrated_by",
+	"waits_on_output",
+	"triggered",
+	"updated",
+	"serves"
+];
+export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
 	"applied",
 	"proposed",
@@ -15413,20 +15433,6 @@ export interface SubmitCaptureGraphResult {
 	 * can have failed. Omitted when nothing failed.
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
-	/**
-	 * The agent is not a member of a space this graph lands in, so NOTHING was
-	 * written: the whole graph is kept on that space's workspace-JOIN request
-	 * (`proposalId` names the join) and replayed, all of it, as the agent once a
-	 * person approves the join (finding 590ca76a). `deferred: false` when the
-	 * join could not keep it (the agent retries after approval). Omitted
-	 * otherwise.
-	 */
-	joinGate?: {
-		deferred: boolean;
-		message: string;
-		proposalId: string;
-		ref?: string;
-	};
 	writeReceipt: {
 		/** applied path only: fresh-created vs linked-existing counts + ids. */
 		created?: number;
@@ -15597,8 +15603,8 @@ export interface UpdateEntitiesResult {
 		reason: string;
 	}>;
 	/**
-	 * `deferred: true` = the write was KEPT on a workspace-join request and is
-	 * replayed for the caller once the join is approved — never resend it.
+	 * `deferred: true` = the write was KEPT on today's held-writes pack and is
+	 * replayed for the caller once it is approved — never resend it.
 	 */
 	skipped: Array<{
 		deferred?: true;
@@ -27076,16 +27082,6 @@ export interface WorkGraphEntity {
 	/** The status's fixed category; `null` = no lifecycle. */
 	category: LifecycleCategory | null;
 }
-declare const WORK_GRAPH_EDGE_KINDS: readonly [
-	"blocked_by",
-	"spawned_from",
-	"orchestrated_by",
-	"waits_on_output",
-	"triggered",
-	"updated",
-	"serves"
-];
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 /** What an edge end is when it is not a session (B4). */
 export type WorkGraphEndKind = "entity" | "track";
 export interface WorkGraphEdge {
@@ -27639,6 +27635,20 @@ export type UnitBlockerReport = BlockerKey & ({
 	reason: UnitBlockerReason;
 	status: "failed";
 });
+/**
+ * Why a spawn target was not recorded. `checked_by_criterion`: a required
+ * criterion of the parent checks that output, so its evaluator meets it and
+ * the rollup never would (`selectSlotsDeliveredByChild`).
+ */
+export type SpawnTargetRefusal = "checked_by_criterion" | "no_such_output" | "not_a_parent_writer";
+export type SpawnTargetCheck = {
+	key: string;
+	status: "recorded";
+} | {
+	key: string;
+	reason: SpawnTargetRefusal;
+	status: "refused";
+};
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -27646,6 +27656,8 @@ export type CreateTimeParentLink = {
 	 * child. `null` when the write produced no report.
 	 */
 	blocksParent?: CreateTimeBlockerReport | null;
+	/** Present when `forOutput` was asked: recorded, or refused and why. */
+	forOutput?: SpawnTargetCheck;
 	parentSessionId: string;
 	status: "linked";
 	suspendedIntentRecorded: boolean;
@@ -28754,8 +28766,8 @@ export interface OpenTarget {
  *
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
- * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * migration 0225); scope (pod-wide vs workspace) is DERIVED from the spaces of
+ * the person it acts for (none ⇒ pod-wide). Floored like the scorecard
  * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
  * another owner's agent identity to a member. A pod admin may already list
  * every space, so the space names below reveal nothing new to one.
@@ -30848,7 +30860,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: string;
 					kind: "recovery_code";
 				} | undefined;
-				role?: "admin" | "editor" | "viewer" | undefined;
 				workspaceId: string;
 				writesRequireProposal?: boolean | undefined;
 			};
@@ -40067,7 +40078,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks: RequiredLinkCheck;
 				reviewUrl: string;
@@ -40091,7 +40102,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks?: undefined;
 				reviewUrl: string;

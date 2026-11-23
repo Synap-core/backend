@@ -1,19 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  drizzleSql,
   proposals,
   eq,
   getWorkspaceMembership,
-  users,
-  workspaceMembers,
-  workspaces,
   transitionProposal,
 } from "@synap/database";
-import { readDeferredWrites } from "@synap-core/types/proposals/deferred-writes";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { auditLog } from "../../../utils/audit-log.js";
 import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import {
   registerProposalExecutor,
@@ -337,172 +331,6 @@ export function registerWorkspaceExecutors(): void {
   registerProposalExecutor({
     key: "workspace/create",
     execute: executeTemplateApplyApproval,
-  });
-
-  // ── workspace / join ───────────────────────────────────────────────────────
-  registerProposalExecutor({
-    key: "workspace/join",
-    // Adds a member / exposes a resource: lasting access for someone.
-    widensCredential: true,
-    async execute({ proposal, payload, userId, input, deps }) {
-      void payload;
-      const joinData = (proposal.data ?? {}) as Record<string, unknown>;
-
-      // Pre-flight: `proposals.workspaceId` has NO foreign key to `workspaces`
-      // (workspaceMembers does, ON DELETE CASCADE), so a pending join can
-      // outlive the workspace it targets. Without this check, approve would
-      // emit `.validated`, flip the row APPROVED, and only THEN — in the
-      // materializer worker, async — hit the membership insert's FK violation.
-      // The reviewer would see success while no membership was ever granted.
-      // This does not replace the materializer's FK (still the backstop for
-      // any other route into that insert); it only turns the failure loud and
-      // synchronous on the approve path instead of silent and deferred.
-      //
-      // Resolve the target the SAME way `materializeWorkspace` does
-      // (`data.workspaceId || workspaceId || subjectId` in materializer.ts) —
-      // the audit event below stamps `data.workspaceId: proposal.workspaceId`
-      // and the worker is invoked with that same `proposal.workspaceId`, so
-      // both arms of that `||` collapse to `proposal.workspaceId`, falling
-      // back to `proposal.targetId` (the materializer's `subjectId`).
-      const targetWorkspaceId = proposal.workspaceId || proposal.targetId;
-      if (targetWorkspaceId) {
-        const [existing] = await db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.id, targetWorkspaceId));
-        if (!existing) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              `Workspace ${targetWorkspaceId} no longer exists — this join ` +
-              "proposal cannot be approved and should be rejected.",
-          });
-        }
-      }
-
-      const agentUserId =
-        proposal.agentUserId ??
-        (typeof joinData.agentUserId === "string"
-          ? joinData.agentUserId
-          : null);
-      const role =
-        joinData.role === "owner" ||
-        joinData.role === "editor" ||
-        joinData.role === "viewer"
-          ? joinData.role
-          : "editor";
-      // Defence-in-depth, the materializer's rule: a join only ever makes an
-      // AGENT user row a member.
-      const [agentRow] = agentUserId
-        ? await db
-            .select({ userType: users.userType })
-            .from(users)
-            .where(eq(users.id, agentUserId))
-        : [];
-      if (
-        !targetWorkspaceId ||
-        !agentUserId ||
-        agentRow?.userType !== "agent"
-      ) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "This join request names no agent to add (or its requester is not " +
-            "an agent), so no membership can be granted — reject it.",
-        });
-      }
-
-      const validatedEvent = await auditLog({
-        subjectType: "workspace",
-        action: "join",
-        phase: "validated",
-        throwOnError: true,
-        subjectId: proposal.targetId,
-        userId,
-        workspaceId: proposal.workspaceId ?? undefined,
-        correlationId:
-          typeof joinData.correlationId === "string"
-            ? joinData.correlationId
-            : undefined,
-        data: {
-          role: typeof joinData.role === "string" ? joinData.role : "editor",
-          agentUserId: proposal.agentUserId ?? joinData.agentUserId,
-          workspaceId: proposal.workspaceId,
-          approvedBy: userId,
-          approvedAt: new Date().toISOString(),
-          approvalComment: input.comment,
-          sourceProposalId: input.proposalId,
-        },
-        source: "api",
-      });
-
-      // MEMBERSHIP IS SYNCHRONOUS (#6): the row lands in the SAME transaction
-      // as the APPROVED flip, so the moment the join reads approved the agent
-      // IS a member — the deferred writes below replay against it. The
-      // materializer still receives `workspace.join.validated` and finds the
-      // row already there (its existing idempotent skip); it is the backstop
-      // for any other route into that insert, no longer the writer.
-      const { rows: inserted, approved } = await db.transaction(async (tx) => {
-        const rows = await tx
-          .insert(workspaceMembers)
-          .values({ workspaceId: targetWorkspaceId, userId: agentUserId, role })
-          .onConflictDoNothing()
-          .returning({ id: workspaceMembers.id });
-        const [approved] = await transitionProposal(tx, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            // MERGED into the row, never the copy read above: a write kept
-            // (or an item the reviewer dropped) since then must survive.
-            ...(validatedEvent
-              ? {
-                  data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) || jsonb_build_object('validatedEventId', ${validatedEvent.id}::text)`,
-                }
-              : {}),
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        }).returning({ data: proposals.data });
-        return { rows, approved };
-      });
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-
-      // Replay the writes the agent made while it waited, AS THE AGENT, each
-      // through its own door — the ladder decides each one again (access was
-      // approved here, content was not). Outcomes land on the join row.
-      // Read from the row as approved: a write kept after this executor read
-      // the proposal is in it too.
-      if (readDeferredWrites(approved?.data).writes.length > 0) {
-        const { replayDeferredWrites } =
-          await import("../../../services/governance/deferred-writes.js");
-        await replayDeferredWrites({
-          proposalId: input.proposalId,
-          workspaceId: targetWorkspaceId,
-        });
-      }
-
-      return {
-        success: true,
-        // The storage engine's own answer: 1 = the agent became a member now,
-        // 0 = it already was (the conflict was the row).
-        effect: {
-          applied: "verified",
-          rows: inserted.length,
-          ids: inserted.map((r) => r.id),
-          subject: "workspace_members",
-        },
-      };
-    },
   });
 
   // ── workspace / declare_source ───────────────────────────────────────────────
