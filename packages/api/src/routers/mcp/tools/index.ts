@@ -2795,6 +2795,12 @@ export const tools = {
               description:
                 "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent.",
             },
+            forOutput: {
+              type: "string",
+              maxLength: 120,
+              description:
+                "With parentSessionId: the parent's outcome key you deliver; met when you close done with your same-key outcome delivered.",
+            },
             expectedOutputs: {
               type: "array",
               items: { type: "object" },

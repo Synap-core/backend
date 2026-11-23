@@ -44446,6 +44446,11 @@
                     "minLength": 1,
                     "maxLength": 2000
                   },
+                  "forOutput": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
                   "blockedBySessionIds": {
                     "type": "array",
                     "items": { "type": "string", "format": "uuid" },

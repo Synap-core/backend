@@ -103,6 +103,7 @@ import {
   addCreateTimeBlockers,
   type CreateTimeBlockerReport,
 } from "./session-blocked-by.js";
+import { resolveSpawnTarget, type SpawnTargetCheck } from "./lane-rollup.js";
 import {
   applyUnitBlockerEdits,
   type UnitBlockerReport,
@@ -335,6 +336,16 @@ export interface CreateFocusSessionParams {
    */
   suspendedIntent?: string | null;
   /**
+   * The key of the PARENT's output this child is spawned to deliver (work
+   * model W7). Only with `parentSessionId`. Recorded on the `spawned_from`
+   * edge only when the spawner may write the parent (its owner, or an agent
+   * on its roster) and the parent declares that output (`checkSpawnTarget`);
+   * otherwise the link still lands and `parentLink.forOutput` says why the
+   * target was refused. When this child closes done with its own output of
+   * that key delivered, the parent's output is met (`lane-rollup.ts`).
+   */
+  forOutput?: string | null;
+  /**
    * Sessions this one is BLOCKED BY, declared at birth. Each becomes a
    * `session --blocked_by--> session` edge through `addCreateTimeBlockers` (the
    * same validate + write door as `POST /links`), after the row exists; each
@@ -499,6 +510,8 @@ export type CreateTimeParentLink =
        * child. `null` when the write produced no report.
        */
       blocksParent?: CreateTimeBlockerReport | null;
+      /** Present when `forOutput` was asked: recorded, or refused and why. */
+      forOutput?: SpawnTargetCheck;
     }
   | {
       status: "failed";
@@ -623,6 +636,7 @@ export async function createFocusSession(
     expectedOutputs = [],
     parentSessionId = null,
     suspendedIntent = null,
+    forOutput = null,
     blockedBySessionIds = [],
     blockedByEntityIds = [],
     blockedByTrackIds = [],
@@ -691,6 +705,27 @@ export async function createFocusSession(
   const directAgentIds = agentIds.filter(
     (id) => !handedOff.includes(id.trim())
   );
+
+  // A target output (W7) names one of the PARENT's outputs: with no parent,
+  // or blank, it names nothing. Refused in words, never dropped (a lane that
+  // believes it was spawned for an output would wait for a rollup that never
+  // comes). Every start door reaches this one check.
+  if (forOutput !== null && forOutput !== undefined) {
+    if (typeof forOutput !== "string" || !forOutput.trim()) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput must name the key of one of the parent's outcomes; it is blank.",
+      });
+    }
+    if (!parentSessionId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput needs parentSessionId: it names one of the PARENT's outcomes, which this session delivers.",
+      });
+    }
+  }
 
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
@@ -1150,6 +1185,7 @@ export async function createFocusSession(
       // `proposals/executors/focus-session.ts` after the row is inserted.
       ...(parentSessionId ? { parentSessionId } : {}),
       ...(suspendedIntent ? { suspendedIntent } : {}),
+      ...(forOutput ? { forOutput } : {}),
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
       ...(blockedByEntityIds.length > 0 ? { blockedByEntityIds } : {}),
@@ -1553,18 +1589,30 @@ export async function createFocusSession(
   let parentLink: CreateTimeParentLink | undefined;
   if (parentSessionId) {
     try {
+      // The output this child is spawned FOR: recorded only when the spawner
+      // may write the parent and the parent declares it (W7).
+      const target = forOutput?.trim()
+        ? await resolveSpawnTarget({
+            parentSessionId,
+            userId,
+            agentUserId,
+            forOutput,
+          })
+        : undefined;
       const spawn = await recordSessionSpawn({
         childSessionId: sessionOut.id,
         parentSessionId,
         userId,
         workspaceId: sessionOut.workspaceId,
         suspendedIntent,
+        forOutput: target?.status === "recorded" ? target.key : null,
       });
       parentLink = spawn.linked
         ? {
             status: "linked",
             parentSessionId,
             suspendedIntentRecorded: spawn.suspendedIntentRecorded,
+            ...(target ? { forOutput: target } : {}),
           }
         : { status: "failed", parentSessionId, reason: spawn.reason };
       // A detour (suspendedIntent) blocks the parent on this child. Same

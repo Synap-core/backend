@@ -64,6 +64,7 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import { resolveSpawnTarget } from "../../../services/focus-sessions/lane-rollup.js";
 import { applyUnitBlockerEdits } from "../../../services/links/unit-blockers.js";
 import {
   findOpenSessionTwin,
@@ -580,6 +581,23 @@ export function registerFocusSessionExecutors(): void {
         );
       } else if (created && typeof innerData.parentSessionId === "string") {
         try {
+          // The output this child is spawned FOR (W7): the same check as the
+          // direct path, on the agent that proposed the start.
+          const target =
+            typeof innerData.forOutput === "string" &&
+            innerData.forOutput.trim()
+              ? await resolveSpawnTarget({
+                  parentSessionId: innerData.parentSessionId,
+                  userId: proposal.subjectUserId as string,
+                  agentUserId: proposal.agentUserId ?? null,
+                  forOutput: innerData.forOutput,
+                })
+              : undefined;
+          if (target?.status === "refused") {
+            lineageRefusals.push(
+              `This session's target output "${target.key}" was not recorded (${target.reason}).`
+            );
+          }
           const spawn = await recordSessionSpawn({
             childSessionId: created.id,
             parentSessionId: innerData.parentSessionId,
@@ -589,6 +607,7 @@ export function registerFocusSessionExecutors(): void {
               typeof innerData.suspendedIntent === "string"
                 ? innerData.suspendedIntent
                 : null,
+            forOutput: target?.status === "recorded" ? target.key : null,
           });
           if (!spawn.linked) {
             lineageRefusals.push(

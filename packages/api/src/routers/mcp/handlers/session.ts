@@ -602,6 +602,17 @@ export const sessionHandlers: McpHandlerMap = {
         error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
       });
     }
+    const forOutputArg = args.forOutput;
+    if (
+      forOutputArg !== undefined &&
+      forOutputArg !== null &&
+      (typeof forOutputArg !== "string" || forOutputArg.length > 120)
+    ) {
+      return ok({
+        error:
+          "forOutput must be a string of at most 120 characters: the key of the parent's outcome this session delivers.",
+      });
+    }
     // `subjectRef` (W2): an identity naming the subject — the same
     // advisory-schema reason, refused in words.
     const subjectRefArg = args.subjectRef;
@@ -717,6 +728,7 @@ export const sessionHandlers: McpHandlerMap = {
         expectedOutputs: declared.expectedOutputs,
         parentSessionId: args.parentSessionId as string | undefined,
         suspendedIntent: args.suspendedIntent as string | undefined,
+        forOutput: (forOutputArg as string | null | undefined) ?? null,
         // Validated above (array of UUIDs), so this narrows nothing unchecked.
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
