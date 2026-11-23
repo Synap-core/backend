@@ -33,12 +33,16 @@ import {
   events,
   focusSessions,
   links,
+  profileSlugScopeCondition,
 } from "@synap/database";
 import { decisionRecordView } from "@synap-core/types/ask";
 import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
 import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { NotificationService } from "../../notifications/NotificationService.js";
 import { updateDecisionEntity } from "./decision-entity-door.js";
+// Read at call time only: the reactor imports this module back.
+import { DECISION_PROFILE_SLUG } from "./decision-ask-reactor.js";
+import { resolveFacetVisibilityScope } from "../../utils/workspace-membership.js";
 
 const logger = createLogger({ module: "decision-timeout" });
 
@@ -130,7 +134,7 @@ export async function stampDefaultOptionAuthor(
       .from(entities)
       .where(eq(entities.id, decisionId))
       .limit(1);
-    if (!row || row.type !== "decision") return;
+    if (!row || row.type !== DECISION_PROFILE_SLUG) return;
     const value = (row.properties as Record<string, unknown> | null)
       ?.defaultOption;
     if (typeof value !== "string" || !value.trim()) {
@@ -174,37 +178,53 @@ export async function stampDefaultOptionAuthor(
 }
 
 /**
- * The hourly net: every `proposed` decision whose `answerBy` passed, oldest
- * due first; one already reminded for this due date is left out (so the
- * batch never fills with the same ones). Returns how many it decided.
+ * The hourly net: every `proposed` decision whose `answerBy` passed, read
+ * owner by owner through the kind door, each owner's oldest due first; one
+ * already reminded for this due date is left out (so the batch never fills
+ * with the same ones). Returns how many it decided.
  */
 export async function sweepDecisionTimeouts(
   now: Date = new Date()
 ): Promise<number> {
   // ISO dates compare as text; the exact instant is checked by the plan.
   const horizon = new Date(now.getTime() + 24 * 3600_000).toISOString();
-  const rows = await db
-    .select({
-      id: entities.id,
-      userId: entities.userId,
-      workspaceId: entities.workspaceId,
-      title: entities.title,
-      status: entities.status,
-      properties: entities.properties,
-      systemData: entities.systemData,
-    })
+  const due = and(
+    isNull(entities.deletedAt),
+    drizzleSql`coalesce(${entities.status}, ${entities.properties} ->> 'decisionStatus') = 'proposed'`,
+    drizzleSql`${entities.properties} ->> 'answerBy' < ${horizon}`,
+    drizzleSql`(${entities.systemData} ->> ${OVERDUE_NOTIFIED_KEY}) is distinct from (${entities.properties} ->> 'answerBy')`
+  );
+  // The owners with something due, then each owner's decisions through THE
+  // kind door (`profileSlugScopeCondition`, under that owner's facet scope).
+  const owners = await db
+    .selectDistinct({ userId: entities.userId })
     .from(entities)
-    .where(
-      and(
-        eq(entities.type, "decision"),
-        isNull(entities.deletedAt),
-        drizzleSql`coalesce(${entities.status}, ${entities.properties} ->> 'decisionStatus') = 'proposed'`,
-        drizzleSql`${entities.properties} ->> 'answerBy' < ${horizon}`,
-        drizzleSql`(${entities.systemData} ->> ${OVERDUE_NOTIFIED_KEY}) is distinct from (${entities.properties} ->> 'answerBy')`
-      )
-    )
-    .orderBy(drizzleSql`${entities.properties} ->> 'answerBy' asc`)
-    .limit(DECISION_TIMEOUT_SWEEP_LIMIT);
+    .where(due);
+  const rows: DecisionRow[] = [];
+  for (const { userId } of owners) {
+    if (rows.length >= DECISION_TIMEOUT_SWEEP_LIMIT) break;
+    const isDecision = await profileSlugScopeCondition(
+      db,
+      DECISION_PROFILE_SLUG,
+      await resolveFacetVisibilityScope(userId, undefined)
+    );
+    rows.push(
+      ...(await db
+        .select({
+          id: entities.id,
+          userId: entities.userId,
+          workspaceId: entities.workspaceId,
+          title: entities.title,
+          status: entities.status,
+          properties: entities.properties,
+          systemData: entities.systemData,
+        })
+        .from(entities)
+        .where(and(eq(entities.userId, userId), isDecision, due))
+        .orderBy(drizzleSql`${entities.properties} ->> 'answerBy' asc`)
+        .limit(DECISION_TIMEOUT_SWEEP_LIMIT - rows.length))
+    );
+  }
 
   let decided = 0;
   for (const row of rows) {
