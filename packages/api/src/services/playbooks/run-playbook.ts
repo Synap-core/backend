@@ -2824,7 +2824,8 @@ export async function gateWorkerRun(
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
 /**
- * A per_thing SCHEDULE tick: one run per thing of the worker's set
+ * A per_thing SCHEDULE tick: refused once when no runner can take the
+ * playbook; else one run per thing of the worker's set
  * ({@link workerSet}, at most {@link WORKER_EACH_LIMIT}), each through this
  * same door with that thing as its subject, so its gate, its one live run and
  * its param binding are the ones every run has. Nothing in the set ⇒
@@ -2837,6 +2838,14 @@ async function runWorkerEach(
   worker: RunWorker,
   filing: RunFiling
 ): Promise<RunPlaybookResult> {
+  // Asked once for the tick: a playbook no runner can take would otherwise
+  // be born blocked once per thing.
+  const nobody = await refuseRunNobodyCanTake({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (nobody) throw new Error(nobody);
   const { items } = await workerSet(playbook, input, worker, filing, {
     limit: WORKER_EACH_LIMIT,
   });

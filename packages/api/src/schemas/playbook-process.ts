@@ -376,6 +376,36 @@ export function carryProcessOver(
   return out;
 }
 
+/**
+ * A re-declared schedule that names no `timezone` keeps the one stored on the
+ * installed activator of the same key (a folded schedule's UTC, a zone the
+ * person set): only a declaration that names a zone changes it, so a template
+ * reconcile never moves when a schedule fires. A new activator names none and
+ * compiles in its owner's zone.
+ */
+export function keepDeclaredZones(
+  next: Record<string, unknown> | null,
+  stored: unknown
+): Record<string, unknown> | null {
+  const acts = next?.activators;
+  if (!Array.isArray(acts)) return next;
+  const zones = new Map(
+    readPlaybookProcess(stored)
+      .activators.filter((a) => a.on === "schedule" && a.timezone)
+      .map((a) => [activatorKey(a), a.timezone!])
+  );
+  if (zones.size === 0) return next;
+  return {
+    ...next,
+    activators: acts.map((a) => {
+      const act = a as { on?: unknown; timezone?: unknown };
+      if (act?.on !== "schedule" || act.timezone !== undefined) return a;
+      const zone = zones.get(activatorKey(a as PlaybookActivator));
+      return zone ? { ...act, timezone: zone } : a;
+    }),
+  };
+}
+
 export class ProcessDeclarationError extends Error {
   constructor(message: string) {
     super(message);

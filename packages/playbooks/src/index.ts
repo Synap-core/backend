@@ -2180,41 +2180,9 @@ export interface PlaybookSchedule {
   /** 5-field cron expression (e.g. "0 9 * * MON"). */
   cron: string;
   enabled: boolean;
-  /**
-   * WHAT the schedule materializes at each slot. Two different products:
-   *
-   * - `"run"` (DEFAULT, and the pre-existing behaviour byte-for-byte) — an
-   *   unattended run. The slot instantiates a session, opens its channel, writes
-   *   a `playbook_runs` ledger row and DISPATCHES an agent. Nobody has to be
-   *   there.
-   *
-   * - `"appointment"` — an APPOINTMENT. The slot materializes a
-   *   `focus_sessions` row with `status: 'scheduled'` and stops: no channel, no
-   *   run row, no agent kickoff. It waits for the HUMAN, who opens the app and
-   *   finds the session already there, already scoped, saying "this is what you
-   *   are doing now". This is the ONLY producer of
-   *   `FocusSessionStatus.SCHEDULED` — the status existed in the union with zero
-   *   writers until it was built.
-   *
-   * Absent ⇒ `"run"`, so every playbook scheduled before this field existed keeps
-   * behaving exactly as it did.
-   */
+  /** Absent ⇒ `"run"`; folded into the activator's `mode`. */
   mode?: PlaybookScheduleMode;
-  /**
-   * HAND-OFF — the agent (its agent user id, `users.id`, as `synap_list_agents`
-   * returns it; the same identity `synap_start_session` `agentIds` and
-   * `synap_update_session` `addAgentId` take) that each slot's session is handed
-   * to. The compiler writes it onto the `playbook_run` node
-   * (`PlaybookRunNodeDef.data.handToAgentId`); `runPlaybook` resolves it ONCE per
-   * run through THE route, before any session exists, and puts it on the
-   * session's roster INSTEAD of dispatching the playbook's own executor — the
-   * named agent does the work (a `pull` agent picks it up from its orient's
-   * `handedToYou`; a `dispatch` agent is pushed it through its binding). An
-   * unknown, paused or foreign agent fails the slot by name.
-   *
-   * Only meaningful for `mode: "run"`: an appointment waits for the HUMAN, so the
-   * write door refuses the pair. Absent ⇒ unchanged.
-   */
+  /** Folded into the activator's `handToAgentId` (run mode only). */
   handToAgentId?: string;
 }
 

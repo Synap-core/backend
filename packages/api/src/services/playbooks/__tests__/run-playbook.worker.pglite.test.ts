@@ -33,7 +33,22 @@ const h = vi.hoisted(() => ({
   sends: 0,
   inFlight: [] as string[],
   subjectProfile: { profileSlug: "deal" } as Record<string, unknown>,
+  /** The playbook's executor; `external-agent` = it runs only on an agent. */
+  executor: "is-agent",
+  /** The route finds no agent to take a run. */
+  nobodyCanTake: false,
 }));
+
+vi.mock("../../agent-dispatch/route.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    route: (...args: unknown[]) =>
+      h.nobodyCanTake
+        ? Promise.resolve({ kind: "choose", candidates: [] })
+        : (actual.route as (...a: unknown[]) => unknown)(...args),
+  };
+});
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -74,6 +89,7 @@ vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
       inputStrategy: null,
       goalTemplate: "Review them",
       subjectProfile: h.subjectProfile,
+      executor: h.executor,
     })),
     instantiateSession: vi.fn(
       async (i: { subjectId?: string | null; metadata?: unknown }) => {
@@ -209,6 +225,8 @@ beforeEach(async () => {
   h.sends = 0;
   h.inFlight = [];
   h.subjectProfile = { profileSlug: "deal" };
+  h.executor = "is-agent";
+  h.nobodyCanTake = false;
   await h.client!.exec(
     "delete from profile_properties; delete from property_defs;"
   );
@@ -534,6 +552,17 @@ describe("per_thing schedule — one run per thing of the set", () => {
     for (let i = 0; i < 60; i++) await deal("review");
     await tick({ status: "review" });
     expect(await subjects()).toHaveLength(60);
+  });
+
+  it("an agent-only playbook no agent can take: refused once for the tick, no run per thing", async () => {
+    await declareLifecycle("stage");
+    await deal("review");
+    await deal("review");
+    h.executor = "external-agent";
+    h.nobodyCanTake = true;
+    const out = await tick({ status: "review" });
+    expect(out).toEqual({ error: expect.stringContaining("Nothing filed") });
+    expect(await sessions()).toHaveLength(0);
   });
 
   it("nothing in the set → no-subject, no session", async () => {

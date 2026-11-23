@@ -87,6 +87,7 @@ import { evaluateSubjectFilter } from "../services/playbooks/subject-filter.js";
 import {
   carryProcessOver,
   foldProcessIntoSubjectProfile,
+  keepDeclaredZones,
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
@@ -2627,6 +2628,12 @@ export const playbooksRouter = router({
           activators: input.activators,
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
+      }
+      if (input.subjectProfile !== undefined) {
+        input.subjectProfile = keepDeclaredZones(
+          input.subjectProfile as Record<string, unknown> | null,
+          existing.subjectProfile
+        ) as typeof input.subjectProfile;
       }
       if (input.schedule) {
         refuseUnfoldableSchedule(
