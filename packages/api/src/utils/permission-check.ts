@@ -1766,6 +1766,7 @@ async function evaluatePermission(
         userId,
         workspaceId,
         requiredPermission,
+        asAgent: !!agentUserId,
       });
 
       if (!result.allowed) {
@@ -4965,14 +4966,16 @@ export const AGENT_PERSON_NOT_MEMBER =
 
 /**
  * THE membership check of the gate (rung 4): may `userId` (the person, never
- * the agent acting for them) do `requiredPermission` in `workspaceId`? Shared
- * with the doors that check membership BEFORE they write, so they read the
- * same answer the gate gives at each write.
+ * the agent acting for them) do `requiredPermission` in `workspaceId`? An
+ * agent acts with the person's role capped at editor (`asAgent`). Shared with
+ * the doors that check membership BEFORE they write, so they read the same
+ * answer the gate gives at each write.
  */
 async function verifyWorkspaceAccess(opts: {
   userId: string;
   workspaceId: string;
   requiredPermission: ReturnType<typeof requiredPermissionFor>;
+  asAgent?: boolean;
 }) {
   const { verifyPermission } = await import("@synap/database");
   return verifyPermission({
@@ -4980,6 +4983,7 @@ async function verifyWorkspaceAccess(opts: {
     userId: opts.userId,
     workspace: { id: opts.workspaceId },
     requiredPermission: opts.requiredPermission,
+    asAgent: opts.asAgent,
   });
 }
 
@@ -5022,6 +5026,7 @@ export type WorkspaceJoinRequestResult =
  */
 export async function requestWorkspaceJoin(opts: {
   userId: string;
+  agentUserId?: string;
   workspaceId: string;
 }): Promise<WorkspaceJoinRequestResult> {
   const { workspaceId } = opts;
@@ -5066,6 +5071,7 @@ export async function requestWorkspaceJoin(opts: {
     userId: opts.userId,
     workspaceId,
     requiredPermission: requiredPermissionFor("create"),
+    asAgent: !!opts.agentUserId,
   });
   if (access.reason === WORKSPACE_MEMBERSHIP_MISS) {
     return { status: "refused", workspaceId, reason: AGENT_PERSON_NOT_MEMBER };

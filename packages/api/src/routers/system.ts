@@ -1756,7 +1756,7 @@ export const systemRouter = router({
 
         // 2. Agent users this human spawned. Identified via
         //    users.agent_metadata->>'createdByUserId' = <target.id>. Their
-        //    own memberships and api keys are cleaned up alongside.
+        //    api keys are cleaned up alongside.
         const childAgents = await tx
           .select({ id: users.id })
           .from(users)

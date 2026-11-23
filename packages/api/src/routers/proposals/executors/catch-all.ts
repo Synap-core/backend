@@ -38,7 +38,6 @@ import { reportApproved } from "./shared.js";
  *     materializeRelation — `if (action !== "create") { warn; return; }`
  *     materializeLink / materializeProjectMember / materializeRelationDef — same
  *     materializeCommand  — `if (action !== "execute") { warn; return; }`
- *     materializeWorkspace— `if (action !== "join")    { warn; return; }`
  *
  * So `cell` and `relation` were listed as materialized subjects, and the two
  * governed doors `cell/update` and `relation/update` therefore SAILED PAST the

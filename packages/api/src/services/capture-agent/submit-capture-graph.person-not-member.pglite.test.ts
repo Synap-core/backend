@@ -1,6 +1,6 @@
 /**
  * A capture graph lands WHOLE or not at all, and an agent writes only where
- * the person it acts for is a member (decision 2).
+ * the person it acts for is a member.
  *
  * An agent whose person is not a member of a space the graph lands in is
  * refused BEFORE anything is written, though the agent itself holds a seat

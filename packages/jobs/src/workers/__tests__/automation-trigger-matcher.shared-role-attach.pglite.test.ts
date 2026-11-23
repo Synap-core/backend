@@ -411,7 +411,7 @@ describe("an approved conversion runs as the person who approved it", () => {
     expect(await triggeredBy(becomesClient)).toEqual([AGENT]);
     expect(producersOf(becomesClient)).toEqual([AGENT]);
 
-    // An agent holds no membership: it acts through its person's (decision 2),
+    // An agent holds no membership: it acts through its person's,
     // so the activator compiled into Operations answers to its move.
     await attached({
       profileSlug: "client",

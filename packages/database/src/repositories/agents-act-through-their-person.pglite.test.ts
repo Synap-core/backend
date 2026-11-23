@@ -1,18 +1,18 @@
 /**
  * An agent is never a space or project member: it acts through its person's
- * membership (decision 2). Proved on PGlite through the gate's membership
- * step (`verifyPermission` → `getMembership` → `membershipHolderIds`), the
- * person removal door (`WorkspaceMemberRepository.remove`) and migration
- * 0450: a removed person's agent loses the space on every path, a seat an
- * agent still holds grants nothing, an agent acts for the person its key is
- * linked to (never its creator when they differ), and a shared agent (no
- * linked key) acts for the person who installed it. Cannot see: production
- * Postgres, the read floor's `db` (`memberWorkspaceIds` shares the subquery).
+ * membership, at most as an editor. Proved on PGlite through the gate's
+ * membership step (`verifyPermission` → `getMembership` →
+ * `membershipHolderIds`) and the person removal door
+ * (`WorkspaceMemberRepository.remove`): a removed person's agent loses the
+ * space on every path, a seat an agent still holds grants nothing, an agent
+ * acts for the person its live key is linked to (never its creator when they
+ * differ), a shared agent (no live linked key) acts for the person who
+ * installed it, and an owner's agent cannot manage. Migration 0450:
+ * `migrations-0450.pglite.test.ts`. Cannot see: production Postgres, the read
+ * floor's `db` (`memberWorkspaceIds` shares the subquery).
  */
 import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { is, SQL } from "drizzle-orm";
@@ -23,16 +23,6 @@ import {
   getProjectMembership,
   verifyPermission,
 } from "../utils/permissions.js";
-
-const M0450 = readFileSync(
-  fileURLToPath(
-    new URL(
-      "../../migrations/0450_agents_hold_no_membership.sql",
-      import.meta.url
-    )
-  ),
-  "utf8"
-);
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -90,7 +80,7 @@ const PERSON = "person-agents";
 const STAYER = "stayer-agents";
 // Agents acting for one person (a key linked to them).
 const PERSON_AGENT = randomUUID();
-const PERSON_REVOKED_AGENT = randomUUID(); // its only key is revoked
+const PERSON_REVOKED_AGENT = randomUUID(); // made by POD_OWNER, its key to PERSON revoked
 const STAYER_AGENT = randomUUID();
 const OWNER_MADE_FOR_STAYER = randomUUID(); // created by POD_OWNER, acts for STAYER
 // Shared agents: installed by the pod owner, no key linked to a person.
@@ -113,15 +103,23 @@ async function member(workspaceId: string, userId: string, role = "editor") {
   );
 }
 
-const canWrite = async (userId: string, workspaceId: string) =>
+const can = async (
+  requiredPermission: "write" | "manage",
+  userId: string,
+  workspaceId: string,
+  asAgent?: boolean
+) =>
   (
     await verifyPermission({
       db,
       userId,
       workspace: { id: workspaceId },
-      requiredPermission: "write",
+      requiredPermission,
+      asAgent,
     })
   ).allowed;
+const canWrite = (userId: string, workspaceId: string) =>
+  can("write", userId, workspaceId);
 
 const memberIds = async (workspaceId: string) =>
   (
@@ -216,13 +214,12 @@ describe("a removed person's agent loses the space on every path", () => {
     expect(await canWrite(PERSON_AGENT, SPACE)).toBe(false);
   });
 
-  it("a revoked key still names its person, never falls back to the creator", async () => {
-    await member(SPACE, POD_OWNER);
-    expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(true);
-
-    await repo.remove({ workspaceId: SPACE, userId: PERSON }, ADMIN);
-
+  it("a revoked key names nobody: the agent falls back to the person who made it", async () => {
     expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(false);
+
+    await member(SPACE, POD_OWNER);
+
+    expect(await canWrite(PERSON_REVOKED_AGENT, SPACE)).toBe(true);
   });
 
   it("CONTROL: another member's agent, and the person's agent in another space, keep their access", async () => {
@@ -230,6 +227,23 @@ describe("a removed person's agent loses the space on every path", () => {
 
     expect(await canWrite(STAYER_AGENT, SPACE)).toBe(true);
     expect(await canWrite(PERSON_AGENT, OTHER_SPACE)).toBe(true);
+  });
+});
+
+describe("an agent acts at most as an editor", () => {
+  beforeEach(async () => {
+    await member(SPACE, PERSON, "owner");
+  });
+
+  it("its person's owner role lets it write, never manage", async () => {
+    expect(await can("manage", PERSON, SPACE)).toBe(true);
+    expect(await can("write", PERSON_AGENT, SPACE)).toBe(true);
+    expect(await can("manage", PERSON_AGENT, SPACE)).toBe(false);
+  });
+
+  it("the same cap when the request arrives as the person (asAgent)", async () => {
+    expect(await can("write", PERSON, SPACE, true)).toBe(true);
+    expect(await can("manage", PERSON, SPACE, true)).toBe(false);
   });
 });
 
@@ -280,60 +294,5 @@ describe("whose membership an agent acts through", () => {
       role: "viewer",
       projectId: PROJECT,
     });
-  });
-});
-
-describe("migration 0450", () => {
-  const JOIN = randomUUID();
-  const OTHER = randomUUID();
-
-  beforeEach(async () => {
-    await member(SPACE, ADMIN, "owner");
-    await member(SPACE, PERSON);
-    for (const agent of [PERSON_AGENT, CAPTURE, POD_WIDE, ORPHAN_AGENT]) {
-      await member(SPACE, agent);
-    }
-    await q(
-      `insert into project_members (id, project_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $2, $5, 'editor')`,
-      [randomUUID(), PROJECT, PERSON_AGENT, randomUUID(), PERSON]
-    );
-    await q(
-      `insert into proposals (id, status, target_type, target_id, proposal_type, workspace_id, agent_user_id, data)
-       values ($1, 'pending', 'workspace', $3, 'join', $3, $4, '{"role":"editor"}'::jsonb),
-              ($2, 'pending', 'entity', $3, 'create', $3, $4, '{}'::jsonb)`,
-      [JOIN, OTHER, SPACE, PERSON_AGENT]
-    );
-  });
-
-  it("deletes every agent membership, keeps the persons', and ends pending joins as expired", async () => {
-    await client.exec(M0450);
-
-    expect(await memberIds(SPACE)).toEqual([ADMIN, PERSON].sort());
-    expect(
-      (
-        await q<{ user_id: string }>(
-          `select user_id from project_members where project_id = $1`,
-          [PROJECT]
-        )
-      ).map((r) => r.user_id)
-    ).toEqual([PERSON]);
-    const rows = await q<{ id: string; status: string; data: unknown }>(
-      `select id, status, data from proposals order by id`
-    );
-    const byId = new Map(rows.map((r) => [r.id, r]));
-    expect(byId.get(JOIN)?.status).toBe("expired");
-    expect(byId.get(JOIN)?.data).toMatchObject({
-      role: "editor",
-      ended: { reason: "lapsed", by: "system" },
-    });
-    expect(byId.get(OTHER)?.status).toBe("pending");
-  });
-
-  it("is idempotent", async () => {
-    await client.exec(M0450);
-    const once = await memberIds(SPACE);
-    await client.exec(M0450);
-
-    expect(await memberIds(SPACE)).toEqual(once);
   });
 });

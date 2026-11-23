@@ -29,9 +29,8 @@ export function registerChannelExecutors(): void {
   // into an OPEN A2AI channel. Approving that proposal hit the `*/*` catch-all,
   // which flips the row APPROVED and inserts nothing — so the agent was told
   // "waiting for user approval", the user approved, and the agent was STILL not
-  // a member. Every subsequent post re-proposed. The materializer is no
-  // backstop: `materializeWorkspace` handles only `"join"` for the WORKSPACE
-  // subject, and this subject is `a2ai`.
+  // a member. Every subsequent post re-proposed. The materializer has no
+  // `a2ai` case, so it is no backstop.
   //
   // PAYLOAD: the gate stores FLAT `data: { channelId, agentUserId, topic }`
   // (nested by the request-shaped envelope as `data.data.*`). `topic` is

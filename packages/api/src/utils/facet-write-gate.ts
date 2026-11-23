@@ -29,8 +29,7 @@
  *      request/propose path is deliberately out of scope).
  */
 
-import { db, eq, and } from "@synap/database";
-import { workspaceMembers } from "@synap/database/schema";
+import { db, getWorkspaceMembership } from "@synap/database";
 import { isPodAdmin } from "./workspace-role.js";
 
 export async function canWriteFacet(
@@ -43,13 +42,7 @@ export async function canWriteFacet(
     return await isPodAdmin(userId);
   }
 
-  const member = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, facet.workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
+  const member = await getWorkspaceMembership(db, facet.workspaceId, userId);
   return (
     member?.role === "owner" ||
     member?.role === "admin" ||

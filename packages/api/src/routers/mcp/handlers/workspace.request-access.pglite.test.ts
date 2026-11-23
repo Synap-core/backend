@@ -37,12 +37,14 @@ import {
   pgliteSchemaDdl,
 } from "../../../__tests__/pglite-ddl.js";
 import { workspaceHandlers } from "./workspace.js";
+import { AGENT_PERSON_NOT_MEMBER } from "../../../utils/permission-check.js";
 
 const HUMAN = randomUUID();
 const AGENT = randomUUID();
 const WS = randomUUID(); // the person is an editor
 const WS_SEAT = randomUUID(); // the person is not a member; the agent holds a seat
 const WS_ARCHIVED = randomUUID(); // archived; the person is an editor
+const WS_OWNED = randomUUID(); // the person owns it
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
@@ -56,8 +58,13 @@ beforeAll(async () => {
     `insert into workspaces (id, name, owner_id, workspace_type, settings, archived_at) values
       ($1, 'Sales', $4, 'team', '{}'::jsonb, null),
       ($2, 'Builder', $4, 'team', '{}'::jsonb, null),
-      ($3, 'Old', $4, 'team', '{}'::jsonb, now())`,
-    [WS, WS_SEAT, WS_ARCHIVED, randomUUID()]
+      ($3, 'Old', $4, 'team', '{}'::jsonb, now()),
+      ($5, 'Mine', $4, 'team', '{}'::jsonb, null)`,
+    [WS, WS_SEAT, WS_ARCHIVED, randomUUID(), WS_OWNED]
+  );
+  await q(
+    `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
+    [randomUUID(), WS_OWNED, HUMAN]
   );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'editor'), ($4, $5, $3, 'editor'), ($6, $7, $8, 'admin')`,
@@ -114,8 +121,15 @@ describe("synap_request_workspace_access — the person's membership, nothing fi
   it("the person is not a member ⇒ refused, though the agent holds a seat there", async () => {
     const res = await requestAccess(WS_SEAT);
     expect(res.status).toBe("refused");
-    expect(String(res.reason)).toMatch(/person you act for is not a member/);
+    expect(res.reason).toBe(AGENT_PERSON_NOT_MEMBER);
     expect(await proposalCount()).toBe(0);
+  });
+
+  it("the person owns the space ⇒ the agent acts there as an editor, never an owner", async () => {
+    expect(await requestAccess(WS_OWNED)).toMatchObject({
+      status: "member",
+      role: "editor",
+    });
   });
 
   it("a key whose grant does not reach the space ⇒ refused", async () => {

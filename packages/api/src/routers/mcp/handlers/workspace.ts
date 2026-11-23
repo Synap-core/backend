@@ -794,13 +794,13 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_request_workspace_access: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, userId, apiKeyScopes } = ctx;
+    const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // The confined value: a bound service key cannot name another space.
     const workspaceId = ctx.confinedWorkspaceId ?? "";
     const badId = fullUuidError(toolName, "workspaceId", workspaceId);
     if (badId) return badId;
-    return ok(await requestWorkspaceJoin({ userId, workspaceId }));
+    return ok(await requestWorkspaceJoin({ userId, agentUserId, workspaceId }));
   },
   synap_project_use_workspace: async (
     ctx: McpToolContext

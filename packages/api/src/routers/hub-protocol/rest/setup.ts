@@ -1115,8 +1115,7 @@ export function registerSetupRoutes(app: HubHono): void {
       // ── A KEY sets its AI up only for a space its person administers ──────
       // A key may name only a space whose owner or admin is the key's own
       // person, and that lies inside the key's live grant. Not a member: the
-      // same 404 as a missing space, so an id never confirms a space exists
-      // (pre-launch audit F5, 2026-10-28).
+      // same 404 as a missing space, so an id never confirms a space exists.
       if (ws && authMethod === "api_key_surface") {
         const callerMembership = surfaceAgentLinkedUserId
           ? await db.query.workspaceMembers.findFirst({
