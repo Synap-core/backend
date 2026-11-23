@@ -111,7 +111,7 @@ export const meetOutcomesReactionEffect: ReactionEffect = {
           target: { subjectType: "slot", subjectId: `${s.id}/${pick.key}` },
           to: "done",
           toCategory: "done",
-          expectedFrom: slotStatusOf(slots[pick.index]!),
+          expectedFrom: slotStatusOf(slots[pick.index]!, slots),
           ownerUserId: owner,
           detail: {
             sessionId: s.id,

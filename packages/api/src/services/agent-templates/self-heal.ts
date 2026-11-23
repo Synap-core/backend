@@ -47,7 +47,7 @@ import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { resolveAgentReachMany } from "../agent-dispatch/agent-binding.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import { reconcileOwedSince } from "../focus-sessions/update-session.js";
-import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
+import { deliverableOwedBy } from "@synap-core/types/units";
 import {
   loadInstalledAgentTemplates,
   type InstalledAgentTemplate,
@@ -195,7 +195,8 @@ const askFieldIds = (slot: ExpectedOutput): string[] => {
 };
 const isOpenTemplateAsk = (slot: ExpectedOutput) =>
   slot?.kind === AGENT_TEMPLATE_ASK_SLOT_KIND &&
-  isOwedSlot(slot) &&
+  // The slot alone: a template ask is never a criterion's grade.
+  deliverableOwedBy(slot) === "you" &&
   !slot.answer &&
   !slot.retiredAt;
 

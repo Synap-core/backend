@@ -6,12 +6,12 @@
  *
  * Read doors are user-floored (`automations.get` / `automations.listRuns`,
  * `protectedProcedure`), so a member who was sent the link reads what the pod
- * would show them anywhere, and an admin reads the same floor (D1a). The one
- * act offered is PAUSE — de-escalation, which the pod never sends for review
- * ("stopping a misbehaving automation never waits", `automations.pause`).
- * Switching it back on and running it now are governed (an agent proposes, a
- * person decides) and authoring lives in the app, so both stay behind "Open
- * in app".
+ * would show them anywhere, and an admin reads the same floor (D1a). The
+ * header's one act follows its status: a live rule offers PAUSE —
+ * de-escalation, which the pod never sends for review ("stopping a
+ * misbehaving automation never waits", `automations.pause`); a draft or a
+ * paused one offers TURN ON, through the governed door (`useProcessStatus`:
+ * an agent's key proposes). Running it now and authoring live in the app.
  */
 
 import { useState } from "react";
@@ -36,6 +36,7 @@ import {
   runLine,
   shortDescription,
 } from "../object-summaries";
+import { TurnOnButton, useProcessStatus } from "../use-process-status";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { FactsGrid } from "../facts-grid";
@@ -67,6 +68,7 @@ export function AutomationObject({
     retry: false,
   });
   const [confirmPause, setConfirmPause] = useState(false);
+  const status = useProcessStatus();
   const pause = trpc.automations.pause.useMutation({
     onSuccess: async () => {
       setConfirmPause(false);
@@ -120,6 +122,8 @@ export function AutomationObject({
             >
               Pause
             </Button>
+          ) : rule.status === "draft" || rule.status === "paused" ? (
+            <TurnOnButton status={status} target={{ kind: "automation", id }} />
           ) : undefined,
           secondaryActions: (
             <ExitLink

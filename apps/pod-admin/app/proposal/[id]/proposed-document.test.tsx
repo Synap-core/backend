@@ -312,33 +312,48 @@ describe("ProposedDocumentBody — the whole document is readable", () => {
   });
 });
 
+/** What the read row carries once the create applied (`landed`). */
+function approvedCreate() {
+  return {
+    ...documentCreate("approved", "# Note\n\nBody."),
+    landed: [
+      {
+        id: ids.NEW,
+        kind: "document",
+        name: "Launch plan",
+        role: "created",
+        next: null,
+      },
+    ],
+  };
+}
+
 describe("an approved Create document", () => {
-  it("names what was created and links to the document page", () => {
-    state.proposal = documentCreate("approved", "# Note\n\nBody.");
+  it("names what was created in its Made row and links to the document page", () => {
+    state.proposal = approvedCreate();
     const html = render();
-    const door = html.slice(html.indexOf("data-created-object"));
-    expect(text(door)).toMatch(/Created · Launch plan/);
-    expect(door).toContain(`href="/open/document/${ids.NEW}"`);
-    expect(text(door)).toContain("Open document");
+    const row = html.slice(html.indexOf("data-made-object"));
+    expect(text(row)).toMatch(/Launch plan\s*Created/);
+    expect(row).toContain(`href="/open/document/${ids.NEW}"`);
   });
 
   it("labels the next proposal as the queue's, apart from this one", () => {
-    state.proposal = documentCreate("approved", "# Note\n\nBody.");
+    state.proposal = approvedCreate();
     const html = render();
     const queue = html.slice(html.indexOf("data-review-queue"));
     expect(text(queue)).toContain("Next in your queue");
     expect(queue).toContain(`href="/proposal/${ids.NEXT}"`);
     expect(text(queue)).toContain("Edit section in Document Roadmap");
     expect(text(html)).not.toContain("Next: ");
-    // The created document's door comes first, the queue after it.
-    expect(html.indexOf("data-created-object")).toBeLessThan(
+    // The created document's row comes first, the queue after it.
+    expect(html.indexOf("data-made-object")).toBeLessThan(
       html.indexOf("data-review-queue")
     );
   });
 
-  it("a pending one has no Open document yet", () => {
+  it("a pending one has made nothing yet", () => {
     state.proposal = documentCreate("pending", "# Note\n\nBody.");
-    expect(render()).not.toContain("data-created-object");
+    expect(render()).not.toContain("data-made-object");
   });
 });
 
@@ -549,18 +564,30 @@ describe("the door to the object an update changes", () => {
     expect(text(door)).not.toContain("Lean report");
   });
 
-  it("an approved one still opens the document", () => {
-    state.proposal = documentUpdate("approved", { stamped: true });
+  it("an approved one opens the document from its Made row", () => {
+    state.proposal = {
+      ...documentUpdate("approved", { stamped: true }),
+      landed: [
+        {
+          id: ids.DOC,
+          kind: "document",
+          name: "Lean report",
+          role: "updated",
+          next: null,
+        },
+      ],
+    };
     state.document = liveDocument("html", PAGE_AFTER);
-    const door = doorOf(render());
-    expect(door).toContain(`href="/open/document/${ids.DOC}"`);
-    expect(text(door)).toContain("Open document");
+    const html = render();
+    expect(html).not.toContain("data-updated-object");
+    const row = html.slice(html.indexOf("data-made-object"));
+    expect(row).toContain(`href="/open/document/${ids.DOC}"`);
   });
 
   it("an entity update is named by its profile's noun, never its table", () => {
     const door = renderToStaticMarkup(
       createElement(UpdatedDoor, {
-        updated: { kind: "entity", id: ids.DOC, title: "Gap" },
+        updated: { kind: "entity", id: ids.DOC },
         kind: "finding",
       })
     );
@@ -584,8 +611,10 @@ describe("the door to the object an update changes", () => {
     expect(render()).not.toContain("data-updated-object");
   });
 
-  it("a delete names no object to open", () => {
+  it("a pending delete opens what it would remove; an applied one names nothing", () => {
     state.proposal = documentUpdate("pending", { action: "delete" });
+    expect(doorOf(render())).toContain(`href="/open/document/${ids.DOC}"`);
+    state.proposal = documentUpdate("approved", { action: "delete" });
     expect(render()).not.toContain("data-updated-object");
   });
 });
