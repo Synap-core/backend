@@ -90,7 +90,10 @@ beforeEach(() => {
 
 describe("widget/register delegates to defineCell", () => {
   it("approves a legacy payload through defineCell, with every stored field", async () => {
-    await expect(approve(legacy)).resolves.toEqual({ success: true });
+    await expect(approve(legacy)).resolves.toMatchObject({
+      success: true,
+      primaryKind: "cell",
+    });
     expect(h.defineCalls).toHaveLength(1);
     expect(h.defineCalls[0]).toMatchObject({
       typeKey: "legacy-widget",

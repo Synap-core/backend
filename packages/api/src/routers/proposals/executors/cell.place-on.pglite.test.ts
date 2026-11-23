@@ -231,9 +231,22 @@ describe("cell/define with placeOn — define and place in one act", () => {
       viewId: HEALTH,
       viewName: "Health",
     });
-    await expect(approve(id)).resolves.toEqual({ success: true });
+    const result = await approve(id);
 
     expect(await cellRows("generated:replies-by-week")).toBe(1);
+    // What it landed is the row it wrote (the landed stamp reads this).
+    const [cell] = (
+      await q<{ id: string }>(
+        `select id from widget_definitions where type_key = $1`,
+        ["generated:replies-by-week"]
+      )
+    ).rows;
+    expect(result).toEqual({
+      success: true,
+      primaryId: cell!.id,
+      primaryKind: "cell",
+      primaryRole: "created",
+    });
     const blocks = await blocksOf(HEALTH);
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toEqual(EXISTING_TILE);
