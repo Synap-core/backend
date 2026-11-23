@@ -492,7 +492,7 @@ Use this when the person wants a plan they will live once: many steps, some that
 
 | The work                                            | It is                                              |
 | --------------------------------------------------- | -------------------------------------------------- |
-| the same steps each time, with a new subject        | a playbook: a template that sessions follow         |
+| the same steps each time, with a new subject        | a playbook: a template that sessions follow        |
 | one bounded piece of work                           | a session                                          |
 | a lasting aim, closed with a verdict                | a goal (§2c); a pathway's steps may serve it       |
 | lived once, long, with dependent steps and choices  | a pathway: this section                            |
@@ -529,7 +529,7 @@ A pathway is not a new object. It is a lens: a goal (`workKind: "pathway"`), a r
 
 **What the person sees.** Only what can start, or what they are asked now: planned steps owe nothing. The flow view draws the pathway from its goal, sessions, decisions and links; `synap_get_work_graph` with `rootSessionId` (or `trackId`) reads the same map. A written story of the plan, if the person wants one, is made from that read, never kept as a second copy.
 
-Example, "fund the company to seed": a goal "Fund to seed" (`workKind: "pathway"`, measured by the money in the bank); a root session; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both, from March 2027); one decision "Raise from angels or a fund" with two arms, "Close the angel round" (`angels`) and "Sign a lead fund" (`fund`), each also waiting on the meetings. Today the person owes only the decision. The full call: `multi-entity-capture`, PLAN EXAMPLE 2.
+Example, "fund the company to seed": a goal "Fund to seed" (`workKind: "pathway"`, done when the money is in the bank); a root session; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both, from March 2027); one decision "Raise from angels or a fund" with two arms, "Close the angel round" (`angels`) and "Sign a lead fund" (`fund`), each also waiting on the meetings. Today the person owes only the decision. The full call: `multi-entity-capture`, PLAN EXAMPLE 2.
 
 ### 3. Which skill to load next
 
