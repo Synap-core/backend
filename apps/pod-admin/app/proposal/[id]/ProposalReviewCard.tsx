@@ -11,6 +11,8 @@
  *         session · when, `RequestHead`), each a door, said once on the
  *         page; what the session is FOR is behind its door (pod admin is
  *         not a work surface);
+ *       once applied, what it MADE leads (`MadeSection`): each object it
+ *         landed, with its next step's one act (Turn on, or a door);
  *       the change first: the RECORD approving creates or changes (its name
  *         as the heading, its kind beside it, its fields in a grid —
  *         `proposal-record-model.ts`), a document's diff, an app's access
@@ -159,10 +161,9 @@ import {
   undoMark,
   type ProposalChangeInput,
   type ReviewMark,
-  createdObject,
-  type CreatedObject,
-  updatedObject,
+  aboutObjects,
 } from "./proposal-review-model";
+import { MadeSection } from "./MadeSection";
 import { askingComputer, proposalWhy } from "./proposal-why";
 import {
   ApprovalProgressLines,
@@ -445,12 +446,10 @@ const OUTCOME_TONE: Record<
 
 function Outcome({
   status,
-  created,
   ended,
   left = [],
 }: {
   status: string;
-  created?: CreatedObject | null;
   /** Why a withdrawn or expired request ended, and who (`proposalEndLine`). */
   ended?: ProposalEndLine | null;
   /** What a failed plan applied and could not roll back (`proposalItemsLeft`). */
@@ -481,7 +480,6 @@ function Outcome({
             {t(o.messageKey)}
           </span>
         )}
-        {created && <CreatedDoor created={created} />}
         {/* Where the decision is kept, said once it is made (it left the
             bar before it, founder 17 Nov 2026). */}
         <RecordedInAuditLog />
@@ -573,34 +571,6 @@ function LeftInPlace({ items }: { items: readonly ProposalItemLeft[] }) {
           ))}
         </span>
       )}
-    </span>
-  );
-}
-
-/**
- * What this approval made, named, with the way into it: "Created · Q3 plan →
- * Open document". The id is the proposal's own `targetId`, so it reads the same
- * when the page is reopened later. Plain words from the vocabulary door.
- */
-function CreatedDoor({ created }: { created: CreatedObject }) {
-  const noun = resolveObjectNoun(created.kind);
-  return (
-    <span
-      data-created-object={created.id}
-      className="mt-1.5 flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1 text-[13px] text-foreground/80"
-    >
-      <span className="min-w-0 break-words">
-        {resolveActionLabel("create", "past")}
-        {created.title ? ` · ${created.title}` : ""}
-      </span>
-      <ExitLink
-        exit={openIn({
-          kind: "object",
-          objectKind: created.kind,
-          id: created.id,
-        })}
-        label={`Open ${noun.toLowerCase()}`}
-      />
     </span>
   );
 }
@@ -1051,13 +1021,14 @@ export function ProposalReviewBody({
     data: p.data,
   });
   const graph = isGraphPayload(payload);
-  // The existing object an update changes: a door to it at every status.
-  const updated = updatedObject({
-    action,
+  // What it is about, a door at every status until it lands; then the
+  // objects it landed are its "Made" rows.
+  const [about] = aboutObjects({
+    status,
+    proposalType: p.proposalType,
     targetType: p.targetType ? String(p.targetType) : null,
     targetId: p.targetId ?? null,
-    title: p.targetName ? String(p.targetName) : null,
-    graph,
+    data: p.data,
   });
   const createKind =
     !graph && action === "create" && payload && typeof payload === "object"
@@ -1378,16 +1349,6 @@ export function ProposalReviewBody({
                       locale
                     )}
                     left={proposalItemsLeft(p.data)}
-                    created={createdObject({
-                      status,
-                      action,
-                      targetType: p.targetType ? String(p.targetType) : null,
-                      targetId: p.targetId ?? null,
-                      title:
-                        records[0]?.title ??
-                        (p.targetName ? String(p.targetName) : null),
-                      graph,
-                    })}
                   />
                   {afterDecision}
                 </>
@@ -1415,10 +1376,11 @@ export function ProposalReviewBody({
           </>
         }
       >
-        {updated && (
+        <MadeSection landed={p.landed} />
+        {about && (
           <UpdatedDoor
-            updated={updated}
-            kind={p.targetType === "entity" ? defs.targetKind : null}
+            updated={about}
+            kind={about.kind === "entity" ? defs.targetKind : null}
           />
         )}
 

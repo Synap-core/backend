@@ -13,17 +13,34 @@
  *                  will not need to showcase that"); `revertable: false` AND
  *                  an unmeasured one are marked (founder default D6, 16 Nov
  *                  2026: nobody checked, so nobody can promise an undo).
+ *   `aboutObjects` / `madeRows` — the objects the request names, through the
+ *                  pod's one reading (`proposalObjectsOf`): what it is about
+ *                  until it lands, then each object it landed with its next
+ *                  step (`landed[].next`).
  *
  * The change itself is `proposal-record-model.ts`.
  */
 
-import { isUuid } from "../../../lib/format";
+import {
+  proposalObjectsOf,
+  type ProposalLandedRole,
+  type ProposalLandedRow,
+  type ProposalObject,
+} from "@synap-core/types/proposals/landed";
+import type { ObjectNext, UnitTone } from "@synap-core/types/units";
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
+import {
+  nextStepOf,
+  type NextStep,
+} from "../../_lib/object/next-step-model";
 import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
 import { needsYouRisk } from "@synap-core/types/needs-you";
 import { proposalPageT } from "./copy";
-import type { UnitTone } from "@synap-core/types/units";
 
 /** One field of the pod's diff, read structurally. */
 export interface ProposalChangeInput {
@@ -119,85 +136,47 @@ export function reviewReadsWide(drawn: {
   );
 }
 
-/** The object an approved create made, named so the page can open it. */
-export interface CreatedObject {
-  /** The object kind `openIn` opens (`document`, `entity`). */
+/**
+ * What the request is ABOUT while nothing of it has landed (a pending update's
+ * object, a merge's survivor, a facet's entity): a door to each, at every
+ * status but an applied one, whose objects are its "Made" rows.
+ */
+export function aboutObjects(row: ProposalLandedRow): ProposalObject[] {
+  return proposalObjectsOf(row).filter((o) => o.role === null);
+}
+
+/** One object a proposal landed, as the read row carries it (`landed`). */
+export interface LandedInput {
+  id: string;
+  kind: string;
+  name: string | null;
+  role: ProposalLandedRole;
+  next?: ObjectNext | null;
+}
+
+export interface MadeRow {
   kind: string;
   id: string;
-  title: string | null;
+  title: string;
+  /** What approving did to it, in the past mood ("Created"). */
+  done: string;
+  step: NextStep | null;
 }
 
-/** Target types the review can open after a create: id known, page hosted. */
-const OPENABLE_CREATED: ReadonlySet<string> = new Set(["document", "entity"]);
+const VERB_OF_ROLE: Record<ProposalLandedRole, string> = {
+  created: "create",
+  updated: "update",
+  linked: "link",
+};
 
-/**
- * What an approved create made, when the page can open it: the proposal's own
- * `targetId` + `targetType` (the id the document was written under), so it
- * reads the same when the page is reopened later. A capture graph's target id
- * is not one object's, so it names nothing. `null` for anything else.
- */
-export function createdObject(input: {
-  status: string;
-  action: string;
-  targetType: string | null | undefined;
-  targetId: string | null | undefined;
-  title: string | null | undefined;
-  graph: boolean;
-}): CreatedObject | null {
-  if (input.status !== "approved" && input.status !== "auto_approved") {
-    return null;
-  }
-  if (input.action !== "create" || input.graph) return null;
-  const kind = input.targetType ?? "";
-  if (!OPENABLE_CREATED.has(kind)) return null;
-  const id = input.targetId ?? "";
-  if (!isUuid(id)) return null;
-  return { kind, id, title: input.title?.trim() || null };
-}
-
-/** The object an update changes, named so the page can open it. */
-export interface UpdatedObject {
-  /** The object kind `openIn` opens (`document`, `session`, …). */
-  kind: string;
-  id: string;
-  title: string | null;
-}
-
-/**
- * A proposal's `targetType` is its own word for what it changes; `/open` hosts
- * the same objects under its own. Only the kinds seen on real update proposals
- * are listed (document, entity, playbook, skill, and a session as
- * `focus_session`): a kind not here gets no door, never a guessed route.
- */
-const OPEN_KIND_OF_TARGET: ReadonlyMap<string, string> = new Map([
-  ["document", "document"],
-  ["entity", "entity"],
-  ["playbook", "playbook"],
-  ["skill", "skill"],
-  ["focus_session", "session"],
-]);
-
-/**
- * The existing object an UPDATE changes, when the page can open it. Unlike a
- * create (`createdObject`, which names something only once approved), an update
- * names its object at every status: the reviewer wants to open the thing being
- * changed BEFORE deciding, and the review page is not the object's page. A
- * create has no object yet, a delete may have none left, and a capture graph's
- * target id is not one object's, so those name nothing.
- */
-export function updatedObject(input: {
-  action: string;
-  targetType: string | null | undefined;
-  targetId: string | null | undefined;
-  title: string | null | undefined;
-  graph: boolean;
-}): UpdatedObject | null {
-  if (input.action !== "update" || input.graph) return null;
-  // A Map, not an object: `targetType` comes from a stored row, and an object
-  // literal answers "constructor" or "toString" with an inherited function.
-  const kind = OPEN_KIND_OF_TARGET.get(input.targetType ?? "");
-  if (!kind) return null;
-  const id = input.targetId ?? "";
-  if (!isUuid(id)) return null;
-  return { kind, id, title: input.title?.trim() || null };
+/** The "Made" rows: each landed object, its next step first among them. */
+export function madeRows(landed: readonly LandedInput[] | undefined): MadeRow[] {
+  const rows = (landed ?? []).map((o) => ({
+    kind: o.kind,
+    id: o.id,
+    title: o.name?.trim() || resolveObjectNoun(o.kind),
+    done: resolveActionLabel(VERB_OF_ROLE[o.role], "past"),
+    step: nextStepOf(o, o.next, "elsewhere"),
+  }));
+  return [...rows.filter((r) => r.step), ...rows.filter((r) => !r.step)];
 }

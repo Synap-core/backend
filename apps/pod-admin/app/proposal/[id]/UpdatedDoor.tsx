@@ -6,7 +6,7 @@
  * door to the real object, at every status: the question comes before the
  * decision, and an approved change is read against the object it changed.
  *
- * The twin of `CreatedDoor`, which names what an approval MADE once it exists.
+ * Once applied, what it changed is a "Made" row instead (`MadeSection`).
  * The verb takes its mood from the status (what approving WILL do while it is
  * open, what it DID once approved), from the vocabulary door.
  */
@@ -19,7 +19,6 @@ import {
 import { ExitLink } from "../../../lib/exit-link";
 import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
-import type { UpdatedObject } from "./proposal-review-model";
 
 /**
  * The door's words: ONE catalog message carrying the verb and the noun bundle
@@ -28,7 +27,7 @@ import type { UpdatedObject } from "./proposal-review-model";
  * (`kind`, a profile slug), never by its table ("Open entity").
  */
 export function updatedDoorLabel(
-  updated: Pick<UpdatedObject, "kind">,
+  updated: { kind: string },
   kind?: string | null
 ): string {
   return proposalPageT()("updated.open", {
@@ -41,7 +40,7 @@ export function UpdatedDoor({
   updated,
   kind,
 }: {
-  updated: UpdatedObject;
+  updated: { kind: string; id: string };
   /** The object's own kind (a profile slug: `finding`), when the pod named it. */
   kind?: string | null;
 }) {

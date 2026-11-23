@@ -49,6 +49,11 @@ export const en = {
   "session.subSessions.failed": "Its sub-sessions couldn’t be read.",
   "session.subSessions.showAll": "Show all {n} sub-sessions",
   "session.subSessions.restFailed": "The other sub-sessions couldn’t be read.",
+  "nextStep.title": "Next step",
+  "nextStep.proposed": "Sent for review: it changes once someone approves it.",
+  "nextStep.failed": "That didn’t work",
+  "made.title": "Made",
+  "made.showAll": "Show all {n}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -98,6 +103,12 @@ export const fr: Catalog<typeof en> = {
   "session.subSessions.showAll": "Voir les {n} sous-sessions",
   "session.subSessions.restFailed":
     "Les autres sous-sessions n’ont pas pu être lues.",
+  "nextStep.title": "Prochaine étape",
+  "nextStep.proposed":
+    "Envoyé pour revue : cela change une fois que quelqu’un l’approuve.",
+  "nextStep.failed": "Cela n’a pas fonctionné",
+  "made.title": "Créé ou modifié",
+  "made.showAll": "Voir les {n}",
 };
 
 /** The object views' translator, in the ambient catalog locale. */

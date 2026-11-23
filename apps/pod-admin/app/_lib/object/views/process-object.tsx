@@ -16,7 +16,8 @@
  * door to the desktop app where runs are worked. No run list here
  * (CLAUDE.md: pod admin is not a work surface).
  *
- * Acts: Pause / Turn on (`playbooks.update` status, governed: an agent-owned
+ * Acts: its next step leads (`NextStepBlock`: Turn on a draft), then Pause /
+ * Turn on a paused one (`playbooks.update` status, governed: an agent-owned
  * space proposes) and Archive. Authoring stays in the app ("Open in app").
  */
 
@@ -64,6 +65,9 @@ import {
   stepGateLabel,
   stepUses,
 } from "../../../(admin)/processes/_lib/process-page";
+import { objectNextOf } from "@synap-core/types/units";
+import { NextStepBlock } from "../next-step";
+import { nextStepOf } from "../next-step-model";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
@@ -183,7 +187,7 @@ export function ProcessObject({
       >
         {resolveActionLabel("pause", "imperative")}
       </Button>
-    ) : def.status === "paused" || def.status === "draft" ? (
+    ) : def.status === "paused" ? (
       <Button
         size="sm"
         variant="flat"
@@ -279,6 +283,13 @@ export function ProcessObject({
     factColumns: 4,
     children: (
       <div className="flex flex-col gap-6">
+        <NextStepBlock
+          step={nextStepOf(
+            { kind: "playbook", id },
+            objectNextOf("playbook", { health: read.health }),
+            "itsPage"
+          )}
+        />
         {/* REASSURE: why the counts open elsewhere (D4), when there are some. */}
         {week.doors.length > 0 && (
           <p className="text-[12.5px] text-foreground/65">
