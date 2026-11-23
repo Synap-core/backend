@@ -100,6 +100,25 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   const { database, userId, workspaceId, auditSource, skillAuthor } = ctx;
   const ownerUserId = ctx.ownerUserId ?? userId;
 
+  // The applying principal must be a member of every space a step lands in:
+  // review authority reads only the proposal's own space, so a step naming
+  // another space is floored here, on the approver.
+  const membershipIn = async (spaceId: string) => {
+    const { getWorkspaceMembership } = await import("@synap/database");
+    const membership = await getWorkspaceMembership(
+      database as Parameters<typeof getWorkspaceMembership>[0],
+      spaceId,
+      userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No workspace access",
+      });
+    }
+    return membership;
+  };
+
   // A domain is built only by an approved plan: its rows are the proposal's.
   const domainProposalId = (op: string): string => {
     if (!ctx.sourceProposalId) {
@@ -259,6 +278,9 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             code: "BAD_REQUEST",
             message: `create_cell: "${contentKind}" is not a content kind (${CONTENT_KINDS.join(", ")})`,
           });
+        }
+        if (cellOp.workspaceId && cellOp.workspaceId !== workspaceId) {
+          await membershipIn(cellOp.workspaceId);
         }
         const existing = await readStoredCellContent({
           name: cellOp.name,
@@ -430,6 +452,12 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
         const flow = automationOp.flowDefinition as {
           triggerConfig?: Record<string, unknown>;
         } | null;
+        if (
+          automationOp.workspaceId &&
+          automationOp.workspaceId !== workspaceId
+        ) {
+          await membershipIn(automationOp.workspaceId);
+        }
         const created = await materializeAutomationForPrincipal({
           database,
           definition: {
@@ -508,18 +536,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
               "create_playbook needs a workspace: a process lives in a space.",
           });
         }
-        const { getWorkspaceMembership } = await import("@synap/database");
-        const membership = await getWorkspaceMembership(
-          database as Parameters<typeof getWorkspaceMembership>[0],
-          playbookWorkspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
+        const membership = await membershipIn(playbookWorkspaceId);
         // The one birth decision. A batch no person reviewed may be
         // structured from pasted content, so it is judged as an agent's.
         const status = statusAtCreate({
@@ -565,28 +582,12 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
     // list live. Kinds: the op's slugs, else the members' own kinds.
     viewCaller: {
       create: async (viewOp) => {
-        const {
-          getWorkspaceMembership,
-          ProfileResolutionService,
-          entities,
-          inArray,
-        } = await import("@synap/database");
+        const { ProfileResolutionService, entities, inArray } =
+          await import("@synap/database");
         const viewWorkspaceId = viewOp.workspaceId ?? workspaceId;
-        let workspaceRole = "owner";
-        if (viewWorkspaceId) {
-          const membership = await getWorkspaceMembership(
-            database as Parameters<typeof getWorkspaceMembership>[0],
-            viewWorkspaceId,
-            userId
-          );
-          if (!membership) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "No workspace access",
-            });
-          }
-          workspaceRole = membership.role;
-        }
+        const workspaceRole = viewWorkspaceId
+          ? (await membershipIn(viewWorkspaceId)).role
+          : "owner";
 
         const scopeProfileIds = new Set<string>();
         if (viewOp.scopeProfileSlugs?.length) {

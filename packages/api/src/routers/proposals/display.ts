@@ -2707,6 +2707,11 @@ function buildConfigReviewItems(
   const workspaces: NonNullable<ProposalReviewGraph["workspaces"]> = [];
   const kinds: NonNullable<ProposalReviewGraph["kinds"]> = [];
   const lifecycles: NonNullable<ProposalReviewGraph["lifecycles"]> = [];
+  // The space a step names, when it names one (`ReviewStepSpace`).
+  const spaceOf = (op: { workspaceRef?: string; workspaceId?: string }) => ({
+    ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+    ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+  });
   // A playbook naming a kind of this bundle shows that kind's slug.
   const kindSlugByRef = new Map(
     data.operations.flatMap((op) =>
@@ -2774,6 +2779,7 @@ function buildConfigReviewItems(
       case "create_automation":
         renderedOpIndexes.add(index);
         automations.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
@@ -2807,6 +2813,7 @@ function buildConfigReviewItems(
       case "create_playbook":
         renderedOpIndexes.add(index);
         playbooks.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
@@ -2871,6 +2878,7 @@ function buildConfigReviewItems(
               )
             : undefined;
         views.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           viewType: op.viewType,
@@ -2888,6 +2896,7 @@ function buildConfigReviewItems(
         renderedOpIndexes.add(index);
         const source = op.rendererSource ?? "";
         cells.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),

@@ -414,6 +414,16 @@ export interface ProposalReviewEvent {
  * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
  * names/shapes without updating the frontend in lockstep.
  */
+/**
+ * The space a step lands in when it is not the proposal's own: a space this
+ * bundle creates (`workspaceRef`) or an existing one (`workspaceId`). The
+ * reviewer of the proposal's space approves it, so the review names it.
+ */
+export interface ReviewStepSpace {
+  workspaceRef?: string;
+  workspaceId?: string;
+}
+
 export interface ProposalReviewGraph {
   entities: Array<{
     ref: string;
@@ -560,24 +570,26 @@ export interface ProposalReviewGraph {
     /** True when the body was longer than the excerpt. */
     bodyTruncated: boolean;
   }>;
-  automations?: Array<{
-    ref: string;
-    name: string;
-    description?: string;
-    triggerType: "event" | "cron" | "webhook" | "manual";
-    /**
-     * Whether a person's approval turns it on: true unless the op keeps it
-     * off (`enabled: false`). Carried so the surface says whether it starts
-     * firing.
-     */
-    bornEnabled: boolean;
-    /**
-     * What its steps can reach outside the pod once it runs, read the way the
-     * runtime resolves each step (a verb → the skill that answers it).
-     * Absent = not measured (draw nothing, never "nothing").
-     */
-    reach?: ProposalPartReach;
-  }>;
+  automations?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      description?: string;
+      triggerType: "event" | "cron" | "webhook" | "manual";
+      /**
+       * Whether a person's approval turns it on: true unless the op keeps it
+       * off (`enabled: false`). Carried so the surface says whether it starts
+       * firing.
+       */
+      bornEnabled: boolean;
+      /**
+       * What its steps can reach outside the pod once it runs, read the way the
+       * runtime resolves each step (a verb → the skill that answers it).
+       * Absent = not measured (draw nothing, never "nothing").
+       */
+      reach?: ProposalPartReach;
+    }
+  >;
   rules?: Array<{
     ref: string;
     /** The user's stated rule, in their words. */
@@ -592,15 +604,17 @@ export interface ProposalReviewGraph {
    * `create_playbook` — a process for a kind. A person's approval makes it
    * active unless the op keeps it a draft (`bornStatus`).
    */
-  playbooks?: Array<{
-    ref: string;
-    name: string;
-    description?: string;
-    goalTemplate: string;
-    subjectProfileSlug: string;
-    statusProperty?: string;
-    bornStatus: "draft" | "active";
-  }>;
+  playbooks?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      description?: string;
+      goalTemplate: string;
+      subjectProfileSlug: string;
+      statusProperty?: string;
+      bornStatus: "draft" | "active";
+    }
+  >;
   /**
    * A domain: `create_workspace`, `define_kind`, `declare_lifecycle`. Refs
    * name steps of this bundle (`workspaceRef`, `kindRef`).
@@ -626,61 +640,65 @@ export interface ProposalReviewGraph {
    * `create_view` — a List over this bundle's things (import Build). Counts,
    * not ids: the members are refs into `entities[]` or existing ids.
    */
-  views?: Array<{
-    ref: string;
-    name: string;
-    viewType: CompositeViewType;
-    /** Kinds the list shows, when the op named them. */
-    scopeProfileSlugs?: string[];
-    /** How many things the list holds (in-batch refs + existing ids). */
-    memberCount: number;
-    /** The group container the list is about, when there is one. */
-    containerRef?: string;
-    /** A pipeline: the kind whose declared lifecycle its columns are. */
-    lifecycleOf?: string;
-    /** A bento: the widget keys it places, in block order. */
-    widgets?: string[];
-  }>;
+  views?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      viewType: CompositeViewType;
+      /** Kinds the list shows, when the op named them. */
+      scopeProfileSlugs?: string[];
+      /** How many things the list holds (in-batch refs + existing ids). */
+      memberCount: number;
+      /** The group container the list is about, when there is one. */
+      containerRef?: string;
+      /** A pipeline: the kind whose declared lifecycle its columns are. */
+      lifecycleOf?: string;
+      /** A bento: the widget keys it places, in block order. */
+      widgets?: string[];
+    }
+  >;
   /**
    * `create_cell` / `bind_renderer` — a GENERATED cell (its source is code a
    * person approves) and the pages it shows on. A binding of a cell in this
    * bundle is drawn under that cell; a binding of an existing cell gets an
    * entry of its own (`existingCellKey`).
    */
-  cells?: Array<{
-    /** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
-    ref: string;
-    name: string;
-    /** Set when this entry binds a cell that already exists (no source here). */
-    existingCellKey?: string;
-    description?: string;
-    contentKind?: string;
-    /** How the frame draws it: `module` (React) or `page` (HTML). */
-    mechanism?: "module" | "page";
-    /** The first characters of the source. The whole source is the op's. */
-    sourceExcerpt?: string;
-    sourceTruncated?: boolean;
-    sourceBytes?: number;
-    /**
-     * WHAT IT DOES once approved, read off the source: the bridge reads and
-     * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
-     * order they first appear). A name built at run time is not seen. The
-     * frame gives a generated cell no network (connect-src none but the
-     * bridge), so these are everything it can reach.
-     */
-    bridgeOps?: { reads: string[]; writes: string[] };
-    bindings: Array<{
+  cells?: Array<
+    ReviewStepSpace & {
+      /** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
       ref: string;
-      targetKind: BindRendererTargetKind;
-      /** The object's id; with `targetRef`, the ref of a step of this bundle. */
-      targetId: string;
-      targetRef?: string;
-      /** The object's name, when the pod read it for this viewer. */
-      targetName?: string;
-      slot: "detail";
-      scope: "pod" | "workspace";
-    }>;
-  }>;
+      name: string;
+      /** Set when this entry binds a cell that already exists (no source here). */
+      existingCellKey?: string;
+      description?: string;
+      contentKind?: string;
+      /** How the frame draws it: `module` (React) or `page` (HTML). */
+      mechanism?: "module" | "page";
+      /** The first characters of the source. The whole source is the op's. */
+      sourceExcerpt?: string;
+      sourceTruncated?: boolean;
+      sourceBytes?: number;
+      /**
+       * WHAT IT DOES once approved, read off the source: the bridge reads and
+       * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+       * order they first appear). A name built at run time is not seen. The
+       * frame gives a generated cell no network (connect-src none but the
+       * bridge), so these are everything it can reach.
+       */
+      bridgeOps?: { reads: string[]; writes: string[] };
+      bindings: Array<{
+        ref: string;
+        targetKind: BindRendererTargetKind;
+        /** The object's id; with `targetRef`, the ref of a step of this bundle. */
+        targetId: string;
+        targetRef?: string;
+        /** The object's name, when the pod read it for this viewer. */
+        targetName?: string;
+        slot: "detail";
+        scope: "pod" | "workspace";
+      }>;
+    }
+  >;
   /**
    * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
    * "Updates", beside the "New" things above). Each names the row it rewrites
