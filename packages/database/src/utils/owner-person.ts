@@ -86,7 +86,7 @@ export async function personOfOwner(
  * names the outer row.
  */
 export function membershipHolderIds(userId: string | AnyColumn) {
-  return sql`(SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active WHERE u.id = ${userId} AND u.user_type = 'agent' UNION ALL SELECT ${userId} WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = ${userId} AND a.user_type = 'agent'))`;
+  return sql`(SELECT COALESCE(k.linked_user_id, u.created_by_user_id) FROM users u LEFT JOIN api_keys k ON k.user_id = u.id AND k.linked_user_id IS NOT NULL AND k.is_active AND k.revoked_at IS NULL WHERE u.id = ${userId} AND u.user_type = 'agent' UNION ALL SELECT ${userId} WHERE NOT EXISTS (SELECT 1 FROM users a WHERE a.id = ${userId} AND a.user_type = 'agent'))`;
 }
 
 export interface OwnerAndActor {
