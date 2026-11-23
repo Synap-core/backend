@@ -111,6 +111,8 @@ export const LIFECYCLE_CATEGORY_TONE: Readonly<
  * provenance). Keys are lower case; {@link resolveStatusTone} normalises.
  * A word that is not here paints `textMuted`, never a guessed colour.
  */
+// Answers "where in the lifecycle is it"; `resolveUnitState` answers "whose
+// turn is it". Two questions, two tables: never merge or twin them.
 export const STATUS_TONE: Readonly<Record<string, UnitTone>> = {
   // Succeeded / healthy
   done: LIFECYCLE_CATEGORY_TONE.done,
@@ -323,6 +325,8 @@ function pctOf(
  *    never a gate or a parked run (decision E2, 2026-10-27): its asks wait
  *    "until you can".
  */
+// Answers "whose turn is it"; `STATUS_TONE` answers "where in the lifecycle".
+// Two questions, two tables: never merge or twin them.
 export function resolveUnitState(input: UnitStateInput): UnitStateView {
   const pct = pctOf(input.progress);
   const determinate = (fallback: number): UnitRail => ({

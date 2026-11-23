@@ -116,11 +116,20 @@ export function statusMark(
     (outcome === "no_effect" && facts.stopReason === "no_effect")
       ? outcome
       : word;
+  // A run that ended changing nothing needs a look and is not an error: the
+  // paused tone (the write receipt's calm `no_effect` row stays as it is). A
+  // precondition skip keeps its own word's tone.
+  const toneWord =
+    outcome === "no_effect"
+      ? facts.stopReason === "no_effect"
+        ? "paused"
+        : word
+      : (outcome ?? category);
   return {
     status: word,
     category,
     outcome,
     label: resolveStatusLabel(labelWord, facts.locale),
-    tone: resolveStatusTone(outcome ?? category),
+    tone: resolveStatusTone(toneWord),
   };
 }
