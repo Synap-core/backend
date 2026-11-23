@@ -72,7 +72,7 @@ const BATCH_APPROVE_BLOCK = (() => {
   const end = ROUTER.indexOf("batchReject: protectedProcedure", start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
-  const item = ROUTER.indexOf("async function approveOneOfMany(");
+  const item = ROUTER.indexOf("type ApproveManyItem = {");
   expect(item, "the per-item door vanished — scan is blind").toBeGreaterThan(
     -1
   );
@@ -647,7 +647,8 @@ describe("(g) executor throw on approve -> APPROVAL_FAILED, never reported as ap
 // ───────────────────────────────────────────────────────────────────────────
 describe("(f) return shape is unchanged", () => {
   it("still returns { results: [{ proposalId, success, error? }] }", () => {
-    expect(BATCH_APPROVE_BLOCK).toContain("const results: Array<{");
+    expect(BATCH_APPROVE_BLOCK).toContain("const results: ApproveManyItem[]");
+    expect(BATCH_APPROVE_BLOCK).toContain("type ApproveManyItem = {");
     expect(BATCH_APPROVE_BLOCK).toContain("proposalId: string;");
     expect(BATCH_APPROVE_BLOCK).toContain("success: boolean;");
     expect(BATCH_APPROVE_BLOCK).toContain("error?: string;");
@@ -664,7 +665,7 @@ describe("(f) return shape is unchanged", () => {
     // multi-line object. The contract is unchanged — `proposalId` and
     // `success: true` are still both on that push — which is what is pinned.
     expect(BATCH_APPROVE_BLOCK).toMatch(
-      /results\.push\(\{\s*proposalId,\s*success: true,/
+      /return \{\s*proposalId,\s*success: true,/
     );
     expect(BATCH_APPROVE_BLOCK).toContain(
       'relationsFailed?: ProposalExecutorResult["relationsFailed"];'

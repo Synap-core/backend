@@ -4197,7 +4197,10 @@ export const proposalsRouter = router({
         },
         where: inArray(proposals.id, ids),
       });
-      const rows = read.filter((r) => r.sessionId === input.sessionId);
+      const wanted = new Set(ids);
+      const rows = read.filter(
+        (r) => wanted.has(r.id) && r.sessionId === input.sessionId
+      );
       const held = new Set(rows.map((r) => r.id));
       const results: ApproveManyItem[] = ids
         .filter((id) => !held.has(id))
