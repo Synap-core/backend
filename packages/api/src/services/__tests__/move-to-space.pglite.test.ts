@@ -121,7 +121,12 @@ const grants = async (objectId: string) =>
 
 const runRefusal = async (id: string, workspaceId: string) => {
   const [row] = (
-    await q<{ id: string; name: string; workspace_id: string; status: string }>(
+    await q<{
+      id: string;
+      name: string;
+      workspace_id: string;
+      status: "draft" | "active" | "paused" | "archived";
+    }>(
       `select id, name, workspace_id, status from playbooks where id = $1`,
       [id]
     )
