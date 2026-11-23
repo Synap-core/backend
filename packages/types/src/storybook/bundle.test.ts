@@ -170,10 +170,17 @@ describe("parseStorybookBundle", () => {
     b.source = { sha: "abc" };
     const read = parseStorybookBundle(b);
     expect(read.ok).toBe(false);
-    // The refused page also leaves the flow's step pointing at nothing.
+    // What points at a key the bundle no longer holds dangles too: the button's
+    // key moved with its machine path, leaving the row's composedOf and variantOf
+    // pointing at nothing; the refused page (bad surface) leaves the flow's step.
     expect(read.problems.map((p) => p.code).sort()).toEqual(
-      ["absolute-path", "bad-value", "bad-value", "dangling-ref", "missing-field"].sort()
+      ["absolute-path", "bad-value", "bad-value", "dangling-ref", "dangling-ref", "dangling-ref", "missing-field"].sort()
     );
+    expect(read.problems.filter((p) => p.code === "dangling-ref").map((p) => p.path)).toEqual([
+      "components[1].composedOf[0]",
+      "components[1].variantOf",
+      "flows[0].steps[0].page",
+    ]);
   });
 
   it("refuses missing lists instead of reading them as empty", () => {
