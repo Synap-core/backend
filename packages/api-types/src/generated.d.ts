@@ -10772,7 +10772,8 @@ declare const PROPOSAL_LANDED_KINDS: readonly [
 	"track",
 	"agent",
 	"tool",
-	"channel"
+	"channel",
+	"cell"
 ];
 export type ProposalLandedKind = (typeof PROPOSAL_LANDED_KINDS)[number];
 declare const PROPOSAL_SOURCES: readonly [
@@ -18024,7 +18025,7 @@ export interface ProposalSetup {
  *
  * Kinds are vocabulary object kinds (`entity`, `session`, `project`,
  * `workspace`, `automation`, `playbook`, `agent`, `skill`, `tool`, `track`,
- * `document`, `channel`, `view`), so a host opens each through its one route
+ * `document`, `channel`, `view`, `cell`), so a host opens each through its one route
  * table. A caller that already knows its refs (what a proposal landed) passes
  * them as `refs` instead of a payload.
  */
@@ -18485,6 +18486,8 @@ export interface ProposalExecutorResult {
 	 * key, a run). Absent: the target's kind. Read by the landed stamp.
 	 */
 	primaryKind?: ProposalLandedKind | null;
+	/** What approving did to `primaryId` when the verb cannot say (a define upserts). */
+	primaryRole?: ProposalLandedRole;
 	created?: number;
 	linked?: number;
 	/**
@@ -56539,6 +56542,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -56561,6 +56565,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
@@ -56580,10 +56585,68 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				linked?: number;
 				primaryId?: string;
 				primaryKind?: ProposalLandedKind | null;
+				primaryRole?: ProposalLandedRole;
 				queued?: true;
 				refusals?: string[];
 				relationsFailed?: MaterializeRelationFailure[];
 				success: boolean;
+			};
+		}>;
+		approveSession: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				comment?: string | undefined;
+				expectedRevisions: Record<string, number>;
+				presenceByProposal?: Record<string, {
+					challengeId: string;
+					keyId: string;
+					kind: "device_key";
+					signature: string;
+				} | {
+					challengeId: string;
+					credential: {
+						authenticatorAttachment?: string | null | undefined;
+						clientExtensionResults?: Record<string, unknown> | undefined;
+						id: string;
+						rawId: string;
+						response: {
+							authenticatorData: string;
+							clientDataJSON: string;
+							signature: string;
+							userHandle?: string | null | undefined;
+						};
+						type: "public-key";
+					};
+					kind: "passkey";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "totp";
+				} | {
+					challengeId: string;
+					code: string;
+					kind: "recovery_code";
+				}> | undefined;
+				sessionId: string;
+			};
+			meta: object;
+			output: {
+				results: {
+					candidates?: Array<{
+						id: string;
+						title: string | null;
+						type: string;
+					}>;
+					error?: string;
+					errorCode?: import("@trpc/server").TRPCError["code"];
+					identities?: ProposalExecutorResult["identities"];
+					identity?: ProposalExecutorResult["identity"];
+					opRef?: string;
+					proposalId: string;
+					reasonCode?: "ENTITY_WEAK_DEDUP" | "REVIEW_ON_ITS_PAGE" | PresenceRefusalCode;
+					refusals?: ProposalExecutorResult["refusals"];
+					relationsFailed?: ProposalExecutorResult["relationsFailed"];
+					success: boolean;
+				}[];
 			};
 		}>;
 		askAi: import("@trpc/server").TRPCMutationProcedure<{
