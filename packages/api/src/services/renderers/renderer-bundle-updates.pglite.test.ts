@@ -308,9 +308,10 @@ beforeEach(async () => {
   vi.stubGlobal("fetch", fakeCp);
 });
 
-/** v1 installed by the first pass, v2 published `age` before NOW. */
+/** v1 installed by the first pass, v2 published `ageOfV2` before NOW. */
 async function installedV1ThenV2(ageOfV2: number) {
-  const v1 = publish(bundle(":root{}"), new Date(NOW.getTime() - 72 * HOUR));
+  // Published before any v2 below, so v2 is the newest row.
+  const v1 = publish(bundle(":root{}"), new Date(NOW.getTime() - 96 * HOUR));
   expect(await syncRendererBundleUpdates({ settings: auto, now: NOW })).toEqual(
     { kind: "installed", version: v1.version }
   );
