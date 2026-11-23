@@ -30,6 +30,8 @@ vi.mock("../../../lib/trpc", () => {
   return {
     trpc: {
       useUtils: () => ({ client: {} }),
+      // The frame's context (contract v3): none to wear here.
+      surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
       widgetDefinitions: { get: answered(() => reads.cell) },
       renderers: { hostModules: answered(() => reads.modules) },
     },

@@ -39,6 +39,7 @@ import {
   cellModuleNeedsKit,
   cellModuleNetworkRefusal,
   createCellFrameHost,
+  surfaceContextInitFields,
   type CellBridgeEventLike,
   type CellBridgeMutateResult,
   type CellBridgeTarget,
@@ -48,6 +49,7 @@ import {
   type CellFrameStatus,
   type CellFrameWorkspaceScope,
   type CellFrameWriteRequest,
+  type SurfaceContext,
 } from "@synap-core/types/cell-bridge";
 import {
   useContext,
@@ -83,6 +85,12 @@ import { NotRun, useFullSize } from "./html-frame";
 import { EmbedBodyContext } from "./embed-context";
 import { frameT, type RendererWordSubject } from "./frame-copy";
 import { objectPage } from "./markdown-model";
+import {
+  frameBrandCss,
+  frameContextAnswer,
+  moduleFrameAnchor,
+  useFrameContext,
+} from "./use-frame-context";
 
 /** What the frame IS: the pod resolves a write's trust from it. */
 export interface ModuleFrameIdentity {
@@ -110,6 +118,12 @@ export function createModuleFrameHost(options: {
   locale?: () => Locale;
   /** `page` refuses every write (a stored HTML page's rule). Default `module`. */
   mechanism?: "module" | "page";
+  /**
+   * What the frame is about (frame contract v3): its fields ride `synap:init`
+   * and answer `SynapWidget.context()`. A failed read answers its error;
+   * absent: the frame has no context.
+   */
+  context?: { value: SurfaceContext | null; answer?: () => Promise<SurfaceContext> };
   onStatus?: (status: CellFrameStatus) => void;
   onResize?: (height: number) => void;
   /** What the pod answered a write the host sent: the receipt is the host's. */
@@ -140,7 +154,11 @@ export function createModuleFrameHost(options: {
       ...(identity.profileSlug ? { profileSlug: identity.profileSlug } : {}),
       theme: options.theme(),
       ...(options.locale ? { locale: options.locale() } : {}),
+      ...(options.context?.value
+        ? surfaceContextInitFields(options.context.value)
+        : {}),
     }),
+    ...(options.context?.answer ? { context: options.context.answer } : {}),
     read: (op, params) =>
       readForPage(client, op, params, { workspaceId: lens.workspaceId }),
     write: async (request) => {
@@ -532,6 +550,19 @@ export function ModuleFrame({
   const near = useNearViewport(area.ref);
   const fillHeight = useFillHeight(area.ref, fill);
   const fullSize = useFullSize();
+  // What the cell draws (an entity, else a view) and its project's brand
+  // (contract v3), read once: the srcdoc is built with the brand after it.
+  // Asked at the first theme only: the brand CSS carries both modes on the
+  // frame's `data-theme`, so a theme flip is still posted, never rebuilt.
+  const [contextTheme] = useState(themeRef.current);
+  const anchor = moduleFrameAnchor(identity);
+  const frameContext = useFrameContext(
+    anchor,
+    contextTheme,
+    localeRef.current
+  );
+  const brandCss = frameBrandCss(frameContext);
+  const contextWaits = frameContext.state === "loading";
 
   // Keyed by value: a caller that hands a new but equal array must not
   // rebuild the srcdoc, which would reload (and so tear down) the frame.
@@ -546,7 +577,7 @@ export function ModuleFrame({
   // rebuilding megabytes of srcdoc.
   const srcDoc = useMemo(
     () =>
-      refusal || !near
+      refusal || !near || contextWaits
         ? ""
         : buildCellModuleFrameSrcdoc({
             code,
@@ -554,14 +585,15 @@ export function ModuleFrame({
             theme: themeRef.current,
             externalHosts: hostsKey ? hostsKey.split(" ") : [],
             hostModules,
+            brandCss,
           }),
     // The theme is read through its ref: a change is posted, not rebuilt.
-    [code, hostsKey, hostModules, refusal, run, near]
+    [code, hostsKey, hostModules, refusal, run, near, contextWaits, brandCss]
   );
 
   const lensKey = workspaceId ?? "";
   const { typeKey, viewId, entityId, profileSlug } = identity;
-  const live = near && !left && !refusal;
+  const live = near && !left && !refusal && !contextWaits;
   useEffect(() => {
     if (!live) return;
     const frameIdentity = { typeKey, viewId, entityId, profileSlug };
@@ -572,6 +604,10 @@ export function ModuleFrame({
       identity: frameIdentity,
       theme: () => themeRef.current,
       locale: () => localeRef.current,
+      context: {
+        value: frameContext.state === "ready" ? frameContext.context : null,
+        answer: frameContextAnswer(frameContext),
+      },
       onStatus: (s) => setStatus(moduleFrameStatusOf(s)),
       onResize: (h) => setHeight(h),
       onWriteAnswer: (result, request) => {
@@ -601,6 +637,7 @@ export function ModuleFrame({
     profileSlug,
     live,
     run,
+    frameContext,
   ]);
 
   // A frame that never says it mounted is failed, not "still loading".
@@ -696,7 +733,7 @@ export function ModuleFrame({
         ref={fullSize.boxRef}
         className={`relative ${fullSize.isFull ? "h-full w-full bg-background" : ""}`}
       >
-        {!near ? (
+        {!near || contextWaits ? (
           (cover ?? (
             <RendererSkeleton fill={fill} subject={subject} announce={false} />
           ))
