@@ -167,7 +167,7 @@ const PROPOSAL = randomUUID();
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
-const callers = (proposalId: string | undefined = PROPOSAL) =>
+const callers = (proposalId: string | null = PROPOSAL) =>
   buildRuleLoopCallers({
     database: h.db as never,
     userId: HUMAN,
@@ -239,7 +239,7 @@ describe("a plan's space — the plain space door", () => {
   it("is refused outside an approved plan", async () => {
     expect(
       await refusal(
-        callers(undefined).workspaceCaller.create({ ref: "ws", name: "Other" })
+        callers(null).workspaceCaller.create({ ref: "ws", name: "Other" })
       )
     ).toBe("PRECONDITION_FAILED");
   });
