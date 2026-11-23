@@ -169,6 +169,7 @@ import {
   listWorkerViews,
   playbookGoalsAndHealth,
   setWorkerPaused,
+  withPlaybookSchedules,
 } from "../workers.js";
 import { updateRuleGoverned } from "../../rules/update.js";
 import {
@@ -870,6 +871,11 @@ describe("listWorkerViews — trigger words, runs and health from the pod", () =
         health: { state: "healthy", marks: [] },
       });
       expect(w!.trigger.words).not.toContain("*");
+      // The playbook reads project the same worker as the schedule.
+      const [read] = await withPlaybookSchedules(USER, [
+        { id: PB2, schedule: null },
+      ]);
+      expect(read!.schedule).toMatchObject({ cron: "0 9 * * *", on: true });
     } finally {
       await q(`delete from playbooks where id = $1`, [PB2]);
     }

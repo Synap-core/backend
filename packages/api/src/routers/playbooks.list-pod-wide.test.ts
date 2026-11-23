@@ -60,6 +60,15 @@ vi.mock("../access/index.js", () => ({
   scopedDb: mockScopedDb,
 }));
 
+vi.mock("../services/playbooks/workers.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  // Proven against real SQL in `workers.pglite.test.ts`.
+  withPlaybookSchedules: vi.fn(
+    async (_userId: string, rows: Array<Record<string, unknown>>) =>
+      rows.map((r) => ({ ...r, schedule: null }))
+  ),
+}));
+
 import { playbooksRouter } from "./playbooks.js";
 
 function selectChain(rows: unknown[]) {
@@ -108,7 +117,12 @@ describe("playbooks.list — pod-wide", () => {
     // `projectsUsingCount` is additive (tracks, 0272): a playbook that is not
     // a project-scoped method is used by 0 projects, read with no query.
     expect(rows).toEqual([
-      { id: "pb-1", name: "Pod-wide playbook", projectsUsingCount: 0 },
+      {
+        id: "pb-1",
+        name: "Pod-wide playbook",
+        schedule: null,
+        projectsUsingCount: 0,
+      },
     ]);
     expect(mockAccessFrom).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1" })

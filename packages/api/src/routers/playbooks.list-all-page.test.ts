@@ -65,6 +65,10 @@ vi.mock("../access/index.js", () => ({
 vi.mock("../services/playbooks/workers.js", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   // Proven against real SQL in `workers.pglite.test.ts`.
+  withPlaybookSchedules: vi.fn(
+    async (_userId: string, rows: Array<Record<string, unknown>>) =>
+      rows.map((r) => ({ ...r, schedule: null }))
+  ),
   playbookGoalsAndHealth: vi.fn(
     async ({ playbookIds }: { playbookIds: string[] }) =>
       new Map(
@@ -141,6 +145,7 @@ describe("playbooks.listAllPage", () => {
         id: "pb-1",
         name: "Pod-wide playbook",
         createdAt: new Date("2026-01-01T00:00:00Z"),
+        schedule: null,
         servesGoals: [{ id: "goal-1", name: "Ship" }],
         runHealth: null,
       },

@@ -131,7 +131,10 @@ import {
   type RunnerOffer,
 } from "../services/playbooks/run-runner-choice.js";
 import { AccessContext, scopedDb } from "../access/index.js";
-import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
+import {
+  playbookGoalsAndHealth,
+  withPlaybookSchedules,
+} from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
 import {
   preferTrackTemplates,
@@ -1841,7 +1844,7 @@ export const playbooksRouter = router({
           isHubProtocol: ctx.isHubProtocol,
         }
       );
-      return rows.map((r) => ({
+      return (await withPlaybookSchedules(ctx.userId, rows)).map((r) => ({
         ...r,
         projectsUsingCount: usage.get(r.id) ?? 0,
       }));
@@ -1897,7 +1900,7 @@ export const playbooksRouter = router({
       const page = hasNextPage ? rows.slice(0, limit) : rows;
       const last = page.at(-1);
       return {
-        playbooks: page,
+        playbooks: await withPlaybookSchedules(ctx.userId, page),
         nextCursor:
           hasNextPage && last
             ? encodeDefinitionCursor({ at: last.createdAt, id: last.id })
@@ -1977,7 +1980,7 @@ export const playbooksRouter = router({
         playbookIds: page.map((p) => p.id),
       });
       return {
-        playbooks: page.map((p) => ({
+        playbooks: (await withPlaybookSchedules(ctx.userId, page)).map((p) => ({
           ...p,
           servesGoals: served.get(p.id)?.goals ?? [],
           runHealth: served.get(p.id)?.health ?? null,
@@ -2096,8 +2099,9 @@ export const playbooksRouter = router({
         });
       }
 
+      const [scheduled] = await withPlaybookSchedules(ctx.userId, [row]);
       return {
-        ...row,
+        ...scheduled!,
         /** Visible projects running this method as a track (0 unless project-scoped). */
         projectsUsingCount:
           row.scope === "project"

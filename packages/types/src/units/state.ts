@@ -294,8 +294,8 @@ export interface UnitStateInput {
    * unreadable count outranks it.
    */
   idle?: boolean;
-  /** A recurring unit's cadence, straight off `playbooks.schedule`. */
-  schedule?: { cron: string; enabled: boolean } | null;
+  /** A recurring unit's cadence: the playbook read's projected `schedule`. */
+  schedule?: { cron: string; on: boolean } | null;
   /** False = it exists but nothing has happened in it yet. */
   everStarted?: boolean;
   /** Measurable progress. Absent = not measurable, which is not the same as 0. */
@@ -444,7 +444,7 @@ export function resolveUnitState(input: UnitStateInput): UnitStateView {
   }
   if (input.running) return working();
   if (input.schedule) {
-    return input.schedule.enabled
+    return input.schedule.on
       ? {
           state: "scheduled",
           tone: "info",
@@ -610,7 +610,7 @@ export function resolveRunUnitState(
  * label that is confidently wrong is worse than one that admits it is a cron.
  */
 export function describeCadence(
-  schedule: { cron: string; enabled: boolean } | null | undefined
+  schedule: { cron: string } | null | undefined
 ): string | null {
   if (!schedule) return null;
   const parts = schedule.cron.trim().split(/\s+/);
