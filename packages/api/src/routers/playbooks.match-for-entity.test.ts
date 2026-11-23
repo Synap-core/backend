@@ -624,13 +624,13 @@ describe("playbooks.matchForEntity", () => {
       };
       const grantChain = {
         from: () => grantChain,
-        where: async () => [{ objectId: "shared-here", workspaceId: WORKSPACE }],
+        where: async () => [
+          { objectId: "shared-here", workspaceId: WORKSPACE },
+        ],
       };
       let n = 0;
       mockGetDb.mockResolvedValue({
-        select: vi.fn(() =>
-          [pbChain, entChain][n++] ?? grantChain
-        ),
+        select: vi.fn(() => [pbChain, entChain][n++] ?? grantChain),
       });
     }
     const ids = (r: Array<{ id: string }>) => r.map((x) => x.id).sort();
@@ -646,7 +646,13 @@ describe("playbooks.matchForEntity", () => {
           purpose: "entity-actions",
         });
       expect(ids(res)).toEqual(
-        ["filter-pass", "here", "pod-wide", "propose-only", "shared-here"].sort()
+        [
+          "filter-pass",
+          "here",
+          "pod-wide",
+          "propose-only",
+          "shared-here",
+        ].sort()
       );
       const po = res.find((r) => r.id === "propose-only")!;
       expect(po).toMatchObject({
