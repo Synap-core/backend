@@ -4186,21 +4186,18 @@ export const proposalsRouter = router({
       const userId = requireUserId(ctx.userId);
       refuseAgentProposalApprover(ctx);
       const ids = Object.keys(input.expectedRevisions);
-      const rows = await db
-        .select({
-          id: proposals.id,
-          proposalType: proposals.proposalType,
-          targetType: proposals.targetType,
-          data: proposals.data,
-          createdAt: proposals.createdAt,
-        })
-        .from(proposals)
-        .where(
-          and(
-            inArray(proposals.id, ids),
-            eq(proposals.sessionId, input.sessionId)
-          )
-        );
+      const read = await db.query.proposals.findMany({
+        columns: {
+          id: true,
+          sessionId: true,
+          proposalType: true,
+          targetType: true,
+          data: true,
+          createdAt: true,
+        },
+        where: inArray(proposals.id, ids),
+      });
+      const rows = read.filter((r) => r.sessionId === input.sessionId);
       const held = new Set(rows.map((r) => r.id));
       const results: ApproveManyItem[] = ids
         .filter((id) => !held.has(id))
