@@ -269,6 +269,14 @@ describe("Hub REST GET /status-of: a key narrowed by its grant", () => {
     expect(wire).toContain("Scribe");
   });
 
+  it("work: without agent.read the holder and live sections are withheld whole", async () => {
+    h.work = WORK;
+    const { body } = await workOf(PINNED_NO_AGENTS);
+    const item = body.statusOf[0]!.work.items[0]!;
+    expect(item.holder).toMatchObject({ status: "withheld" });
+    expect(item.live).toMatchObject({ status: "withheld" });
+  });
+
   it("CONTROL: a person and a key reading every subject get the whole answer", async () => {
     await send(`/status-of?ids=${ID}&include=work,history`);
     const res = await send(

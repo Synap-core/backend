@@ -15,9 +15,10 @@
  *     playbook, room, link): columns of that session row, the same ones
  *     `GET /focus-sessions/:id` serves a key that reads the session.
  *   - STAGES and ASKS: the row's declared stages and owed slots; the stage
- *     ledger of that session (its entry status and times). A runner's NAME
- *     only when the key reads the person's agents (`sessionHolderReadable`),
- *     as the session door's `holder`.
+ *     ledger of that session (its entry status and times). WHO runs it
+ *     (`holder`, `live`, a stage entry's agent name) only when the key reads
+ *     the person's agents (`sessionHolderReadable`), as the work graph and
+ *     timeline doors withhold the whole holder section.
  *   - OUTCOMES: the declared outputs and criteria of the row (key, label,
  *     kind, owner, verdicts), never a produced object's reference.
  *   - GATES: a gate is a PROPOSAL row filed against the session, read by
@@ -47,11 +48,11 @@ export const STATUS_OF_WORK_WITHHELD_FIELDS: readonly string[] = [
   "hold.reason",
   "hold.until",
   "gates.proposal (a proposal the grant does not read)",
-  "agentName (without agent.read)",
+  "holder, live, agentName (without agent.read)",
 ];
 
 export const STATUS_OF_WORK_WITHHELD_REASON =
-  "This key's grant does not read everything a session's work packet reads: the pending proposals, the next move, a hold's reference and last completion are not shown, a gate's proposal only when the key may read it, and an agent's name only with agent.read.";
+  "This key's grant does not read everything a session's work packet reads: the pending proposals, the next move, a hold's reference and last completion are not shown, a gate's proposal only when the key may read it, and who runs it (holder, live, agent names) only with agent.read.";
 
 /** The keys one narrowed work item carries (pinned by the test). */
 export const STATUS_OF_NARROWED_WORK_ITEM_KEYS = [
@@ -132,20 +133,32 @@ function narrowRun(v: unknown): unknown {
   ]);
 }
 
-function narrowLive(v: unknown): unknown {
+/**
+ * `holder` and `live` read the runners and the activity of the session (chat
+ * turns, events and proposals by session id, with no grant clause): a key that
+ * does not read the person's agents (`agent.read`, `sessionHolderReadable`) is
+ * told they are withheld, as the work graph and timeline doors withhold the
+ * whole holder section. (The answer's own top-level `live` of a session is
+ * the row-derived rule of #1250 and is unchanged.)
+ */
+const WITHHELD_AGENTS = {
+  status: "withheld",
+  reason: "This key does not read the person's agents (agent.read).",
+} as const;
+
+function narrowLive(v: unknown, ctx: NarrowWorkContext): unknown {
+  if (!ctx.holderReadable) return WITHHELD_AGENTS;
   if (isUnavailable(v)) return UNAVAILABLE;
   return pick(v as Rec, ["status", "state", "lastActivityAt"]);
 }
 
 function narrowHolder(v: unknown, ctx: NarrowWorkContext): unknown {
+  if (!ctx.holderReadable) return WITHHELD_AGENTS;
   if (isUnavailable(v)) return UNAVAILABLE;
   const h = v as Rec;
   return {
     ...pick(h, ["kind", "waitKind", "since", "reason"]),
-    agentName:
-      ctx.holderReadable && typeof h.agentName === "string"
-        ? h.agentName
-        : null,
+    agentName: typeof h.agentName === "string" ? h.agentName : null,
   };
 }
 
@@ -170,6 +183,13 @@ function narrowAsks(v: unknown): unknown {
   };
 }
 
+/**
+ * DELIBERATE KEEP: an outcome's `met` and `state` are computed by
+ * `listSessionOutputsWithOutcomes` from the session's declared slots AND the
+ * ledger rows produced in it (read by session id, with no grant clause). Only
+ * the verdict (a boolean and a state word) leaves, never an output's
+ * reference or title, and the session itself is under the session floor.
+ */
 function narrowOutcomes(v: unknown): unknown {
   if (v === undefined) return undefined;
   if (isUnavailable(v)) return UNAVAILABLE;
@@ -346,7 +366,7 @@ export function narrowWorkItem(raw: Rec, ctx: NarrowWorkContext): Rec {
     outcomes: narrowOutcomes(raw.outcomes),
     hold: narrowHold(raw.hold),
     holder: narrowHolder(raw.holder, ctx),
-    live: narrowLive(raw.live),
+    live: narrowLive(raw.live, ctx),
     stopped: narrowStopped(raw.stopped),
     continue: narrowContinue(raw.continue),
   };

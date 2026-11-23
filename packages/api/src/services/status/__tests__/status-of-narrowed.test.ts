@@ -444,12 +444,25 @@ describe("narrowStatusOfWork (a key narrowed by its grant)", () => {
     expect(wireOf(item)).not.toContain("p-foreign");
   });
 
-  it("a runner's name rides only when the key reads the person's agents", () => {
-    const open = wireOf(
-      narrowWorkItem(ITEM, { ...NONE, holderReadable: true })
-    );
-    expect(open).toContain("Scribe");
-    expect(wireOf(narrowWorkItem(ITEM, NONE))).not.toContain("Scribe");
+  it("who runs it (holder, live, a runner's name) rides only when the key reads the person's agents", () => {
+    const open = narrowWorkItem(ITEM, { ...NONE, holderReadable: true }) as {
+      holder: Record<string, unknown>;
+      live: Record<string, unknown>;
+    };
+    expect(open.holder).toMatchObject({ kind: "agent", agentName: "Scribe" });
+    expect(open.live).toMatchObject({ state: "working" });
+    expect(wireOf(open)).toContain("Scribe");
+    const shut = narrowWorkItem(ITEM, NONE) as {
+      holder: unknown;
+      live: unknown;
+    };
+    // The whole section is withheld, not just the name (as the work graph
+    // and timeline doors): no kind, no wait kind, no time, no reason.
+    expect(shut.holder).toMatchObject({ status: "withheld" });
+    expect(shut.live).toMatchObject({ status: "withheld" });
+    expect(wireOf(shut.holder)).not.toContain("agent\"");
+    expect(wireOf(shut)).not.toContain("Scribe");
+    expect(wireOf(shut)).not.toContain("lastActivityAt");
   });
 
   it("a hold keeps its kind only, never its reference, reason or resume condition", () => {

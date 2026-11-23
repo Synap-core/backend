@@ -38,7 +38,13 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL, is } from "drizzle-orm";
 import { PgTable, getTableConfig } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
-import { runWithGrant, type KeyGrant } from "@synap/database";
+import {
+  inArray,
+  proposals,
+  runWithGrant,
+  type KeyGrant,
+} from "@synap/database";
+import { AccessContext, scopedDb } from "../../../access/index.js";
 import { readableWorkProposalIds } from "../status-of-narrowed-proposals.js";
 
 const ME = "user-me";
@@ -176,5 +182,30 @@ describe("readableWorkProposalIds", () => {
     expect([...(await readableWorkProposalIds(ME, [{ id: "e3" }]))]).toEqual(
       []
     );
+  });
+
+  it("an agent key's AccessContext reads the same proposals as the one this floor builds", async () => {
+    // `readableWorkProposalIds` builds `AccessContext.from({ userId })`; the
+    // read path consumes only the user (access/context.ts), so an agent
+    // boundary context must answer the same rows under the same grant.
+    const all = [P_OWN, P_OTHER_SPACE, P_POD_WIDE];
+    const agent = AccessContext.agent({
+      userId: ME,
+      agentUserId: randomUUID(),
+    });
+    for (const g of [pin("proposal.read"), pin("session.read")]) {
+      const viaAgent = await runWithGrant(g, async () =>
+        (
+          await scopedDb(agent).findMany<{ id: string }>(proposals, {
+            where: inArray(proposals.id, all),
+            columns: { id: true },
+          })
+        ).map((r) => r.id)
+      );
+      const viaFloor = await runWithGrant(g, () =>
+        readableWorkProposalIds(ME, [answerWith(...all)])
+      );
+      expect(viaAgent.sort()).toEqual([...viaFloor].sort());
+    }
   });
 });
