@@ -761,6 +761,7 @@ export function hostVerbRunAsUnifiedRun(
     replayOf: null,
     summary: hostVerbRunSummary(row, computerName, now),
     error: row.status === "failed" ? row.error : null,
+    stopReason: null,
     triggeredBy: row.agentUserId ?? row.userId,
     stepsCompleted: null,
     stepsFailed: null,

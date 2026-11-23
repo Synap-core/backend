@@ -72,6 +72,16 @@ describe("run rows", () => {
     expect(
       runActions({ flowType: "chat", flowId: null, status: "failed" })
     ).toEqual({ cancel: false, runAgain: false });
+    // A run nobody claimed yet, or nobody picked up, is cancellable too.
+    for (const status of ["queued", "blocked"]) {
+      expect(
+        runActions({ flowType: "playbook", flowId: "p", status }).cancel
+      ).toBe(true);
+    }
+    expect(
+      runActions({ flowType: "playbook", flowId: "p", status: "proposed" })
+        .cancel
+    ).toBe(false);
   });
 
   it("never shows an id as a name", () => {

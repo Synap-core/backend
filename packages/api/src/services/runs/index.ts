@@ -378,6 +378,7 @@ async function listAutomationRuns(
       workspaceId: automationRuns.workspaceId,
       subjectEntityId: automationRuns.subjectEntityId,
       error: automationRuns.errorMessage,
+      stopReason: automationRuns.stopReason,
       outputSummary: automationRuns.outputSummary,
       triggeredBy: automationRuns.triggeredBy,
       stepsCompleted: automationRuns.stepsCompleted,
@@ -445,6 +446,7 @@ async function listAutomationRuns(
         ? (r.outputSummary.summary as string)
         : null,
     error: r.error ?? null,
+    stopReason: r.stopReason ?? null,
     triggeredBy: r.triggeredBy ?? null,
     stepsCompleted: r.stepsCompleted ?? null,
     stepsFailed: r.stepsFailed ?? null,
@@ -474,6 +476,7 @@ async function listPlaybookRuns(
       workspaceId: playbookRuns.workspaceId,
       summary: playbookRuns.summary,
       error: playbookRuns.error,
+      stopReason: playbookRuns.stopReason,
       // The run's room lives on its session (playbook → 1 channel per run).
       channelId: focusSessions.channelId,
       // A one-shot run's subject is on its record, its creator's alone:
@@ -546,6 +549,7 @@ async function listPlaybookRuns(
     replayOf: r.replayOf ?? null,
     summary: r.summary ?? null,
     error: r.error ?? null,
+    stopReason: r.stopReason ?? null,
     triggeredBy: null,
     stepsCompleted: null,
     stepsFailed: null,
@@ -635,6 +639,7 @@ async function listCaptureRuns(
       summary:
         typeof data.summary === "string" ? (data.summary as string) : null,
       error: null,
+      stopReason: null,
       triggeredBy: null,
       stepsCompleted: null,
       stepsFailed: null,
@@ -772,6 +777,7 @@ async function listCapabilityRuns(
             ? `Result: ${JSON.stringify(data.runResult).slice(0, 200)}`
             : null,
         error: null,
+        stopReason: null,
         triggeredBy: null,
         stepsCompleted: null,
         stepsFailed: null,
@@ -885,6 +891,7 @@ async function listCapabilityRuns(
                         : "Synced"
                       : null,
                 error: null,
+                stopReason: null,
                 triggeredBy: null,
                 stepsCompleted: null,
                 stepsFailed: null,
@@ -1045,6 +1052,7 @@ async function listAgentWriteRuns(
                 reasonText ? `: ${reasonText.slice(0, 200)}` : ""
               }`,
               error: null,
+              stopReason: null,
               triggeredBy:
                 typeof data.agentUserId === "string" ? data.agentUserId : null,
               stepsCompleted: null,
@@ -1130,6 +1138,7 @@ async function listAgentWriteRuns(
       replayOf: null,
       summary: reasoning ?? r.proposalType,
       error: null,
+      stopReason: null,
       // The AGENT is what did this — the whole point of the flow type.
       triggeredBy: r.agentUserId ?? null,
       stepsCompleted: null,
@@ -1252,6 +1261,7 @@ async function listSessionRuns(
     replayOf: null,
     summary: null,
     error: null,
+    stopReason: null,
     triggeredBy: null,
     stepsCompleted: null,
     stepsFailed: null,
@@ -1340,6 +1350,7 @@ async function listChatRuns(
           : err
         : `Chat turn ${turnShort}`,
       error: err,
+      stopReason: null,
       triggeredBy: userId,
       stepsCompleted: null,
       stepsFailed: null,

@@ -168,7 +168,11 @@ export function ToolRuns({
                 Icon={Play}
                 primary={actionLabel(run.flowName)}
                 secondary={runRowSecondary(run)}
-                status={machinePill("run", run.status) ?? undefined}
+                status={
+                  machinePill("run", run.status, {
+                    stopReason: run.stopReason,
+                  }) ?? undefined
+                }
                 onSelect={() => openRun(run.flowType, run.id)}
                 wrap
               />

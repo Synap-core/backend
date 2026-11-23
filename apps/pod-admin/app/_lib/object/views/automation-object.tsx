@@ -212,7 +212,11 @@ export function AutomationObject({
                       Icon={Play}
                       primary={line.primary}
                       secondary={line.secondary}
-                      status={machinePill("run", run.status) ?? undefined}
+                      status={
+                        machinePill("run", run.status, {
+                          stopReason: run.stopReason,
+                        }) ?? undefined
+                      }
                       onSelect={
                         onOpenRun
                           ? () => onOpenRun({ id: run.id, flowName: rule.name })
