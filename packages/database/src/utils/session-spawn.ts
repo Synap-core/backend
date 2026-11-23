@@ -189,11 +189,11 @@ export async function getParentSessionId(
 
 /** What a child was spawned from, and for which of the parent's outputs. */
 export type SessionSpawnTarget =
-  | { status: "none" }
+  | { kind: "none" }
   /** More than one `spawned_from` edge: no single parent to act on. */
-  | { status: "ambiguous" }
+  | { kind: "ambiguous" }
   | {
-      status: "one";
+      kind: "one";
       parentSessionId: string;
       /** `metadata.forOutput` on the edge; null = spawned for no output. */
       forOutput: string | null;
@@ -221,13 +221,13 @@ export async function getSessionSpawnTarget(
       )
     )
     .limit(2);
-  if (rows.length === 0) return { status: "none" };
-  if (rows.length > 1) return { status: "ambiguous" };
+  if (rows.length === 0) return { kind: "none" };
+  if (rows.length > 1) return { kind: "ambiguous" };
   const raw = (rows[0]!.metadata as Record<string, unknown> | null)?.[
     "forOutput"
   ];
   return {
-    status: "one",
+    kind: "one",
     parentSessionId: rows[0]!.toId,
     forOutput: typeof raw === "string" && raw.trim() ? raw.trim() : null,
   };

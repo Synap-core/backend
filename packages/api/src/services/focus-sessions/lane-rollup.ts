@@ -204,8 +204,8 @@ export async function rollUpLane(
   if (readSessionRunManifest(child.metadata)?.rerun) return { status: "rerun" };
 
   const target = await getSessionSpawnTarget(child.id);
-  if (target.status === "none") return { status: "no_parent" };
-  if (target.status === "ambiguous") return { status: "ambiguous_parent" };
+  if (target.kind === "none") return { status: "no_parent" };
+  if (target.kind === "ambiguous") return { status: "ambiguous_parent" };
   const key = target.forOutput;
   if (!key) return { status: "no_target" };
 
