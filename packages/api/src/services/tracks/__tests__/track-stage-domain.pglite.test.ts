@@ -127,7 +127,8 @@ vi.mock("../../focus-sessions/block-guidelines.js", async (orig) => ({
   guidanceForBlockedSlots: async () => undefined,
 }));
 
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import type { PgTable } from "drizzle-orm/pg-core";
+import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import {
   focusSessions,
   playbooks,
@@ -169,26 +170,6 @@ const STAGES = [
   { key: "sign", name: "Sign", category: "started", domain: "legal" },
   { key: "home", name: "Home", category: "completed" },
 ];
-
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    const def =
-      c.name === "id"
-        ? " default gen_random_uuid()"
-        : c.name === "started_at" || c.name === "created_at"
-          ? " default now()"
-          : c.name === "metadata" || c.name === "settings"
-            ? " default '{}'::jsonb"
-            : "";
-    return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
-  });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
-}
 
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
@@ -235,25 +216,25 @@ async function usedBy(projectId: string): Promise<string[]> {
 }
 
 beforeAll(async () => {
-  for (const t of [
-    lifecycleTransitionOutbox,
-    focusSessions,
-    proposals,
-    users,
-    workspaces,
-    workspaceMembers,
-    apiKeys,
-    podMembers,
-    projectMembers,
-    links,
-    playbooks,
-    projects,
-    sessionEvaluations,
-    // Who is on a goal (0348): `startTrack` seeds the owner row.
-    trackParticipants,
-  ]) {
-    await h.client!.exec(ddlFor(t as unknown as PgTable));
-  }
+  await h.client!.exec(
+    pgliteSchemaDdl([
+      lifecycleTransitionOutbox,
+      focusSessions,
+      proposals,
+      users,
+      workspaces,
+      workspaceMembers,
+      apiKeys,
+      podMembers,
+      projectMembers,
+      links,
+      playbooks,
+      projects,
+      sessionEvaluations,
+      // Who is on a goal (0348): `startTrack` seeds the owner row.
+      trackParticipants,
+    ] as unknown as PgTable[])
+  );
   await h.client!.exec(`
     create table project_tracks (
       id uuid primary key default gen_random_uuid(),

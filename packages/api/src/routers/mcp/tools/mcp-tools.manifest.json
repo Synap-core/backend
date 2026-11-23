@@ -7241,7 +7241,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations; refused when something left behind uses it). You must be able to write both spaces. Returns { moved, proposed, errors } per item — a proposed move is success.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -7251,6 +7251,12 @@
               "type": "string"
             },
             "description": "Entity UUIDs to move (1-500)."
+          },
+          "playbookIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "workspaceId": {
             "type": "string",
@@ -7265,7 +7271,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["entityIds", "workspaceId"]
+        "required": ["workspaceId"]
       }
     },
     {
@@ -7432,13 +7438,22 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
       "inputSchema": {
         "type": "object",
         "properties": {
           "profileId": {
             "type": "string",
             "description": "Profile UUID."
+          },
+          "playbookId": {
+            "type": "string"
+          },
+          "skillId": {
+            "type": "string"
+          },
+          "revoke": {
+            "type": "boolean"
           },
           "targetWorkspaceId": {
             "type": "string",
@@ -7457,7 +7472,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["profileId", "targetWorkspaceId"]
+        "required": ["targetWorkspaceId"]
       }
     },
     {

@@ -6025,7 +6025,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+          "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations; refused when something left behind uses it). You must be able to write both spaces. Returns { moved, proposed, errors } per item — a proposed move is success.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6034,6 +6034,7 @@ export const tools = {
               items: { type: "string" },
               description: "Entity UUIDs to move (1-500).",
             },
+            playbookIds: { type: "array", items: { type: "string" } },
             workspaceId: {
               type: "string",
               description: "Destination workspace UUID.",
@@ -6043,7 +6044,7 @@ export const tools = {
               description: "Why they belong there — shown to the reviewer.",
             },
           },
-          required: ["entityIds", "workspaceId"],
+          required: ["workspaceId"],
         },
       },
       {
@@ -6204,11 +6205,14 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+          "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
         inputSchema: {
           type: "object",
           properties: {
             profileId: { type: "string", description: "Profile UUID." },
+            playbookId: { type: "string" },
+            skillId: { type: "string" },
+            revoke: { type: "boolean" },
             targetWorkspaceId: {
               type: "string",
               description: "Workspace UUID that gains access.",
@@ -6223,7 +6227,7 @@ export const tools = {
               description: "Why — shown to the reviewer. One line.",
             },
           },
-          required: ["profileId", "targetWorkspaceId"],
+          required: ["targetWorkspaceId"],
         },
       },
       {

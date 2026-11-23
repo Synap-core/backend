@@ -53,6 +53,7 @@ import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
+import { scopedDb } from "../../access/scoped-db.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { grantReadPredicate } from "../../access/grant-read.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
@@ -451,7 +452,7 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(playbooks.id, id),
-              userVisibleWhere(playbooks.workspaceId, userId)
+              scopedDb(AccessContext.from({ userId })).predicate(playbooks)
             )
           )
           .limit(1);
