@@ -66,13 +66,20 @@ const ROUTER = readSrc("routers/proposals.ts");
 const APPLY_APPROVAL = readSrc("routers/proposals/apply-approval.ts");
 const EXECUTORS = readExecutorsSource(API_SRC);
 
-/** `batchApprove`'s body (up to the next procedure). */
+/** `batchApprove`'s body (up to the next procedure) and its per-item door. */
 const BATCH_APPROVE_BLOCK = (() => {
   const start = ROUTER.indexOf("batchApprove: protectedProcedure");
   const end = ROUTER.indexOf("batchReject: protectedProcedure", start);
   expect(start).toBeGreaterThan(-1);
   expect(end).toBeGreaterThan(start);
-  return ROUTER.slice(start, end);
+  const item = ROUTER.indexOf("async function approveOneOfMany(");
+  expect(item, "the per-item door vanished — scan is blind").toBeGreaterThan(
+    -1
+  );
+  return (
+    ROUTER.slice(start, end) +
+    ROUTER.slice(item, ROUTER.indexOf("export const proposalsRouter", item))
+  );
 })();
 
 /** `approve`'s body (up to the next procedure). */

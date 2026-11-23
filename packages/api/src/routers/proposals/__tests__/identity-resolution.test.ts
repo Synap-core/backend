@@ -836,10 +836,16 @@ describe("source seams", () => {
   it("batchApprove forwards resolutions[id] as identityResolution", () => {
     const start = proposalsSrc.indexOf("batchApprove: protectedProcedure");
     const end = proposalsSrc.indexOf("batchReject: protectedProcedure", start);
-    const block = proposalsSrc.slice(start, end);
-    expect(block).toContain(
-      "const resolution = input.resolutions?.[proposalId]"
-    );
+    const item = proposalsSrc.indexOf("async function approveOneOfMany(");
+    // The procedure and the per-item door it runs for each id.
+    const block =
+      proposalsSrc.slice(start, end) +
+      proposalsSrc.slice(
+        item,
+        proposalsSrc.indexOf("export const proposalsRouter", item)
+      );
+    expect(block).toContain("resolution: input.resolutions?.[proposalId]");
+    expect(block).toContain("const resolution = args.resolution");
     expect(block).toContain("identityResolution: resolution");
     expect(block).toContain("...weakDedupFailureFields(error)");
     expect(block).toContain(

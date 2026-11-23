@@ -74,6 +74,11 @@ vi.mock("../../channels.js", () => ({ channelsRouter: {} }));
 vi.mock("../../../utils/split-brain-service.js", () => ({
   isPodReadOnly: vi.fn().mockResolvedValue(false),
 }));
+// The review authority has its own suites: here every item is the viewer's.
+vi.mock("../review-authority.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../review-authority.js")>()),
+  computeCanReviewApproval: async () => ({ allowed: true, reason: "owner" }),
+}));
 // Everything AFTER the gates. A refused item must never reach it.
 vi.mock("../apply-approval.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../apply-approval.js")>()),
