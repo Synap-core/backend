@@ -17364,6 +17364,11 @@ export interface UnifiedRun {
 	replayOf: string | null;
 	summary: string | null;
 	error: string | null;
+	/**
+	 * Why a run ended before it finished with nobody broken (`stop_reason`:
+	 * `budget`, `stages_left`, `no_effect`); null on every other ledger.
+	 */
+	stopReason: string | null;
 	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
 	triggeredBy: string | null;
 	/** Steps that completed / failed (automation runs only; null for other ledgers). */

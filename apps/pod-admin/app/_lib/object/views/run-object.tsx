@@ -127,7 +127,9 @@ export function useRunDetail(target: RunAddress | null) {
       ? { ...runActions(run), stop: canStopBox }
       : { cancel: false, runAgain: false, stop: false },
     boxRun,
-    pill: run ? machinePill("run", run.status) : null,
+    pill: run
+      ? machinePill("run", run.status, { stopReason: run.stopReason })
+      : null,
     who: run ? triggeredByLabel(run.triggeredBy, me.data?.id ?? null) : null,
     activity: (detail.data?.activity ?? []).slice(0, TIMELINE_MAX),
     activityTotal: detail.data?.activity.length ?? 0,

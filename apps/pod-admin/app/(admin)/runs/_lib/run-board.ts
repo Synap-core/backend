@@ -11,7 +11,7 @@
 
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
-import { statusMark } from "@synap-core/types/units";
+import { LIVE_RUN_STATUSES, statusMark } from "@synap-core/types/units";
 import { statusMarkPill } from "../../components/status-tone";
 import {
   formatRelative,
@@ -135,8 +135,11 @@ export function runActions(run: {
   status: string;
 }): { cancel: boolean; runAgain: boolean } {
   return {
-    // `playbookRuns.cancelRun` refuses anything not live (CONFLICT).
-    cancel: run.flowType === "playbook" && run.status === "running",
+    // `playbookRuns.cancelRun` takes a live run (queued, running, blocked,
+    // waiting on you, stale) and refuses anything else (CONFLICT).
+    cancel:
+      run.flowType === "playbook" &&
+      (LIVE_RUN_STATUSES as readonly string[]).includes(run.status),
     // A rule re-runs through `automations.trigger` (governed for agents).
     runAgain: run.flowType === "automation" && run.flowId !== null,
   };
