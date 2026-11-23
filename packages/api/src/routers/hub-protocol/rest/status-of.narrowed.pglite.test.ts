@@ -384,7 +384,9 @@ describe("GET /status-of?include=work, a key pinned to space A, end to end", () 
       const gates = answers[0]!.work!.items[0]!.gates.items as Array<
         Record<string, any>
       >;
-      return Object.fromEntries(gates.map((g) => [g.stageKey, g]));
+      return Object.fromEntries(
+        gates.map((g): [string, Record<string, any>] => [String(g.stageKey), g])
+      ) as Record<string, Record<string, any>>;
     };
     const withRead = await gatesOf(PIN_ALL);
     expect(withRead.review).toMatchObject({

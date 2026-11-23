@@ -281,7 +281,7 @@ function narrowGates(
   // has no gate to show.
   if (isUnavailable(v) || isUnavailable(stages)) return UNAVAILABLE;
   const g = v as Rec;
-  const items = (Array.isArray(g.items) ? g.items : []).flatMap((i) => {
+  const items = (Array.isArray(g.items) ? g.items : []).flatMap((i): Rec[] => {
     if (!isRec(i) || typeof i.stageKey !== "string") return [];
     const stageName = names.get(i.stageKey);
     if (stageName === undefined) return [];
