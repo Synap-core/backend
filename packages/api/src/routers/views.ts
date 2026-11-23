@@ -220,6 +220,10 @@ import {
 
 const logger = createLogger({ module: "views" });
 
+/** `views.execute`: the largest page a caller may ask for, and the deepest offset. */
+const VIEW_EXECUTE_MAX_LIMIT = 500;
+const VIEW_EXECUTE_MAX_OFFSET = 100_000;
+
 /**
  * Validate filters a client sends back for a view (a save, or ephemeral
  * execute filters) against the view's STORED filters: stored rows that
@@ -1308,6 +1312,14 @@ export const viewsRouter = router({
          * echoes back cannot fail the run.
          */
         filters: z.array(z.unknown()).optional(),
+        /**
+         * EPHEMERAL page: when present, they replace the stored query's
+         * `limit` / `offset` for this execution only (the stored pair is
+         * pagination, not part of what the view shows). `hasMore` in the
+         * answer says whether a next page exists.
+         */
+        limit: z.number().int().min(1).max(VIEW_EXECUTE_MAX_LIMIT).optional(),
+        offset: z.number().int().min(0).max(VIEW_EXECUTE_MAX_OFFSET).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -1357,9 +1369,17 @@ export const viewsRouter = router({
         filters: storedFilters = [],
         sorts = [],
         search,
-        limit = 100,
-        offset = 0,
+        limit: storedLimit = 100,
+        offset: storedOffset = 0,
       } = query;
+      // A stored pair predates the zod door (JSONB): read as a whole number,
+      // so `limit + 1` below is arithmetic, never string concatenation.
+      const whole = (v: unknown, fallback: number) => {
+        const n = Number(v);
+        return Number.isFinite(n) && n >= 0 ? Math.trunc(n) : fallback;
+      };
+      const limit = input.limit ?? whole(storedLimit, 100);
+      const offset = input.offset ?? whole(storedOffset, 0);
 
       // Ephemeral filters (input) replace the stored ones for this run. Stored
       // rows predate the zod door: they are REPAIRED into the grammar where
@@ -1589,10 +1609,17 @@ export const viewsRouter = router({
         .orderBy(
           ...(orderByClause.length > 0
             ? orderByClause
-            : [desc(entities.createdAt)])
+            : [desc(entities.createdAt)]),
+          // A unique last key: rows that tie on the sort (one import shares
+          // one created_at) keep one order, so no page skips or repeats them.
+          asc(entities.id)
         )
-        .limit(limit)
+        // One row past the page: it says whether a next page exists, and
+        // is never returned.
+        .limit(limit + 1)
         .offset(offset);
+      const hasMore = fetchedEntities.length > limit;
+      if (hasMore) fetchedEntities = fetchedEntities.slice(0, limit);
 
       // Apply manual ordering if present (from metadata)
       const metadata = view.metadata as ViewMetadata | undefined;
@@ -1660,6 +1687,8 @@ export const viewsRouter = router({
         // Filters that did not apply (stored rows outside the grammar). A
         // dropped filter WIDENS the result, so a surface must say so.
         droppedFilters,
+        // A next page exists (`offset + limit` onward).
+        hasMore,
       };
     }),
 

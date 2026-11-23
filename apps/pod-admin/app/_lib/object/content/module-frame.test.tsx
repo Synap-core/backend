@@ -31,6 +31,7 @@ import {
   ModuleSandbox,
   RendererSkeleton,
   createModuleFrameHost,
+  moduleFrameStatusOf,
   observeNear,
   readsToRefresh,
   writeErrorReceipt,
@@ -161,6 +162,7 @@ function harness(
     mechanism?: "module" | "page";
     typeKey?: string;
     answer?: unknown;
+    locale?: "en" | "fr";
   } = {}
 ) {
   const posted: Posted[] = [];
@@ -197,6 +199,7 @@ function harness(
       entityId: ENTITY,
     },
     theme: () => "dark",
+    ...(opts.locale ? { locale: () => opts.locale! } : {}),
     mechanism: opts.mechanism,
     onWriteAnswer: (r) => answers.push(r),
   });
@@ -253,6 +256,36 @@ describe("createModuleFrameHost — which messages count", () => {
       theme: "dark",
       sdkVersion: "2",
     });
+  });
+
+  it("init carries the console's language when the host knows it, and none otherwise", async () => {
+    const fr = harness({ locale: "fr" });
+    await fr.send({ type: "synap:ready" });
+    expect(
+      (fr.posted[0]!.message as { context: Record<string, unknown> }).context
+    ).toMatchObject({ locale: "fr", theme: "dark" });
+
+    const none = harness();
+    await none.send({ type: "synap:ready" });
+    expect(
+      (none.posted[0]!.message as { context: Record<string, unknown> }).context
+    ).not.toHaveProperty("locale");
+  });
+});
+
+describe("moduleFrameStatusOf — what a frame's status draws", () => {
+  it("ready draws the cell; an error the failed state; not-drawn the page's own content", () => {
+    expect(moduleFrameStatusOf({ state: "ready" })).toBe("ready");
+    expect(moduleFrameStatusOf({ state: "error", message: "boom" })).toBe(
+      "failed"
+    );
+    expect(
+      moduleFrameStatusOf({
+        state: "error",
+        message: "Not a list",
+        reason: "not-drawn",
+      })
+    ).toBe("not-drawn");
   });
 });
 
