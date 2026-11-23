@@ -1206,10 +1206,10 @@ export async function safeRevert(
 
 /**
  * An archived playbook is not live, so neither is what fires it: the SAME
- * teardown the archive doors run (`playbooksRouter.archive`) — its backing
- * cron automation and its activator rules. After the commit, because both read
- * the playbook's committed status. Without it, an undo archived the playbook
- * and its schedule kept firing (ticket cdf608a8).
+ * pass the archive doors run (`playbooksRouter.archive`) retires its
+ * activator rules, its schedule among them. After the commit, because it
+ * reads the playbook's committed status. Without it, an undo archived the
+ * playbook and its schedule kept firing.
  */
 async function tearDownArchivedPlaybooks(
   database: Database,
@@ -1217,19 +1217,13 @@ async function tearDownArchivedPlaybooks(
 ): Promise<void> {
   const ids = reverted.flatMap((t) => (t.kind === "playbook" ? [t.id] : []));
   if (ids.length === 0) return;
-  const { materializePlaybookCronAutomation } =
-    await import("../playbooks/cron-automation.js");
   const { convergePlaybookActivatorsSafely } =
     await import("../playbooks/playbook-activators.js");
   const rows = await database
-    .select()
+    .select({ id: playbooks.id, createdBy: playbooks.createdBy })
     .from(playbooks)
     .where(inArray(playbooks.id, ids));
   for (const row of rows) {
-    await materializePlaybookCronAutomation(row, {
-      userId: row.createdBy,
-      agentUserId: row.agentUserId,
-    });
     await convergePlaybookActivatorsSafely({
       playbookId: row.id,
       userId: row.createdBy,

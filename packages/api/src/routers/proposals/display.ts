@@ -2987,6 +2987,7 @@ function buildPlanReviewGraph(
   const projects: NonNullable<ProposalReviewGraph["projects"]> = [];
   const sessions: NonNullable<ProposalReviewGraph["sessions"]> = [];
   const documents: NonNullable<ProposalReviewGraph["documents"]> = [];
+  const tracks: NonNullable<ProposalReviewGraph["tracks"]> = [];
   const sessionLabelByRef = new Map<string, string>();
 
   data.operations.forEach((op, index) => {
@@ -3022,9 +3023,27 @@ function buildPlanReviewGraph(
           ...(op.subjectEntityId
             ? { subjectEntityId: op.subjectEntityId }
             : {}),
+          ...(op.trackRef ? { trackRef: op.trackRef } : {}),
+          ...(op.trackId ? { trackId: op.trackId } : {}),
         });
         return;
       }
+      case "create_track":
+        renderedOpIndexes.add(index);
+        tracks.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.direction ? { direction: op.direction } : {}),
+          ...(op.projectRef ? { projectRef: op.projectRef } : {}),
+          ...(op.projectId ? { projectId: op.projectId } : {}),
+          ...(op.parentRef ? { parentRef: op.parentRef } : {}),
+          ...(op.parentGoalId ? { parentGoalId: op.parentGoalId } : {}),
+          blockedBy: [
+            ...(op.blockedByRefs ?? []),
+            ...(op.blockedByTrackIds ?? []),
+          ],
+        });
+        return;
       case "create_document":
         renderedOpIndexes.add(index);
         documents.push({
@@ -3076,6 +3095,7 @@ function buildPlanReviewGraph(
     isPlan: true,
     planStepCount:
       projects.length +
+      tracks.length +
       sessions.length +
       documents.length +
       data.operations.filter((op) => op.op === "create_link").length,
@@ -3083,6 +3103,7 @@ function buildPlanReviewGraph(
     sessions,
     documents,
     links,
+    ...(tracks.length > 0 ? { tracks } : {}),
   };
 }
 

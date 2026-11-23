@@ -31,6 +31,7 @@ import {
 import {
   planSessionEdges,
   sessionOpsRootFirst,
+  trackOpsRootFirst,
   type PlanSessionEdge,
 } from "../services/capture-agent/capture-plan.js";
 import { createLogger } from "@synap-core/core";
@@ -499,6 +500,17 @@ export interface MaterializeLinkResult {
   preExisting?: true;
 }
 
+/** Per-op result for a `create_track` op (connected plan). */
+export interface MaterializeTrackResult {
+  ref: string;
+  opIndex: number;
+  trackId: string;
+  /** The start door handed back a LIVE goal of the same name — not this run's row. */
+  linked?: boolean;
+  /** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
+  blockerLinkIds?: string[];
+}
+
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
   ref: string;
@@ -603,6 +615,8 @@ export interface MaterializeResult {
   sessions: MaterializeSessionResult[];
   links: MaterializeLinkResult[];
   documents: MaterializeDocumentResult[];
+  /** Goals (`create_track`) a plan started. */
+  tracks?: MaterializeTrackResult[];
 }
 
 /**
@@ -859,8 +873,31 @@ export interface PlanCallers {
       awaitsBlockers?: boolean;
       plannedFor?: string | null;
       dueBy?: string | null;
+      /** The goal it works toward (an existing id, or one this plan started). */
+      trackId?: string | null;
       /** `linked` = the door reused an existing open session (never compensated). */
     }) => Promise<{ id: string; linked?: boolean }>;
+  };
+  /**
+   * A goal through THE start-goal door (`startTrack`), as the plan's owner,
+   * then its goal→goal `blocked_by` edges through THE governed dependency door.
+   */
+  trackCaller: {
+    create: (input: {
+      name: string;
+      projectId: string;
+      direction?: string;
+      kpi?: Record<string, unknown>;
+      criteria?: Array<Record<string, unknown>>;
+      workKind?: string;
+      endState?: string;
+      /** The goal it serves, when it already exists (in-plan parents first). */
+      parentGoalId?: string;
+    }) => Promise<{ id: string; linked: boolean }>;
+    addBlockers: (input: {
+      trackId: string;
+      blockerTrackIds: string[];
+    }) => Promise<{ linkIds: string[] }>;
   };
   linkCaller: {
     create: (input: {
@@ -1116,6 +1153,9 @@ function appliedRowsOf(
       .filter((l) => l.linkId && !l.preExisting)
       .map((l) => ({ kind: "link", id: l.linkId as string })),
     ...result.documents.map((d) => ({ kind: "document", id: d.documentId })),
+    ...(result.tracks ?? [])
+      .filter((t) => !t.linked)
+      .map((t) => ({ kind: "track", id: t.trackId })),
   ];
 }
 
@@ -1285,6 +1325,7 @@ export async function materializeCompositeGraph(
   const sessionResults: MaterializeSessionResult[] = [];
   const linkResults: MaterializeLinkResult[] = [];
   const documentResults: MaterializeDocumentResult[] = [];
+  const trackResults: MaterializeTrackResult[] = [];
   const workspaceResults: MaterializeWorkspaceResult[] = [];
   const kindResults: MaterializeKindResult[] = [];
   const lifecycleResults: MaterializeLifecycleResult[] = [];
@@ -1334,6 +1375,7 @@ export async function materializeCompositeGraph(
     sessions: sessionResults,
     links: linkResults,
     documents: documentResults,
+    ...(trackResults.length > 0 ? { tracks: trackResults } : {}),
   });
 
   // One update op through the update caller. Per-op resilient like every
@@ -2212,6 +2254,81 @@ export async function materializeCompositeGraph(
           .filter((e) => e.type === "blocked_by")
           .flatMap((e) => ("ref" in e.from ? [e.from.ref] : []))
       );
+      // ── Plan pass PT — GOALS, parents before children ──────────────────
+      // Before every session, so a session's `trackRef` resolves AT create
+      // (it is born in its goal, like `start_session` + `trackId`). The goal
+      // it serves is passed at start when it exists (an existing id, or an
+      // in-plan goal started earlier in this pass).
+      for (const i of trackOpsRootFirst(operations)) {
+        const op = operations[i];
+        if (op.op !== "create_track") continue;
+        currentOpIndex = i;
+        const projectId =
+          op.projectId ??
+          (op.projectRef
+            ? resolveCompositeRef(refToRealId, op.projectRef)
+            : undefined);
+        if (!projectId) {
+          failPlanStep(i, "a goal lives in a project: none was given");
+          continue;
+        }
+        const parentGoalId =
+          op.parentGoalId ??
+          (op.parentRef
+            ? trackResults.find((t) => t.ref === op.parentRef)?.trackId
+            : undefined);
+        const track = await planCallers.trackCaller.create({
+          name: op.name,
+          projectId,
+          ...(op.direction ? { direction: op.direction } : {}),
+          ...(op.kpi ? { kpi: op.kpi } : {}),
+          ...(op.criteria ? { criteria: op.criteria } : {}),
+          ...(op.workKind ? { workKind: op.workKind } : {}),
+          ...(op.endState ? { endState: op.endState } : {}),
+          ...(parentGoalId ? { parentGoalId } : {}),
+        });
+        registerEntityRef(refToRealId, i, op.ref, track.id, false);
+        trackResults.push({
+          ref: op.ref,
+          opIndex: i,
+          trackId: track.id,
+          ...(track.linked ? { linked: true } : {}),
+        });
+        // A LIVE goal of that name was handed back: somebody's goal. Placing
+        // it or making it wait from this plan would change it silently — the
+        // same reason a reused project's subject is never rebound.
+        if (
+          track.linked &&
+          (parentGoalId ||
+            (op.blockedByRefs?.length ?? 0) +
+              (op.blockedByTrackIds?.length ?? 0) >
+              0)
+        ) {
+          failPlanStep(
+            i,
+            `a live goal named "${op.name}" already exists in this project (${track.id}); the plan would place it or make it wait — rename the goal step, or file the sessions with its trackId`
+          );
+        }
+      }
+      // Goal → goal `blocked_by`, once every goal exists (either direction).
+      for (const result of trackResults) {
+        const op = operations[result.opIndex];
+        if (op.op !== "create_track") continue;
+        const blockerTrackIds = [
+          ...(op.blockedByRefs ?? []).map((ref) =>
+            resolveCompositeRef(refToRealId, ref)
+          ),
+          ...(op.blockedByTrackIds ?? []),
+        ];
+        if (blockerTrackIds.length === 0) continue;
+        currentOpIndex = result.opIndex;
+        const { linkIds } = await planCallers.trackCaller.addBlockers({
+          trackId: result.trackId,
+          blockerTrackIds,
+        });
+        result.blockerLinkIds = linkIds;
+      }
+
       // ── Plan pass P1 — SESSIONS, parents before children ───────────────
       for (const i of sessionOpsRootFirst(operations)) {
         const op = operations[i];
@@ -2246,6 +2363,11 @@ export async function materializeCompositeGraph(
           ...(waiting.has(op.ref) ? { awaitsBlockers: true } : {}),
           ...(op.plannedFor ? { plannedFor: op.plannedFor } : {}),
           ...(op.dueBy ? { dueBy: op.dueBy } : {}),
+          trackId:
+            op.trackId ??
+            (op.trackRef
+              ? resolveCompositeRef(refToRealId, op.trackRef)
+              : null),
         });
         registerEntityRef(refToRealId, i, op.ref, session.id, false);
         sessionResults.push({

@@ -40,6 +40,7 @@ const HIDDEN_RULE = randomUUID();
 const BOARD = randomUUID();
 const CELL = randomUUID();
 const HIDDEN_CELL = randomUUID();
+const LEAD = randomUUID();
 
 const q = (sql: string, params?: unknown[]) => h.client!.query(sql, params);
 
@@ -69,6 +70,10 @@ beforeAll(async () => {
        ($1,'generated:win-rate',$3,'Win rate','iframe','<div></div>'),
        ($2,'generated:secret',$4,'Secret cell','iframe','<div></div>')`,
     [CELL, HIDDEN_CELL, WS_SEEN, WS_HIDDEN]
+  );
+  await q(
+    `insert into entities (id, user_id, workspace_id, type, title, properties) values ($1,$2,$3,'lead','Acme','{}'::jsonb)`,
+    [LEAD, VIEWER, WS_SEEN]
   );
 }, 120_000);
 
@@ -126,6 +131,20 @@ describe("landed — what an approval made, as doors with their next step", () =
         next: null,
       },
       { id: BOARD, kind: "view", name: "Leads board", role: "created" },
+    ]);
+  });
+
+  it("names a landed entity by its kind (profile slug)", async () => {
+    const landed = await landedOf("approved", {
+      landed: [{ kind: "entity", id: LEAD, role: "created" }],
+    });
+    expect(landed).toEqual([
+      expect.objectContaining({
+        id: LEAD,
+        kind: "entity",
+        name: "Acme",
+        profileSlug: "lead",
+      }),
     ]);
   });
 

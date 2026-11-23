@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { ACTION_VERBS } from "../vocabulary/index.js";
 import {
+  LANDED_ROLE_VERB,
+  PROPOSAL_LANDED_ROLES,
   landedFromRecord,
   landedRoleOf,
   proposalLanded,
@@ -256,5 +259,15 @@ describe("readMaterializedOps — the one reader of byOp", () => {
         revertedAt: "2026-11-20",
       },
     ]);
+  });
+});
+
+describe("LANDED_ROLE_VERB — what approving did, as a vocabulary verb", () => {
+  it("names every role by a verb the vocabulary declares", () => {
+    for (const role of PROPOSAL_LANDED_ROLES) {
+      expect(Object.hasOwn(ACTION_VERBS, LANDED_ROLE_VERB[role]), role).toBe(
+        true
+      );
+    }
   });
 });

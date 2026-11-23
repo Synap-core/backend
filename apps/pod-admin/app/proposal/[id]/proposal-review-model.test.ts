@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { GOVERNANCE_POLICY_SENTENCES } from "@synap-core/types/proposals";
 import {
-  createdObject,
-  updatedObject,
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
+import {
+  aboutObject,
+  madeRows,
   reasonMark,
   reviewReadsWide,
   undoMark,
@@ -260,86 +264,138 @@ describe("reviewReadsWide — a proposal is as wide as the object it creates or 
   });
 });
 
-describe("createdObject — what an approved create made, openable", () => {
+describe("aboutObject — what the request names until it applies", () => {
   const ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
-  const base = {
-    status: "approved",
-    action: "create",
+  const ENTITY = "8e5a7d1f-7b2c-4b9f-8a64-4f3c2d1e0f22";
+  const pending = {
+    status: "pending",
+    proposalType: "document.update",
     targetType: "document",
     targetId: ID,
-    title: " Plan ",
-    graph: false,
+    data: {},
   };
 
-  it("names the document by the proposal's own target, approved or auto-approved", () => {
-    expect(createdObject(base)).toEqual({
+  it("names an update's object while it waits, and after a rejection", () => {
+    expect(aboutObject(pending)).toEqual({
       kind: "document",
       id: ID,
-      title: "Plan",
+      role: null,
     });
-    expect(createdObject({ ...base, status: "auto_approved" })?.id).toBe(ID);
+    expect(aboutObject({ ...pending, status: "rejected" })?.id).toBe(ID);
   });
 
-  it("names nothing while pending, rejected, an edit, a graph or an unhosted kind", () => {
-    expect(createdObject({ ...base, status: "pending" })).toBeNull();
-    expect(createdObject({ ...base, status: "rejected" })).toBeNull();
-    expect(createdObject({ ...base, action: "update" })).toBeNull();
-    expect(createdObject({ ...base, graph: true })).toBeNull();
-    expect(createdObject({ ...base, targetType: "workspace" })).toBeNull();
-    expect(createdObject({ ...base, targetId: "not-an-id" })).toBeNull();
-  });
-});
-
-describe("updatedObject — the existing object an update changes, openable", () => {
-  const ID = "7d4f6c0e-6a1b-4a8e-9a53-3f2b1c0d9e11";
-  const base = {
-    action: "update",
-    targetType: "document",
-    targetId: ID,
-    title: " Plan ",
-    graph: false,
-  };
-
-  it("names the document by the proposal's own target", () => {
-    expect(updatedObject(base)).toEqual({
-      kind: "document",
-      id: ID,
-      title: "Plan",
-    });
-  });
-
-  it("opens each kind under the word /open hosts it by (a session is not a focus_session there)", () => {
-    expect(updatedObject({ ...base, targetType: "entity" })?.kind).toBe(
-      "entity"
-    );
-    expect(updatedObject({ ...base, targetType: "playbook" })?.kind).toBe(
-      "playbook"
-    );
-    expect(updatedObject({ ...base, targetType: "skill" })?.kind).toBe("skill");
-    expect(updatedObject({ ...base, targetType: "focus_session" })?.kind).toBe(
+  it("opens a session under the word /open hosts it by", () => {
+    expect(aboutObject({ ...pending, targetType: "focus_session" })?.kind).toBe(
       "session"
     );
   });
 
-  it("has no status: the reviewer opens the object BEFORE deciding", () => {
-    // Unlike createdObject, there is no status input to refuse on at all.
-    expect(Object.keys(base)).not.toContain("status");
-    expect(updatedObject(base)).not.toBeNull();
+  it("names nothing once applied, a facet's entity and a partial apply included", () => {
+    expect(aboutObject({ ...pending, status: "approved" })).toBeNull();
+    expect(
+      aboutObject({ ...pending, status: "partially_approved" })
+    ).toBeNull();
+    const facet = {
+      status: "pending",
+      proposalType: "facet.detach",
+      targetType: "facet",
+      targetId: ID,
+      data: { entityId: ENTITY },
+    };
+    expect(aboutObject(facet)?.id).toBe(ENTITY);
+    expect(aboutObject({ ...facet, status: "approved" })).toBeNull();
   });
 
-  it("names nothing for a create, a delete, a graph or a kind /open does not host", () => {
-    expect(updatedObject({ ...base, action: "create" })).toBeNull();
-    expect(updatedObject({ ...base, action: "delete" })).toBeNull();
-    expect(updatedObject({ ...base, graph: true })).toBeNull();
-    expect(updatedObject({ ...base, targetType: "workspace" })).toBeNull();
-    expect(updatedObject({ ...base, targetType: null })).toBeNull();
-    expect(updatedObject({ ...base, targetType: "constructor" })).toBeNull();
+  it("names nothing for a pending create, a graph or a non-id target", () => {
+    expect(aboutObject({ ...pending, proposalType: "document.create" })).toBe(
+      null
+    );
+    expect(aboutObject({ ...pending, targetType: "composite" })).toBeNull();
+    expect(aboutObject({ ...pending, targetId: "not-an-id" })).toBeNull();
+  });
+});
+
+describe("madeRows — each landed object with its mark and one act", () => {
+  const AUTOMATION = "11111111-1111-4111-8111-111111111111";
+  const LEAD = "22222222-2222-4222-8222-222222222222";
+  const THING = "33333333-3333-4333-8333-333333333333";
+  const SESSION = "44444444-4444-4444-8444-444444444444";
+
+  it("an object that needs nothing: named by its kind, what approving did, no step", () => {
+    const [row] = madeRows([
+      {
+        id: LEAD,
+        kind: "entity",
+        profileSlug: "lead",
+        name: null,
+        role: "created",
+        next: null,
+      },
+    ]);
+    expect(row).toEqual({
+      kind: "lead",
+      openKind: "entity",
+      id: LEAD,
+      title: resolveObjectNoun("lead"),
+      done: resolveActionLabel("create", "past"),
+      step: null,
+    });
   });
 
-  it("names nothing without a real id, and keeps a missing title as null", () => {
-    expect(updatedObject({ ...base, targetId: "not-an-id" })).toBeNull();
-    expect(updatedObject({ ...base, targetId: null })).toBeNull();
-    expect(updatedObject({ ...base, title: "   " })?.title).toBeNull();
-    expect(updatedObject({ ...base, title: null })?.title).toBeNull();
+  it("a draft automation offers Turn on through its governed door", () => {
+    const [row] = madeRows([
+      {
+        id: AUTOMATION,
+        kind: "automation",
+        name: "Weekly digest",
+        role: "created",
+        next: { action: "turn_on", reason: "draft" },
+      },
+    ]);
+    expect(row?.step?.act).toEqual({
+      kind: "turn_on",
+      objectKind: "automation",
+      id: AUTOMATION,
+    });
+  });
+
+  it("work owed by the person is its mark and one door to the app", () => {
+    const [row] = madeRows([
+      {
+        id: THING,
+        kind: "entity",
+        name: "Acme",
+        role: "updated",
+        next: { action: "answer", reason: "owed_slot", sessionId: SESSION },
+      },
+    ]);
+    expect(row?.done).toBe(resolveActionLabel("update", "past"));
+    expect(row?.step?.act).toEqual({
+      kind: "in_app",
+      objectKind: "session",
+      id: SESSION,
+    });
+  });
+
+  it("what needs the person comes first; a step not read is marked, not first", () => {
+    const rows = madeRows([
+      { id: LEAD, kind: "entity", name: "Lead", role: "linked" },
+      { id: THING, kind: "entity", name: "Acme", role: "linked", next: null },
+      {
+        id: AUTOMATION,
+        kind: "automation",
+        name: "Digest",
+        role: "created",
+        next: { action: "see_failure", reason: "latest_failed" },
+      },
+    ]);
+    expect(rows.map((r) => r.id)).toEqual([AUTOMATION, LEAD, THING]);
+    expect(rows[0]?.step?.pill.kind).toBe("down");
+    expect(rows[1]?.step).toMatchObject({ measured: false, act: null });
+    expect(rows[2]?.step).toBeNull();
+  });
+
+  it("no landed objects, no rows", () => {
+    expect(madeRows(undefined)).toEqual([]);
   });
 });

@@ -22,6 +22,7 @@ function stubPlanCallers(
   overrides: Partial<{
     sessionCreate: PlanCallers["sessionCaller"]["create"];
     linkCreate: PlanCallers["linkCaller"]["create"];
+    trackCreate: PlanCallers["trackCaller"]["create"];
   }> = {}
 ) {
   const calls: string[] = [];
@@ -41,7 +42,7 @@ function stubPlanCallers(
         overrides.sessionCreate ??
           (async (input) => {
             calls.push(
-              `session:${input.goal}:project=${input.projectId}:subject=${input.subjectEntityId}`
+              `session:${input.goal}:project=${input.projectId}:subject=${input.subjectEntityId}${input.trackId ? `:track=${input.trackId}` : ""}`
             );
             return { id: `session-${++n}` };
           })
@@ -65,6 +66,27 @@ function stubPlanCallers(
       create: vi.fn(async (input) => {
         calls.push(`document:${input.title}:session=${input.sessionId}`);
         return { id: "doc-1" };
+      }),
+    },
+    trackCaller: {
+      create: vi.fn(
+        overrides.trackCreate ??
+          (async (input) => {
+            calls.push(
+              `track:${input.name}:project=${input.projectId}:parent=${input.parentGoalId ?? null}`
+            );
+            return { id: `track-${input.name}`, linked: false };
+          })
+      ),
+      addBlockers: vi.fn(async (input) => {
+        calls.push(
+          `track-blockers:${input.trackId}>${input.blockerTrackIds.join(",")}`
+        );
+        return {
+          linkIds: input.blockerTrackIds.map(
+            (b: string) => `tl-${input.trackId}-${b}`
+          ),
+        };
       }),
     },
     compensate: vi.fn(async (_applied: MaterializeResult) => ({
@@ -481,5 +503,151 @@ describe("materializeCompositeGraph — a plan step that waits is born planned (
         dueBy: undefined,
       },
     });
+  });
+});
+
+/**
+ * THE ONE PLAN DOOR (pathway plan 368179d7, P7): a goal rides the same plan as
+ * the sessions that join it.
+ *
+ * Pinned: goals apply parents-first BEFORE any session, so a session's
+ * `trackRef` reaches the session door AT create (born in its goal, as
+ * `start_session` + `trackId`); goal → goal edges run once every goal exists;
+ * the record names the goals and the goal edges, so a failed plan hands both
+ * to compensation.
+ */
+describe("materializeCompositeGraph — goals in the plan", () => {
+  const onePlan: CompositeProposalOperation[] = [
+    // Declared out of dependency order on purpose.
+    {
+      op: "create_session",
+      ref: "step",
+      goal: "Write the deck",
+      trackRef: "seed",
+    },
+    {
+      op: "create_track",
+      ref: "seed",
+      name: "Seed round",
+      projectId: "project-x",
+      parentRef: "company",
+      blockedByRefs: ["preseed"],
+    },
+    {
+      op: "create_track",
+      ref: "preseed",
+      name: "Pre-seed",
+      projectId: "project-x",
+    },
+    {
+      op: "create_track",
+      ref: "company",
+      name: "Fund Synap",
+      projectId: "project-x",
+    },
+  ];
+
+  it("goals parents-first before sessions, the session born in its goal", async () => {
+    const { callers, calls } = stubPlanCallers();
+    const entities = {
+      create: vi.fn(async (input: { title: string }) => {
+        calls.push(`entity:${input.title}`);
+        return { id: `entity-${input.title}` };
+      }),
+    };
+    const result = await materializeCompositeGraph(
+      onePlan,
+      entities,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    );
+
+    expect(calls).toEqual([
+      // Its in-plan parent is started first and passed AT start.
+      "track:Fund Synap:project=project-x:parent=null",
+      "track:Seed round:project=project-x:parent=track-Fund Synap",
+      "track:Pre-seed:project=project-x:parent=null",
+      // Goal → goal edges once EVERY goal exists (the blocker came after).
+      "track-blockers:track-Seed round>track-Pre-seed",
+      "session:Write the deck:project=null:subject=null:track=track-Seed round",
+    ]);
+    expect(result.tracks?.map((t) => [t.ref, t.trackId])).toEqual([
+      ["company", "track-Fund Synap"],
+      ["seed", "track-Seed round"],
+      ["preseed", "track-Pre-seed"],
+    ]);
+    // The record plan undo and the proposal stamp read.
+    const { buildMaterializedRecord } =
+      await import("../services/proposals/stamp-materialized.js");
+    const record = buildMaterializedRecord(result);
+    expect(record.trackIds).toEqual([
+      "track-Fund Synap",
+      "track-Seed round",
+      "track-Pre-seed",
+    ]);
+    expect(record.linkIds).toContain("tl-track-Seed round-track-Pre-seed");
+    expect(record.byOp?.seed).toEqual({
+      op: "create_track",
+      trackId: "track-Seed round",
+    });
+    expect(callers.compensate).not.toHaveBeenCalled();
+  });
+
+  it("a failed step after the goals hands them to compensation", async () => {
+    const { callers } = stubPlanCallers({
+      sessionCreate: async () => {
+        throw new Error("session door exploded");
+      },
+    });
+    const error = await materializeCompositeGraph(
+      onePlan,
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    ).catch((err) => err);
+    expect(error).toBeInstanceOf(CompositePlanApplyError);
+    const applied = vi.mocked(callers.compensate).mock.calls[0][0];
+    expect(applied.tracks?.map((t) => t.trackId).sort()).toEqual([
+      "track-Fund Synap",
+      "track-Pre-seed",
+      "track-Seed round",
+    ]);
+    expect(
+      applied.tracks?.find((t) => t.ref === "seed")?.blockerLinkIds
+    ).toEqual(["tl-track-Seed round-track-Pre-seed"]);
+  });
+
+  it("a LIVE goal of the same name handed back is never placed or made to wait from the plan", async () => {
+    const { callers } = stubPlanCallers({
+      trackCreate: async (input) => ({
+        id: `live-${input.name}`,
+        linked: input.name === "Seed round",
+      }),
+    });
+    const error = await materializeCompositeGraph(
+      onePlan,
+      entityCaller,
+      relationCaller,
+      undefined,
+      { planCallers: callers }
+    ).catch((err) => err);
+    expect(error).toBeInstanceOf(CompositePlanApplyError);
+    expect((error as CompositePlanApplyError).steps[0]).toEqual(
+      expect.objectContaining({ op: "create_track", ref: "seed" })
+    );
+    expect((error as CompositePlanApplyError).steps[0].reason).toMatch(
+      /already exists in this project/
+    );
+    expect(callers.trackCaller.addBlockers).not.toHaveBeenCalled();
+    expect(callers.sessionCaller.create).not.toHaveBeenCalled();
+    // Somebody's live goal is not this run's row: never compensated.
+    const applied = vi.mocked(callers.compensate).mock.calls[0][0];
+    const { buildMaterializedRecord } =
+      await import("../services/proposals/stamp-materialized.js");
+    expect(buildMaterializedRecord(applied).trackIds).not.toContain(
+      "live-Seed round"
+    );
   });
 });

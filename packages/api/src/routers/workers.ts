@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure } from "../trpc.js";
 import { requireUserId } from "../utils/user-scoped.js";
 import {
+  WORKER_ACTIVATOR_MODES,
   WORKER_ACTIVATOR_TRIGGERS,
   WORKER_RUN_OUTCOMES,
   WORKER_SCOPES,
@@ -44,13 +45,14 @@ import {
 
 const activatorWire = z.object({
   on: z.enum(WORKER_ACTIVATOR_TRIGGERS),
-  status: z.string().optional(),
+  status: z.union([z.string(), z.array(z.string())]).optional(),
   cron: z.string().optional(),
+  timezone: z.string().optional(),
   min: z.number().optional(),
   playbook: z.string().optional(),
   outcome: z.enum(WORKER_RUN_OUTCOMES).optional(),
   size: z.enum(WORKER_SIZES).optional(),
-  mode: z.enum(["run", "propose"]),
+  mode: z.enum(WORKER_ACTIVATOR_MODES),
   maxPendingApprovals: z.number().optional(),
 });
 
@@ -64,7 +66,7 @@ const enabledWorkerWire = z.object({
   activator: activatorWire.nullable(),
   profileSlug: z.string().nullable(),
   size: z.enum(WORKER_SIZES),
-  mode: z.enum(["run", "propose"]),
+  mode: z.enum(WORKER_ACTIVATOR_MODES),
   scope: z.enum(WORKER_SCOPES),
   projectId: z.string().nullable(),
   trackId: z.string().nullable(),

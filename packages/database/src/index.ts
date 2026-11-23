@@ -627,6 +627,7 @@ export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
 export * from "./utils/insert-automation.js";
 export * from "./utils/owner-person.js";
+export * from "./utils/person-time-zone.js";
 export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";
 

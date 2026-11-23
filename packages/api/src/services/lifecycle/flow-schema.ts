@@ -16,7 +16,11 @@ import {
   WAITING_ON_REASONS,
   type ThingBlocker,
 } from "@synap-core/types/units";
-import { WORKER_RUN_OUTCOMES, WORKER_SCOPES } from "@synap-core/types/workers";
+import {
+  WORKER_ACTIVATOR_MODES,
+  WORKER_RUN_OUTCOMES,
+  WORKER_SCOPES,
+} from "@synap-core/types/workers";
 
 const STAGE_CATEGORIES = [
   "backlog",
@@ -60,7 +64,7 @@ export const flowStageSchema = z.object({
 export const flowWorkerSchema = z.object({
   ruleId: z.string(),
   activatorKey: z.string(),
-  mode: z.enum(["run", "propose"]),
+  mode: z.enum(WORKER_ACTIVATOR_MODES),
   scope: z.enum(WORKER_SCOPES),
   projectId: z.string().nullable(),
   /** `stopped`: a session's worker whose session ended. */

@@ -889,8 +889,8 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "cell/define": "floored",
   "playbook/create": "floored",
   "playbook/promote": "floored",
-  // Editing a playbook can switch on its schedule, which materialises an ACTIVE
-  // cron automation (services/playbooks/cron-automation.ts).
+  // Editing a playbook can switch on its schedule activator, which compiles an
+  // ACTIVE cron rule.
   "playbook/update": "floored",
   // Choosing who runs a playbook for the person from now on (run choice v3,
   // decision D7): an agent or a third-party app may ASK, the person approves it
