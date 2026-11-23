@@ -176,7 +176,10 @@ async function loadDefinition(
     })
     .from(playbooks)
     .where(
-      and(eq(playbooks.id, id), scopedDb(AccessContext.operator({ userId })).predicate(playbooks))
+      and(
+        eq(playbooks.id, id),
+        scopedDb(AccessContext.operator({ userId })).predicate(playbooks)
+      )
     )
     .limit(1);
   if (!row) return null;

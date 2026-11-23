@@ -199,7 +199,9 @@ async function visiblePlaybooks(input: {
     .from(playbooks)
     .where(
       and(
-        scopedDb(AccessContext.operator({ userId: input.userId })).predicate(playbooks),
+        scopedDb(AccessContext.operator({ userId: input.userId })).predicate(
+          playbooks
+        ),
         ...(input.playbookId ? [eq(playbooks.id, input.playbookId)] : []),
         ...(input.playbookIds
           ? [inArray(playbooks.id, [...input.playbookIds])]

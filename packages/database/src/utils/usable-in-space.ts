@@ -17,7 +17,10 @@ import { and, eq, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db, type db as Db } from "../client-pg.js";
 import { spaceAccess, type SpaceAccessObjectType } from "../schema/profiles.js";
-import { workspaceLensWhere, type WorkspaceLens } from "./user-visible-where.js";
+import {
+  workspaceLensWhere,
+  type WorkspaceLens,
+} from "./user-visible-where.js";
 
 /** A shareable object's type in `space_access` and its id column. */
 export interface SharedAs {

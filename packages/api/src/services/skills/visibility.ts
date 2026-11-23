@@ -31,13 +31,7 @@
  * It is a SQL predicate, not a post-fetch filter, so `limit`/`offset` and any
  * count stay honest. It is vacuously true for a row that is not a rule.
  */
-import {
-  and,
-  eq,
-  or,
-  sharedReadableWhere,
-  type SQL,
-} from "@synap/database";
+import { and, eq, or, sharedReadableWhere, type SQL } from "@synap/database";
 import { skills } from "@synap/database/schema";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { ruleNotExpiredWhere } from "../rules/expiry.js";

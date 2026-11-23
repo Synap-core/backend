@@ -1037,7 +1037,9 @@ export const governanceRulesRouter = router({
         db.query.playbooks.findFirst({
           where: and(
             eq(playbooks.id, input.subjectId),
-            scopedDb(AccessContext.operator({ userId: ctx.userId })).predicate(playbooks)
+            scopedDb(AccessContext.operator({ userId: ctx.userId })).predicate(
+              playbooks
+            )
           ),
           columns: {
             id: true,
