@@ -12,5 +12,9 @@
  *   1  the contract before 23 Nov 2026
  *   2  `views.execute` limit / offset, `update_entity` title (alone or with
  *      properties), `profiles.get` fill, init `locale`, `synap:error` reason
+ *   3  the frame's context (`surface-context.ts`): `synap:context` /
+ *      `synap:context:result` (`window.synap.context()`,
+ *      `SynapWidget.context()`), init `anchor` / `projectId` / `goalId` /
+ *      `filters` / `brand`, and the brand's CSS after the host's tokens
  */
-export const CELL_BRIDGE_CONTRACT_VERSION = 2;
+export const CELL_BRIDGE_CONTRACT_VERSION = 3;

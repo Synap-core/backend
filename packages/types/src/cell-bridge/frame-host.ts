@@ -34,6 +34,8 @@
  *     checked payload (`pickBridgeWritePayload`), stamped by the HOST with
  *     `viewContext`, `source: "user"` and its lens; the frame reads what the
  *     pod answered (approved, proposed or denied), never an optimistic yes;
+ *   - `synap:context` → the host's context (`context()`, frame contract v3),
+ *     or an error when the host gives none;
  *   - navigate, toast, open-panel, surface:open, context-update → `on.*`.
  *
  * Every answer is posted to that same window, only while it is still the
@@ -44,6 +46,7 @@
 import {
   CELL_BRIDGE_MAX_IN_FLIGHT,
   cellBridgeAnswer,
+  cellBridgeContextAnswer,
   cellBridgeErrorText,
   type CellBridgeEventLike,
   type CellBridgeTarget,
@@ -70,6 +73,7 @@ import {
   type CellFrameErrorReason,
 } from "./messages.js";
 import type { CellFrameInitContext } from "./module-frame.js";
+import type { SurfaceContext } from "./surface-context.js";
 
 /** The lens the host stamps on every read and write: never the frame's. */
 export interface CellFrameLens {
@@ -110,6 +114,11 @@ export interface CellFrameHostOptions {
   identity: CellFrameIdentity;
   /** The context `synap:init` carries, read when the frame says ready (the theme is current then). */
   init: () => Omit<CellFrameInitContext, "sdkVersion">;
+  /**
+   * What the frame is about (`synap:context`, frame contract v3). Absent: the
+   * frame reads an error. Throws on a failed read.
+   */
+  context?: () => SurfaceContext | Promise<SurfaceContext>;
   /** One allowed read, as the viewer. Throws on a failed read. Absent: every read is refused. */
   read?: (
     op: CellBridgeReadOp,
@@ -228,6 +237,9 @@ export function createCellFrameHost(options: CellFrameHostOptions) {
         return;
       case "synap:context-update":
         on.contextUpdate?.(msg.meta);
+        return;
+      case "synap:context":
+        post(await cellBridgeContextAnswer(msg.id, options.context));
         return;
       case "synap:query": {
         const fail = (error: string) =>
