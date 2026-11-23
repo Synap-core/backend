@@ -2,13 +2,14 @@
  * Hub Protocol - Views Router
  *
  * Governance:
- *   - listViews:   auto-approved (read)
+ *   - listViews:   auto-approved (read), the VISIBLE floor (viewReadableWhere)
  *   - createView:  auto-approved (view.create in DEFAULT_AUTO_APPROVE)
  *   - updateView:  generates proposal (requires user review)
  *   - deleteView:  NOT exposed — agents cannot delete views
  */
 
 import { grantReadPredicate } from "../../access/grant-read.js";
+import { viewReadableWhere } from "../../utils/view-visibility.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../../trpc.js";
@@ -98,7 +99,12 @@ async function assertViewConfigPlaceable(
 
 export const hubViewsRouter = router({
   /**
-   * List views in a workspace
+   * List the views the caller can SEE (Surfaces P1): the same floor as the
+   * operator `views.list` (`viewReadableWhere`: a workspace view by
+   * membership, a pod-personal view by its owner, a view exposed to one of
+   * the caller's projects), not only the views they created — an owner-only
+   * list hid a co-worker's board, so "list before you create" could not hold.
+   * `workspaceId` and `projectId` narrow.
    * Requires: hub-protocol.read scope
    */
   listViews: scopedProcedure(["hub-protocol.read"])
@@ -106,6 +112,7 @@ export const hubViewsRouter = router({
       z.object({
         userId: z.string(),
         workspaceId: z.string().uuid().nullable().optional(),
+        projectId: z.string().uuid().optional(),
         profileId: z.string().uuid().optional(),
         type: z.string().optional(),
       })
@@ -115,15 +122,15 @@ export const hubViewsRouter = router({
 
       const rows = await db.query.views.findMany({
         where: and(
-          // Scope to the caller's own views — mirrors the operator views.list
-          // (eq userId). Without it the optional filters degrade to a null-where
-          // returning every view on the pod.
-          eq(views.userId, ctx.userId as string),
+          // The visible floor. Without a floor the optional filters degrade
+          // to a null-where returning every view on the pod.
+          viewReadableWhere(ctx.userId as string, undefined),
           // W1 — the calling key's grant (`view` subject), narrow-only.
           grantReadPredicate(views),
           input.workspaceId
             ? eq(views.workspaceId, input.workspaceId)
             : undefined,
+          input.projectId ? eq(views.projectId, input.projectId) : undefined,
           input.type ? eq(views.type, input.type) : undefined,
           input.profileId
             ? // views store scopeProfileIds as JSONB array — simple text match
