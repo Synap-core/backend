@@ -5493,6 +5493,14 @@ declare const WORKER_SIZES: readonly [
 	"per_moment"
 ];
 export type WorkerSize = (typeof WORKER_SIZES)[number];
+declare const WORKER_ACTIVATOR_MODES: readonly [
+	"run",
+	"propose",
+	"appointment"
+];
+export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
 /**
  * "Unless the thing carries `property`": present = a value that is not null,
  * not an empty string and not an empty list. One shape on purpose: the
@@ -6252,7 +6260,7 @@ export interface PlaybookRunWorkerSpec {
 	/** The subject kind or role the worker works on. */
 	profileSlug: string;
 	/** The status its things sit in (enters_status / count / schedule; a list for schedule). */
-	status?: string | string[];
+	status?: WorkerStatusSpec;
 	/** A `count` worker's threshold. */
 	minCount?: number;
 	maxPendingApprovals?: number;
@@ -12599,8 +12607,7 @@ export interface ProcessAutomation {
 export interface ProcessWorker {
 	ruleId: string;
 	activatorKey: string;
-	/** `appointment`: a schedule that opens a session for the person. */
-	mode: "appointment" | "propose" | "run";
+	mode: WorkerActivatorMode;
 	scope: string;
 	/** `stopped`: a session's worker whose session ended. */
 	state: "paused" | "running" | "stopped";
