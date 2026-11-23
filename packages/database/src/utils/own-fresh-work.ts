@@ -17,7 +17,8 @@
  *     - either: an applied plan this agent filed through this key made it
  *       (the proposal's `data.materialized` names it). Its making — the
  *       create event the approval wrote — is not a person's touch.
- *  2. FRESH — created in the last {@link OWN_WORK_FRESH_HOURS} hours.
+ *  2. FRESH — created in the last `governance.own_work_fresh_hours` hours
+ *     (a pod setting, `pod-settings.ts`; 24 unless a person changed it).
  *  3. UNTOUCHED BY A PERSON — no completed write on it since that a person
  *     made (an event with no agent, from a person's door — not the system,
  *     an automation, a sync or a migration).
@@ -38,13 +39,11 @@ import { entities } from "../schema/entities.js";
 import { events } from "../schema/events.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { ProposalStatus, proposals } from "../schema/proposals.js";
+import { readPodNumberSetting } from "./pod-settings.js";
 
 type DbHandle = typeof import("../client-pg.js").db;
 
 const logger = createLogger({ module: "own-fresh-work" });
-
-/** How long an agent's work stays "fresh" (founder B3b: 24 hours). */
-export const OWN_WORK_FRESH_HOURS = 24;
 
 /** Event sources that are never a person (`auditLog`'s `source`). */
 const NON_PERSON_SOURCES = ["system", "automation", "sync", "migration"];
@@ -119,11 +118,15 @@ export async function isOwnFreshWork(
   const { agentUserId, apiKeyId } = input;
   const ids = [...new Set(input.subjectIds)];
   if (!agentUserId || !apiKeyId || ids.length === 0) return false;
-  const since = new Date(
-    (input.now ?? new Date()).getTime() - OWN_WORK_FRESH_HOURS * 3_600_000
-  );
 
   try {
+    const freshHours = await readPodNumberSetting(
+      db,
+      "governance.own_work_fresh_hours"
+    );
+    const since = new Date(
+      (input.now ?? new Date()).getTime() - freshHours * 3_600_000
+    );
     const planMade = await planMadeSubjectIds(db, {
       agentUserId,
       apiKeyId,

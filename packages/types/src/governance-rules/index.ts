@@ -101,6 +101,15 @@ export const REVERSIBLE_CLASS_PATTERN = "@reversible";
 export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
 
 /**
+ * The two floor families a pod may switch (`FLOOR_CLASS_PATTERNS` in
+ * `@synap/governance-policy`, pinned the same way): switched on, an agent's
+ * kind definitions / its playbook, automation and space creates and automation
+ * activations are no longer always asked; the other approval rules still apply.
+ */
+export const AGENT_DEFINES_KINDS_CLASS_PATTERN = "@agent-defines-kinds";
+export const AGENT_BUILDS_STRUCTURE_CLASS_PATTERN = "@agent-builds-structure";
+
+/**
  * The pod's two class defaults in words: THE copy for the switch on the
  * desktop and on the phone ("How agents act"), and for the rule list's title
  * of the row each switch owns. ONE home, so the surfaces cannot word one rule
@@ -118,6 +127,14 @@ export const POD_DEFAULT_WORDS: Readonly<
     label: "Tidy their own new work",
     line: "Agents file what they made in the last day into the project you named, and close their own tasks. Each is listed with Undo; anything you changed since still asks.",
   },
+  [AGENT_DEFINES_KINDS_CLASS_PATTERN]: {
+    label: "Define new kinds without always asking",
+    line: "Off, an agent always asks before it defines a kind or a role. On, your other approval rules decide.",
+  },
+  [AGENT_BUILDS_STRUCTURE_CLASS_PATTERN]: {
+    label: "Create playbooks, automations and spaces without always asking",
+    line: "Off, an agent always asks before it creates a playbook, an automation or a space, or turns an automation on. On, your other approval rules decide.",
+  },
 };
 
 /**
@@ -133,6 +150,12 @@ export function describeWritePattern(pattern: string): string {
   }
   if (pattern === OWN_ORGANISE_CLASS_PATTERN) {
     return `An agent tidying its own new work (${pattern})`;
+  }
+  if (pattern === AGENT_DEFINES_KINDS_CLASS_PATTERN) {
+    return `An agent defining a kind or role (${pattern})`;
+  }
+  if (pattern === AGENT_BUILDS_STRUCTURE_CLASS_PATTERN) {
+    return `An agent creating a playbook, automation or space (${pattern})`;
   }
   // Wildcards are words too: `*` alone, `note.*` and `*.create` each say
   // "any" in words rather than printing the star as a noun or a verb.
@@ -354,8 +377,9 @@ export function rulePattern(rule: TargetRow): string | null {
 
 /**
  * Is this the row BEHIND a root switch ("Act directly on changes that can be
- * undone", "Tidy their own new work")? `setReversibleDefault` /
- * `setOwnOrganiseDefault` own every row with exactly this shape (principal
+ * undone", "Tidy their own new work", the two floor switches)?
+ * `setReversibleDefault`, `setOwnOrganiseDefault` and `setPodFloorDefault`
+ * own every row with exactly this shape (principal
  * any · scope pod · action · the class pattern), so revoking it anywhere else
  * would silently flip the switch.
  */
@@ -369,8 +393,7 @@ export function isRootSwitchRule(
     rule.principalKind === "any" &&
     rule.scopeKind === "pod" &&
     rule.targetKind === "action" &&
-    (rule.targetPattern === REVERSIBLE_CLASS_PATTERN ||
-      rule.targetPattern === OWN_ORGANISE_CLASS_PATTERN)
+    Object.prototype.hasOwnProperty.call(POD_DEFAULT_WORDS, rule.targetPattern)
   );
 }
 

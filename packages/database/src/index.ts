@@ -131,6 +131,7 @@ export * from "./utils/knowledge-contract.js";
 // Message shape matcher (shared door) + the config-settings/guideline store.
 export * from "./utils/message-shape.js";
 export * from "./utils/config-settings.js";
+export * from "./utils/pod-settings.js";
 export * from "./utils/structure-context.js";
 export * from "./utils/import-staging.js";
 export * from "./utils/filed-document.js";

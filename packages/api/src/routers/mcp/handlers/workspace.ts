@@ -560,8 +560,9 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Provenance: this create came through the MCP door.
       door: "mcp",
-      // Gravity evidence — the tRPC create enforces ≥5 caller-visible ids for
-      // agent callers (projectCtx carries the agent identity).
+      // Gravity evidence: below the pod's evidence count the tRPC create
+      // files an agent's project for review, marked (projectCtx carries the
+      // agent identity).
       evidenceEntityIds: Array.isArray(args.evidenceEntityIds)
         ? (args.evidenceEntityIds as string[])
         : undefined,

@@ -4558,7 +4558,7 @@ export const tools = {
             projects: {
               type: "array",
               description:
-                "PLAN: projects to create. `ref` is how sessions/entities point at it (`projectRef`). An agent-proposed project needs ≥5 evidence entities (`evidenceRefs` of entities in this call + `evidenceEntityIds` you can see); below that the step is still filed, MARKED for the reviewer, and never auto-applies.",
+                "PLAN: projects to create. `ref` is how sessions/entities point at it (`projectRef`). An agent-proposed project needs the pod's evidence count of entities (5 by default: `evidenceRefs` of entities in this call + `evidenceEntityIds` you can see); below that the step is still filed, MARKED for the reviewer, and never auto-applies.",
               items: {
                 type: "object",
                 properties: {
@@ -4997,7 +4997,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). You MUST pass evidenceEntityIds: at least 5 existing entity ids that would belong to this project, or the create is rejected. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status="proposed" is SUCCESS — say it is awaiting review, do not retry.',
+          'Create a project — a cross-cutting lens for an initiative/venture that organizes entities across workspaces (a workspace is a domain lens; a project cuts across them). workspaceId = its HOME workspace (optional). A PROJECT IS A COMMITMENT WITH GRAVITY: never create one per git-repo, per-feature, or per-task — those are entities (task/plan/note). Pass evidenceEntityIds: existing entity ids that would belong to this project (the evidence count this pod sets, 5 by default); with fewer the create is still filed for review, MARKED for the reviewer, and never auto-applies. A project with the same name is reused; a similar one, or the same one still waiting for review, does not block: the create is filed for review showing it, so reuse it instead of making a near-duplicate. An agent call lands as a proposal unless governance has widened it: status="proposed" is SUCCESS — say it is awaiting review, do not retry.',
         inputSchema: {
           type: "object",
           properties: {
@@ -5016,7 +5016,7 @@ export const tools = {
               type: "array",
               items: { type: "string" },
               description:
-                "REQUIRED for agents: ≥5 existing, visible entity ids that would belong to this project (its gravity). Fewer/invalid ⇒ rejected with guidance to store as an entity or reuse an existing project.",
+                "For agents: existing, visible entity ids that would belong to this project (its gravity; the pod's evidence count, 5 by default). Fewer ⇒ filed for review, marked, never auto-applied: store it as an entity or reuse an existing project instead when it is not a commitment.",
             },
             usedWorkspaceIds: {
               type: "array",

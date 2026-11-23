@@ -19,8 +19,13 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import {
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
   OWN_ORGANISE_CLASS_PATTERN,
   REVERSIBLE_CLASS_PATTERN,
+  floorClassOf,
+  type AgentPolicyInput,
+  type FloorClassPattern,
 } from "@synap/governance-policy";
 import { governanceRules } from "../schema/governance-rules.js";
 import { authoredCreatedBy } from "./governance-rule-provenance.js";
@@ -35,9 +40,13 @@ export const REVERSIBLE_DEFAULT_CREATED_BY = "system:reversible-default";
  * switched from Settings › Approvals. `@reversible` (2026-09-28) and
  * `@own-organise` (FB1020 B3, 2026-10-21: an agent's organisational moves on
  * its own fresh work act directly). Same store, same rung, same switch logic.
+ * The two floor families (`FloorClassPattern`, seeded `propose` by 0451) use
+ * the same row and switch; on, their floor yields (`readFloorsYield`).
  */
 export type PodClassPattern =
-  typeof REVERSIBLE_CLASS_PATTERN | typeof OWN_ORGANISE_CLASS_PATTERN;
+  | typeof REVERSIBLE_CLASS_PATTERN
+  | typeof OWN_ORGANISE_CLASS_PATTERN
+  | FloorClassPattern;
 
 const podClassRow = (pattern: PodClassPattern) =>
   and(
@@ -127,4 +136,24 @@ export function setOwnOrganiseDefault(
     ...input,
     pattern: OWN_ORGANISE_CLASS_PATTERN,
   });
+}
+
+/**
+ * Whether this write's floor family is switched on (its class row active and
+ * `auto`): the engine's `floorsYield`. Reads nothing for a write outside both
+ * families. A revoked, missing or `propose` row keeps the floor.
+ */
+export async function readFloorsYield(
+  db: DbHandle,
+  eventKey: string
+): Promise<AgentPolicyInput["floorsYield"]> {
+  const family = floorClassOf(eventKey);
+  if (!family) return undefined;
+  const { enabled } = await readPodClassDefault(db, family);
+  if (!enabled) return undefined;
+  return family === AGENT_DEFINES_KINDS_CLASS_PATTERN
+    ? { agentDefinesKinds: true }
+    : family === AGENT_BUILDS_STRUCTURE_CLASS_PATTERN
+      ? { agentBuildsStructure: true }
+      : undefined;
 }

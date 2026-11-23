@@ -12,8 +12,10 @@ import {
   type AutomationStatusValue,
 } from "@synap-core/types/units";
 import { nextCronRunAtFor } from "@synap/shared-utils";
+import { AGENT_BUILDS_STRUCTURE_CLASS_PATTERN } from "@synap/governance-policy";
 import { automations } from "../schema/automations.js";
 import { isUniqueViolation } from "./pg-errors.js";
+import { readPodClassDefault } from "./reversible-default.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
 type DbHandle = any;
@@ -72,10 +74,17 @@ export async function insertAutomation(
   db: DbHandle,
   input: InsertAutomationInput
 ): Promise<InsertedAutomation | null> {
+  const actorIsAgent = Boolean(input.owner.agentUserId);
   const status = statusAtCreate({
     requested: input.requested,
     personApproved: input.personApproved,
-    actorIsAgent: Boolean(input.owner.agentUserId),
+    actorIsAgent,
+    // Read only when it can matter: an agent's create no person approved.
+    agentMayActivate:
+      actorIsAgent && !input.personApproved
+        ? (await readPodClassDefault(db, AGENT_BUILDS_STRUCTURE_CLASS_PATTERN))
+            .enabled
+        : false,
   });
   const nextRunAt =
     status === "active" && input.values.triggerType === "cron"

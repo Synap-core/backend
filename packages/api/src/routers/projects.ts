@@ -512,7 +512,8 @@ export const projectsRouter = router({
         usedWorkspaceIds: z.array(z.string().uuid()).max(50).optional(),
         /**
          * Agent gravity evidence: existing entity ids that would belong to this
-         * project. Required (≥5, caller-visible) for AGENT-initiated creates;
+         * project. Below the pod's evidence count (`governance.project_evidence_min`,
+         * caller-visible ids) an AGENT's create is filed for review, marked;
          * ignored for human creators. See `assessEvidenceGravity`.
          */
         evidenceEntityIds: z.array(z.string().uuid()).max(500).optional(),

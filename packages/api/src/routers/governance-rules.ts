@@ -57,6 +57,11 @@ import {
   setReversibleDefault,
   readOwnOrganiseDefault,
   setOwnOrganiseDefault,
+  readPodClassDefault,
+  setPodClassDefault,
+  readPodNumberSettings,
+  setPodNumberSetting,
+  POD_NUMBER_SETTING_KEYS,
 } from "@synap/database";
 import {
   GOVERNANCE_PRINCIPAL_CLASSES,
@@ -120,6 +125,9 @@ import {
   nonWidenableFloorFor,
   REVERSIBLE_EVENT_KEYS,
   OWN_ORGANISE_EVENT_KEYS,
+  AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
+  FLOOR_CLASS_PATTERNS,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
 } from "@synap/governance-policy";
 
 // The active-rule predicate, the pod∪workspace scope lens, and the agent-label
@@ -788,7 +796,7 @@ export const governanceRulesRouter = router({
           rung: "2.08",
           editable: false as const,
           actions: AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[],
-          note: "An agent defining a kind or role always goes to review, and no rule can widen it. A person defining one is unaffected.",
+          note: "An agent defining a kind or role always goes to review, and no rule can widen it; only the pod switch @agent-defines-kinds lets the other approval rules decide. A person defining one is unaffected.",
         },
         {
           key: "agent-structure" as const,
@@ -796,7 +804,7 @@ export const governanceRulesRouter = router({
           rung: "2.09",
           editable: false as const,
           actions: AGENT_STRUCTURE_WRITE_EVENT_KEYS as readonly string[],
-          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it. A person doing the same is unaffected.",
+          note: "An agent creating a workspace, cell, playbook or automation — or activating an automation — always goes to review, and no rule can widen it; only the pod switch @agent-builds-structure lets the other approval rules decide its playbook, automation and workspace creates and automation activations. A person doing the same is unaffected.",
         },
         {
           key: "destructive" as const,
@@ -878,6 +886,78 @@ export const governanceRulesRouter = router({
         enabled: input.enabled,
         userId: ctx.userId,
       });
+    }),
+
+  /**
+   * The floors a pod may switch (`FLOOR_CLASS_PATTERNS`): each family's class
+   * row state, the writes it covers, and the pod's number settings the
+   * governance reads (`POD_NUMBER_SETTINGS`). Read by Settings › Approvals.
+   */
+  podFloorDefaults: protectedProcedure.query(async ({ ctx }) => {
+    const families = await Promise.all(
+      FLOOR_CLASS_PATTERNS.map(async (pattern) => ({
+        pattern,
+        ...(await readPodClassDefault(db, pattern)),
+        actions:
+          pattern === AGENT_DEFINES_KINDS_CLASS_PATTERN
+            ? (AGENT_SCHEMA_DEFINITION_EVENT_KEYS as readonly string[])
+            : (AGENT_BUILDS_STRUCTURE_EVENT_KEYS as readonly string[]),
+      }))
+    );
+    return {
+      families,
+      settings: await readPodNumberSettings(db),
+      canManage: await isPodAdmin(ctx.userId),
+    };
+  }),
+
+  /**
+   * Switch one floor family: on, its floor yields to the other approval
+   * rules (never auto by itself); off, the floor holds. Pod-admin only,
+   * humans only, with the reversible default's step-up.
+   */
+  setPodFloorDefault: credentialProcedure
+    .input(presenceInput)
+    .input(
+      z.object({
+        pattern: z.enum(FLOOR_CLASS_PATTERNS),
+        enabled: z.boolean(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      return setPodClassDefault(db, {
+        pattern: input.pattern,
+        enabled: input.enabled,
+        userId: ctx.userId,
+      });
+    }),
+
+  /** Set one of the pod's governance number settings. Pod-admin only, humans only. */
+  setPodSetting: credentialProcedure
+    .input(presenceInput)
+    .input(
+      z.object({
+        key: z.enum(POD_NUMBER_SETTING_KEYS),
+        value: z.number().int(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertPodAdmin(ctx.userId);
+      try {
+        return {
+          value: await setPodNumberSetting(db, {
+            key: input.key,
+            value: input.value,
+            userId: ctx.userId,
+          }),
+        };
+      } catch (err) {
+        if (err instanceof RangeError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
     }),
 
   /**

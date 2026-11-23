@@ -169,8 +169,9 @@ Never a required step. Never create a company project on a team pod.
    auto-apply (that is success, not failure).
 3. Else **ask the human** to create the project (humans skip the gravity floor).
 4. Direct create (`synap_create_project` / `POST /api/hub/projects`) **only**
-   with `evidenceEntityIds`: **≥5 existing, visible** entity ids that would
-   belong to the project. Fewer/invalid ⇒ rejected. **Never POST without
+   with `evidenceEntityIds`: **existing, visible** entity ids that would
+   belong to the project (the pod's evidence count, 5 by default). Fewer ⇒
+   filed for review, marked, never auto-applied. **Never POST without
    evidence on an agent key.**
 
 Humans creating via UI/CLI as themselves skip the evidence floor.
@@ -317,7 +318,7 @@ lens; give them that one, linked and onboarded.
 - **Capabilities are opt-in.** Never connect an external tool without asking.
 - **Project is optional.** Reuse an existing one; skip entirely on a team pod
   or when the user doesn't want one. Agents never blind-POST `/projects`
-  without `evidenceEntityIds` (≥5). Never invent a company project on a team
+  without `evidenceEntityIds` (5 by default). Never invent a company project on a team
   pod. When a project _is_ in play, apply with `projectId` so the uses-index
   stamps; do not invent nested projects.
 - **Sub-work = sessions.** Phases/blockers/sub-projects → `synap_start_session`.

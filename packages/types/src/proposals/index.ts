@@ -1320,12 +1320,12 @@ export interface CompositeCreateDocumentOp {
 export interface PlanProjectEvidence {
   /** In-plan entity refs + existing, caller-visible evidence entities. */
   counted: number;
-  /** The agent floor a direct `projects.create` enforces. */
+  /** The pod's evidence count (`governance.project_evidence_min`, 5 by default). */
   minimum: number;
   /**
-   * True when `counted < minimum`. NOT a refusal inside a plan: the step stays
-   * visible to the reviewer with this marker, and an agent-mode plan carrying
-   * it can never auto-apply.
+   * True when `counted < minimum`. NOT a refusal, in a plan or on a direct
+   * `projects.create`: the step stays visible to the reviewer with this
+   * marker, and an agent's create carrying it can never auto-apply.
    */
   belowAgentFloor: boolean;
 }

@@ -54,6 +54,13 @@ beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(ddlFor(schema.automations as unknown as PgTable));
   await pg.exec(M0447);
+  // The structure floor's class row (`@agent-builds-structure`, 0451).
+  await pg.exec(`CREATE TABLE governance_rules (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    principal_kind text NOT NULL, scope_kind text NOT NULL,
+    target_kind text NOT NULL, target_pattern text NOT NULL,
+    verdict text NOT NULL, created_by text, revoked_at timestamptz
+  );`);
   db = drizzle(pg, { schema });
 }, 120_000);
 afterAll(async () => pg?.close());
@@ -146,6 +153,30 @@ describe("insertAutomation — the birth status", () => {
     });
     expect(made?.status).toBe("draft");
     expect(await statusOf(made!.id)).toBe("draft");
+  });
+
+  it("with the pod's structure floor switched on, an agent's create keeps what it asked", async () => {
+    await pg.exec(`INSERT INTO governance_rules (principal_kind, scope_kind, target_kind, target_pattern, verdict, created_by)
+      VALUES ('any', 'pod', 'action', '@agent-builds-structure', 'auto', 'user:u-person')`);
+    try {
+      const made = await insertAutomation(db, {
+        values: definition("manual"),
+        requested: "active",
+        personApproved: false,
+        owner: AGENT,
+      });
+      expect(made?.status).toBe("active");
+    } finally {
+      await pg.exec(`UPDATE governance_rules SET revoked_at = now()`);
+    }
+    // Switched off (revoked): back to draft.
+    const after = await insertAutomation(db, {
+      values: definition("manual"),
+      requested: "active",
+      personApproved: false,
+      owner: AGENT,
+    });
+    expect(after?.status).toBe("draft");
   });
 
   it("a person's own create keeps what it asked, draft when nothing", async () => {

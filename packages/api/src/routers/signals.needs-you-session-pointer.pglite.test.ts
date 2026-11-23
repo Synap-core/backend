@@ -93,6 +93,11 @@ vi.mock("../services/signals/permission-sessions.js", () => ({
 vi.mock("../services/signals/broken-connections.js", () => ({
   listBrokenConnections: async () => ({ rows: [], truncated: false }),
 }));
+// What recent approvals landed that needs the person: pinned by its own
+// PGlite suite (`landed-needs.pglite.test.ts`); none here.
+vi.mock("../services/signals/landed-needs.js", () => ({
+  listLandedNeedsPerson: async () => ({ rows: [], truncated: false }),
+}));
 // The viewer's open space invites: pinned by their own PGlite suite
 // (`space-invites.pglite.test.ts`); none here.
 vi.mock("../services/signals/space-invites.js", () => ({

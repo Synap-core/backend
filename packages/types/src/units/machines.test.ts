@@ -116,4 +116,19 @@ describe("statusAtCreate — the one birth decision", () => {
       })
     ).toBe("draft");
   });
+
+  it("an agent's own create keeps what it asked only when the pod lets agents activate", () => {
+    const agentCreate = {
+      requested: "active" as const,
+      personApproved: false,
+      actorIsAgent: true,
+    };
+    expect(statusAtCreate(agentCreate)).toBe("draft");
+    expect(statusAtCreate({ ...agentCreate, agentMayActivate: false })).toBe(
+      "draft"
+    );
+    expect(statusAtCreate({ ...agentCreate, agentMayActivate: true })).toBe(
+      "active"
+    );
+  });
 });

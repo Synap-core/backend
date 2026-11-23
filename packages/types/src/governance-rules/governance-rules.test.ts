@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 import { resolveGovernanceRungLabel } from "../vocabulary/index.js";
 import {
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
   ALL_COMPUTERS_PRINCIPAL,
   GOVERNANCE_PRINCIPAL_KINDS,
   type GovernanceRuleRowLike,
@@ -117,6 +119,8 @@ describe("where it holds, what it covers, where it came from", () => {
     for (const pattern of [
       REVERSIBLE_CLASS_PATTERN,
       OWN_ORGANISE_CLASS_PATTERN,
+      AGENT_DEFINES_KINDS_CLASS_PATTERN,
+      AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
     ]) {
       const row = rule({ targetPattern: pattern });
       expect(ruleTitle(row)).toBe(POD_DEFAULT_WORDS[pattern]!.label);
