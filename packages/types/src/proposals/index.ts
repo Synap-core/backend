@@ -44,6 +44,8 @@ export * from "./reach.js";
 export * from "./requester.js";
 // What an approval landed, and the one answer for the objects a proposal names.
 export * from "./landed.js";
+// The order a whole session's proposals are approved in (`approveSession`).
+export * from "./session-approval.js";
 export type {
   ProposalToolRun,
   ProposalToolRunParameter,
