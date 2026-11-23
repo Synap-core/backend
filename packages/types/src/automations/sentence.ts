@@ -30,6 +30,7 @@
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
 import type { PlaybookRunNodeDef } from "./flow.js";
+import type { WorkerActivatorMode } from "../workers/index.js";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -789,6 +790,12 @@ const PLAYBOOK_PARENT_SESSION_KEY = "__parentSessionId";
  */
 const PLAYBOOK_WORKER_KEY = "__worker";
 /**
+ * HAND-OFF — the agent each run is handed to (`data.handToAgentId`, a
+ * schedule activator's `handToAgentId`). Bookkeeping, kept out of
+ * `paramsMapping`.
+ */
+const PLAYBOOK_HAND_TO_KEY = "__handToAgentId";
+/**
  * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
  * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
  * writes `propose` here for "propose a playbook, I decide"; it lands on the
@@ -856,6 +863,7 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_RUN_MODE_KEY,
   PLAYBOOK_WORKER_KEY,
   PLAYBOOK_PARENT_SESSION_KEY,
+  PLAYBOOK_HAND_TO_KEY,
 ];
 
 /**
@@ -929,10 +937,12 @@ export type PlaybookActivatorTrigger =
       lifecycle: "declared" | "undeclared";
     }
   | {
-      /** A cron rule (UTC). The cron must be one the grammar can spell —
-       *  {@link isSentenceCron}; the worker spec carries the set. */
+      /** A cron rule, read in `timezone` (absent = UTC). The cron must be one
+       *  the grammar can spell — {@link isSentenceCron}; the worker spec
+       *  carries the set. */
       on: "schedule";
       cron: string;
+      timezone?: string;
     }
   | {
       /**
@@ -967,8 +977,13 @@ export function playbookActivatorSentence(
   input: {
     playbookId: string;
     profileSlug: string;
-    /** `run` starts the run; `propose` files one proposal per (rule, subject). */
-    mode: "run" | "propose";
+    /**
+     * `run` starts the run; `propose` files one proposal per (rule, subject);
+     * `appointment` opens a session that waits for the person.
+     */
+    mode: WorkerActivatorMode;
+    /** The agent each run is handed to (run mode). Omitted when absent. */
+    handToAgentId?: string;
     /**
      * An ENABLED worker's node spec (work model L4) + its filing. Each is
      * OMITTED when absent, so an activator compiled before workers existed
@@ -994,7 +1009,7 @@ export function playbookActivatorSentence(
         ? {
             triggerType: "cron",
             ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
-            cronTimezone: "UTC",
+            cronTimezone: input.timezone ?? "UTC",
           }
         : input.on === "run_ended"
           ? {
@@ -1024,8 +1039,11 @@ export function playbookActivatorSentence(
           [PLAYBOOK_ID_KEY]: input.playbookId,
           // `run` is the node default and is OMITTED, so a run-mode activator
           // compiles to the byte-identical node any other run rule has.
-          ...(input.mode === "propose"
-            ? { [PLAYBOOK_RUN_MODE_KEY]: "propose" }
+          ...(input.mode !== "run"
+            ? { [PLAYBOOK_RUN_MODE_KEY]: input.mode }
+            : {}),
+          ...(input.handToAgentId
+            ? { [PLAYBOOK_HAND_TO_KEY]: input.handToAgentId }
             : {}),
           ...(input.projectId
             ? { [PLAYBOOK_PROJECT_KEY]: input.projectId }
@@ -1320,6 +1338,8 @@ function actionToFlowNode(
       data.trackId = cfg[PLAYBOOK_TRACK_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_PARENT_SESSION_KEY]))
       data.parentSessionId = cfg[PLAYBOOK_PARENT_SESSION_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_HAND_TO_KEY]))
+      data.handToAgentId = cfg[PLAYBOOK_HAND_TO_KEY];
     const worker = cfg[PLAYBOOK_WORKER_KEY];
     if (worker && typeof worker === "object" && !Array.isArray(worker))
       data.worker = worker;
@@ -1605,6 +1625,7 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       projectId?: string;
       trackId?: string;
       parentSessionId?: string;
+      handToAgentId?: string;
       mode?: unknown;
       worker?: unknown;
       paramsMapping?: Record<string, unknown>;
@@ -1627,6 +1648,8 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
     if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
     if (nonEmptyStr(pdata.parentSessionId))
       config[PLAYBOOK_PARENT_SESSION_KEY] = pdata.parentSessionId;
+    if (nonEmptyStr(pdata.handToAgentId))
+      config[PLAYBOOK_HAND_TO_KEY] = pdata.handToAgentId;
     if (
       pdata.worker &&
       typeof pdata.worker === "object" &&

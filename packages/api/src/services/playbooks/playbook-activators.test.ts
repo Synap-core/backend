@@ -1198,7 +1198,7 @@ describe("D4: rules compiled before the worker spec re-converge once", () => {
     const a = installV1(TWO[0]!);
     const b = installV1(TWO[1]!);
     remember({ [a.key]: { ruleId: a.id }, [b.key]: { ruleId: b.id } });
-    expect(ACTIVATOR_COMPILE_VERSION).toBe(2);
+    expect(ACTIVATOR_COMPILE_VERSION).toBe(3);
 
     const first = await run();
     expect(first.outcomes.map((o) => o.status)).toEqual(["updated", "updated"]);
@@ -1208,7 +1208,7 @@ describe("D4: rules compiled before the worker spec re-converge once", () => {
       };
       expect(rule.sentence.actions[0]!.config.__worker).toBeDefined();
     }
-    expect(memory().compileVersion).toBe(2);
+    expect(memory().compileVersion).toBe(3);
     expect(createRuleGoverned).not.toHaveBeenCalled();
 
     vi.mocked(updateRuleGoverned).mockClear();

@@ -415,6 +415,27 @@ function deriveJsonSchema(
   return derived;
 }
 
+const BOUND_KEYS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minimum",
+  "maximum",
+  "pattern",
+]);
+
+/** A derived JSON schema without its bounds (see `activators` below). */
+function withoutBounds<T>(node: T): T {
+  if (Array.isArray(node)) return node.map(withoutBounds) as T;
+  if (!node || typeof node !== "object") return node;
+  return Object.fromEntries(
+    Object.entries(node)
+      .filter(([k]) => !BOUND_KEYS.has(k))
+      .map(([k, v]) => [k, withoutBounds(v)])
+  ) as T;
+}
+
 function buildOutputSlotsJsonSchema(
   description: string
 ): Record<string, unknown> {
@@ -492,9 +513,13 @@ const PLAYBOOK_PROCESS_JSON_SCHEMA = {
     playbookSubjectProfileSchema.shape.statusProperty.unwrap(),
     "Slug of the subject's lifecycle property (e.g. 'post-status'). Omit it: the process follows the lifecycle the kind or role declares. If you name it, name that same property. Needs subjectProfileSlug."
   ),
-  activators: deriveJsonSchema(
-    playbookActivatorsSchema,
-    "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug; each compiles to a governed rule the owner can pause."
+  // Bounds (lengths, counts, patterns) are the parse's, not advertised: the
+  // shape is what a caller needs, the door refuses what is out of bounds.
+  activators: withoutBounds(
+    deriveJsonSchema(
+      playbookActivatorsSchema,
+      "Workers: when the process starts on its subject (`run_ended` = a link: when a run of `playbook` ends). Mode 'propose' (default) or 'run' (only when cheap and safe). Grammar: skill system/synap/processes. Needs subjectProfileSlug (a schedule may run without); each compiles to a governed rule the owner can pause."
+    )
   ),
   humanOnlyStatuses: deriveJsonSchema(
     humanOnlyStatusesSchema,
@@ -5395,7 +5420,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
+          "How a GOAL runs: the workers enabled on it (a goal is a TRACK in tool names; say 'goal' to the person). A worker is a playbook's declared trigger (a schedule, something happening, a count) turned on for the goal; each run of its playbook is filed in the goal. Only the workers enabled ON this goal, never its project's others. Each row: ruleId (what synap_pause_worker and synap_run_worker take), playbookId, playbookName, activatorKey, trigger { kind: schedule|event|manual, words — 'Every Monday at 09:00 UTC', never a raw cron }, mode (propose = asks before each run, run = acts, appointment = opens a session for the person), state (running|paused), pendingApprovals, lastRunAt, nextRunAt (from the pod, schedule workers only), health { state: failing|off|waiting|healthy|paused|not_running, marks (last 10 runs, oldest first: done|failed|waiting|skipped|running), consecutiveFailures, offReason — why the pod turned it off }. No rows = the goal is worked until it is done, nothing runs it on its own. Find the goal with synap_list_tracks.",
         inputSchema: {
           type: "object",
           properties: {
@@ -5416,7 +5441,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00 UTC; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares no workers: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
+          "Make a GOAL run on its own: enable one of a playbook's declared workers on the goal (a track). activatorKey names the trigger the playbook declares (synap_list_playbooks shows `activators`): 'schedule:<cron>' (e.g. 'schedule:0 9 * * *' = every day at 09:00; 'schedule:0 9 * * 1' = every Monday), 'enters_status:<status>' (when a thing enters that status), 'count:<status>' (when enough things are in it), 'created'. A playbook with NO subject declares only schedules: give it your own clock, every day ('schedule:<m> <h> * * *') or every week on one day ('schedule:<m> <h> * * <0-6>'), and say with mode whether each run is asked first ('propose', the default) or just runs ('run'). Its runs are filed in the goal. A goal that should simply be worked until it is done needs NO worker. Refused when the same worker already runs for the goal's project or the whole space (the reply names the holder: pause it there first) and for a manual worker (run it with synap_run_worker or synap_run_playbook instead). Governed: status='proposed' is SUCCESS — say it awaits the person's review, do not retry. Otherwise status='enabled' with its ruleId.",
         inputSchema: {
           type: "object",
           properties: {

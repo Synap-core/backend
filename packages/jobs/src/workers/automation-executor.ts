@@ -465,10 +465,10 @@ async function executeAutomationFlow(params: {
   // it creates carry the session's id and group under one reviewable card, and
   // the automation's data lives ON the session (openRunSession's contract).
   //
-  // A "playbook-delegate" automation is the single-node `playbook_run` flow
-  // shape `buildPlaybookRunFlowDefinition` produces (e.g. a scheduled
-  // playbook's backing cron automation) — `executePlaybookRun` already opens
-  // its OWN session for that case, so we must not double-open here.
+  // A "playbook-delegate" automation is a single-node `playbook_run` flow
+  // (e.g. a compiled schedule activator, a loop trigger) —
+  // `executePlaybookRun` already opens its OWN session for that case, so we
+  // must not double-open here.
   const isPlaybookDelegate =
     flow.nodes.length === 1 && flow.nodes[0]?.type === "playbook_run";
 

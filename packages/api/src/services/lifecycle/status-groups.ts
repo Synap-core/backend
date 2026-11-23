@@ -723,7 +723,8 @@ export function statusSubjectOfRows(
  */
 export async function listThingsInStatus(params: {
   profileSlug: string;
-  status?: string | null;
+  /** One status, several (any of them), or null / [] for every status. */
+  status?: string | readonly string[] | null;
   userId: string;
   workspaceId: string | null;
   projectId?: string | null;
@@ -732,6 +733,8 @@ export async function listThingsInStatus(params: {
   onlyIds?: readonly string[];
   /** The question is about `onlyIds` BY ID: no listing rule (see above). */
   byId?: boolean;
+  /** More conditions on the thing (a stored filter, a property status). */
+  where?: readonly SQL[];
 }): Promise<{
   items: Array<StatusGroupItem & { status: string | null }>;
   total: number;
@@ -770,8 +773,12 @@ export async function listThingsInStatus(params: {
   const narrowed = [
     ...conditions,
     ...(params.onlyIds ? [inArray(entities.id, [...params.onlyIds])] : []),
+    ...(params.where ?? []),
   ];
-  const statusKey = params.status ?? null;
+  const statuses =
+    typeof params.status === "string"
+      ? [params.status]
+      : [...(params.status ?? [])];
   const [page, counts] = await Promise.all([
     pageThingsInColumn({
       subject,
@@ -782,7 +789,7 @@ export async function listThingsInStatus(params: {
           : []),
       ],
       order: "time_in_column",
-      column: statusKey ? { statuses: [statusKey] } : { outside: [] },
+      column: statuses.length ? { statuses } : { outside: [] },
       offset: 0,
       limit: params.limit,
     }),
@@ -793,7 +800,11 @@ export async function listThingsInStatus(params: {
     }),
   ]);
   const total = counts
-    .filter((c) => statusKey === null || c.status === statusKey)
+    .filter(
+      (c) =>
+        statuses.length === 0 ||
+        (c.status !== null && statuses.includes(c.status))
+    )
     .reduce((n, c) => n + c.count, 0);
   return { items: page.items, total, hasMore: page.hasMore };
 }
