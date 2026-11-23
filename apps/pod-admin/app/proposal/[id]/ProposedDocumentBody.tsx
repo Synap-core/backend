@@ -13,6 +13,7 @@ import { Button } from "@heroui/react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { ContentBody } from "../../_lib/object/content/content-block";
 import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
+import { proposalPageT } from "./copy";
 import { documentReading } from "./proposal-record-model";
 
 export function ProposedDocumentBody({
@@ -23,6 +24,7 @@ export function ProposedDocumentBody({
   /** Start with the whole document open (the reader asked, or a test). */
   defaultOpen?: boolean;
 }) {
+  const t = proposalPageT();
   const [open, setOpen] = useState(defaultOpen);
   // A whole HTML document (a report an agent made) is drawn as the page, not
   // as markdown. Only a doctype or <html> opening counts: markdown may open
@@ -31,9 +33,9 @@ export function ProposedDocumentBody({
     return (
       <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
         <span className="text-[12.5px] font-medium text-foreground/70">
-          Content
+          {t("doc.content")}
         </span>
-        <HtmlPagePreview html={content} title="Document preview" />
+        <HtmlPagePreview html={content} title={t("doc.preview")} />
       </div>
     );
   }
@@ -51,8 +53,7 @@ export function ProposedDocumentBody({
         <ContentBody prepared={shown} />
         {open && full.truncated && (
           <p className="mt-2 text-[12.5px] text-foreground/65">
-            Only the first {full.shownPercent}% is drawn here. The whole text is
-            in Advanced, under the request.
+            {t("doc.truncated", { percent: full.shownPercent })}
           </p>
         )}
         {!open && hasMore && (

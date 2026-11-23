@@ -44,14 +44,11 @@ export const en = {
   "failed.health": "Couldn’t run the health checks.",
   "failed.sync": "Couldn’t load the sync status.",
   "failed.updates": "Couldn’t read the update status.",
-  "band.title":
-    "Getting started",
+  "band.title": "Getting started",
   "band.saved":
     "Your setup is saved at step {n} of {of}. The next steps are not in the console yet.",
-  "band.change":
-    "Change what Synap runs first",
-  "band.failed":
-    "Couldn't load your setup progress.",
+  "band.change": "Change what Synap runs first",
+  "band.failed": "Couldn't load your setup progress.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -87,14 +84,11 @@ export const fr: Catalog<typeof en> = {
   "failed.health": "Impossible de lancer les vérifications.",
   "failed.sync": "Impossible de charger l’état de la synchronisation.",
   "failed.updates": "Impossible de lire l’état des mises à jour.",
-  "band.title":
-    "Pour démarrer",
+  "band.title": "Pour démarrer",
   "band.saved":
     "Votre configuration est enregistrée à l’étape {n} sur {of}. Les étapes suivantes ne sont pas encore dans la console.",
-  "band.change":
-    "Changer ce que Synap lance en premier",
-  "band.failed":
-    "Impossible de charger l’avancement de votre configuration.",
+  "band.change": "Changer ce que Synap lance en premier",
+  "band.failed": "Impossible de charger l’avancement de votre configuration.",
 };
 
 /** The words' translator, in the ambient catalog locale. */

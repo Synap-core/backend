@@ -17,6 +17,7 @@ import { Button } from "@heroui/react";
 import { Check } from "lucide-react";
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import type { Step } from "./ConsentForm";
+import { consentT } from "./copy";
 
 export interface ConsentAsk {
   title: string;
@@ -42,6 +43,7 @@ export function AskConsent({
   step: Step;
   onDecide: (approve: boolean) => void;
 }) {
+  const t = consentT();
   const lines = summarizeAppConnectRequest({
     appName,
     requests: ask.pairs,
@@ -51,7 +53,7 @@ export function AskConsent({
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-2.5 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
         <p className="text-xs font-medium uppercase tracking-[0.04em] text-foreground/65">
-          Also allow
+          {t("ask.alsoAllow")}
         </p>
         <ul className="flex flex-col gap-2">
           {lines.map((line) => (
@@ -72,12 +74,11 @@ export function AskConsent({
         </ul>
         {ask.unavailable.length > 0 ? (
           <p className="text-xs leading-relaxed text-foreground/65">
-            It also asked for something none of your spaces can hold; that part
-            is left out.
+            {t("ask.unavailable")}
           </p>
         ) : null}
         <p className="text-xs leading-relaxed text-foreground/65">
-          What it already has stays as it is.
+          {t("ask.keeps")}
         </p>
       </div>
 
@@ -91,7 +92,7 @@ export function AskConsent({
           isLoading={busy && step.kind === "working" && step.approve}
           onPress={() => onDecide(true)}
         >
-          Allow
+          {t("ask.allow")}
         </Button>
         <Button
           variant="flat"
@@ -102,7 +103,7 @@ export function AskConsent({
           isLoading={busy && step.kind === "working" && !step.approve}
           onPress={() => onDecide(false)}
         >
-          Not now
+          {t("ask.notNow")}
         </Button>
       </div>
 
@@ -112,7 +113,7 @@ export function AskConsent({
             href={`/apps/${encodeURIComponent(ask.connectionPublicId)}`}
             className="text-foreground/65 underline underline-offset-2"
           >
-            See everything it has
+            {t("ask.seeAll")}
           </Link>
         </p>
       ) : null}

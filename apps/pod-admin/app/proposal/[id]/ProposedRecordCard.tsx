@@ -22,6 +22,7 @@ import { TextDiff } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
+import { proposalPageT } from "./copy";
 import type { PartEdge } from "./composite-parts-model";
 import type { RecordGroup } from "./record-groups";
 import {
@@ -43,6 +44,7 @@ export const RECORD_GRID_CLASS =
 export const CODE_LINES_SHOWN = 40;
 
 export function CodeValue({ text, lines }: { text: string; lines: number }) {
+  const t = proposalPageT();
   const [all, setAll] = useState(false);
   const folded = !all && lines > CODE_LINES_SHOWN;
   return (
@@ -64,7 +66,7 @@ export function CodeValue({ text, lines }: { text: string; lines: number }) {
           className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
-          Show all {lines} lines
+          {t("record.showAllLines", { lines })}
         </Button>
       )}
     </span>
@@ -81,6 +83,7 @@ function TextValue({
 }: {
   value: Extract<RecordValue, { kind: "text" }>;
 }) {
+  const t = proposalPageT();
   const [all, setAll] = useState(false);
   // Roughly four lines at the card's width, or cut by the model.
   const hasMore =
@@ -105,7 +108,7 @@ function TextValue({
           className="h-6 min-w-0 px-1 text-[12px] text-foreground/70"
           onPress={() => setAll(true)}
         >
-          Show all
+          {t("record.showAll")}
         </Button>
       )}
     </span>
@@ -202,6 +205,7 @@ function CodeSide({
 }
 
 function Field({ field }: { field: RecordField }) {
+  const t = proposalPageT();
   const { before, after, op } = field;
   const label = (
     <dt className="text-[12px] font-medium text-foreground/70">
@@ -220,8 +224,8 @@ function Field({ field }: { field: RecordField }) {
       >
         {label}
         <dd className="flex min-w-0 flex-col gap-2 text-[13px] leading-relaxed text-foreground/90">
-          <CodeSide label="Before" value={before} />
-          <CodeSide label="After" value={after} title={field.label} />
+          <CodeSide label={t("record.before")} value={before} />
+          <CodeSide label={t("record.after")} value={after} title={field.label} />
         </dd>
       </div>
     );
@@ -235,7 +239,7 @@ function Field({ field }: { field: RecordField }) {
       <dd className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] leading-relaxed text-foreground/90">
         {op !== "add" && before !== undefined && (
           <span className="text-foreground/70 line-through decoration-foreground/30">
-            {before ? <Value value={before} /> : <em>empty</em>}
+            {before ? <Value value={before} /> : <em>{t("record.empty")}</em>}
           </span>
         )}
         {op === "change" && before !== undefined && (
@@ -248,15 +252,17 @@ function Field({ field }: { field: RecordField }) {
           (after ? (
             <Value value={after} title={field.label} />
           ) : (
-            <em className="text-foreground/70">empty</em>
+            <em className="text-foreground/70">{t("record.empty")}</em>
           ))}
         {op === "remove" && (
-          <span className="text-[12px] text-status-down">removed</span>
+          <span className="text-[12px] text-status-down">
+            {t("record.removed")}
+          </span>
         )}
       </dd>
       {field.stale && (
         <span className="text-[11.5px] text-warning">
-          Edited since this was proposed — the value before is out of date.
+          {t("record.stale")}
         </span>
       )}
     </div>

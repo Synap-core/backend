@@ -130,6 +130,18 @@ export const en = {
   "made.title": "What it made",
   "made.showAll":
     "Show all {n, plural, one {# object} other {# objects}} it made",
+  "doc.content": "Content",
+  "doc.preview": "Document preview",
+  "doc.truncated":
+    "Only the first {percent}% is drawn here. The whole text is in Advanced, under the request.",
+  "record.showAll": "Show all",
+  "record.showAllLines": "Show all {lines} lines",
+  "record.before": "Before",
+  "record.after": "After",
+  "record.empty": "empty",
+  "record.removed": "removed",
+  "record.stale":
+    "Edited since this was proposed — the value before is out of date.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -253,6 +265,18 @@ export const fr: Catalog<typeof en> = {
   "made.title": "Ce qui a été fait",
   "made.showAll":
     "Voir {n, plural, one {l’objet} other {les # objets}} concernés",
+  "doc.content": "Contenu",
+  "doc.preview": "Aperçu du document",
+  "doc.truncated":
+    "Seuls les {percent} % premiers sont affichés ici. Le texte entier est dans Avancé, sous la demande.",
+  "record.showAll": "Tout afficher",
+  "record.showAllLines": "Afficher les {lines} lignes",
+  "record.before": "Avant",
+  "record.after": "Après",
+  "record.empty": "vide",
+  "record.removed": "supprimé",
+  "record.stale":
+    "Modifié depuis la proposition — la valeur d’avant n’est plus à jour.",
 };
 
 /** The catalog keys of a decided request's one-line outcome. */
