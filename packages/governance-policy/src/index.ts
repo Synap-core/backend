@@ -881,6 +881,10 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "automation/update": "floored",
   "cell/create": "floored",
   "cell/define": "floored",
+  // Installing a marketplace cell type, or retiring one (soft-delete of the
+  // `widget_definitions` row): what the pod can draw, for every view that uses it.
+  "cell/install": "floored",
+  "cell/retire": "floored",
   "playbook/create": "floored",
   "playbook/promote": "floored",
   // Editing a playbook can switch on its schedule activator, which compiles an
@@ -1245,6 +1249,11 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // Choosing who runs a playbook is part of running it (run choice v3): the
   // grant that may run it may ask to remember who does.
   "playbook/set_run_choice": "run",
+  // Installing a marketplace cell type or retiring one writes the same
+  // `widget_definitions` row a define writes: a key that may define a cell may
+  // ASK to install or retire one. The doors govern it (both floored, 2.09).
+  "cell/install": "define",
+  "cell/retire": "define",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -2427,6 +2436,8 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "capability/renderer.set": "disruptive", // struct: how a capability renders everywhere
   "cell/create": "disruptive", // struct (2.09)
   "cell/define": "disruptive", // struct (2.09)
+  "cell/install": "disruptive", // struct (2.09)
+  "cell/retire": "disruptive", // struct (2.09): every view drawing it loses its renderer
   "cell/update": "reversible", // config patch of an existing placement
   "channel/bind": "disruptive", // scope: wires a room to a bridge
   "channel/create_branch": "disruptive", // struct: a new room the person must see
@@ -2703,6 +2714,10 @@ export const GATE_WRITE_DOORS = {
   "capability/renderer.set": "gate",
   "cell/create": "gate",
   "cell/define": "gate",
+  // `POST /cells/install` and `DELETE /cells/:typeKey` (Hub REST). Approved by
+  // `routers/proposals/executors/cell.ts`.
+  "cell/install": "gate",
+  "cell/retire": "gate",
   "cell/update": "gate",
   "channel/bind": "gate",
   "channel/create_branch": "gate",
