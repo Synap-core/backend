@@ -20,7 +20,6 @@ const TWIN = "44444444-4444-4444-8444-444444444444";
 const ACTING_GRAPH = "44444444-4444-4444-8444-444444444446";
 
 const h = vi.hoisted(() => ({
-  session: "",
   proposals: new Map<string, Record<string, unknown>>(),
   apply: vi.fn(async (_args: { proposal: { id: string } }) => ({
     success: true,
@@ -43,9 +42,9 @@ vi.mock("@synap/database", async (importOriginal) => {
         // `where: eq(proposals.id, id)` is built right before the call.
         proposals: {
           findFirst: async () => h.proposals.get(lastEqValue ?? "") ?? null,
-          // The session read: the rows the session holds (`h.session`).
-          findMany: async () =>
-            [...h.proposals.values()].filter((r) => r.sessionId === h.session),
+          // The session read: every row asked for; the door keeps the
+          // session's own.
+          findMany: async () => [...h.proposals.values()],
         },
         workspaces: { findFirst: async () => undefined },
         workspaceMembers: { findFirst: async () => undefined },
@@ -133,7 +132,6 @@ const PLAYBOOK = "44444444-4444-4444-8444-444444444449";
 beforeEach(() => {
   h.apply.mockClear();
   h.proposals.clear();
-  h.session = SESSION;
   const inSession = (r: Record<string, unknown>, at: string) => ({
     ...r,
     sessionId: SESSION,
