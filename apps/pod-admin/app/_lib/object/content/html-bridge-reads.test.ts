@@ -424,6 +424,26 @@ describe("the page bridge — through the console's own client", () => {
     ]);
   });
 
+  it("a view's rows one page at a time: limit 1-100 and an offset, never the frame's filters", async () => {
+    const { calls, send } = wired(SPACE);
+    const spoof = { workspaceId: "other", projectId: "p9", filters: [1] };
+    await send(query("views.execute", { id: "v1", limit: 50, offset: 100 }));
+    await send(
+      query(
+        "views.execute",
+        { id: "v1", limit: 5000, offset: 7, ...spoof },
+        "q2"
+      )
+    );
+    await send(query("views.execute", { id: "v1", limit: 0 }, "q3"));
+    expect(calls.map((c) => c.input)).toEqual([
+      { id: "v1", limit: 50, offset: 100 },
+      // Over the frame's cap: clamped to one page of 100, never refused.
+      { id: "v1", limit: 100, offset: 7 },
+      { id: "v1", limit: 1 },
+    ]);
+  });
+
   it("a page in no space reads a kind's lifecycle at the pod's base, and its fields with no space", async () => {
     const { calls, send } = wired(null);
     await send(query("lifecycle.get", { profileSlug: "deal" }));

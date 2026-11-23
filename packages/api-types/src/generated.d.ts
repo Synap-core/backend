@@ -62589,6 +62589,8 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				filters?: unknown[] | undefined;
 				id: string;
+				limit?: number | undefined;
+				offset?: number | undefined;
 				projectId?: string | undefined;
 			};
 			meta: object;
@@ -62598,6 +62600,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				content: {};
 				droppedFilters?: undefined;
 				entities: never[];
+				hasMore?: undefined;
 				query?: undefined;
 				relations: never[];
 				view: {
@@ -62660,6 +62663,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: number;
 					workspaceId: string | null;
 				}[];
+				hasMore: boolean;
 				query: EntityQuery;
 				relations: {
 					agentUserId: string | null;

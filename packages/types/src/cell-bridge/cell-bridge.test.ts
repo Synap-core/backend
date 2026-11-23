@@ -476,6 +476,24 @@ describe("the read allowlist", () => {
     ).toEqual({ profileSlug: "deal", firstN: 5, properties: true });
   });
 
+  it("a view's rows are read one page at a time: limit and offset, never its filters", () => {
+    expect(CELL_BRIDGE_READ_OPS["views.execute"]).toEqual([
+      "id",
+      "limit",
+      "offset",
+    ]);
+    expect(
+      pickBridgeParams("views.execute", {
+        id: "v1",
+        limit: 100,
+        offset: 200,
+        filters: [{ field: "status" }],
+        workspaceId: "w",
+        projectId: "p",
+      })
+    ).toEqual({ id: "v1", limit: 100, offset: 200 });
+  });
+
   it("a page in no space is refused a space's own page, and only that", () => {
     expect([...CELL_BRIDGE_SPACE_READ_OPS]).toEqual(["lens.page"]);
     expect(cellBridgeReadRefusal("lens.page", { workspaceId: null })).toBe(

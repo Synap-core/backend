@@ -245,7 +245,7 @@ export async function readForPage(
       );
     // What a view adapter reads to draw (renderer bundles): the view by id
     // (unlensed, the pod floors it), its rows by its STORED query (no
-    // ephemeral filters), a kind and its fields and lifecycle IN the page's
+    // ephemeral filters; one page of it at a time), a kind and its fields and lifecycle IN the page's
     // space. A refusal (a view this viewer may not read, no space for the
     // fields) reaches the page as that error, never as an empty answer.
     case "views.get":
@@ -253,9 +253,15 @@ export async function readForPage(
         id: required(op, "an id", str(p.id)),
       });
     case "views.execute":
-      return client.views.execute.query({
-        id: required(op, "an id", str(p.id)),
-      });
+      // One page of the stored query (`limit` 1-100, `offset`): absent, the
+      // view's own stored pair. `hasMore` in the answer says a next page exists.
+      return client.views.execute.query(
+        defined({
+          id: required(op, "an id", str(p.id)),
+          limit: int(p.limit, 1, 100),
+          offset: int(p.offset, 0, 100_000),
+        })
+      );
     case "profiles.get":
       return client.profiles.get.query(
         { identifier: required(op, "an identifier", str(p.identifier)) },

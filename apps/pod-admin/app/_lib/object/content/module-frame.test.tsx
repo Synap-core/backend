@@ -161,6 +161,7 @@ function harness(
     mechanism?: "module" | "page";
     typeKey?: string;
     answer?: unknown;
+    locale?: "en" | "fr";
   } = {}
 ) {
   const posted: Posted[] = [];
@@ -197,6 +198,7 @@ function harness(
       entityId: ENTITY,
     },
     theme: () => "dark",
+    ...(opts.locale ? { locale: () => opts.locale! } : {}),
     mechanism: opts.mechanism,
     onWriteAnswer: (r) => answers.push(r),
   });
@@ -253,6 +255,20 @@ describe("createModuleFrameHost — which messages count", () => {
       theme: "dark",
       sdkVersion: "2",
     });
+  });
+
+  it("init carries the console's language when the host knows it, and none otherwise", async () => {
+    const fr = harness({ locale: "fr" });
+    await fr.send({ type: "synap:ready" });
+    expect(
+      (fr.posted[0]!.message as { context: Record<string, unknown> }).context
+    ).toMatchObject({ locale: "fr", theme: "dark" });
+
+    const none = harness();
+    await none.send({ type: "synap:ready" });
+    expect(
+      (none.posted[0]!.message as { context: Record<string, unknown> }).context
+    ).not.toHaveProperty("locale");
   });
 });
 

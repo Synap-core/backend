@@ -65,13 +65,14 @@ export const CELL_BRIDGE_READ_OPS = {
   "project.pillars": ["id"],
   // What a view adapter reads to draw (renderer bundles, decision c91d26dc):
   // a view's definition and its rows (`views.get`, `views.execute`, the
-  // stored query only: no ephemeral filters), a kind (`profiles.get`, by
+  // stored query only: no ephemeral filters; one PAGE of it with `limit` and
+  // `offset`, so a frame reads past the first 100 rows), a kind (`profiles.get`, by
   // slug or id), its fields (`propertyDefs.list`: with a profileId the host
   // asks `profileIds: [profileId]`, without one every field of its own
   // space) and its declared
   // lifecycle (`lifecycle.get`, in the host's space).
   "views.get": ["id"],
-  "views.execute": ["id"],
+  "views.execute": ["id", "limit", "offset"],
   "profiles.get": ["identifier"],
   "propertyDefs.list": ["profileId"],
   "lifecycle.get": ["profileSlug"],

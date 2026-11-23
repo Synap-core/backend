@@ -62,7 +62,9 @@ import {
 import { Button } from "@heroui/react";
 import { Maximize2 } from "lucide-react";
 import { useTheme } from "next-themes";
+import type { Locale } from "@synap-core/types/i18n";
 import { trpc } from "../../../../lib/trpc";
+import { useConsoleLocale } from "../../../../lib/i18n/locale-provider";
 import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { showReceipt } from "../../receipt/decision-receipt-toast";
 import { typedDetail, type Receipt } from "../../receipt/decision-receipt";
@@ -104,6 +106,8 @@ export function createModuleFrameHost(options: {
   lens: CellFrameLens;
   identity: ModuleFrameIdentity;
   theme: () => "light" | "dark";
+  /** The console's language: the frame's words follow it (`synap:init` `locale`). */
+  locale?: () => Locale;
   /** `page` refuses every write (a stored HTML page's rule). Default `module`. */
   mechanism?: "module" | "page";
   onStatus?: (status: CellFrameStatus) => void;
@@ -135,6 +139,7 @@ export function createModuleFrameHost(options: {
       ...(identity.entityId ? { entityId: identity.entityId } : {}),
       ...(identity.profileSlug ? { profileSlug: identity.profileSlug } : {}),
       theme: options.theme(),
+      ...(options.locale ? { locale: options.locale() } : {}),
     }),
     read: (op, params) =>
       readForPage(client, op, params, { workspaceId: lens.workspaceId }),
@@ -500,6 +505,11 @@ export function ModuleFrame({
   const theme = frameTheme(resolvedTheme);
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  // A change of language remounts the console's pages (`ConsoleLocaleProvider`),
+  // so the frame is rebuilt and reads the new one at its next init.
+  const locale = useConsoleLocale();
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
   const area = useFocusAfterRetry<HTMLDivElement>();
   const near = useNearViewport(area.ref);
   const fillHeight = useFillHeight(area.ref, fill);
@@ -543,6 +553,7 @@ export function ModuleFrame({
       lens: { workspaceId: lensKey || null },
       identity: frameIdentity,
       theme: () => themeRef.current,
+      locale: () => localeRef.current,
       onStatus: (s) => setStatus(s.state === "ready" ? "ready" : "failed"),
       onResize: (h) => setHeight(h),
       onWriteAnswer: (result, request) => {
