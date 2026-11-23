@@ -373,6 +373,33 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
         ownSessionIds: cancelledSessionIds,
       });
 
+      // A domain's space, kinds and lifecycles have no undo here: kept, and
+      // named, so the reviewer retires them from their pages.
+      for (const w of applied.workspaces ?? []) {
+        if (!w.linked)
+          notCompensated.push({
+            kind: "workspace",
+            id: w.workspaceId,
+            reason: "a space is kept: archive it from its page",
+          });
+      }
+      for (const k of applied.kinds ?? []) {
+        if (!k.linked)
+          notCompensated.push({
+            kind: "profile",
+            id: k.profileId,
+            reason: "a kind is kept: retire it from its page",
+          });
+      }
+      for (const l of applied.lifecycles ?? []) {
+        notCompensated.push({
+          kind: "lifecycle",
+          id: l.propertyDefId,
+          reason:
+            "a declared lifecycle is kept: change it with the lifecycle door",
+        });
+      }
+
       for (const s of creations.skipped) {
         if (s.reason === "already_reverted") continue;
         const view = revertSkipView(s);

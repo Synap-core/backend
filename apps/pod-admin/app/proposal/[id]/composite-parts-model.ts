@@ -159,6 +159,27 @@ function newRoles(
   );
 }
 
+/** The space a step names when it is not the proposal's own. */
+function space(
+  graph: ProposalReviewGraph,
+  step: { workspaceRef?: string; workspaceId?: string }
+): RecordValue | null {
+  if (step.workspaceRef) {
+    return text(
+      graph.workspaces?.find((w) => w.ref === step.workspaceRef)?.name ??
+        step.workspaceRef
+    );
+  }
+  return step.workspaceId
+    ? {
+        kind: "ref",
+        objectKind: "workspace",
+        id: step.workspaceId,
+        name: resolveObjectNoun("workspace"),
+      }
+    : null;
+}
+
 /** What a stored flow runs: its first action in words, else every step named. */
 function flowRuns(flow: unknown): RecordValue | null {
   const then = ruleThenWords(flow, new Map());
@@ -210,13 +231,14 @@ const DRAWERS = {
       const flow = opByRef.get(a.ref)?.flowDefinition as
         { triggerConfig?: Record<string, unknown> } | null | undefined;
       return record("automations", a.ref, "automation", a.name, [
-        // Born off: an approved automation never starts firing on its own.
+        // On once approved, unless the op keeps it off.
         ...field("status", status(a.bornEnabled ? "active" : "draft")),
         ...field(
           "trigger",
           text(ruleWhenWords(a.triggerType, flow?.triggerConfig ?? null).text)
         ),
         ...field("runs", flowRuns(flow)),
+        ...field("workspace", space(graph, a)),
         ...field("canReach", reach(a.reach)),
         ...field("description", text(a.description)),
       ]);
@@ -291,12 +313,51 @@ const DRAWERS = {
       ];
     });
   },
+  workspaces: ({ graph }) =>
+    (graph.workspaces ?? []).map((w) =>
+      record("workspaces", w.ref, "workspace", w.name, [])
+    ),
+  kinds: ({ graph }) =>
+    (graph.kinds ?? []).map((k) =>
+      record("kinds", k.ref, "profile", k.displayName, [
+        ...field("slug", text(k.slug)),
+        ...field("fields", text(String(k.fieldCount))),
+        ...field(
+          "entityScope",
+          k.entityScope ? text(resolveObjectNoun(k.entityScope)) : null
+        ),
+        ...field("workspace", space(graph, k)),
+      ])
+    ),
+  lifecycles: ({ graph }) =>
+    (graph.lifecycles ?? []).map((l) => {
+      const kind = l.kindRef
+        ? graph.kinds?.find((k) => k.ref === l.kindRef)?.displayName
+        : undefined;
+      return record("lifecycles", l.ref, "lifecycle", kind ?? null, [
+        ...field("property", text(l.property)),
+        ...field(
+          "options",
+          tags(
+            l.options.map(
+              (o) =>
+                `${resolveStatusLabel(o.key)} · ${resolveStatusLabel(o.category)}`
+            )
+          )
+        ),
+        ...field(
+          "initialStatus",
+          l.initialStatus ? status(l.initialStatus) : null
+        ),
+      ]);
+    }),
   playbooks: ({ graph }) =>
     (graph.playbooks ?? []).map((p) =>
       record("playbooks", p.ref, "playbook", p.name, [
         ...field("status", status(p.bornStatus)),
         ...field("goalTemplate", text(p.goalTemplate)),
         ...field("subject", text(resolveObjectNoun(p.subjectProfileSlug))),
+        ...field("workspace", space(graph, p)),
         ...field("description", text(p.description)),
       ])
     ),
@@ -314,6 +375,7 @@ const DRAWERS = {
           v.lifecycleOf ? text(resolveObjectNoun(v.lifecycleOf)) : null
         ),
         ...field("widgets", tags(v.widgets)),
+        ...field("workspace", space(graph, v)),
       ])
     ),
   cells: ({ graph, opByRef }) =>
@@ -345,6 +407,7 @@ const DRAWERS = {
         ...field("reads", tags(c.bridgeOps?.reads)),
         ...field("writes", tags(c.bridgeOps?.writes)),
         ...field("existingCell", text(c.existingCellKey)),
+        ...field("workspace", space(graph, c)),
         ...field("description", text(c.description)),
         ...field(
           "showsOn",

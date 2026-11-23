@@ -34,6 +34,7 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
@@ -2703,6 +2704,20 @@ function buildConfigReviewItems(
   const views: NonNullable<ProposalReviewGraph["views"]> = [];
   const cells: NonNullable<ProposalReviewGraph["cells"]> = [];
   const updates: NonNullable<ProposalReviewGraph["updates"]> = [];
+  const workspaces: NonNullable<ProposalReviewGraph["workspaces"]> = [];
+  const kinds: NonNullable<ProposalReviewGraph["kinds"]> = [];
+  const lifecycles: NonNullable<ProposalReviewGraph["lifecycles"]> = [];
+  // The space a step names, when it names one (`ReviewStepSpace`).
+  const spaceOf = (op: { workspaceRef?: string; workspaceId?: string }) => ({
+    ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+    ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+  });
+  // A playbook naming a kind of this bundle shows that kind's slug.
+  const kindSlugByRef = new Map(
+    data.operations.flatMap((op) =>
+      op.op === "define_kind" ? [[op.ref, op.slug] as const] : []
+    )
+  );
   /** `bind_renderer` ops, drawn under their cell once every cell is listed. */
   const bindOps: Array<{
     index: number;
@@ -2764,12 +2779,22 @@ function buildConfigReviewItems(
       case "create_automation":
         renderedOpIndexes.add(index);
         automations.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          // Forced false at materialization — see CompositeCreateAutomationOp.
-          bornEnabled: false,
+          bornEnabled:
+            statusAtCreate({
+              requested:
+                op.enabled === undefined
+                  ? undefined
+                  : op.enabled
+                    ? "active"
+                    : "draft",
+              personApproved: true,
+              actorIsAgent: true,
+            }) === "active",
           ...(stepSkills
             ? { reach: flowReach(op.flowDefinition, stepSkills) }
             : {}),
@@ -2788,16 +2813,52 @@ function buildConfigReviewItems(
       case "create_playbook":
         renderedOpIndexes.add(index);
         playbooks.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           goalTemplate: op.goalTemplate,
-          subjectProfileSlug: op.subjectProfile.profileSlug,
-          ...(op.subjectProfile.statusProperty
+          subjectProfileSlug:
+            (op.subjectProfileRef
+              ? kindSlugByRef.get(op.subjectProfileRef)
+              : op.subjectProfile?.profileSlug) ?? "",
+          ...(op.subjectProfile?.statusProperty
             ? { statusProperty: op.subjectProfile.statusProperty }
             : {}),
-          // Forced at materialization — see CompositeCreatePlaybookOp.
-          bornStatus: "draft",
+          bornStatus: statusAtCreate({
+            requested: op.status,
+            personApproved: true,
+            actorIsAgent: true,
+          }),
+        });
+        return;
+      case "create_workspace":
+        renderedOpIndexes.add(index);
+        workspaces.push({ ref: op.ref, name: op.name });
+        return;
+      case "define_kind":
+        renderedOpIndexes.add(index);
+        kinds.push({
+          ref: op.ref,
+          slug: op.slug,
+          displayName: op.displayName,
+          fieldCount: op.fields?.length ?? 0,
+          ...(op.entityScope ? { entityScope: op.entityScope } : {}),
+          ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+        });
+        return;
+      case "declare_lifecycle":
+        renderedOpIndexes.add(index);
+        lifecycles.push({
+          ref: op.ref,
+          ...(op.kindRef ? { kindRef: op.kindRef } : {}),
+          ...(op.profileId ? { profileId: op.profileId } : {}),
+          property: op.property ?? "status",
+          options: (op.options ?? []).map((o) => ({
+            key: String(o.key ?? ""),
+            category: String(o.category ?? ""),
+          })),
+          ...(op.initialStatus ? { initialStatus: op.initialStatus } : {}),
         });
         return;
       case "create_view": {
@@ -2817,6 +2878,7 @@ function buildConfigReviewItems(
               )
             : undefined;
         views.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           viewType: op.viewType,
@@ -2834,6 +2896,7 @@ function buildConfigReviewItems(
         renderedOpIndexes.add(index);
         const source = op.rendererSource ?? "";
         cells.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
@@ -2861,7 +2924,8 @@ function buildConfigReviewItems(
     const binding = {
       ref: op.ref,
       targetKind: op.target.kind,
-      targetId: op.target.id,
+      targetId: op.target.id ?? op.target.ref ?? "",
+      ...(op.target.ref ? { targetRef: op.target.ref } : {}),
       slot: op.slot,
       scope: op.scope,
     };
@@ -2889,6 +2953,9 @@ function buildConfigReviewItems(
     ...(views.length ? { views } : {}),
     ...(cells.length ? { cells } : {}),
     ...(updates.length ? { updates } : {}),
+    ...(workspaces.length ? { workspaces } : {}),
+    ...(kinds.length ? { kinds } : {}),
+    ...(lifecycles.length ? { lifecycles } : {}),
   };
 }
 

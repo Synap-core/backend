@@ -37,7 +37,11 @@ import type {
   CellDefineCaller,
   RendererBindCaller,
   CompositeUpdateCaller,
+  WorkspaceCreateCaller,
+  KindDefineCaller,
+  LifecycleDeclareCaller,
 } from "./materialize-composite.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
 import type { materializeAutomationForPrincipal } from "../routers/automations.js";
@@ -89,11 +93,178 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
   cellCaller: CellDefineCaller;
   rendererCaller: RendererBindCaller;
   updateCaller: CompositeUpdateCaller;
+  workspaceCaller: WorkspaceCreateCaller;
+  kindCaller: KindDefineCaller;
+  lifecycleCaller: LifecycleDeclareCaller;
 } {
   const { database, userId, workspaceId, auditSource, skillAuthor } = ctx;
   const ownerUserId = ctx.ownerUserId ?? userId;
 
+  // The applying principal must be a member of every space a step lands in:
+  // review authority reads only the proposal's own space, so a step naming
+  // another space is floored here, on the approver.
+  const membershipIn = async (spaceId: string) => {
+    const { getWorkspaceMembership } = await import("@synap/database");
+    const membership = await getWorkspaceMembership(
+      database as Parameters<typeof getWorkspaceMembership>[0],
+      spaceId,
+      userId
+    );
+    if (!membership) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "No workspace access",
+      });
+    }
+    return membership;
+  };
+
+  // A domain is built only by an approved plan: its rows are the proposal's.
+  const domainProposalId = (op: string): string => {
+    if (!ctx.sourceProposalId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: `${op} applies only from an approved plan`,
+      });
+    }
+    return ctx.sourceProposalId;
+  };
+
   return {
+    // A domain's SPACE, through the one plain space door (`workspaces.create`,
+    // as the approver: the creator becomes its owner). One space per domain:
+    // a space of that name already there is reused when the approver is in
+    // it (a retried approval finds the space its first attempt made), and
+    // refused when it is anybody else's.
+    workspaceCaller: {
+      create: async ({ name }) => {
+        domainProposalId("create_workspace");
+        const { findWorkspaceIdentityConflict, getWorkspaceMembership } =
+          await import("@synap/database");
+        const held = await findWorkspaceIdentityConflict(
+          database as Parameters<typeof findWorkspaceIdentityConflict>[0],
+          { name }
+        );
+        if (held) {
+          const member = await getWorkspaceMembership(
+            database as Parameters<typeof getWorkspaceMembership>[0],
+            held.existingWorkspaceId,
+            userId
+          );
+          if (!member) {
+            throw new TRPCError({
+              code: "CONFLICT",
+              message: `create_workspace "${name}": a space of this name already exists and is not yours`,
+            });
+          }
+          return { id: held.existingWorkspaceId, linked: true };
+        }
+        const { workspacesRouter } = await import("../routers/workspaces.js");
+        const out = await workspacesRouter
+          .createCaller({
+            db: database,
+            authenticated: true as const,
+            userId,
+          } as unknown as Parameters<typeof workspacesRouter.createCaller>[0])
+          .create({ name });
+        if (out.status !== "created") {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `create_workspace "${name}" did not apply (${out.status})`,
+          });
+        }
+        return { id: out.workspaceId, linked: false };
+      },
+    },
+
+    // A KIND and its fields, through the `profile/create` executor's apply
+    // (`materializeKindCreate`), as the approver, owned by the proposal. A
+    // kind of that slug already there is linked only when this proposal made
+    // it (a retried approval); anybody else's refuses.
+    kindCaller: {
+      define: async (kindOp) => {
+        const proposalId = domainProposalId("define_kind");
+        const home = kindOp.workspaceId ?? workspaceId;
+        if (!home) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `define_kind "${kindOp.slug}" needs a space: name one (workspaceRef) or file the plan into one`,
+          });
+        }
+        const { checkFieldSpec } =
+          await import("../routers/hub-protocol/define-profile.js");
+        const checked = kindOp.fields.map(checkFieldSpec);
+        const refused = checked.flatMap((c) => ("entry" in c ? [c.entry] : []));
+        if (refused.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `define_kind "${kindOp.slug}": ${refused
+              .map((e) => `${String(e.slug ?? "field")}: ${String(e.error)}`)
+              .join("; ")}`,
+          });
+        }
+        const { slugifyPropertyKey } = await import("@synap/database");
+        const { materializeKindCreate } =
+          await import("../routers/proposals/executors/profile.js");
+        const uiHints = {
+          ...(kindOp.icon ? { icon: kindOp.icon } : {}),
+          ...(kindOp.description ? { description: kindOp.description } : {}),
+        };
+        const made = await materializeKindCreate({
+          userId,
+          workspaceId: home,
+          proposalId,
+          agentAuthored: !!skillAuthor.agentUserId,
+          duplicateReviewed: false,
+          profile: {
+            slug: slugifyPropertyKey(kindOp.slug) || kindOp.slug,
+            displayName: kindOp.displayName,
+            profileKind: "kind",
+            ...(Object.keys(uiHints).length > 0 ? { uiHints } : {}),
+            ...(kindOp.entityScope ? { entityScope: kindOp.entityScope } : {}),
+          },
+          kindFields: checked.flatMap((c) => ("field" in c ? [c.field] : [])),
+        });
+        if (!made.profileId || !made.slug) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `define_kind "${kindOp.slug}" did not apply`,
+          });
+        }
+        if (made.existing && made.existingOwnerId !== proposalId) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: `define_kind: a kind "${made.slug}" already exists here; approval never adopts it`,
+          });
+        }
+        return { id: made.profileId, slug: made.slug, linked: made.existing };
+      },
+    },
+
+    // A kind's LIFECYCLE, through the lifecycle declaration's approval half
+    // (`applyKindLifecycle`): the preflight and the authority floor re-run on
+    // the approver, the field and the declaration in one transaction.
+    lifecycleCaller: {
+      declare: async (lifecycleOp) => {
+        const proposalId = domainProposalId("declare_lifecycle");
+        const { applyKindLifecycle } =
+          await import("../services/lifecycle/declare-kind-lifecycle.js");
+        const applied = await applyKindLifecycle({
+          approverUserId: userId,
+          sourceProposalId: proposalId,
+          input: {
+            profileId: lifecycleOp.profileId,
+            ...(lifecycleOp.property ? { property: lifecycleOp.property } : {}),
+            options: lifecycleOp.options,
+            ...(lifecycleOp.initialStatus
+              ? { initialStatus: lifecycleOp.initialStatus }
+              : {}),
+          },
+        });
+        return { propertyDefId: applied.propertyDefId };
+      },
+    },
+
     // A playbook's UI: the generated cell, through the ONE cell door
     // (`defineCell` runs the mount and sandbox checks again on the source
     // the reviewer approved). Never overwrites a cell of the same key that
@@ -112,6 +283,9 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             code: "BAD_REQUEST",
             message: `create_cell: "${contentKind}" is not a content kind (${CONTENT_KINDS.join(", ")})`,
           });
+        }
+        if (cellOp.workspaceId && cellOp.workspaceId !== workspaceId) {
+          await membershipIn(cellOp.workspaceId);
         }
         const existing = await readStoredCellContent({
           name: cellOp.name,
@@ -283,10 +457,16 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
         const flow = automationOp.flowDefinition as {
           triggerConfig?: Record<string, unknown>;
         } | null;
+        if (
+          automationOp.workspaceId &&
+          automationOp.workspaceId !== workspaceId
+        ) {
+          await membershipIn(automationOp.workspaceId);
+        }
         const created = await materializeAutomationForPrincipal({
           database,
           definition: {
-            workspaceId,
+            workspaceId: automationOp.workspaceId ?? workspaceId,
             name: automationOp.name,
             ...(automationOp.description
               ? { description: automationOp.description }
@@ -346,38 +526,35 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
       },
     },
 
-    // A DRAFT process (`create_playbook`), through the EXISTING
+    // A process (`create_playbook`), through the EXISTING
     // `playbooks.create` door — the same caller shape the playbook approval
     // executor builds (`executors/playbook.ts`), membership-floored. No
     // agentUserId: the governance decision was already made for the graph, so
     // the re-entrant door grants instead of filing a second proposal.
     playbookCaller: {
       create: async (playbookOp) => {
-        if (!workspaceId) {
+        const playbookWorkspaceId = playbookOp.workspaceId ?? workspaceId;
+        if (!playbookWorkspaceId) {
           throw new TRPCError({
             code: "PRECONDITION_FAILED",
             message:
               "create_playbook needs a workspace: a process lives in a space.",
           });
         }
-        const { getWorkspaceMembership } = await import("@synap/database");
-        const membership = await getWorkspaceMembership(
-          database as Parameters<typeof getWorkspaceMembership>[0],
-          workspaceId,
-          userId
-        );
-        if (!membership) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "No workspace access",
-          });
-        }
+        const membership = await membershipIn(playbookWorkspaceId);
+        // The one birth decision. A batch no person reviewed may be
+        // structured from pasted content, so it is judged as an agent's.
+        const status = statusAtCreate({
+          requested: playbookOp.status,
+          personApproved: skillAuthor.personApproved,
+          actorIsAgent: true,
+        });
         const { playbooksRouter } = await import("../routers/playbooks.js");
         const caller = playbooksRouter.createCaller({
           db: database,
           authenticated: true as const,
           userId,
-          workspaceId,
+          workspaceId: playbookWorkspaceId,
           workspaceRole: membership.role,
         } as unknown as Parameters<typeof playbooksRouter.createCaller>[0]);
         const created = await caller.create({
@@ -387,7 +564,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             : {}),
           goalTemplate: playbookOp.goalTemplate,
           subjectProfile: playbookOp.subjectProfile,
-          status: "draft",
+          status,
         });
         if (created.status !== "created" || !created.playbook) {
           throw new TRPCError({
@@ -395,7 +572,7 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             message: `create_playbook did not apply (${created.status})`,
           });
         }
-        return { id: created.playbook.id };
+        return { id: created.playbook.id, status };
       },
     },
 
@@ -410,28 +587,12 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
     // list live. Kinds: the op's slugs, else the members' own kinds.
     viewCaller: {
       create: async (viewOp) => {
-        const {
-          getWorkspaceMembership,
-          ProfileResolutionService,
-          entities,
-          inArray,
-        } = await import("@synap/database");
+        const { ProfileResolutionService, entities, inArray } =
+          await import("@synap/database");
         const viewWorkspaceId = viewOp.workspaceId ?? workspaceId;
-        let workspaceRole = "owner";
-        if (viewWorkspaceId) {
-          const membership = await getWorkspaceMembership(
-            database as Parameters<typeof getWorkspaceMembership>[0],
-            viewWorkspaceId,
-            userId
-          );
-          if (!membership) {
-            throw new TRPCError({
-              code: "FORBIDDEN",
-              message: "No workspace access",
-            });
-          }
-          workspaceRole = membership.role;
-        }
+        const workspaceRole = viewWorkspaceId
+          ? (await membershipIn(viewWorkspaceId)).role
+          : "owner";
 
         const scopeProfileIds = new Set<string>();
         if (viewOp.scopeProfileSlugs?.length) {

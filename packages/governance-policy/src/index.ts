@@ -3105,7 +3105,7 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_skill: { subjectType: "skill", action: "create" },
   create_automation: { subjectType: "automation", action: "create" },
   create_rule: { subjectType: "rule", action: "create" },
-  // A DRAFT process from a capture — the `playbooks.create` door.
+  // A process — the `playbooks.create` door.
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
@@ -3114,6 +3114,13 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   // …and the page it shows on — the `profile/renderer.set` door, which binds
   // a playbook's or a view's own page too (per-object binding).
   bind_renderer: { subjectType: "profile", action: "renderer.set" },
+  // A plan's domain: its space and its kinds — the doors
+  // `synap_create_workspace` and `synap_define_kind` file through. The
+  // lifecycle door is direct (always pending, no gate pair): it gates on the
+  // kind's own schema door.
+  create_workspace: { subjectType: "workspace", action: "create" },
+  define_kind: { subjectType: "profile", action: "create" },
+  declare_lifecycle: { subjectType: "profile", action: "create" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },
@@ -3143,9 +3150,9 @@ export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
 const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_rule: 4,
   create_skill: 3,
-  // A process is configuration like an automation, and is likewise born
-  // inert (always `draft`); it outranks the automation because a process,
-  // once completed, ORCHESTRATES runs, sessions and their outputs.
+  // A process is configuration like an automation, born by the same rule
+  // (`statusAtCreate`); it outranks the automation because a process
+  // ORCHESTRATES runs, sessions and their outputs.
   create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
@@ -3159,6 +3166,12 @@ const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   // Changes how one object's page renders: presentational and revocable,
   // above a view (it replaces a page a person reads), below a record.
   bind_renderer: 0.8,
+  // A domain's structure, read by every space and every later write: a space
+  // and a kind outrank a rule's halves; a lifecycle changes how every thing
+  // of a kind moves.
+  create_workspace: 3.7,
+  define_kind: 3.6,
+  declare_lifecycle: 3.5,
   create_relation: 0,
   // An update rewrites a row a person already approved once: ranked with the
   // create of the same object, a hair below it (it mints no identity).

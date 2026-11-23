@@ -168,6 +168,7 @@ const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
   // A rule is a `skills` row (`kind: "rule"`), opened where skills are.
   ["ruleIds", "skill"],
   ["viewIds", "view"],
+  ["workspaceIds", "workspace"],
 ];
 
 /**

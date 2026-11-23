@@ -3,7 +3,7 @@
  * `automation-status-one-writer`). A compare-and-set: only rows standing in
  * one of `from` that `AUTOMATION_TRANSITIONS` lets reach `to` move, so a
  * concurrent pause, archive or fix is never overwritten. A row is BORN with
- * its status (`automationStatusAtCreate`), which is not a move.
+ * its status (`statusAtCreate`), which is not a move.
  */
 import { and, eq, inArray, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";

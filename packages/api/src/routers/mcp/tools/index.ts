@@ -4415,6 +4415,7 @@ export const tools = {
           "• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n" +
           "• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n" +
           "• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n" +
+          "• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n" +
           "• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\n" +
           "COUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\n" +
           "Call it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\n" +
@@ -4751,6 +4752,52 @@ export const tools = {
                 required: ["ref", "intent", "scope"],
               },
             },
+            workspaces: {
+              type: "array",
+              description: "DOMAIN: {ref, name}.",
+              items: { type: "object" },
+            },
+            kinds: {
+              type: "array",
+              description:
+                "{ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
+              items: { type: "object" },
+            },
+            lifecycles: {
+              type: "array",
+              description:
+                "{ref, kindRef | profileId, options: [{key, category}], initialStatus?}.",
+              items: { type: "object" },
+            },
+            playbooks: {
+              type: "array",
+              description:
+                "{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; flows run it by playbookName.",
+              items: { type: "object" },
+            },
+            views: {
+              type: "array",
+              description:
+                "{ref, name, viewType, scopeProfileSlugs | entityRefs, config?, workspaceRef?}.",
+              items: { type: "object" },
+            },
+            cells: {
+              type: "array",
+              description: "{ref, name, rendererSource, workspaceRef?}.",
+              items: { type: "object" },
+            },
+            renderers: {
+              type: "array",
+              description:
+                '{ref, target: {kind, ref | id}, slot: "detail", scope, cellRef | cellKey}.',
+              items: { type: "object" },
+            },
+            updates: {
+              type: "array",
+              description:
+                'Rewrites {op: "update_<kind>", ref, <kind>Id, patch}.',
+              items: { type: "object" },
+            },
             summary: {
               type: "string",
               description:
@@ -4759,12 +4806,12 @@ export const tools = {
             validate: {
               type: "boolean",
               description:
-                'Dry run for the structured `entities[]` lane: run the capture\'s validators and write NOTHING. Returns `dryRun: true` and `status: "valid"` or `"invalid"`, with every problem at once: ref and shape problems in `problems[]`, unknown relation slugs in `relationsFailed[]` (same shape as a real call, with the valid slugs named), and unknown profiles or invalid properties in `invalidEntities[]`. `notChecked[]` lists what only the real write can decide. Not supported on the `text` lane.',
+                'Dry run (structured lanes): every validator runs and NOTHING is written. Returns `dryRun: true`, `status: "valid"` or `"invalid"` and every problem at once: `problems[]` (refs, shapes), `relationsFailed[]` (valid slugs named), `invalidEntities[]`; `notChecked[]` = what only the real write decides. Not on the `text` lane.',
             },
             profileSlug: {
               type: "string",
               description:
-                "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note.",
+                "Optional kind hint for the text lane: it guides extraction, and if AI structuring is down the text is saved as this kind (marked degraded) when it is in your lens, else as a note.",
             },
             global: {
               type: "boolean",
@@ -4779,7 +4826,7 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`). An `entities[]` graph with no `workspaceId` is placed only when every entity's kind (and roles) points at the same space; otherwise it stays pod-wide and returns `placement` (reason + candidates) and, when there is a candidate, `pendingWorkspaceSwitch`.",
+                "Pin the capture to this workspace: it wins over routing and the AI's guess, and is how you accept a `pendingWorkspaceSwitch`. Left out, a graph is placed only when every kind (and role) points at one space; otherwise it stays pod-wide and returns `placement` and, with a candidate, `pendingWorkspaceSwitch`.",
             },
             projectId: {
               type: "string",
@@ -4795,18 +4842,18 @@ export const tools = {
               type: "string",
               enum: ["title", "semantic", "both"],
               description:
-                "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity.",
+                "Dedup for surfaced candidates: 'title' (string similarity), 'semantic' (embeddings: catches paraphrases), 'both' (default: the strongest match per entity).",
             },
             workspaceRouting: {
               type: "string",
               enum: ["auto", "ask", "locked"],
               description:
-                "Latitude over the AI's workspace GUESS only (the deterministic rungs always run). A guess NEVER moves a capture: 'auto' and 'ask' both keep it where it landed and return `pendingWorkspaceSwitch` {suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence} to confirm with the user; to accept, re-call with `workspaceId` = its suggestedWorkspaceId. 'locked' suppresses the guess. To pin an exact workspace, pass `workspaceId`.",
+                "Latitude over the AI's workspace GUESS only: a guess never moves a capture. 'auto' and 'ask' return `pendingWorkspaceSwitch` to confirm with the user (accept: re-call with its suggestedWorkspaceId as `workspaceId`); 'locked' suppresses the guess.",
             },
             sessionId: {
               type: "string",
               description:
-                "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error.",
+                "Optional: the session this write belongs to. Left out, it is attributed automatically; send it only to choose between two or more open sessions of yours, or to join one another conversation started. A session that isn't yours is ignored, not an error.",
             },
           },
           // No `required`: the payload is a gradient — `text` OR `entities[]`

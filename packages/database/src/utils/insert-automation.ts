@@ -3,12 +3,12 @@
  * validation. Every writer of a new automation reaches it: the api's
  * materialization door (`materializeAutomationForPrincipal`) and the template
  * reconcile. It decides the status the row is born with
- * (`automationStatusAtCreate`), stamps the first cron slot of a live cron row,
+ * (`statusAtCreate`), stamps the first cron slot of a live cron row,
  * and converges a same-name clash on the surviving row (0230's unique index).
  */
 import { and, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import {
-  automationStatusAtCreate,
+  statusAtCreate,
   type AutomationStatusValue,
 } from "@synap-core/types/units";
 import { nextCronRunAtFor } from "@synap/shared-utils";
@@ -72,7 +72,7 @@ export async function insertAutomation(
   db: DbHandle,
   input: InsertAutomationInput
 ): Promise<InsertedAutomation | null> {
-  const status = automationStatusAtCreate({
+  const status = statusAtCreate({
     requested: input.requested,
     personApproved: input.personApproved,
     actorIsAgent: Boolean(input.owner.agentUserId),

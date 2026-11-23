@@ -414,6 +414,16 @@ export interface ProposalReviewEvent {
  * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
  * names/shapes without updating the frontend in lockstep.
  */
+/**
+ * The space a step lands in when it is not the proposal's own: a space this
+ * bundle creates (`workspaceRef`) or an existing one (`workspaceId`). The
+ * reviewer of the proposal's space approves it, so the review names it.
+ */
+export interface ReviewStepSpace {
+  workspaceRef?: string;
+  workspaceId?: string;
+}
+
 export interface ProposalReviewGraph {
   entities: Array<{
     ref: string;
@@ -560,24 +570,26 @@ export interface ProposalReviewGraph {
     /** True when the body was longer than the excerpt. */
     bodyTruncated: boolean;
   }>;
-  automations?: Array<{
-    ref: string;
-    name: string;
-    description?: string;
-    triggerType: "event" | "cron" | "webhook" | "manual";
-    /**
-     * ALWAYS false: an approved automation is born INERT and a human activates
-     * it. Carried so the surface can say so rather than leaving the reviewer to
-     * assume it starts firing.
-     */
-    bornEnabled: false;
-    /**
-     * What its steps can reach outside the pod once it runs, read the way the
-     * runtime resolves each step (a verb → the skill that answers it).
-     * Absent = not measured (draw nothing, never "nothing").
-     */
-    reach?: ProposalPartReach;
-  }>;
+  automations?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      description?: string;
+      triggerType: "event" | "cron" | "webhook" | "manual";
+      /**
+       * Whether a person's approval turns it on: true unless the op keeps it
+       * off (`enabled: false`). Carried so the surface says whether it starts
+       * firing.
+       */
+      bornEnabled: boolean;
+      /**
+       * What its steps can reach outside the pod once it runs, read the way the
+       * runtime resolves each step (a verb → the skill that answers it).
+       * Absent = not measured (draw nothing, never "nothing").
+       */
+      reach?: ProposalPartReach;
+    }
+  >;
   rules?: Array<{
     ref: string;
     /** The user's stated rule, in their words. */
@@ -589,75 +601,104 @@ export interface ProposalReviewGraph {
     behaviourRefs?: string[];
   }>;
   /**
-   * `create_playbook` — a DRAFT process for a kind. Always born `draft`
-   * (never runs until a person completes and activates it).
+   * `create_playbook` — a process for a kind. A person's approval makes it
+   * active unless the op keeps it a draft (`bornStatus`).
    */
-  playbooks?: Array<{
+  playbooks?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      description?: string;
+      goalTemplate: string;
+      subjectProfileSlug: string;
+      statusProperty?: string;
+      bornStatus: "draft" | "active";
+    }
+  >;
+  /**
+   * A domain: `create_workspace`, `define_kind`, `declare_lifecycle`. Refs
+   * name steps of this bundle (`workspaceRef`, `kindRef`).
+   */
+  workspaces?: Array<{ ref: string; name: string }>;
+  kinds?: Array<{
     ref: string;
-    name: string;
-    description?: string;
-    goalTemplate: string;
-    subjectProfileSlug: string;
-    statusProperty?: string;
-    bornStatus: "draft";
+    slug: string;
+    displayName: string;
+    fieldCount: number;
+    entityScope?: "pod" | "workspace";
+    workspaceRef?: string;
+  }>;
+  lifecycles?: Array<{
+    ref: string;
+    kindRef?: string;
+    profileId?: string;
+    property: string;
+    options: Array<{ key: string; category: string }>;
+    initialStatus?: string;
   }>;
   /**
    * `create_view` — a List over this bundle's things (import Build). Counts,
    * not ids: the members are refs into `entities[]` or existing ids.
    */
-  views?: Array<{
-    ref: string;
-    name: string;
-    viewType: CompositeViewType;
-    /** Kinds the list shows, when the op named them. */
-    scopeProfileSlugs?: string[];
-    /** How many things the list holds (in-batch refs + existing ids). */
-    memberCount: number;
-    /** The group container the list is about, when there is one. */
-    containerRef?: string;
-    /** A pipeline: the kind whose declared lifecycle its columns are. */
-    lifecycleOf?: string;
-    /** A bento: the widget keys it places, in block order. */
-    widgets?: string[];
-  }>;
+  views?: Array<
+    ReviewStepSpace & {
+      ref: string;
+      name: string;
+      viewType: CompositeViewType;
+      /** Kinds the list shows, when the op named them. */
+      scopeProfileSlugs?: string[];
+      /** How many things the list holds (in-batch refs + existing ids). */
+      memberCount: number;
+      /** The group container the list is about, when there is one. */
+      containerRef?: string;
+      /** A pipeline: the kind whose declared lifecycle its columns are. */
+      lifecycleOf?: string;
+      /** A bento: the widget keys it places, in block order. */
+      widgets?: string[];
+    }
+  >;
   /**
    * `create_cell` / `bind_renderer` — a GENERATED cell (its source is code a
    * person approves) and the pages it shows on. A binding of a cell in this
    * bundle is drawn under that cell; a binding of an existing cell gets an
    * entry of its own (`existingCellKey`).
    */
-  cells?: Array<{
-    /** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
-    ref: string;
-    name: string;
-    /** Set when this entry binds a cell that already exists (no source here). */
-    existingCellKey?: string;
-    description?: string;
-    contentKind?: string;
-    /** How the frame draws it: `module` (React) or `page` (HTML). */
-    mechanism?: "module" | "page";
-    /** The first characters of the source. The whole source is the op's. */
-    sourceExcerpt?: string;
-    sourceTruncated?: boolean;
-    sourceBytes?: number;
-    /**
-     * WHAT IT DOES once approved, read off the source: the bridge reads and
-     * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
-     * order they first appear). A name built at run time is not seen. The
-     * frame gives a generated cell no network (connect-src none but the
-     * bridge), so these are everything it can reach.
-     */
-    bridgeOps?: { reads: string[]; writes: string[] };
-    bindings: Array<{
+  cells?: Array<
+    ReviewStepSpace & {
+      /** The `create_cell` op's ref, or the `bind_renderer` op's for an existing cell. */
       ref: string;
-      targetKind: BindRendererTargetKind;
-      targetId: string;
-      /** The object's name, when the pod read it for this viewer. */
-      targetName?: string;
-      slot: "detail";
-      scope: "pod" | "workspace";
-    }>;
-  }>;
+      name: string;
+      /** Set when this entry binds a cell that already exists (no source here). */
+      existingCellKey?: string;
+      description?: string;
+      contentKind?: string;
+      /** How the frame draws it: `module` (React) or `page` (HTML). */
+      mechanism?: "module" | "page";
+      /** The first characters of the source. The whole source is the op's. */
+      sourceExcerpt?: string;
+      sourceTruncated?: boolean;
+      sourceBytes?: number;
+      /**
+       * WHAT IT DOES once approved, read off the source: the bridge reads and
+       * writes it names (`SynapWidget.query("…")` / `mutate("…")`, in the
+       * order they first appear). A name built at run time is not seen. The
+       * frame gives a generated cell no network (connect-src none but the
+       * bridge), so these are everything it can reach.
+       */
+      bridgeOps?: { reads: string[]; writes: string[] };
+      bindings: Array<{
+        ref: string;
+        targetKind: BindRendererTargetKind;
+        /** The object's id; with `targetRef`, the ref of a step of this bundle. */
+        targetId: string;
+        targetRef?: string;
+        /** The object's name, when the pod read it for this viewer. */
+        targetName?: string;
+        slot: "detail";
+        scope: "pod" | "workspace";
+      }>;
+    }
+  >;
   /**
    * `update_*` — CHANGES to rows an earlier bundle made (a Library rebuild:
    * "Updates", beside the "New" things above). Each names the row it rewrites
@@ -978,6 +1019,9 @@ export interface CompositeCreateAutomationOp {
    * person's approval an agent's automation is born draft.
    */
   enabled?: boolean;
+  /** The space it runs in: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
 }
 
 export interface CompositeCreateRuleOp {
@@ -998,11 +1042,11 @@ export interface CompositeCreateRuleOp {
  *
  * "Draft a process for this": a capture of a kind that has a lifecycle (a
  * select property whose slug names a status / stage) but no playbook built
- * for it files ONE draft playbook for that kind. Materialized through the
- * EXISTING `playbooks.create` door — never a raw insert — and ALWAYS as
- * `status: "draft"`: a process drafted from a capture is a starting point a
- * person (or agent) completes; it never arrives running. Goal and stages are
- * deliberately minimal.
+ * for it files ONE draft playbook for that kind (`status: "draft"`), and a
+ * plan files the playbooks of its domain. Materialized through the EXISTING
+ * `playbooks.create` door — never a raw insert — born by the one rule
+ * (`statusAtCreate`): a draft stays a draft; otherwise a person's approval
+ * makes it active.
  *
  * Per-op RESILIENT (like the Rule Loop config ops): a draft that fails does
  * not discard the entities captured beside it.
@@ -1015,13 +1059,66 @@ export interface CompositeCreatePlaybookOp {
   description?: string;
   /** Required by the playbook door; a one-line goal is enough for a draft. */
   goalTemplate: string;
-  /** The kind the process runs on, and the property that holds its lifecycle. */
-  subjectProfile: { profileSlug: string; statusProperty?: string };
   /**
-   * ALWAYS FORCED "draft" at materialization; present so an author can state
-   * it. Any other value is overridden, never honoured.
+   * The kind the process runs on, and the property that holds its lifecycle.
+   * `profileSlug` may be left out when `subjectProfileRef` names the kind.
    */
-  status?: "draft";
+  subjectProfile: { profileSlug?: string; statusProperty?: string };
+  /** A `define_kind` op of this batch: the process runs on the kind it defines. */
+  subjectProfileRef?: string;
+  /** The space it lives in: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
+  /**
+   * `draft` keeps it off. Absent: a person's approval of the batch makes it
+   * active; with no person's approval it is born draft.
+   */
+  status?: "draft" | "active";
+}
+
+/**
+ * ── Domain ops (a plan builds a domain) ──────────────────────────────────────
+ *
+ * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
+ * the playbooks, automations, views and cells that use them, so the person
+ * approves a whole domain once. Each applies through its existing door (the
+ * template apply, the profile create, the lifecycle declaration) as the
+ * approver, before every op that may name it. Per-op resilient: an op that
+ * names one that failed is skipped, named.
+ */
+export interface CompositeCreateWorkspaceOp {
+  op: "create_workspace";
+  ref: string;
+  name: string;
+}
+
+export interface CompositeDefineKindOp {
+  op: "define_kind";
+  ref: string;
+  slug: string;
+  displayName: string;
+  description?: string;
+  icon?: string;
+  /** `pod`: its things are read in every space; `workspace`: in its home. */
+  entityScope?: "pod" | "workspace";
+  /** Field definitions, the `define_kind` door's contract (`{ slug, valueType, … }`). */
+  fields?: Array<Record<string, unknown>>;
+  /** Its home space: a `create_workspace` op of this batch, or an id. */
+  workspaceRef?: string;
+  workspaceId?: string;
+}
+
+export interface CompositeDeclareLifecycleOp {
+  op: "declare_lifecycle";
+  ref: string;
+  /** The kind: a `define_kind` op of this batch, or an existing kind's id. */
+  kindRef?: string;
+  profileId?: string;
+  /** The status field's slug (default `status`). */
+  property?: string;
+  /** Each `{ key, category, label?, … }`, the lifecycle door's contract. */
+  options: Array<Record<string, unknown>>;
+  initialStatus?: string;
 }
 
 /**
@@ -1056,6 +1153,8 @@ export interface CompositeCreateViewOp {
   viewType: CompositeViewType;
   /** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
   workspaceId?: string;
+  /** …or a `create_workspace` op of this batch. */
+  workspaceRef?: string;
   /** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
   scopeProfileSlugs?: string[];
   /** The listed things: in-batch `create_entity` refs or existing entity ids. */
@@ -1102,6 +1201,8 @@ export interface CompositeCreateCellOp {
   description?: string;
   /** Space the cell lives in; absent ⇒ pod-global. */
   workspaceId?: string;
+  /** …or a `create_workspace` op of this batch. */
+  workspaceRef?: string;
   /**
    * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
    * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
@@ -1118,14 +1219,18 @@ export interface CompositeBindRendererOp {
   op: "bind_renderer";
   /** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
   ref: string;
-  /** The object whose page shows the cell: an existing playbook or view. */
-  target: { kind: BindRendererTargetKind; id: string };
+  /**
+   * The object whose page shows the cell: an existing playbook or view
+   * (`id`), or a `create_playbook` / `create_view` op of this batch (`ref`).
+   */
+  target: { kind: BindRendererTargetKind; id?: string; ref?: string };
   /** Its slot: one object's page has only `detail`. */
   slot: "detail";
   /** `pod` = the object's own page everywhere; `workspace` = in one space. */
   scope: "pod" | "workspace";
-  /** Required for `scope: "workspace"`. */
+  /** Required for `scope: "workspace"` (or its `workspaceRef`). */
   workspaceId?: string;
+  workspaceRef?: string;
   /** The cell: a `create_cell` op in this batch… */
   cellRef?: string;
   /** …or an existing cell's key. Exactly one of the two. */
@@ -1368,6 +1473,9 @@ export type CompositeProposalOperation =
   | CompositeCreateAutomationOp
   | CompositeCreateRuleOp
   | CompositeCreatePlaybookOp
+  | CompositeCreateWorkspaceOp
+  | CompositeDefineKindOp
+  | CompositeDeclareLifecycleOp
   | CompositeCreateViewOp
   | CompositeCreateSessionOp
   | CompositeCreateDocumentOp
@@ -1388,6 +1496,17 @@ export function isUpdateOperation(
   op: CompositeProposalOperation
 ): op is CompositeUpdateOperation {
   return (UPDATE_OPERATION_KINDS as readonly string[]).includes(op.op);
+}
+
+/** The op kinds that build a domain: a person's review, never auto-applied. */
+export const DOMAIN_OPERATION_KINDS = [
+  "create_workspace",
+  "define_kind",
+  "declare_lifecycle",
+] as const satisfies ReadonlyArray<CompositeProposalOperation["op"]>;
+
+export function isDomainOperation(op: CompositeProposalOperation): boolean {
+  return (DOMAIN_OPERATION_KINDS as readonly string[]).includes(op.op);
 }
 
 /** The op kinds that make a composite a PLAN (all-or-none on apply). */
@@ -1466,6 +1585,9 @@ const _RESILIENT_OPERATION_KINDS = [
   "create_rule",
   // A draft process: a failed draft must not discard the capture beside it.
   "create_playbook",
+  // A domain's space, kinds and lifecycles: an op naming one that failed is
+  // skipped, named, like a binding whose cell did not land.
+  ...DOMAIN_OPERATION_KINDS,
   // A list over the bundle's things: a failed list must not discard them.
   "create_view",
   // A playbook's UI: a cell that fails leaves the views beside it, and a
@@ -1492,6 +1614,11 @@ type _EveryOpKindClassified =
  */
 const _everyOpKindClassified: _EveryOpKindClassified = true;
 void _everyOpKindClassified;
+
+/** Every composite op kind: the plan ops and the resilient ones, classified above. */
+export const COMPOSITE_OPERATION_KINDS: ReadonlyArray<
+  CompositeProposalOperation["op"]
+> = [...PLAN_OPERATION_KINDS, ..._RESILIENT_OPERATION_KINDS];
 
 export interface CompositeProposalData extends ProposalDataLifecycle {
   /**
@@ -1619,6 +1746,9 @@ export interface ProposalMaterializedRecord {
   /** Connected plan: focus sessions and projects created by the run. */
   sessionIds?: string[];
   projectIds?: string[];
+  /** A domain: spaces and kinds created by the run (an undo keeps them). */
+  workspaceIds?: string[];
+  profileIds?: string[];
   /** Entities a merge into a PRE-EXISTING entity changed. */
   propertyDiffs?: Array<{ entityId: string }>;
   /** Config rows an `update_*` op changed (`kind`: skill, automation, playbook, view, focus_session…). */
@@ -1827,17 +1957,7 @@ export function isCompositeProposalData(
     (o) =>
       o != null &&
       typeof o === "object" &&
-      (o.op === "create_entity" ||
-        o.op === "create_relation" ||
-        o.op === "create_skill" ||
-        o.op === "create_automation" ||
-        o.op === "create_rule" ||
-        o.op === "create_playbook" ||
-        o.op === "create_view" ||
-        o.op === "create_cell" ||
-        o.op === "bind_renderer" ||
-        isPlanOperation(o) ||
-        isUpdateOperation(o))
+      COMPOSITE_OPERATION_KINDS.includes(o.op)
   );
 }
 
