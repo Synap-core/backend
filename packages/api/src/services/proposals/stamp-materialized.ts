@@ -221,6 +221,7 @@ export interface MaterializedOpRecord {
     | "create_project"
     | "create_link"
     | "create_track"
+    | "update_session"
     | UpdateOpName;
   entityId?: string;
   linked?: boolean;
@@ -307,6 +308,8 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "links"
       | "documents"
       | "tracks"
+      | "crossLinks"
+      | "sessionUpdates"
     >
   >;
 
@@ -456,12 +459,14 @@ function planOnlyRecordFields(
   const links = result.links ?? [];
   const documents = result.documents ?? [];
   const tracks = result.tracks ?? [];
+  const crossLinks = result.crossLinks ?? [];
   if (
     sessions.length +
       projects.length +
       links.length +
       documents.length +
-      tracks.length ===
+      tracks.length +
+      crossLinks.length ===
     0
   ) {
     return {};
@@ -482,6 +487,10 @@ function planOnlyRecordFields(
         .map((l) => l.linkId as string),
       // Goal → goal edges the run wrote for its goals.
       ...tracks.flatMap((t) => t.blockerLinkIds ?? []),
+      // Step → decision / goal edges.
+      ...crossLinks
+        .filter((l) => !l.preExisting && l.linkId)
+        .map((l) => l.linkId as string),
     ]),
     ...(ownTracks.length > 0
       ? { trackIds: unique(ownTracks.map((t) => t.trackId)) }
@@ -614,6 +623,18 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
       trackId: t.trackId,
       ...(t.linked ? { linked: true } : {}),
     };
+  }
+  for (const l of result.crossLinks ?? []) {
+    byOp[linkOpKey({ requested: l.requested, type: "blocked_by" })] = {
+      op: "create_link",
+      ...(l.linkId ? { linkId: l.linkId } : {}),
+      ...(l.preExisting ? { preExisting: true } : {}),
+    };
+  }
+  // A re-plan's step update: the step it changed (the change itself is put
+  // back by a failed plan's compensation, not by a later revert).
+  for (const u of result.sessionUpdates ?? []) {
+    byOp[u.ref] = { op: "update_session", sessionId: u.sessionId };
   }
   // An edge has no ref of its own — keyed by what it asked for, like a relation.
   for (const l of result.links ?? []) {

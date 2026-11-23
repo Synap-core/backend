@@ -4455,7 +4455,7 @@ export const tools = {
             text: {
               type: "string",
               description:
-                "Free-form text to parse (max 8000 chars). Send this when you have prose. If you ALSO send `entities[]`, the structured payload is used and this text is kept on the proposal as provenance.",
+                "Free-form text to parse (max 8000 chars), when you have prose. Sent with `entities[]`, the structured payload is used and this text is kept as provenance.",
             },
             entities: {
               type: "array",
@@ -4691,7 +4691,7 @@ export const tools = {
             links: {
               type: "array",
               description:
-                "PLAN: session edges. `blocked_by`: from waits on to. `spawned_from`: to is from's parent (from must be a session in this call). Cycles are refused.",
+                "PLAN: edges. `blocked_by`: from waits on to (`toEntity…`: a decision, + `option` for one arm; `toTrack…`: a goal). `spawned_from`: to is from's parent (from: a session here). Cycles refused.",
               items: {
                 type: "object",
                 properties: {
