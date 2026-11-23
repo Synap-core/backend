@@ -58,7 +58,7 @@ import {
   readOwnOrganiseDefault,
   setOwnOrganiseDefault,
   readPodClassDefault,
-  readPodFloorsYield,
+  nonWidenableFloorAtPod,
   setPodClassDefault,
   readPodNumberSetting,
   readPodNumberSettings,
@@ -93,6 +93,7 @@ import {
   fileRuleGrant,
   loadVisibleNextRungRow,
   projectNextRung,
+  floorsYieldFor,
   readAlwaysApproved,
   readNextRungs,
 } from "../services/proposals/next-rung.js";
@@ -127,7 +128,6 @@ import {
   ADMIN_ACTIONS,
   AGENT_SCHEMA_DEFINITION_EVENT_KEYS,
   AGENT_STRUCTURE_WRITE_EVENT_KEYS,
-  nonWidenableFloorFor,
   REVERSIBLE_EVENT_KEYS,
   OWN_ORGANISE_EVENT_KEYS,
   AGENT_BUILDS_STRUCTURE_EVENT_KEYS,
@@ -994,10 +994,7 @@ export const governanceRulesRouter = router({
       // 2.8), so an `auto` row there would be a success toast for a grant that
       // does nothing. The answer comes from the engine itself, never a list here.
       if (input.verdict === "auto" && input.targetKind === "action") {
-        const floor = nonWidenableFloorFor(
-          input.targetPattern,
-          await readPodFloorsYield(db)
-        );
+        const floor = await nonWidenableFloorAtPod(db, input.targetPattern);
         if (floor) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1205,7 +1202,7 @@ export const governanceRulesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const row = await loadVisibleNextRungRow(ctx.userId, input.itemRef.id);
-      const { rule } = projectNextRung(row, await readPodFloorsYield(db));
+      const { rule } = projectNextRung(row, await floorsYieldFor([row]));
       let mayGrant = false;
       if (rule) {
         try {

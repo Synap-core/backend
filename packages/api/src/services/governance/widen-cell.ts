@@ -15,16 +15,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, and, eq, readPodFloorsYield } from "@synap/database";
+import { db, and, eq, nonWidenableFloorAtPod } from "@synap/database";
 import { users } from "@synap/database/schema";
 import {
   dryRunAgentGovernanceDecision,
   seedHostFor,
 } from "@synap/database/agent-governance";
-import {
-  isReversibleWrite,
-  nonWidenableFloorFor,
-} from "@synap/governance-policy";
+import { isReversibleWrite } from "@synap/governance-policy";
 import { nextRungRuleDraft } from "@synap-core/types/trust-ladder";
 import {
   canWidenAnswer,
@@ -61,7 +58,7 @@ export async function draftMatrixWiden(
   probe: MatrixCellProbe,
   ownerUserId: string | null
 ): Promise<RuleGrantDraft> {
-  if (nonWidenableFloorFor(probe.action, await readPodFloorsYield(db))) {
+  if (await nonWidenableFloorAtPod(db, probe.action)) {
     throw noNextRung("a floor decides this write; no rule can widen it.");
   }
   if (!isReversibleWrite(probe.action)) {

@@ -24,6 +24,7 @@ import {
   OWN_ORGANISE_CLASS_PATTERN,
   REVERSIBLE_CLASS_PATTERN,
   floorClassOf,
+  nonWidenableFloorFor,
   type AgentPolicyInput,
   type FloorClassPattern,
 } from "@synap/governance-policy";
@@ -174,4 +175,18 @@ export async function readFloorsYield(
     : family === AGENT_BUILDS_STRUCTURE_CLASS_PATTERN
       ? { agentBuildsStructure: true }
       : undefined;
+}
+
+/**
+ * The non-widenable floor of one event key at this pod
+ * (`nonWidenableFloorFor` with the pod's switches): the switches are read
+ * only when a floor of a switchable family is what stands.
+ */
+export async function nonWidenableFloorAtPod(
+  db: DbHandle,
+  eventKey: string
+): Promise<string | null> {
+  const floor = nonWidenableFloorFor(eventKey);
+  if (!floor || !floorClassOf(eventKey)) return floor;
+  return nonWidenableFloorFor(eventKey, await readPodFloorsYield(db));
 }

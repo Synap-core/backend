@@ -42,6 +42,7 @@ import {
   REVERSIBLE_CLASS_PATTERN,
   isReversibleWrite,
   nonWidenableFloorFor,
+  floorClassOf,
 } from "@synap/governance-policy";
 import {
   earnedStreak,
@@ -217,6 +218,18 @@ export interface NextRungProjection {
  * key the engine floors can never get an offer even if a reason code was never
  * stored on the row.
  */
+/**
+ * The pod's floor switches, read only when one of these cards is a write of a
+ * switchable family (`floorClassOf`); otherwise no floor yields.
+ */
+export async function floorsYieldFor(
+  rows: readonly NextRungRow[]
+): Promise<Parameters<typeof nonWidenableFloorFor>[1]> {
+  return rows.some((row) => floorClassOf(proposalEventKey(row)))
+    ? readPodFloorsYield(db)
+    : undefined;
+}
+
 export function projectNextRung(
   row: NextRungRow,
   /** The pod's floor switches (`readPodFloorsYield`); absent = every floor holds. */
@@ -305,7 +318,7 @@ export async function readNextRungs(params: {
     .select(ROW_COLUMNS)
     .from(proposals)
     .where(inArray(proposals.id, [...visible]))) as NextRungRow[];
-  const floorsYield = await readPodFloorsYield(db);
+  const floorsYield = await floorsYieldFor(rows);
   const projections = (await resolveGrantedByRule(rows)).map((row) =>
     projectNextRung(row, floorsYield)
   );
@@ -521,7 +534,7 @@ export async function readAlwaysApproved(params: {
     params.userId
   );
   const exemplars = new Map<string, NextRungProjection>();
-  const floorsYield = await readPodFloorsYield(db);
+  const floorsYield = await floorsYieldFor(recent);
   for (const row of recent) {
     if (!visible.has(row.id)) continue;
     const p = projectNextRung(row, floorsYield);
@@ -691,7 +704,10 @@ export async function fileNextRung(params: {
   row: NextRungRow;
   mayGrant: boolean;
 }): Promise<FileNextRungResult> {
-  const projection = projectNextRung(params.row, await readPodFloorsYield(db));
+  const projection = projectNextRung(
+    params.row,
+    await floorsYieldFor([params.row])
+  );
   if (!projection.offer || !projection.rule) {
     throw noNextRung(
       "this item has no next rung to grant (a floor routed it, the write cannot be undone, its kind is unknown, it was declined, or no agent made it)."

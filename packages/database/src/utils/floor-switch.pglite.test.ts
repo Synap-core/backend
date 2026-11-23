@@ -181,7 +181,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     expect(await decide("automation.create")).toMatchObject({
       decision: "execute",
@@ -193,7 +193,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: KINDS,
       enabled: true,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     expect(await decide("profile.create")).toMatchObject({
       decision: "execute",
@@ -204,7 +204,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     expect(await decide("playbook.create")).toMatchObject({
       decision: "propose",
@@ -216,7 +216,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     expect(await decide("cell.define")).toMatchObject({ decision: "propose" });
   });
@@ -226,14 +226,14 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     await pg.exec(M0451);
     expect((await readPodClassDefault(db, STRUCTURE)).enabled).toBe(true);
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: false,
-      createdBy: HUMAN,
+      userId: HUMAN,
     });
     await pg.exec(M0451);
     expect((await readPodClassDefault(db, STRUCTURE)).enabled).toBe(false);

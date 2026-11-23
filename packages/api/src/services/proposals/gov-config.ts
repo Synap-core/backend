@@ -14,7 +14,6 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { nonWidenableFloorFor } from "@synap/governance-policy";
 import { isRootSwitchRule } from "@synap-core/types/governance-rules";
 import {
   db,
@@ -25,7 +24,7 @@ import {
   governanceCeilings,
   createGuideline,
   revokeGuideline,
-  readPodFloorsYield,
+  nonWidenableFloorAtPod,
   writePodNumberSetting,
   type PodNumberSettingKey,
   type GovernanceCeilingAxis,
@@ -223,10 +222,7 @@ export async function applyGovConfigChange(
       // a non-widenable floor resolves ABOVE the rule store (rung 2.8), so an
       // `auto` row there is a success receipt for a grant that does nothing.
       if (verdict === "auto" && targetKind === "action") {
-        const floor = nonWidenableFloorFor(
-          targetPattern,
-          await readPodFloorsYield(db)
-        );
+        const floor = await nonWidenableFloorAtPod(db, targetPattern);
         if (floor) {
           throw new TRPCError({
             code: "BAD_REQUEST",

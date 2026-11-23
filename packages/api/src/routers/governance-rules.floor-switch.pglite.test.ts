@@ -8,8 +8,12 @@
  * switch is off and stored once it is on (and only then deciding the agent's
  * write); a second row for a switch, refused (the switch reads one row); the
  * matrix widen, which stops at the floor while off and at reversibility once
- * on (a structure write cannot be undone, so it never widens there); the
- * floor column, which loses the kinds floor once that switch is on.
+ * on (a structure write cannot be undone, so it never widens there).
+ *
+ * Not pinned here: the matrix's floor column (it shows at most four floor
+ * kinds, so whether the kinds floor is among them depends on that cap) and
+ * the next-rung offer (no switchable write is reversible, so no card can
+ * tell the yield apart).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -47,20 +51,15 @@ vi.mock("../middleware/audit-log.js", async () => {
 
 import { is } from "drizzle-orm";
 import { getTableConfig, PgTable } from "drizzle-orm/pg-core";
-import {
-  readPodFloorsYield,
-  resolveAgentGovernanceDecision,
-} from "@synap/database";
+import { resolveAgentGovernanceDecision } from "@synap/database/agent-governance";
 import * as schema from "@synap/database/schema";
 import { governanceRulesRouter } from "./governance-rules.js";
 import { draftMatrixWiden } from "../services/governance/widen-cell.js";
-import { floorProbes } from "../services/governance/agent-matrix.js";
 import type { Context } from "../types/context.js";
 
 const ALICE = "alice-fs"; // the person, a pod admin
 const AGENT = "agent-fs"; // an AI of Alice's
 const STRUCTURE = "@agent-builds-structure";
-const KINDS = "@agent-defines-kinds";
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -142,15 +141,21 @@ describe("the floor switches, through the person's own doors", () => {
     expect(err.message).toContain("NON_WIDENABLE_FLOOR");
   });
 
-  it("switched on, the same rule is stored and decides the agent's write", async () => {
-    expect(await decide("create")).toMatchObject({ decision: "propose" });
+  it("switched on, the same rule is stored", async () => {
+    await caller(ALICE).setPodFloorDefault({
+      pattern: STRUCTURE,
+      enabled: true,
+    });
+    await expect(agentAuto("automation.create")).resolves.toBeTruthy();
+  });
+
+  it("and that rule decides the agent's write; the family's other writes still need theirs", async () => {
     await caller(ALICE).setPodFloorDefault({
       pattern: STRUCTURE,
       enabled: true,
     });
     await agentAuto("automation.create");
     expect(await decide("create")).toMatchObject({ decision: "execute" });
-    // The rest of the family's writes still need their own rule.
     expect(await decide("activate")).toMatchObject({ decision: "propose" });
   });
 
@@ -185,15 +190,5 @@ describe("the floor switches, through the person's own doors", () => {
     expect((await refusal(draftMatrixWiden(probe, ALICE))).message).toMatch(
       /cannot be undone/
     );
-  });
-
-  it("the matrix's floor column loses the kinds floor once that switch is on", async () => {
-    const kindsFloor = async () =>
-      floorProbes(await readPodFloorsYield(h.db as never)).some(
-        (p) => p.action === "profile.create"
-      );
-    expect(await kindsFloor()).toBe(true);
-    await caller(ALICE).setPodFloorDefault({ pattern: KINDS, enabled: true });
-    expect(await kindsFloor()).toBe(false);
   });
 });
