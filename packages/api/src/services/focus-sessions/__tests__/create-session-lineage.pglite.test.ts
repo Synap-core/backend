@@ -386,7 +386,11 @@ describe("createFocusSession — title, parent and blockers at birth", () => {
       `select count(*)::int as n from focus_sessions`
     );
     await expect(
-      createFocusSession({ userId: USER, goal: "orphan lane", forOutput: "api" })
+      createFocusSession({
+        userId: USER,
+        goal: "orphan lane",
+        forOutput: "api",
+      })
     ).rejects.toThrow(/forOutput needs parentSessionId/);
     for (const blank of ["", "   "]) {
       await expect(

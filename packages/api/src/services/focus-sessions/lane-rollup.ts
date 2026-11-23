@@ -110,9 +110,7 @@ const slotsOf = (v: unknown): ExpectedOutput[] =>
  * the rollup never would (`selectSlotsDeliveredByChild`).
  */
 export type SpawnTargetRefusal =
-  | "not_a_parent_writer"
-  | "no_such_output"
-  | "checked_by_criterion";
+  "not_a_parent_writer" | "no_such_output" | "checked_by_criterion";
 
 export type SpawnTargetCheck =
   | { status: "recorded"; key: string }

@@ -3302,6 +3302,12 @@
           "description": "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
         },
         {
+          "name": "forOutput",
+          "type": "string",
+          "required": false,
+          "description": "With parentSessionId: the key of the PARENT's outcome this session delivers. Declare your own outcome with the same key; when you close done with it delivered, the parent's outcome is met. Recorded only if you are on the parent's roster, your key may write the parent, and the parent declares that key with no required criterion checking it (`parentLink.forOutput` says recorded or why not). Without it, nothing rolls up; without parentSessionId, or blank, it is refused."
+        },
+        {
           "name": "expectedOutputs",
           "type": "array<object>",
           "required": false,
@@ -3585,6 +3591,11 @@
             "type": "string",
             "maxLength": 400,
             "description": "With parentSessionId, this session BLOCKS the parent: one line naming what the parent was about to do. The parent stays open and waits until this session closes; then this line is what you resume. Omit it for a slice that does not block the parent."
+          },
+          "forOutput": {
+            "type": "string",
+            "maxLength": 120,
+            "description": "With parentSessionId: the key of the PARENT's outcome this session delivers. Declare your own outcome with the same key; when you close done with it delivered, the parent's outcome is met. Recorded only if you are on the parent's roster, your key may write the parent, and the parent declares that key with no required criterion checking it (`parentLink.forOutput` says recorded or why not). Without it, nothing rolls up; without parentSessionId, or blank, it is refused."
           },
           "expectedOutputs": {
             "type": "array",

@@ -13256,6 +13256,16 @@ export interface WorkReleaseRead {
 	/** Present only when the caller's grant narrowed the read. */
 	narrowed?: WorkReleaseNarrowing;
 }
+declare const WORK_GRAPH_EDGE_KINDS: readonly [
+	"blocked_by",
+	"spawned_from",
+	"orchestrated_by",
+	"waits_on_output",
+	"triggered",
+	"updated",
+	"serves"
+];
+export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
 	"applied",
 	"proposed",
@@ -27042,16 +27052,6 @@ export interface WorkGraphEntity {
 	/** The status's fixed category; `null` = no lifecycle. */
 	category: LifecycleCategory | null;
 }
-declare const WORK_GRAPH_EDGE_KINDS: readonly [
-	"blocked_by",
-	"spawned_from",
-	"orchestrated_by",
-	"waits_on_output",
-	"triggered",
-	"updated",
-	"serves"
-];
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 /** What an edge end is when it is not a session (B4). */
 export type WorkGraphEndKind = "entity" | "track";
 export interface WorkGraphEdge {
@@ -27605,6 +27605,20 @@ export type UnitBlockerReport = BlockerKey & ({
 	reason: UnitBlockerReason;
 	status: "failed";
 });
+/**
+ * Why a spawn target was not recorded. `checked_by_criterion`: a required
+ * criterion of the parent checks that output, so its evaluator meets it and
+ * the rollup never would (`selectSlotsDeliveredByChild`).
+ */
+export type SpawnTargetRefusal = "checked_by_criterion" | "no_such_output" | "not_a_parent_writer";
+export type SpawnTargetCheck = {
+	key: string;
+	status: "recorded";
+} | {
+	key: string;
+	reason: SpawnTargetRefusal;
+	status: "refused";
+};
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -27612,6 +27626,8 @@ export type CreateTimeParentLink = {
 	 * child. `null` when the write produced no report.
 	 */
 	blocksParent?: CreateTimeBlockerReport | null;
+	/** Present when `forOutput` was asked: recorded, or refused and why. */
+	forOutput?: SpawnTargetCheck;
 	parentSessionId: string;
 	status: "linked";
 	suspendedIntentRecorded: boolean;

@@ -560,8 +560,8 @@ describe("a lane spawned for an output that met nothing is said in the log", () 
 describe("resolveSpawnTarget under a key's grant: the key must be able to write the parent", () => {
   const PROJECT_X = randomUUID();
   const PROJECT_Y = randomUUID();
-  const asKey = (scope: Parameters<typeof grantOfScope>[0]) =>
-    (parentSessionId: string) =>
+  const asKey =
+    (scope: Parameters<typeof grantOfScope>[0]) => (parentSessionId: string) =>
       runWithGrant(grantOfScope(scope, "app-1"), () =>
         resolveSpawnTarget({
           parentSessionId,
