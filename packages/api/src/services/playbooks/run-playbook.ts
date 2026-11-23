@@ -1548,7 +1548,7 @@ export async function checkUnattendedPlaybookReadiness(input: {
  * choice ({@link resolveRunChoice}) left an agent-only playbook with no agent
  * and nobody to choose among.
  */
-async function refuseRunNobodyCanTake(input: {
+export async function refuseRunNobodyCanTake(input: {
   playbook: Playbook;
   userId: string;
   workspaceId: string;

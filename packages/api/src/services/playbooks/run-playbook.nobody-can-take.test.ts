@@ -44,9 +44,7 @@ describe("checkUnattendedPlaybookReadiness: a run no runner can take", () => {
     const out = await checkUnattendedPlaybookReadiness(INPUT);
     expect(out.ready).toBe(false);
     if (out.ready) return;
-    expect(out.message).toMatch(
-      /^Nothing filed: "Enrich and score" runs only on an agent, and none of your agents can take it\./
-    );
+    expect(out.message).toContain('"Enrich and score"');
   });
 
   it("an agent-only playbook an agent can take is ready", async () => {

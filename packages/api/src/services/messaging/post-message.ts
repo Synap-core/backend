@@ -55,7 +55,6 @@ import {
   desc,
   drizzleSql,
   focusSessions,
-  claimRunAsAgent,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import {
@@ -332,10 +331,11 @@ async function fileSlotQuestion(
 }
 
 /**
- * An agent's post in the room of a session handed to it is its first act on
- * the work: the run handed to THAT agent is claimed (`claimRunAsAgent`). A
- * worker's launched agent posts here before anything else. Never throws: a
- * failed claim leaves the run to the reaper's window.
+ * An agent's post in a session's room is a write attributed to that session,
+ * like any governed write (`reviveSessionForWrite`): a stale session is
+ * revived and the run handed to THAT agent is claimed. A worker's launched
+ * agent posts here before anything else. Never throws: a failed claim leaves
+ * the run to the reaper's window.
  */
 async function claimRoomRun(
   channelId: string,
@@ -343,11 +343,19 @@ async function claimRoomRun(
 ): Promise<void> {
   try {
     const [session] = await db
-      .select({ id: focusSessions.id })
+      .select({ id: focusSessions.id, userId: focusSessions.userId })
       .from(focusSessions)
       .where(eq(focusSessions.channelId, channelId))
       .limit(1);
-    if (session) await claimRunAsAgent(db, session.id, agentUserId);
+    if (!session) return;
+    const { reviveSessionForWrite } =
+      await import("../focus-sessions/revive-stale-session.js");
+    await reviveSessionForWrite({
+      userId: session.userId,
+      agentUserId,
+      sessionId: session.id,
+      subjectType: "message",
+    });
   } catch (err) {
     logger.warn(
       { err, channelId, agentUserId },

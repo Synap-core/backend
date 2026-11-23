@@ -347,7 +347,9 @@ export class ExternalAgentExecutor implements Executor {
       return fail(
         candidates.length === 0
           ? "no agent is bound for dispatch — bind one, then run this again"
-          : "several agents can take this work — choose one in the session, then run this again",
+          : candidates.length === 1
+            ? "the run named no agent — choose yours in the session, then run this again"
+            : "several agents can take this work — choose one in the session, then run this again",
         "choose-agent"
       );
     }

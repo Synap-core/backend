@@ -1481,12 +1481,17 @@ export async function createFocusSession(
   // room (a dispatch agent's provider task starts it; a pull agent finds it
   // handed to it). The dispatch enters the first stage itself.
   if (playbook && runChoice) {
+    if (!sessionOut.channelId) {
+      throw new Error(
+        `Session ${sessionOut.id} has no room, so its run could not be handed to the agent.`
+      );
+    }
     const { dispatchRunOnSession } =
       await import("../playbooks/run-playbook.js");
     await dispatchRunOnSession({
       playbook,
       sessionId: sessionOut.id,
-      channelId: sessionOut.channelId ?? "",
+      channelId: sessionOut.channelId,
       actorId: userId,
       workspaceId: sessionOut.workspaceId ?? null,
       params: paramResolution?.declaredValues ?? {},

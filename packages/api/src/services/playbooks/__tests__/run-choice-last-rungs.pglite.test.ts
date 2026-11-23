@@ -152,6 +152,8 @@ interface Row {
   owner: string;
   playbookId?: string;
   workspaceId?: string;
+  /** The playbook's own runner (`playbooks.runner`); none by default. */
+  runner?: unknown[];
   work: RunWork;
   expected: Outcome;
 }
@@ -172,7 +174,7 @@ const choice = (row: Row) =>
     playbook: {
       id: row.playbookId ?? PLAYBOOK,
       executor: "external-agent",
-      runner: null,
+      runner: (row.runner ?? null) as never,
     },
     work: row.work,
   });
@@ -311,6 +313,15 @@ const ROWS: Row[] = [
     expected: { kind: "agent", id: D2 },
   },
   {
+    label:
+      "a runner whose choices are all passed over falls through to the last rungs",
+    owner: MANY,
+    // Synap AI cannot run an agent-only playbook: passed over, not_allowed.
+    runner: ["synap_ai"],
+    work: { roster: [D1] },
+    expected: { kind: "agent", id: D1 },
+  },
+  {
     label: "an answer naming a teammate's agent is refused, never swapped",
     owner: MANY,
     work: { answeredAgentUserId: FOREIGN },
@@ -329,6 +340,16 @@ describe("the executor's agent selection, now the run choice's last rungs: same 
     const was = await before(row);
     expect(was).toEqual(row.expected);
     expect(await now(row)).toEqual(was);
+  });
+
+  it("the runner's passed-over choices stay on the run the last rungs gave an agent", async () => {
+    const row = ROWS.find((r) => r.runner)!;
+    const c = await choice(row);
+    expect(c.runOn).toMatchObject({
+      agentUserId: D1,
+      via: "default",
+      runnerPassedOver: [{ choice: 0, why: "not_allowed" }],
+    });
   });
 
   it("the run choice names the agent on the run itself (runOn), never through the executor", async () => {
