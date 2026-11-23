@@ -565,6 +565,8 @@ export const vocabularyFr: Catalog<VocabularyEn> = {
   "status.muted": "En sourdine",
   "status.no_effect": "Aucun changement",
   "status.not_done": "Non abouti",
+  "status.stopped_on_error": "Arrêtée sur une erreur",
+  "status.stopped_at_limit": "Arrêté à sa limite",
   "status.blocked_by_policy": "Bloqué par une règle",
   "status.no_active_goal": "Aucun objectif actif",
   "status.stalled": "À l’arrêt",

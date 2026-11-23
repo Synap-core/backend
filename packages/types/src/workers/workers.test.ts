@@ -140,8 +140,16 @@ describe("playbookScheduleOf", () => {
     expect(
       playbookScheduleOf({
         workers: [
-          { activator: clock("0 8 * * *"), state: "paused" },
-          { activator: clock("0 9 * * 1", "Europe/Paris"), state: "running" },
+          {
+            activator: clock("0 8 * * *"),
+            state: "paused",
+            automationId: null,
+          },
+          {
+            activator: clock("0 9 * * 1", "Europe/Paris"),
+            state: "running",
+            automationId: "a-1",
+          },
         ],
       })
     ).toEqual({ cron: "0 9 * * 1", timezone: "Europe/Paris", on: true });
@@ -150,8 +158,28 @@ describe("playbookScheduleOf", () => {
   it("a paused worker is a schedule that does not fire", () => {
     expect(
       playbookScheduleOf({
-        workers: [{ activator: clock("0 8 * * *"), state: "paused" }],
+        workers: [
+          {
+            activator: clock("0 8 * * *"),
+            state: "paused",
+            automationId: null,
+          },
+        ],
         retired: { cron: "0 7 * * *", enabled: true },
+      })
+    ).toEqual({ cron: "0 8 * * *", timezone: null, on: false });
+  });
+
+  it("a running worker whose automation does not fire is off", () => {
+    expect(
+      playbookScheduleOf({
+        workers: [
+          {
+            activator: clock("0 8 * * *"),
+            state: "running",
+            automationId: null,
+          },
+        ],
       })
     ).toEqual({ cron: "0 8 * * *", timezone: null, on: false });
   });
@@ -161,6 +189,7 @@ describe("playbookScheduleOf", () => {
       {
         activator: { on: "enters_status" as const },
         state: "running" as const,
+        automationId: "a-2",
       },
     ];
     expect(playbookScheduleOf({ workers })).toBeNull();

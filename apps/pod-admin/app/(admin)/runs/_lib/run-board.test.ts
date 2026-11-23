@@ -72,8 +72,9 @@ describe("run rows", () => {
     expect(
       runActions({ flowType: "chat", flowId: null, status: "failed" })
     ).toEqual({ cancel: false, runAgain: false });
-    // A run nobody claimed yet, or nobody picked up, is cancellable too.
-    for (const status of ["queued", "blocked"]) {
+    // Not claimed yet, nobody picked it up, or paused (the feed's word for a
+    // stale run): cancellable too.
+    for (const status of ["queued", "blocked", "paused"]) {
       expect(
         runActions({ flowType: "playbook", flowId: "p", status }).cancel
       ).toBe(true);

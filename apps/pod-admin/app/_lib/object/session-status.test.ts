@@ -74,7 +74,7 @@ describe("sessionStatusMark — a draft is its own mark", () => {
     expect(notDone.kind).not.toBe("healthy");
     expect(sessionStatusMark({ status: "closed" })).toMatchObject({
       kind: "healthy",
-      glyph: "done",
+      glyph: "check",
     });
   });
 
@@ -416,6 +416,21 @@ describe("sessionParent — no parent and a failed read are two facts", () => {
   it("says a failed read failed", () => {
     expect(sessionParent({ status: "unavailable", reason: "x" })).toEqual({
       state: "failed",
+    });
+  });
+
+  it("a child closed not done reads Not done in its lineage row", () => {
+    expect(
+      sessionChildren({
+        status: "ok",
+        total: 1,
+        items: [
+          { id: "k", title: "Kid", status: "closed", closedAs: "not_done" },
+        ],
+      })
+    ).toMatchObject({
+      state: "ok",
+      rows: [{ mark: { kind: "stale", label: "Not done" } }],
     });
   });
 

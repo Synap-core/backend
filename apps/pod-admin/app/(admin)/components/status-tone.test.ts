@@ -67,6 +67,18 @@ describe("machinePill", () => {
     expect(machinePill("run", "failed")!.kind).toBe("down");
   });
 
+  it("an automation stopped on error is one red mark", () => {
+    expect(machinePill("automation", "error")).toEqual({
+      kind: "down",
+      label: "Stopped on error",
+    });
+  });
+
+  it("a waiting run is your turn; a policy hold is quiet", () => {
+    expect(machinePill("run", "waiting_on_you")!.kind).toBe("stale");
+    expect(machinePill("run", "blocked_by_policy")!.kind).toBe("unknown");
+  });
+
   it("keeps a running run healthy and a queued one quiet", () => {
     expect(machinePill("run", "running")!.kind).toBe("healthy");
     expect(machinePill("run", "queued")).toEqual({

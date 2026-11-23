@@ -402,7 +402,7 @@ export interface PlaybookScheduleView {
 }
 
 /**
- * THE schedule of one playbook: its enabled schedule worker (a running one
+ * THE schedule of one playbook: its enabled schedule worker (one that fires
  * first), else a retired `playbooks.schedule` no activator could say (it
  * still fires through its own automation while `enabled`), else none.
  */
@@ -410,18 +410,23 @@ export function playbookScheduleOf(input: {
   workers: ReadonlyArray<{
     activator: Pick<WorkerActivator, "on" | "cron" | "timezone"> | null;
     state: "running" | "paused" | "stopped";
+    /** The automation that fires it: null while it does not fire. */
+    automationId: string | null;
   }>;
   retired?: unknown;
 }): PlaybookScheduleView | null {
   const clocks = input.workers.filter(
     (w) => w.activator?.on === "schedule" && w.activator.cron
   );
-  const worker = clocks.find((w) => w.state === "running") ?? clocks[0];
+  // It fires only while its worker runs AND its automation is active.
+  const fires = (w: (typeof clocks)[number]) =>
+    w.state === "running" && w.automationId !== null;
+  const worker = clocks.find(fires) ?? clocks[0];
   if (worker) {
     return {
       cron: worker.activator!.cron!,
       timezone: worker.activator!.timezone ?? null,
-      on: worker.state === "running",
+      on: fires(worker),
     };
   }
   const retired = input.retired as

@@ -38,6 +38,17 @@ describe("goalSessionRows", () => {
     expect(rows.map((r) => r.title)).toEqual(["Named", "First line"]);
     expect(rows[1]!.status?.label).toBeTruthy();
   });
+
+  it("a session closed with required work open reads Not done, never healthy", () => {
+    const [row] = goalSessionRows([
+      {
+        id: "c",
+        status: "closed",
+        verificationReport: { closedNotDone: { reason: "out of time" } },
+      },
+    ]);
+    expect(row!.status).toEqual({ kind: "stale", label: "Not done" });
+  });
 });
 
 describe("goalWriteNotice — how a write answered, said once", () => {

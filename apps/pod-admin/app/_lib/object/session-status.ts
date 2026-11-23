@@ -40,7 +40,7 @@ import {
   isDeliverableDelivered,
   statusMark,
   type DeliverableFacts,
-  type StatusMark,
+  type StatusGlyph,
 } from "@synap-core/types/units";
 import {
   resolveActionLabel,
@@ -56,29 +56,8 @@ import type { StatusKind } from "../../(admin)/components/status-pill";
 
 // ─── The mark ────────────────────────────────────────────────────────────────
 
-/** Which glyph the mark wears; the page maps each to its icon. */
-export type SessionGlyph =
-  "draft" | "moving" | "paused" | "scheduled" | "done" | "stopped" | "failed";
-
-/** The glyph of where it stands: how it ended, else its category. */
-function glyphOf(mark: StatusMark): SessionGlyph | null {
-  switch (mark.outcome ?? mark.category) {
-    case "open":
-      return "scheduled";
-    case "active":
-      return "moving";
-    case "paused":
-      return "paused";
-    case "done":
-      return "done";
-    case "failed":
-      return "failed";
-    case null:
-      return null;
-    default:
-      return "stopped";
-  }
-}
+/** Which glyph the mark wears (`statusMark`'s, or a draft's); the page maps each to its icon. */
+export type SessionGlyph = StatusGlyph | "draft";
 
 export interface SessionStatusMark {
   kind: StatusKind;
@@ -122,7 +101,12 @@ export function sessionStatusMark(
     closedNotDone: closedNotDoneRecorded(s.verificationReport),
   });
   if (!mark) return null;
-  return { ...statusMarkPill(mark), glyph: glyphOf(mark), draft: false };
+  return {
+    ...statusMarkPill(mark),
+    // An undeclared word keeps the pill's dot.
+    glyph: mark.category ? mark.glyph : null,
+    draft: false,
+  };
 }
 
 // ─── The moves ───────────────────────────────────────────────────────────────
@@ -478,6 +462,8 @@ interface LinkedSessionLike {
   title: string;
   status: string;
   statusLabel?: string;
+  /** How it ended (`sessionClosedAs`), when the packet says. */
+  closedAs?: string | null;
 }
 
 /** A linked session as a row: its name, its status mark, its id for the door. */
@@ -502,7 +488,9 @@ export function lineageRow(s: LinkedSessionLike): LineageRow {
     key: s.id,
     id: s.id,
     title: s.title.trim() || "Untitled session",
-    mark: machinePill("session", s.status),
+    mark: machinePill("session", s.status, {
+      closedNotDone: s.closedAs === "not_done",
+    }),
   };
 }
 

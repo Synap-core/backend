@@ -60,13 +60,19 @@ export function statusPillFor(
   };
 }
 
-/** A machine status's mark (`statusMark`) as a pill. */
+/**
+ * A machine status's mark (`statusMark`) as a pill. A run that has not ended
+ * wears whose turn it is (`mark.turn`): its tone is the unit table's, read
+ * through `unitTonePill`; every other mark's tone is the lifecycle table's.
+ */
 export function statusMarkPill(mark: StatusMark): {
   kind: StatusKind;
   label: string;
 } {
   return {
-    kind: statusKindForTone(unitToneEnum(mark.tone)),
+    kind: mark.turn
+      ? unitTonePill(mark.tone)
+      : statusKindForTone(unitToneEnum(mark.tone)),
     label: mark.label,
   };
 }

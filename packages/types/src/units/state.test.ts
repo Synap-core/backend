@@ -293,6 +293,8 @@ describe("resolveRunUnitState — a run's status wears the unit mark", () => {
     expect(resolveRunUnitState("queued").state).toBe("not_started");
     // Rules out the unmeasured fallthrough: the person chooses its runner.
     expect(resolveRunUnitState("blocked").state).toBe("needs_you");
+    // Waits for the person to approve its start: a decision, never unmeasured.
+    expect(resolveRunUnitState("proposed").state).toBe("needs_review");
   });
 
   it("paused and the reaper's stale read PAUSED — never stopped, never unmeasured", () => {

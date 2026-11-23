@@ -520,6 +520,9 @@ export function unitStateInputOfRunStatus(
     case "running":
     case "pending":
       return { running: true };
+    // Waits for the person to approve its start.
+    case "proposed":
+      return { pendingDecisions: 1 };
     // Handed to a runner that has not claimed it: not at work yet.
     case "queued":
       return { everStarted: false };

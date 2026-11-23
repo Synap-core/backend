@@ -218,7 +218,9 @@ export function sessionClosedAs(
 export function closedNotDoneRecorded(verificationReport: unknown): boolean {
   const record = (verificationReport as { closedNotDone?: unknown } | null)
     ?.closedNotDone;
-  return typeof record === "object" && record !== null;
+  return (
+    typeof record === "object" && record !== null && !Array.isArray(record)
+  );
 }
 
 export function isTerminalSessionStatus(
