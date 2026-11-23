@@ -5525,6 +5525,17 @@ export interface WorkerOnly {
 	in: string[];
 }
 /**
+ * A playbook's schedule as every surface reads it: its clock, the zone it
+ * runs in (`null` = its owner's), and whether it fires now. Projected by the
+ * playbook reads (`playbooks.list`, `get`); a client never joins activators
+ * with rule status itself.
+ */
+export interface PlaybookScheduleView {
+	cron: string;
+	timezone: string | null;
+	on: boolean;
+}
+/**
  * AutomationTriggerConfig
  *
  * Typed configuration stored as JSONB on the automations table.
@@ -52356,7 +52367,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52453,7 +52464,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52494,7 +52505,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requires: unknown;
 					runHealth: RunHealth | null;
 					runner: unknown;
-					schedule: unknown;
+					schedule: PlaybookScheduleView | null;
 					scope: "project" | "session" | null;
 					servesGoals: ServedGoal[];
 					stages: unknown;
@@ -52516,7 +52527,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				nextCursor: string | null;
-				playbooks: {
+				playbooks: (Omit<{
 					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
@@ -52544,7 +52555,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
-				}[];
+				}, "schedule"> & {
+					schedule: PlaybookScheduleView | null;
+				})[];
 			};
 		}>;
 		match: import("@trpc/server").TRPCQueryProcedure<{
