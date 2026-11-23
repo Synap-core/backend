@@ -34,6 +34,7 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
@@ -2777,7 +2778,17 @@ function buildConfigReviewItems(
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          bornEnabled: op.enabled !== false,
+          bornEnabled:
+            statusAtCreate({
+              requested:
+                op.enabled === undefined
+                  ? undefined
+                  : op.enabled
+                    ? "active"
+                    : "draft",
+              personApproved: true,
+              actorIsAgent: true,
+            }) === "active",
           ...(stepSkills
             ? { reach: flowReach(op.flowDefinition, stepSkills) }
             : {}),
@@ -2807,7 +2818,11 @@ function buildConfigReviewItems(
           ...(op.subjectProfile?.statusProperty
             ? { statusProperty: op.subjectProfile.statusProperty }
             : {}),
-          bornStatus: op.status ?? "active",
+          bornStatus: statusAtCreate({
+            requested: op.status,
+            personApproved: true,
+            actorIsAgent: true,
+          }),
         });
         return;
       case "create_workspace":

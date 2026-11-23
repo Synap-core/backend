@@ -41,6 +41,7 @@ import type {
   KindDefineCaller,
   LifecycleDeclareCaller,
 } from "./materialize-composite.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { buildCompositeUpdateCaller } from "./composite-update-caller.js";
 // Type-only: no runtime edge, so the lazy-import cycle guard above still holds.
 import type { materializeAutomationForPrincipal } from "../routers/automations.js";
@@ -519,12 +520,13 @@ export function buildRuleLoopCallers(ctx: RuleLoopCallerContext): {
             message: "No workspace access",
           });
         }
-        // The same decision the automation door makes: a batch no person
-        // reviewed writes a draft; a person's approval makes it active unless
-        // the op keeps it a draft.
-        const status: "draft" | "active" = !skillAuthor.personApproved
-          ? "draft"
-          : (playbookOp.status ?? "active");
+        // The one birth decision. A batch no person reviewed may be
+        // structured from pasted content, so it is judged as an agent's.
+        const status = statusAtCreate({
+          requested: playbookOp.status,
+          personApproved: skillAuthor.personApproved,
+          actorIsAgent: true,
+        });
         const { playbooksRouter } = await import("../routers/playbooks.js");
         const caller = playbooksRouter.createCaller({
           db: database,
