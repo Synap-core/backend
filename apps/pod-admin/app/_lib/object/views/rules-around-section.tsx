@@ -21,6 +21,7 @@ import { ResourceRowError } from "../../../(admin)/components/resource-row";
 import { StatusPill } from "../../../(admin)/components/status-pill";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { objectPage } from "../content/markdown-model";
+import { objectViewsT } from "./copy";
 import {
   lastOutcomeWords,
   ruleAroundHref,
@@ -32,6 +33,7 @@ import {
 const TITLE = "When this moves";
 
 export function RulesAroundSection({ thingId }: { thingId: string }) {
+  const t = objectViewsT();
   const query = trpc.lifecycle.statusOf.useQuery(
     { ids: [thingId], include: ["reactions"] },
     { retry: false, staleTime: 15_000 }
@@ -49,7 +51,7 @@ export function RulesAroundSection({ thingId }: { thingId: string }) {
     return (
       <SectionCard variant="flat" title={TITLE}>
         <ResourceRowError
-          message="The automations around it couldn’t be read."
+          message={t("rules.failed")}
           onRetry={() => void query.refetch()}
         />
       </SectionCard>
@@ -69,6 +71,7 @@ export function RulesAroundSection({ thingId }: { thingId: string }) {
 }
 
 function RuleAround({ rule }: { rule: StatusOfReaction }) {
+  const t = objectViewsT();
   const mark = ruleAroundMark(rule);
   const last = lastOutcomeWords(rule);
   // Its own page says whether it still waits: the log only proves it was filed.
@@ -98,7 +101,7 @@ function RuleAround({ rule }: { rule: StatusOfReaction }) {
               href={proposal}
               className="underline decoration-foreground/25 underline-offset-2 hover:decoration-foreground"
             >
-              Open the proposal
+              {t("rules.openProposal")}
             </Link>
           </>
         )}

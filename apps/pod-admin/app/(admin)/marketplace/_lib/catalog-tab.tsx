@@ -39,6 +39,7 @@ import {
   catalogFreshness,
   catalogKindLabel,
 } from "./catalog-model";
+import { marketplaceT } from "./copy";
 import { catalogSourceChips } from "./sources-model";
 import { TrustChip } from "./sources-tab";
 import type { CatalogEntry } from "./types";
@@ -46,6 +47,7 @@ import type { CatalogEntry } from "./types";
 const PAGE_SIZE = 60;
 
 export function CatalogTab() {
+  const tm = marketplaceT();
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
   const [kind, setKind] = useState<CatalogEntry["kind"] | null>(null);
@@ -101,8 +103,8 @@ export function CatalogTab() {
       <FilterRow
         search={
           <Input
-            aria-label="Search the catalog"
-            placeholder="Search the catalog…"
+            aria-label={tm("search.aria")}
+            placeholder={tm("search.placeholder")}
             value={search}
             onValueChange={setSearch}
             size="sm"
@@ -115,7 +117,7 @@ export function CatalogTab() {
           <>
             {sourceChips.length > 1 && (
               <FilterChip
-                label="Source"
+                label={tm("filter.source")}
                 allLabel="All sources"
                 value={source}
                 options={sourceChips.map((s) => ({
@@ -127,7 +129,7 @@ export function CatalogTab() {
             )}
             {page && (
               <FilterChip<CatalogEntry["kind"]>
-                label="Kind"
+                label={tm("filter.kind")}
                 allLabel="All kinds"
                 value={kind}
                 options={page.kinds.map((k) => ({
@@ -149,7 +151,7 @@ export function CatalogTab() {
 
       {catalog.error && !page && (
         <ResourceRowError
-          message="The pod couldn't read its catalog."
+          message={tm("failed")}
           onRetry={() => void catalog.refetch()}
         />
       )}
@@ -158,12 +160,12 @@ export function CatalogTab() {
         <ResourceRowEmpty
           message={
             <>
-              No catalog source is on, so there is nothing to browse.{" "}
+              {tm("noSource.body")}{" "}
               <Link
                 href={navHref("marketplace", { tab: "sources" })}
                 className="rounded-sm text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                See the sources
+                {tm("noSource.link")}
               </Link>
             </>
           }
@@ -174,8 +176,8 @@ export function CatalogTab() {
         <ResourceRowEmpty
           message={
             debounced || kind || source
-              ? "Nothing in the catalog matches this filter."
-              : (freshness ?? "The catalog is empty.")
+              ? tm("empty.filtered")
+              : (freshness ?? tm("empty.catalog"))
           }
         />
       )}
@@ -193,8 +195,7 @@ export function CatalogTab() {
           </div>
           {page && page.total > entries.length && (
             <p className="mt-4 text-[11.5px] text-foreground/65">
-              Showing {entries.length} of {page.total}. Narrow the search to see
-              the rest.
+              {tm("showing", { shown: entries.length, total: page.total })}
             </p>
           )}
         </>
@@ -214,6 +215,7 @@ export function EntryCard({
   entry: CatalogEntry;
   showSource: boolean;
 }) {
+  const tm = marketplaceT();
   const Icon = kindIcon(entry.objectKind);
   // Absent is omitted: a placeholder sentence is not a state (ui-composition).
   const description = readableDescription(entry.description);
@@ -262,7 +264,9 @@ export function EntryCard({
       <div className="mt-auto flex min-w-0 items-center gap-1.5 pt-1 text-[11px] text-foreground/65">
         <span className="truncate font-mono">{entry.id}</span>
         {showSource && (
-          <span className="shrink-0">· from {entry.sourceName}</span>
+          <span className="shrink-0">
+            {tm("from", { source: entry.sourceName })}
+          </span>
         )}
         {entry.trust !== "official" && (
           <span className="ml-auto shrink-0">
@@ -276,11 +280,12 @@ export function EntryCard({
 
 /** The grid's shape while the first page loads, so cards land where it stood. */
 function CatalogSkeleton() {
+  const tm = marketplaceT();
   return (
     <div
       role="status"
       aria-busy="true"
-      aria-label="Loading the catalog"
+      aria-label={tm("loading")}
       className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
     >
       {Array.from({ length: 6 }, (_, i) => (

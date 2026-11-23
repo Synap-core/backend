@@ -28,6 +28,7 @@ import type {
 } from "@synap-core/types/units";
 import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { humanizeToken } from "@synap-core/types/vocabulary";
+import { objectViewsT } from "./views/copy";
 
 /** The work part as a door returns it: the answer, or a failed read. */
 export type WorkRead = StatusOfWork | { status: "unavailable" } | undefined;
@@ -205,9 +206,10 @@ export function nextMoveLine(item: StatusOfWorkItem): {
 export function stagesLeftLine(item: StatusOfWorkItem): string | null {
   const left = item.stopped?.left ?? [];
   if (left.length === 0) return null;
-  return `${left.length} stage${left.length === 1 ? "" : "s"} left: ${left
-    .map((s) => s.name)
-    .join(", ")}`;
+  return objectViewsT()("work.stagesLeft", {
+    n: left.length,
+    names: left.map((s) => s.name).join(", "),
+  });
 }
 
 /**
