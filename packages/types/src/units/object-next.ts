@@ -101,12 +101,14 @@ function fromNextMove(move: StatusOfWorkNextMove): ObjectNext | null {
  * The object's next step, or null when it needs nothing from the person.
  * Automations and playbooks read their health (a playbook first needs the
  * skills it uses enabled, unless it is still a draft or broken); things and
- * sessions read their next move. A kind with none of its facts read: null.
+ * sessions read their next move; a defined cell needs nothing more (its
+ * placing is the person's own choice). A kind with none of its facts read: null.
  */
 export function objectNextOf(
   kind: string,
   facts: ObjectNextFacts
 ): ObjectNext | null {
+  if (kind === "cell") return null;
   if (kind === "automation" || kind === "playbook") {
     const health = facts.health;
     if (

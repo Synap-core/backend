@@ -39,6 +39,7 @@ export const PROPOSAL_LANDED_KINDS = [
   "agent",
   "tool",
   "channel",
+  "cell",
 ] as const;
 export type ProposalLandedKind = (typeof PROPOSAL_LANDED_KINDS)[number];
 
@@ -169,10 +170,11 @@ const CREATED_LISTS: ReadonlyArray<[string, ProposalLandedKind]> = [
   ["ruleIds", "skill"],
   ["viewIds", "view"],
   ["workspaceIds", "workspace"],
+  ["cellIds", "cell"],
 ];
 
 /**
- * What the apply's records say landed. Relations, facets, links, cells and an
+ * What the apply's records say landed. Relations, facets, links and an
  * entity's body document are not objects a host opens, so they are left out.
  */
 export function landedFromRecord(data: unknown): ProposalLandedRef[] {

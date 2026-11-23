@@ -124,7 +124,7 @@ export async function applyCellDefineProposal(
     );
   }
 
-  await defineCell({
+  const cell = await defineCell({
     name,
     rendererSource,
     typeKey: proposedTypeKey,
@@ -215,7 +215,13 @@ export async function applyCellDefineProposal(
     "approved",
     userId
   );
-  return { success: true };
+  return {
+    success: true,
+    primaryId: cell.id,
+    // Also for a legacy `widget/register` row, whose target type is no kind.
+    primaryKind: "cell" as const,
+    primaryRole: cell.changeType,
+  };
 }
 
 /** Register the cell/define approve executor. */
