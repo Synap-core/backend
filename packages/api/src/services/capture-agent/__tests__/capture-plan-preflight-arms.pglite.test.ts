@@ -35,7 +35,10 @@ vi.mock("@synap/database", async (importOriginal) => {
   return { ...actual, db: pg, getDb: async () => pg };
 });
 
-import { allSchemaTables, pgliteTableDdl } from "../../../__tests__/pglite-ddl.js";
+import {
+  allSchemaTables,
+  pgliteTableDdl,
+} from "../../../__tests__/pglite-ddl.js";
 import { preflightPlanOperations } from "../capture-plan-preflight.js";
 import type { CompositeProposalOperation } from "@synap-core/types/proposals";
 
@@ -65,7 +68,10 @@ const OPTIONS = {
 };
 
 /** A one-step plan whose step waits on `toEntityId`, naming `option`. */
-function plan(toEntityId: string, option?: string): CompositeProposalOperation[] {
+function plan(
+  toEntityId: string,
+  option?: string
+): CompositeProposalOperation[] {
   return [
     { op: "create_session", ref: "step", goal: "Run the raise" },
     {
@@ -114,11 +120,13 @@ describe("capture plan preflight — an arm on an existing decision", () => {
 
   it("refuses an arm on an entity that is not a decision, and on a decision with no options", async () => {
     const task = await entity("task", OPTIONS);
-    expect((await problemsOf(plan(task, "raise"))).map((p) => p.message)).toEqual([
-      "Only a wait on a decision can name an option (an arm).",
-    ]);
+    expect(
+      (await problemsOf(plan(task, "raise"))).map((p) => p.message)
+    ).toEqual(["Only a wait on a decision can name an option (an arm)."]);
     const bare = await entity("decision", {});
-    expect((await problemsOf(plan(bare, "raise"))).map((p) => p.message)).toEqual([
+    expect(
+      (await problemsOf(plan(bare, "raise"))).map((p) => p.message)
+    ).toEqual([
       "This decision lists no options (decisionOptions): give it its options, then name one.",
     ]);
   });
@@ -130,8 +138,8 @@ describe("capture plan preflight — an arm on an existing decision", () => {
 
   it("an unseen decision is reported once as not found, never also judged as an arm (no existence oracle)", async () => {
     const ghost = randomUUID();
-    expect((await problemsOf(plan(ghost, "raise"))).map((p) => p.message)).toEqual([
-      `entity ${ghost} was not found`,
-    ]);
+    expect(
+      (await problemsOf(plan(ghost, "raise"))).map((p) => p.message)
+    ).toEqual([`entity ${ghost} was not found`]);
   });
 });

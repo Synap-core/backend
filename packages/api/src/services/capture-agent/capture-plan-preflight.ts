@@ -266,9 +266,7 @@ export async function preflightPlanOperations(
         properties: entities.properties,
       })
       .from(entities)
-      .where(
-        inArray(entities.id, [...new Set(armLinks.map((a) => a.toId))])
-      );
+      .where(inArray(entities.id, [...new Set(armLinks.map((a) => a.toId))]));
     const byId = new Map(rows.map((r) => [r.id, r]));
     for (const arm of armLinks) {
       const problem = armOptionProblem(byId.get(arm.toId), arm.option);
