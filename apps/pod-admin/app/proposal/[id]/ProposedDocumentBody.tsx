@@ -44,7 +44,7 @@ export function ProposedDocumentBody({
   return (
     <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
       <span className="text-[12.5px] font-medium text-foreground/70">
-        Content
+        {t("doc.content")}
       </span>
       <div
         data-proposed-document-body={open ? "whole" : "preview"}
@@ -77,7 +77,7 @@ export function ProposedDocumentBody({
           }
           onPress={() => setOpen((v) => !v)}
         >
-          {open ? "Show less" : "Read the whole document"}
+          {open ? t("doc.showLess") : t("doc.readWhole")}
         </Button>
       )}
     </div>

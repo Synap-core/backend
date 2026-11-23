@@ -132,6 +132,8 @@ export const en = {
     "Show all {n, plural, one {# object} other {# objects}} it made",
   "doc.content": "Content",
   "doc.preview": "Document preview",
+  "doc.showLess": "Show less",
+  "doc.readWhole": "Read the whole document",
   "doc.truncated":
     "Only the first {percent}% is drawn here. The whole text is in Advanced, under the request.",
   "record.showAll": "Show all",
@@ -267,6 +269,8 @@ export const fr: Catalog<typeof en> = {
     "Voir {n, plural, one {l’objet} other {les # objets}} concernés",
   "doc.content": "Contenu",
   "doc.preview": "Aperçu du document",
+  "doc.showLess": "Afficher moins",
+  "doc.readWhole": "Lire tout le document",
   "doc.truncated":
     "Seuls les {percent} % premiers sont affichés ici. Le texte entier est dans Avancé, sous la demande.",
   "record.showAll": "Tout afficher",
