@@ -318,7 +318,9 @@ describe("moveToSpace — a playbook carries its automations", () => {
     const message = (err as { message: string }).message;
     expect(message).toMatch(/playbook "Suivi" \(uses it\)/);
     expect(message).toMatch(/automation "Weekly run" \(runs it\)/);
-    expect(message).toMatch(/automation "Shared schedule" \(it also runs another playbook\)/);
+    expect(message).toMatch(
+      /automation "Shared schedule" \(it also runs another playbook\)/
+    );
     expect(h.checkPermission).not.toHaveBeenCalled();
     expect(await homeOf("playbooks", pb)).toBe(A);
   });

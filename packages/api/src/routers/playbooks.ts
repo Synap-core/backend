@@ -923,7 +923,10 @@ const playbookAutomationsRouter = router({
       });
       if (
         !automation ||
-        !usableInSpace({ ...automation, sharedWith: null }, playbook.workspaceId)
+        !usableInSpace(
+          { ...automation, sharedWith: null },
+          playbook.workspaceId
+        )
       ) {
         throw new TRPCError({
           code: "NOT_FOUND",

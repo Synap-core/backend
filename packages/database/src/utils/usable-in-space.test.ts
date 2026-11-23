@@ -17,7 +17,9 @@ const things = pgTable("things", {
   workspaceId: uuid("workspace_id"),
 });
 const sqlOf = (space: string | null) =>
-  new PgDialect().sqlToQuery(usableInSpaceWhere(things.workspaceId, space, null));
+  new PgDialect().sqlToQuery(
+    usableInSpaceWhere(things.workspaceId, space, null)
+  );
 
 describe("usableInSpace", () => {
   it.each([
@@ -27,7 +29,9 @@ describe("usableInSpace", () => {
     ["homed, elsewhere", A, B, false],
     ["homed, outside any space", A, null, false],
   ] as const)("%s", (_label, home, space, expected) => {
-    expect(usableInSpace({ workspaceId: home, sharedWith: null }, space)).toBe(expected);
+    expect(usableInSpace({ workspaceId: home, sharedWith: null }, space)).toBe(
+      expected
+    );
   });
 
   it.each([

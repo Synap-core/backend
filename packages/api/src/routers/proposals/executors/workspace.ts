@@ -779,8 +779,12 @@ export function registerWorkspaceExecutors(): void {
       // A move into this space, or a share with it (`services/move-to-space.ts`):
       // replayed as the APPROVER through the same floor, never the gate.
       if (inner.operation === "move_in" || inner.operation === "share") {
-        const { applyMoveToSpace, applyShareWithSpace, MOVABLE_TYPES, SHAREABLE_TYPES } =
-          await import("../../../services/move-to-space.js");
+        const {
+          applyMoveToSpace,
+          applyShareWithSpace,
+          MOVABLE_TYPES,
+          SHAREABLE_TYPES,
+        } = await import("../../../services/move-to-space.js");
         const objectId = inner.objectId;
         const objectType = inner.objectType;
         const types: readonly unknown[] =

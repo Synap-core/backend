@@ -226,7 +226,8 @@ async function playbookDependants(
       )
     );
   for (const a of runners)
-    if (!usableAt(a.workspaceId!)) out.push(`automation ${quoted(a.name)} (runs it)`);
+    if (!usableAt(a.workspaceId!))
+      out.push(`automation ${quoted(a.name)} (runs it)`);
   const lower = playbook.name.toLowerCase();
   const users = await db
     .select({
@@ -528,7 +529,12 @@ async function planShare(input: ShareInput, object: ObjectRow): Promise<void> {
       message: `${noun} "${object.name}" lives in space ${input.workspaceId}: it needs no share there.`,
     });
   }
-  await assertMayPlace(input.userId, input.objectType, object, input.workspaceId);
+  await assertMayPlace(
+    input.userId,
+    input.objectType,
+    object,
+    input.workspaceId
+  );
 }
 
 async function writeShare(input: ShareInput): Promise<ShareWithSpaceResult> {

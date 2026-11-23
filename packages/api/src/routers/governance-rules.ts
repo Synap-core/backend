@@ -1034,13 +1034,13 @@ export const governanceRulesRouter = router({
           ),
           orderBy: [desc(governanceRules.createdAt)],
         }),
-        db.query.playbooks.findFirst({
-          where: and(
-            eq(playbooks.id, input.subjectId),
-            scopedDb(AccessContext.operator({ userId: ctx.userId })).predicate(
-              playbooks
-            )
-          ),
+        scopedDb(AccessContext.from(ctx)).findFirst<
+          Pick<
+            typeof playbooks.$inferSelect,
+            "id" | "version" | "executor" | "runner" | "stages" | "tools"
+          >
+        >(playbooks, {
+          where: eq(playbooks.id, input.subjectId),
           columns: {
             id: true,
             version: true,
