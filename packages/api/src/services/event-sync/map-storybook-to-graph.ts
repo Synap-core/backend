@@ -155,7 +155,8 @@ function pageEntity(
   p: StorybookBundlePage,
   run: StorybookRunContext
 ): SyncGraphEntity {
-  const url = storyUrl(run.storybookUrl, p.storyId);
+  // A page is shown by its first story; its other stories are its states.
+  const url = storyUrl(run.storybookUrl, p.storyIds[0]!);
   return entity(
     p.key,
     UI_PAGE_PROFILE,
@@ -165,7 +166,7 @@ function pageEntity(
       "page-template": p.template,
       "page-layout": p.layout,
       route: p.route,
-      "story-id": p.storyId,
+      "story-id": p.storyIds[0],
       "story-url": url ?? undefined,
       screenshot: p.screenshot,
       "source-hash": p.sourceHash,

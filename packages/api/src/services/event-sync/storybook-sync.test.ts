@@ -32,7 +32,7 @@ import { getSyncKinds } from "./sync-kind-registry.js";
 
 const BUTTON = componentKey("packages/web/src/spatial-ui/components.tsx", "SpatialButton");
 const ROW = componentKey("packages/web/src/proposals/row.tsx", "ProposalRow");
-const HOME = pageKey("pages-desktop-home--full");
+const HOME = pageKey("pages-desktop-home");
 const FLOW = flowKey("morning-check");
 const APP = "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b";
 
@@ -70,7 +70,7 @@ function bundle(): StorybookBundle {
         key: HOME,
         title: "Home",
         surface: "desktop",
-        storyId: "pages-desktop-home--full",
+        storyIds: ["pages-desktop-home--full", "pages-desktop-home--empty"],
         sourceHash: "p1",
         components: [ROW],
       },
@@ -134,6 +134,18 @@ describe("mapStorybookItems", () => {
     const after = graphOf(b).graph.entities.find((e) => e.ref === BUTTON)!;
     expect(after.identity.externalId).toBe(before.identity.externalId);
     expect(after.title).toBe("Button");
+  });
+
+  it("shows a page by its first story; its key is the title id, whatever the order", () => {
+    const page = graphOf(bundle()).graph.entities.find((e) => e.ref === HOME)!;
+    expect(page.properties["story-id"]).toBe("pages-desktop-home--full");
+    const b = bundle();
+    b.pages[0]!.storyIds.reverse();
+    const reordered = graphOf(b, { bundleFileId: "f", appId: APP, url: undefined } as never).graph.entities.find(
+      (e) => e.profileSlug === "ui-page"
+    )!;
+    expect(reordered.identity.externalId).toBe(HOME);
+    expect(reordered.properties["story-id"]).toBe("pages-desktop-home--empty");
   });
 
   it("sets the initial status from the inventory verdict and never writes a review or a brand", () => {
