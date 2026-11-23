@@ -22,6 +22,7 @@ import {
   isLikelyUUID,
   isPlanOperation,
   isUpdateOperation,
+  type UPDATE_OPERATION_KINDS,
   updateOperationTargetId,
   PLAN_LINK_TYPES,
   type CompositeProposalOperation,
@@ -32,6 +33,7 @@ import {
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import { decisionRecordView } from "@synap-core/types/ask";
 import {
   STEP_DUE_BY_KEY,
   STEP_PLANNED_FOR_KEY,
@@ -53,6 +55,7 @@ export const CAPTURE_PLAN_KEYS = [
   "documents",
   "projects",
   "tracks",
+  "edits",
   "links",
   "skills",
   "automations",
@@ -143,6 +146,53 @@ export interface CapturePlanProblem {
   message: string;
 }
 
+/** One step → decision / goal edge (a cross-kind `blocked_by` `create_link`). */
+export interface PlanCrossKindEdge {
+  opIndex: number;
+  from: { ref: string } | { sessionId: string };
+  to: { kind: "entity" | "track" } & ({ ref: string } | { id: string });
+  /** The decision option the step waits on (an arm), when it names one. */
+  option?: string;
+}
+
+/** True when a `create_link` waits on a decision or a goal, not a session. */
+export function isCrossKindLink(
+  op: Extract<CompositeProposalOperation, { op: "create_link" }>
+): boolean {
+  return !!(op.toEntityRef || op.toEntityId || op.toTrackRef || op.toTrackId);
+}
+
+/**
+ * Every step → decision / goal `blocked_by` the plan declares — the cross-kind
+ * half of the plan's edges. `planSessionEdges` is the session↔session half;
+ * the two never overlap (`isCrossKindLink`).
+ */
+export function planCrossKindEdges(
+  operations: CompositeProposalOperation[]
+): PlanCrossKindEdge[] {
+  const edges: PlanCrossKindEdge[] = [];
+  operations.forEach((op, opIndex) => {
+    if (op.op !== "create_link" || !isCrossKindLink(op)) return;
+    const from = op.fromRef
+      ? { ref: op.fromRef }
+      : { sessionId: op.fromSessionId ?? "" };
+    const to = op.toEntityRef
+      ? { kind: "entity" as const, ref: op.toEntityRef }
+      : op.toEntityId
+        ? { kind: "entity" as const, id: op.toEntityId }
+        : op.toTrackRef
+          ? { kind: "track" as const, ref: op.toTrackRef }
+          : { kind: "track" as const, id: op.toTrackId ?? "" };
+    edges.push({
+      opIndex,
+      from,
+      to,
+      ...(op.option ? { option: op.option } : {}),
+    });
+  });
+  return edges;
+}
+
 /** One session↔session edge, from a `create_session` field or a `create_link` op. */
 export interface PlanSessionEdge {
   type: PlanLinkType;
@@ -169,6 +219,8 @@ const OP_REF_KIND: Partial<
   create_track: "track",
   define_kind: "kind",
   declare_lifecycle: "lifecycle",
+  // A re-plan's step update names an EXISTING session; its ref resolves to it.
+  update_session: "session",
   // An update names an EXISTING row; its ref resolves to that row's id, so
   // a relation may target a reused container (`update_entity`).
   update_skill: "skill",
@@ -269,7 +321,7 @@ export function planSessionEdges(
           to: { sessionId: blocker },
         });
       }
-    } else if (op.op === "create_link") {
+    } else if (op.op === "create_link" && !isCrossKindLink(op)) {
       const from = op.fromRef
         ? { ref: op.fromRef }
         : { sessionId: op.fromSessionId ?? "" };
@@ -442,6 +494,14 @@ export function validatePlanOperations(
       expectRef(opIndex, "workspaceRef", op.workspaceRef, "workspace");
     if (op.workspaceId) expectId(opIndex, "workspaceId", op.workspaceId);
   };
+  // Existing steps this plan re-plans (`update_session`).
+  const replannedSessionIds = new Set(
+    operations.flatMap((op) =>
+      op.op === "update_session" && typeof op.sessionId === "string"
+        ? [op.sessionId]
+        : []
+    )
+  );
 
   operations.forEach((op, i) => {
     switch (op.op) {
@@ -621,6 +681,73 @@ export function validatePlanOperations(
           push(i, "kpi must be an object ({ label, target, unit? })");
         return;
       }
+      case "update_session": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a step update needs a `ref`");
+        expectId(i, "sessionId", op.sessionId);
+        const patch = op.patch as Record<string, unknown> | null | undefined;
+        if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+          push(i, "a step update needs a `patch` object");
+          return;
+        }
+        const allowed = ["title", "goal", "status"];
+        const keys = Object.keys(patch);
+        if (keys.length === 0)
+          push(i, "a step update needs at least one of title, goal, status");
+        for (const key of keys) {
+          if (!allowed.includes(key))
+            push(
+              i,
+              `a step update changes title, goal or status only — not "${key}" (blockers: create_link / remove_link)`
+            );
+        }
+        if (
+          patch.goal !== undefined &&
+          (typeof patch.goal !== "string" ||
+            !patch.goal.trim() ||
+            patch.goal.length > PLAN_SESSION_GOAL_MAX)
+        ) {
+          push(
+            i,
+            `goal must be a non-empty string of at most ${PLAN_SESSION_GOAL_MAX} characters`
+          );
+        }
+        if (patch.title !== undefined && patch.title !== null) {
+          const title = normalizeSessionTitle(
+            typeof patch.title === "string" ? patch.title : null
+          );
+          if (typeof patch.title !== "string")
+            push(i, "title must be a string (or null to clear it)");
+          else if (title && title.length > SESSION_TITLE_MAX)
+            push(i, `title must be at most ${SESSION_TITLE_MAX} characters`);
+        }
+        if (
+          patch.status !== undefined &&
+          patch.status !== "active" &&
+          patch.status !== "paused"
+        ) {
+          push(i, 'a step update moves status to "active" or "paused" only');
+        }
+        return;
+      }
+      case "remove_link": {
+        if (op.type !== "blocked_by")
+          push(i, "a plan removes blocked_by edges only");
+        expectId(i, "fromSessionId", op.fromSessionId);
+        const targets = [
+          ["toSessionId", op.toSessionId],
+          ["toEntityId", op.toEntityId],
+          ["toTrackId", op.toTrackId],
+        ] as const;
+        const given = targets.filter(([, value]) => !!value);
+        if (given.length !== 1)
+          push(
+            i,
+            "a removed link names exactly one of toSessionId, toEntityId, toTrackId"
+          );
+        for (const [field, value] of given) expectId(i, field, value as string);
+        return;
+      }
       case "create_link": {
         if (!(PLAN_LINK_TYPES as readonly string[]).includes(op.type)) {
           push(
@@ -628,15 +755,67 @@ export function validatePlanOperations(
             `link type "${String(op.type)}" is not a plan edge — use one of ${PLAN_LINK_TYPES.join(", ")}`
           );
         }
-        for (const [side, ref, id] of [
-          ["from", op.fromRef, op.fromSessionId],
-          ["to", op.toRef, op.toSessionId],
-        ] as const) {
-          if (!ref && !id)
-            push(i, `a link needs ${side}Ref or ${side}SessionId`);
-          notBoth(i, `${side}Ref`, ref, `${side}SessionId`, id);
-          if (ref) expectRef(i, `${side}Ref`, ref, "session");
-          if (id) expectId(i, `${side}SessionId`, id);
+        if (!op.fromRef && !op.fromSessionId)
+          push(i, "a link needs fromRef or fromSessionId");
+        notBoth(i, "fromRef", op.fromRef, "fromSessionId", op.fromSessionId);
+        if (op.fromRef) expectRef(i, "fromRef", op.fromRef, "session");
+        if (op.fromSessionId) expectId(i, "fromSessionId", op.fromSessionId);
+        // Exactly ONE target: a session, a decision (entity) or a goal.
+        const targets = [
+          ["toRef", op.toRef, "session", true],
+          ["toSessionId", op.toSessionId, "session", false],
+          ["toEntityRef", op.toEntityRef, "entity", true],
+          ["toEntityId", op.toEntityId, "entity", false],
+          ["toTrackRef", op.toTrackRef, "track", true],
+          ["toTrackId", op.toTrackId, "track", false],
+        ] as const;
+        const given = targets.filter(([, value]) => !!value);
+        if (given.length !== 1) {
+          push(
+            i,
+            "a link needs exactly one target: toRef / toSessionId (a session), toEntityRef / toEntityId (a decision), or toTrackRef / toTrackId (a goal)"
+          );
+        }
+        for (const [field, value, kind, isRef] of given) {
+          if (isRef) expectRef(i, field, value as string, kind);
+          else expectId(i, field, value as string);
+        }
+        if (isCrossKindLink(op) && op.type !== "blocked_by") {
+          push(
+            i,
+            "only a blocked_by link may point at a decision or a goal (a session's parent is a session)"
+          );
+        }
+        // An ARM: an option names one of a DECISION's options.
+        if (op.option !== undefined) {
+          const decisionRef = op.toEntityRef;
+          if (typeof op.option !== "string" || !op.option.trim()) {
+            push(i, "option must be a non-empty string");
+          } else if (!op.toEntityRef && !op.toEntityId) {
+            push(
+              i,
+              "only a wait on a decision (toEntityRef / toEntityId) can name an option"
+            );
+          } else if (decisionRef) {
+            // A decision this plan creates: its options are in the plan, so the
+            // refusal is raised now (the door judges an existing one at apply).
+            const made = operations.find(
+              (o) => o.op === "create_entity" && o.ref === decisionRef
+            );
+            if (made && made.op === "create_entity") {
+              const keys = decisionRecordView(made.properties).options.map(
+                (o) => o.key
+              );
+              if (!keys.includes(op.option)) {
+                push(
+                  i,
+                  keys.length === 0
+                    ? `decision "${decisionRef}" lists no options (decisionOptions): give it its options, then name one`
+                    : `"${op.option}" is not an option of decision "${decisionRef}". Its options: ${keys.map((k) => `"${k}"`).join(", ")}`
+                );
+              }
+            }
+          }
         }
         // The CHILD of a `spawned_from` edge must be a session this plan
         // creates: the spawn producer floors the parent only, because its
@@ -648,12 +827,21 @@ export function validatePlanOperations(
             "a spawned_from link's `from` (the child) must be a session this plan creates — use fromRef"
           );
         }
-        // An edge between two EXISTING sessions is not part of building a
-        // plan — that is `POST /links`, governed on its own.
-        if (!op.fromRef && !op.toRef && op.fromSessionId && op.toSessionId) {
+        // An edge between two EXISTING things is not part of building a plan
+        // — that is `POST /links`, governed on its own — UNLESS the plan
+        // re-plans that existing step (`update_session` on it): a step's
+        // blockers change with it.
+        if (
+          op.fromSessionId &&
+          !op.fromRef &&
+          !op.toRef &&
+          !op.toEntityRef &&
+          !op.toTrackRef &&
+          !replannedSessionIds.has(op.fromSessionId)
+        ) {
           push(
             i,
-            "a plan link must touch a session this plan creates — link two existing sessions through the links door instead"
+            "a plan link must touch a step this plan creates — or re-plan that step (`update_session` on it) — otherwise link two existing things through the links door"
           );
         }
         if (
@@ -1303,11 +1491,28 @@ export function planStepSummaries(
         return { ...base, kind: "project", label: op.name };
       case "create_track":
         return { ...base, kind: "track", label: op.name };
+      case "update_session":
+        return {
+          ...base,
+          kind: "session",
+          label:
+            (typeof op.patch?.title === "string" && op.patch.title) ||
+            (typeof op.patch?.goal === "string" && op.patch.goal) ||
+            base.ref ||
+            "session",
+          update: { targetId: op.sessionId },
+        };
+      case "remove_link":
+        return {
+          ...base,
+          kind: "link",
+          label: `${op.fromSessionId} -/-${op.type}-/-> ${op.toSessionId ?? op.toEntityId ?? op.toTrackId}`,
+        };
       case "create_link":
         return {
           ...base,
           kind: "link",
-          label: `${op.fromRef ?? op.fromSessionId} --${op.type}--> ${op.toRef ?? op.toSessionId}`,
+          label: `${op.fromRef ?? op.fromSessionId} --${op.type}--> ${op.toRef ?? op.toSessionId ?? op.toEntityRef ?? op.toEntityId ?? op.toTrackRef ?? op.toTrackId}`,
         };
       case "create_skill":
         return {
@@ -1375,7 +1580,7 @@ const UPDATE_STEP_KIND = {
   update_view: "view",
   update_entity: "entity",
 } as const satisfies Record<
-  Extract<CompositeProposalOperation["op"], `update_${string}`>,
+  (typeof UPDATE_OPERATION_KINDS)[number],
   PlanStepSummary["kind"]
 >;
 

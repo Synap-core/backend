@@ -11156,6 +11156,22 @@ export interface ProposalReviewGraph {
 		projectRef?: string;
 		ref: string;
 	}>;
+	/** Existing steps a re-plan changes (`update_session`). */
+	sessionUpdates?: Array<{
+		goal?: string;
+		ref: string;
+		sessionId: string;
+		status?: string;
+		title?: string | null;
+	}>;
+	/** Existing `blocked_by` edges a re-plan drops (`remove_link`). */
+	linkRemovals?: Array<{
+		fromSessionId: string;
+		/** Stable per-item address: `$unlinkN` in operation order. */
+		itemRef: string;
+		toId: string;
+		toKind: PlanBlockerKind;
+	}>;
 	documents?: Array<{
 		entityId?: string;
 		/** Attached as this entity's body (in-graph ref or existing id). */
@@ -11179,9 +11195,16 @@ export interface ProposalReviewGraph {
 		fromSessionId?: string;
 		/** Stable per-item address: `$linkN` in derivation order. */
 		itemRef: string;
+		/** The decision option (arm) the step waits on, when it names one. */
+		option?: string;
+		toEntityId?: string;
+		/** What the step waits on when it is not a session (absent = a session). */
+		toKind?: PlanBlockerKind;
 		toLabel: string;
+		/** The in-graph ref of the target, whatever its kind. */
 		toRef?: string;
 		toSessionId?: string;
+		toTrackId?: string;
 		type: PlanLinkType;
 	}>;
 	/**
@@ -11940,6 +11963,55 @@ export interface CompositeCreateLinkOp {
 	fromSessionId?: string;
 	toRef?: string;
 	toSessionId?: string;
+	/**
+	 * `blocked_by` only — the step waits on a DECISION (an entity: a
+	 * `create_entity` ref or an existing id) or on a GOAL (a `create_track` ref
+	 * or an existing id): the cross-kind edge the dependency rule already reads
+	 * (`session --blocked_by--> entity | track`), written through THE governed
+	 * dependency door. Exactly one `to…` per link.
+	 */
+	toEntityRef?: string;
+	toEntityId?: string;
+	toTrackRef?: string;
+	toTrackId?: string;
+	/**
+	 * An ARM (P5): with a decision target, the step waits on that ONE option of
+	 * it. Stamped as `links.metadata.option` through the same governed door,
+	 * which refuses an option the decision does not list.
+	 */
+	option?: string;
+}
+/** What a step may wait on besides a session (`create_link` / `remove_link`). */
+export type PlanBlockerKind = "entity" | "session" | "track";
+/**
+ * RE-PLAN: change an EXISTING step (pathway plan 368179d7, B3 for B7). Only
+ * these fields, through THE session update door as the applying person (its
+ * move rules decide a status change). Its blockers change with `create_link`
+ * (from this session) and `remove_link`.
+ */
+export interface CompositeUpdateSessionOp {
+	op: "update_session";
+	ref: string;
+	sessionId: string;
+	patch: {
+		goal?: string;
+		status?: "active" | "paused";
+		title?: string | null;
+	};
+}
+/**
+ * RE-PLAN: drop an EXISTING `blocked_by` edge from an existing step, through
+ * the door that owns it (session → session: the session blocker door; a
+ * decision or a goal: THE governed dependency door). An edge already gone is
+ * a no-op, never a failure.
+ */
+export interface CompositeRemoveLinkOp {
+	op: "remove_link";
+	type: "blocked_by";
+	fromSessionId: string;
+	toSessionId?: string;
+	toEntityId?: string;
+	toTrackId?: string;
 }
 /**
  * ── UPDATE ops (Library rebuild, 2026-10-13) ────────────────────────────────
@@ -12021,7 +12093,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateTrackOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateTrackOp | CompositeUpdateSessionOp | CompositeRemoveLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -15214,6 +15286,46 @@ export interface MaterializeTrackResult {
 	/** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
 	blockerLinkIds?: string[];
 }
+/** One step → decision / goal `blocked_by` edge a plan applied. */
+export interface MaterializeCrossLinkResult {
+	opIndex: number;
+	fromSessionId: string;
+	toKind: "entity" | "track";
+	toId: string;
+	/** As declared (a ref or a real id per side) — the edge's identity in a record. */
+	requested: {
+		from: string;
+		to: string;
+	};
+	linkId?: string;
+	/** The edge was already in the graph — not created by this run. */
+	preExisting?: true;
+}
+/** One existing step a re-plan changed (`update_session`), before and after. */
+export interface MaterializeSessionUpdateResult {
+	ref: string;
+	opIndex: number;
+	sessionId: string;
+	before: {
+		goal: string;
+		status: string;
+		title: string | null;
+	};
+	after: {
+		goal: string;
+		status: string;
+		title: string | null;
+	};
+}
+/** One existing `blocked_by` edge a re-plan dropped (`remove_link`). */
+export interface MaterializeLinkRemovalResult {
+	opIndex: number;
+	fromSessionId: string;
+	toKind: PlanBlockerKind;
+	toId: string;
+	/** False when the edge was already gone (a no-op, nothing to restore). */
+	removed: boolean;
+}
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
 	ref: string;
@@ -15275,6 +15387,10 @@ export interface MaterializeResult {
 	documents: MaterializeDocumentResult[];
 	/** Goals (`create_track`) a plan started. */
 	tracks?: MaterializeTrackResult[];
+	/** Step → decision / goal edges, and a re-plan's edits. */
+	crossLinks?: MaterializeCrossLinkResult[];
+	sessionUpdates?: MaterializeSessionUpdateResult[];
+	linkRemovals?: MaterializeLinkRemovalResult[];
 }
 /** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
 export interface CaptureUpdateResult {
@@ -18978,7 +19094,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_track" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_track" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | "update_session" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;

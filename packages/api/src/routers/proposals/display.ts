@@ -125,7 +125,10 @@ import {
   buildRunSessionStartTitle,
   resolveSessionTitle,
 } from "@synap-core/types/focus-sessions";
-import { planSessionEdges } from "../../services/capture-agent/capture-plan.js";
+import {
+  planCrossKindEdges,
+  planSessionEdges,
+} from "../../services/capture-agent/capture-plan.js";
 import type {
   UpdateRequest,
   ProposalReviewGraph,
@@ -2988,6 +2991,8 @@ function buildPlanReviewGraph(
   const sessions: NonNullable<ProposalReviewGraph["sessions"]> = [];
   const documents: NonNullable<ProposalReviewGraph["documents"]> = [];
   const tracks: NonNullable<ProposalReviewGraph["tracks"]> = [];
+  const sessionUpdates: NonNullable<ProposalReviewGraph["sessionUpdates"]> = [];
+  const linkRemovals: NonNullable<ProposalReviewGraph["linkRemovals"]> = [];
   const sessionLabelByRef = new Map<string, string>();
 
   data.operations.forEach((op, index) => {
@@ -3059,6 +3064,38 @@ function buildPlanReviewGraph(
       case "create_link":
         renderedOpIndexes.add(index);
         return;
+      case "update_session":
+        renderedOpIndexes.add(index);
+        sessionLabelByRef.set(
+          op.ref,
+          (typeof op.patch?.title === "string" && op.patch.title) ||
+            `session ${op.sessionId.slice(0, 8)}`
+        );
+        sessionUpdates.push({
+          ref: op.ref,
+          sessionId: op.sessionId,
+          ...(op.patch?.title !== undefined ? { title: op.patch.title } : {}),
+          ...(op.patch?.goal !== undefined ? { goal: op.patch.goal } : {}),
+          ...(op.patch?.status !== undefined
+            ? { status: op.patch.status }
+            : {}),
+        });
+        return;
+      case "remove_link": {
+        renderedOpIndexes.add(index);
+        const toKind = op.toEntityId
+          ? ("entity" as const)
+          : op.toTrackId
+            ? ("track" as const)
+            : ("session" as const);
+        linkRemovals.push({
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId: op.toEntityId ?? op.toTrackId ?? op.toSessionId ?? "",
+          itemRef: `$unlink${linkRemovals.length}`,
+        });
+        return;
+      }
       default:
         return;
     }
@@ -3090,6 +3127,40 @@ function buildPlanReviewGraph(
       itemRef: `$link${ordinal}`,
     };
   });
+  // A step that waits on a decision or a goal: the same list, its target
+  // kind named, so a reviewer sees what each step waits on.
+  const entityLabelByRef = new Map<string, string>();
+  for (const op of data.operations) {
+    if (op.op === "create_entity" && op.ref)
+      entityLabelByRef.set(op.ref, op.title ?? op.ref);
+  }
+  const trackLabelByRef = new Map(tracks.map((t) => [t.ref, t.name]));
+  for (const edge of planCrossKindEdges(data.operations)) {
+    const from = endpoint(edge.from);
+    const kindWord = edge.to.kind === "entity" ? "decision" : "goal";
+    const toLabel =
+      "ref" in edge.to
+        ? ((edge.to.kind === "entity"
+            ? entityLabelByRef.get(edge.to.ref)
+            : trackLabelByRef.get(edge.to.ref)) ?? edge.to.ref)
+        : `${kindWord} ${edge.to.id.slice(0, 8)}`;
+    links.push({
+      type: "blocked_by",
+      ...("ref" in from
+        ? { fromRef: from.ref }
+        : { fromSessionId: from.sessionId }),
+      toKind: edge.to.kind,
+      ...("ref" in edge.to
+        ? { toRef: edge.to.ref }
+        : edge.to.kind === "entity"
+          ? { toEntityId: edge.to.id }
+          : { toTrackId: edge.to.id }),
+      ...(edge.option ? { option: edge.option } : {}),
+      fromLabel: from.label,
+      toLabel,
+      itemRef: `$link${links.length}`,
+    });
+  }
 
   return {
     isPlan: true,
@@ -3098,12 +3169,16 @@ function buildPlanReviewGraph(
       tracks.length +
       sessions.length +
       documents.length +
+      sessionUpdates.length +
+      linkRemovals.length +
       data.operations.filter((op) => op.op === "create_link").length,
     projects,
     sessions,
     documents,
     links,
     ...(tracks.length > 0 ? { tracks } : {}),
+    ...(sessionUpdates.length > 0 ? { sessionUpdates } : {}),
+    ...(linkRemovals.length > 0 ? { linkRemovals } : {}),
   };
 }
 

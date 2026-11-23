@@ -79,6 +79,8 @@ import {
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
   type CompositeCreateTrackOp,
+  type CompositeRemoveLinkOp,
+  type CompositeUpdateSessionOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
@@ -257,6 +259,12 @@ export interface CapturePlanInput {
   links?: Array<Omit<CompositeCreateLinkOp, "op">>;
   /** Goals (`create_track`), started before the sessions that join them. */
   tracks?: Array<Omit<CompositeCreateTrackOp, "op">>;
+  /**
+   * RE-PLAN edits on existing steps (`update_session`, `remove_link`),
+   * carried WITH their discriminant. Hub REST only: the re-plan loop files
+   * them; `synap_revise_proposal` takes them as operations.
+   */
+  edits?: Array<CompositeUpdateSessionOp | CompositeRemoveLinkOp>;
   /**
    * ── Rule Loop config steps (NS1) ─────────────────────────────────────
    * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
@@ -740,6 +748,10 @@ export async function buildCaptureGraphOperations(
       ...d,
     })),
     ...(plan?.links ?? []).map((l) => ({ op: "create_link" as const, ...l })),
+    // Re-plan edits keep their own discriminant (only these two).
+    ...(plan?.edits ?? []).filter(
+      (e) => e.op === "update_session" || e.op === "remove_link"
+    ),
     // ── Rule Loop config steps (NS1) ─────────────────────────────────────
     // Emitted in fact → behaviour → rule order so the array reads the way the
     // materializer applies it. Apply order is fixed by its passes, not by
