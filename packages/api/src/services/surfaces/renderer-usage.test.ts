@@ -50,7 +50,12 @@ vi.mock("../../access/scoped-db.js", () => ({
 }));
 
 import { buildRendererUsage } from "./renderer-usage.js";
-import { workspaces, views, entities } from "@synap/database";
+import {
+  workspaces,
+  views,
+  entities,
+  rendererBindings,
+} from "@synap/database";
 import type { AccessContext } from "../../access/context.js";
 
 const USER = "user-1";
@@ -68,13 +73,18 @@ function setup(opts?: {
   viewRows?: unknown[];
   profiles?: unknown[];
   registry?: unknown[];
+  bindingRows?: unknown[];
 }) {
   rowsByTable.clear();
   rowsByTable.set(workspaces, opts?.workspaceRows ?? []);
   rowsByTable.set(views, opts?.viewRows ?? []);
   rowsByTable.set(entities, [{ value: 7 }]);
   mockGetAccessibleProfiles.mockResolvedValue(opts?.profiles ?? []);
-  mockScopedFindMany.mockResolvedValue(opts?.registry ?? REGISTRY);
+  mockScopedFindMany.mockImplementation(async (table: unknown) =>
+    table === rendererBindings
+      ? (opts?.bindingRows ?? [])
+      : (opts?.registry ?? REGISTRY)
+  );
 }
 
 beforeEach(() => {
@@ -309,5 +319,69 @@ describe("buildRendererUsage", () => {
     expect(usage).toHaveLength(1);
     expect(usage[0]!.bindings.map((b) => b.workspaceId)).toEqual([null, null]);
     expect(usage[0]!.health.bindingCount).toBe(2);
+  });
+
+  it("reads renderer_bindings, the canonical store (user scope included)", async () => {
+    setup({
+      bindingRows: [
+        {
+          id: "binding-1",
+          scopeKind: "user",
+          workspaceId: null,
+          subjectKind: "contact",
+          subjectId: null,
+          contentKind: "entity-card",
+          ref: { kind: "cell", cellKey: "shared-card" },
+        },
+      ],
+    });
+
+    const { usage, unavailable } = await buildRendererUsage({
+      userId: USER,
+      access,
+    });
+    expect(unavailable).toEqual([]);
+    expect(usage).toHaveLength(1);
+    expect(usage[0]!.key).toBe("shared-card");
+    expect(usage[0]!.bindings).toEqual([
+      {
+        store: "binding",
+        id: "binding-1",
+        name: "contact",
+        profileSlug: "contact",
+        contentKind: "entity-card",
+        workspaceId: null,
+        scope: "user",
+      },
+    ]);
+  });
+
+  it("names a store that failed in `unavailable`, never an empty store", async () => {
+    setup({
+      workspaceRows: [
+        {
+          id: WS,
+          name: "Builder",
+          settings: {
+            profileRenderers: {
+              contact: {
+                "entity-detail": { kind: "cell", cellKey: "shared-card" },
+              },
+            },
+          },
+        },
+      ],
+    });
+    mockGetAccessibleProfiles.mockRejectedValue(new Error("profiles down"));
+
+    const { usage, unavailable } = await buildRendererUsage({
+      userId: USER,
+      access,
+    });
+    // The store that answered still answers.
+    expect(usage.map((u) => u.key)).toEqual(["shared-card"]);
+    expect(unavailable).toEqual([
+      { source: "profile-defaults", error: "profiles down" },
+    ]);
   });
 });

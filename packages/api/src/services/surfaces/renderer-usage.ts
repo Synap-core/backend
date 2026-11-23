@@ -18,6 +18,12 @@
  *   (d) per-view — `views.config.rendererRef` AND `views.config.render.rendererRef`
  *       (both nestings are legal — see `assertValidRendererRef` in routers/views.ts).
  *
+ *   (e) `renderer_bindings` — THE store since K2 (`set-profile-renderer.ts`):
+ *       every promote and every renderer write lands here, user-scope and
+ *       per-object rows included, which the three legacy stores cannot hold.
+ *       Read through `scopedDb` (its VisibilityRule: active rows; pod rows,
+ *       the caller's own user rows, workspace rows by membership + lens).
+ *
  * (c) per-ENTITY overrides (`entities.system_data.renderer`) are NOT enumerated
  * in v1 — that scan is unbounded. Only a single scoped `count(*)` is returned.
  *
@@ -34,8 +40,10 @@
  * for views, `scopedDb` for widget_definitions. `workspaceId` NARROWS; pod-wide
  * NULL-workspace rows are always included; omitted ⇒ the pod-wide user floor.
  *
- * Per-store failures degrade to omission (that store contributes no bindings)
- * and are logged — never a 500, mirroring `listCapabilityCompositions`.
+ * A store that fails contributes no bindings and is NAMED in `unavailable`
+ * with its error (never a 500, and never a silent omission: an empty result
+ * and a failed read are different facts). The registry and the entity count
+ * report a failure as `null` and in `unavailable` too.
  */
 
 import {
@@ -50,6 +58,7 @@ import {
   views,
   entities,
   widgetDefinitions,
+  rendererBindings,
   ProfileRepository,
 } from "@synap/database";
 // The `sql` re-exported by @synap/database is postgres.js's tagged template,
@@ -67,8 +76,11 @@ import type { AccessContext } from "../../access/context.js";
 
 const logger = createLogger({ module: "renderer-usage" });
 
-/** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
-export type RendererBindingStore = "workspace" | "profile" | "view";
+/**
+ * Where a binding was found. `binding` = a `renderer_bindings` row. `entity`
+ * (per-entity override) is deferred (v1).
+ */
+export type RendererBindingStore = "workspace" | "profile" | "view" | "binding";
 
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
 export type RendererKeyKind = "cell" | "view-adapter" | "view" | "other";
@@ -86,6 +98,10 @@ export interface RendererBinding {
   /** True when the ref sits under a deprecated slot key / column. */
   legacy?: boolean;
   workspaceId: string | null;
+  /** `binding` store only: the row's scope (user | workspace | pod). */
+  scope?: string;
+  /** `binding` store only: the one object it pins, absent for a whole kind. */
+  subjectId?: string;
 }
 
 export interface RendererUsage {
@@ -110,6 +126,8 @@ export interface RendererUsageReport {
    * entity floor. `null` when the count could not be taken.
    */
   perEntityOverrideCount: number | null;
+  /** The stores that could not be read, with their error: NOT "no bindings". */
+  unavailable: { source: string; error: string }[];
 }
 
 export interface RendererUsageInput {
@@ -148,27 +166,40 @@ export async function buildRendererUsage(
   const { userId, cellKey } = input;
   const workspaceId = input.workspaceId ?? null;
 
-  const [wsBindings, profileBindings, viewBindings, registry, entityCount] =
-    await Promise.all([
-      safe("workspace-overlay", () =>
-        readWorkspaceBindings(userId, workspaceId)
-      ),
-      safe("profile-defaults", () => readProfileBindings(userId, workspaceId)),
-      safe("view-refs", () => readViewBindings(userId, workspaceId)),
-      safeNullable("widget-definitions", () =>
-        readRegistry(input.access, workspaceId)
-      ),
-      safeNullable("entity-override-count", () =>
-        countEntityOverrides(userId, workspaceId)
-      ),
-    ]);
+  const unavailable: RendererUsageReport["unavailable"] = [];
+  const read = <T>(source: string, fn: () => Promise<T>) =>
+    readOrReport(source, fn, unavailable);
+  const [
+    wsBindings,
+    profileBindings,
+    viewBindings,
+    tableBindings,
+    registry,
+    entityCount,
+  ] = await Promise.all([
+    read("workspace-overlay", () => readWorkspaceBindings(userId, workspaceId)),
+    read("profile-defaults", () => readProfileBindings(userId, workspaceId)),
+    read("view-refs", () => readViewBindings(userId, workspaceId)),
+    read("renderer-bindings", () =>
+      readRendererBindingRows(input.access, workspaceId)
+    ),
+    read("widget-definitions", () => readRegistry(input.access, workspaceId)),
+    read("entity-override-count", () =>
+      countEntityOverrides(userId, workspaceId)
+    ),
+  ]);
 
   // ── Reverse-index: key → its bindings. ──────────────────────────────────
   const byKey = new Map<
     string,
     { kind: RendererKeyKind; bindings: RendererBinding[] }
   >();
-  for (const found of [...wsBindings, ...profileBindings, ...viewBindings]) {
+  for (const found of [
+    ...(wsBindings ?? []),
+    ...(profileBindings ?? []),
+    ...(viewBindings ?? []),
+    ...(tableBindings ?? []),
+  ]) {
     if (cellKey && found.key !== cellKey) continue;
     const entry = byKey.get(found.key) ?? { kind: found.kind, bindings: [] };
     entry.bindings.push(found.binding);
@@ -209,7 +240,7 @@ export async function buildRendererUsage(
     });
   }
 
-  return { usage, perEntityOverrideCount: entityCount };
+  return { usage, perEntityOverrideCount: entityCount, unavailable };
 }
 
 /**
@@ -237,7 +268,9 @@ function describeGap(b: RendererBinding, key: string): string {
       ? `Workspace "${b.name}"`
       : b.store === "profile"
         ? `Profile "${b.name}"`
-        : `View "${b.name}"`;
+        : b.store === "binding"
+          ? `Binding "${b.name}"`
+          : `View "${b.name}"`;
   const subject = b.profileSlug
     ? `${b.profileSlug}→${b.contentKind ?? "?"}`
     : (b.contentKind ?? "renderer");
@@ -442,6 +475,55 @@ async function readViewBindings(
   return out;
 }
 
+// ── (e) renderer_bindings ─────────────────────────────────────────────────
+
+async function readRendererBindingRows(
+  access: AccessContext,
+  workspaceId: string | null
+): Promise<FoundBinding[]> {
+  const scoped = scopedDb(access.withLens(workspaceId ?? undefined));
+  const rows = await scoped.findMany<{
+    id: string;
+    scopeKind: string;
+    workspaceId: string | null;
+    subjectKind: string;
+    subjectId: string | null;
+    contentKind: string;
+    ref: unknown;
+  }>(rendererBindings, {
+    columns: {
+      id: true,
+      scopeKind: true,
+      workspaceId: true,
+      subjectKind: true,
+      subjectId: true,
+      contentKind: true,
+      ref: true,
+    },
+  });
+  const out: FoundBinding[] = [];
+  for (const row of rows) {
+    const found = rendererRefKey(row.ref);
+    if (!found) continue;
+    out.push({
+      ...found,
+      binding: {
+        store: "binding",
+        id: row.id,
+        name: row.subjectId
+          ? `${row.subjectKind} ${row.subjectId}`
+          : row.subjectKind,
+        profileSlug: row.subjectKind,
+        contentKind: row.contentKind,
+        workspaceId: row.workspaceId,
+        scope: row.scopeKind,
+        ...(row.subjectId ? { subjectId: row.subjectId } : {}),
+      },
+    });
+  }
+  return out;
+}
+
 // ── The registry (widget_definitions) ─────────────────────────────────────
 
 /** The set of ACTIVE `typeKey`s visible at this altitude, or `null` on failure. */
@@ -491,26 +573,24 @@ async function countEntityOverrides(
 
 // ── Per-store isolation ───────────────────────────────────────────────────
 
-async function safe<T>(store: string, fn: () => Promise<T[]>): Promise<T[]> {
-  try {
-    return await fn();
-  } catch (err) {
-    logger.warn(
-      { store, err },
-      "buildRendererUsage: store degraded to omission"
-    );
-    return [];
-  }
-}
-
-async function safeNullable<T>(
-  store: string,
-  fn: () => Promise<T>
+/**
+ * Run one store's read. A failure is logged AND recorded in `unavailable`;
+ * the store answers `null`, which every caller reads as "not known", never
+ * as an empty store.
+ */
+async function readOrReport<T>(
+  source: string,
+  fn: () => Promise<T>,
+  unavailable: { source: string; error: string }[]
 ): Promise<T | null> {
   try {
     return await fn();
   } catch (err) {
-    logger.warn({ store, err }, "buildRendererUsage: store degraded to null");
+    logger.warn({ store: source, err }, "buildRendererUsage: store unavailable");
+    unavailable.push({
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return null;
   }
 }
