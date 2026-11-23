@@ -41,7 +41,7 @@
  */
 
 import { randomUUID } from "crypto";
-import { and, eq, links, type db } from "@synap/database";
+import { and, eq, focusSessions, links, type db } from "@synap/database";
 import type { LinkEndpointType } from "@synap/database/schema";
 import type { Context } from "../context.js";
 import type {
@@ -224,6 +224,59 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
           `session "${input.title ?? input.goal}" was routed to a proposal instead of being created`
         );
       },
+      update: async ({ sessionId, patch }) => {
+        // The step as it is now: what a failed plan puts back.
+        const read = async () => {
+          const [row] = await database
+            .select({
+              title: focusSessions.title,
+              goal: focusSessions.goal,
+              status: focusSessions.status,
+            })
+            .from(focusSessions)
+            .where(
+              and(
+                eq(focusSessions.id, sessionId),
+                eq(focusSessions.userId, sessionOwnerUserId)
+              )
+            )
+            .limit(1);
+          return row
+            ? { title: row.title ?? null, goal: row.goal, status: row.status }
+            : null;
+        };
+        const before = await read();
+        if (!before) {
+          throw new Error(
+            `session ${sessionId} was not found among the plan owner's sessions`
+          );
+        }
+        const { updateFocusSession } =
+          await import("../services/focus-sessions/update-session.js");
+        // THE session update door, as the plan's owner: its move rules judge
+        // a status change, and the move is compare-and-set on what was read.
+        const out = await updateFocusSession({
+          sessionId,
+          userId: sessionOwnerUserId,
+          ...(patch.title !== undefined ? { title: patch.title } : {}),
+          ...(patch.goal !== undefined ? { goal: patch.goal } : {}),
+          ...(patch.status !== undefined
+            ? {
+                status: patch.status,
+                expectedStatus: before.status as Parameters<
+                  typeof updateFocusSession
+                >[0]["expectedStatus"],
+              }
+            : {}),
+        });
+        if (out.status !== "updated") {
+          throw new Error(
+            `session ${sessionId} was not changed (${out.status}${"reason" in out && out.reason ? `: ${out.reason}` : ""})`
+          );
+        }
+        const after = await read();
+        return { before, after: after ?? before };
+      },
     },
 
     trackCaller: {
@@ -349,6 +402,67 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
             !spawnedAtCreate.has(`${fromSessionId}>${toSessionId}`),
         };
       },
+      createCrossKind: async ({ fromSessionId, toKind, toId, option }) => {
+        const { addUnitBlockers } =
+          await import("../services/links/unit-blockers.js");
+        const [report] = await addUnitBlockers({
+          from: { type: "session", id: fromSessionId },
+          kind: toKind,
+          // An arm rides the entity ref (`<decision id>:<option>`): the door
+          // stamps `links.metadata.option` and refuses an unlisted option.
+          ids: [option && toKind === "entity" ? `${toId}:${option}` : toId],
+          userId: sessionOwnerUserId,
+          approvedProposalId: ctx.proposal.id,
+          sessionId: fromSessionId,
+          door: "capture plan",
+        });
+        if (!report || report.status !== "linked") {
+          throw new Error(
+            `session ${fromSessionId} could not wait on ${toKind === "entity" ? "decision" : "goal"} ${toId} (${report?.status === "failed" ? `${report.reason}${report.message ? `: ${report.message}` : ""}` : (report?.status ?? "no answer")})`
+          );
+        }
+        return {
+          linkId: await dependencyLinkIdFor(database, {
+            fromType: "session",
+            fromId: fromSessionId,
+            toType: toKind,
+            toId,
+          }),
+          preExisting: report.inserted === 0,
+        };
+      },
+      remove: async ({ fromSessionId, toKind, toId }) => {
+        if (toKind === "session") {
+          const { removeSessionBlocker } =
+            await import("../services/focus-sessions/session-blocked-by.js");
+          const out = await removeSessionBlocker({
+            sessionId: fromSessionId,
+            blockerSessionId: toId,
+            userId: sessionOwnerUserId,
+          });
+          if (out.removed) return { removed: true };
+          if (out.reason === "no_edge") return { removed: false };
+          throw new Error(
+            `blocked_by ${fromSessionId} → ${toId} was not removed (${out.reason}): both sessions must belong to the plan's owner`
+          );
+        }
+        const { removeUnitBlockers } =
+          await import("../services/links/unit-blockers.js");
+        const [report] = await removeUnitBlockers({
+          from: { type: "session", id: fromSessionId },
+          kind: toKind,
+          ids: [toId],
+          userId: sessionOwnerUserId,
+          approvedProposalId: ctx.proposal.id,
+          sessionId: fromSessionId,
+          door: "capture plan",
+        });
+        if (report?.status === "removed") return { removed: true };
+        if (report?.status === "absent") return { removed: false };
+        throw new Error(
+          `session ${fromSessionId} still waits on ${toKind} ${toId} (${report?.status === "failed" ? `${report.reason}${report.message ? `: ${report.message}` : ""}` : (report?.status ?? "no answer")})`
+        );
+      },
     },
 
     documentCaller: {
@@ -418,6 +532,92 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
       const record = buildMaterializedRecord(applied);
       const plan = creationsPlanFromRecord(record);
       const notCompensated: PlanCompensationReport["notCompensated"] = [];
+
+      // RE-PLAN EDITS first, newest first: each existing step gets back the
+      // fields it had, through the same door, and each dropped edge comes
+      // back through the door that owns it. A step changed by someone since
+      // is still put back (the plan failed seconds ago): reported if refused.
+      const restoredSessionIds: string[] = [];
+      for (const u of [...(applied.sessionUpdates ?? [])].reverse()) {
+        try {
+          const { updateFocusSession } =
+            await import("../services/focus-sessions/update-session.js");
+          const out = await updateFocusSession({
+            sessionId: u.sessionId,
+            userId: sessionOwnerUserId,
+            title: u.before.title,
+            goal: u.before.goal,
+            ...(u.before.status !== u.after.status &&
+            (u.before.status === "active" || u.before.status === "paused")
+              ? { status: u.before.status }
+              : {}),
+          });
+          // A status the update door cannot move back to (it moves to active
+          // or paused only) is named, never silently left.
+          if (
+            u.before.status !== u.after.status &&
+            u.before.status !== "active" &&
+            u.before.status !== "paused"
+          ) {
+            notCompensated.push({
+              kind: "session_update",
+              id: u.sessionId,
+              reason: `its status was ${u.before.status} and cannot be put back through the update door`,
+            });
+          }
+          if (out.status === "updated") restoredSessionIds.push(u.sessionId);
+          else
+            notCompensated.push({
+              kind: "session_update",
+              id: u.sessionId,
+              reason: `the step could not be put back (${out.status})`,
+            });
+        } catch (err) {
+          notCompensated.push({
+            kind: "session_update",
+            id: u.sessionId,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      const restoredLinks: string[] = [];
+      for (const r of applied.linkRemovals ?? []) {
+        if (!r.removed) continue;
+        const key = `${r.fromSessionId}>${r.toKind}:${r.toId}`;
+        try {
+          if (r.toKind === "session") {
+            const { addSessionBlocker } =
+              await import("../services/focus-sessions/session-blocked-by.js");
+            const out = await addSessionBlocker({
+              sessionId: r.fromSessionId,
+              blockerSessionId: r.toId,
+              userId: sessionOwnerUserId,
+            });
+            if (!out.linked) throw new Error(out.reason);
+          } else {
+            const { addUnitBlockers } =
+              await import("../services/links/unit-blockers.js");
+            const [report] = await addUnitBlockers({
+              from: { type: "session", id: r.fromSessionId },
+              kind: r.toKind,
+              ids: [r.toId],
+              userId: sessionOwnerUserId,
+              approvedProposalId: ctx.proposal.id,
+              sessionId: r.fromSessionId,
+              door: "capture plan undo",
+            });
+            if (report?.status !== "linked")
+              throw new Error(report?.status ?? "no answer");
+          }
+          restoredLinks.push(key);
+        } catch (err) {
+          notCompensated.push({
+            kind: "link_removal",
+            id: key,
+            reason: `the edge could not be put back: ${err instanceof Error ? err.message : String(err)}`,
+          });
+        }
+      }
 
       // SESSIONS FIRST, through the ONE close door. A session's terminal status
       // is owned by `completeFocusSession` (the `session-terminal-one-door`
@@ -577,6 +777,8 @@ export function buildPlanCallers(ctx: PlanCallerContext): PlanCallers {
             link: undone.linkIds ?? [],
             document: deletedDocumentIds,
             track: droppedTrackIds,
+            session_update: restoredSessionIds,
+            link_removal: restoredLinks,
           }).filter(([, ids]) => ids.length > 0)
         ),
         notCompensated,
