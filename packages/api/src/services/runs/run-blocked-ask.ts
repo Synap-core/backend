@@ -234,11 +234,7 @@ export async function askAboutBlockedRun(
 }
 
 type BlockedAnswer =
-  | "restarted"
-  | "waiting"
-  | "cancelled"
-  | "refused"
-  | "nothing";
+  "restarted" | "waiting" | "cancelled" | "refused" | "nothing";
 
 /**
  * The choice a picked chip stands for, only when the session's card OFFERED
