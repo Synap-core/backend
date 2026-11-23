@@ -670,7 +670,7 @@ describe("a pod-wide automation naming a space-scoped playbook (6c15da33)", () =
       })
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      message: expect.stringContaining(`run it in space ${OTHER}.`),
+      message: expect.stringContaining(`run it in space ${OTHER}, or move or share it`),
     });
     expect(h.updateSets).toHaveLength(0);
   });

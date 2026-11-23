@@ -17,7 +17,7 @@ const things = pgTable("things", {
   workspaceId: uuid("workspace_id"),
 });
 const sqlOf = (space: string | null) =>
-  new PgDialect().sqlToQuery(usableInSpaceWhere(things.workspaceId, space));
+  new PgDialect().sqlToQuery(usableInSpaceWhere(things.workspaceId, space, null));
 
 describe("usableInSpace", () => {
   it.each([
@@ -27,7 +27,7 @@ describe("usableInSpace", () => {
     ["homed, elsewhere", A, B, false],
     ["homed, outside any space", A, null, false],
   ] as const)("%s", (_label, home, space, expected) => {
-    expect(usableInSpace({ workspaceId: home }, space)).toBe(expected);
+    expect(usableInSpace({ workspaceId: home, sharedWith: null }, space)).toBe(expected);
   });
 
   it.each([
@@ -73,7 +73,7 @@ describe("usableInSpace", () => {
         B
       )
     ).toBe(
-      `Playbook "Ship" (pb-1) lives in space ${A}, so it is not visible in space ${B}: run it in space ${A}.`
+      `Playbook "Ship" (pb-1) lives in space ${A}, so it is not visible in space ${B}: run it in space ${A}, or move or share it (synap_move_entities playbookIds / synap_grant_profile_access playbookId).`
     );
   });
 });

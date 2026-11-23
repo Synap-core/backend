@@ -51,6 +51,7 @@
 import {
   getDb,
   isUsableInSpace,
+  usableInSpaceWhere,
   notUsableInSpaceReason,
   eq,
   and,
@@ -577,18 +578,17 @@ export async function resolveRunnablePlaybook(input: {
       })) as Playbook | undefined)
     : undefined;
   if (!playbook && input.playbookName) {
-    playbook = ((await db.query.playbooks.findFirst({
+    // By name: the space's own, then one shared with it, then a pod-wide one.
+    playbook = (await db.query.playbooks.findFirst({
       where: and(
         eq(playbooks.name, input.playbookName),
-        eq(playbooks.workspaceId, input.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       ),
-    })) ??
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, input.playbookName),
-          isNull(playbooks.workspaceId)
-        ),
-      }))) as Playbook | undefined;
+      orderBy: drizzleSql`case when ${playbooks.workspaceId} = ${input.workspaceId} then 0 when ${playbooks.workspaceId} is null then 2 else 1 end`,
+    })) as Playbook | undefined;
   }
   if (!playbook) {
     throw new Error(

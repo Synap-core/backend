@@ -28,8 +28,13 @@ export interface SharedAs {
   id: AnyPgColumn;
 }
 
+/**
+ * `sharedWith`: the spaces the object is shared with, or null for an object of
+ * a table that is never shared (relation defs, automations, entities). Always
+ * passed, so a shareable object never silently reads as home-only.
+ */
 export function usableInSpace(
-  object: { workspaceId: string | null; sharedWith?: readonly string[] },
+  object: { workspaceId: string | null; sharedWith: readonly string[] | null },
   workspaceId: string | null
 ): boolean {
   return (
@@ -39,11 +44,14 @@ export function usableInSpace(
   );
 }
 
-/** {@link usableInSpace} as SQL, for a list read; `shared` adds the grants. */
+/**
+ * {@link usableInSpace} as SQL, for a list read. `shared` names the grants of
+ * a shareable table; null only for a table that is never shared.
+ */
 export function usableInSpaceWhere(
   homeColumn: AnyPgColumn,
   workspaceId: string | null,
-  shared?: SharedAs
+  shared: SharedAs | null
 ): SQL {
   if (workspaceId === null) return isNull(homeColumn);
   return or(
@@ -65,7 +73,7 @@ export async function isUsableInSpace(
   object: { id: string; workspaceId: string | null },
   workspaceId: string | null
 ): Promise<boolean> {
-  if (usableInSpace(object, workspaceId)) return true;
+  if (usableInSpace({ ...object, sharedWith: null }, workspaceId)) return true;
   if (workspaceId === null) return false;
   const [grant] = await db
     .select({ objectId: spaceAccess.objectId })
@@ -182,6 +190,6 @@ export function notUsableInSpaceReason(
   return (
     `${noun} "${object.name}" (${object.id}) lives in space ${object.workspaceId}, ` +
     `so it is not visible in ${workspaceId ? `space ${workspaceId}` : "a run outside its space"}: ` +
-    `run it in space ${object.workspaceId}.`
+    `run it in space ${object.workspaceId}, or move or share it (synap_move_entities playbookIds / synap_grant_profile_access playbookId).`
   );
 }

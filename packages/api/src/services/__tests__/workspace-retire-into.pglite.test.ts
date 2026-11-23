@@ -555,9 +555,9 @@ describe("applyRetireInto — configuration moves through the move door", () => 
     const { pb, auto, view } = await seedConfig(SOURCE);
     const planned = await planRetireInto({ workspaceId: SOURCE, userId: USER });
     if ("status" in planned) throw new Error(planned.message);
-    // The playbook's automation moves with it, never on its own.
     expect(planned.plan.configMoves).toEqual([
       { kind: "playbook", count: 1 },
+      { kind: "automation", count: 1 },
       { kind: "view", count: 1 },
     ]);
 
@@ -590,12 +590,67 @@ describe("applyRetireInto — configuration moves through the move door", () => 
     );
     expect(await homeOf("playbooks", pb)).toBe(SOURCE);
     expect(await homeOf("automations", auto)).toBe(SOURCE);
-    expect(result.configFailed).toMatchObject([
-      { objectType: "playbook", objectId: pb },
-    ]);
+    expect(result.configFailed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ objectType: "playbook", objectId: pb }),
+      ])
+    );
     expect(steps.calls.archive).toEqual([]);
     expect(result.archived).toBe(false);
     expect(result.keptBecause).toMatch(/already has "weekly REVIEW"/);
+  });
+});
+
+describe("applyRetireInto — never archives a source that still holds configuration", () => {
+  async function ecosystem() {
+    const target = await seedWorkspace("Ecosystem", {
+      packageSlug: "ecosystem",
+    });
+    await seedProfile("signal", target);
+    return target;
+  }
+
+  it("an automation that runs a playbook of a third space stays, named, and the source is kept", async () => {
+    await ecosystem();
+    const third = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, status) values ($1,$2,$3,'Elsewhere','g','active')`,
+      [third, OTHER, USER]
+    );
+    const auto = randomUUID();
+    await q(
+      `insert into automations (id, workspace_id, created_by, name, trigger_type, status) values ($1,$2,$3,'Runs elsewhere','cron','active')`,
+      [auto, SOURCE, USER]
+    );
+    await q(
+      `insert into playbook_automations (playbook_id, automation_id, role) values ($1,$2,'activator')`,
+      [third, auto]
+    );
+    const steps = fakeSteps();
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      steps
+    );
+    expect(steps.calls.archive).toEqual([]);
+    expect(result.archived).toBe(false);
+    expect(result.keptBecause).toMatch(/1 × automation still here/);
+    expect(result.keptBecause).toMatch(/Elsewhere/);
+  });
+
+  it("archive reads what is LEFT, not what the move reported", async () => {
+    await ecosystem();
+    await q(
+      `insert into views (id, workspace_id, user_id, type, category, name) values ($1,$2,$3,'table','structured','Left behind')`,
+      [randomUUID(), SOURCE, USER]
+    );
+    const steps = fakeSteps();
+    steps.moveConfig = async () => ({ moved: 0, failed: [] });
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      steps
+    );
+    expect(steps.calls.archive).toEqual([]);
+    expect(result.keptBecause).toMatch(/1 × view still here/);
   });
 });
 

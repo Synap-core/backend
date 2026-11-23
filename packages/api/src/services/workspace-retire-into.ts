@@ -395,8 +395,7 @@ export interface RetireIntoSteps {
 
 /**
  * The configuration homed in a space, in move order: playbooks (each takes the
- * automations linked to it, which never move on their own), the other
- * automations, then views.
+ * automations linked to it there), the automations still left, then views.
  */
 async function configOf(
   workspaceId: string
@@ -418,12 +417,7 @@ async function configOf(
         await db
           .select({ id: automations.id })
           .from(automations)
-          .where(
-            and(
-              eq(automations.workspaceId, workspaceId),
-              drizzleSql`${automations.id} not in (select automation_id from playbook_automations)`
-            )
-          )
+          .where(eq(automations.workspaceId, workspaceId))
       ),
     },
     {
@@ -490,6 +484,7 @@ export function retireIntoStepsFor(userId: string): RetireIntoSteps {
               objectType,
               objectId,
               workspaceId: targetWorkspaceId,
+              movingWith: sourceWorkspaceId,
             });
             moved += 1 + r.carriedAutomationIds.length;
           } catch (err) {
@@ -570,6 +565,9 @@ export async function applyRetireInto(
 
   // Archive ONLY an empty source — read after the move, never from the plan.
   const left = await remainingKinds(plan.source.workspaceId);
+  const configLeft = (await configOf(plan.source.workspaceId)).filter(
+    (g) => g.ids.length > 0
+  );
   const plannedStay = new Map(plan.stays.map((k) => [k.kind, k.reason]));
   const remaining = countByKind(left).map((k) => ({
     ...k,
@@ -577,7 +575,7 @@ export async function applyRetireInto(
       plannedStay.get(k.kind) ??
       `${k.count === 1 ? "It" : "They"} could not be moved.`,
   }));
-  const empty = left.length === 0 && config.failed.length === 0;
+  const empty = left.length === 0 && configLeft.length === 0;
   let archived = false;
   if (empty) {
     archived = (await steps.archive(plan.source.workspaceId)).archived;
@@ -588,8 +586,16 @@ export async function applyRetireInto(
       : "Archiving the space needs its owner or a pod admin."
     : [
         ...remaining.map((k) => `${k.count} × ${k.kind}: ${k.reason}`),
-        ...config.failed.map(
-          (f) => `${resolveObjectNoun(f.objectType)} ${f.objectId}: ${f.error}`
+        ...configLeft.map(
+          (g) =>
+            `${g.ids.length} × ${resolveObjectNoun(g.objectType).toLowerCase()} still here${
+              config.failed.some((f) => f.objectType === g.objectType)
+                ? `: ${config.failed
+                    .filter((f) => f.objectType === g.objectType)
+                    .map((f) => f.error)
+                    .join(" ")}`
+                : "."
+            }`
         ),
       ].join(" ");
 

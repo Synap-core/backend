@@ -94,11 +94,21 @@ async function space(name: string, members: string[]): Promise<string> {
   return id;
 }
 
-async function playbook(name: string, workspaceId: string): Promise<string> {
+async function playbook(
+  name: string,
+  workspaceId: string | null,
+  opts: { owner?: string; stages?: unknown[] } = {}
+): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status) values ($1,$2,$3,$4,'g','active')`,
-    [id, workspaceId, PERSON, name]
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, status, stages) values ($1,$2,$3,$4,'g','active',$5::jsonb)`,
+    [
+      id,
+      workspaceId,
+      opts.owner ?? PERSON,
+      name,
+      JSON.stringify(opts.stages ?? []),
+    ]
   );
   return id;
 }
@@ -106,12 +116,19 @@ async function playbook(name: string, workspaceId: string): Promise<string> {
 async function automation(
   name: string,
   workspaceId: string | null,
-  playbookId?: string
+  playbookId?: string,
+  opts: { owner?: string; flow?: unknown } = {}
 ): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into automations (id, workspace_id, created_by, name, trigger_type, status) values ($1,$2,$3,$4,'cron','active')`,
-    [id, workspaceId, PERSON, name]
+    `insert into automations (id, workspace_id, created_by, name, trigger_type, status, flow_definition) values ($1,$2,$3,$4,'cron','active',$5::jsonb)`,
+    [
+      id,
+      workspaceId,
+      opts.owner ?? PERSON,
+      name,
+      JSON.stringify(opts.flow ?? { nodes: [], edges: [] }),
+    ]
   );
   if (playbookId) {
     await q(
@@ -240,11 +257,91 @@ describe("moveToSpace — a playbook carries its automations", () => {
     expect(await homeOf("playbooks", pb)).toBe(A);
   });
 
-  it("an agent acts through its person's membership: outside it, refused before any request", async () => {
+  it("a person who writes the destination but not the object's home is refused before any request", async () => {
+    const pb = await playbook("Their playbook", C, { owner: OUTSIDER });
+    await expect(
+      moveToSpace({
+        userId: PERSON,
+        objectType: "playbook",
+        objectId: pb,
+        workspaceId: B,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/do not write the space it lives in/),
+    });
+    expect(h.checkPermission).not.toHaveBeenCalled();
+    expect(await homeOf("playbooks", pb)).toBe(C);
+  });
+
+  it("a pod-wide playbook does not carry someone else's pod-wide automation", async () => {
+    const pb = await playbook("Pod-wide digest", null);
+    const theirs = await automation("Their digest", null, pb, {
+      owner: OUTSIDER,
+    });
+    await expect(
+      moveToSpace({
+        userId: PERSON,
+        objectType: "playbook",
+        objectId: pb,
+        workspaceId: B,
+      })
+    ).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: expect.stringMatching(/Their digest/),
+    });
+    expect(await homeOf("playbooks", pb)).toBeNull();
+    expect(await homeOf("automations", theirs)).toBeNull();
+  });
+
+  it("a move that would break what stays behind is refused, naming each one", async () => {
+    const pb = await playbook("Dossier de reprise", A);
+    await playbook("Suivi", A, {
+      stages: [{ key: "dossier", uses: { playbookId: pb, version: 1 } }],
+    });
+    await automation("Weekly run", A, undefined, {
+      flow: { nodes: [{ id: "n1", type: "playbook_run", playbookId: pb }] },
+    });
+    const other = await playbook("Autre", A);
+    await automation("Shared schedule", A, pb);
+    await q(
+      `insert into playbook_automations (playbook_id, automation_id, role) select $1, id, 'activator' from automations where name = 'Shared schedule'`,
+      [other]
+    );
+    const err = await moveToSpace({
+      userId: PERSON,
+      objectType: "playbook",
+      objectId: pb,
+      workspaceId: B,
+    }).catch((e: unknown) => e as { code: string; message: string });
+    expect(err).toMatchObject({ code: "PRECONDITION_FAILED" });
+    const message = (err as { message: string }).message;
+    expect(message).toMatch(/playbook "Suivi" \(uses it\)/);
+    expect(message).toMatch(/automation "Weekly run" \(runs it\)/);
+    expect(message).toMatch(/automation "Shared schedule" \(it also runs another playbook\)/);
+    expect(h.checkPermission).not.toHaveBeenCalled();
+    expect(await homeOf("playbooks", pb)).toBe(A);
+  });
+
+  it("a move to where it already lives changes nothing and files nothing", async () => {
     const pb = await playbook("Dossier de reprise", A);
     await expect(
       moveToSpace({
         userId: PERSON,
+        agentUserId: AGENT,
+        objectType: "playbook",
+        objectId: pb,
+        workspaceId: A,
+      })
+    ).resolves.toMatchObject({ status: "unchanged" });
+    expect(h.checkPermission).not.toHaveBeenCalled();
+  });
+
+  it("an agent acts through its person's membership: outside it, refused before any request", async () => {
+    const pb = await playbook("Dossier de reprise", A);
+    await expect(
+      moveToSpace({
+        userId: AGENT,
         agentUserId: AGENT,
         objectType: "playbook",
         objectId: pb,
@@ -258,7 +355,7 @@ describe("moveToSpace — a playbook carries its automations", () => {
     const pb = await playbook("Dossier de reprise", A);
     h.realGate = true;
     const out = await moveToSpace({
-      userId: PERSON,
+      userId: AGENT,
       agentUserId: AGENT,
       objectType: "playbook",
       objectId: pb,

@@ -5987,7 +5987,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations). You must be able to write both spaces. Per entity: returns { moved, proposed, errors }; per playbook: { results } — a proposed move is success.",
+          "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations; refused when something left behind uses it). You must be able to write both spaces. Returns { moved, proposed, errors } per item — a proposed move is success.",
         inputSchema: {
           type: "object",
           properties: {

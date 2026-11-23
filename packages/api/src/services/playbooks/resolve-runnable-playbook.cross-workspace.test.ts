@@ -47,7 +47,7 @@ describe("resolveRunnablePlaybook cross-workspace floor", () => {
     await expect(
       resolveRunnablePlaybook({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toThrow(
-      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}.`
+      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or move or share it (synap_move_entities playbookIds / synap_grant_profile_access playbookId).`
     );
   });
 

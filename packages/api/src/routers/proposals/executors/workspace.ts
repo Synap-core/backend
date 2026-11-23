@@ -630,6 +630,24 @@ export function registerWorkspaceExecutors(): void {
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
       }
+      const approve = async () => {
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+      };
 
       // `workspacesRouter.update` shape — `{ id, name, description, settings }`,
       // no `definition`, no `operation`. This is the RENAME / settings door
@@ -691,23 +709,7 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: inner.id };
       }
 
@@ -738,23 +740,7 @@ export function registerWorkspaceExecutors(): void {
         }
         await applySpaceBriefPatchNow(targetWorkspaceId, patch.data, userId);
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
@@ -772,23 +758,7 @@ export function registerWorkspaceExecutors(): void {
           userId,
         });
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         // The source is kept when anything is left in it (by contract), and
         // a per-entity move can fail: both are told to the reviewer.
         const refusals = [
@@ -809,48 +779,35 @@ export function registerWorkspaceExecutors(): void {
       // A move into this space, or a share with it (`services/move-to-space.ts`):
       // replayed as the APPROVER through the same floor, never the gate.
       if (inner.operation === "move_in" || inner.operation === "share") {
+        const { applyMoveToSpace, applyShareWithSpace, MOVABLE_TYPES, SHAREABLE_TYPES } =
+          await import("../../../services/move-to-space.js");
         const objectId = inner.objectId;
         const objectType = inner.objectType;
-        if (typeof objectId !== "string" || typeof objectType !== "string") {
+        const types: readonly unknown[] =
+          inner.operation === "move_in" ? MOVABLE_TYPES : SHAREABLE_TYPES;
+        if (typeof objectId !== "string" || !types.includes(objectType)) {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message: "This request does not name the object to place.",
+            message: `This request does not name an object that can be ${inner.operation === "move_in" ? "moved" : "shared"} (${types.join(", ")}).`,
           });
         }
-        const { applyMoveToSpace, applyShareWithSpace } =
-          await import("../../../services/move-to-space.js");
         if (inner.operation === "move_in") {
           await applyMoveToSpace({
             userId,
-            objectType: objectType as "playbook" | "automation" | "view",
+            objectType: objectType as (typeof MOVABLE_TYPES)[number],
             objectId,
             workspaceId: targetWorkspaceId,
           });
         } else {
           await applyShareWithSpace({
             userId,
-            objectType: objectType as "playbook" | "skill",
+            objectType: objectType as (typeof SHAREABLE_TYPES)[number],
             objectId,
             workspaceId: targetWorkspaceId,
             revoke: inner.revoke === true,
           });
         }
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: objectId };
       }
 
@@ -900,23 +857,7 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
@@ -941,23 +882,7 @@ export function registerWorkspaceExecutors(): void {
           userId
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
