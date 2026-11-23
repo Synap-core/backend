@@ -652,6 +652,27 @@ export async function createFocusSession(
     (id) => !handedOff.includes(id.trim())
   );
 
+  // A target output (W7) names one of the PARENT's outputs: with no parent,
+  // or blank, it names nothing. Refused in words, never dropped (a lane that
+  // believes it was spawned for an output would wait for a rollup that never
+  // comes). Every start door reaches this one check.
+  if (forOutput !== null && forOutput !== undefined) {
+    if (typeof forOutput !== "string" || !forOutput.trim()) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput must name the key of one of the parent's outcomes; it is blank.",
+      });
+    }
+    if (!parentSessionId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput needs parentSessionId: it names one of the PARENT's outcomes, which this session delivers.",
+      });
+    }
+  }
+
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
   // caller's own explicit pin (rung 1), so nothing downstream re-derives it.

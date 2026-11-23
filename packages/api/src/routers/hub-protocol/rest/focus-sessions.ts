@@ -497,7 +497,9 @@ const CreateBodySchema = z
     /**
      * With parentSessionId: the key of the parent's output this child
      * delivers (W7). Recorded on the edge only when the caller may write the
-     * parent and the parent declares it; `parentLink.forOutput` says which.
+     * parent (roster, and the key's grant) and the parent declares it with no
+     * required criterion checking it; `parentLink.forOutput` says which.
+     * Without parentSessionId, or blank, the start is refused (400).
      */
     forOutput: z.string().min(1).max(120).optional(),
     /**

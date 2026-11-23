@@ -17,15 +17,21 @@
  *   - a lane in another space copying its pointer up;
  *   - a retried event writing again;
  *   - a step's child run, a rerun, a child of two parents, or another
- *     person's parent being reached.
- * The spawn check itself (who may name a target) is pure, below; the door
- * that records it is driven in `create-session-lineage.pglite.test.ts`, and
- * the W6 step it can move in `advance-if-stage-met.pglite.test.ts`.
+ *     person's parent being reached;
+ *   - a lane spawned for an output that still met nothing, or with several
+ *     parents, passing in silence (the log names the child and the parent).
+ * The spawn check itself (who may name a target) is pure, below, and so is
+ * the grant half of `resolveSpawnTarget` (a key fenced to one space or
+ * project names no target in another), driven on PGlite under a real grant;
+ * the door that records it is driven in `create-session-lineage.pglite.test.ts`
+ * (direct and proposed starts), the Hub `POST /links` refusal of a forged
+ * `spawned_from` target in `links.test.ts`, and the W6 step it can move in
+ * `advance-if-stage-met.pglite.test.ts`.
  *
  * Stubbed, and why: governance (`checkPermissionOrPropose`: granted), the
  * transport seams of the close door (`emitSideEffects` is CAPTURED, so the
  * test hands the emitted payload to the reactor; sockets, Expo, the event
- * history row).
+ * history row), and this module's logger (captured, to read what it says).
  */
 
 import { describe, it, expect, beforeAll, vi } from "vitest";
@@ -46,6 +52,8 @@ const h = vi.hoisted(() => {
     },
     db: null as unknown,
     emitted: [] as Emitted[],
+    /** What the lane-rollup module's logger warned. */
+    warned: [] as Array<{ obj: Record<string, unknown>; msg: string }>,
     async init(): Promise<unknown> {
       if (!state.db) {
         const { PGlite } = await import("@electric-sql/pglite");
@@ -75,6 +83,21 @@ const h = vi.hoisted(() => {
   return state;
 });
 
+vi.mock("@synap-core/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@synap-core/core")>();
+  return {
+    ...actual,
+    createLogger: (opts: { module?: string }) => {
+      const real = actual.createLogger(opts as never);
+      if (opts?.module !== "focus-sessions/lane-rollup") return real;
+      return Object.assign(Object.create(real), {
+        warn: (obj: Record<string, unknown>, msg: string) => {
+          h.warned.push({ obj, msg });
+        },
+      });
+    },
+  };
+});
 vi.mock("../../../../database/dist/client-pg.js", () => h.clientPgModule());
 vi.mock("../../../../database/src/client-pg.js", () => h.clientPgModule());
 vi.mock("@synap/database", async (importOriginal) => {
@@ -117,7 +140,12 @@ vi.mock("../../lib/event-helpers.js", () => ({
 
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import { completeFocusSession } from "./complete-session.js";
-import { checkSpawnTarget, laneRollupReactor } from "./lane-rollup.js";
+import {
+  checkSpawnTarget,
+  laneRollupReactor,
+  resolveSpawnTarget,
+} from "./lane-rollup.js";
+import { grantOfScope, runWithGrant } from "@synap/database";
 
 const OWNER = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -147,6 +175,7 @@ type Slot = Record<string, unknown>;
 async function seed(p: {
   user?: string;
   workspaceId?: string | null;
+  projectId?: string | null;
   outputs: Slot[];
   metadata?: Record<string, unknown>;
   status?: string;
@@ -155,8 +184,8 @@ async function seed(p: {
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into focus_sessions (id, user_id, goal, title, status, workspace_id, expected_outputs, agent_ids, metadata, criteria, created_at, updated_at, started_at, closed_at)
-     values ($1, $2, 'Ship', 'Ship', $6, $3, $4::jsonb, '{}', $5::jsonb, $8::jsonb, now(), now(), now(),
+    `insert into focus_sessions (id, user_id, goal, title, status, workspace_id, project_id, expected_outputs, agent_ids, metadata, criteria, created_at, updated_at, started_at, closed_at)
+     values ($1, $2, 'Ship', 'Ship', $6, $3, $9, $4::jsonb, '{}', $5::jsonb, $8::jsonb, now(), now(), now(),
              case when $7::int is null then null else now() - make_interval(hours => $7::int) end)`,
     [
       id,
@@ -167,6 +196,7 @@ async function seed(p: {
       p.status ?? "active",
       p.closedHoursAgo ?? null,
       JSON.stringify(p.criteria ?? []),
+      p.projectId ?? null,
     ]
   );
   return id;
@@ -475,6 +505,125 @@ describe("a lane's target output rolls up into its parent", () => {
   });
 });
 
+describe("a lane spawned for an output that met nothing is said in the log", () => {
+  const warnedFor = (child: string) =>
+    h.warned.filter((w) => w.obj.childSessionId === child);
+
+  it("an undelivered target, or an ended parent, logs the child and the parent", async () => {
+    const undelivered = await laneFor({ childPr: PR });
+    await closeAndReact(undelivered.child);
+    expect(warnedFor(undelivered.child)).toEqual([
+      {
+        obj: expect.objectContaining({
+          childSessionId: undelivered.child,
+          parentSessionId: undelivered.parent,
+          forOutput: "pr",
+          status: "nothing_matched",
+        }),
+        msg: expect.stringContaining("met nothing"),
+      },
+    ]);
+
+    const ended = await laneFor({ parent: { status: "cancelled" } });
+    await closeAndReact(ended.child);
+    expect(warnedFor(ended.child)).toEqual([
+      {
+        obj: expect.objectContaining({
+          parentSessionId: ended.parent,
+          status: "parent_ended",
+        }),
+        msg: expect.stringContaining("parent has ended"),
+      },
+    ]);
+  });
+
+  it("a lane with two parents logs both; one spawned for nothing, or rolled up, logs nothing", async () => {
+    const twice = await laneFor();
+    const second = await seed({ outputs: [PR] });
+    await spawn(twice.child, second, "pr");
+    await closeAndReact(twice.child);
+    const [warned] = warnedFor(twice.child);
+    expect(warned?.obj.status).toBe("ambiguous_parent");
+    expect([...(warned?.obj.parentSessionIds as string[])].sort()).toEqual(
+      [twice.parent, second].sort()
+    );
+
+    const untargeted = await laneFor({ forOutput: null });
+    await closeAndReact(untargeted.child);
+    const rolled = await laneFor();
+    await closeAndReact(rolled.child);
+    expect(warnedFor(untargeted.child)).toEqual([]);
+    expect(warnedFor(rolled.child)).toEqual([]);
+  });
+});
+
+describe("resolveSpawnTarget under a key's grant: the key must be able to write the parent", () => {
+  const PROJECT_X = randomUUID();
+  const PROJECT_Y = randomUUID();
+  const asKey = (scope: Parameters<typeof grantOfScope>[0]) =>
+    (parentSessionId: string) =>
+      runWithGrant(grantOfScope(scope, "app-1"), () =>
+        resolveSpawnTarget({
+          parentSessionId,
+          userId: OWNER,
+          // An app key carries no agent identity.
+          agentUserId: null,
+          forOutput: "pr",
+        })
+      );
+
+  it("a key fenced to a space names a target only in that space", async () => {
+    const inA = await seed({ outputs: [PR] });
+    const inB = await seed({ outputs: [PR], workspaceId: WS_B });
+    const key = asKey({
+      permissions: ["session.create", "session.update"],
+      workspaceIds: [WS_A],
+    });
+    expect(await key(inA)).toEqual({ status: "recorded", key: "pr" });
+    expect(await key(inB)).toEqual({
+      status: "refused",
+      key: "pr",
+      reason: "not_a_parent_writer",
+    });
+  });
+
+  it("a key fenced to a project names a target only in that project", async () => {
+    const inX = await seed({ outputs: [PR], projectId: PROJECT_X });
+    const inY = await seed({ outputs: [PR], projectId: PROJECT_Y });
+    const key = asKey({
+      permissions: ["session.create", "session.update"],
+      projectIds: [PROJECT_X],
+    });
+    expect(await key(inX)).toEqual({ status: "recorded", key: "pr" });
+    expect(await key(inY)).toEqual({
+      status: "refused",
+      key: "pr",
+      reason: "not_a_parent_writer",
+    });
+  });
+
+  it("a key that may create sessions but not update them names no target", async () => {
+    const inA = await seed({ outputs: [PR] });
+    expect(
+      await asKey({ permissions: ["session.create"], workspaceIds: [WS_A] })(
+        inA
+      )
+    ).toMatchObject({ status: "refused", reason: "not_a_parent_writer" });
+  });
+
+  it("with no key grant (a person, or the IS), the owner floor and the roster decide", async () => {
+    const inB = await seed({ outputs: [PR], workspaceId: WS_B });
+    expect(
+      await resolveSpawnTarget({
+        parentSessionId: inB,
+        userId: OWNER,
+        agentUserId: null,
+        forOutput: "pr",
+      })
+    ).toEqual({ status: "recorded", key: "pr" });
+  });
+});
+
 describe("checkSpawnTarget (pure): who may name the output a child is spawned for", () => {
   const parent = {
     agentIds: ["agent-1"],
@@ -491,6 +640,30 @@ describe("checkSpawnTarget (pure): who may name the output a child is spawned fo
     ).toEqual({ status: "recorded", key: "pr" });
     expect(
       checkSpawnTarget({ parent, agentUserId: "agent-1", forOutput: " pr " })
+    ).toEqual({ status: "recorded", key: "pr" });
+  });
+
+  it("an output a required criterion checks is refused; an optional criterion leaves it open", () => {
+    const criterion = (required: boolean) => ({
+      key: "pr-merged",
+      statement: "The PR is merged",
+      check: { kind: "judge" },
+      outputKey: "pr",
+      required,
+    });
+    expect(
+      checkSpawnTarget({
+        parent: { ...parent, criteria: [criterion(true)] },
+        agentUserId: "agent-1",
+        forOutput: "pr",
+      })
+    ).toEqual({ status: "refused", key: "pr", reason: "checked_by_criterion" });
+    expect(
+      checkSpawnTarget({
+        parent: { ...parent, criteria: [criterion(false)] },
+        agentUserId: "agent-1",
+        forOutput: "pr",
+      })
     ).toEqual({ status: "recorded", key: "pr" });
   });
 

@@ -17,7 +17,11 @@
  * and fill that session's slot with no proposal. The target is therefore
  * named explicitly, and recorded only when the spawner may write the parent:
  * the parent's owner (a person's start) or an agent on the parent's roster
- * (`agentIds`).
+ * (`agentIds`), and, under a key's grant, a grant that allows writing the
+ * parent where it counts (`sessionGrantWorkspaceId`, the session write
+ * doors' rule): an app key fenced to one space or project names no target in
+ * another. Its metadata is written by the spawn producer only: the Hub
+ * `POST /links` door refuses metadata on `spawned_from` (backend#1199 N1).
  *
  * A reactor on the close EVENT, never a line in a close door, for the reason
  * `every-close-door-reaches-every-exit.test.ts` gives: every close goes
@@ -60,6 +64,7 @@ import {
   db,
   eq,
   focusSessions,
+  getRequestGrant,
   getSessionSpawnTarget,
   runOutsideRequestContext,
 } from "@synap/database";
@@ -67,7 +72,8 @@ import {
   CRITERION_SLOT_KIND,
   PARAM_SLOT_KIND,
 } from "@synap-core/types/focus-sessions";
-import type { ExpectedOutput } from "@synap/playbooks";
+import { checkedOutputKeys } from "@synap-core/types/units";
+import { readCriteria, type ExpectedOutput } from "@synap/playbooks";
 import {
   registerReactor,
   type Reactor,
@@ -80,6 +86,8 @@ import {
 import { deriveSlotKeys } from "./slot-keys.js";
 import { readStageOf } from "../playbooks/stage-of.js";
 import { readSessionRunManifest } from "../intake/record-session-run-manifest.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
+import { grantDeniedKey } from "../../utils/grant-write-check.js";
 
 const logger = createLogger({ module: "focus-sessions/lane-rollup" });
 
@@ -96,8 +104,15 @@ function isDelivery(slot: ExpectedOutput): boolean {
 const slotsOf = (v: unknown): ExpectedOutput[] =>
   Array.isArray(v) ? (v as ExpectedOutput[]) : [];
 
-/** Why a spawn target was not recorded. */
-export type SpawnTargetRefusal = "not_a_parent_writer" | "no_such_output";
+/**
+ * Why a spawn target was not recorded. `checked_by_criterion`: a required
+ * criterion of the parent checks that output, so its evaluator meets it and
+ * the rollup never would (`selectSlotsDeliveredByChild`).
+ */
+export type SpawnTargetRefusal =
+  | "not_a_parent_writer"
+  | "no_such_output"
+  | "checked_by_criterion";
 
 export type SpawnTargetCheck =
   | { status: "recorded"; key: string }
@@ -106,12 +121,17 @@ export type SpawnTargetCheck =
 /**
  * May this child be spawned FOR the parent's output `forOutput`? Pure. Only
  * when the spawner may write the parent (the parent's owner starting it with
- * no agent, or an agent on the parent's roster) and the parent declares a
- * delivery of that key. The parent is already floored on the child's owner by
- * the caller.
+ * no agent, or an agent on the parent's roster), the parent declares a
+ * delivery of that key, and no required criterion of the parent checks it.
+ * The parent is already floored on the child's owner, and the calling key's
+ * grant checked on it, by the caller ({@link resolveSpawnTarget}).
  */
 export function checkSpawnTarget(input: {
-  parent: { agentIds: readonly string[] | null; expectedOutputs: unknown };
+  parent: {
+    agentIds: readonly string[] | null;
+    expectedOutputs: unknown;
+    criteria?: unknown;
+  };
   agentUserId: string | null | undefined;
   forOutput: string;
 }): SpawnTargetCheck {
@@ -129,12 +149,23 @@ export function checkSpawnTarget(input: {
   if (index === -1 || !slot || !isDelivery(slot)) {
     return { status: "refused", key, reason: "no_such_output" };
   }
+  if (checkedOutputKeys(readCriteria(input.parent.criteria)).has(key)) {
+    return { status: "refused", key, reason: "checked_by_criterion" };
+  }
   return { status: "recorded", key };
 }
 
 /**
  * Check a requested target against the parent (owner-floored on `userId`)
- * and say what to record. Used by every start door that takes `forOutput`.
+ * and say what to record. Used by every start door that takes `forOutput`
+ * (the direct start, and the proposed start at approval).
+ *
+ * Under a key's grant (`getRequestGrant`), the grant must allow writing the
+ * parent (`focus_session.update` on it) where the parent counts, the check
+ * every session write door makes (`sessionGrantWorkspaceId`): the rollup
+ * writes the parent's slot later, outside any request, so the key's fence is
+ * checked here or nowhere. An app key carries no agent identity, so the
+ * roster check alone would read it as the parent's owner.
  */
 export async function resolveSpawnTarget(input: {
   parentSessionId: string;
@@ -142,19 +173,36 @@ export async function resolveSpawnTarget(input: {
   agentUserId: string | null | undefined;
   forOutput: string;
 }): Promise<SpawnTargetCheck> {
+  const key = input.forOutput.trim();
   const parent = await db.query.focusSessions.findFirst({
-    columns: { agentIds: true, expectedOutputs: true },
+    columns: {
+      id: true,
+      agentIds: true,
+      expectedOutputs: true,
+      criteria: true,
+      workspaceId: true,
+      projectId: true,
+      metadata: true,
+    },
     where: and(
       eq(focusSessions.id, input.parentSessionId),
       eq(focusSessions.userId, input.userId)
     ),
   });
   if (!parent) {
-    return {
-      status: "refused",
-      key: input.forOutput.trim(),
-      reason: "no_such_output",
+    return { status: "refused", key, reason: "no_such_output" };
+  }
+  const grant = getRequestGrant();
+  if (grant) {
+    const write = {
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: parent.id },
     };
+    const workspaceId = await sessionGrantWorkspaceId(parent, write, grant);
+    if (await grantDeniedKey({ ...write, workspaceId }, grant)) {
+      return { status: "refused", key, reason: "not_a_parent_writer" };
+    }
   }
   return checkSpawnTarget({
     parent,
@@ -165,15 +213,15 @@ export async function resolveSpawnTarget(input: {
 
 export type LaneRollupResult =
   | {
-      status:
-        | "not_done"
-        | "step_child"
-        | "rerun"
-        | "no_parent"
-        | "ambiguous_parent"
-        | "no_target"
-        | "parent_ended"
-        | "nothing_matched";
+      status: "not_done" | "step_child" | "rerun" | "no_parent" | "no_target";
+    }
+  /** Several `spawned_from` edges: no single parent to write. */
+  | { status: "ambiguous_parent"; parentSessionIds: string[] }
+  /** A target was recorded, and still nothing was met: said in the log. */
+  | {
+      status: "parent_ended" | "nothing_matched";
+      parentSessionId: string;
+      key: string;
     }
   | { status: "rolled_up"; satisfied: string[]; crossSpace: boolean };
 
@@ -205,7 +253,12 @@ export async function rollUpLane(
 
   const target = await getSessionSpawnTarget(child.id);
   if (target.kind === "none") return { status: "no_parent" };
-  if (target.kind === "ambiguous") return { status: "ambiguous_parent" };
+  if (target.kind === "ambiguous") {
+    return {
+      status: "ambiguous_parent",
+      parentSessionIds: target.parentSessionIds,
+    };
+  }
   const key = target.forOutput;
   if (!key) return { status: "no_target" };
 
@@ -228,7 +281,12 @@ export async function rollUpLane(
     await import("./satisfy-expected-output.js");
   // A cancelled or failed parent, or one closed past the approval window:
   // its record is not rewritten after the fact.
-  if (!sessionMayBeMetByRef(parent)) return { status: "parent_ended" };
+  const missed = (status: "parent_ended" | "nothing_matched") => ({
+    status,
+    parentSessionId: parent.id,
+    key,
+  });
+  if (!sessionMayBeMetByRef(parent)) return missed("parent_ended");
 
   // The child's own output of the target's key, delivered.
   const childSlots = slotsOf(child.expectedOutputs);
@@ -240,12 +298,12 @@ export async function rollUpLane(
     childSlot.status !== "done" ||
     childSlot.retiredAt != null
   ) {
-    return { status: "nothing_matched" };
+    return missed("nothing_matched");
   }
   const parentSlots = slotsOf(parent.expectedOutputs);
   const parentSlot = parentSlots[deriveSlotKeys(parentSlots).indexOf(key)];
   if (!parentSlot || !isDelivery(parentSlot)) {
-    return { status: "nothing_matched" };
+    return missed("nothing_matched");
   }
 
   const crossSpace = parent.workspaceId !== child.workspaceId;
@@ -264,7 +322,7 @@ export async function rollUpLane(
     crossSpace,
     reason: "Its lane delivered it.",
   });
-  if (verdict.satisfied.length === 0) return { status: "nothing_matched" };
+  if (verdict.satisfied.length === 0) return missed("nothing_matched");
   return {
     status: "rolled_up",
     satisfied: verdict.satisfied.map((s) => s.key),
@@ -285,9 +343,10 @@ export const laneRollupReactor: Reactor = {
     try {
       // The pod's act on the owner's behalf, not the closing agent's: no
       // acting agent, no calling key's grant (`closing-report-reactor.ts`).
-      await runOutsideRequestContext(() =>
+      const result = await runOutsideRequestContext(() =>
         rollUpLane(closedId, payload.data?.closedAs)
       );
+      logRollupMiss(closedId, result);
     } catch (err) {
       logger.error(
         { err, sessionId: closedId },
@@ -296,6 +355,44 @@ export const laneRollupReactor: Reactor = {
     }
   },
 };
+
+/**
+ * A lane that was spawned for an output (or has several parents) and still
+ * rolled nothing up is said in the log, with the child and the parent: the
+ * parent's slot stays open and someone will ask why. A child spawned for no
+ * output, closed not done, a step's run or a rerun is the rule working, not
+ * a miss, and is not logged.
+ */
+export function logRollupMiss(
+  childSessionId: string,
+  result: LaneRollupResult
+): void {
+  if (result.status === "ambiguous_parent") {
+    logger.warn(
+      {
+        childSessionId,
+        parentSessionIds: result.parentSessionIds,
+        status: result.status,
+      },
+      "lane rollup: the lane has several parents, so its output reached none"
+    );
+  } else if (
+    result.status === "parent_ended" ||
+    result.status === "nothing_matched"
+  ) {
+    logger.warn(
+      {
+        childSessionId,
+        parentSessionId: result.parentSessionId,
+        forOutput: result.key,
+        status: result.status,
+      },
+      result.status === "parent_ended"
+        ? "lane rollup: the parent has ended, so the lane's output was not rolled up"
+        : "lane rollup: the lane closed done but met nothing in its parent (its output not delivered, or the parent's already met or not a delivery)"
+    );
+  }
+}
 
 let registered = false;
 

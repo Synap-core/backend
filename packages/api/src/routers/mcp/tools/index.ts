@@ -2779,7 +2779,7 @@ export const tools = {
               type: "string",
               maxLength: 120,
               description:
-                "With parentSessionId: the key of the PARENT's outcome this session delivers. Declare your own outcome with the same key; when you close done with it delivered, the parent's outcome is met. Recorded only if you are on the parent's roster and the parent declares that key (`parentLink.forOutput` says recorded or why not). Without it, nothing rolls up.",
+                "With parentSessionId: the key of the PARENT's outcome this session delivers. Declare your own outcome with the same key; when you close done with it delivered, the parent's outcome is met. Recorded only if you are on the parent's roster, your key may write the parent, and the parent declares that key with no required criterion checking it (`parentLink.forOutput` says recorded or why not). Without it, nothing rolls up; without parentSessionId, or blank, it is refused.",
             },
             expectedOutputs: {
               type: "array",

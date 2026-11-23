@@ -191,7 +191,7 @@ export async function getParentSessionId(
 export type SessionSpawnTarget =
   | { kind: "none" }
   /** More than one `spawned_from` edge: no single parent to act on. */
-  | { kind: "ambiguous" }
+  | { kind: "ambiguous"; parentSessionIds: string[] }
   | {
       kind: "one";
       parentSessionId: string;
@@ -222,7 +222,9 @@ export async function getSessionSpawnTarget(
     )
     .limit(2);
   if (rows.length === 0) return { kind: "none" };
-  if (rows.length > 1) return { kind: "ambiguous" };
+  if (rows.length > 1) {
+    return { kind: "ambiguous", parentSessionIds: rows.map((r) => r.toId) };
+  }
   const raw = (rows[0]!.metadata as Record<string, unknown> | null)?.[
     "forOutput"
   ];
