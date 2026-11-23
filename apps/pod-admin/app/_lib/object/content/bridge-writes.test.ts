@@ -91,6 +91,23 @@ describe("writeForFrame — each op to its own door, stamped", () => {
     ]);
   });
 
+  it("update_entity → entities.update renames: a title alone, or with properties", async () => {
+    const { client, calls } = recording({ status: "updated" });
+    await writeForFrame(client, req("update_entity", { id: A, title: "Acme" }));
+    await writeForFrame(
+      client,
+      req("update_entity", {
+        id: A,
+        title: "Acme",
+        properties: { stage: "won" },
+      })
+    );
+    expect(calls.map((c) => c[1])).toEqual([
+      { id: A, title: "Acme", ...STAMP },
+      { id: A, title: "Acme", properties: { stage: "won" }, ...STAMP },
+    ]);
+  });
+
   it("delete_entity → entities.delete, with the view's identity", async () => {
     const { client, calls } = recording({ status: "deleted" });
     await writeForFrame(client, req("delete_entity", { id: A }, null));

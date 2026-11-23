@@ -4,7 +4,8 @@
  * the VIEWER'S session:
  *
  *   create_entity   → entities.create
- *   update_entity   → entities.update (with `expectedStatus`)
+ *   update_entity   → entities.update (a `title`, `properties` or both,
+ *                     with `expectedStatus`)
  *   delete_entity   → entities.delete
  *   create_relation → relations.create
  *
@@ -142,7 +143,10 @@ export async function writeForFrame(
           await client.entities.update.mutate(
             {
               id: p.id,
-              properties: p.properties,
+              ...(p.title !== undefined ? { title: p.title } : {}),
+              ...(p.properties !== undefined
+                ? { properties: p.properties }
+                : {}),
               ...(p.expectedStatus !== undefined
                 ? { expectedStatus: p.expectedStatus }
                 : {}),

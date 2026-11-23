@@ -36,9 +36,12 @@ export const CELL_BRIDGE_WRITE_OPS = {
     properties: "object",
     title: "string",
   },
+  // A rename (`title`), a change of fields (`properties`), or both: at
+  // least one of them (`CELL_BRIDGE_WRITE_ONE_OF`).
   update_entity: {
     id: "uuid!",
-    properties: "object!",
+    title: "string",
+    properties: "object",
     expectedStatus: "string|null",
   },
   delete_entity: { id: "uuid!" },
@@ -50,6 +53,16 @@ export const CELL_BRIDGE_WRITE_OPS = {
 } as const;
 
 export type CellBridgeWriteOp = keyof typeof CELL_BRIDGE_WRITE_OPS;
+
+/**
+ * Ops that need AT LEAST ONE of these optional fields: an update that names
+ * nothing to change is refused, never sent as an empty write.
+ */
+export const CELL_BRIDGE_WRITE_ONE_OF: Readonly<
+  Partial<Record<CellBridgeWriteOp, readonly string[]>>
+> = {
+  update_entity: ["title", "properties"],
+};
 type FieldRule =
   | "string!"
   | "string"
@@ -264,6 +277,9 @@ export function pickBridgeWritePayload<Op extends CellBridgeWriteOp>(
       }
     }
   }
+  const oneOf = CELL_BRIDGE_WRITE_ONE_OF[op];
+  if (oneOf && !oneOf.some((field) => out[field] !== undefined))
+    return { ok: false, error: `"${op}" needs ${oneOf.join(" or ")}.` };
   return { ok: true, payload: out as unknown as CellBridgeWritePayload<Op> };
 }
 
