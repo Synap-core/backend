@@ -164,16 +164,7 @@ function narrowAsks(v: unknown): unknown {
     total: typeof a.total === "number" ? a.total : 0,
     items: (Array.isArray(a.items) ? a.items : []).flatMap((i) =>
       isRec(i)
-        ? [
-            pick(i, [
-              "label",
-              "kind",
-              "noun",
-              "askMode",
-              "prompt",
-              "owedSince",
-            ]),
-          ]
+        ? [pick(i, ["label", "kind", "noun", "askMode", "prompt", "owedSince"])]
         : []
     ),
   };

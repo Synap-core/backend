@@ -83,7 +83,12 @@ const gateOf = (proposalId: string) => ({
 const answerWith = (...proposalIds: string[]) => ({
   id: "e1",
   work: {
-    items: [{ sessionId: "s1", gates: { status: "ok", items: proposalIds.map(gateOf) } }],
+    items: [
+      {
+        sessionId: "s1",
+        gates: { status: "ok", items: proposalIds.map(gateOf) },
+      },
+    ],
     truncated: false,
   },
 });
@@ -112,10 +117,10 @@ beforeAll(async () => {
       [randomUUID(), w, ME]
     );
   }
-  await q(
-    `insert into pod_members (id, user_id) values ($1, $2)`,
-    [randomUUID(), ME]
-  ).catch(() => undefined);
+  await q(`insert into pod_members (id, user_id) values ($1, $2)`, [
+    randomUUID(),
+    ME,
+  ]).catch(() => undefined);
   for (const [id, ws] of [
     [P_OWN, W1],
     [P_OTHER_SPACE, W2],
@@ -134,14 +139,14 @@ describe("readableWorkProposalIds", () => {
     const ids = await readableWorkProposalIds(ME, [
       answerWith(P_OWN, P_OTHER_SPACE, P_POD_WIDE),
     ]);
-    expect([...ids].sort()).toEqual(
-      [P_OWN, P_OTHER_SPACE, P_POD_WIDE].sort()
-    );
+    expect([...ids].sort()).toEqual([P_OWN, P_OTHER_SPACE, P_POD_WIDE].sort());
   });
 
   it("a key pinned to the session's space reads that space's proposal only", async () => {
     const ids = await runWithGrant(pin("proposal.read", "session.read"), () =>
-      readableWorkProposalIds(ME, [answerWith(P_OWN, P_OTHER_SPACE, P_POD_WIDE)])
+      readableWorkProposalIds(ME, [
+        answerWith(P_OWN, P_OTHER_SPACE, P_POD_WIDE),
+      ])
     );
     expect([...ids]).toEqual([P_OWN]);
   });
@@ -158,7 +163,12 @@ describe("readableWorkProposalIds", () => {
       readableWorkProposalIds(ME, [
         answerWith(P_OTHER_SPACE),
         answerWith(P_OWN),
-        { id: "e2", work: { items: [{ sessionId: "s2", gates: { status: "ok", items: [] } }] } },
+        {
+          id: "e2",
+          work: {
+            items: [{ sessionId: "s2", gates: { status: "ok", items: [] } }],
+          },
+        },
         { id: "e3" },
       ])
     );

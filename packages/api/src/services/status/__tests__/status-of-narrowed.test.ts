@@ -389,7 +389,9 @@ describe("narrowStatusOfWork (a key narrowed by its grant)", () => {
   });
 
   it("with no proposal readable and no agent grant, nothing foreign survives anywhere", () => {
-    const wire = wireOf(narrowStatusOfWork({ items: [ITEM], truncated: true }, NONE));
+    const wire = wireOf(
+      narrowStatusOfWork({ items: [ITEM], truncated: true }, NONE)
+    );
     for (const w of FOREIGN_WORDS) expect(wire).not.toContain(w);
     // The own plain facts are still there.
     for (const kept of ["Make video 12", "Draft", "Pick a title", "Has a hook"])
@@ -397,7 +399,9 @@ describe("narrowStatusOfWork (a key narrowed by its grant)", () => {
   });
 
   it("with no context at all, it fails closed the same way", () => {
-    const wire = wireOf(narrowStatusOfWork({ items: [ITEM], truncated: false }));
+    const wire = wireOf(
+      narrowStatusOfWork({ items: [ITEM], truncated: false })
+    );
     for (const w of FOREIGN_WORDS) expect(wire).not.toContain(w);
   });
 
@@ -449,18 +453,25 @@ describe("narrowStatusOfWork (a key narrowed by its grant)", () => {
   });
 
   it("a hold keeps its kind only, never its reference, reason or resume condition", () => {
-    expect(
-      (narrowWorkItem(ITEM, NONE) as { hold: unknown }).hold
-    ).toEqual({ on: "person", since: "t0" });
+    expect((narrowWorkItem(ITEM, NONE) as { hold: unknown }).hold).toEqual({
+      on: "person",
+      since: "t0",
+    });
   });
 
   it("an unavailable part stays unavailable, an unreadable work part is unavailable", () => {
-    expect(narrowStatusOfWork({ status: "unavailable", reason: "x leaks 7" })).toEqual({
+    expect(
+      narrowStatusOfWork({ status: "unavailable", reason: "x leaks 7" })
+    ).toEqual({
       status: "unavailable",
       reason: "This part could not be read.",
     });
     const item = narrowWorkItem(
-      { ...ITEM, stages: { status: "unavailable", reason: "r" }, gates: { status: "ok", items: ITEM.gates.items } },
+      {
+        ...ITEM,
+        stages: { status: "unavailable", reason: "r" },
+        gates: { status: "ok", items: ITEM.gates.items },
+      },
       NONE
     ) as { stages: unknown; gates: unknown };
     expect(item.stages).toMatchObject({ status: "unavailable" });
