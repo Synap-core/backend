@@ -11024,6 +11024,15 @@ export interface ProposalReviewEvent {
  * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
  * names/shapes without updating the frontend in lockstep.
  */
+/**
+ * The space a step lands in when it is not the proposal's own: a space this
+ * bundle creates (`workspaceRef`) or an existing one (`workspaceId`). The
+ * reviewer of the proposal's space approves it, so the review names it.
+ */
+export interface ReviewStepSpace {
+	workspaceRef?: string;
+	workspaceId?: string;
+}
 export interface ProposalReviewGraph {
 	entities: Array<{
 		/**
@@ -11174,13 +11183,13 @@ export interface ProposalReviewGraph {
 		ref: string;
 		scope: "pod" | "user" | "workspace";
 	}>;
-	automations?: Array<{
+	automations?: Array<ReviewStepSpace & {
 		/**
-		 * ALWAYS false: an approved automation is born INERT and a human activates
-		 * it. Carried so the surface can say so rather than leaving the reviewer to
-		 * assume it starts firing.
+		 * Whether a person's approval turns it on: true unless the op keeps it
+		 * off (`enabled: false`). Carried so the surface says whether it starts
+		 * firing.
 		 */
-		bornEnabled: false;
+		bornEnabled: boolean;
 		description?: string;
 		name: string;
 		/**
@@ -11203,11 +11212,11 @@ export interface ProposalReviewGraph {
 		scopeKind: "pod" | "user" | "workspace";
 	}>;
 	/**
-	 * `create_playbook` — a DRAFT process for a kind. Always born `draft`
-	 * (never runs until a person completes and activates it).
+	 * `create_playbook` — a process for a kind. A person's approval makes it
+	 * active unless the op keeps it a draft (`bornStatus`).
 	 */
-	playbooks?: Array<{
-		bornStatus: "draft";
+	playbooks?: Array<ReviewStepSpace & {
+		bornStatus: "active" | "draft";
 		description?: string;
 		goalTemplate: string;
 		name: string;
@@ -11216,10 +11225,37 @@ export interface ProposalReviewGraph {
 		subjectProfileSlug: string;
 	}>;
 	/**
+	 * A domain: `create_workspace`, `define_kind`, `declare_lifecycle`. Refs
+	 * name steps of this bundle (`workspaceRef`, `kindRef`).
+	 */
+	workspaces?: Array<{
+		name: string;
+		ref: string;
+	}>;
+	kinds?: Array<{
+		displayName: string;
+		entityScope?: "pod" | "workspace";
+		fieldCount: number;
+		ref: string;
+		slug: string;
+		workspaceRef?: string;
+	}>;
+	lifecycles?: Array<{
+		initialStatus?: string;
+		kindRef?: string;
+		options: Array<{
+			category: string;
+			key: string;
+		}>;
+		profileId?: string;
+		property: string;
+		ref: string;
+	}>;
+	/**
 	 * `create_view` — a List over this bundle's things (import Build). Counts,
 	 * not ids: the members are refs into `entities[]` or existing ids.
 	 */
-	views?: Array<{
+	views?: Array<ReviewStepSpace & {
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
 		/** A pipeline: the kind whose declared lifecycle its columns are. */
@@ -11240,15 +11276,17 @@ export interface ProposalReviewGraph {
 	 * bundle is drawn under that cell; a binding of an existing cell gets an
 	 * entry of its own (`existingCellKey`).
 	 */
-	cells?: Array<{
+	cells?: Array<ReviewStepSpace & {
 		bindings: Array<{
 			ref: string;
 			scope: "pod" | "workspace";
 			slot: "detail";
+			/** The object's id; with `targetRef`, the ref of a step of this bundle. */
 			targetId: string;
 			targetKind: BindRendererTargetKind;
 			/** The object's name, when the pod read it for this viewer. */
 			targetName?: string;
+			targetRef?: string;
 		}>;
 		/**
 		 * WHAT IT DOES once approved, read off the source: the bridge reads and
@@ -11513,6 +11551,9 @@ export interface CompositeCreateAutomationOp {
 	 * person's approval an agent's automation is born draft.
 	 */
 	enabled?: boolean;
+	/** The space it runs in: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
 }
 export interface CompositeCreateRuleOp {
 	op: "create_rule";
@@ -11534,11 +11575,11 @@ export interface CompositeCreateRuleOp {
  *
  * "Draft a process for this": a capture of a kind that has a lifecycle (a
  * select property whose slug names a status / stage) but no playbook built
- * for it files ONE draft playbook for that kind. Materialized through the
- * EXISTING `playbooks.create` door — never a raw insert — and ALWAYS as
- * `status: "draft"`: a process drafted from a capture is a starting point a
- * person (or agent) completes; it never arrives running. Goal and stages are
- * deliberately minimal.
+ * for it files ONE draft playbook for that kind (`status: "draft"`), and a
+ * plan files the playbooks of its domain. Materialized through the EXISTING
+ * `playbooks.create` door — never a raw insert — born by the one rule
+ * (`statusAtCreate`): a draft stays a draft; otherwise a person's approval
+ * makes it active.
  *
  * Per-op RESILIENT (like the Rule Loop config ops): a draft that fails does
  * not discard the entities captured beside it.
@@ -11551,16 +11592,66 @@ export interface CompositeCreatePlaybookOp {
 	description?: string;
 	/** Required by the playbook door; a one-line goal is enough for a draft. */
 	goalTemplate: string;
-	/** The kind the process runs on, and the property that holds its lifecycle. */
+	/**
+	 * The kind the process runs on, and the property that holds its lifecycle.
+	 * `profileSlug` may be left out when `subjectProfileRef` names the kind.
+	 */
 	subjectProfile: {
-		profileSlug: string;
+		profileSlug?: string;
 		statusProperty?: string;
 	};
+	/** A `define_kind` op of this batch: the process runs on the kind it defines. */
+	subjectProfileRef?: string;
+	/** The space it lives in: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
 	/**
-	 * ALWAYS FORCED "draft" at materialization; present so an author can state
-	 * it. Any other value is overridden, never honoured.
+	 * `draft` keeps it off. Absent: a person's approval of the batch makes it
+	 * active; with no person's approval it is born draft.
 	 */
-	status?: "draft";
+	status?: "active" | "draft";
+}
+/**
+ * ── Domain ops (a plan builds a domain) ──────────────────────────────────────
+ *
+ * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
+ * the playbooks, automations, views and cells that use them, so the person
+ * approves a whole domain once. Each applies through its existing door (the
+ * template apply, the profile create, the lifecycle declaration) as the
+ * approver, before every op that may name it. Per-op resilient: an op that
+ * names one that failed is skipped, named.
+ */
+export interface CompositeCreateWorkspaceOp {
+	op: "create_workspace";
+	ref: string;
+	name: string;
+}
+export interface CompositeDefineKindOp {
+	op: "define_kind";
+	ref: string;
+	slug: string;
+	displayName: string;
+	description?: string;
+	icon?: string;
+	/** `pod`: its things are read in every space; `workspace`: in its home. */
+	entityScope?: "pod" | "workspace";
+	/** Field definitions, the `define_kind` door's contract (`{ slug, valueType, … }`). */
+	fields?: Array<Record<string, unknown>>;
+	/** Its home space: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
+}
+export interface CompositeDeclareLifecycleOp {
+	op: "declare_lifecycle";
+	ref: string;
+	/** The kind: a `define_kind` op of this batch, or an existing kind's id. */
+	kindRef?: string;
+	profileId?: string;
+	/** The status field's slug (default `status`). */
+	property?: string;
+	/** Each `{ key, category, label?, … }`, the lifecycle door's contract. */
+	options: Array<Record<string, unknown>>;
+	initialStatus?: string;
 }
 /**
  * ── List op (import Build, 2026-10-12) ──────────────────────────────────────
@@ -11594,6 +11685,8 @@ export interface CompositeCreateViewOp {
 	viewType: CompositeViewType;
 	/** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
 	workspaceId?: string;
+	/** …or a `create_workspace` op of this batch. */
+	workspaceRef?: string;
 	/** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
 	scopeProfileSlugs?: string[];
 	/** The listed things: in-batch `create_entity` refs or existing entity ids. */
@@ -11632,6 +11725,8 @@ export interface CompositeCreateCellOp {
 	description?: string;
 	/** Space the cell lives in; absent ⇒ pod-global. */
 	workspaceId?: string;
+	/** …or a `create_workspace` op of this batch. */
+	workspaceRef?: string;
 	/**
 	 * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
 	 * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
@@ -11647,17 +11742,22 @@ export interface CompositeBindRendererOp {
 	op: "bind_renderer";
 	/** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
 	ref: string;
-	/** The object whose page shows the cell: an existing playbook or view. */
+	/**
+	 * The object whose page shows the cell: an existing playbook or view
+	 * (`id`), or a `create_playbook` / `create_view` op of this batch (`ref`).
+	 */
 	target: {
-		id: string;
+		id?: string;
 		kind: BindRendererTargetKind;
+		ref?: string;
 	};
 	/** Its slot: one object's page has only `detail`. */
 	slot: "detail";
 	/** `pod` = the object's own page everywhere; `workspace` = in one space. */
 	scope: "pod" | "workspace";
-	/** Required for `scope: "workspace"`. */
+	/** Required for `scope: "workspace"` (or its `workspaceRef`). */
 	workspaceId?: string;
+	workspaceRef?: string;
 	/** The cell: a `create_cell` op in this batch… */
 	cellRef?: string;
 	/** …or an existing cell's key. Exactly one of the two. */
@@ -11860,7 +11960,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -11895,6 +11995,9 @@ export interface ProposalMaterializedRecord {
 	/** Connected plan: focus sessions and projects created by the run. */
 	sessionIds?: string[];
 	projectIds?: string[];
+	/** A domain: spaces and kinds created by the run (an undo keeps them). */
+	workspaceIds?: string[];
+	profileIds?: string[];
 	/** Entities a merge into a PRE-EXISTING entity changed. */
 	propertyDiffs?: Array<{
 		entityId: string;
@@ -14919,13 +15022,38 @@ export interface MaterializeRuleResult {
 	factSkillId?: string;
 	automationIds: string[];
 }
-/** Per-op result for a `create_playbook` op (a DRAFT process). */
+/** Per-op result for a `create_playbook` op. */
 export interface MaterializePlaybookResult {
 	ref: string;
 	opIndex: number;
 	playbookId: string;
-	/** Always "draft" — what the op asked for is never honoured over this. */
-	status: "draft";
+	/** What the door wrote: the caller decides from the op and the approval. */
+	status: "active" | "draft";
+}
+/** Per-op result for a `create_workspace` op (a domain's space). */
+export interface MaterializeWorkspaceResult {
+	ref: string;
+	opIndex: number;
+	workspaceId: string;
+	/** The template apply reused a space a retry of this approval made. */
+	linked: boolean;
+}
+/** Per-op result for a `define_kind` op. */
+export interface MaterializeKindResult {
+	ref: string;
+	opIndex: number;
+	profileId: string;
+	/** The stored slug: what a playbook or a view of this batch names. */
+	slug: string;
+	/** The kind a retry of this approval already made. */
+	linked: boolean;
+}
+/** Per-op result for a `declare_lifecycle` op. */
+export interface MaterializeLifecycleResult {
+	ref: string;
+	opIndex: number;
+	profileId: string;
+	propertyDefId: string;
 }
 /** Per-op result for a `create_view` op (a List over the bundle's things). */
 export interface MaterializeViewResult {
@@ -15055,8 +15183,12 @@ export interface MaterializeResult {
 	automations: MaterializeAutomationResult[];
 	/** Rule Loop (NS1): rules created by `create_rule` ops. */
 	rules: MaterializeRuleResult[];
-	/** Draft processes created by `create_playbook` ops. Empty by default. */
+	/** Processes created by `create_playbook` ops. Empty by default. */
 	playbooks: MaterializePlaybookResult[];
+	/** A domain: spaces, kinds and lifecycles its ops made. Absent when none. */
+	workspaces?: MaterializeWorkspaceResult[];
+	kinds?: MaterializeKindResult[];
+	lifecycles?: MaterializeLifecycleResult[];
 	/** Lists created by `create_view` ops. Empty by default. */
 	views: MaterializeViewResult[];
 	/** Cells defined by `create_cell` ops (a playbook's UI). */
@@ -15286,7 +15418,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "binding" | "cell" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "kind" | "lifecycle" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view" | "workspace";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -18726,7 +18858,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -18735,8 +18867,14 @@ export interface MaterializedOpRecord {
 	skillId?: string;
 	automationId?: string;
 	ruleId?: string;
-	/** `create_playbook`: the DRAFT playbook it created. */
+	/** `create_playbook`: the playbook it created. */
 	playbookId?: string;
+	/** `create_workspace`: the space it created. */
+	workspaceId?: string;
+	/** `define_kind` / `declare_lifecycle`: the kind. */
+	profileId?: string;
+	/** `declare_lifecycle`: the status field it declared. */
+	propertyDefId?: string;
 	/** `create_view`: the List it created. */
 	viewId?: string;
 	/** `create_cell`: the cell row it created. */
@@ -20561,6 +20699,11 @@ export interface OpenBlocker extends DependencyNodeRef {
 	 * or link a replacement.
 	 */
 	dropped: boolean;
+	/**
+	 * With `dropped`: the step is an arm of this decision that was NOT taken
+	 * (P5). It holds until the pod closes the step as skipped.
+	 */
+	notTaken?: true;
 	/** Its own raw status, when the reader may see it. */
 	status?: string | null;
 	/** Its display name, when the reader may see it. */
@@ -21252,6 +21395,11 @@ export interface PacketChildItem {
 	 * ended. Absent on items of other sections.
 	 */
 	closedAs?: SessionClosedAs | null;
+	/**
+	 * It ended as a decision's arm not taken (P5): it holds none of its
+	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
+	 */
+	skipped?: true;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -27087,6 +27235,12 @@ export interface WorkGraphEdge {
 	lastAt?: string | null;
 	/** `serves`: the goal criterion the session serves, when the edge names one. */
 	criterionKey?: string;
+	/**
+	 * `blocked_by` to a decision (`toKind: "entity"`): the option this step is
+	 * the ARM of (`links.metadata.option`, decision arms P5). Taken when the
+	 * decision chooses it; another choice skips the step. Absent = a plain wait.
+	 */
+	option?: string;
 }
 export type WorkGraphSection = {
 	status: "ok";
@@ -27160,6 +27314,11 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	 * narrowed). ABSENT without the narrow: there is nothing to match.
 	 */
 	playbookMatch?: WorkGraphPlaybookMatch | null;
+	/**
+	 * It ended as a decision's arm NOT taken (P5, `notTakenRecorded`): the
+	 * readiness rule's `skipped`, never a plain cancel. Absent otherwise.
+	 */
+	skipped?: true;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
@@ -27603,6 +27762,7 @@ export interface SessionTargetsWrite {
 export type BlockerKey = {
 	blockerEntityId: string;
 	blockerTrackId?: never;
+	option?: string;
 } | {
 	blockerEntityId?: never;
 	blockerTrackId: string;
@@ -57057,6 +57217,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notRun?: MaterializedOpRef[];
 					opCount?: number;
 					playbookIds?: string[];
+					profileIds?: string[];
 					projectIds?: string[];
 					projectSubjectIds?: Record<string, string>;
 					propertyDiffs?: EntityPropertyDiff[];
@@ -57069,6 +57230,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
 					viewIds?: string[];
+					workspaceIds?: string[];
 				};
 				revertedAt?: undefined;
 				skipped?: {

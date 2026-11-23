@@ -75,4 +75,27 @@ describe("synap_start_session — born waiting on a decision or a goal", () => {
     expect(out.error).toMatch(/blockedByEntityIds must be an array/);
     expect(h.create).not.toHaveBeenCalled();
   });
+
+  it("a decision's ARM rides as `<id>:<option>` (P5); a goal list takes no arm", async () => {
+    await sessionHandlers.synap_start_session!(
+      ctx({ blockedByEntityIds: [`${DECISION}:raise`] })
+    );
+    expect(h.create.mock.calls[0][0]).toMatchObject({
+      blockedByEntityIds: [`${DECISION}:raise`],
+    });
+    h.create.mockClear();
+    const goal = textOf(
+      await sessionHandlers.synap_start_session!(
+        ctx({ blockedByTrackIds: [`${GOAL}:raise`] })
+      )
+    );
+    expect(goal.error).toMatch(/blockedByTrackIds must be an array/);
+    const empty = textOf(
+      await sessionHandlers.synap_start_session!(
+        ctx({ blockedByEntityIds: [`${DECISION}:`] })
+      )
+    );
+    expect(empty.error).toMatch(/blockedByEntityIds must be an array/);
+    expect(h.create).not.toHaveBeenCalled();
+  });
 });

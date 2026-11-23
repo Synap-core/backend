@@ -82,7 +82,10 @@ import {
   captureStatusForCreateState,
 } from "../../../services/capture-agent/single-entity-create.js";
 import { createEntityData } from "./entity.js";
-import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import {
+  CAPTURE_PLAN_KEYS,
+  captureSkillStepProblems,
+} from "../../../services/capture-agent/capture-plan.js";
 import { findLinkByMatches } from "../../../services/capture-agent/capture-table-links.js";
 import {
   expandCaptureTable,
@@ -242,29 +245,15 @@ const captureHandler: McpToolHandler = async (
       : []),
     ...(captureTable?.relations ?? []),
   ];
-  // CONNECTED PLAN steps (sessions / documents / projects / links) and the
-  // Rule Loop config steps (skills / automations / rules). Each is
-  // shape-checked door-locally (an object), then validated in full — refs,
-  // cycles, limits, ownership, evidence — by the shared preflight.
-  const planArg = (
-    key:
-      | "sessions"
-      | "documents"
-      | "projects"
-      | "links"
-      | "skills"
-      | "automations"
-      | "rules"
-  ) => (Array.isArray(args[key]) ? (args[key] as unknown[]) : []);
-  const capturePlanRaw = {
-    sessions: planArg("sessions"),
-    documents: planArg("documents"),
-    projects: planArg("projects"),
-    links: planArg("links"),
-    skills: planArg("skills"),
-    automations: planArg("automations"),
-    rules: planArg("rules"),
-  };
+  // Every plan step array (`CAPTURE_PLAN_KEYS`, the list the REST door reads
+  // too). Each is shape-checked door-locally (an object), then validated in
+  // full — refs, cycles, limits, ownership, evidence — by the shared preflight.
+  const capturePlanRaw = Object.fromEntries(
+    CAPTURE_PLAN_KEYS.map((key) => [
+      key,
+      Array.isArray(args[key]) ? (args[key] as unknown[]) : [],
+    ])
+  ) as Record<(typeof CAPTURE_PLAN_KEYS)[number], unknown[]>;
   const capturePlanShapeProblems: string[] = [];
   for (const [key, items] of Object.entries(capturePlanRaw)) {
     items.forEach((item, i) => {

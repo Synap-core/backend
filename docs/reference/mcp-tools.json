@@ -3288,7 +3288,7 @@
           "name": "blockedByEntityIds",
           "type": "array<string>",
           "required": false,
-          "description": "e.g. a decision: accepted clears, rejected holds."
+          "description": "e.g. a decision: accepted clears, rejected holds. <id>:<option> waits on that arm; other arms are skipped."
         },
         {
           "name": "blockedByTrackIds",
@@ -3599,7 +3599,7 @@
           "blockedByEntityIds": {
             "type": "array",
             "items": { "type": "string" },
-            "description": "e.g. a decision: accepted clears, rejected holds."
+            "description": "e.g. a decision: accepted clears, rejected holds. <id>:<option> waits on that arm; other arms are skipped."
           },
           "blockedByTrackIds": {
             "type": "array",
@@ -3852,7 +3852,8 @@
         {
           "name": "addBlockedByEntityIds",
           "type": "array<string>",
-          "required": false
+          "required": false,
+          "description": "<id>:<option> = one arm of a decision."
         },
         {
           "name": "removeBlockedByEntityIds",
@@ -4209,7 +4210,8 @@
           },
           "addBlockedByEntityIds": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": { "type": "string" },
+            "description": "<id>:<option> = one arm of a decision."
           },
           "removeBlockedByEntityIds": {
             "type": "array",
@@ -7829,7 +7831,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nCOUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n\nEXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill(\"system/synap/multi-entity-capture\").\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
+      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n• + `projects[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE reviewable proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nCOUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N connected objects as N proposals exhausts your pending-proposal cap; re-sending a capped write through another door lands the same playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is still owed, not a percentage.\nCall it AFTER learning something durable — don't wait to be asked. Placement uses EXISTING lenses only; capture never invents a workspace. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` — those exact spellings. A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n\nEXAMPLES (text, one entity, a graph, a connected plan): synap_load_skill(\"system/synap/multi-entity-capture\").\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a real clickable link and you MUST surface it as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. The usual cause is a `type` that names no relation def — re-send those edges with a real slug. The default slugs resolve pod-wide: a capture needs no `workspaceId` for its edges to land.\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
       "parameters": [
         {
           "name": "text",
@@ -7898,6 +7900,54 @@
           "description": "RULE LOOP: the memory that joins a FACT to a BEHAVIOUR. Needs `factRef` and/or `behaviourRefs` — each names a `skills[]` / `automations[]` step in this call, or a real UUID that already exists. A rule joined to nothing is refused."
         },
         {
+          "name": "workspaces",
+          "type": "array<object>",
+          "required": false,
+          "description": "DOMAIN: {ref, name}."
+        },
+        {
+          "name": "kinds",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, slug, displayName, fields?, entityScope?, workspaceRef?}."
+        },
+        {
+          "name": "lifecycles",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, kindRef | profileId, options: [{key, category}], initialStatus?}."
+        },
+        {
+          "name": "playbooks",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; flows run it by playbookName."
+        },
+        {
+          "name": "views",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, name, viewType, scopeProfileSlugs | entityRefs, config?, workspaceRef?}."
+        },
+        {
+          "name": "cells",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, name, rendererSource, workspaceRef?}."
+        },
+        {
+          "name": "renderers",
+          "type": "array<object>",
+          "required": false,
+          "description": "{ref, target: {kind, ref | id}, slot: \"detail\", scope, cellRef | cellKey}."
+        },
+        {
+          "name": "updates",
+          "type": "array<object>",
+          "required": false,
+          "description": "Rewrites {op: \"update_<kind>\", ref, <kind>Id, patch}."
+        },
+        {
           "name": "summary",
           "type": "string",
           "required": false,
@@ -7907,13 +7957,13 @@
           "name": "validate",
           "type": "boolean",
           "required": false,
-          "description": "Dry run for the structured `entities[]` lane: run the capture's validators and write NOTHING. Returns `dryRun: true` and `status: \"valid\"` or `\"invalid\"`, with every problem at once: ref and shape problems in `problems[]`, unknown relation slugs in `relationsFailed[]` (same shape as a real call, with the valid slugs named), and unknown profiles or invalid properties in `invalidEntities[]`. `notChecked[]` lists what only the real write can decide. Not supported on the `text` lane."
+          "description": "Dry run (structured lanes): every validator runs and NOTHING is written. Returns `dryRun: true`, `status: \"valid\"` or `\"invalid\"` and every problem at once: `problems[]` (refs, shapes), `relationsFailed[]` (valid slugs named), `invalidEntities[]`; `notChecked[]` = what only the real write decides. Not on the `text` lane."
         },
         {
           "name": "profileSlug",
           "type": "string",
           "required": false,
-          "description": "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note."
+          "description": "Optional kind hint for the text lane: it guides extraction, and if AI structuring is down the text is saved as this kind (marked degraded) when it is in your lens, else as a note."
         },
         {
           "name": "global",
@@ -7931,7 +7981,7 @@
           "name": "workspaceId",
           "type": "string",
           "required": false,
-          "description": "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`). An `entities[]` graph with no `workspaceId` is placed only when every entity's kind (and roles) points at the same space; otherwise it stays pod-wide and returns `placement` (reason + candidates) and, when there is a candidate, `pendingWorkspaceSwitch`."
+          "description": "Pin the capture to this workspace: it wins over routing and the AI's guess, and is how you accept a `pendingWorkspaceSwitch`. Left out, a graph is placed only when every kind (and role) points at one space; otherwise it stays pod-wide and returns `placement` and, with a candidate, `pendingWorkspaceSwitch`."
         },
         {
           "name": "projectId",
@@ -7949,21 +7999,21 @@
           "name": "dedupMode",
           "type": "enum",
           "required": false,
-          "description": "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity.",
+          "description": "Dedup for surfaced candidates: 'title' (string similarity), 'semantic' (embeddings: catches paraphrases), 'both' (default: the strongest match per entity).",
           "enum": ["title", "semantic", "both"]
         },
         {
           "name": "workspaceRouting",
           "type": "enum",
           "required": false,
-          "description": "Latitude over the AI's workspace GUESS only (the deterministic rungs always run). A guess NEVER moves a capture: 'auto' and 'ask' both keep it where it landed and return `pendingWorkspaceSwitch` {suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence} to confirm with the user; to accept, re-call with `workspaceId` = its suggestedWorkspaceId. 'locked' suppresses the guess. To pin an exact workspace, pass `workspaceId`.",
+          "description": "Latitude over the AI's workspace GUESS only: a guess never moves a capture. 'auto' and 'ask' return `pendingWorkspaceSwitch` to confirm with the user (accept: re-call with its suggestedWorkspaceId as `workspaceId`); 'locked' suppresses the guess.",
           "enum": ["auto", "ask", "locked"]
         },
         {
           "name": "sessionId",
           "type": "string",
           "required": false,
-          "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
+          "description": "Optional: the session this write belongs to. Left out, it is attributed automatically; send it only to choose between two or more open sessions of yours, or to join one another conversation started. A session that isn't yours is ignored, not an error."
         },
         {
           "name": "supersedes",
@@ -8324,17 +8374,57 @@
               "required": ["ref", "intent", "scope"]
             }
           },
+          "workspaces": {
+            "type": "array",
+            "description": "DOMAIN: {ref, name}.",
+            "items": { "type": "object" }
+          },
+          "kinds": {
+            "type": "array",
+            "description": "{ref, slug, displayName, fields?, entityScope?, workspaceRef?}.",
+            "items": { "type": "object" }
+          },
+          "lifecycles": {
+            "type": "array",
+            "description": "{ref, kindRef | profileId, options: [{key, category}], initialStatus?}.",
+            "items": { "type": "object" }
+          },
+          "playbooks": {
+            "type": "array",
+            "description": "{ref, name, goalTemplate, subjectProfileRef | subjectProfile, workspaceRef?, status?}; flows run it by playbookName.",
+            "items": { "type": "object" }
+          },
+          "views": {
+            "type": "array",
+            "description": "{ref, name, viewType, scopeProfileSlugs | entityRefs, config?, workspaceRef?}.",
+            "items": { "type": "object" }
+          },
+          "cells": {
+            "type": "array",
+            "description": "{ref, name, rendererSource, workspaceRef?}.",
+            "items": { "type": "object" }
+          },
+          "renderers": {
+            "type": "array",
+            "description": "{ref, target: {kind, ref | id}, slot: \"detail\", scope, cellRef | cellKey}.",
+            "items": { "type": "object" }
+          },
+          "updates": {
+            "type": "array",
+            "description": "Rewrites {op: \"update_<kind>\", ref, <kind>Id, patch}.",
+            "items": { "type": "object" }
+          },
           "summary": {
             "type": "string",
             "description": "One line the reviewer sees on the proposal card (structured payloads). Auto-generated when omitted — write your own, it is what the user reads."
           },
           "validate": {
             "type": "boolean",
-            "description": "Dry run for the structured `entities[]` lane: run the capture's validators and write NOTHING. Returns `dryRun: true` and `status: \"valid\"` or `\"invalid\"`, with every problem at once: ref and shape problems in `problems[]`, unknown relation slugs in `relationsFailed[]` (same shape as a real call, with the valid slugs named), and unknown profiles or invalid properties in `invalidEntities[]`. `notChecked[]` lists what only the real write can decide. Not supported on the `text` lane."
+            "description": "Dry run (structured lanes): every validator runs and NOTHING is written. Returns `dryRun: true`, `status: \"valid\"` or `\"invalid\"` and every problem at once: `problems[]` (refs, shapes), `relationsFailed[]` (valid slugs named), `invalidEntities[]`; `notChecked[]` = what only the real write decides. Not on the `text` lane."
           },
           "profileSlug": {
             "type": "string",
-            "description": "Optional kind hint for the work lane. It guides extraction, and if AI structuring is unavailable the text is still saved as this kind (marked degraded) when it is a kind in your lens; otherwise as a note."
+            "description": "Optional kind hint for the text lane: it guides extraction, and if AI structuring is down the text is saved as this kind (marked degraded) when it is in your lens, else as a note."
           },
           "global": {
             "type": "boolean",
@@ -8346,7 +8436,7 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Explicit workspace pin (rung-1 placement) — wins over ontology/session/relational routing and the AI's workspace guess. Pass this when you already know exactly which workspace the capture belongs in, and to ACT on a previous call's `pendingWorkspaceSwitch` (the AI's suggestion is never applied on its own — a pin that differs from it is recorded as the suggestion being corrected). Leave it out to let the resolver place it (see `workspaceRouting`). An `entities[]` graph with no `workspaceId` is placed only when every entity's kind (and roles) points at the same space; otherwise it stays pod-wide and returns `placement` (reason + candidates) and, when there is a candidate, `pendingWorkspaceSwitch`."
+            "description": "Pin the capture to this workspace: it wins over routing and the AI's guess, and is how you accept a `pendingWorkspaceSwitch`. Left out, a graph is placed only when every kind (and role) points at one space; otherwise it stays pod-wide and returns `placement` and, with a candidate, `pendingWorkspaceSwitch`."
           },
           "projectId": {
             "type": "string",
@@ -8359,16 +8449,16 @@
           "dedupMode": {
             "type": "string",
             "enum": ["title", "semantic", "both"],
-            "description": "Dedup strategy for surfaced candidates: 'title' = string-similarity search only, 'semantic' = pgvector cosine search over entity embeddings (catches paraphrases with no shared words), 'both' (default) = run both and keep the strongest match per entity."
+            "description": "Dedup for surfaced candidates: 'title' (string similarity), 'semantic' (embeddings: catches paraphrases), 'both' (default: the strongest match per entity)."
           },
           "workspaceRouting": {
             "type": "string",
             "enum": ["auto", "ask", "locked"],
-            "description": "Latitude over the AI's workspace GUESS only (the deterministic rungs always run). A guess NEVER moves a capture: 'auto' and 'ask' both keep it where it landed and return `pendingWorkspaceSwitch` {suggestedWorkspaceId, suggestedWorkspaceName, reason, confidence} to confirm with the user; to accept, re-call with `workspaceId` = its suggestedWorkspaceId. 'locked' suppresses the guess. To pin an exact workspace, pass `workspaceId`."
+            "description": "Latitude over the AI's workspace GUESS only: a guess never moves a capture. 'auto' and 'ask' return `pendingWorkspaceSwitch` to confirm with the user (accept: re-call with its suggestedWorkspaceId as `workspaceId`); 'locked' suppresses the guess."
           },
           "sessionId": {
             "type": "string",
-            "description": "OPTIONAL focus-session override. Leave it out and the write is attributed automatically — you do NOT normally pass this. Send it ONLY to disambiguate: when two or more of your focus sessions are open, automatic attribution deliberately declines rather than guess (mis-grouping a write is worse than not grouping it), and this is the only way to say which session the write belongs to. Also the way to JOIN a session another conversation started — automatic attribution never shares one across conversations. A session that isn't yours is ignored, not an error."
+            "description": "Optional: the session this write belongs to. Left out, it is attributed automatically; send it only to choose between two or more open sessions of yours, or to join one another conversation started. A session that isn't yours is ignored, not an error."
           },
           "supersedes": {
             "type": "string",

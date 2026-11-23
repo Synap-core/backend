@@ -60,6 +60,7 @@ import {
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
 import { createLogger } from "@synap-core/core";
 import {
+  isDomainOperation,
   type HubWriteSource,
   type CompositeProposalOperation,
   type CompositeCreateAutomationOp,
@@ -69,6 +70,11 @@ import {
   type CompositeCreateRuleOp,
   type CompositeCreatePlaybookOp,
   type CompositeCreateViewOp,
+  type CompositeCreateCellOp,
+  type CompositeBindRendererOp,
+  type CompositeCreateWorkspaceOp,
+  type CompositeDefineKindOp,
+  type CompositeDeclareLifecycleOp,
   type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
@@ -78,6 +84,7 @@ import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { preflightPlanOperations } from "./capture-plan-preflight.js";
 import { completeKnowledgeProposalProperties } from "../proposals/complete-knowledge-proposal.js";
 import {
+  CAPTURE_PLAN_KEYS,
   hasComposedSteps,
   planStepSummaries,
   type CapturePlanProblem,
@@ -275,6 +282,20 @@ export interface CapturePlanInput {
    */
   views?: Array<Omit<CompositeCreateViewOp, "op">>;
   /**
+   * A playbook's UI: generated cells and the object pages they show on. A
+   * renderer's `target.ref` / `cellRef` name steps of this plan.
+   */
+  cells?: Array<Omit<CompositeCreateCellOp, "op">>;
+  renderers?: Array<Omit<CompositeBindRendererOp, "op">>;
+  /**
+   * A domain: its space, its kinds and their lifecycles. Every other step may
+   * live in the space (`workspaceRef`) and name the kinds (`subjectProfileRef`,
+   * `kindRef`); the person approves the whole domain once.
+   */
+  workspaces?: Array<Omit<CompositeCreateWorkspaceOp, "op">>;
+  kinds?: Array<Omit<CompositeDefineKindOp, "op">>;
+  lifecycles?: Array<Omit<CompositeDeclareLifecycleOp, "op">>;
+  /**
    * Changes to rows an earlier bundle made (a Library rebuild): a Tool's
    * body, a Template's goal, a List's name, the group container's note.
    * Carried WITH their discriminant — each names its own door. Never a twin:
@@ -298,21 +319,24 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
   loadWith?: string;
 }
 
+// The one list of step arrays (`capture-plan.ts`) names exactly this input's
+// keys, in both directions.
+const _planKeysAreInputKeys: ReadonlyArray<keyof CapturePlanInput> =
+  CAPTURE_PLAN_KEYS;
+void _planKeysAreInputKeys;
+type _EveryPlanKeyListed =
+  Exclude<
+    keyof CapturePlanInput,
+    (typeof CAPTURE_PLAN_KEYS)[number]
+  > extends never
+    ? true
+    : never;
+const _everyPlanKeyListed: _EveryPlanKeyListed = true;
+void _everyPlanKeyListed;
+
 /** True when a plan input carries any step. */
 export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
-  return (
-    (plan?.sessions?.length ?? 0) +
-      (plan?.documents?.length ?? 0) +
-      (plan?.projects?.length ?? 0) +
-      (plan?.links?.length ?? 0) +
-      (plan?.skills?.length ?? 0) +
-      (plan?.automations?.length ?? 0) +
-      (plan?.rules?.length ?? 0) +
-      (plan?.playbooks?.length ?? 0) +
-      (plan?.views?.length ?? 0) +
-      (plan?.updates?.length ?? 0) >
-    0
-  );
+  return CAPTURE_PLAN_KEYS.some((key) => (plan?.[key]?.length ?? 0) > 0);
 }
 
 /**
@@ -716,6 +740,20 @@ export async function buildCaptureGraphOperations(
       ...p,
     })),
     ...(plan?.views ?? []).map((v) => ({ op: "create_view" as const, ...v })),
+    ...(plan?.cells ?? []).map((c) => ({ op: "create_cell" as const, ...c })),
+    ...(plan?.renderers ?? []).map((b) => ({
+      op: "bind_renderer" as const,
+      ...b,
+    })),
+    ...(plan?.workspaces ?? []).map((w) => ({
+      op: "create_workspace" as const,
+      ...w,
+    })),
+    ...(plan?.kinds ?? []).map((k) => ({ op: "define_kind" as const, ...k })),
+    ...(plan?.lifecycles ?? []).map((l) => ({
+      op: "declare_lifecycle" as const,
+      ...l,
+    })),
     ...(plan?.updates ?? []),
   ];
 
@@ -1491,8 +1529,12 @@ export async function submitCaptureGraph(
   }
   // A project step below the agent evidence floor is shown to a human with
   // its marker — it can never be auto-applied past that human.
+  // A domain's space, kinds and lifecycles are a person's: their own doors
+  // always propose for an agent (a lifecycle for a person too).
   const planNeedsReview = operations.some(
-    (op) => op.op === "create_project" && op.evidence?.belowAgentFloor === true
+    (op) =>
+      (op.op === "create_project" && op.evidence?.belowAgentFloor === true) ||
+      isDomainOperation(op)
   );
 
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the

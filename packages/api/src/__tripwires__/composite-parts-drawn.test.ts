@@ -127,6 +127,28 @@ const ONE_OF_EACH = {
     goalTemplate: "Onboard {name}",
     subjectProfile: { profileSlug: "company" },
   },
+  create_workspace: {
+    op: "create_workspace",
+    ref: "ws1",
+    name: "Clients",
+  },
+  define_kind: {
+    op: "define_kind",
+    ref: "k1",
+    slug: "client-file",
+    displayName: "Client file",
+    workspaceRef: "ws1",
+    fields: [{ slug: "tier", valueType: "string" }],
+  },
+  declare_lifecycle: {
+    op: "declare_lifecycle",
+    ref: "lc1",
+    kindRef: "k1",
+    options: [
+      { key: "open", category: "open" },
+      { key: "won", category: "done" },
+    ],
+  },
   create_view: {
     op: "create_view",
     ref: "v1",
@@ -279,14 +301,15 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
     expect(graph.skills?.[0]?.bodyTruncated).toBe(true);
   });
 
-  it("an automation says when it fires, what it runs, and that it is born off", () => {
+  it("an automation says when it fires, what it runs, and whether approval turns it on", () => {
     const auto = items.find((i) => i.source === "automations");
     const fields =
       auto?.shape === "record"
         ? Object.fromEntries(auto.record.fields.map((f) => [f.key, f.after]))
         : {};
+    // `enabled: true`: a person's approval of the batch turns it on.
     expect(fields.status).toEqual(
-      expect.objectContaining({ kind: "status", raw: "draft" })
+      expect.objectContaining({ kind: "status", raw: "active" })
     );
     expect(fields.trigger).toEqual(expect.objectContaining({ kind: "text" }));
     expect(fields.runs).toEqual(

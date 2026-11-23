@@ -15,10 +15,14 @@
  *   - create_skill             → skill.create
  *   - create_automation        → automation.create
  *   - create_rule              → rule.create
- *   - create_playbook          → playbook.create (a DRAFT process)
+ *   - create_playbook          → playbook.create (a process)
  *   - create_view              → view.create (a List over the bundle's things)
  *   - create_cell              → cell.define (a generated cell)
  *   - bind_renderer            → profile.renderer.set (a cell on one object's page)
+ *   - create_workspace         → workspace.create (a plan's space)
+ *   - define_kind              → profile.create (a kind)
+ *   - declare_lifecycle        → profile.create (a kind's lifecycle: its door is
+ *                                direct, so it is judged on the kind's schema key)
  *   - update_<kind>            → <kind>.update (a Library rebuild's change)
  * NONE of these keys is in the shipped `DEFAULT_AUTO_APPROVE` (which carries
  * only read/presentational keys: search.*, memory.recall, entity.read,
@@ -37,21 +41,8 @@
  * unscored.
  */
 
-import {
-  isUpdateOperation,
-  type CompositeProposalOperation,
-  type CompositeUpdateOperation,
-} from "@synap-core/types/proposals";
-
-/** Update op → the subject its update door gates. Total over the update arms. */
-const UPDATE_OP_SUBJECT: Record<CompositeUpdateOperation["op"], string> = {
-  update_skill: "skill",
-  update_automation: "automation",
-  update_rule: "rule",
-  update_playbook: "playbook",
-  update_view: "view",
-  update_entity: "entity",
-};
+import { type CompositeProposalOperation } from "@synap-core/types/proposals";
+import { COMPOSITE_OP_GATE_PAIRS } from "@synap/governance-policy";
 
 export interface CaptureGraphEventKey {
   subjectType: string;
@@ -102,29 +93,6 @@ export function captureGraphEventKeys(
       });
       if (op.facets && op.facets.length > 0)
         add({ subjectType: "facet", action: "attach" });
-    } else if (op.op === "create_relation") {
-      add({ subjectType: "relation", action: "create" });
-    } else if (op.op === "create_skill") {
-      add({ subjectType: "skill", action: "create" });
-    } else if (op.op === "create_automation") {
-      add({ subjectType: "automation", action: "create" });
-    } else if (op.op === "create_rule") {
-      add({ subjectType: "rule", action: "create" });
-    } else if (op.op === "create_playbook") {
-      // The SAME key the direct door judges (`playbooks.create` gates
-      // `playbook.create`), so a graph carrying a draft process auto-applies
-      // only when that key would — the strictest member decides the graph.
-      add({ subjectType: "playbook", action: "create" });
-    } else if (op.op === "create_view") {
-      // The SAME key the direct door judges (`views.create` gates
-      // `view.create`). It is in the shipped auto-approve set, so a list never
-      // makes a graph stricter than the things it lists.
-      add({ subjectType: "view", action: "create" });
-    } else if (isUpdateOperation(op)) {
-      // A Library rebuild's change to a row it made before: the SAME key the
-      // object's own update door judges (`skills.update` → `skill.update`, …).
-      // Mapped from the op kind, never defaulted — see the fail-closed else.
-      add({ subjectType: UPDATE_OP_SUBJECT[op.op], action: "update" });
     } else if (op.op === "create_session") {
       // The SAME keys the direct session door judges: `createFocusSession`
       // gates `focus_session.create`, and a create-time blocker is judged as
@@ -149,15 +117,12 @@ export function captureGraphEventKeys(
     } else if (op.op === "create_link") {
       // `POST /links` judges every edge as `link.create`.
       add({ subjectType: "link", action: "create" });
-    } else if (op.op === "create_cell") {
-      // The SAME key the direct cell door judges (`synap_create_cell` →
-      // `cell.define`): generated source is floored, so a graph carrying one
-      // proposes for an agent.
-      add({ subjectType: "cell", action: "define" });
-    } else if (op.op === "bind_renderer") {
-      // The SAME key the binding door judges (`profiles.setRenderer` gates
-      // `profile.renderer.set` for a playbook's or a view's page too).
-      add({ subjectType: "profile", action: "renderer.set" });
+    } else if (op.op in COMPOSITE_OP_GATE_PAIRS) {
+      // Every other op is judged on the door its arm performs, the ONE map the
+      // gate-pair derivation reads (`COMPOSITE_OP_GATE_PAIRS`).
+      const pair =
+        COMPOSITE_OP_GATE_PAIRS[op.op as keyof typeof COMPOSITE_OP_GATE_PAIRS];
+      add({ subjectType: pair.subjectType, action: pair.action });
     } else {
       // FAIL CLOSED. The SAME defect class as the hardcoded gate pair this
       // wave removed: an op arm this function does not recognise produced NO

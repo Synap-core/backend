@@ -118,7 +118,7 @@ function normalizationNotice(
  * valid ones ride the kind's proposal as `deferredFields`). An invalid spec
  * becomes its ledger entry, never a write.
  */
-function checkFieldSpec(
+export function checkFieldSpec(
   spec: Record<string, unknown>
 ):
   | { field: ProposedKindField; normalized: { normalizedFrom?: string } }

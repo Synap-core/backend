@@ -1463,6 +1463,8 @@ export interface HubWorkGraphEdge {
   lastAt?: string | null;
   /** `serves`: the goal criterion served, when the edge names one. */
   criterionKey?: string;
+  /** `blocked_by` to a decision: the option this step is the arm of. Absent = a plain wait. */
+  option?: string;
 }
 
 /** A decision a node waits on or is about. Absent from an older pod. */
@@ -1517,6 +1519,8 @@ export interface HubWorkGraphNode extends HubFocusSessionListItem {
   viewerRole: "owner" | "member";
   /** false = only the far end of an edge of a window session. */
   inWindow: boolean;
+  /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
+  skipped?: true;
 }
 
 /** GET /api/hub/focus-sessions/graph. */

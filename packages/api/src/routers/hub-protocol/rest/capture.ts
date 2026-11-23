@@ -26,7 +26,10 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import { loadRouteSuggestions } from "../../../services/routing/load-route-suggestions.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
-import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import {
+  CAPTURE_PLAN_KEYS,
+  captureSkillStepProblems,
+} from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
   describeDegradedCapture,
@@ -1521,41 +1524,19 @@ export function registerCaptureRoutes(app: HubHono): void {
         branchPurpose?: "client-comms" | "team";
         title?: string;
       }>;
-      // CONNECTED PLAN steps — refs share the entity ref namespace; validated
-      // in full (refs, cycles, limits, ownership, evidence) by the core.
-      sessions?: unknown[];
-      documents?: unknown[];
-      projects?: unknown[];
-      links?: unknown[];
-      // RULE LOOP config steps — same ref namespace, same proposal. Carried
-      // here too so this door and `synap_capture` accept the SAME call: a
-      // capability one door can express and the other cannot is the fork this
-      // codebase keeps re-discovering.
-      skills?: unknown[];
-      automations?: unknown[];
-      rules?: unknown[];
       summary?: string;
     } | null;
 
-    const planArrays = body
-      ? {
-          sessions: Array.isArray(body.sessions) ? body.sessions : [],
-          documents: Array.isArray(body.documents) ? body.documents : [],
-          projects: Array.isArray(body.projects) ? body.projects : [],
-          links: Array.isArray(body.links) ? body.links : [],
-          skills: Array.isArray(body.skills) ? body.skills : [],
-          automations: Array.isArray(body.automations) ? body.automations : [],
-          rules: Array.isArray(body.rules) ? body.rules : [],
-        }
-      : {
-          sessions: [],
-          documents: [],
-          projects: [],
-          links: [],
-          skills: [],
-          automations: [],
-          rules: [],
-        };
+    // Every plan step array (`CAPTURE_PLAN_KEYS`, the list `synap_capture`
+    // reads too): a step one door can express and the other cannot is the
+    // fork this codebase keeps re-discovering. Refs share the entity ref
+    // namespace; validated in full by the core.
+    const planArrays = Object.fromEntries(
+      CAPTURE_PLAN_KEYS.map((key) => {
+        const items = (body as Record<string, unknown> | null)?.[key];
+        return [key, Array.isArray(items) ? items : []];
+      })
+    ) as Record<(typeof CAPTURE_PLAN_KEYS)[number], unknown[]>;
     const planStepCount = Object.values(planArrays).reduce(
       (n, items) => n + items.length,
       0
@@ -1567,8 +1548,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     ) {
       return c.json(
         {
-          error:
-            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[] / skills[] / automations[] / rules[])",
+          error: `entities[] is required (at least one), unless the call carries a plan step (${CAPTURE_PLAN_KEYS.map((k) => `${k}[]`).join(" / ")})`,
         },
         400
       );

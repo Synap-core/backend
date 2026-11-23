@@ -17,10 +17,18 @@
  * `absent` | `proposed` | `failed`), keyed `blockerEntityId` or
  * `blockerTrackId`. A bad id never fails the call and never vanishes.
  *
- * What it does NOT do: option arms on a decision (founder decision D-P5), or
- * wake a step when its blocker delivers (D-P3).
+ * AN ARM (founder decision P5): an entity ref `<decision id>:<option>`
+ * (`parseArmRef`) writes the edge with `links.metadata.option`; the door
+ * refuses an option the decision does not list. A bare id is a plain wait.
+ * Removing takes either form (the edge is the pair, whatever its arm).
+ *
+ * What it does NOT do: wake a step when its blocker delivers (D-P3).
  */
-import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
+import {
+  DECISION_ARM_OPTION_KEY,
+  DEPENDENCY_LINK_TYPE,
+  parseArmRef,
+} from "@synap-core/types/connections";
 import {
   governedDependencyLink,
   governedRemoveDependencyLink,
@@ -38,7 +46,7 @@ export interface WaitingUnit {
 }
 
 type BlockerKey =
-  | { blockerEntityId: string; blockerTrackId?: never }
+  | { blockerEntityId: string; blockerTrackId?: never; option?: string }
   | { blockerTrackId: string; blockerEntityId?: never };
 
 export type UnitBlockerReason =
@@ -58,8 +66,14 @@ export type UnitBlockerRemovalReport = BlockerKey &
     | { status: "failed"; reason: UnitBlockerReason; message?: string }
   );
 
-function keyOf(kind: BlockerKind, id: string): BlockerKey {
-  return kind === "entity" ? { blockerEntityId: id } : { blockerTrackId: id };
+function keyOf(
+  kind: BlockerKind,
+  id: string,
+  option: string | null
+): BlockerKey {
+  return kind === "entity"
+    ? { blockerEntityId: id, ...(option ? { option } : {}) }
+    : { blockerTrackId: id };
 }
 
 /** The door's refusal, in the reasons the session reports already use. */
@@ -115,15 +129,22 @@ function notApplied(
 async function perId<R>(
   input: UnitBlockerInput,
   door: typeof governedDependencyLink,
-  applied: (r: GovernedLinkResult) => R | null
+  applied: (r: GovernedLinkResult) => R | null,
+  /** An add writes the arm an entity ref names; a removal drops the pair. */
+  writesArm = false
 ): Promise<
   Array<BlockerKey & (R | Failed | { status: "proposed"; proposalId: string })>
 > {
   const out: Array<
     BlockerKey & (R | Failed | { status: "proposed"; proposalId: string })
   > = [];
-  for (const id of [...new Set(input.ids)]) {
-    const key = keyOf(input.kind, id);
+  for (const ref of [...new Set(input.ids)]) {
+    // An entity ref may name an arm (`<id>:<option>`); a removal ignores it.
+    const arm =
+      input.kind === "entity" ? parseArmRef(ref) : { id: ref, option: null };
+    const id = arm?.id ?? ref;
+    const option = writesArm ? (arm?.option ?? null) : null;
+    const key = keyOf(input.kind, id, option);
     try {
       const r = await door({
         edge: {
@@ -133,6 +154,7 @@ async function perId<R>(
           toId: id,
           linkType: DEPENDENCY_LINK_TYPE,
         },
+        ...(option ? { metadata: { [DECISION_ARM_OPTION_KEY]: option } } : {}),
         userId: input.userId,
         agentUserId: input.agentUserId ?? null,
         approvedProposalId: input.approvedProposalId ?? null,
@@ -156,10 +178,14 @@ async function perId<R>(
 export async function addUnitBlockers(
   input: UnitBlockerInput
 ): Promise<UnitBlockerReport[]> {
-  return perId(input, governedDependencyLink, (r) =>
-    r.status === "created" || r.status === "exists"
-      ? { status: "linked" as const, inserted: r.inserted }
-      : null
+  return perId(
+    input,
+    governedDependencyLink,
+    (r) =>
+      r.status === "created" || r.status === "exists"
+        ? { status: "linked" as const, inserted: r.inserted }
+        : null,
+    true
   );
 }
 

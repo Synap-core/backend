@@ -108,6 +108,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   entities,
+  events,
   podSettings,
   lifecycleTransitionOutbox,
 } from "@synap/database";
@@ -720,6 +721,94 @@ describe("a proposed decision asks the person (W3)", () => {
       for (const id of [reasked, named, filed]) {
         expect((await slotsCarrying(id))[0]).not.toHaveProperty("retiredAt");
       }
+    });
+  });
+
+  describe("who set a decision's default (the timeout arm, P5)", () => {
+    beforeAll(async () => {
+      // The write's audit row is where the author comes from.
+      await h.client!.exec(ddlFor(events as unknown as PgTable));
+    });
+    const stampOf = async (id: string) =>
+      (
+        await q<{ system_data: Record<string, unknown> }>(
+          `select system_data from entities where id = $1`,
+          [id]
+        )
+      ).rows[0]!.system_data.defaultOptionBy as
+        Record<string, unknown> | undefined;
+    const auditRow = async (id: string, agentUserId: string | null) => {
+      const eventId = randomUUID();
+      await q(
+        `insert into events (id, type, subject_id, subject_type, data, user_id, agent_user_id)
+         values ($1, 'entities.update.completed', $2, 'entity', '{}'::jsonb, $3, $4)`,
+        [eventId, id, OWNER, agentUserId]
+      );
+      return eventId;
+    };
+
+    it("an update that changed defaultOption is stamped from ITS audit row: person, or agent", async () => {
+      const mine = await decision(
+        {
+          decisionStatus: "proposed",
+          decisionOptions: OPTIONS,
+          defaultOption: "seat",
+        },
+        null
+      );
+      const payload = (id: string, eventId: string) => ({
+        subjectType: "entity",
+        action: "update",
+        subjectId: id,
+        userId: OWNER,
+        eventId,
+        data: { profileSlug: "decision", "changed.defaultOption": true },
+      });
+      await decisionAskReactor.handler(
+        payload(mine, await auditRow(mine, null)) as never,
+        { boss: {} as never }
+      );
+      expect(await stampOf(mine)).toMatchObject({
+        option: "seat",
+        kind: "person",
+      });
+
+      const theirs = await decision(
+        {
+          decisionStatus: "proposed",
+          decisionOptions: OPTIONS,
+          defaultOption: "seat",
+        },
+        null
+      );
+      await decisionAskReactor.handler(
+        payload(theirs, await auditRow(theirs, AGENT)) as never,
+        { boss: {} as never }
+      );
+      expect(await stampOf(theirs)).toMatchObject({ kind: "agent" });
+    });
+
+    it("CONTROL: an edit that did not touch defaultOption stamps nothing (rules out 'the last writer of anything owns the default')", async () => {
+      const id = await decision(
+        {
+          decisionStatus: "proposed",
+          decisionOptions: OPTIONS,
+          defaultOption: "seat",
+        },
+        null
+      );
+      await decisionAskReactor.handler(
+        {
+          subjectType: "entity",
+          action: "update",
+          subjectId: id,
+          userId: OWNER,
+          eventId: await auditRow(id, null),
+          data: { profileSlug: "decision", "changed.title": true },
+        } as never,
+        { boss: {} as never }
+      );
+      expect(await stampOf(id)).toBeUndefined();
     });
   });
 });
