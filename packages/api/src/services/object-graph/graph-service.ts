@@ -547,9 +547,7 @@ export interface NeighbourRef {
   direction: "outgoing" | "incoming";
 }
 
-export function isProvenanceSessionRef(
-  ref: Omit<NeighbourRef, "id">
-): boolean {
+export function isProvenanceSessionRef(ref: Omit<NeighbourRef, "id">): boolean {
   return (
     ref.kind === "session" &&
     ref.direction === "incoming" &&
