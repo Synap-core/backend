@@ -1652,7 +1652,7 @@ Change a Space's brief (how agents work there: purpose, persona, anchors, what t
 
 **Move entities to space** · Group: `data` · readOnlyHint: false · destructiveHint: false · openWorldHint: false
 
-Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations). You must be able to write both spaces. Per entity: returns { moved, proposed, errors }; per playbook: { results } — a proposed move is success.
+Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations; refused when something left behind uses it). You must be able to write both spaces. Returns { moved, proposed, errors } per item — a proposed move is success.
 
 | Parameter     | Type          | Required | Description                                                                                                                                                                                                                                                                                                                                               |
 | ------------- | ------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
