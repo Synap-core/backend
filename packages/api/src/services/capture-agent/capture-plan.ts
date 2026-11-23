@@ -52,6 +52,7 @@ export const CAPTURE_PLAN_KEYS = [
   "sessions",
   "documents",
   "projects",
+  "tracks",
   "links",
   "skills",
   "automations",
@@ -129,6 +130,7 @@ export type PlanRefKind =
   | "playbook"
   | "view"
   | "workspace"
+  | "track"
   | "kind"
   | "lifecycle";
 
@@ -164,6 +166,7 @@ const OP_REF_KIND: Partial<
   create_view: "view",
   create_cell: "cell",
   create_workspace: "workspace",
+  create_track: "track",
   define_kind: "kind",
   declare_lifecycle: "lifecycle",
   // An update names an EXISTING row; its ref resolves to that row's id, so
@@ -524,6 +527,9 @@ export function validatePlanOperations(
           expectId(i, "subjectEntityId", op.subjectEntityId);
         if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
         if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "trackRef", op.trackRef, "trackId", op.trackId);
+        if (op.trackRef) expectRef(i, "trackRef", op.trackRef, "track");
+        if (op.trackId) expectId(i, "trackId", op.trackId);
         if (
           op.expectedOutputs !== undefined &&
           !Array.isArray(op.expectedOutputs)
@@ -579,6 +585,42 @@ export function validatePlanOperations(
         for (const id of op.evidenceEntityIds ?? [])
           expectId(i, "evidenceEntityIds", id);
         return;
+      case "create_track": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a goal step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a goal step needs a `name`");
+        notBoth(i, "projectRef", op.projectRef, "projectId", op.projectId);
+        if (!op.projectRef && !op.projectId)
+          push(
+            i,
+            "a goal lives in a project: give it `projectRef` (a project step) or `projectId`"
+          );
+        if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
+        if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "parentRef", op.parentRef, "parentGoalId", op.parentGoalId);
+        if (op.parentRef) {
+          if (op.parentRef === op.ref) push(i, "a goal cannot serve itself");
+          else expectRef(i, "parentRef", op.parentRef, "track");
+        }
+        if (op.parentGoalId) expectId(i, "parentGoalId", op.parentGoalId);
+        for (const blocker of op.blockedByRefs ?? []) {
+          if (blocker === op.ref) push(i, "a goal cannot wait on itself");
+          else expectRef(i, "blockedByRefs", blocker, "track");
+        }
+        for (const id of op.blockedByTrackIds ?? [])
+          expectId(i, "blockedByTrackIds", id);
+        if (op.criteria !== undefined && !Array.isArray(op.criteria))
+          push(i, "criteria must be an array");
+        if (
+          op.kpi !== undefined &&
+          (op.kpi === null ||
+            typeof op.kpi !== "object" ||
+            Array.isArray(op.kpi))
+        )
+          push(i, "kpi must be an object ({ label, target, unit? })");
+        return;
+      }
       case "create_link": {
         if (!(PLAN_LINK_TYPES as readonly string[]).includes(op.type)) {
           push(
@@ -1114,7 +1156,63 @@ export function validatePlanOperations(
     }
   }
 
+  // Goals: no cycle among in-plan goals, per edge (serves / waits on).
+  for (const [label, edgesOf] of [
+    [
+      "serves",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.parentRef ? [op.parentRef] : [],
+    ],
+    [
+      "blocked_by",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.blockedByRefs ?? [],
+    ],
+  ] as const) {
+    const goalEdges = operations.flatMap((op) =>
+      op.op === "create_track"
+        ? edgesOf(op).map((to) => ({ from: op.ref, to }))
+        : []
+    );
+    const cycle = findCycle(goalEdges);
+    if (cycle) {
+      const at = operations.findIndex(
+        (op) => op.op === "create_track" && op.ref === cycle[0]
+      );
+      push(Math.max(at, 0), `goal ${label} cycle: ${cycle.join(" → ")}`);
+    }
+  }
+
   return problems;
+}
+
+/**
+ * `create_track` op indexes, parents before children (in-plan `parentRef`),
+ * so a goal's parent exists when the start door places it. Assumes
+ * `validatePlanOperations` passed (no cycle).
+ */
+export function trackOpsRootFirst(
+  operations: CompositeProposalOperation[]
+): number[] {
+  const indexByRef = new Map<string, number>();
+  operations.forEach((op, i) => {
+    if (op.op === "create_track") indexByRef.set(op.ref, i);
+  });
+  const ordered: number[] = [];
+  const placed = new Set<number>();
+  const place = (index: number, depth: number) => {
+    if (placed.has(index) || depth > operations.length) return;
+    const op = operations[index];
+    if (op.op !== "create_track") return;
+    const parent = op.parentRef ? indexByRef.get(op.parentRef) : undefined;
+    if (parent !== undefined) place(parent, depth + 1);
+    if (!placed.has(index)) {
+      placed.add(index);
+      ordered.push(index);
+    }
+  };
+  for (const index of indexByRef.values()) place(index, 0);
+  return ordered;
 }
 
 /**
@@ -1167,6 +1265,7 @@ export interface PlanStepSummary {
     | "cell"
     | "binding"
     | "workspace"
+    | "track"
     | "kind"
     | "lifecycle";
   label: string;
@@ -1202,6 +1301,8 @@ export function planStepSummaries(
         return { ...base, kind: "document", label: op.title };
       case "create_project":
         return { ...base, kind: "project", label: op.name };
+      case "create_track":
+        return { ...base, kind: "track", label: op.name };
       case "create_link":
         return {
           ...base,

@@ -32,9 +32,11 @@ import { SESSION_CLOSE_OUTCOMES } from "../focus-sessions/statuses.js";
  *
  *   created        — a thing of the subject kind is created (a role: attached).
  *   enters_status  — the subject enters `status`.
- *   schedule       — on `cron` (UTC), over the things currently in `status`
- *                    (or every thing of the subject, without one); always
- *                    `per_moment`.
+ *   schedule       — on `cron` in `timezone`, over the things currently in
+ *                    `status` (or every thing of the subject, without one):
+ *                    one session for the set (`per_moment`, the default) or
+ *                    one per thing (`per_thing`). A playbook with no subject
+ *                    runs once per tick.
  *   count          — when at least `min` things sit in `status`; always
  *                    `per_moment` (the count IS the moment).
  *   manual         — never by itself: a button that runs the worker over its
@@ -76,6 +78,16 @@ export type WorkerSize = (typeof WORKER_SIZES)[number];
 export const WORKER_MODES = ["run", "propose"] as const;
 export type WorkerMode = (typeof WORKER_MODES)[number];
 
+/**
+ * What an activator may declare: a worker mode, or `appointment` (schedule
+ * only) — each tick opens a `scheduled` session that waits for the person.
+ */
+export const WORKER_ACTIVATOR_MODES = [...WORKER_MODES, "appointment"] as const;
+export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
+
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
+
 export const DEFAULT_WORKER_SIZE: WorkerSize = "per_thing";
 export const DEFAULT_WORKER_MODE: WorkerMode = "propose";
 
@@ -103,16 +115,22 @@ export interface WorkerActivator {
   /** `run_ended` only: which end starts it; absent = any. */
   outcome?: WorkerRunOutcome;
   /** The lifecycle option: required for `enters_status` and `count`,
-   *  optional for `schedule` (narrows the set). */
-  status?: string;
-  /** Cron expression (UTC). Required for `schedule`. */
+   *  optional for `schedule` (narrows the set; a list there). */
+  status?: WorkerStatusSpec;
+  /** Cron expression. Required for `schedule`. */
   cron?: string;
+  /** `schedule` only: the IANA zone `cron` is read in; absent = the owner's. */
+  timezone?: string;
+  /** `schedule` only: installed paused — the person turns it on. */
+  startsPaused?: true;
+  /** `schedule` in `run` mode only: the agent each run is handed to. */
+  handToAgentId?: string;
   /** Threshold for `count` (≥ {@link WORKER_COUNT_MIN_FLOOR}). */
   min?: number;
-  /** Default {@link DEFAULT_WORKER_SIZE}; `count` / `schedule` force `per_moment`. */
+  /** Default {@link DEFAULT_WORKER_SIZE}; `count` is `per_moment`, `schedule` defaults to it. */
   size?: WorkerSize;
   /** Default {@link DEFAULT_WORKER_MODE}. */
-  mode?: WorkerMode;
+  mode?: WorkerActivatorMode;
   /** Default {@link DEFAULT_WORKER_MAX_PENDING_APPROVALS}. */
   maxPendingApprovals?: number;
   /**
@@ -182,16 +200,24 @@ export function skippedByOnly(
 }
 
 /**
- * The size a declared activator runs at. `count` and `schedule` are always
- * `per_moment`: the moment (a threshold, a tick) has no single thing, and one
- * session per thing on a tick would need a fan-out engine the worker does not
- * have — the set rides as targets instead.
+ * The size a declared activator runs at. `count` is always `per_moment` (the
+ * threshold has no single thing); a `schedule` is `per_moment` unless it
+ * declares `per_thing` (one run per thing in its set at each tick).
  */
 export function effectiveWorkerSize(
   a: Pick<WorkerActivator, "on" | "size">
 ): WorkerSize {
-  if (a.on === "count" || a.on === "schedule") return "per_moment";
+  if (a.on === "count") return "per_moment";
+  if (a.on === "schedule") return a.size ?? "per_moment";
   return a.size ?? DEFAULT_WORKER_SIZE;
+}
+
+/** A declared `status` as a list: [] when absent. */
+export function workerStatuses(
+  status: string | readonly string[] | null | undefined
+): string[] {
+  if (status === null || status === undefined) return [];
+  return typeof status === "string" ? [status] : [...status];
 }
 
 /**
@@ -201,6 +227,13 @@ export function effectiveWorkerSize(
  * hash, and the convergence UPDATES the same rule in place. The pod's
  * `activatorKey` (`schemas/playbook-process.ts`) is this function.
  */
+/** Is this activator key a `schedule`'s (`workerActivatorKey`)? */
+export function isScheduleActivatorKey(
+  key: string | null | undefined
+): boolean {
+  return typeof key === "string" && key.startsWith("schedule:");
+}
+
 /** Is this activator key a `run_ended` link's (`workerActivatorKey`)? */
 export function isLinkActivatorKey(key: string | null | undefined): boolean {
   return typeof key === "string" && key.startsWith("run_ended:");
@@ -215,13 +248,14 @@ export const LINK_CHAIN_MAX = 32;
 
 export function workerActivatorKey(a: {
   on: string;
-  status?: string | null;
+  status?: string | readonly string[] | null;
   cron?: string | null;
   playbook?: string | null;
   outcome?: string | null;
 }): string {
-  if (a.on === "enters_status") return `enters_status:${a.status ?? ""}`;
-  if (a.on === "count") return `count:${a.status ?? ""}`;
+  if (a.on === "enters_status")
+    return `enters_status:${workerStatuses(a.status).join(",")}`;
+  if (a.on === "count") return `count:${workerStatuses(a.status).join(",")}`;
   if (a.on === "schedule")
     return `schedule:${(a.cron ?? "").trim().split(/\s+/).join(" ")}`;
   if (a.on === "run_ended")

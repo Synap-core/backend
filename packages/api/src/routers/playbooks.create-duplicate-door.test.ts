@@ -28,7 +28,6 @@ const {
   mockGetDb,
   mockCheckPermission,
   mockPreviewDecision,
-  mockMaterializeCron,
   mockCreateLinks,
   insertReturning,
   selectLimit,
@@ -70,7 +69,6 @@ const {
     profilesFindMany,
     insertReturning,
     selectLimit,
-    mockMaterializeCron: vi.fn().mockResolvedValue(undefined),
     mockCreateLinks: vi.fn().mockResolvedValue([]),
     mockCheckPermission: vi.fn().mockResolvedValue({ granted: true }),
     mockPreviewDecision: vi.fn().mockResolvedValue({ decision: "propose" }),
@@ -140,14 +138,6 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
     checkPermissionOrPropose: mockCheckPermission,
     previewPermissionDecision: mockPreviewDecision,
   };
-});
-
-vi.mock("../services/playbooks/cron-automation.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../services/playbooks/cron-automation.js")
-    >();
-  return { ...actual, materializePlaybookCronAutomation: mockMaterializeCron };
 });
 
 vi.mock("../services/links/links-service.js", () => ({

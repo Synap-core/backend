@@ -4,7 +4,6 @@ import {
   flowValidationErrorMessage,
   FLOW_NODE_TYPES,
 } from "./validate-flow.js";
-import { buildPlaybookRunFlowDefinition } from "../playbooks/cron-automation.js";
 
 /**
  * Pure-function contract test for the author-time flow validation gate.
@@ -282,21 +281,19 @@ describe("validateFlowDefinition — valid flows", () => {
   });
 });
 
-describe("validateFlowDefinition — keystone regressions (real materializer)", () => {
-  it("single playbook_run cron flow (maintenance/hygiene shape) → valid", () => {
-    const flow = buildPlaybookRunFlowDefinition("pb-1", {
-      playbookName: "CRM Hygiene",
-    });
-    const result = validateFlowDefinition(flow);
-    expect(result.errors).toEqual([]);
-    expect(result.valid).toBe(true);
-  });
-
-  it("kind-fan-out query→loop→playbook_run radar flow → valid", () => {
-    const flow = buildPlaybookRunFlowDefinition("pb-1", {
-      playbookName: "Radar",
-      subjectProfile: { profileSlug: "client" },
-    });
+describe("validateFlowDefinition — keystone regressions", () => {
+  it("single playbook_run flow (a loop trigger's shape) → valid", () => {
+    const flow = {
+      nodes: [
+        {
+          id: "playbook-run",
+          type: "playbook_run",
+          position: { x: 0, y: 0 },
+          data: { label: "CRM Hygiene", playbookId: "pb-1" },
+        },
+      ],
+      edges: [],
+    };
     const result = validateFlowDefinition(flow);
     expect(result.errors).toEqual([]);
     expect(result.valid).toBe(true);

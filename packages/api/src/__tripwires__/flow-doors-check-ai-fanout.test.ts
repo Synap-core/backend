@@ -62,7 +62,6 @@ describe("tripwire: every flow persist door runs the AI fan-out rule", () => {
     for (const known of [
       "routers/automations.ts",
       "routers/sync.ts",
-      "services/playbooks/cron-automation.ts",
       "services/rules/compile.ts",
     ]) {
       expect(files, `the scan no longer sees ${known}`).toContain(known);

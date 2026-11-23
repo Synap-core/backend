@@ -59,6 +59,7 @@ import {
   projectTracks,
   focusSessions,
   countWorkerPendingApprovalsBulk,
+  personTimeZone,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
@@ -153,7 +154,7 @@ export interface EnabledWorker {
   /** The kind or role it works on. */
   profileSlug: string | null;
   size: WorkerSize;
-  mode: "run" | "propose";
+  mode: PlaybookActivator["mode"];
   scope: WorkerScopeKind;
   projectId: string | null;
   trackId: string | null;
@@ -179,6 +180,7 @@ interface PlaybookRow {
   status: string;
   workspaceId: string | null;
   subjectProfile: unknown;
+  createdBy: string;
 }
 
 async function visiblePlaybooks(input: {
@@ -195,6 +197,7 @@ async function visiblePlaybooks(input: {
       status: playbooks.status,
       workspaceId: playbooks.workspaceId,
       subjectProfile: playbooks.subjectProfile,
+      createdBy: playbooks.createdBy,
     })
     .from(playbooks)
     .where(
@@ -589,7 +592,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     const stopped = !paused && sessionEnded(en.sessionId);
     const automationId = paused || stopped ? null : activeOf(row.id);
     if (input.liveOnly && !automationId) continue;
-    const activator =
+    const declared =
       process.activators.find((a) => activatorKey(a) === en.activatorKey) ??
       (en.scope !== "space"
         ? chosenClockActivator({
@@ -598,6 +601,16 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
             mode: modeOfCompiledRule(row.meta),
           })
         : null);
+    // A schedule naming no zone runs in the one its rule compiled with.
+    const compiledZone = (
+      row.meta.sentence as { trigger?: { cronTimezone?: unknown } } | undefined
+    )?.trigger?.cronTimezone;
+    const activator =
+      declared?.on === "schedule" &&
+      !declared.timezone &&
+      typeof compiledZone === "string"
+        ? { ...declared, timezone: compiledZone }
+        : declared;
     out.push({
       automations: automationsOf.get(row.id) ?? { current: null, all: [] },
       worker: {
@@ -893,6 +906,7 @@ export async function enableWorker(input: {
     profileSlug: process.profileSlug,
     statusProperty: process.statusProperty,
     subject,
+    defaultTimezone: await personTimeZone(db, pb.createdBy),
     scope: { projectId, trackId, parentSessionId: sessionId },
   });
   if ("error" in decl) return { status: "denied", reason: decl.error };
