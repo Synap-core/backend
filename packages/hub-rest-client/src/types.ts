@@ -2431,6 +2431,56 @@ export interface HubView {
   updatedAt: string;
 }
 
+// ─── Surfaces ────────────────────────────────────────────────────────────────
+
+/**
+ * The surface find contract, a structural mirror of `@synap-core/types/surfaces`
+ * (`SurfaceRow`, `SurfacesForObject`): this package has no dependencies.
+ */
+export type HubSurfaceAnchorKind =
+  | "entity"
+  | "profile"
+  | "workspace"
+  | "project"
+  | "track"
+  | "playbook"
+  | "session";
+
+export interface HubSurfaceRow {
+  id: string;
+  body:
+    | "view"
+    | "document"
+    | "html"
+    | "bento"
+    | "whiteboard"
+    | "cell"
+    | "site"
+    | "app";
+  relation:
+    | "renders"
+    | "attached"
+    | "body"
+    | "pinned"
+    | "home"
+    | "session-output"
+    | "exposed";
+  anchor: { kind: HubSurfaceAnchorKind; id: string };
+  title: string;
+  viewType?: string;
+  cellKey?: string;
+  slot?: string;
+  openUrl: string;
+  readOnly: boolean;
+  source: string;
+}
+
+/** GET /surfaces. A store that could not be read is in `unavailable`. */
+export interface HubSurfacesForObject {
+  rows: HubSurfaceRow[];
+  unavailable: { source: string; error: string }[];
+}
+
 /**
  * One row from GET /widget-definitions — the pod's ONE renderables door: the
  * built-in catalog (`source: "catalog"`, from `@synap-core/types/renderables`)
