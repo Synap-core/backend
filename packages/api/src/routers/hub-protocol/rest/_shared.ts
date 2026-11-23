@@ -33,6 +33,8 @@ import {
   drizzleSql,
   getWorkspaceMembership,
   getDelegatedTurnAgent,
+  inArray,
+  membershipHolderIds,
 } from "@synap/database";
 import { APP_PERSON_KEY_TYPE, apiKeys } from "@synap/database/schema";
 
@@ -1019,11 +1021,13 @@ export async function getUserMemberWorkspaceIds(
         .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
         .where(
           and(
-            eq(workspaceMembers.userId, userId),
+            inArray(workspaceMembers.userId, membershipHolderIds(userId)),
             isNull(workspaces.archivedAt)
           )
         )
-    : await query.where(eq(workspaceMembers.userId, userId));
+    : await query.where(
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
+      );
   return rows.map((r) => r.workspaceId);
 }
 

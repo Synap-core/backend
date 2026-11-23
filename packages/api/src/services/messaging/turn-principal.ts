@@ -74,8 +74,8 @@ export async function resolveTurnPrincipal(p: {
  * behalf). An external worker (Claude Code, Hermes...) is never an IS turn: it
  * is reached its own way and writes as itself with its own key.
  *
- * Nothing enrolls the AI in the room's space: a write where it is not a member
- * goes to the governance gate (a `workspace.join` proposal or a refusal).
+ * Nothing enrolls the AI in the room's space: it acts through the person's
+ * membership, and a write where that person is not a member is refused.
  */
 export async function resolveTurnAgentUserId(p: {
   /** The turn principal (`resolveTurnPrincipal`, or the sender). */

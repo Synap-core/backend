@@ -588,11 +588,9 @@ function permitDiffs(
  * Where scopes put the app, and as what: each space and project a scope
  * names, as `viewer` when it holds only reads there and `editor` otherwise,
  * and `pod` for an unpinned (pod-wide read) scope. The doors that read a
- * scope's PLACE rather than ask `permits` follow it: the app agent's space
- * memberships, its RBAC floor (`syncAppAgentMemberships`: a read makes it a
- * viewer of the space, a write an editor), and the spaces a facet or capture
- * door narrows to (`grantedWorkspaceIdsOf`). A pod-wide read permits a read
- * in space A, but it never makes the app a member of A.
+ * scope's PLACE rather than ask `permits` follow it: the spaces a facet or
+ * capture door narrows to (`grantedWorkspaceIdsOf`). A pod-wide read permits
+ * a read in space A, but it never names A.
  */
 function placementOf(
   scopes: readonly AppAccessGrantScope[]

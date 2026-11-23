@@ -1692,7 +1692,7 @@
           },
           "proposalType": {
             "type": "string",
-            "description": "Present when status is \"proposed\". \"join\" for a workspace-join gate, else \"<subject>.<action>\" (e.g. \"entity.create\")."
+            "description": "Present when status is \"proposed\". \"held_writes\" for a write held past the daily limit, else \"<subject>.<action>\" (e.g. \"entity.create\")."
           },
           "reviewUrl": {
             "type": "string",
@@ -1701,11 +1701,11 @@
           "deferred": {
             "type": "boolean",
             "enum": [true],
-            "description": "Workspace-join gate only (proposalType \"join\"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it."
+            "description": "Held writes only (proposalType \"held_writes\"): this write was KEPT on today's held-writes pack and is replayed for you once it is approved — do not resend it."
           },
           "ref": {
             "type": "string",
-            "description": "With `deferred`: the kept write's ref on the join proposal."
+            "description": "With `deferred`: the kept write's ref on the held-writes pack."
           },
           "facets": {
             "type": "array",
@@ -1884,11 +1884,11 @@
           "deferred": {
             "type": "boolean",
             "enum": [true],
-            "description": "Workspace-join gate only (proposalType \"join\"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it."
+            "description": "Held writes only (proposalType \"held_writes\"): this write was KEPT on today's held-writes pack and is replayed for you once it is approved — do not resend it."
           },
           "ref": {
             "type": "string",
-            "description": "With `deferred`: the kept write's ref on the join proposal."
+            "description": "With `deferred`: the kept write's ref on the held-writes pack."
           },
           "entityId": { "type": "string" },
           "title": {
@@ -8760,84 +8760,11 @@
         }
       }
     },
-    "/workspaces/enroll-agent": {
-      "post": {
-        "tags": ["Workspaces"],
-        "summary": "Enroll an agent user into the caller's workspaces",
-        "description": "Adds the given agent user as a member to all workspaces the calling user belongs to (or just one, when workspaceId is supplied). Idempotent — safe to call on reconnect. Used by `synap connect` when 'All workspaces' is selected to give the agent key pod-wide access.",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "agentUserId": { "type": "string", "format": "uuid" },
-                  "workspaceId": { "type": "string", "format": "uuid" },
-                  "role": {
-                    "type": "string",
-                    "enum": ["viewer", "editor", "admin"]
-                  }
-                },
-                "required": ["agentUserId"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "List of workspace IDs the agent was enrolled into",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "enrolled": {
-                      "type": "array",
-                      "items": { "type": "string" }
-                    },
-                    "skipped": {
-                      "type": "array",
-                      "items": { "type": "string" }
-                    }
-                  },
-                  "required": ["enrolled", "skipped"]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid body or agentUserId not an agent user",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          }
-        }
-      }
-    },
     "/workspaces/provision-agent": {
       "post": {
         "tags": ["Workspaces"],
         "summary": "Provision an agent's workspace (idempotent)",
-        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent is its admin member. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
+        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent works there through that membership. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {

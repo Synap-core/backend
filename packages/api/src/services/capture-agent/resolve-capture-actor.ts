@@ -20,6 +20,10 @@
  * pod, or `ensureCaptureAgent` has not run), fall back to the caller's own
  * `ctxAgentUserId` so the write proceeds under its normal governance instead of
  * crashing.
+ *
+ * The Capture agent is never a space member: like every agent it acts through
+ * the caller's membership (the gate's `userId`), so it writes only where the
+ * caller may.
  */
 
 import type { Context } from "hono";
@@ -27,14 +31,13 @@ import type { Context } from "hono";
 import { createLogger } from "@synap-core/core";
 
 import { getCaptureAgentUserId } from "./ensure-capture-agent.js";
-import { enrollAgentInWorkspace } from "../enroll-agent-in-workspace.js";
 
 const logger = createLogger({ module: "resolve-capture-actor" });
 
 export async function resolveCaptureActorUserId(
   c: Context,
   ctxAgentUserId: string | undefined,
-  opts?: { always?: boolean; workspaceId?: string | null }
+  opts?: { always?: boolean }
 ): Promise<string | undefined> {
   const shouldCapture =
     opts?.always === true || c.req.header("x-capture") === "1";
@@ -53,28 +56,6 @@ export async function resolveCaptureActorUserId(
     return ctxAgentUserId;
   }
   if (!captureAgentId) return ctxAgentUserId;
-
-  // Membership gate: checkPermissionOrPropose requires workspace membership
-  // BEFORE the auto-approve ladder — so a pod-wide Capture agent that isn't a
-  // member of the target workspace would file a `workspace.join` proposal
-  // instead of auto-applying (breaking event-mode sessions + workspace-scoped
-  // enrichment). Enroll it idempotently (editor) so its bounded capture writes
-  // reach the ladder. Its 7-verb `autoApproveFor` — NOT the editor role —
-  // stays the real capability boundary. Non-fatal.
-  if (opts?.workspaceId) {
-    try {
-      await enrollAgentInWorkspace({
-        workspaceId: opts.workspaceId,
-        agentUserId: captureAgentId,
-        role: "editor",
-      });
-    } catch (err) {
-      logger.warn(
-        { err, workspaceId: opts.workspaceId },
-        "capture-agent workspace enroll failed (non-fatal)"
-      );
-    }
-  }
 
   return captureAgentId;
 }

@@ -68,6 +68,8 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  users,
+  apiKeys,
   syncGeneration,
 } from "@synap/database/schema";
 import { workspacesRouter } from "./workspaces.js";
@@ -137,7 +139,13 @@ const caller = () =>
 beforeAll(async () => {
   // `syncGeneration`: the mutation middleware's replica guard reads it (an
   // empty table = this pod is not a read-only replica).
-  for (const t of [workspaces, workspaceMembers, syncGeneration])
+  for (const t of [
+    workspaces,
+    workspaceMembers,
+    users,
+    apiKeys,
+    syncGeneration,
+  ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   await h.client!.query(
     `insert into workspaces (id, name, owner_id, settings, created_at, updated_at)

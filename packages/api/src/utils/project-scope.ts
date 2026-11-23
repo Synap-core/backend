@@ -45,7 +45,15 @@
 import { grantReadPredicate } from "../access/grant-read.js";
 import { projectVisibleWhere } from "../access/project-visibility.js";
 import { AccessContext } from "../access/context.js";
-import { and, eq, inArray, isNull, isNotNull, or } from "@synap/database";
+import {
+  and,
+  eq,
+  inArray,
+  isNull,
+  isNotNull,
+  or,
+  membershipHolderIds,
+} from "@synap/database";
 import { not, sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import {
@@ -128,7 +136,7 @@ function userAnchorIdsSubquery(userId: string, which: "member" | "guest") {
     .from(projectMembers)
     .where(
       and(
-        eq(projectMembers.userId, userId),
+        inArray(projectMembers.userId, membershipHolderIds(userId)),
         which === "guest"
           ? eq(projectMembers.role, GUEST_PROJECT_ROLE)
           : drizzleSql`${projectMembers.role} IS DISTINCT FROM ${GUEST_PROJECT_ROLE}`
@@ -151,7 +159,7 @@ export function projectMembershipWhere(
     db
       .select({ id: projectMembers.projectId })
       .from(projectMembers)
-      .where(eq(projectMembers.userId, userId))
+      .where(inArray(projectMembers.userId, membershipHolderIds(userId)))
   );
 }
 
@@ -702,7 +710,7 @@ function lensSpacesImIn(userId: string, lens: string | string[]) {
     .from(workspaceMembers)
     .where(
       and(
-        eq(workspaceMembers.userId, userId),
+        inArray(workspaceMembers.userId, membershipHolderIds(userId)),
         inArray(workspaceMembers.workspaceId, ids)
       )
     );

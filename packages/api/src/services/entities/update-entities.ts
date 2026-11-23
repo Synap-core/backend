@@ -66,8 +66,6 @@ import type { Context } from "../../context.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import {
   checkPermissionOrPropose,
-  HELD_WRITES_PROPOSAL_TYPE,
-  isJoinGate,
   previewPermissionDecision,
   type PermissionDecisionPreview,
 } from "../../utils/permission-check.js";
@@ -152,8 +150,8 @@ export interface UpdateEntitiesResult {
   } | null;
   denied: Array<{ id: string; reason: string }>;
   /**
-   * `deferred: true` = the write was KEPT on a workspace-join request and is
-   * replayed for the caller once the join is approved — never resend it.
+   * `deferred: true` = the write was KEPT on today's held-writes pack and is
+   * replayed for the caller once it is approved — never resend it.
    */
   skipped: Array<{
     id: string;
@@ -678,17 +676,13 @@ async function fileAlone(params: {
       noteUnmodeled(result, item.id, written);
       return;
     }
-    const kept = (written as { deferred?: true }).deferred;
-    if (kept || isJoinGate(written.proposalType)) {
+    if ((written as { deferred?: true }).deferred) {
       result.skipped.push({
         id: item.id,
-        reason: !kept
-          ? "Needs access to its space first — approve the join request, then send it again"
-          : written.proposalType === HELD_WRITES_PROPOSAL_TYPE
-            ? "Held with today's writes past your daily limit — replayed for you once approved; do not resend it"
-            : "Kept on a request to join its space — replayed for you once approved; do not resend it",
+        reason:
+          "Held with today's writes past your daily limit — replayed for you once approved; do not resend it",
         proposalId: written.proposalId,
-        ...(kept ? { deferred: true as const } : {}),
+        deferred: true as const,
       });
       return;
     }
@@ -768,13 +762,6 @@ async function filePack(
     return;
   }
   if ("proposalId" in perm) {
-    if (isJoinGate(perm.proposalType)) {
-      notFiled(
-        "Needs access to its space first — approve the join request, then send these items again",
-        perm.proposalId
-      );
-      return;
-    }
     result.proposed = {
       proposalId: perm.proposalId,
       count: ids.length,

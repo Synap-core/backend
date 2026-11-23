@@ -75,6 +75,8 @@ import {
   profiles,
   workspaceMembers,
   workspaces,
+  users,
+  apiKeys,
 } from "@synap/database/schema";
 import {
   applyRetireInto,
@@ -251,6 +253,8 @@ beforeEach(async () => {
   for (const t of [
     "workspaces",
     "workspace_members",
+    "users",
+    "api_keys",
     "entities",
     "profiles",
     "cp_catalog_cache",
@@ -260,12 +264,15 @@ beforeEach(async () => {
   for (const t of [
     workspaces,
     workspaceMembers,
+    users,
+    apiKeys,
     entities,
     profiles,
     cpCatalogCache,
     podSettings,
   ] as PgTable[])
     await h.client!.exec(ddlFor(t));
+  await q(`insert into users (id, email) values ($1, 'u@x.test')`, [USER]);
 
   h.resolveTemplate.mockReset().mockResolvedValue({
     packageDefinition: { profiles: [{ slug: "company" }, { slug: "contact" }] },

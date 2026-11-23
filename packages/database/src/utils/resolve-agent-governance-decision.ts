@@ -95,7 +95,7 @@ export * from "./host-seed.js";
  *
  * WHAT STAYS WITH EACH CALLER (deliberately NOT here):
  *   - Step (a) the RBAC `verifyPermission` call and its FAILURE handling — the
- *     chat door files workspace-join / role-insufficient proposals on failure,
+ *     chat door files role-insufficient proposals on failure,
  *     the automation door simply denies. Those side effects diverge, so RBAC is
  *     each caller's concern; this helper runs AFTER RBAC has passed.
  *   - The `propose`/`execute` SIDE EFFECTS (proposal creation, auto-approve

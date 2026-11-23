@@ -367,29 +367,22 @@ describe("F5 — a surface key adds its AI only to a space its person administer
     expect(provisionSurfaceAgentKey).toHaveBeenCalled();
   });
 
-  it("an admin of a space with NO owner row: the agent joins as editor, no human is written in as owner", async () => {
+  it("an admin of a space with NO owner row: no membership is written, for the agent or a human", async () => {
     key(MEMBER, ["hub-protocol.write"]);
-    // caller's membership, the owner lookup (none), the agent's existing row (none)
-    h.memberAnswers = [{ role: "admin" }, undefined, undefined];
+    // caller's membership, the owner lookup (none)
+    h.memberAnswers = [{ role: "admin" }, undefined];
     const res = await connect({ workspaceId: WS });
     expect(res.status).toBe(200);
-    expect(h.inserts).toEqual([
-      expect.objectContaining({ userId: NEW_AGENT, role: "editor" }),
-    ]);
+    expect(h.inserts).toEqual([]);
   });
 
-  it("control: the space's owner adds the agent", async () => {
+  it("control: the space's owner sets the agent up", async () => {
     key(MEMBER, ["hub-protocol.write"]);
-    h.memberAnswers = [{ role: "owner" }, { userId: MEMBER }, undefined];
+    h.memberAnswers = [{ role: "owner" }, { userId: MEMBER }];
     const res = await connect({ workspaceId: WS });
     expect(res.status).toBe(200);
     expect(provisionSurfaceAgentKey).toHaveBeenCalled();
-    expect(h.inserts).toEqual([
-      expect.objectContaining({
-        workspaceId: WS,
-        userId: NEW_AGENT,
-        role: "editor",
-      }),
-    ]);
+    // The agent holds no seat: it acts through its person's membership.
+    expect(h.inserts).toEqual([]);
   });
 });

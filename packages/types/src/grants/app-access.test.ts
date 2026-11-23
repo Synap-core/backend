@@ -120,7 +120,7 @@ function permitsTable(scopes: readonly Scope[], perms: readonly string[]) {
 /**
  * Where the app is PUT, read the way the app doors read a scope
  * (`parsePlace`): each space or project it is in, as `viewer` when it only
- * reads there and `editor` otherwise (`syncAppAgentMemberships`), and the pod
+ * reads there and `editor` otherwise, and the pod
  * (or "unbounded") for a scope with no space. A pod-wide read permits a read
  * in A without making the app a member of A, so this is checked beside the
  * permits.

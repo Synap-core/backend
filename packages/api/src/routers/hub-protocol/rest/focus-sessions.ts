@@ -2137,9 +2137,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Capture agent so focus_session.create auto-approves; otherwise keep the
       // caller's own agent identity (normal governance).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
       const result = await createFocusSession({
         userId,
         workspaceId,
@@ -2485,9 +2483,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const agentUserId =
         patch.agentUserId !== undefined
           ? resolvedAgentUserId
-          : await resolveCaptureActorUserId(c, resolvedAgentUserId, {
-              workspaceId,
-            });
+          : await resolveCaptureActorUserId(c, resolvedAgentUserId);
 
       // W4: what a pause waits on, and when it happened — refused up front.
       const moveRefusal = sessionMoveRefusal(
@@ -3279,12 +3275,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
 
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
 
       const result = await completeFocusSession({
         sessionId: id,
@@ -3418,11 +3412,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
       const agentUserId = await resolveCaptureActorUserId(
         c,
-        c.get("agentUserId") as string | undefined,
-        { workspaceId }
+        c.get("agentUserId") as string | undefined
       );
 
       const { cancelSession } =

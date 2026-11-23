@@ -130,6 +130,7 @@ import {
   proposals,
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
   links,
   sessionEvaluations,
@@ -182,6 +183,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     links,
     playbooks,
     // Every kept version of a playbook (0416): the create door writes it.

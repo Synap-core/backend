@@ -457,6 +457,7 @@ export async function followPlaybook(
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
           currentStage: focusSessions.currentStage,
+          status: focusSessions.status,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -563,6 +564,8 @@ export async function followPlaybook(
         sessionId,
         executor: playbook.executor,
         holder: starterHolder(userId, agentUserId),
+        // A planned step's run waits with it and starts when it wakes (P4).
+        sessionStatus: locked?.status,
         writerUserId: userId,
         agentUserId,
         // THE helper, not a hand-written field list (`run-playbook.ts`).

@@ -51,6 +51,7 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  apiKeys,
 } from "@synap/database";
 import { focusSessionsRouter } from "../../../routers/focus-sessions.js";
 
@@ -92,6 +93,7 @@ describe("focusSessions.outputs — outcomes / inputs / unattached reach the wir
       projectMembers,
       workspaces,
       workspaceMembers,
+      apiKeys,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

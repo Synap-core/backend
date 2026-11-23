@@ -504,6 +504,8 @@ export {
   claimRunAsAgent,
   claimedHolderSql,
   insertPlaybookRun,
+  runBirthStatus,
+  RUN_HOLDER_CLAIMED_SQL,
   runHolder,
   starterHolder,
   setRunStatus,

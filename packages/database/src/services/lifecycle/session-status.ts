@@ -24,10 +24,11 @@
  * The transitions are not dispatched inline (a caller's own transaction may
  * still be open): the sweeper delivers them within a minute or two.
  */
-import { and, asc, eq, inArray, isNull, type SQL } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
 import type { PgUpdateSetSource } from "drizzle-orm/pg-core";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import {
+  PLANNED_SESSION_STATUS,
   SESSION_STATUSES,
   SESSION_STATUS_DECLARATION,
   type SessionStatus,
@@ -46,6 +47,8 @@ import {
   type FocusSession,
 } from "../../schema/focus-sessions.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
+import { RUN_HOLDER_CLAIMED_SQL, setRunStatus } from "./run-status.js";
+import { playbookRuns } from "../../schema/playbook-runs.js";
 import { expirePendingStageGatesOfEndedSessions } from "../../utils/stage-gate-wait.js";
 import type { ProposalStatusWriter } from "../../utils/proposal-transition.js";
 import {
@@ -178,9 +181,25 @@ export async function setSessionStatus(
       holds.set(r.id, decided.hold);
     }
 
+    // A PLANNED step STARTS when it leaves `forming` for a started status
+    // (P1/P3: the wake, or a person or agent starting it): its `startedAt`
+    // is that moment, not its birth months before — every clock that reads
+    // the start (needs-you's Stopped, recall) then measures the real work.
+    // SET expressions read the OLD row, so `status` is the one it left.
+    const starts =
+      (toCategory === "active" || toCategory === "paused") &&
+      input.set?.startedAt === undefined;
     const rows = await tx
       .update(focusSessions)
-      .set({ ...input.set, status: input.to })
+      .set({
+        ...input.set,
+        ...(starts
+          ? {
+              startedAt: sql`CASE WHEN ${focusSessions.status} = ${PLANNED_SESSION_STATUS} THEN now() ELSE ${focusSessions.startedAt} END`,
+            }
+          : {}),
+        status: input.to,
+      })
       .where(
         inArray(
           focusSessions.id,
@@ -217,6 +236,27 @@ export async function setSessionStatus(
         });
       });
     await insertTransitionOutbox(tx, transitions);
+    // A PLANNED step's own run starts WITH it (P4): the run born `queued`
+    // beside it (`runBirthStatus`) and held by its starter moves to
+    // `running` in this transaction. A run handed to another agent keeps
+    // waiting for that agent's claim.
+    const startedPlanned = starts
+      ? transitions
+          .filter((t) => t.from === PLANNED_SESSION_STATUS)
+          .map((t) => t.subjectId)
+      : [];
+    if (startedPlanned.length > 0) {
+      await setRunStatus(tx, {
+        where: and(
+          inArray(playbookRuns.sessionId, startedPlanned),
+          RUN_HOLDER_CLAIMED_SQL
+        ),
+        from: "queued",
+        to: "running",
+        actor: input.actor,
+        reason: "Its step started.",
+      });
+    }
     // A session that ENDS takes its pending stage gates with it: an approval
     // of a gate on a closed, failed or cancelled run could only lead nowhere
     // (`stage-gate-wait.ts`). Same transaction, so the end and the expiry
