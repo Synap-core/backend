@@ -223,7 +223,7 @@ beforeAll(async () => {
   ] as const) {
     await q(
       `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status, session_id, created_by, created_at, updated_at)
-       values ($1, $2, 'focus_session', $3, 'playbook.stage_gate', $4::jsonb, 'pending', $3, $5, now(), now())`,
+       values ($1, $2, 'focus_session', $3, 'playbook.stage_gate', $4::jsonb, 'pending', $6, $5, now(), now())`,
       [
         id,
         ws,
@@ -235,6 +235,7 @@ beforeAll(async () => {
           summary: `Gate summary ${stageKey}`,
         }),
         ME,
+        S_A,
       ]
     );
   }
