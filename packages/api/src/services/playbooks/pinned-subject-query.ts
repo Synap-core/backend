@@ -59,26 +59,28 @@ export async function loadVisibleEntitiesById(args: {
 }
 
 /**
- * Visible ids of the playbook's kind. An empty slug keeps every visible type.
- * `filter` (a stored query-DSL filter) keeps only the ids it matches; an
- * unreadable one throws `QueryFilterParseError`, it never widens the set.
+ * A stored query-DSL filter (`subjectProfile.filter`) as conditions on the
+ * thing. An unreadable one throws `QueryFilterParseError`: it never widens a
+ * set.
  */
+export function storedFilterSql(filter: unknown) {
+  return filter
+    ? parseQueryFilterConditions(filter, BARE_CONTEXT).map(queryConditionSql)
+    : [];
+}
+
+/** Visible ids of the playbook's kind. An empty slug keeps every visible type. */
 export async function loadVisibleEntityIds(args: {
   ids: readonly string[];
   workspaceId: string | null;
   ownerId: string;
   profileSlug: string | null;
-  filter?: unknown;
 }): Promise<string[]> {
   if (args.ids.length === 0) return [];
-  const filterConditions = args.filter
-    ? parseQueryFilterConditions(args.filter, BARE_CONTEXT)
-    : [];
   const db = await getDb();
   const conditions = [
     inArray(entities.id, [...args.ids]),
     runEntityVisibilityWhere(args.workspaceId, args.ownerId),
-    ...filterConditions.map(queryConditionSql),
   ];
   if (args.profileSlug) {
     // The kind-aware door: a role-subject playbook's pins are its WEARERS,
@@ -113,10 +115,7 @@ export async function findFallbackSubject(args: {
 }): Promise<string | null> {
   // Parsed before any read: an unreadable filter refuses the pick
   // (`QueryFilterParseError`), it never widens it.
-  const filterConditions = parseQueryFilterConditions(
-    args.fallback.filter,
-    BARE_CONTEXT
-  );
+  const filterSql = storedFilterSql(args.fallback.filter);
   const db = await getDb();
   const conditions = [
     // The kind-aware door: a role's wearers carry their primary kind in `type`.
@@ -132,9 +131,7 @@ export async function findFallbackSubject(args: {
     // chosen by id and stay open.)
     listableEntityWhere({ revealSampleOf: args.projectId }),
   ];
-  for (const condition of filterConditions) {
-    conditions.push(queryConditionSql(condition));
-  }
+  conditions.push(...filterSql);
 
   const base = db
     .select({ id: entities.id })

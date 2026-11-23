@@ -47,9 +47,11 @@ export const playbookScheduleInputSchema = z
  * the rule grammar cannot spell, a hand-off beside an appointment, an
  * appointment per thing). null when there is no schedule (no cron).
  *
- * A playbook with a subject kind ran once per thing of it: `per_thing` (its
- * `subjectProfile.filter` still selects which). `armed: false` (its backing
- * automation was paused) or `enabled: false` installs it paused.
+ * A retired schedule was read in UTC: its activator keeps that zone (a new
+ * activator defaults to its owner's). A playbook with a subject kind ran once
+ * per thing of it: `per_thing` (its `subjectProfile.filter` still selects
+ * which). `armed: false` (its backing automation was paused) or
+ * `enabled: false` installs it paused.
  */
 export function scheduleActivatorOf(
   schedule: unknown,
@@ -65,6 +67,7 @@ export function scheduleActivatorOf(
   const parsed = playbookActivatorSchema.safeParse({
     on: "schedule",
     cron,
+    timezone: "UTC",
     mode: normalizePlaybookScheduleMode(s.mode),
     ...(subjectKind ? { size: "per_thing" } : {}),
     ...(handTo ? { handToAgentId: handTo } : {}),

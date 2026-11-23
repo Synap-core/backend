@@ -30,6 +30,7 @@
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
 import type { PlaybookRunNodeDef } from "./flow.js";
+import type { WorkerActivatorMode } from "../workers/index.js";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -980,7 +981,7 @@ export function playbookActivatorSentence(
      * `run` starts the run; `propose` files one proposal per (rule, subject);
      * `appointment` opens a session that waits for the person.
      */
-    mode: "run" | "propose" | "appointment";
+    mode: WorkerActivatorMode;
     /** The agent each run is handed to (run mode). Omitted when absent. */
     handToAgentId?: string;
     /**

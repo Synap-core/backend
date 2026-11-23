@@ -733,6 +733,8 @@ export async function listThingsInStatus(params: {
   onlyIds?: readonly string[];
   /** The question is about `onlyIds` BY ID: no listing rule (see above). */
   byId?: boolean;
+  /** More conditions on the thing (a stored filter, a property status). */
+  where?: readonly SQL[];
 }): Promise<{
   items: Array<StatusGroupItem & { status: string | null }>;
   total: number;
@@ -771,6 +773,7 @@ export async function listThingsInStatus(params: {
   const narrowed = [
     ...conditions,
     ...(params.onlyIds ? [inArray(entities.id, [...params.onlyIds])] : []),
+    ...(params.where ?? []),
   ];
   const statuses =
     typeof params.status === "string"

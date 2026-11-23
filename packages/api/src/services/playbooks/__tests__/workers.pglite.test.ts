@@ -1303,23 +1303,26 @@ describe("a SESSION starts a worker (scope `session`)", () => {
 
 /**
  * A playbook still carrying the retired `schedule` column: the boot pass folds
- * it into a `schedule` activator compiled through the rule door, pauses and
- * unlinks the cron automation that drove it, and clears the column — once.
+ * it into a `schedule` activator compiled through the rule door; only once
+ * that rule settled does it pause and unlink the cron automation that drove
+ * it and clear the column.
  */
 describe("convergeActivatorsAtBoot — a retired schedule becomes an activator", () => {
   async function scheduled(o: {
     schedule: unknown;
     subjectProfile?: unknown;
     driver: "active" | "paused";
+    status?: string;
   }) {
     const id = randomUUID();
     const automationId = randomUUID();
     await q(
       `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile, schedule)
-       values ($1, $2, 'active', $3, $4, 'g', $5::jsonb, $6::jsonb)`,
+       values ($1, $2, $3, $4, $5, 'g', $6::jsonb, $7::jsonb)`,
       [
         id,
         `Scheduled ${id.slice(0, 4)}`,
+        o.status ?? "active",
         WS,
         USER,
         JSON.stringify(o.subjectProfile ?? null),
@@ -1327,8 +1330,8 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
       ]
     );
     await q(
-      `insert into automations (id, created_by, name, trigger_type, status, next_run_at)
-       values ($1, $2, 'backing', 'cron', $3, now())`,
+      `insert into automations (id, created_by, name, trigger_type, trigger_config, status, next_run_at)
+       values ($1, $2, 'backing', 'cron', '{"expression":"*/15 * * * *"}'::jsonb, $3, now())`,
       [automationId, USER, o.driver]
     );
     await q(
@@ -1359,17 +1362,31 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
       )
     ).rows[0]!.n,
   });
-  const createCalls = () =>
-    vi.mocked(createRuleGoverned).mock.calls.map(
-      ([c]) =>
-        c as {
-          seed?: { template: string; key: string };
-          draft?: boolean;
-          sentence?: { trigger?: { cronTimezone?: string } };
-        }
-    );
+  type CreateCall = {
+    seed?: { template: string; key: string };
+    draft?: boolean;
+    sentence?: { trigger?: { cronTimezone?: string } };
+  };
+  const createsFor = (pbId: string) =>
+    vi
+      .mocked(createRuleGoverned)
+      .mock.calls.map(([c]) => c as CreateCall)
+      .filter((c) => c.seed?.template === `playbook-activator:${pbId}`);
+  const ruleOf = async (pbId: string) =>
+    (
+      await q<{ id: string; draft: boolean | null }>(
+        `select id, (metadata->'rule'->>'draft')::boolean as draft from skills where metadata->'rule'->'seed'->>'template' = $1`,
+        [`playbook-activator:${pbId}`]
+      )
+    ).rows;
+  const pass = async (pbId: string) => {
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    return real.applyPlaybookActivators({ playbookId: pbId, userId: USER });
+  };
 
-  it("a subject-less daily run: one live rule in its owner's zone; the old automation stops; a second boot adds nothing", async () => {
+  it("a subject-less daily run keeps its UTC: one live rule, the old automation stopped, a second boot adds nothing", async () => {
     await q(`update users set timezone = 'Asia/Kolkata' where id = $1`, [USER]);
     vi.mocked(createRuleGoverned).mockClear();
     const pb = await scheduled({
@@ -1381,29 +1398,51 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
       const after = await row(pb.id);
       expect(after.schedule).toBeNull();
       expect(after.subject_profile.activators).toEqual([
-        { on: "schedule", cron: "0 8 * * *", mode: "run" },
+        { on: "schedule", cron: "0 8 * * *", timezone: "UTC", mode: "run" },
       ]);
+      // No second live automation: the one that drove it is paused, unlinked.
       expect(await driver(pb.id, pb.automationId)).toEqual({
         status: "paused",
         linked: 0,
       });
-      const mine = createCalls().filter(
-        (c) => c.seed?.template === `playbook-activator:${pb.id}`
-      );
+      const mine = createsFor(pb.id);
       expect(mine).toHaveLength(1);
       expect(mine[0]!.seed!.key).toBe("schedule:0 8 * * *");
       expect(mine[0]!.draft).toBeUndefined();
-      expect(mine[0]!.sentence?.trigger?.cronTimezone).toBe("Asia/Kolkata");
+      expect(mine[0]!.sentence?.trigger?.cronTimezone).toBe("UTC");
 
       await convergeActivatorsAtBoot();
-      expect(
-        createCalls().filter(
-          (c) => c.seed?.template === `playbook-activator:${pb.id}`
-        )
-      ).toHaveLength(1);
+      expect(createsFor(pb.id)).toHaveLength(1);
     } finally {
       await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
       await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a declared schedule naming no zone compiles in its owner's zone", async () => {
+    await q(`update users set timezone = 'Asia/Kolkata' where id = $1`, [USER]);
+    vi.mocked(createRuleGoverned).mockClear();
+    const id = randomUUID();
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Daily', 'active', $2, $3, 'g', $4::jsonb)`,
+      [
+        id,
+        WS,
+        USER,
+        JSON.stringify({
+          activators: [{ on: "schedule", cron: "0 8 * * *", mode: "run" }],
+        }),
+      ]
+    );
+    try {
+      await pass(id);
+      expect(createsFor(id)[0]!.sentence?.trigger?.cronTimezone).toBe(
+        "Asia/Kolkata"
+      );
+    } finally {
+      await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
+      await q(`delete from playbooks where id = $1`, [id]);
     }
   });
 
@@ -1423,14 +1462,13 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
         {
           on: "schedule",
           cron: "0 8 1 * *",
+          timezone: "UTC",
           mode: "run",
           size: "per_thing",
           startsPaused: true,
         },
       ]);
-      const mine = createCalls().filter(
-        (c) => c.seed?.template === `playbook-activator:${pb.id}`
-      );
+      const mine = createsFor(pb.id);
       expect(mine).toHaveLength(1);
       expect(mine[0]!.draft).toBe(true);
     } finally {
@@ -1438,10 +1476,90 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
     }
   });
 
-  it("a cron no activator can say is left as it was: its automation keeps firing", async () => {
+  it("a rule the door refuses leaves the old automation firing and the column set: the next pass tries again", async () => {
+    vi.mocked(createRuleGoverned).mockClear();
+    vi.mocked(createRuleGoverned).mockResolvedValueOnce({
+      status: "denied",
+      reason: "refused for the test",
+    } as never);
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toEqual({
+        cron: "0 8 * * *",
+        enabled: true,
+      });
+      expect((await row(pb.id)).subject_profile).toBeNull();
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "active",
+        linked: 1,
+      });
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toBeNull();
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "paused",
+        linked: 0,
+      });
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("the person's pause outlives every later pass; schedule enabled switches the rule on and off", async () => {
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      const [rule] = await ruleOf(pb.id);
+      // The person pauses the rule (a draft this module did not retire).
+      await updateRuleGoverned({ ruleId: rule!.id, draft: true } as never);
+      vi.mocked(updateRuleGoverned).mockClear();
+      await q(`update playbooks set name = 'Renamed' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await ruleOf(pb.id))[0]!.draft).toBe(true);
+      expect(updateRuleGoverned).not.toHaveBeenCalled();
+
+      // The schedule toggle (`enabled: true`) turns it back on.
+      await q(`update playbooks set schedule = $2::jsonb where id = $1`, [
+        pb.id,
+        JSON.stringify({ cron: "0 8 * * *", enabled: true }),
+      ]);
+      await pass(pb.id);
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: rule!.id, draft: false })
+      );
+      expect((await ruleOf(pb.id))[0]!.draft).toBeNull();
+      expect((await row(pb.id)).schedule).toBeNull();
+
+      // …and `enabled: false` pauses it again.
+      vi.mocked(updateRuleGoverned).mockClear();
+      await q(`update playbooks set schedule = $2::jsonb where id = $1`, [
+        pb.id,
+        JSON.stringify({ cron: "0 8 * * *", enabled: false }),
+      ]);
+      await pass(pb.id);
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: rule!.id, draft: true })
+      );
+      expect((await ruleOf(pb.id))[0]!.draft).toBe(true);
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a cron no activator can say keeps its automation: paused while the playbook is not live, resumed when it is", async () => {
     const pb = await scheduled({
       schedule: { cron: "*/15 * * * *", enabled: true },
       driver: "active",
+    });
+    const person = await scheduled({
+      schedule: { cron: "*/15 * * * *", enabled: true },
+      driver: "paused",
     });
     try {
       await convergeActivatorsAtBoot();
@@ -1453,8 +1571,24 @@ describe("convergeActivatorsAtBoot — a retired schedule becomes an activator",
         status: "active",
         linked: 1,
       });
+
+      await q(`update playbooks set status = 'paused' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await driver(pb.id, pb.automationId)).status).toBe("paused");
+
+      await q(`update playbooks set status = 'active' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await driver(pb.id, pb.automationId)).status).toBe("active");
+
+      // One a person paused is never resumed by the pass.
+      await pass(person.id);
+      expect((await driver(person.id, person.automationId)).status).toBe(
+        "paused"
+      );
     } finally {
-      await q(`delete from playbooks where id = $1`, [pb.id]);
+      await q(`delete from playbooks where id = any($1::uuid[])`, [
+        [pb.id, person.id],
+      ]);
     }
   });
 });

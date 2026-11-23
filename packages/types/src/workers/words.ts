@@ -25,8 +25,10 @@ import {
 } from "../vocabulary/index.js";
 import {
   workerStatuses,
+  type WorkerActivatorMode,
   type WorkerActivatorTrigger,
   type WorkerRunOutcome,
+  type WorkerStatusSpec,
 } from "./index.js";
 
 /** The fields of an enabled worker (`workers.list`) the words read. */
@@ -35,7 +37,7 @@ export interface TriggerWorker {
   profileSlug: string | null;
   activator: {
     on: WorkerActivatorTrigger;
-    status?: string | string[];
+    status?: WorkerStatusSpec;
     cron?: string;
     /** `schedule`: the zone its cron is read in (absent = UTC). */
     timezone?: string;
@@ -49,7 +51,7 @@ export interface TriggerWorker {
 /** …plus what the worker does, for the whole sentence and its mark. */
 export interface SentenceWorker extends TriggerWorker {
   playbookName: string;
-  mode: "run" | "propose" | "appointment";
+  mode: WorkerActivatorMode;
   /** Its runs waiting on a person (`workers.list`); > 0 = your turn. */
   pendingApprovals?: number;
 }

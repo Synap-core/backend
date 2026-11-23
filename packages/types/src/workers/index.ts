@@ -85,6 +85,9 @@ export type WorkerMode = (typeof WORKER_MODES)[number];
 export const WORKER_ACTIVATOR_MODES = [...WORKER_MODES, "appointment"] as const;
 export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
 
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
+
 export const DEFAULT_WORKER_SIZE: WorkerSize = "per_thing";
 export const DEFAULT_WORKER_MODE: WorkerMode = "propose";
 
@@ -113,7 +116,7 @@ export interface WorkerActivator {
   outcome?: WorkerRunOutcome;
   /** The lifecycle option: required for `enters_status` and `count`,
    *  optional for `schedule` (narrows the set; a list there). */
-  status?: string | string[];
+  status?: WorkerStatusSpec;
   /** Cron expression. Required for `schedule`. */
   cron?: string;
   /** `schedule` only: the IANA zone `cron` is read in; absent = the owner's. */

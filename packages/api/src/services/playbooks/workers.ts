@@ -59,6 +59,7 @@ import {
   projectTracks,
   focusSessions,
   countWorkerPendingApprovalsBulk,
+  personTimeZone,
   userVisibleWhere,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
@@ -113,7 +114,6 @@ import {
   applyPlaybookActivators,
   chosenClockActivator,
   modeOfCompiledRule,
-  ownerCronTimezone,
   parseWorkerEnablementKey,
   readSubjectProfile,
   rulesOfSeedTemplate,
@@ -905,7 +905,7 @@ export async function enableWorker(input: {
     profileSlug: process.profileSlug,
     statusProperty: process.statusProperty,
     subject,
-    defaultTimezone: await ownerCronTimezone(pb.createdBy),
+    defaultTimezone: await personTimeZone(db, pb.createdBy),
     scope: { projectId, trackId, parentSessionId: sessionId },
   });
   if ("error" in decl) return { status: "denied", reason: decl.error };

@@ -144,6 +144,7 @@ import {
 import {
   findFallbackSubject,
   loadVisibleEntityIds,
+  storedFilterSql,
 } from "./pinned-subject-query.js";
 import { QueryFilterParseError } from "@synap/jobs/workers/query-dsl.js";
 import { trialSessionMetadata, type TrialRunInput } from "./trial-run.js";
@@ -2636,15 +2637,12 @@ export async function gateWorkerRun(
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
 /**
- * A per_thing SCHEDULE tick: one run per thing in the worker's set, each
- * through this same door with that thing as its subject (so its gate, its
- * one-live-run and its param binding are the ones every run has). The set:
- * the things in the worker's status under its scope — the lifecycle column
- * when the status lives there, else the playbook's `statusProperty` read off
- * each thing — kept by the playbook's `subjectProfile.filter`, `only` and
- * `unless`, at most `WORKER_BATCH_LIMIT`.
- * Nothing in it ⇒ `no-subject`. The first run is the reply; a failed one is
- * logged and the others still run (all failing throws the last error).
+ * A per_thing SCHEDULE tick: one run per thing of the worker's set
+ * ({@link workerSet}, at most {@link WORKER_EACH_LIMIT}), each through this
+ * same door with that thing as its subject, so its gate, its one live run and
+ * its param binding are the ones every run has. Nothing in the set ⇒
+ * `no-subject`. The first run is the reply; a failed one is logged and the
+ * others still run (all failing throws the last error).
  */
 async function runWorkerEach(
   playbook: Playbook,
@@ -2652,10 +2650,12 @@ async function runWorkerEach(
   worker: RunWorker,
   filing: RunFiling
 ): Promise<RunPlaybookResult> {
-  const things = await workerSetOfThings(playbook, input, worker, filing);
+  const { items } = await workerSet(playbook, input, worker, filing, {
+    limit: WORKER_EACH_LIMIT,
+  });
   let first: RunPlaybookResult | null = null;
   let lastError: unknown = null;
-  for (const id of things) {
+  for (const { id } of items) {
     try {
       const result = await runPlaybook({
         ...input,
@@ -2680,15 +2680,37 @@ async function runWorkerEach(
   return { run: null, session: null, skipped: "no-subject" };
 }
 
-/** HIDDEN LIMIT: a set filtered off the things' properties reads this many first. */
-const WORKER_SET_SCAN_LIMIT = 200;
+/** The most runs ONE per_thing tick starts (the kind-bound schedule's cap). */
+const WORKER_EACH_LIMIT = 100;
+/**
+ * HIDDEN LIMIT: `only` / `unless` are read off each thing after the listing,
+ * so a set they narrow lists this many times its cap first.
+ */
+const WORKER_SET_SCAN_FACTOR = 4;
 
-async function workerSetOfThings(
+/**
+ * THE set a worker works over, for a per_moment batch and a per_thing tick
+ * alike: the things of its kind under its scope (the board's own base set,
+ * `listThingsInStatus`) in its status — the lifecycle column when the status
+ * lives there, else the playbook's `statusProperty` — and matching the
+ * playbook's stored `subjectProfile.filter`, both in the query; then kept by
+ * `only` / `unless`, read off each thing. `total` counts the query's set
+ * (before `only` / `unless`).
+ */
+async function workerSet(
   playbook: Playbook,
   input: RunPlaybookInput,
   worker: RunWorker,
-  filing: RunFiling
-): Promise<string[]> {
+  filing: RunFiling,
+  opts: {
+    limit: number;
+    excludeIds?: readonly string[];
+    onlyIds?: readonly string[];
+  }
+): Promise<{
+  items: Array<{ id: string; name: string | null }>;
+  total: number;
+}> {
   const { readSubjectProfile } = await import("./playbook-activators.js");
   const { lifecycleProperty } = await readSubjectProfile(
     worker.profileSlug,
@@ -2697,15 +2719,22 @@ async function workerSetOfThings(
   const statusProperty =
     readPlaybookProcess(playbook.subjectProfile).statusProperty ??
     lifecycleProperty;
-  const filter = (playbook.subjectProfile as { filter?: unknown } | null)
-    ?.filter;
   const statuses = workerStatuses(worker.status);
   const onColumn = !statusProperty || statusProperty === lifecycleProperty;
-  const byProperties =
-    (!onColumn && statuses.length > 0) ||
-    !!worker.only ||
-    !!worker.unless ||
-    !!filter;
+  const where = [
+    ...storedFilterSql(
+      (playbook.subjectProfile as { filter?: unknown } | null)?.filter
+    ),
+    ...(!onColumn && statuses.length > 0
+      ? [
+          inArray(
+            drizzleSql`${entities.properties}->>${statusProperty}`,
+            statuses
+          ),
+        ]
+      : []),
+  ];
+  const perThing = !!worker.only || !!worker.unless;
   const { listThingsInStatus } = await loadStatusGroups();
   const set = await listThingsInStatus({
     profileSlug: worker.profileSlug,
@@ -2713,50 +2742,45 @@ async function workerSetOfThings(
     userId: input.userId,
     workspaceId: input.workspaceId,
     projectId: filing.projectId,
-    limit: byProperties ? WORKER_SET_SCAN_LIMIT : WORKER_BATCH_LIMIT,
+    limit: perThing ? opts.limit * WORKER_SET_SCAN_FACTOR : opts.limit,
+    excludeIds: opts.excludeIds,
+    onlyIds: opts.onlyIds,
+    where,
   });
-  const listed = set.items.map((i) => i.id);
-  if (!byProperties || listed.length === 0) return listed;
-  const ids = filter
-    ? await loadVisibleEntityIds({
-        ids: listed,
-        workspaceId: input.workspaceId,
-        ownerId: input.userId,
-        profileSlug: null,
-        filter,
-      })
-    : listed;
-  if (ids.length === 0) return [];
+  if (!perThing || set.items.length === 0) return set;
   const db = await getDb();
   const rows = await db
     .select({ id: entities.id, properties: entities.properties })
     .from(entities)
-    .where(inArray(entities.id, ids));
+    .where(
+      inArray(
+        entities.id,
+        set.items.map((i) => i.id)
+      )
+    );
   const props = new Map(
     rows.map((r) => [r.id, (r.properties as Record<string, unknown>) ?? {}])
   );
-  return ids
-    .filter((id) => {
-      const p = props.get(id) ?? {};
-      if (!onColumn && statuses.length > 0) {
-        const v = p[statusProperty!];
-        if (typeof v !== "string" || !statuses.includes(v)) return false;
-      }
-      return (
-        !skippedByOnly(worker.only, p) && !skippedByUnless(worker.unless, p)
-      );
-    })
-    .slice(0, WORKER_BATCH_LIMIT);
+  return {
+    items: set.items
+      .filter((i) => {
+        const p = props.get(i.id) ?? {};
+        return (
+          !skippedByOnly(worker.only, p) && !skippedByUnless(worker.unless, p)
+        );
+      })
+      .slice(0, opts.limit),
+    total: set.total,
+  };
 }
 
 /**
- * A per_moment worker run: the things in the worker's status under its scope
- * (the board's own set — `listThingsInStatus`), minus those this enablement
- * is already working, capped at `WORKER_BATCH_LIMIT`. ONE session, no
- * subject, one target edge per thing. Nothing in the set ⇒ `no-subject` (a
- * quiet moment, no session); a `count` worker under its threshold ⇒
- * `below_threshold` — the threshold counts the things in the status that
- * this enablement is NOT already working, so it gathers N fresh things
+ * A per_moment worker run: the worker's set ({@link workerSet}) minus what
+ * this enablement is already working, capped at `WORKER_BATCH_LIMIT`. ONE
+ * session, no subject, one target edge per thing. Nothing in the set ⇒
+ * `no-subject` (a quiet moment, no session); a `count` worker under its
+ * threshold ⇒ `below_threshold` — the threshold counts the things in the set
+ * that this enablement is NOT already working, so it gathers N fresh things
  * before it runs again.
  */
 async function runWorkerBatch(
@@ -2770,13 +2794,7 @@ async function runWorkerBatch(
   const inFlight = worker.automationId
     ? await listWorkerTargetsInFlight(worker.automationId)
     : [];
-  const { listThingsInStatus } = await loadStatusGroups();
-  const set = await listThingsInStatus({
-    profileSlug: worker.profileSlug,
-    status: worker.status ?? null,
-    userId: input.userId,
-    workspaceId: input.workspaceId,
-    projectId: filing.projectId,
+  const set = await workerSet(playbook, input, worker, filing, {
     limit: WORKER_BATCH_LIMIT,
     excludeIds: inFlight,
   });
@@ -2784,15 +2802,10 @@ async function runWorkerBatch(
     // The threshold counts the things NOT already being worked (backend F11):
     // once a batch over N runs, every later entry would otherwise find
     // total ≥ N and start a session over that one new thing. Things in flight
-    // that are still in the status are taken off the status total.
+    // that are still in the set are taken off its total.
     const busy = inFlight.length
       ? (
-          await listThingsInStatus({
-            profileSlug: worker.profileSlug,
-            status: worker.status ?? null,
-            userId: input.userId,
-            workspaceId: input.workspaceId,
-            projectId: filing.projectId,
+          await workerSet(playbook, input, worker, filing, {
             limit: 1,
             onlyIds: inFlight,
           })

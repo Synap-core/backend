@@ -527,10 +527,36 @@ describe("per_thing schedule — one run per thing of the set", () => {
     expect(await subjects()).toEqual([kept]);
   });
 
+  it("a tick runs up to 100 things, not a batch's 50", async () => {
+    await declareLifecycle("stage");
+    for (let i = 0; i < 60; i++) await deal("review");
+    await tick({ status: "review" });
+    expect(await subjects()).toHaveLength(60);
+  });
+
   it("nothing in the set → no-subject, no session", async () => {
     await declareLifecycle("stage");
     await deal("won");
     expect(await tick({ status: "review" })).toEqual({ skipped: "no-subject" });
     expect(await sessions()).toHaveLength(0);
+  });
+});
+
+/**
+ * ONE set for both sizes: a per_moment batch reads the playbook's
+ * statusProperty and stored filter exactly as a per_thing tick does.
+ */
+describe("per_moment — the same set as a per_thing tick", () => {
+  it("statusProperty and the stored filter narrow the batch's targets", async () => {
+    h.subjectProfile = {
+      profileSlug: "deal",
+      statusProperty: "stage",
+      filter: '{"properties.billing":"monthly"}',
+    };
+    const kept = await deal(null, { stage: "review", billing: "monthly" });
+    await deal(null, { stage: "review", billing: "annual" });
+    await deal(null, { stage: "draft", billing: "monthly" });
+    expect(await fire(worker())).toEqual({ error: BORN });
+    expect((await targetEdges()).map((e) => e.to_id)).toEqual([kept]);
   });
 });

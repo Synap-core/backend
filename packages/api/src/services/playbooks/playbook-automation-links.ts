@@ -23,12 +23,14 @@
 import {
   and,
   asc,
+  automations,
   eq,
   inArray,
   playbookAutomations,
   playbooks,
   type getDb,
 } from "@synap/database";
+import type { AutomationStatusValue } from "@synap-core/types/units";
 
 type Db = Awaited<ReturnType<typeof getDb>>;
 /** A transaction passes too: it is the same database surface. */
@@ -64,6 +66,46 @@ export async function readDriverAutomationId(
     .orderBy(asc(playbookAutomations.createdAt))
     .limit(1);
   return row?.automationId ?? null;
+}
+
+/** The automation a retired `schedule` drove, as the fold needs it. */
+export interface ScheduleDriver {
+  id: string;
+  status: AutomationStatusValue;
+  metadata: Record<string, unknown> | null;
+  triggerConfig: unknown;
+}
+
+/** The playbook's role-`schedule` automation, or null. */
+export async function readScheduleDriver(
+  db: Pick<Db, "select">,
+  playbookId: string
+): Promise<ScheduleDriver | null> {
+  const [row] = await db
+    .select({
+      id: automations.id,
+      status: automations.status,
+      metadata: automations.metadata,
+      triggerConfig: automations.triggerConfig,
+    })
+    .from(playbookAutomations)
+    .innerJoin(
+      automations,
+      eq(automations.id, playbookAutomations.automationId)
+    )
+    .where(
+      and(
+        eq(playbookAutomations.playbookId, playbookId),
+        eq(playbookAutomations.role, SCHEDULE_ROLE)
+      )
+    )
+    .limit(1);
+  return row
+    ? {
+        ...row,
+        metadata: (row.metadata as Record<string, unknown> | null) ?? null,
+      }
+    : null;
 }
 
 /** The playbook has no driving automation any more (its schedule was turned off). */

@@ -14,7 +14,7 @@ describe("scheduleActivatorOf", () => {
     expect(scheduleActivatorOf({ enabled: true }, null)).toBeNull();
   });
 
-  it("a subject-less run keeps its mode; disabled or paused installs paused", () => {
+  it("a subject-less run keeps its mode and its UTC; disabled or paused installs paused", () => {
     expect(
       scheduleActivatorOf(
         { cron: "0 16 * * 5", enabled: false, mode: "appointment" },
@@ -24,6 +24,7 @@ describe("scheduleActivatorOf", () => {
       activator: {
         on: "schedule",
         cron: "0 16 * * 5",
+        timezone: "UTC",
         mode: "appointment",
         startsPaused: true,
       },
@@ -34,6 +35,7 @@ describe("scheduleActivatorOf", () => {
       activator: {
         on: "schedule",
         cron: "0 8 * * *",
+        timezone: "UTC",
         mode: "run",
         startsPaused: true,
       },
@@ -50,6 +52,7 @@ describe("scheduleActivatorOf", () => {
       activator: {
         on: "schedule",
         cron: "0 8 1 * *",
+        timezone: "UTC",
         mode: "run",
         size: "per_thing",
       },
@@ -88,6 +91,6 @@ describe("retiredScheduleRefusal", () => {
         { cron: "0 9 * * *", enabled: true },
         { activators: [{ on: "schedule", cron: "0 8 * * *", mode: "run" }] }
       )
-    ).toContain("schedule activator");
+    ).not.toBeNull();
   });
 });

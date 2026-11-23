@@ -30,6 +30,7 @@
 import type { ProcessHealth } from "./health.js";
 import type { SessionKind } from "../focus-sessions/kinds.js";
 import type { ProcessStepRunnerKind } from "./steps.js";
+import type { WorkerActivatorMode } from "../workers/index.js";
 
 // ── Needs ────────────────────────────────────────────────────────────────────
 
@@ -129,8 +130,7 @@ export interface ProcessAutomation {
 export interface ProcessWorker {
   ruleId: string;
   activatorKey: string;
-  /** `appointment`: a schedule that opens a session for the person. */
-  mode: "run" | "propose" | "appointment";
+  mode: WorkerActivatorMode;
   scope: string;
   /** `stopped`: a session's worker whose session ended. */
   state: "running" | "paused" | "stopped";

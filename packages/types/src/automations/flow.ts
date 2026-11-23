@@ -8,7 +8,12 @@
  * code, nothing from the database package.
  */
 
-import type { WorkerOnly, WorkerSize, WorkerUnless } from "../workers/index.js";
+import type {
+  WorkerOnly,
+  WorkerSize,
+  WorkerStatusSpec,
+  WorkerUnless,
+} from "../workers/index.js";
 
 // ── Flow definition types ───────────────────────────────────────────────────
 
@@ -855,7 +860,7 @@ export interface PlaybookRunWorkerSpec {
   /** The subject kind or role the worker works on. */
   profileSlug: string;
   /** The status its things sit in (enters_status / count / schedule; a list for schedule). */
-  status?: string | string[];
+  status?: WorkerStatusSpec;
   /** A `count` worker's threshold. */
   minCount?: number;
   maxPendingApprovals?: number;

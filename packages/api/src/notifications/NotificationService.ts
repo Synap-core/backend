@@ -23,7 +23,7 @@ import {
   db,
   notifications,
   notificationPreferences,
-  users,
+  personTimeZone,
   workspaceMembers,
   and,
   eq,
@@ -374,24 +374,9 @@ export function localHourMinute(at: Date, timeZone: string): string {
  */
 async function recipientTimezone(userId: string): Promise<string> {
   try {
-    const [row] = await db
-      .select({ timezone: users.timezone })
-      .from(users)
-      .where(eq(users.id, userId))
-      .limit(1);
-    const zone = row?.timezone || "UTC";
     // A stored name Intl does not know reads as UTC (as `localHourMinute`
     // does), so no reader downstream — the push count's SQL — ever sees it.
-    try {
-      new Intl.DateTimeFormat("en-GB", { timeZone: zone });
-      return zone;
-    } catch {
-      logger.warn(
-        { userId, timeZone: zone },
-        "Unknown IANA timezone — read as UTC"
-      );
-      return "UTC";
-    }
+    return await personTimeZone(db, userId);
   } catch (err) {
     logger.warn(
       { err, userId },
