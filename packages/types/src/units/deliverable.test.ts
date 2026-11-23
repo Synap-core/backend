@@ -6,6 +6,7 @@ import {
   isDeliverableDelivered,
   isDeliverableOutstanding,
   resolveDeliverableState,
+  slotStatusOf,
   tallyDeliverables,
   type DeliverableFacts,
 } from "./deliverable.js";
@@ -368,5 +369,51 @@ describe("newestOwedFirst", () => {
       "d",
       "b",
     ]);
+  });
+});
+
+/**
+ * W5 review (item 9): the readers that count and mark a slot read a declared
+ * grade in its session's list, like needs-you does. A grade waiting on its
+ * output is outstanding but not yet the person's; once the output is claimed
+ * it is.
+ */
+describe("a declared grade read in its session's list", () => {
+  const grade = {
+    kind: "criterion",
+    label: "Check: the copy reads well",
+    owner: "human",
+    outputKey: "landing-copy",
+  };
+  const copy = { key: "landing-copy", label: "Landing copy" };
+  const waiting = [grade, copy];
+  const due = [grade, { ...copy, claimedDone: true }];
+
+  it("tallyDeliverables: outstanding, owed by you only once the output is made", () => {
+    expect(tallyDeliverables(waiting)).toEqual({
+      done: 0,
+      total: 2,
+      owedByYou: 0,
+    });
+    expect(tallyDeliverables(due).owedByYou).toBe(1);
+  });
+
+  it("slotStatusOf: pending while it waits, owed once due; alone it reads owed", () => {
+    expect(slotStatusOf(grade, waiting)).toBe("pending");
+    expect(slotStatusOf(grade, due)).toBe("owed");
+    expect(slotStatusOf(grade)).toBe("owed");
+  });
+
+  it("resolveDeliverableState: the agent's work while it waits, the person's once due", () => {
+    expect(
+      resolveDeliverableState(grade, {
+        sessionTerminal: false,
+        outputs: waiting,
+      }).state
+    ).toBe("working");
+    expect(
+      resolveDeliverableState(grade, { sessionTerminal: false, outputs: due })
+        .state
+    ).toBe("needs_you");
   });
 });

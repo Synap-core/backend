@@ -621,6 +621,31 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
       });
     }
   });
+
+  it("a grade waiting on its output is in no list; delivered, it needs you (W5)", async () => {
+    const grade = {
+      kind: "criterion",
+      label: "Check: the copy reads well",
+      criterionKey: "copy-reads-well",
+      owner: "human",
+      owedSince: ago(DAY),
+      outputKey: "landing-copy",
+    };
+    const copy = { key: "landing-copy", label: "Landing copy", owner: "agent" };
+    for (const [slots, want] of [
+      [[grade, copy], null],
+      [[grade, { ...copy, status: "done" }], "needs_you"],
+    ] as const) {
+      const id = await insertSession(LIVE, [...slots]);
+      const cls = classifyOwedAsk(
+        grade,
+        { ...factsOf(LIVE), expectedOutputs: slots },
+        NOW
+      );
+      expect(cls).toBe(want);
+      expect(await sqlClass(id)).toBe(cls);
+    }
+  });
 });
 
 describe("SLOT_ENDS_WITH_SESSION_SQL === askEndsWithSession", () => {

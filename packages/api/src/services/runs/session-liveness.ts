@@ -106,7 +106,9 @@ function newestAsk(session: LivenessSession): number | null {
     : [];
   let newest: number | null = null;
   for (const slot of slots) {
-    if (!slot || typeof slot !== "object" || !isOwedSlot(slot)) continue;
+    if (!slot || typeof slot !== "object" || !isOwedSlot(slot, slots)) {
+      continue;
+    }
     if (typeof slot.label !== "string" || !slot.label.trim()) continue;
     const since = (slot as { owedSince?: unknown }).owedSince;
     const t =

@@ -64,6 +64,7 @@ const STORED: Required<
   },
   status: "pending",
   criterionKey: "no-stale",
+  outputKey: "landing-copy",
   paramName: "channel",
   claimedDone: false,
   satisfiedByProposalId: "11111111-1111-1111-1111-111111111111",
@@ -128,6 +129,8 @@ const FORGED: typeof STORED = {
   },
   status: "done",
   criterionKey: "forged-key",
+  // An agent holding the person's grade back until an output it chose.
+  outputKey: "forged-output",
   // An agent pointing the person's answer at a param it chose.
   paramName: "budget",
   claimedDone: true,

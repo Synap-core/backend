@@ -73,6 +73,8 @@ const FORGED: Record<string, unknown> = {
   // An agent putting its own ask off in the person's list (only the person's Later sets it).
   laterUntil: "2020-01-01T00:00:00.000Z",
   criterionKey: "forged-key",
+  // An agent holding the person's grade back until an output it chose.
+  outputKey: "forged-output",
   paramName: "forged-param",
   // An agent claiming it read an answer it never read.
   answerPickedUpAt: "2020-01-01T00:00:00.000Z",

@@ -2608,6 +2608,14 @@ export const focusSessionsRouter = router({
         throw err;
       });
 
+      // GRADES DECLARED UP FRONT (W5): a written criteria change keeps the
+      // grade slots in step, as every criteria door does. Never throws.
+      if (updated && patch.criteria !== undefined) {
+        const { fileDeclaredGradeSlots } =
+          await import("../services/focus-sessions/evaluations/record.js");
+        await fileDeclaredGradeSlots(updated.id);
+      }
+
       // The TARGETS, after the row write, through THE writer every door uses.
       const targetsWrite =
         updated && targets.length > 0
