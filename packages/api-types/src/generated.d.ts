@@ -11017,6 +11017,15 @@ export interface ProposalReviewEvent {
  * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
  * names/shapes without updating the frontend in lockstep.
  */
+/**
+ * The space a step lands in when it is not the proposal's own: a space this
+ * bundle creates (`workspaceRef`) or an existing one (`workspaceId`). The
+ * reviewer of the proposal's space approves it, so the review names it.
+ */
+export interface ReviewStepSpace {
+	workspaceRef?: string;
+	workspaceId?: string;
+}
 export interface ProposalReviewGraph {
 	entities: Array<{
 		/**
@@ -11167,7 +11176,7 @@ export interface ProposalReviewGraph {
 		ref: string;
 		scope: "pod" | "user" | "workspace";
 	}>;
-	automations?: Array<{
+	automations?: Array<ReviewStepSpace & {
 		/**
 		 * Whether a person's approval turns it on: true unless the op keeps it
 		 * off (`enabled: false`). Carried so the surface says whether it starts
@@ -11199,7 +11208,7 @@ export interface ProposalReviewGraph {
 	 * `create_playbook` — a process for a kind. A person's approval makes it
 	 * active unless the op keeps it a draft (`bornStatus`).
 	 */
-	playbooks?: Array<{
+	playbooks?: Array<ReviewStepSpace & {
 		bornStatus: "active" | "draft";
 		description?: string;
 		goalTemplate: string;
@@ -11239,7 +11248,7 @@ export interface ProposalReviewGraph {
 	 * `create_view` — a List over this bundle's things (import Build). Counts,
 	 * not ids: the members are refs into `entities[]` or existing ids.
 	 */
-	views?: Array<{
+	views?: Array<ReviewStepSpace & {
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
 		/** A pipeline: the kind whose declared lifecycle its columns are. */
@@ -11260,7 +11269,7 @@ export interface ProposalReviewGraph {
 	 * bundle is drawn under that cell; a binding of an existing cell gets an
 	 * entry of its own (`existingCellKey`).
 	 */
-	cells?: Array<{
+	cells?: Array<ReviewStepSpace & {
 		bindings: Array<{
 			ref: string;
 			scope: "pod" | "workspace";
@@ -11559,11 +11568,11 @@ export interface CompositeCreateRuleOp {
  *
  * "Draft a process for this": a capture of a kind that has a lifecycle (a
  * select property whose slug names a status / stage) but no playbook built
- * for it files ONE draft playbook for that kind. Materialized through the
- * EXISTING `playbooks.create` door — never a raw insert — and ALWAYS as
- * `status: "draft"`: a process drafted from a capture is a starting point a
- * person (or agent) completes; it never arrives running. Goal and stages are
- * deliberately minimal.
+ * for it files ONE draft playbook for that kind (`status: "draft"`), and a
+ * plan files the playbooks of its domain. Materialized through the EXISTING
+ * `playbooks.create` door — never a raw insert — born by the one rule
+ * (`statusAtCreate`): a draft stays a draft; otherwise a person's approval
+ * makes it active.
  *
  * Per-op RESILIENT (like the Rule Loop config ops): a draft that fails does
  * not discard the entities captured beside it.
@@ -11596,7 +11605,7 @@ export interface CompositeCreatePlaybookOp {
 	status?: "active" | "draft";
 }
 /**
- * ── Domain ops (a plan builds a domain, 2026-11-22) ──────────────────────────
+ * ── Domain ops (a plan builds a domain) ──────────────────────────────────────
  *
  * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
  * the playbooks, automations, views and cells that use them, so the person
