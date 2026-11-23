@@ -845,6 +845,40 @@ describe("one step per fact", () => {
     await deliver(id);
     expect((await sessionOf(id)).current_stage).toBe("build");
   });
+
+  it("a declared grade waiting on its output does NOT hold the step (W5)", async () => {
+    // A later stage's criterion the person grades, naming an output that
+    // stage brings in: its grade card is filed from the start, and it is not
+    // the person's move before the output is made.
+    const id = await runAt({
+      stage: "build",
+      outputs: [
+        spec(),
+        {
+          key: "check-the-launch-post-is-right",
+          kind: "criterion",
+          label: "Check: The launch post is right",
+          criterionKey: "post-is-right",
+          outputKey: "launch-post",
+          owner: "human",
+          status: "pending",
+          blockedReason: "decision",
+          owedSince: new Date().toISOString(),
+        },
+      ],
+      criteria: [
+        {
+          key: "post-is-right",
+          statement: "The launch post is right",
+          check: { kind: "human" },
+          outputKey: "launch-post",
+          stageKey: "review",
+        },
+      ],
+    });
+    await deliver(id);
+    expect((await sessionOf(id)).current_stage).toBe("review");
+  });
 });
 
 describe("the plan and the write: the write re-checks", () => {

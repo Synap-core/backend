@@ -611,6 +611,18 @@ export const slotClearedByWireSchema = z.union([
   z.object({ capability: z.string().trim().min(1).max(120) }).strict(),
 ]);
 
+/**
+ * `unblocksTarget` on the wire (`SlotUnblocksTarget`): exactly ONE key of the
+ * same session — an output or a criterion. Whether that key exists is read
+ * when the answer re-checks it, never at the parse: an output can be declared
+ * after the ask.
+ */
+const targetKeySchema = z.string().trim().min(1).max(80);
+export const unblocksTargetWireSchema = z.union([
+  z.object({ output: targetKeySchema }).strict(),
+  z.object({ criterion: targetKeySchema }).strict(),
+]);
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -660,6 +672,10 @@ export const expectedOutputWireSchema = z.object({
     .min(1)
     .max(ASK_LIMITS.unblocksMaxChars)
     .optional(),
+  // The same, as data: the ONE output or criterion of this session the
+  // answer re-checks (`SlotUnblocksTarget`, work-model W5). Optional; the prose
+  // line above is what the person reads.
+  unblocksTarget: unblocksTargetWireSchema.optional(),
   // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
   // ON the wire only so a caller round-tripping a stored slot does not lose it
   // at the parse — never so a client can author a time it did not observe; the
@@ -684,6 +700,9 @@ export const expectedOutputWireSchema = z.object({
   // `evaluations/record.ts`, never authored by a client. On the wire for the
   // same round-trip reason as `owedSince`: a naive echo must not lose it.
   criterionKey: z.string().optional(),
+  // The output a criterion slot grades — stamped with `criterionKey`, never
+  // authored by a client. On the wire for the same round-trip reason.
+  outputKey: z.string().optional(),
   // The param a param slot stands for — stamped by `param-slots.ts`, never
   // authored by a client. On the wire for the same round-trip reason.
   paramName: z.string().optional(),
@@ -854,6 +873,7 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "why",
   // What the answer unblocks — the declarer's word, like `why` (decision E).
   "unblocks",
+  "unblocksTarget",
   // The pointer the declarer supplies. Declaring WHERE something lives is not a
   // claim that it landed, so it closes nothing — same footing as `why`.
   "ref",
@@ -911,6 +931,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // merely erasure-protected: an agent that could author it would point the
   // scorecard at a criterion it did not fail.
   "criterionKey",
+  // Stamped with `criterionKey`. An agent that could author it would hold the
+  // person's grade back until an output of its choosing is delivered.
+  "outputKey",
   // Stamped by the door that files a param slot. An agent that could author
   // it would make the person's answer overwrite a param it names.
   "paramName",
@@ -977,6 +1000,7 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason as `why`: renaming a sibling must not drop what the
   // answer unblocks.
   "unblocks",
+  "unblocksTarget",
   // Listed for ERASURE, not authority (see the docblock above): a browser that
   // has never heard of `ref` reads the array, renames a sibling, sends it back —
   // and must not silently drop the door the agent put on the card.
@@ -3083,6 +3107,27 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+  // GRADES DECLARED UP FRONT (W5): a written criteria change, or outputs
+  // added, keep the grade slots in step: a grade naming its output is filed,
+  // a re-pointed one follows, one whose criterion was removed is withdrawn.
+  // Never throws. The push and the asked log below read the list as the
+  // reconcile left it.
+  if (
+    criteriaChange ||
+    params.addOutput !== undefined ||
+    params.expectedOutputs !== undefined
+  ) {
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+    const grades = await fileDeclaredGradeSlots(sessionId);
+    if (grades.outputs) {
+      if (!mutatesOutputs) {
+        outputsBefore = Array.isArray(existing.expectedOutputs)
+          ? (existing.expectedOutputs as OutputItem[])
+          : [];
+      }
+      outputsAfter = grades.outputs;
+    }
+  }
   // C6: the own-session criteria change says so in the room, with its Undo.
   if (ownSessionCriteria && params.criteria) {
     const before = Array.isArray(existing.criteria)

@@ -535,6 +535,7 @@ export function stampUnblocked(
       blockedReason: _blockedReason,
       why: _why,
       unblocks: _unblocks,
+      unblocksTarget: _unblocksTarget,
       owedSince: _owedSince,
       ask: _ask,
       askedBy: _askedBy,
