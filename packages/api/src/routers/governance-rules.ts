@@ -58,9 +58,10 @@ import {
   readOwnOrganiseDefault,
   setOwnOrganiseDefault,
   readPodClassDefault,
+  readPodFloorsYield,
   setPodClassDefault,
+  readPodNumberSetting,
   readPodNumberSettings,
-  setPodNumberSetting,
   POD_NUMBER_SETTING_KEYS,
 } from "@synap/database";
 import {
@@ -95,6 +96,7 @@ import {
   readAlwaysApproved,
   readNextRungs,
 } from "../services/proposals/next-rung.js";
+import { applyGovConfigChange } from "../services/proposals/gov-config.js";
 import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
@@ -106,7 +108,10 @@ import {
   readActionModes,
   writeActionMode,
 } from "../services/governance/action-mode.js";
-import { ACTION_RUN_MODES } from "@synap-core/types/governance-rules";
+import {
+  ACTION_RUN_MODES,
+  isRootSwitchRule,
+} from "@synap-core/types/governance-rules";
 import {
   draftMatrixWiden,
   loadAgentOwner,
@@ -933,7 +938,10 @@ export const governanceRulesRouter = router({
       });
     }),
 
-  /** Set one of the pod's governance number settings. Pod-admin only, humans only. */
+  /**
+   * Set one of the pod's governance number settings, through the gov-config
+   * store-write (versioned). Pod-admin only, humans only, with step-up.
+   */
   setPodSetting: credentialProcedure
     .input(presenceInput)
     .input(
@@ -944,20 +952,14 @@ export const governanceRulesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertPodAdmin(ctx.userId);
-      try {
-        return {
-          value: await setPodNumberSetting(db, {
-            key: input.key,
-            value: input.value,
-            userId: ctx.userId,
-          }),
-        };
-      } catch (err) {
-        if (err instanceof RangeError) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
-        }
-        throw err;
-      }
+      // The one gov-config store-write, as every settings change.
+      await applyGovConfigChange({
+        store: "config_settings",
+        op: "set",
+        spec: { podSetting: { key: input.key, value: input.value } },
+        createdBy: ctx.userId,
+      });
+      return { value: await readPodNumberSetting(db, input.key) };
     }),
 
   /**
@@ -979,12 +981,23 @@ export const governanceRulesRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      // A Settings switch owns its pod row (one active row each): a second one
+      // written here would make the switch read either of two rows.
+      if (isRootSwitchRule(input)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `ROOT_SWITCH: "${input.targetPattern}" is a Settings switch; switch it in Settings › Approvals.`,
+        });
+      }
       // A rule that can never fire is refused, not stored (B3). An exact action
       // key behind a non-widenable floor resolves ABOVE the rule store (rung
       // 2.8), so an `auto` row there would be a success toast for a grant that
       // does nothing. The answer comes from the engine itself, never a list here.
       if (input.verdict === "auto" && input.targetKind === "action") {
-        const floor = nonWidenableFloorFor(input.targetPattern);
+        const floor = nonWidenableFloorFor(
+          input.targetPattern,
+          await readPodFloorsYield(db)
+        );
         if (floor) {
           throw new TRPCError({
             code: "BAD_REQUEST",
@@ -1192,7 +1205,7 @@ export const governanceRulesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const row = await loadVisibleNextRungRow(ctx.userId, input.itemRef.id);
-      const { rule } = projectNextRung(row);
+      const { rule } = projectNextRung(row, await readPodFloorsYield(db));
       let mayGrant = false;
       if (rule) {
         try {

@@ -428,7 +428,7 @@ export type SettingSensitivity = "loosening" | "tightening" | "benign";
 export function classifySettingSensitivity(input: {
   store: GovConfigStore;
   op: "set" | "revoke";
-  spec?: { verdict?: string; posture?: string };
+  spec?: { verdict?: string; posture?: string; podSetting?: unknown };
 }): SettingSensitivity {
   const { store, op, spec } = input;
   // Removing a stored guard/rule/guideline changes what auto-applies — always a
@@ -444,6 +444,9 @@ export function classifySettingSensitivity(input: {
       // A rule set to `auto` widens auto-approve (loosens); `propose` tightens.
       return spec?.verdict === "auto" ? "loosening" : "tightening";
     case "config_settings":
+      // A pod number the governance reads (a freshness window, an evidence
+      // count) changes what applies without a person: always the person's.
+      if (spec?.podSetting !== undefined) return "loosening";
       // A guideline with posture:auto would auto-apply (loosens); plain text is
       // benign guidance.
       return spec?.posture === "auto" ? "loosening" : "benign";
@@ -2441,8 +2444,15 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
  * 2.1 forcePropose, 2.55 untrusted origin, 2.56 ceiling). A rule on those keys
  * still fires whenever the context is absent. Globs (`*`, `entity.*`) also
  * cover widenable keys, so they are never non-widenable here.
+ *
+ * `floorsYield`: the pod's floor switches (`readPodFloorsYield`). A family
+ * switched on is not a floor here either, so a person may write the rule it
+ * yields to through the rule doors.
  */
-export function nonWidenableFloorFor(eventKey: string): string | null {
+export function nonWidenableFloorFor(
+  eventKey: string,
+  floorsYield?: AgentPolicyInput["floorsYield"]
+): string | null {
   if (eventKey.includes("*")) return null;
   const dot = eventKey.lastIndexOf(".");
   if (dot <= 0 || dot === eventKey.length - 1) return null;
@@ -2452,6 +2462,7 @@ export function nonWidenableFloorFor(eventKey: string): string | null {
     governanceRuleVerdict: "auto",
     // A rule on this exact key names the write (2.8, the outward floor).
     governanceRuleNamesWrite: true,
+    floorsYield,
   });
   return decided.verdict === "propose" ? (decided.reasonCode ?? null) : null;
 }

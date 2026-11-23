@@ -7,6 +7,10 @@
  * rank of its earliest step; its own steps are ordered by the materializer.
  * Within a rank, the order the proposals were filed in.
  *
+ * The ranks follow the order the composite materializer applies a plan's own
+ * steps in (`materializeCompositeGraph`, api: spaces and kinds, then
+ * playbooks, skills, automations, rules): keep the two in step.
+ *
  * Pure.
  */
 

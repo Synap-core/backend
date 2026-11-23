@@ -16,6 +16,9 @@ import { AGENT_BUILDS_STRUCTURE_CLASS_PATTERN } from "@synap/governance-policy";
 import { automations } from "../schema/automations.js";
 import { isUniqueViolation } from "./pg-errors.js";
 import { readPodClassDefault } from "./reversible-default.js";
+import { createLogger } from "@synap-core/core";
+
+const logger = createLogger({ module: "insert-automation" });
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- any drizzle handle (db / tx)
 type DbHandle = any;
@@ -70,20 +73,61 @@ export interface InsertedAutomation {
   created: boolean;
 }
 
+/**
+ * May this agent's create be born with the status it asked for? Only when its
+ * ACTIVATION would itself be applied without a person: the pod switched the
+ * structure floor on AND the normal ladder auto-approves `automation.activate`
+ * for this agent there. The switch alone never activates anything. A failed
+ * read keeps it a draft (logged).
+ */
+async function agentMayActivate(
+  db: DbHandle,
+  agentUserId: string,
+  workspaceId: string | null | undefined
+): Promise<boolean> {
+  try {
+    const { enabled } = await readPodClassDefault(
+      db,
+      AGENT_BUILDS_STRUCTURE_CLASS_PATTERN
+    );
+    if (!enabled) return false;
+    const { resolveAgentGovernanceDecision } =
+      await import("./resolve-agent-governance-decision.js");
+    const activation = await resolveAgentGovernanceDecision({
+      db,
+      agentUserId,
+      workspaceId: workspaceId ?? null,
+      subjectType: "automation",
+      action: "activate",
+      preferAgentMetadataAutoApproveFor: true,
+    });
+    return activation.decision === "execute";
+  } catch (err) {
+    logger.warn(
+      { err, agentUserId },
+      "agent activation read failed; the automation is born a draft"
+    );
+    return false;
+  }
+}
+
 export async function insertAutomation(
   db: DbHandle,
   input: InsertAutomationInput
 ): Promise<InsertedAutomation | null> {
-  const actorIsAgent = Boolean(input.owner.agentUserId);
+  const agentUserId = input.owner.agentUserId;
   const status = statusAtCreate({
     requested: input.requested,
     personApproved: input.personApproved,
-    actorIsAgent,
-    // Read only when it can matter: an agent's create no person approved.
+    actorIsAgent: Boolean(agentUserId),
+    // Read only when it can matter: an agent's create no person approved,
+    // asking for more than a draft.
     agentMayActivate:
-      actorIsAgent && !input.personApproved
-        ? (await readPodClassDefault(db, AGENT_BUILDS_STRUCTURE_CLASS_PATTERN))
-            .enabled
+      agentUserId &&
+      !input.personApproved &&
+      input.requested &&
+      input.requested !== "draft"
+        ? await agentMayActivate(db, agentUserId, input.values.workspaceId)
         : false,
   });
   const nextRunAt =

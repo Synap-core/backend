@@ -34,6 +34,7 @@ import {
   governanceRules,
   insertPendingProposal,
   authoredCreatedBy,
+  readPodFloorsYield,
 } from "@synap/database";
 import { users } from "@synap/database/schema";
 import {
@@ -216,7 +217,11 @@ export interface NextRungProjection {
  * key the engine floors can never get an offer even if a reason code was never
  * stored on the row.
  */
-export function projectNextRung(row: NextRungRow): NextRungProjection {
+export function projectNextRung(
+  row: NextRungRow,
+  /** The pod's floor switches (`readPodFloorsYield`); absent = every floor holds. */
+  floorsYield?: Parameters<typeof nonWidenableFloorFor>[1]
+): NextRungProjection {
   const item = {
     kind: "proposal" as const,
     status: row.status,
@@ -239,7 +244,7 @@ export function projectNextRung(row: NextRungRow): NextRungProjection {
   // scope that still FIRES. `null` ⇒ the gate saw no space ⇒ pod reach, which
   // the offer states (`reach: "pod"`) instead of applying silently.
   const offer =
-    nonWidenableFloorFor(eventKey) === null
+    nonWidenableFloorFor(eventKey, floorsYield) === null
       ? nextRung({
           item,
           agentUserId: row.agentUserId,
@@ -300,7 +305,10 @@ export async function readNextRungs(params: {
     .select(ROW_COLUMNS)
     .from(proposals)
     .where(inArray(proposals.id, [...visible]))) as NextRungRow[];
-  const projections = (await resolveGrantedByRule(rows)).map(projectNextRung);
+  const floorsYield = await readPodFloorsYield(db);
+  const projections = (await resolveGrantedByRule(rows)).map((row) =>
+    projectNextRung(row, floorsYield)
+  );
   const covering = await findCoveringRules(
     projections.flatMap((p) => (p.rule ? [p.rule] : []))
   );
@@ -513,9 +521,10 @@ export async function readAlwaysApproved(params: {
     params.userId
   );
   const exemplars = new Map<string, NextRungProjection>();
+  const floorsYield = await readPodFloorsYield(db);
   for (const row of recent) {
     if (!visible.has(row.id)) continue;
-    const p = projectNextRung(row);
+    const p = projectNextRung(row, floorsYield);
     if (!p.offer || !p.rule) continue;
     const key = ruleKey(p.rule);
     if (!exemplars.has(key)) exemplars.set(key, p);
@@ -682,7 +691,7 @@ export async function fileNextRung(params: {
   row: NextRungRow;
   mayGrant: boolean;
 }): Promise<FileNextRungResult> {
-  const projection = projectNextRung(params.row);
+  const projection = projectNextRung(params.row, await readPodFloorsYield(db));
   if (!projection.offer || !projection.rule) {
     throw noNextRung(
       "this item has no next rung to grant (a floor routed it, the write cannot be undone, its kind is unknown, it was declined, or no agent made it)."

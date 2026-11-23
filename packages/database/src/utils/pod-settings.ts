@@ -79,32 +79,47 @@ export async function readPodNumberSettings(
 }
 
 /**
- * Set it: the active row is revoked and a new one written, in one
- * transaction. The caller authorizes (a pod admin). Refuses a value out of
+ * Write a new version of the setting: the active row is revoked and a new one
+ * written with `version + 1` and `supersedesId`, in one transaction (the
+ * guideline store's versions, 0258). Called ONLY by the gov-config store-write
+ * (`applyGovConfigChange`, api): the one door a person's Settings, an AI's
+ * `settings.update` proposal and a recommender share. Refuses a value out of
  * range rather than storing one the read would ignore.
  */
-export async function setPodNumberSetting(
+export async function writePodNumberSetting(
   db: DbHandle,
-  input: { key: PodNumberSettingKey; value: number; userId: string }
-): Promise<number> {
+  input: {
+    key: PodNumberSettingKey;
+    value: number;
+    createdBy: string;
+    source?: string;
+  }
+): Promise<{ id: string; value: number }> {
   if (!inRange(input.key, input.value)) {
     const { min, max } = POD_NUMBER_SETTINGS[input.key];
     throw new RangeError(
       `${input.key} must be a whole number from ${min} to ${max}.`
     );
   }
-  await db.transaction(async (tx) => {
-    await tx
+  return db.transaction(async (tx) => {
+    const [previous] = await tx
       .update(configSettings)
       .set({ revokedAt: new Date() })
-      .where(activeRow(input.key));
-    await tx.insert(configSettings).values({
-      scopeKind: "default",
-      key: input.key,
-      value: { value: input.value },
-      workspaceId: null,
-      createdBy: input.userId,
-    });
+      .where(activeRow(input.key))
+      .returning({ id: configSettings.id, version: configSettings.version });
+    const [row] = await tx
+      .insert(configSettings)
+      .values({
+        scopeKind: "default",
+        key: input.key,
+        value: { value: input.value },
+        workspaceId: null,
+        source: input.source ?? "user",
+        createdBy: input.createdBy,
+        version: (previous?.version ?? 0) + 1,
+        supersedesId: previous?.id ?? null,
+      })
+      .returning({ id: configSettings.id });
+    return { id: row!.id, value: input.value };
   });
-  return readPodNumberSetting(db, input.key);
 }

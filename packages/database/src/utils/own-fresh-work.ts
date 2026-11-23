@@ -62,7 +62,9 @@ export interface OwnFreshWorkInput {
 /**
  * Which of `subjectIds` an APPLIED proposal made that this agent filed through
  * this key — a plan it proposed and a person approved: the record of what the
- * approval materialized (`data.materialized`) names them.
+ * approval materialized (`data.materialized`) names them. An item the
+ * reviewer EDITED at approval (`data.dispositions[ref].status === "edit"`) is
+ * the person's work too, so it is left out.
  */
 async function planMadeSubjectIds(
   db: DbHandle,
@@ -94,11 +96,27 @@ async function planMadeSubjectIds(
   const wanted = new Set(input.subjectIds);
   const made = new Set<string>();
   for (const row of rows) {
-    const named = ((
-      row.data as { materialized?: Record<string, unknown> } | null
-    )?.materialized?.[list] ?? []) as unknown[];
+    const data = row.data as {
+      materialized?: Record<string, unknown>;
+      dispositions?: Record<string, { status?: unknown } | undefined>;
+    } | null;
+    const edited = new Set(
+      Object.entries(data?.dispositions ?? {})
+        .filter(([, d]) => d?.status === "edit")
+        .flatMap(([ref]) => {
+          const op = (
+            data?.materialized?.byOp as
+              Record<string, Record<string, unknown> | undefined> | undefined
+          )?.[ref];
+          const id = op?.entityId ?? op?.sessionId;
+          return typeof id === "string" ? [id] : [];
+        })
+    );
+    const named = (data?.materialized?.[list] ?? []) as unknown[];
     for (const id of named) {
-      if (typeof id === "string" && wanted.has(id)) made.add(id);
+      if (typeof id === "string" && wanted.has(id) && !edited.has(id)) {
+        made.add(id);
+      }
     }
   }
   return made;

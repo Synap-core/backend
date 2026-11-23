@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { PGlite } from "@electric-sql/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import * as schema from "@synap/database/schema";
-import { isOwnFreshWork, setPodNumberSetting } from "@synap/database";
+import { isOwnFreshWork, writePodNumberSetting } from "@synap/database";
 import { allSchemaTables, pgliteSchemaDdl } from "../__tests__/pglite-ddl.js";
 
 const AGENT = randomUUID();
@@ -33,6 +33,7 @@ async function planMadeSession(opts: {
   key: string;
   status?: string;
   personEditAfter?: boolean;
+  editedAtApproval?: boolean;
 }): Promise<string> {
   const session = randomUUID();
   const proposal = randomUUID();
@@ -50,7 +51,15 @@ async function planMadeSession(opts: {
       AGENT,
       opts.key,
       HUMAN,
-      JSON.stringify({ materialized: { sessionIds: [session] } }),
+      JSON.stringify({
+        materialized: {
+          sessionIds: [session],
+          byOp: { s1: { op: "create_session", sessionId: session } },
+        },
+        ...(opts.editedAtApproval
+          ? { dispositions: { s1: { status: "edit", edits: { goal: "x" } } } }
+          : {}),
+      }),
     ]
   );
   // The approval's own create event: as the session's person, no agent.
@@ -96,6 +105,12 @@ describe("what an agent's approved plan made is its own fresh work", () => {
     ).toBe(false);
   });
 
+  it("not an item the reviewer edited at approval: that is the person's work too", async () => {
+    expect(
+      await own(await planMadeSession({ key: KEY, editedAtApproval: true }))
+    ).toBe(false);
+  });
+
   it("not while the plan is still pending", async () => {
     expect(
       await own(await planMadeSession({ key: KEY, status: "pending" }))
@@ -112,10 +127,10 @@ describe("what an agent's approved plan made is its own fresh work", () => {
       [twoHoursOld, HUMAN, JSON.stringify({ clientKey: `key:${KEY}` }), made]
     );
     expect(await own(twoHoursOld)).toBe(true);
-    await setPodNumberSetting(db as never, {
+    await writePodNumberSetting(db as never, {
       key: "governance.own_work_fresh_hours",
       value: 1,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     expect(await own(twoHoursOld)).toBe(false);
   });

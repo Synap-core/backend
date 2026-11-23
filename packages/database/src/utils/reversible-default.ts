@@ -17,7 +17,7 @@
  * stops the seed from ever switching it back on.
  */
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import {
   AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
   AGENT_DEFINES_KINDS_CLASS_PATTERN,
@@ -71,6 +71,7 @@ export async function readPodClassDefault(
     .select({ id: governanceRules.id, verdict: governanceRules.verdict })
     .from(governanceRules)
     .where(podClassRow(pattern))
+    .orderBy(desc(governanceRules.createdAt))
     .limit(1);
   // A `propose` row on the class is not "on" — it would only tighten.
   const on = row !== undefined && row.verdict === "auto";
@@ -136,6 +137,23 @@ export function setOwnOrganiseDefault(
     ...input,
     pattern: OWN_ORGANISE_CLASS_PATTERN,
   });
+}
+
+/**
+ * Both floor families' state, for a door that judges many keys at once
+ * (`nonWidenableFloorFor`): the engine's `floorsYield`.
+ */
+export async function readPodFloorsYield(
+  db: DbHandle
+): Promise<NonNullable<AgentPolicyInput["floorsYield"]>> {
+  const [kinds, structure] = await Promise.all([
+    readPodClassDefault(db, AGENT_DEFINES_KINDS_CLASS_PATTERN),
+    readPodClassDefault(db, AGENT_BUILDS_STRUCTURE_CLASS_PATTERN),
+  ]);
+  return {
+    agentDefinesKinds: kinds.enabled,
+    agentBuildsStructure: structure.enabled,
+  };
 }
 
 /**

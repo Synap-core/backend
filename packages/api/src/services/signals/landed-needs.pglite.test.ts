@@ -113,6 +113,14 @@ beforeAll(async () => {
   await approved({ by: VIEWER, landed: [{ id: DRAFT }], at: daysAgo(2) });
   await approved({ by: OTHER, landed: [{ id: THEIRS }], at: daysAgo(1) });
   await approved({ by: VIEWER, landed: [{ id: OLD }], at: daysAgo(30) });
+  // Newer receipts that land no automation or playbook: never in the scan.
+  for (let i = 0; i < 120; i++) {
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, status, created_by, subject_user_id, reviewed_by, data, created_at, updated_at)
+       values ($1, $2, 'entity', $3, 'create', 'auto_approved', $4, $4, $4, '{}'::jsonb, now(), now())`,
+      [randomUUID(), WS_SEEN, randomUUID(), VIEWER]
+    );
+  }
 }, 120_000);
 
 describe("what the viewer's recent approvals landed that only they can take on", () => {
@@ -121,6 +129,7 @@ describe("what the viewer's recent approvals landed that only they can take on",
       userId: VIEWER,
       roster: false,
     });
+    // 120 newer entity receipts did not fill the scan.
     expect(truncated).toBe(false);
     expect(rows).toEqual([
       {

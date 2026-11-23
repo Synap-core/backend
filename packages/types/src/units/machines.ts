@@ -63,8 +63,9 @@ export const AUTOMATION_TRANSITIONS = {
  *     `active` when it asked none (an approval activates).
  *   - An agent wrote it and no person approved it: `draft` (activating an
  *     agent's automation is floored to a person, `automation/activate`),
- *     unless the pod switched that floor off (`agentMayActivate`, the
- *     `@agent-builds-structure` class row): then like anyone else's.
+ *     unless its activation would itself apply without a person
+ *     (`agentMayActivate`: the pod's structure switch is on AND the ladder
+ *     auto-approves `automation.activate` for it): then like anyone else's.
  *   - Anyone else's own create keeps its status, `draft` when it asked none.
  */
 export function statusAtCreate<S extends string>(input: {

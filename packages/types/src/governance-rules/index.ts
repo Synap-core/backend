@@ -109,6 +109,15 @@ export const OWN_ORGANISE_CLASS_PATTERN = "@own-organise";
 export const AGENT_DEFINES_KINDS_CLASS_PATTERN = "@agent-defines-kinds";
 export const AGENT_BUILDS_STRUCTURE_CLASS_PATTERN = "@agent-builds-structure";
 
+/** The class patterns whose pod row a Settings switch owns, each its own door. */
+export const ROOT_SWITCH_PATTERNS = [
+  REVERSIBLE_CLASS_PATTERN,
+  OWN_ORGANISE_CLASS_PATTERN,
+  AGENT_DEFINES_KINDS_CLASS_PATTERN,
+  AGENT_BUILDS_STRUCTURE_CLASS_PATTERN,
+] as const;
+export type RootSwitchPattern = (typeof ROOT_SWITCH_PATTERNS)[number];
+
 /**
  * The pod's two class defaults in words: THE copy for the switch on the
  * desktop and on the phone ("How agents act"), and for the rule list's title
@@ -393,7 +402,7 @@ export function isRootSwitchRule(
     rule.principalKind === "any" &&
     rule.scopeKind === "pod" &&
     rule.targetKind === "action" &&
-    Object.prototype.hasOwnProperty.call(POD_DEFAULT_WORDS, rule.targetPattern)
+    (ROOT_SWITCH_PATTERNS as readonly string[]).includes(rule.targetPattern)
   );
 }
 

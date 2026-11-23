@@ -14,6 +14,7 @@ import {
   OWN_ORGANISE_CLASS_PATTERN,
   POD_DEFAULT_WORDS,
   REVERSIBLE_CLASS_PATTERN,
+  ROOT_SWITCH_PATTERNS,
   describeWritePattern,
   governanceRuleTitle,
   humanizePrincipal,
@@ -127,6 +128,10 @@ describe("where it holds, what it covers, where it came from", () => {
       expect(isRootSwitchRule(row)).toBe(true);
     }
     expect(isRootSwitchRule(rule({ targetPattern: "*" }))).toBe(false);
+    // Every switch has its words, and nothing else does.
+    expect(Object.keys(POD_DEFAULT_WORDS).sort()).toEqual(
+      [...ROOT_SWITCH_PATTERNS].sort()
+    );
   });
 
   it("a profiled action grant names its kind", () => {

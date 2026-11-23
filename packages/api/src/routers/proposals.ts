@@ -640,6 +640,14 @@ export async function withdrawOwnProposal(
 type ApproveManyItem = {
   proposalId: string;
   success: boolean;
+  /**
+   * `approveSession` only: `applied`, `queued` (a large plan handed to the
+   * background job, as single approve does), `failed`, or `not_attempted`
+   * (an earlier step did not apply, or is still being applied).
+   */
+  outcome?: "applied" | "queued" | "failed" | "not_attempted";
+  /** The approval was handed to the background job (`applyProposalApproval`). */
+  queued?: true;
   error?: string;
   errorCode?: TRPCError["code"];
   /** Edges of an approved graph that did not land — see ProposalExecutorResult. */
@@ -679,6 +687,8 @@ async function approveOneOfMany(args: {
    * its approval to the revision it rendered: there, such an item may pass.
    */
   actingOnItsPage?: boolean;
+  /** Hand a large plan to the background job, as single approve does. */
+  background?: boolean;
 }): Promise<ApproveManyItem> {
   const { ctx, userId, proposalId } = args;
   try {
@@ -737,14 +747,13 @@ async function approveOneOfMany(args: {
       });
     }
 
-    // Ownership check — SAME computation as single `approve`; this door's
-    // failure behavior (record the item + continue the batch) is unchanged.
+    // Ownership check — SAME computation as single `approve`; a refusal is
+    // this item's result.
     const { allowed: canApprove, reason: batchReason } =
       await computeCanReviewApproval({
         proposal,
         userId,
         roster: rosterReadFor(ctx),
-        // batchApprove — same door as single approve, same floor.
         purpose: "approve",
         actingAgentUserId: ctx.agentUserId,
       });
@@ -784,23 +793,16 @@ async function approveOneOfMany(args: {
     }
 
     // ONE door — the SAME `applyProposalApproval` single approve runs.
-    // This block used to inline only the generic `.validated`-emit tail
-    // and never resolved an executor, so "Approve all" flipped the row
-    // to APPROVED and silently did NOTHING for every proposal type the
-    // materializer has no case for, and ran the wrong (generic) path for
-    // the ones it does.
     //
-    // SEQUENTIAL and per-item best-effort, deliberately: executors do
-    // real writes (entity creates that dedup against each other, project
-    // membership stamps, workspace provisioning), so items must settle in
-    // the order the user selected them — the same order N single approves
-    // would produce. Concurrency would buy nothing at max 50 items and
-    // would make dedup/ordering races nondeterministic. A throw is caught
-    // below: that item is reported failed (and was already flipped to
-    // APPROVAL_FAILED + rejectionReason by the shared dispatch, exactly as
-    // single approve does) while every remaining item is still attempted.
-    // Idempotency is layered: the status guard above skips terminal rows,
-    // and each executor keeps its own already-APPROVED short-circuit.
+    // One item at a time, by the caller: executors do real writes (entity
+    // creates that dedup against each other, project membership stamps,
+    // workspace provisioning), so items settle in the caller's order, the
+    // order N single approves would produce. A throw is caught below and
+    // reported as this item's result (the shared dispatch already flipped it
+    // to APPROVAL_FAILED, as single approve does); whether the next item is
+    // attempted is the caller's call. Idempotency is layered: the status
+    // guard above skips terminal rows, and each executor keeps its own
+    // already-APPROVED short-circuit.
     const result = await applyProposalApproval({
       proposal,
       userId,
@@ -810,6 +812,7 @@ async function approveOneOfMany(args: {
         ...(resolution ? { identityResolution: resolution } : {}),
       },
       ctx,
+      ...(args.background ? { background: true } : {}),
       presence: args.presence ?? null,
       door: args.door,
     });
@@ -817,6 +820,7 @@ async function approveOneOfMany(args: {
       return {
         proposalId,
         success: true,
+        ...(result.queued ? { queued: true as const } : {}),
         ...(result.relationsFailed?.length
           ? { relationsFailed: result.relationsFailed }
           : {}),
@@ -832,9 +836,7 @@ async function approveOneOfMany(args: {
       // explicitly-chosen fallback — the same one the catch below uses —
       // and it carries no invented sentence: the door reported no reason,
       // and manufacturing one would be a claim about what happened that
-      // nothing verified. (This arm previously reported `success:false`
-      // with NO error and NO code at all, which read to a client as an
-      // unexplained failure.)
+      // nothing verified.
       return {
         proposalId,
         success: false,
@@ -4157,10 +4159,16 @@ export const proposalsRouter = router({
    * make depends on each other (`sessionApprovalOrder`: a space before its
    * kinds, a kind before its lifecycle, a playbook before the automation that
    * runs it). Only the proposals the page rendered are approved, each bound
-   * to the revision it rendered (`expectedRevisions`); one the session does
-   * not hold is refused. An item that acts on its own may pass here — the
-   * session page shows it whole — never from a list or an inbox. Each item
-   * goes through the same door and checks as `batchApprove`, settled alone.
+   * to the revision it rendered (`expectedRevisions`). An item that acts on
+   * its own may pass here — the session page shows it whole — never from a
+   * list or an inbox. Each item goes through the same door and checks as
+   * `batchApprove`; a large plan is handed to the background job, as single
+   * approve does.
+   *
+   * It stops at the first step that does not apply: a later step may need
+   * it, so every step after it is `not_attempted`. A plan handed to the
+   * background job stops it the same way, until that plan has applied. An id
+   * the session does not hold is refused and nothing is attempted.
    */
   approveSession: protectedProcedure
     .input(
@@ -4168,7 +4176,7 @@ export const proposalsRouter = router({
         sessionId: z.string().uuid(),
         /** `proposalId → revisionHistory.length` the session page rendered. */
         expectedRevisions: z
-          .record(z.string(), z.number().int().nonnegative())
+          .record(z.string().uuid(), z.number().int().nonnegative())
           .refine(
             (m) =>
               Object.keys(m).length > 0 &&
@@ -4207,23 +4215,41 @@ export const proposalsRouter = router({
         .map((proposalId) => ({
           proposalId,
           success: false,
+          outcome: "failed" as const,
           error: "Not a proposal of this session",
           errorCode: "NOT_FOUND" as const,
         }));
+      let stopped = results.length > 0;
       for (const row of sessionApprovalOrder(rows)) {
-        results.push(
-          await approveOneOfMany({
-            ctx,
-            userId,
+        if (stopped) {
+          results.push({
             proposalId: row.id,
-            expectedRevision: input.expectedRevisions[row.id],
-            resolution: undefined,
-            presence: input.presenceByProposal?.[row.id],
-            comment: input.comment,
-            door: "trpc.proposals.approveSession",
-            actingOnItsPage: true,
-          })
-        );
+            success: false,
+            outcome: "not_attempted",
+            error: "An earlier step did not apply",
+            errorCode: "PRECONDITION_FAILED",
+          });
+          continue;
+        }
+        const item = await approveOneOfMany({
+          ctx,
+          userId,
+          proposalId: row.id,
+          expectedRevision: input.expectedRevisions[row.id],
+          resolution: undefined,
+          presence: input.presenceByProposal?.[row.id],
+          comment: input.comment,
+          door: "trpc.proposals.approveSession",
+          actingOnItsPage: true,
+          background: true,
+        });
+        const outcome = !item.success
+          ? "failed"
+          : item.queued
+            ? "queued"
+            : "applied";
+        results.push({ ...item, outcome });
+        stopped = outcome !== "applied";
       }
       return { results };
     }),

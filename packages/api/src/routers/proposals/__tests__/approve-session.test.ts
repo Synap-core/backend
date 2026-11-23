@@ -3,11 +3,15 @@
  * page. Rows chosen where the rules disagree with `batchApprove`:
  *  - an item that acts on its own (a code skill, a graph with an automation)
  *    passes HERE bound to the revision the page rendered, and is refused by
- *    the batch door and by this door without that revision;
+ *    the batch door;
  *  - a same-name twin still needs its own page (a choice, not a review);
- *  - a proposal the session does not hold is refused, never applied;
+ *  - a proposal the session does not hold is refused, and nothing else of
+ *    the call is attempted;
  *  - what makes a space is approved before what lands in it, whatever order
- *    the items were filed or sent in.
+ *    the items were filed or sent in;
+ *  - a step that does not apply, or a plan handed to the background job,
+ *    stops the steps after it (they may need it): `not_attempted`;
+ *  - an id that is no proposal id is a 400, not the whole call failing.
  * Everything after the gates (`applyProposalApproval`) is a recorder.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,9 +25,11 @@ const ACTING_GRAPH = "44444444-4444-4444-8444-444444444446";
 
 const h = vi.hoisted(() => ({
   proposals: new Map<string, Record<string, unknown>>(),
-  apply: vi.fn(async (_args: { proposal: { id: string } }) => ({
-    success: true,
-  })),
+  apply: vi.fn(
+    async (_args: {
+      proposal: { id: string };
+    }): Promise<{ success: boolean; queued?: true }> => ({ success: true })
+  ),
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -123,6 +129,7 @@ function row(
 type Item = {
   proposalId: string;
   success: boolean;
+  outcome?: string;
   error?: string;
   errorCode?: string;
   reasonCode?: string;
@@ -263,5 +270,66 @@ describe("approveSession — the session page approves what it showed", () => {
   it("the space is approved before what lands in it, whatever the filing order", async () => {
     await approveSession([PLAYBOOK, ACTING_GRAPH, SPACE]);
     expect(applied()).toEqual([SPACE, PLAYBOOK, ACTING_GRAPH]);
+  });
+
+  it("a proposal the session does not hold stops the call: nothing is attempted", async () => {
+    const res = results(await approveSession([ORDINARY, SPACE]));
+    expect(res).toEqual([
+      expect.objectContaining({ proposalId: ORDINARY, outcome: "failed" }),
+      expect.objectContaining({ proposalId: SPACE, outcome: "not_attempted" }),
+    ]);
+    expect(applied()).toEqual([]);
+  });
+
+  it("a step that does not apply stops the steps after it", async () => {
+    h.apply.mockImplementation(async ({ proposal }) => ({
+      success: proposal.id !== PLAYBOOK,
+    }));
+    try {
+      const res = results(
+        await approveSession([SPACE, PLAYBOOK, ACTING_GRAPH])
+      );
+      expect(res.map((r) => [r.proposalId, r.outcome])).toEqual([
+        [SPACE, "applied"],
+        [PLAYBOOK, "failed"],
+        [ACTING_GRAPH, "not_attempted"],
+      ]);
+      expect(res[2]).toMatchObject({ errorCode: "PRECONDITION_FAILED" });
+      expect(applied()).toEqual([SPACE, PLAYBOOK]);
+    } finally {
+      h.apply.mockImplementation(async () => ({ success: true }));
+    }
+  });
+
+  it("a large plan is handed to the background job as single approve does, and waits the rest", async () => {
+    h.apply.mockImplementation(async ({ proposal }) =>
+      proposal.id === PLAYBOOK
+        ? { success: true, queued: true as const }
+        : { success: true }
+    );
+    try {
+      const res = results(
+        await approveSession([SPACE, PLAYBOOK, ACTING_GRAPH])
+      );
+      expect(res.map((r) => [r.proposalId, r.outcome])).toEqual([
+        [SPACE, "applied"],
+        [PLAYBOOK, "queued"],
+        [ACTING_GRAPH, "not_attempted"],
+      ]);
+      expect(
+        h.apply.mock.calls.every(
+          ([a]) => (a as { background?: boolean }).background === true
+        )
+      ).toBe(true);
+    } finally {
+      h.apply.mockImplementation(async () => ({ success: true }));
+    }
+  });
+
+  it("an id that is no proposal id is a 400", async () => {
+    await expect(approveSession(["not-a-uuid"])).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    expect(applied()).toEqual([]);
   });
 });

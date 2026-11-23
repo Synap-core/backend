@@ -15,7 +15,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db, and, eq } from "@synap/database";
+import { db, and, eq, readPodFloorsYield } from "@synap/database";
 import { users } from "@synap/database/schema";
 import {
   dryRunAgentGovernanceDecision,
@@ -61,7 +61,7 @@ export async function draftMatrixWiden(
   probe: MatrixCellProbe,
   ownerUserId: string | null
 ): Promise<RuleGrantDraft> {
-  if (nonWidenableFloorFor(probe.action)) {
+  if (nonWidenableFloorFor(probe.action, await readPodFloorsYield(db))) {
     throw noNextRung("a floor decides this write; no rule can widen it.");
   }
   if (!isReversibleWrite(probe.action)) {

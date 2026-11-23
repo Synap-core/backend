@@ -6,8 +6,9 @@
  * is floored to a person, `automation/activate`).
  *
  * ONE read: the viewer's applied proposals of the last
- * {@link LANDED_NEEDS_DAYS} days (reviewed by them, made for them or filed by
- * them, under the proposal floor), then `resolveLandedObjects`, which floors
+ * {@link LANDED_NEEDS_DAYS} days that can land an automation or a playbook
+ * (reviewed by them, made for them or filed by them, under the proposal
+ * floor), then `resolveLandedObjects`, which floors
  * each object by the reader and derives its next step once (`objectNextOf`).
  * The row lives exactly as long as the next step does: once the person turns
  * it on, the next read finds nothing. Each object once, its newest approval
@@ -20,6 +21,7 @@ import {
   and,
   db,
   desc,
+  drizzleSql,
   eq,
   gte,
   inArray,
@@ -80,6 +82,14 @@ export async function listLandedNeedsPerson(args: {
       and(
         inArray(proposals.status, APPLIED),
         gte(proposals.updatedAt, since),
+        // Only a row that can land an automation or a playbook: its target,
+        // a plan's records, or the landed stamp.
+        or(
+          inArray(proposals.targetType, ["automation", "playbook"]),
+          drizzleSql`(${proposals.data} -> 'materialized') ?| array['automationIds','playbookIds']`,
+          drizzleSql`(${proposals.data} -> 'landed') @> '[{"kind":"automation"}]'::jsonb`,
+          drizzleSql`(${proposals.data} -> 'landed') @> '[{"kind":"playbook"}]'::jsonb`
+        ),
         or(
           eq(proposals.reviewedBy, args.userId),
           eq(proposals.subjectUserId, args.userId),

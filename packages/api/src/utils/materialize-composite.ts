@@ -1257,6 +1257,8 @@ export async function materializeCompositeGraph(
       Extract<CompositeProposalOperation, { op: "create_entity" }>["facets"]
     >;
   }> = [];
+  // The pass order below is what a session's approval follows across its
+  // proposals (`sessionApprovalOrder`, types): keep the two in step.
   // ── Pass 0 — Rule Loop CONFIG ops (NS1) ────────────────────────────────
   // Skills and automations are created BEFORE entities so that (a) a
   // `create_rule` op in pass 3 can resolve `factRef` / `behaviourRefs` through

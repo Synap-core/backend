@@ -22,7 +22,11 @@ import {
   readPodClassDefault,
   setPodClassDefault,
 } from "./reversible-default.js";
-import { readPodNumberSetting, setPodNumberSetting } from "./pod-settings.js";
+import { readPodNumberSetting, writePodNumberSetting } from "./pod-settings.js";
+import type { PgTable } from "drizzle-orm/pg-core";
+import { automations } from "../schema/automations.js";
+import { ddlFor } from "../services/lifecycle/__tests__/lifecycle-pglite.js";
+import { insertAutomation } from "./insert-automation.js";
 
 const M0451 = readFileSync(
   fileURLToPath(
@@ -119,6 +123,7 @@ beforeAll(async () => {
       version integer NOT NULL DEFAULT 1,
       supersedes_id uuid
     );
+    ${ddlFor(automations as unknown as PgTable)}
     INSERT INTO users (id, user_type) VALUES ('${HUMAN}', 'human');
     INSERT INTO users (id, user_type, agent_metadata) VALUES ('${AGENT}', 'agent', '{}');
   `);
@@ -176,7 +181,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     expect(await decide("automation.create")).toMatchObject({
       decision: "execute",
@@ -188,7 +193,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: KINDS,
       enabled: true,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     expect(await decide("profile.create")).toMatchObject({
       decision: "execute",
@@ -199,7 +204,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     expect(await decide("playbook.create")).toMatchObject({
       decision: "propose",
@@ -211,7 +216,7 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     expect(await decide("cell.define")).toMatchObject({ decision: "propose" });
   });
@@ -221,20 +226,63 @@ describe("the floor switches, seeded off", () => {
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: true,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     await pg.exec(M0451);
     expect((await readPodClassDefault(db, STRUCTURE)).enabled).toBe(true);
     await setPodClassDefault(db, {
       pattern: STRUCTURE,
       enabled: false,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     await pg.exec(M0451);
     expect((await readPodClassDefault(db, STRUCTURE)).enabled).toBe(false);
     expect(await decide("automation.create")).toMatchObject({
       decision: "propose",
     });
+  });
+});
+
+describe("an agent's automation at birth", () => {
+  const born = async () =>
+    (
+      await insertAutomation(db, {
+        values: {
+          workspaceId: null,
+          name: `n-${Math.random()}`,
+          triggerType: "manual",
+          triggerConfig: {},
+          flowDefinition: { nodes: [], edges: [] },
+        },
+        requested: "active",
+        personApproved: false,
+        owner: { ownerId: HUMAN, agentUserId: AGENT },
+      })
+    )?.status;
+
+  it("is a draft when only its create would apply: the switch alone never activates", async () => {
+    await personRuleAuto("automation.create");
+    await setPodClassDefault(db, {
+      pattern: STRUCTURE,
+      enabled: true,
+      userId: HUMAN,
+    });
+    expect(await born()).toBe("draft");
+  });
+
+  it("keeps the status it asked for when its activation would itself apply", async () => {
+    await personRuleAuto("automation.activate");
+    await setPodClassDefault(db, {
+      pattern: STRUCTURE,
+      enabled: true,
+      userId: HUMAN,
+    });
+    expect(await born()).toBe("active");
+  });
+
+  it("is a draft with the switch off, whatever rule says activate", async () => {
+    await personRuleAuto("automation.activate");
+    expect(await born()).toBe("draft");
   });
 });
 
@@ -246,23 +294,36 @@ describe("the pod number settings", () => {
     expect(
       await readPodNumberSetting(db, "governance.project_evidence_min")
     ).toBe(5);
-    await setPodNumberSetting(db, {
+    await writePodNumberSetting(db, {
       key: "governance.project_evidence_min",
       value: 3,
-      userId: HUMAN,
+      createdBy: HUMAN,
     });
     await pg.exec(M0451);
     expect(
       await readPodNumberSetting(db, "governance.project_evidence_min")
     ).toBe(3);
+    // A new version of the seeded row, never an edit in place.
+    const { rows } = await pg.query<{
+      version: number;
+      superseded: boolean;
+      active: boolean;
+    }>(
+      `SELECT version, supersedes_id IS NOT NULL AS superseded, revoked_at IS NULL AS active
+       FROM config_settings WHERE key = 'governance.project_evidence_min' ORDER BY version`
+    );
+    expect(rows).toEqual([
+      { version: 1, superseded: false, active: false },
+      { version: 2, superseded: true, active: true },
+    ]);
   });
 
   it("refuse a value out of range; a missing row reads as the default", async () => {
     await expect(
-      setPodNumberSetting(db, {
+      writePodNumberSetting(db, {
         key: "governance.own_work_fresh_hours",
         value: 0,
-        userId: HUMAN,
+        createdBy: HUMAN,
       })
     ).rejects.toThrow(RangeError);
     await pg.exec(`DELETE FROM config_settings;`);
