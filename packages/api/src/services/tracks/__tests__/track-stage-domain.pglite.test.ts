@@ -171,7 +171,6 @@ const STAGES = [
   { key: "home", name: "Home", category: "completed" },
 ];
 
-
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
