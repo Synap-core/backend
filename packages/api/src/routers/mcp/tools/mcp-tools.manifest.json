@@ -1804,7 +1804,7 @@
                 },
                 "verify": {
                   "type": "object",
-                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
                   "properties": {
                     "kind": {
                       "type": "string",
@@ -1818,6 +1818,9 @@
                     },
                     "hint": {
                       "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
                     }
                   },
                   "required": ["kind"]
@@ -2153,7 +2156,7 @@
                 },
                 "verify": {
                   "type": "object",
-                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
+                  "description": "How it is checked, cheapest first: evidence (default for a deliverable; `evidenceKey` names the proof, default: the key) → capability (run `capability` with `params`; a count: `measure.check`) → judge (an LLM reads it; `hint` says what to look at) → human (the person grades it).",
                   "properties": {
                     "kind": {
                       "type": "string",
@@ -2167,6 +2170,9 @@
                     },
                     "hint": {
                       "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
                     }
                   },
                   "required": ["kind"]
@@ -4246,7 +4252,7 @@
           },
           "criteria": {
             "type": "array",
-            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
+            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
             "items": {
               "type": "object"
             }
@@ -4661,7 +4667,7 @@
           },
           "criteria": {
             "type": "array",
-            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
+            "description": "Binary acceptance criteria every session of this playbook is graded against. Each: { key (lowercase slug), statement, required?, check: { kind: evidence|capability|judge|human, capability? + params? (kind 'capability'), evidenceKey? (kind 'evidence'; default: the key), hint? }, stageKey? }.",
             "items": {
               "type": "object"
             }
@@ -5364,6 +5370,9 @@
                           },
                           "hint": {
                             "type": "string"
+                          },
+                          "params": {
+                            "type": "object"
                           }
                         },
                         "required": ["kind"]
@@ -6003,7 +6012,7 @@
           "criteria": {
             "type": ["array", "null"],
             "maxItems": 5,
-            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.",
             "items": {
               "type": "object",
               "properties": {
@@ -6033,6 +6042,9 @@
                     },
                     "hint": {
                       "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
                     }
                   },
                   "required": ["kind"]
@@ -6641,7 +6653,7 @@
           "criteria": {
             "type": ["array", "null"],
             "maxItems": 5,
-            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session filed into the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted automatically). Only with the person: your criteria are proposed for review. Written whole; null or [] clears them.",
+            "description": "Optional: how the goal is judged done — none (a lasting goal) or 2 to 5 binary criteria, the same shape as a session's. A goal criterion is met when a session in the goal passes the criterion of the SAME key and the goal's judge accepts it (a measured one checked by someone other than its author is accepted at once). From an agent they are proposed for review. Written whole; null or [] clears them.",
             "items": {
               "type": "object",
               "properties": {
@@ -6671,6 +6683,9 @@
                     },
                     "hint": {
                       "type": "string"
+                    },
+                    "params": {
+                      "type": "object"
                     }
                   },
                   "required": ["kind"]

@@ -786,6 +786,42 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "measure.check",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal count: reached by name, from a
+      // capability criterion (INTENTIONALLY_UNROUTABLE in the
+      // intent-reachability tripwire).
+      description:
+        "Measure a KPI: run one read op as the caller in the run's space and compare its count with a bar. op: entities.list (things of a kind: total) | lifecycle.board (a kind's status column: its count, else live) | lifecycle.throughput (things that reached done over the period) | attention.count (what needs the person). params: the op's own (profileSlug, column, windowDays, bucket, count, trackId...). Put it on a capability criterion: check { kind: 'capability', capability: 'measure.check', params: { op, params, threshold, comparator } }. Returns { passed, detail: { value, threshold, comparator, op } }. Read-only.",
+      parameters: {
+        type: "object",
+        required: ["op", "threshold"],
+        properties: {
+          op: {
+            type: "string",
+            enum: [
+              "entities.list",
+              "lifecycle.board",
+              "lifecycle.throughput",
+              "attention.count",
+            ],
+          },
+          params: {
+            type: "object",
+            description:
+              "The op's own params (never the space), e.g. { profileSlug: 'deal', column: 'won' }.",
+          },
+          threshold: { type: "number" },
+          comparator: {
+            type: "string",
+            enum: ["gte", "lte", "eq", "gt", "lt"],
+            description: "Default gte (at least).",
+          },
+        },
+      },
+    },
     // ── Kind + Facets (roles) — attach/detach/list over the one facet door ──
     {
       name: "entity_facet.attach",

@@ -35,6 +35,7 @@ const h = vi.hoisted(() => ({
     close: () => Promise<void>;
   },
   capability: null as unknown,
+  capabilityArgs: [] as Array<Record<string, unknown>>,
   emitted: [] as Array<Record<string, unknown>>,
 }));
 
@@ -64,7 +65,10 @@ vi.mock("../../../utils/permission-check.js", async (importOriginal) => {
 });
 
 vi.mock("../../capabilities/execute-capability.js", () => ({
-  executeCapability: async () => h.capability,
+  executeCapability: async (args: Record<string, unknown>) => {
+    h.capabilityArgs.push(args);
+    return h.capability;
+  },
 }));
 
 vi.mock("@synap/events", async (importOriginal) => {
@@ -310,6 +314,7 @@ describe("session evaluations", () => {
 
   beforeEach(() => {
     h.capability = null;
+    h.capabilityArgs.length = 0;
     h.emitted.length = 0;
   });
 
@@ -368,6 +373,80 @@ describe("session evaluations", () => {
       kinds: ["capability"],
     });
     expect((await rowsFor(id))[0]).toMatchObject({ verdict: "fail" });
+  });
+
+  // P8 (pathways): a KPI the pod measures. The criterion's `check.params`
+  // reach the verb, the evaluator's own keys win, and the measure's numbers
+  // are the grade's evidence.
+  it("capability: check.params reach the verb and a measure's detail is recorded as evidence", async () => {
+    const measure = {
+      op: "entities.list",
+      params: { profileSlug: "meeting" },
+      threshold: 10,
+      comparator: "gte",
+    };
+    const id = await seed({
+      criteria: [
+        {
+          key: "ten-meetings",
+          statement: "Ten meetings are logged",
+          check: {
+            kind: "capability",
+            capability: "measure.check",
+            // A stored bag that tries to aim the verb at another session.
+            params: { ...measure, sessionId: "not-this-one" },
+          },
+        },
+      ],
+    });
+    h.capability = {
+      kind: "run",
+      skillId: "s",
+      result: {
+        passed: false,
+        detail: {
+          value: 7,
+          threshold: 10,
+          comparator: "gte",
+          op: "entities.list",
+        },
+      },
+      ackState: "acked",
+    };
+    await evaluateSession({
+      sessionId: id,
+      userId: USER,
+      kinds: ["capability"],
+    });
+    expect(h.capabilityArgs).toHaveLength(1);
+    expect(h.capabilityArgs[0]).toMatchObject({
+      verbId: "measure.check",
+      userId: USER,
+      parameters: { ...measure, sessionId: id, criterionKey: "ten-meetings" },
+    });
+    const graded = await q<{
+      verdict: string;
+      rationale: string | null;
+      evidence: Record<string, unknown>;
+    }>(
+      `select verdict, rationale, evidence from session_evaluations where session_id = $1`,
+      [id]
+    ).then((r) => r.rows);
+    expect(graded).toEqual([
+      {
+        verdict: "fail",
+        rationale: "entities.list counted 7; the bar is at least 10.",
+        evidence: {
+          detail: "entities.list counted 7; the bar is at least 10.",
+          result: {
+            value: 7,
+            threshold: 10,
+            comparator: "gte",
+            op: "entities.list",
+          },
+        },
+      },
+    ]);
   });
 
   it("retry bound: a 3rd non-human attempt is refused; the 2nd failure of a REQUIRED criterion is spent, and evaluate_session files the human-owned slot", async () => {
