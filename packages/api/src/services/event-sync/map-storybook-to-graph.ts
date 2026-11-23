@@ -3,7 +3,7 @@
  *
  * Input: the items the `storybook`/`ui` sync kind reads (`storybook-sync.ts`):
  * one per record of a `synap.storybook-bundle/v1`, each carrying the run's
- * context (the app, the brand, the Storybook's public URL), plus a TOMBSTONE
+ * context (the app, the Storybook's public URL), plus a TOMBSTONE
  * per record this connection mirrored before that the bundle no longer holds.
  *
  * Output, keyed by the bundle's own keys (which ARE the external ids under
@@ -62,7 +62,6 @@ export const APP_EXTERNAL_ID_PREFIX = "app:";
 export interface StorybookRunContext {
   /** The devplane_app the records belong to. */
   appId: string | null;
-  brandIdentityId: string | null;
   /** The Storybook's public base URL, when it has one (story links). */
   storybookUrl: string | null;
 }
@@ -96,7 +95,6 @@ function defined(props: Record<string, unknown>): Record<string, unknown> {
 function shared(run: StorybookRunContext): Record<string, unknown> {
   return defined({
     "design-app": run.appId ?? undefined,
-    "brand-identity": run.brandIdentityId ?? undefined,
   });
 }
 

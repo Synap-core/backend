@@ -108,6 +108,7 @@ vi.mock("../../routers/profiles.js", () => ({
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 import { DESIGN_VERBS } from "@synap-core/types/design-board";
+import { STORYBOOK_VERBS } from "@synap-core/types/storybook";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -360,7 +361,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
  * (the catalog-coherence tripwire reads it as their catalog). Never in the
  * core catalog.
  */
-const MARKET_SHIPPED_BUILTINS: ReadonlySet<string> = new Set(DESIGN_VERBS);
+const MARKET_SHIPPED_BUILTINS: ReadonlySet<string> = new Set([
+  ...DESIGN_VERBS,
+  ...STORYBOOK_VERBS,
+]);
 
 /**
  * Brace-walk the `export const <name>: ... = { ... }` object literal and return

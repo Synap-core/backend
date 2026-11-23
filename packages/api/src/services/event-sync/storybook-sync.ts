@@ -102,6 +102,16 @@ export function readStorybookInput(
   return input.bundleFileId || input.url ? input : null;
 }
 
+/** The source's account hint: what the registry row names. */
+export function storybookAccountHint(
+  input: { url?: string },
+  bundle: Pick<StorybookBundle, "source"> | null
+): string {
+  // The validator holds a bundle to name its repo or its url.
+  const named = input.url ?? bundle?.source.repo ?? bundle?.source.url ?? "";
+  return `${STORYBOOK_PROVIDER}:${named.replace(/\/+$/, "")}`;
+}
+
 const fail = (
   message: string,
   errorClass: "validation" | "target_missing" | "permission" | "provider"
@@ -208,7 +218,6 @@ export function bundleItems(
 ): StorybookSyncItem[] {
   const run: StorybookRunContext = {
     appId: input.appId ?? null,
-    brandIdentityId: input.brandIdentityId ?? null,
     storybookUrl: bundle.source.url ?? null,
   };
   return [
@@ -304,7 +313,6 @@ export const SYNC_OWNED_PROPERTIES: Readonly<Record<string, readonly string[]>> 
     "component-level",
     "source-hash",
     "design-app",
-    "brand-identity",
   ],
   [UI_PAGE_PROFILE]: [
     "surface",
@@ -316,7 +324,6 @@ export const SYNC_OWNED_PROPERTIES: Readonly<Record<string, readonly string[]>> 
     "screenshot",
     "source-hash",
     "design-app",
-    "brand-identity",
   ],
   [USER_FLOW_PROFILE]: [
     "need",
@@ -326,7 +333,6 @@ export const SYNC_OWNED_PROPERTIES: Readonly<Record<string, readonly string[]>> 
     "flow-source-id",
     "steps",
     "design-app",
-    "brand-identity",
   ],
 };
 
