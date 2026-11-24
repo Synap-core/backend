@@ -157,6 +157,18 @@ describe("parseStorybookBundle", () => {
     );
   });
 
+  it("holds pages and flows to Storybook's id format", () => {
+    const b = goodBundle();
+    pages(b)[0]!.storyIds = ["Pages Desktop/Home--Full"];
+    pages(b)[0]!.key = "page:Pages Desktop/Home";
+    flows(b)[0]!.key = "flow:Morning_Check";
+    flows(b)[0]!.steps = [{ page: "page:Pages Desktop/Home", label: "Open Home" }];
+    expect(parseStorybookBundle(b).problems.map((p) => [p.code, p.path])).toEqual([
+      ["key-mismatch", "pages[0].key"],
+      ["key-mismatch", "flows[0].key"],
+    ]);
+  });
+
   it("holds the identity rule for pages and flows", () => {
     const b = goodBundle();
     pages(b)[0]!.key = "page:something-else";
