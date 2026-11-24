@@ -1,0 +1,78 @@
+{
+  "v": 0,
+  "meta": { "docgen": "react-docgen-typescript", "durationMs": 5645 },
+  "components": {
+    "inputs-spatialbutton": {
+      "id": "inputs-spatialbutton",
+      "name": "SpatialButton",
+      "path": "./stories/inputs/SpatialButton.stories.tsx",
+      "jsDocTags": {},
+      "description": "The one button.",
+      "import": "import { SpatialButton } from '@synap-core/web/spatial-ui';",
+      "reactDocgenTypescript": {
+        "tags": {},
+        "filePath": "/home/someone/synap-app/packages/web/src/spatial-ui/components.tsx",
+        "description": "The one button.",
+        "displayName": "SpatialButton",
+        "methods": [],
+        "exportName": "SpatialButton",
+        "props": {
+          "variant": {
+            "defaultValue": { "value": "primary" },
+            "description": "How loud it is.",
+            "name": "variant",
+            "required": false,
+            "type": {
+              "name": "enum",
+              "raw": "ButtonVariant",
+              "value": [{ "value": "\"primary\"" }, { "value": "\"danger\"" }]
+            }
+          },
+          "children": {
+            "defaultValue": null,
+            "description": "",
+            "name": "children",
+            "required": true,
+            "type": { "name": "ReactNode" }
+          }
+        }
+      },
+      "stories": [
+        { "id": "inputs-spatialbutton--default", "name": "Default", "snippet": "const Default = () => <SpatialButton>Save</SpatialButton>;" },
+        { "id": "inputs-spatialbutton--danger", "name": "Danger", "snippet": "const Danger = () => <SpatialButton variant=\"danger\">Delete</SpatialButton>;" }
+      ]
+    },
+    "data-actormark": {
+      "id": "data-actormark",
+      "name": "ActorMark",
+      "path": "./stories/data/ActorMark.stories.tsx",
+      "description": "The mark for who acted.",
+      "reactDocgenTypescript": {
+        "filePath": "/home/someone/synap-app/packages/web/src/object-registry/react.tsx",
+        "displayName": "ActorMark",
+        "exportName": "ActorMark",
+        "props": {
+          "size": {
+            "defaultValue": { "value": 24 },
+            "name": "size",
+            "required": false,
+            "type": { "name": "number" }
+          }
+        }
+      },
+      "stories": [
+        { "id": "data-actormark--default", "name": "Default", "snippet": "const Default = () => <ActorMark size={24} />;" }
+      ]
+    },
+    "data-objectchip": {
+      "id": "data-objectchip",
+      "name": "ObjectChip",
+      "path": "./stories/data/ObjectChip.stories.tsx",
+      "error": {
+        "name": "react-docgen-typescript could not match component docs",
+        "message": "File: …"
+      },
+      "stories": [{ "id": "data-objectchip--default", "name": "Default" }]
+    }
+  }
+}

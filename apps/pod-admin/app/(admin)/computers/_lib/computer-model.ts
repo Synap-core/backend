@@ -25,6 +25,7 @@ import {
   type ComputerKeyLike as SharedComputerKeyLike,
   type ComputerKeyState,
 } from "@synap-core/types/computers";
+import { computersT } from "./copy";
 import { AGENT_CONNECT_COMMAND } from "@synap-core/types/agents";
 import { resolveComputerBelongsToLabel } from "@synap-core/types/vocabulary";
 import type { SubjectEventLike } from "../../../_lib/object/subject-activity";
@@ -168,15 +169,13 @@ export function computerCounts(
 /** "Runs 3 agents" · "Runs 1 agent" · "No agents". */
 export function agentsPhrase(n: number): string {
   if (n === 0) return "No agents";
-  return `Runs ${n} agent${n === 1 ? "" : "s"}`;
+  return computersT()("model.runsAgents", { n });
 }
 
 /** "6 agents on 3 computers" — the list's one-line roll-up. */
 export function rosterLine(computers: readonly ComputerLike[]): string {
   const agents = computers.reduce((n, c) => n + c.agents.length, 0);
-  const plural = (n: number, word: string) =>
-    `${n} ${word}${n === 1 ? "" : "s"}`;
-  return `${plural(agents, "agent")} on ${plural(computers.length, "computer")}`;
+  return computersT()("model.roster", { agents, computers: computers.length });
 }
 
 /** How many computers lost their key to expiry. */
@@ -196,16 +195,12 @@ export function expiredLine(
 ): string | null {
   const n = expiredCount(computers);
   if (n === 0) return null;
-  return n === 1
-    ? "One computer's key has expired"
-    : `${n} computers' keys have expired`;
+  return computersT()("model.expired", { n });
 }
 
 /** The callout's body over the reconnect command, for `n` expired computers. */
 export function expiredReconnectLine(n: number): string {
-  return n === 1
-    ? "Its agents can't reach the pod until it has a fresh key. Run this on that computer:"
-    : "Their agents can't reach the pod until each has a fresh key. Run this on each of those computers:";
+  return computersT()("model.expiredReconnect", { n });
 }
 
 // ─── One computer ────────────────────────────────────────────────────
@@ -293,9 +288,7 @@ export function leaveAgentsConfirm(
  */
 export function seedsRevokedLine(seedsRevoked: number): string | null {
   if (seedsRevoked <= 0) return null;
-  return seedsRevoked === 1
-    ? "1 approval it had inherited from its agent was taken back."
-    : `${seedsRevoked} approvals it had inherited from its agent were taken back.`;
+  return computersT()("model.seedsRevoked", { n: seedsRevoked });
 }
 
 /**

@@ -296,6 +296,7 @@ export function AgentScorecard({
   ownerId: string | null | undefined;
   ownerName: OwnerName;
 }) {
+  const t = objectViewsT();
   const card = trpc.diagnose.agent.useQuery(
     { agentId },
     { enabled: readable, staleTime: 60_000 }
@@ -304,7 +305,7 @@ export function AgentScorecard({
   if (!readable) {
     const owner = ownerName(ownerId);
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <p className="text-[12.5px] text-foreground/65">
           {owner
             ? `Only the agent's owner (${owner}) or a pod admin can see its scorecard.`
@@ -316,14 +317,14 @@ export function AgentScorecard({
 
   if (card.isLoading) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <div className="h-16 rounded-lg bg-foreground/[0.04] shimmer-pulse" />
       </Section>
     );
   }
   if (card.isError || !card.data || "error" in card.data) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <div className="flex items-center gap-3">
           <p className="text-[12.5px] text-status-down">
             Couldn&apos;t load the scorecard.
@@ -344,7 +345,7 @@ export function AgentScorecard({
   const s = card.data;
   if (s.counts.total === 0) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <p className="text-[12.5px] text-foreground/65">
           It has not proposed a change you can see yet.
         </p>
@@ -352,16 +353,16 @@ export function AgentScorecard({
     );
   }
   return (
-    <Section title="Scorecard">
+    <Section title={t("scorecard.title")}>
       <p className="text-[12.5px] text-foreground">
         {percent(s.rates.approveRate)} of its last {s.counts.total} changes were
         approved, {percent(s.rates.rejectRate)} refused.
       </p>
       <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="Approved" value={s.counts.approved} />
-        <Stat label="Refused" value={s.counts.rejected} />
-        <Stat label="Waiting" value={s.counts.pending} />
-        <Stat label="Edited first" value={s.counts.revised} />
+        <Stat label={t("scorecard.approved")} value={s.counts.approved} />
+        <Stat label={t("scorecard.refused")} value={s.counts.rejected} />
+        <Stat label={t("scorecard.waiting")} value={s.counts.pending} />
+        <Stat label={t("scorecard.edited")} value={s.counts.revised} />
       </dl>
       {s.rejectionReasons.length > 0 && (
         <p className="text-[12px] text-foreground/65">

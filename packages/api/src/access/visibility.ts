@@ -9,7 +9,13 @@
  * guarantee that replaces "every route remembers to scope itself".
  */
 
-import { and, eq } from "@synap/database";
+import {
+  and,
+  eq,
+  or,
+  sharedReadableWhere,
+  type SharedAs,
+} from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { workspaceLensWhere } from "../utils/user-visible-where.js";
@@ -56,6 +62,12 @@ export type VisibilityRule =
       includeGlobalsInLens?: boolean;
       /** Declared NULL-workspace semantics — see {@link NullWorkspaceMeans}. */
       nullWorkspaceMeans?: NullWorkspaceMeans;
+      /**
+       * A shareable table: a row shared with a space (`space_access`) is also
+       * read by that space's members (`sharedReadableWhere`, the rows
+       * `usableInSpace` reads). Writes stay on the home (`assertWorkspaceWrite`).
+       */
+      sharedAs?: SharedAs;
     }
   /**
    * PRIVATE workspace data: the workspace lens AND the row is owned by the user.
@@ -160,13 +172,24 @@ export function visibilityPredicate(
       return undefined;
     case "user":
       return eq(rule.userColumn, access.userId);
-    case "workspace":
-      return workspaceLensWhere(
+    case "workspace": {
+      const home = workspaceLensWhere(
         rule.workspaceColumn,
         access.userId,
         access.workspaceLens,
         { includeGlobals: rule.includeGlobalsInLens }
       );
+      return rule.sharedAs
+        ? or(
+            home,
+            sharedReadableWhere(
+              rule.sharedAs,
+              access.userId,
+              access.workspaceLens
+            )
+          )
+        : home;
+    }
     case "workspaceOwned":
       return and(
         eq(rule.userColumn, access.userId),

@@ -460,11 +460,11 @@ export function CapabilityObject({
     <ResourceRowSkeleton count={3} />
   ) : catalog.isError ? (
     <ResourceRowError
-      message="Its actions couldn’t be loaded."
+      message={objectViewsT()("cap.failed")}
       onRetry={() => void catalog.refetch()}
     />
   ) : verbs.length === 0 ? (
-    <ResourceRowEmpty message="It brings no actions that can be turned on or off." />
+    <ResourceRowEmpty message={objectViewsT()("cap.none")} />
   ) : (
     <ul className="-mx-2 flex flex-col">
       {verbs.map((v) => (
@@ -534,11 +534,11 @@ export function CapabilityObject({
       breadcrumb: frame.breadcrumb?.(card?.name ?? cap.name),
       primaryAction:
         next?.kind === "connect" ? (
-          <ExitLink exit={connectExit} label="Connect in app" />
+          <ExitLink exit={connectExit} label={objectViewsT()("cap.connect")} />
         ) : undefined,
       secondaryActions:
         next?.kind === "connect" ? undefined : (
-          <ExitLink exit={connectExit} label="Open in app" />
+          <ExitLink exit={connectExit} label={objectViewsT()("cap.openApp")} />
         ),
     },
     facts: [
@@ -565,7 +565,7 @@ export function CapabilityObject({
       ...(verbs.length > 0
         ? [
             {
-              label: "Actions on",
+              label: objectViewsT()("cap.actionsOn"),
               value: `${verbs.filter((v) => v.enabled).length} of ${verbs.length}`,
             },
           ]
@@ -591,7 +591,9 @@ export function CapabilityObject({
         )}
         <section className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-[13px] font-medium text-foreground">Actions</h2>
+            <h2 className="text-[13px] font-medium text-foreground">
+              {objectViewsT()("cap.actions")}
+            </h2>
             {canToggle && offCount > 1 && (
               <div className="flex items-center gap-2">
                 {graceLeft !== null && (
@@ -613,7 +615,7 @@ export function CapabilityObject({
                     })
                   }
                 >
-                  Turn all on
+                  {objectViewsT()("cap.turnAllOn")}
                 </Button>
               </div>
             )}
@@ -894,7 +896,11 @@ function VerbRow({
             isSelected={verb.enabled}
             isDisabled={isPending}
             onValueChange={onToggle}
-            aria-label={`${verb.enabled ? "Turn off" : "Turn on"} ${name}`}
+            aria-label={
+              verb.enabled
+                ? objectViewsT()("cap.turnOffAria", { name })
+                : objectViewsT()("cap.turnOnAria", { name })
+            }
           />
         ) : (
           <span

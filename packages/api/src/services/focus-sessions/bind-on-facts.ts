@@ -36,7 +36,7 @@ import {
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
@@ -111,7 +111,9 @@ export async function loadBindingFacts(input: {
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
+          playbooks
+        ),
         eq(playbooks.status, "active")
       )
     )) as BindingPlaybook[];

@@ -765,6 +765,31 @@ const GRANT_CHECKED_DEEPER: Readonly<
     ],
     why: "playbooks.run: playbook.run through checkPermissionOrPropose in the run's space (the app SDK's runPlaybook). Not covered: with a live run on the subject it returns before the gate and keeps a remembered run choice (rememberRunChoice)",
   },
+  // A worker's "run now" and "pause / resume" (a pod app's "Runs on its own",
+  // plan e51783ca J2-be): the worker is found through the `playbook` grant
+  // clause first (a worker of a playbook the key does not read is a 404).
+  "POST /workers/:ruleId/run": {
+    chain: [
+      { name: "runWorkerDoor", file: "routers/hub-protocol/worker-doors.ts" },
+      {
+        name: "runPlaybookDoor",
+        file: "routers/hub-protocol/playbook-doors.ts",
+      },
+      { name: "run", file: "routers/playbooks.ts" },
+    ],
+    why: "the worker's playbook runs through the shared playbook run door: playbooks.run, playbook.run through checkPermissionOrPropose in the run's space, as POST /playbooks/:id/run",
+  },
+  "POST /workers/:ruleId/paused": {
+    chain: [
+      {
+        name: "setWorkerPausedDoor",
+        file: "routers/hub-protocol/worker-doors.ts",
+      },
+      { name: "setWorkerPaused", file: "services/playbooks/workers.ts" },
+      { name: "updateRuleGoverned", file: "services/rules/update.ts" },
+    ],
+    why: "the ONE rule door: rule.update through checkPermissionOrPropose in the worker's space, where rung 0 also admits playbook.update in the playbook's space (grantNamedPermission); an agent's press is a proposal",
+  },
 };
 
 /**

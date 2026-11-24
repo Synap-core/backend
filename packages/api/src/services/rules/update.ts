@@ -74,6 +74,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import type { NamedGrantPermission } from "../../utils/grant-write-check.js";
 import { classifyRuleIntent } from "../knowledge/classify-intent.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import {
@@ -175,6 +176,13 @@ export interface UpdateRuleGovernedInput {
    * the next reconcile (its fields no longer hash to the seed).
    */
   seed?: RuleSeed;
+  /**
+   * A NAMED permission that also permits this edit at rung 0 (the key's
+   * grant), for a door whose act is narrower than editing any rule: a
+   * playbook worker's pause or resume (`setWorkerPaused`, `playbook.update`
+   * in the playbook's space). Rung 0 only; every later rung runs unchanged.
+   */
+  grantNamedPermission?: NamedGrantPermission;
 }
 
 export type UpdateRuleGovernedResult =
@@ -341,6 +349,9 @@ export async function updateRuleGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "rule",
     action: "update",
+    ...(input.grantNamedPermission
+      ? { grantNamedPermission: input.grantNamedPermission }
+      : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // FULL payload — an approved edit must reproduce THIS edit, not a labelled
     // shell. `id` is the rule being changed, so the executor re-enters this same
