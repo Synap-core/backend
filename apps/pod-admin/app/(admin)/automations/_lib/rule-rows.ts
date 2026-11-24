@@ -11,6 +11,7 @@
 
 import type { StatusKind } from "../../components/status-pill";
 import { flowHealthPill } from "../../runs/_lib/run-board";
+import { automationsT } from "./copy";
 
 export const RULE_FILTERS = [
   { key: "active", label: "Active" },
@@ -158,9 +159,10 @@ export function ruleRowAction(
 /** "418 runs · 2 failed" — lifetime counters, said once. */
 export function runsPhrase(rule: RuleFacts): string {
   if (rule.runCount === 0) return "No runs yet";
-  const runs = `${rule.runCount.toLocaleString("en-US")} ${rule.runCount === 1 ? "run" : "runs"}`;
+  const t = automationsT();
+  const runs = t("rows.runs", { n: rule.runCount });
   return rule.failureCount > 0
-    ? `${runs} · ${rule.failureCount.toLocaleString("en-US")} failed`
+    ? t("rows.runsFailed", { runs, failed: rule.failureCount })
     : runs;
 }
 
@@ -179,10 +181,7 @@ export function neverRanCallout(rules: readonly RuleFacts[]): string | null {
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
     .slice(0, 3)
     .map(([name, n]) => (n > 1 ? `“${name}” ×${n}` : `“${name}”`));
-  const head =
-    idle.length === 1
-      ? "1 automation has never run."
-      : `${idle.length} automations have never run.`;
+  const head = automationsT()("rows.neverRan", { n: idle.length });
   return `${head} Their trigger has not happened yet, or points at something that no longer exists — e.g. ${top.join(", ")}.`;
 }
 

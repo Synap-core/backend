@@ -17,8 +17,6 @@ import {
   recordSessionSpawn,
   drizzleSql,
   and,
-  or,
-  isNull,
   ne,
   playbooks,
   projectTracks,
@@ -30,6 +28,7 @@ import {
   insertFocusSessionRow,
   workspacePlacementPatchFromProposal,
   getRequestGrant,
+  usableInSpaceWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -1560,12 +1559,10 @@ async function visibleTemplateCriteria(
     .where(
       and(
         eq(playbooks.id, templateId as string),
-        workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, workspaceId)
-            )
-          : isNull(playbooks.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       )
     )
     .limit(1);
@@ -1767,7 +1764,7 @@ async function applyProposedOutputMutations(
         sessionId,
         userId: ownerUserId,
       });
-      report = withEvidenceVerdict(report, verdict.satisfied);
+      report = withEvidenceVerdict(report, verdict.satisfied, verdict.held);
     } catch {
       // The claim stands, unverified — reported below like any open claim.
     }

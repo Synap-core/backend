@@ -56,9 +56,10 @@ describe("documentContent — readable bodies", () => {
     });
   });
 
-  it("an html document is a page to run in the frame, its source beside it", () => {
+  it("an html document is a page to run in the frame, its source beside it, anchored to its document", () => {
     const out = documentContent(null, {
       document: {
+        id: "doc-1",
         type: "html",
         storageKey: "k",
         storageUrl: null,
@@ -72,6 +73,7 @@ describe("documentContent — readable bodies", () => {
       bytes: 20,
       tooLarge: false,
       workspaceId: "ws-1",
+      documentId: "doc-1",
       source: {
         format: "source",
         text: "<script>x()</script>",

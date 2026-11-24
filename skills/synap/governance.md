@@ -70,8 +70,7 @@ Agents can perform these actions directly without a proposal:
 - `view.update`, `view.delete`
 - `profile.create`, `profile.update`, `profile.delete` — META-MODEL. A kind/role
   is pod-wide (`entityScope` defaults to `'pod'`), so it changes what the pod IS
-  in every workspace. Unlike `automation.create` (auto-approved but landing
-  INERT as a draft), profiles have no inert state, so they propose.
+  in every workspace; profiles have no inert state, so they propose.
 - `property_def.create`, `property_def.update`, `property_def.delete` — a base
   property def (`workspace_id` NULL) extends a shared kind for every workspace.
 - `workspace.create`, `workspace.update`, `workspace.delete`

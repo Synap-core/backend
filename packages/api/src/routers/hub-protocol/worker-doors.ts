@@ -16,6 +16,7 @@
  * `playbooks.run`. Nothing here decides a permission.
  */
 import { TRPCError } from "@trpc/server";
+import { getRequestGrant } from "@synap/database";
 import { AUTOMATION_SKIP_REASONS } from "@synap-core/types/automations";
 import type { HowOften } from "@synap-core/types/workers/how-often";
 import {
@@ -23,8 +24,14 @@ import {
   enableWorker,
   listEnabledWorkers,
   listWorkerViews,
+  listWorkerViewsInReach,
   setWorkerPaused,
 } from "../../services/playbooks/workers.js";
+import {
+  WORKER_VIEW_SUBJECTS,
+  grantReadsInSpace,
+  isFencedGrant,
+} from "../../access/grant-door-fence.js";
 import {
   runPlaybookDoor,
   type PlaybookDoorIdentity,
@@ -81,8 +88,24 @@ async function guarded<T>(fn: () => Promise<T>): Promise<WorkerDoorOutcome<T>> {
 }
 
 /**
- * The workers enabled on a goal (strict), a project's, or the ones a session
- * started (`scopeSessionId`, strict), as views.
+ * Workers a scoped key's grant left out: their playbook is one it reads, but
+ * not their automation and approvals in that playbook's space
+ * (`WORKER_VIEW_SUBJECTS`). Said, never folded into an empty list.
+ */
+export interface WorkersWithheld {
+  /** How many workers the query matched that are not listed. */
+  workers: number;
+  /** The read permissions that would show them, in their space. */
+  needs: string[];
+}
+
+/**
+ * The workers enabled on a goal (strict), a project's, the ones a session
+ * started (`scopeSessionId`, strict), or a playbook's (`playbookId`: every
+ * enablement of it, the space-wide one included), as views. The filters
+ * compose. A scoped key reads the playbooks its grant reads, and a worker
+ * only where it also reads the worker's automation and approvals
+ * (`grantReadsInSpace`); the rest is counted in `withheld`.
  */
 export function listWorkersDoor(
   identity: PlaybookDoorIdentity,
@@ -94,24 +117,48 @@ export function listWorkersDoor(
     playbookId?: string;
   }
 ): Promise<
-  WorkerDoorOutcome<{ items: Awaited<ReturnType<typeof listWorkerViews>> }>
+  WorkerDoorOutcome<{
+    items: Awaited<ReturnType<typeof listWorkerViews>>;
+    withheld?: WorkersWithheld;
+  }>
 > {
-  if (!input.trackId && !input.projectId && !input.scopeSessionId) {
+  if (
+    !input.trackId &&
+    !input.projectId &&
+    !input.scopeSessionId &&
+    !input.playbookId
+  ) {
     return Promise.resolve({
       kind: "invalid",
       error:
-        "trackId (the goal), projectId or scopeSessionId is required — find a goal with synap_list_tracks.",
+        "trackId (the goal), projectId, scopeSessionId or playbookId is required — find a goal with synap_list_tracks.",
     });
   }
-  return guarded(async () => ({
-    items: await listWorkerViews({
-      userId: identity.userId,
-      ...(input.trackId ? { trackId: input.trackId } : {}),
-      ...(input.projectId ? { projectId: input.projectId } : {}),
-      ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
-      ...(input.playbookId ? { playbookId: input.playbookId } : {}),
-    }),
-  }));
+  const query = {
+    userId: identity.userId,
+    ...(input.trackId ? { trackId: input.trackId } : {}),
+    ...(input.projectId ? { projectId: input.projectId } : {}),
+    ...(input.scopeSessionId ? { sessionId: input.scopeSessionId } : {}),
+    ...(input.playbookId ? { playbookId: input.playbookId } : {}),
+  };
+  const grant = getRequestGrant();
+  if (!isFencedGrant(grant)) {
+    return guarded(async () => ({ items: await listWorkerViews(query) }));
+  }
+  return guarded(async () => {
+    const { items, withheld } = await listWorkerViewsInReach(query, (ws) =>
+      grantReadsInSpace(grant!, WORKER_VIEW_SUBJECTS, ws)
+    );
+    return withheld > 0
+      ? {
+          items,
+          withheld: {
+            workers: withheld,
+            needs: WORKER_VIEW_SUBJECTS.map((s) => `${s}.read`),
+          },
+        }
+      : { items };
+  });
 }
 
 /**

@@ -195,6 +195,7 @@ export function parseCellFrameMessage(
       return { type: "synap:context-update", meta: data.meta };
     case "synap:query":
     case "synap:mutate":
+    case "synap:context":
       return parseCellBridgeMessage(data);
     default:
       return null;

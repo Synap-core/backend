@@ -10,7 +10,11 @@ import {
 // The frame reads the console's client only inside an effect (never on a
 // static render); the hook just has to exist.
 vi.mock("../../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
+  },
 }));
 
 import { DocumentContentSection } from "./content-block";

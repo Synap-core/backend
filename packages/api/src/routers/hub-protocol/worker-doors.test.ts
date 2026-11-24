@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
   enable: vi.fn(),
   paused: vi.fn(),
   views: vi.fn(),
+  viewsInReach: vi.fn(),
   enabled: vi.fn(),
   run: vi.fn(),
 }));
@@ -36,6 +37,7 @@ vi.mock("../../services/playbooks/workers.js", () => {
     enableWorker: h.enable,
     setWorkerPaused: h.paused,
     listWorkerViews: h.views,
+    listWorkerViewsInReach: h.viewsInReach,
     listEnabledWorkers: h.enabled,
   };
 });
