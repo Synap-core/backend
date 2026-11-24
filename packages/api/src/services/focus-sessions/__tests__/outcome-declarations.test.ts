@@ -250,7 +250,9 @@ describe("a fact outcome names the output it checks: outputKey (finding 09ba3d2d
   ];
 
   it("is stored on the criterion, as the criteria alias stores it", () => {
-    const { criteria } = splitOutcomes(outcomeDeclarationsSchema.parse(declared));
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse(declared)
+    );
     expect(criteria).toEqual([
       {
         key: "checklist-ok",

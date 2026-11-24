@@ -40,7 +40,12 @@ const ACTIVE = randomUUID();
 async function space(id: string, archived: boolean): Promise<void> {
   await q(
     `insert into workspaces (id, name, owner_id, archived_at) values ($1, $2, $3, $4)`,
-    [id, `Space ${id.slice(0, 4)}`, USER, archived ? new Date().toISOString() : null]
+    [
+      id,
+      `Space ${id.slice(0, 4)}`,
+      USER,
+      archived ? new Date().toISOString() : null,
+    ]
   );
   await q(
     `insert into workspace_members (id, workspace_id, user_id, role) values ($1, $2, $3, 'owner')`,
