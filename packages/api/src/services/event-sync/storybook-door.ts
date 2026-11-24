@@ -27,6 +27,7 @@ import {
   eq,
   isNull,
   links,
+  listableEntityWhere,
   profiles,
   tools,
 } from "@synap/database";
@@ -248,6 +249,8 @@ export async function changedStorybookComponents(
         eq(profiles.slug, UI_COMPONENT_PROFILE),
         isNull(entities.deletedAt),
         entityReadVisibleWhere(userId),
+        // A listing a person sees: demo and probe rows stay out.
+        listableEntityWhere(),
         drizzleSql`COALESCE(${entities.status}, '') <> 'gone'`,
         drizzleSql`(${props}->>'source-hash') IS DISTINCT FROM (${props}->>'reviewed-hash')`,
         ...(opts.appId
