@@ -91,14 +91,18 @@ function unquote(v: string): string {
   return v;
 }
 
-function propsOf(docgen: ManifestDocgen | undefined): StorybookPropSummary[] | undefined {
+function propsOf(
+  docgen: ManifestDocgen | undefined
+): StorybookPropSummary[] | undefined {
   if (!docgen?.props || docgenProblem(docgen) !== null) return undefined;
   return Object.values(docgen.props).map((p) => {
     const raw = p.type.raw ?? p.type.name;
     const values =
       p.type.name === "enum" && Array.isArray(p.type.value)
         ? p.type.value
-            .map((v) => (typeof v?.value === "string" ? unquote(v.value) : null))
+            .map((v) =>
+              typeof v?.value === "string" ? unquote(v.value) : null
+            )
             .filter((v): v is string => v !== null)
         : undefined;
     const dv = p.defaultValue?.value;
@@ -124,7 +128,10 @@ const lastSegment = (title: string): string => {
   return (parts[parts.length - 1] ?? title).trim() || title;
 };
 
-const storyUrlOf = (source: StorybookBundleSource, storyId: string | undefined) =>
+const storyUrlOf = (
+  source: StorybookBundleSource,
+  storyId: string | undefined
+) =>
   source.url && storyId
     ? `${source.url.replace(/\/+$/, "")}/?path=/story/${encodeURIComponent(storyId)}`
     : undefined;
@@ -165,7 +172,12 @@ export function bundleFromStorybook(
     const componentId = componentIdOfStory(entry.id) ?? entry.id;
     const g = groups.get(componentId);
     if (g) g.stories.push(entry);
-    else groups.set(componentId, { componentId, title: entry.title ?? componentId, stories: [entry] });
+    else
+      groups.set(componentId, {
+        componentId,
+        title: entry.title ?? componentId,
+        stories: [entry],
+      });
   }
 
   const byKey = new Map<string, StorybookBundleComponent>();
@@ -173,7 +185,9 @@ export function bundleFromStorybook(
     const m = manifestById.get(g.componentId);
     const docgen = m?.reactDocgenTypescript;
     const componentPath = g.stories.find((s) => s.componentPath)?.componentPath;
-    const sourcePath = componentPath ? normalizeSourcePath(componentPath) : undefined;
+    const sourcePath = componentPath
+      ? normalizeSourcePath(componentPath)
+      : undefined;
     if (componentPath && !sourcePath) {
       problems.push({
         code: "absolute-path",
@@ -185,7 +199,10 @@ export function bundleFromStorybook(
     const strongExport = docgen?.exportName;
     const exportName = strongExport ?? m?.name ?? lastSegment(g.title);
     const storyFile = g.stories.find((s) => s.importPath)?.importPath;
-    const path = sourcePath ?? (storyFile ? normalizeSourcePath(storyFile) : undefined) ?? g.title;
+    const path =
+      sourcePath ??
+      (storyFile ? normalizeSourcePath(storyFile) : undefined) ??
+      g.title;
     const key =
       sourcePath && strongExport
         ? componentKey(sourcePath, strongExport)
@@ -238,29 +255,33 @@ export function bundleFromStorybook(
     if (list) list.push(e);
     else pageGroups.set(titleId, [e]);
   }
-  const pages: StorybookBundlePage[] = [...pageGroups].map(([titleId, stories]) => {
-    const first = stories[0]!;
-    const title = (first.title ?? titleId).replace(/^Pages\//, "");
-    const manifest = manifestById.get(componentIdOfStory(first.id) ?? "");
-    const phone = stories.some(
-      (e) => e.id.startsWith("pages-phone-") || (e.tags?.includes("phone") ?? false)
-    );
-    return {
-      key: pageKey(titleId),
-      title,
-      surface: phone ? "phone" : "desktop",
-      storyIds: stories.map((e) => e.id),
-      sourceHash: contentHash(
-        stories.map((e) => ({
-          importPath: e.importPath,
-          componentPath: e.componentPath,
-          export: e.exportName ?? e.name,
-          snippet: manifest?.stories?.find((s) => s.id === e.id)?.snippet,
-        }))
-      ),
-      components: [],
-    };
-  });
+  const pages: StorybookBundlePage[] = [...pageGroups].map(
+    ([titleId, stories]) => {
+      const first = stories[0]!;
+      const title = (first.title ?? titleId).replace(/^Pages\//, "");
+      const manifest = manifestById.get(componentIdOfStory(first.id) ?? "");
+      const phone = stories.some(
+        (e) =>
+          e.id.startsWith("pages-phone-") ||
+          (e.tags?.includes("phone") ?? false)
+      );
+      return {
+        key: pageKey(titleId),
+        title,
+        surface: phone ? "phone" : "desktop",
+        storyIds: stories.map((e) => e.id),
+        sourceHash: contentHash(
+          stories.map((e) => ({
+            importPath: e.importPath,
+            componentPath: e.componentPath,
+            export: e.exportName ?? e.name,
+            snippet: manifest?.stories?.find((s) => s.id === e.id)?.snippet,
+          }))
+        ),
+        components: [],
+      };
+    }
+  );
 
   const built: StorybookBundle = {
     version: STORYBOOK_BUNDLE_VERSION,
@@ -273,6 +294,11 @@ export function bundleFromStorybook(
   // The bundle this builds must pass the one validator: a builder bug is an
   // error here, never a bundle the sync half-reads.
   const checked = parseStorybookBundle(built);
-  if (!checked.ok) return { ok: false, problems: [...problems, ...checked.problems] };
-  return { ok: true, value: checked.value, problems: [...problems, ...checked.problems] };
+  if (!checked.ok)
+    return { ok: false, problems: [...problems, ...checked.problems] };
+  return {
+    ok: true,
+    value: checked.value,
+    problems: [...problems, ...checked.problems],
+  };
 }

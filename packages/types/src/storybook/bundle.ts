@@ -222,25 +222,41 @@ class Checker {
   }
 
   /** A required non-empty string; reports and returns undefined when absent. */
-  str(obj: Record<string, unknown>, field: string, at: string): string | undefined {
+  str(
+    obj: Record<string, unknown>,
+    field: string,
+    at: string
+  ): string | undefined {
     const v = obj[field];
     if (v === undefined) {
       this.error("missing-field", `${at}.${field}`, `\`${field}\` is required`);
       return undefined;
     }
     if (!isNonEmptyString(v)) {
-      this.error("wrong-type", `${at}.${field}`, `\`${field}\` must be a non-empty string`);
+      this.error(
+        "wrong-type",
+        `${at}.${field}`,
+        `\`${field}\` must be a non-empty string`
+      );
       return undefined;
     }
     return v;
   }
 
   /** An optional string: undefined when absent, reported when of the wrong type. */
-  optStr(obj: Record<string, unknown>, field: string, at: string): string | undefined {
+  optStr(
+    obj: Record<string, unknown>,
+    field: string,
+    at: string
+  ): string | undefined {
     const v = obj[field];
     if (v === undefined) return undefined;
     if (!isNonEmptyString(v)) {
-      this.error("wrong-type", `${at}.${field}`, `\`${field}\` must be a non-empty string when present`);
+      this.error(
+        "wrong-type",
+        `${at}.${field}`,
+        `\`${field}\` must be a non-empty string when present`
+      );
       return undefined;
     }
     return v;
@@ -256,7 +272,11 @@ class Checker {
     const v = required ? this.str(obj, field, at) : this.optStr(obj, field, at);
     if (v === undefined) return undefined;
     if (!(allowed as readonly string[]).includes(v)) {
-      this.error("bad-value", `${at}.${field}`, `\`${field}\` must be one of ${allowed.join(", ")} (got ${JSON.stringify(v)})`);
+      this.error(
+        "bad-value",
+        `${at}.${field}`,
+        `\`${field}\` must be one of ${allowed.join(", ")} (got ${JSON.stringify(v)})`
+      );
       return undefined;
     }
     return v as T;
@@ -265,11 +285,19 @@ class Checker {
   keys(obj: Record<string, unknown>, field: string, at: string): string[] {
     const v = obj[field];
     if (v === undefined) {
-      this.error("missing-field", `${at}.${field}`, `\`${field}\` is required (an empty list when there is none)`);
+      this.error(
+        "missing-field",
+        `${at}.${field}`,
+        `\`${field}\` is required (an empty list when there is none)`
+      );
       return [];
     }
     if (!isStringArray(v)) {
-      this.error("wrong-type", `${at}.${field}`, `\`${field}\` must be a list of strings`);
+      this.error(
+        "wrong-type",
+        `${at}.${field}`,
+        `\`${field}\` must be a list of strings`
+      );
       return [];
     }
     return v;
@@ -278,7 +306,11 @@ class Checker {
   screenshot(obj: Record<string, unknown>, at: string): string | undefined {
     const v = this.optStr(obj, "screenshot", at);
     if (v !== undefined && !isScreenshotRef(v)) {
-      this.error("bad-value", `${at}.screenshot`, "`screenshot` must be a pod file id (uuid)");
+      this.error(
+        "bad-value",
+        `${at}.screenshot`,
+        "`screenshot` must be a pod file id (uuid)"
+      );
       return undefined;
     }
     return v;
@@ -287,14 +319,22 @@ class Checker {
   list(obj: Record<string, unknown>, field: string, at: string): unknown[] {
     const v = obj[field];
     if (!Array.isArray(v)) {
-      this.error(v === undefined ? "missing-field" : "wrong-type", `${at}.${field}`, `\`${field}\` must be a list`);
+      this.error(
+        v === undefined ? "missing-field" : "wrong-type",
+        `${at}.${field}`,
+        `\`${field}\` must be a list`
+      );
       return [];
     }
     return v;
   }
 }
 
-function readProps(c: Checker, raw: unknown, at: string): StorybookPropSummary[] | undefined {
+function readProps(
+  c: Checker,
+  raw: unknown,
+  at: string
+): StorybookPropSummary[] | undefined {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) {
     c.error("wrong-type", at, "`props` must be a list when present");
@@ -317,7 +357,12 @@ function readProps(c: Checker, raw: unknown, at: string): StorybookPropSummary[]
     let values: string[] | undefined;
     if (p.values !== undefined) {
       if (isStringArray(p.values)) values = p.values;
-      else c.error("wrong-type", `${pat}.values`, "`values` must be a list of strings");
+      else
+        c.error(
+          "wrong-type",
+          `${pat}.values`,
+          "`values` must be a list of strings"
+        );
     }
     if (name && type && typeof p.required === "boolean") {
       out.push({
@@ -338,23 +383,37 @@ function readProps(c: Checker, raw: unknown, at: string): StorybookPropSummary[]
  * with any error has no value. The value is a clean copy holding only the
  * format's fields.
  */
-export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBundle> {
+export function parseStorybookBundle(
+  json: unknown
+): StorybookRead<StorybookBundle> {
   const c = new Checker();
   if (!isObj(json)) {
     c.error("not-object", "$", "a storybook bundle must be a JSON object");
     return { ok: false, problems: c.problems };
   }
   if (json.version !== STORYBOOK_BUNDLE_VERSION) {
-    c.error("wrong-version", "version", `\`version\` must be ${JSON.stringify(STORYBOOK_BUNDLE_VERSION)} (got ${JSON.stringify(json.version)})`);
+    c.error(
+      "wrong-version",
+      "version",
+      `\`version\` must be ${JSON.stringify(STORYBOOK_BUNDLE_VERSION)} (got ${JSON.stringify(json.version)})`
+    );
   }
   const generatedAt = c.str(json, "generatedAt", "$");
   if (generatedAt !== undefined && Number.isNaN(Date.parse(generatedAt))) {
-    c.error("bad-value", "generatedAt", "`generatedAt` must be an ISO date-time");
+    c.error(
+      "bad-value",
+      "generatedAt",
+      "`generatedAt` must be an ISO date-time"
+    );
   }
 
   const source: StorybookBundleSource = {};
   if (!isObj(json.source)) {
-    c.error(json.source === undefined ? "missing-field" : "not-object", "source", "`source` must be an object");
+    c.error(
+      json.source === undefined ? "missing-field" : "not-object",
+      "source",
+      "`source` must be an object"
+    );
   } else {
     for (const f of ["repo", "sha", "storybookVersion", "url"] as const) {
       const v = c.optStr(json.source, f, "source");
@@ -364,7 +423,11 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
       c.error("bad-value", "source.url", "`source.url` must be an https URL");
     }
     if (source.repo === undefined && source.url === undefined) {
-      c.error("missing-field", "source", "`source` must name its `repo` or its `url`");
+      c.error(
+        "missing-field",
+        "source",
+        "`source` must name its `repo` or its `url`"
+      );
     }
   }
 
@@ -394,15 +457,31 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const composedOf = c.keys(raw, "composedOf", at);
     const props = readProps(c, raw.props, `${at}.props`);
     if (sourcePath !== undefined && !isRelativeSourcePath(sourcePath)) {
-      c.error("absolute-path", `${at}.sourcePath`, "`sourcePath` must be repo-relative (no leading /, no ..)");
+      c.error(
+        "absolute-path",
+        `${at}.sourcePath`,
+        "`sourcePath` must be repo-relative (no leading /, no ..)"
+      );
     }
-    if (key !== undefined && sourcePath !== undefined && exportName !== undefined) {
+    if (
+      key !== undefined &&
+      sourcePath !== undefined &&
+      exportName !== undefined
+    ) {
       if (key.startsWith("component:")) {
         if (key !== componentKey(sourcePath, exportName)) {
-          c.error("key-mismatch", `${at}.key`, `a component key must be ${JSON.stringify(componentKey(sourcePath, exportName))}`);
+          c.error(
+            "key-mismatch",
+            `${at}.key`,
+            `a component key must be ${JSON.stringify(componentKey(sourcePath, exportName))}`
+          );
         }
       } else if (!key.startsWith("title:") || key.length <= "title:".length) {
-        c.error("key-mismatch", `${at}.key`, "a component key is `component:<sourcePath>#<exportName>` or `title:<story title>`");
+        c.error(
+          "key-mismatch",
+          `${at}.key`,
+          "a component key is `component:<sourcePath>#<exportName>` or `title:<story title>`"
+        );
       }
     }
     if (key && name && sourcePath && exportName && sourceHash) {
@@ -443,18 +522,42 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const route = c.optStr(raw, "route", at);
     const screenshot = c.screenshot(raw, at);
     const pageComponents = c.keys(raw, "components", at);
-    if (raw.storyIds !== undefined && Array.isArray(raw.storyIds) && storyIds.length === 0) {
+    if (
+      raw.storyIds !== undefined &&
+      Array.isArray(raw.storyIds) &&
+      storyIds.length === 0
+    ) {
       c.error("bad-value", `${at}.storyIds`, "a page has at least one story");
     }
-    const titleId = storyIds[0] !== undefined ? pageTitleIdOf(storyIds[0]) : undefined;
-    if (key !== undefined && titleId !== undefined && key !== pageKey(titleId)) {
-      c.error("key-mismatch", `${at}.key`, `a page key must be ${JSON.stringify(pageKey(titleId))}`);
-    } else if (key !== undefined && !KEY_ID_RE.test(key.slice("page:".length))) {
-      c.error("key-mismatch", `${at}.key`, "a page key is `page:<titleId>`, lowercase letters, digits and dashes");
+    const titleId =
+      storyIds[0] !== undefined ? pageTitleIdOf(storyIds[0]) : undefined;
+    if (
+      key !== undefined &&
+      titleId !== undefined &&
+      key !== pageKey(titleId)
+    ) {
+      c.error(
+        "key-mismatch",
+        `${at}.key`,
+        `a page key must be ${JSON.stringify(pageKey(titleId))}`
+      );
+    } else if (
+      key !== undefined &&
+      !KEY_ID_RE.test(key.slice("page:".length))
+    ) {
+      c.error(
+        "key-mismatch",
+        `${at}.key`,
+        "a page key is `page:<titleId>`, lowercase letters, digits and dashes"
+      );
     }
     storyIds.forEach((id, j) => {
       if (j > 0 && titleId !== undefined && pageTitleIdOf(id) !== titleId) {
-        c.error("bad-value", `${at}.storyIds[${j}]`, `every story of a page shares its title id ${JSON.stringify(titleId)}`);
+        c.error(
+          "bad-value",
+          `${at}.storyIds[${j}]`,
+          `every story of a page shares its title id ${JSON.stringify(titleId)}`
+        );
       }
     });
     if (key && title && surface && titleId && sourceHash) {
@@ -486,16 +589,23 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
     const need = c.optStr(raw, "need", at);
     const entry = c.optStr(raw, "entry", at);
     const doneWhen = c.optStr(raw, "doneWhen", at);
-    if (key !== undefined && (!key.startsWith("flow:") || !KEY_ID_RE.test(key.slice("flow:".length)))) {
-      c.error("key-mismatch", `${at}.key`, "a flow key is `flow:<flowId>`, lowercase letters, digits and dashes");
+    if (
+      key !== undefined &&
+      (!key.startsWith("flow:") || !KEY_ID_RE.test(key.slice("flow:".length)))
+    ) {
+      c.error(
+        "key-mismatch",
+        `${at}.key`,
+        "a flow key is `flow:<flowId>`, lowercase letters, digits and dashes"
+      );
     }
     const steps: StorybookBundleFlowStep[] = [];
     c.list(raw, "steps", at).forEach((s, j) => {
       const sat = `${at}.steps[${j}]`;
       if (!isObj(s)) {
-      c.error("not-object", sat, "a step is not an object");
-      return;
-    }
+        c.error("not-object", sat, "a step is not an object");
+        return;
+      }
       const page = c.str(s, "page", sat);
       const label = c.str(s, "label", sat);
       if (page && label) steps.push({ page, label });
@@ -516,7 +626,12 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
   // Keys are identities: one record per key, and every reference resolves.
   const seen = new Set<string>();
   const dup = (key: string, at: string) => {
-    if (seen.has(key)) c.error("duplicate-key", at, `the key ${JSON.stringify(key)} is used twice`);
+    if (seen.has(key))
+      c.error(
+        "duplicate-key",
+        at,
+        `the key ${JSON.stringify(key)} is used twice`
+      );
     seen.add(key);
   };
   components.forEach((x, i) => dup(x.key, `components[${i}].key`));
@@ -527,20 +642,39 @@ export function parseStorybookBundle(json: unknown): StorybookRead<StorybookBund
   const pageKeys = new Set(pages.map((x) => x.key));
   components.forEach((x, i) => {
     x.composedOf.forEach((k, j) => {
-      if (!componentKeys.has(k)) c.error("dangling-ref", `components[${i}].composedOf[${j}]`, `no component has the key ${JSON.stringify(k)}`);
+      if (!componentKeys.has(k))
+        c.error(
+          "dangling-ref",
+          `components[${i}].composedOf[${j}]`,
+          `no component has the key ${JSON.stringify(k)}`
+        );
     });
     if (x.variantOf !== undefined && !componentKeys.has(x.variantOf)) {
-      c.error("dangling-ref", `components[${i}].variantOf`, `no component has the key ${JSON.stringify(x.variantOf)}`);
+      c.error(
+        "dangling-ref",
+        `components[${i}].variantOf`,
+        `no component has the key ${JSON.stringify(x.variantOf)}`
+      );
     }
   });
   pages.forEach((x, i) => {
     x.components.forEach((k, j) => {
-      if (!componentKeys.has(k)) c.error("dangling-ref", `pages[${i}].components[${j}]`, `no component has the key ${JSON.stringify(k)}`);
+      if (!componentKeys.has(k))
+        c.error(
+          "dangling-ref",
+          `pages[${i}].components[${j}]`,
+          `no component has the key ${JSON.stringify(k)}`
+        );
     });
   });
   flows.forEach((x, i) => {
     x.steps.forEach((s, j) => {
-      if (!pageKeys.has(s.page)) c.error("dangling-ref", `flows[${i}].steps[${j}].page`, `no page has the key ${JSON.stringify(s.page)}`);
+      if (!pageKeys.has(s.page))
+        c.error(
+          "dangling-ref",
+          `flows[${i}].steps[${j}].page`,
+          `no page has the key ${JSON.stringify(s.page)}`
+        );
     });
   });
 

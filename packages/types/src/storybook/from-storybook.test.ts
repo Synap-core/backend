@@ -15,19 +15,36 @@ const FIX = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__");
 const load = (name: string): Record<string, any> =>
   JSON.parse(readFileSync(join(FIX, name), "utf8")) as Record<string, any>;
 
-const SOURCE = { url: "https://storybook.example.com/", storybookVersion: "10.6.1" };
+const SOURCE = {
+  url: "https://storybook.example.com/",
+  storybookVersion: "10.6.1",
+};
 const AT = "2026-11-23T15:00:00.000Z";
-const BUTTON = componentKey("packages/web/src/spatial-ui/components.tsx", "SpatialButton");
-const ACTOR = componentKey("packages/web/src/object-registry/react.tsx", "ActorMark");
+const BUTTON = componentKey(
+  "packages/web/src/spatial-ui/components.tsx",
+  "SpatialButton"
+);
+const ACTOR = componentKey(
+  "packages/web/src/object-registry/react.tsx",
+  "ActorMark"
+);
 
 function build(index: unknown, manifest?: unknown) {
-  const read = bundleFromStorybook({ index, manifest, source: SOURCE, generatedAt: AT });
+  const read = bundleFromStorybook({
+    index,
+    manifest,
+    source: SOURCE,
+    generatedAt: AT,
+  });
   if (!read.ok) throw new Error(JSON.stringify(read.problems));
   return read;
 }
 
 /** The same Storybook with `Inputs/SpatialButton` retitled `Actions/Button` (new story ids, same code). */
-function retitled(): { index: Record<string, any>; manifest: Record<string, any> } {
+function retitled(): {
+  index: Record<string, any>;
+  manifest: Record<string, any>;
+} {
   const index = load("index.json");
   const manifest = load("components.json");
   const entries: Record<string, any> = {};
@@ -51,8 +68,15 @@ function retitled(): { index: Record<string, any>; manifest: Record<string, any>
 
 describe("bundleFromStorybook", () => {
   it("builds components keyed by source file + export, with props, and pages apart", () => {
-    const { value: b, problems } = build(load("index.json"), load("components.json"));
-    expect(b.components.map((c) => c.key)).toEqual([BUTTON, ACTOR, "title:Data/ObjectChip"]);
+    const { value: b, problems } = build(
+      load("index.json"),
+      load("components.json")
+    );
+    expect(b.components.map((c) => c.key)).toEqual([
+      BUTTON,
+      ACTOR,
+      "title:Data/ObjectChip",
+    ]);
 
     const button = b.components[0]!;
     expect(button).toMatchObject({
@@ -60,8 +84,12 @@ describe("bundleFromStorybook", () => {
       sourcePath: "packages/web/src/spatial-ui/components.tsx",
       exportName: "SpatialButton",
       description: "The one button.",
-      storyIds: ["inputs-spatialbutton--default", "inputs-spatialbutton--danger"],
-      storyUrl: "https://storybook.example.com/?path=/story/inputs-spatialbutton--default",
+      storyIds: [
+        "inputs-spatialbutton--default",
+        "inputs-spatialbutton--danger",
+      ],
+      storyUrl:
+        "https://storybook.example.com/?path=/story/inputs-spatialbutton--default",
       composedOf: [],
     });
     expect(button.props).toEqual([
@@ -94,7 +122,11 @@ describe("bundleFromStorybook", () => {
         storyIds: ["pages-desktop-home--full"],
         components: [],
       }),
-      expect.objectContaining({ key: "page:pages-phone-settings", title: "Phone/settings", surface: "phone" }),
+      expect.objectContaining({
+        key: "page:pages-phone-settings",
+        title: "Phone/settings",
+        surface: "phone",
+      }),
     ]);
     expect(b.flows).toEqual([]);
     expect(problems.map((p) => p.code)).toEqual(["manifest-component-error"]);
@@ -107,13 +139,21 @@ describe("bundleFromStorybook", () => {
     const full = index.entries["pages-desktop-home--full"];
     const entries: Record<string, unknown> = {};
     // An "Empty" state listed BEFORE "Full": the page keeps its key.
-    entries["pages-desktop-home--empty"] = { ...full, id: "pages-desktop-home--empty", name: "Empty", exportName: "Empty" };
+    entries["pages-desktop-home--empty"] = {
+      ...full,
+      id: "pages-desktop-home--empty",
+      name: "Empty",
+      exportName: "Empty",
+    };
     for (const [k, v] of Object.entries(index.entries)) entries[k] = v;
     index.entries = entries;
     const b = build(index, load("components.json")).value;
     const home = b.pages.filter((p) => p.key === "page:pages-desktop-home");
     expect(home).toHaveLength(1);
-    expect(home[0]!.storyIds).toEqual(["pages-desktop-home--empty", "pages-desktop-home--full"]);
+    expect(home[0]!.storyIds).toEqual([
+      "pages-desktop-home--empty",
+      "pages-desktop-home--full",
+    ]);
     expect(home[0]!.title).toBe("Desktop/Home");
     expect(parseStorybookBundle(b).ok).toBe(true);
   });
@@ -126,7 +166,10 @@ describe("bundleFromStorybook", () => {
     const b = after.components.find((c) => c.exportName === "SpatialButton")!;
     expect(b.key).toBe(a.key);
     expect(b.sourceHash).toBe(a.sourceHash);
-    expect(b.storyIds).toEqual(["actions-button--default", "actions-button--danger"]);
+    expect(b.storyIds).toEqual([
+      "actions-button--default",
+      "actions-button--danger",
+    ]);
   });
 
   it("moves the hash of exactly the component whose story changed", () => {
@@ -135,9 +178,15 @@ describe("bundleFromStorybook", () => {
     manifest.components["inputs-spatialbutton"].stories[1].snippet =
       'const Danger = () => <SpatialButton variant="danger">Remove</SpatialButton>;';
     const after = build(load("index.json"), manifest).value;
-    expect(after.components[0]!.sourceHash).not.toBe(before.components[0]!.sourceHash);
-    expect(after.components[1]!.sourceHash).toBe(before.components[1]!.sourceHash);
-    expect(after.components[2]!.sourceHash).toBe(before.components[2]!.sourceHash);
+    expect(after.components[0]!.sourceHash).not.toBe(
+      before.components[0]!.sourceHash
+    );
+    expect(after.components[1]!.sourceHash).toBe(
+      before.components[1]!.sourceHash
+    );
+    expect(after.components[2]!.sourceHash).toBe(
+      before.components[2]!.sourceHash
+    );
   });
 
   it("with no manifest: every component keyed by title, props unknown (not empty)", () => {
@@ -162,7 +211,12 @@ describe("bundleFromStorybook", () => {
     manifest.components["inputs-spatialbutton-sizes"] = {
       ...manifest.components["inputs-spatialbutton"],
       id: "inputs-spatialbutton-sizes",
-      stories: [{ id: "inputs-spatialbutton-sizes--all", snippet: "<SpatialButton size='lg' />" }],
+      stories: [
+        {
+          id: "inputs-spatialbutton-sizes--all",
+          snippet: "<SpatialButton size='lg' />",
+        },
+      ],
     };
     const { value: b } = build(index, manifest);
     const buttons = b.components.filter((c) => c.key === BUTTON);
@@ -172,21 +226,39 @@ describe("bundleFromStorybook", () => {
 
   it("an absolute component path is never an identity (warning, title key)", () => {
     const index = load("index.json");
-    index.entries["data-actormark--default"].componentPath = "/Users/someone/app/react.tsx";
+    index.entries["data-actormark--default"].componentPath =
+      "/Users/someone/app/react.tsx";
     const read = build(index, load("components.json"));
     expect(read.value.components[1]!.key).toBe("title:Data/ActorMark");
     expect(read.problems.map((p) => p.code)).toContain("absolute-path");
   });
 
   it("fails, with no bundle, when a file cannot be read: a broken manifest is not 'no manifest'", () => {
-    const badManifest = bundleFromStorybook({ index: load("index.json"), manifest: {}, source: SOURCE, generatedAt: AT });
+    const badManifest = bundleFromStorybook({
+      index: load("index.json"),
+      manifest: {},
+      source: SOURCE,
+      generatedAt: AT,
+    });
     expect(badManifest.ok).toBe(false);
-    expect(badManifest.problems[0]).toMatchObject({ code: "missing-field", path: "components" });
+    expect(badManifest.problems[0]).toMatchObject({
+      code: "missing-field",
+      path: "components",
+    });
 
-    const badIndex = bundleFromStorybook({ index: { v: 5 }, manifest: load("components.json"), source: SOURCE, generatedAt: AT });
+    const badIndex = bundleFromStorybook({
+      index: { v: 5 },
+      manifest: load("components.json"),
+      source: SOURCE,
+      generatedAt: AT,
+    });
     expect(badIndex.ok).toBe(false);
 
-    const noSource = bundleFromStorybook({ index: load("index.json"), source: {}, generatedAt: AT });
+    const noSource = bundleFromStorybook({
+      index: load("index.json"),
+      source: {},
+      generatedAt: AT,
+    });
     expect(noSource.ok).toBe(false);
     expect(noSource.problems.map((p) => p.path)).toContain("source");
   });
@@ -201,9 +273,16 @@ describe("bundleFromStorybook", () => {
         props[`p${j}`] = {
           name: `p${j}`,
           required: j % 2 === 0,
-          description: "A prop description long enough to weigh what docgen writes. ".repeat(2),
+          description:
+            "A prop description long enough to weigh what docgen writes. ".repeat(
+              2
+            ),
           defaultValue: null,
-          type: { name: "enum", raw: `P${j}`, value: [{ value: '"a"' }, { value: '"b"' }] },
+          type: {
+            name: "enum",
+            raw: `P${j}`,
+            value: [{ value: '"a"' }, { value: '"b"' }],
+          },
         };
       }
       for (let s = 0; s < 4; s++) {
@@ -221,8 +300,15 @@ describe("bundleFromStorybook", () => {
       manifest.components[id] = {
         id,
         name: `C${i}`,
-        reactDocgenTypescript: { exportName: `C${i}`, displayName: `C${i}`, props },
-        stories: [0, 1, 2, 3].map((s) => ({ id: `${id}--s${s}`, snippet: `<C${i} p0="a" />` })),
+        reactDocgenTypescript: {
+          exportName: `C${i}`,
+          displayName: `C${i}`,
+          props,
+        },
+        stories: [0, 1, 2, 3].map((s) => ({
+          id: `${id}--s${s}`,
+          snippet: `<C${i} p0="a" />`,
+        })),
       };
     }
     expect(JSON.stringify(manifest).length).toBeGreaterThan(1_800_000);
@@ -235,8 +321,12 @@ describe("bundleFromStorybook", () => {
 
 describe("normalizeSourcePath", () => {
   it("makes Storybook's config-relative paths repo-relative and refuses machine paths", () => {
-    expect(normalizeSourcePath("../../packages/web/src/x.tsx")).toBe("packages/web/src/x.tsx");
-    expect(normalizeSourcePath("./stories/X.stories.tsx")).toBe("stories/X.stories.tsx");
+    expect(normalizeSourcePath("../../packages/web/src/x.tsx")).toBe(
+      "packages/web/src/x.tsx"
+    );
+    expect(normalizeSourcePath("./stories/X.stories.tsx")).toBe(
+      "stories/X.stories.tsx"
+    );
     expect(normalizeSourcePath("/Users/a/x.tsx")).toBeUndefined();
     expect(normalizeSourcePath("C:\\a\\x.tsx")).toBeUndefined();
     expect(normalizeSourcePath("packages/../x.tsx")).toBeUndefined();

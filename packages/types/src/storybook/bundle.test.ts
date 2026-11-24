@@ -13,14 +13,21 @@ import {
   uiStatusFromVerdict,
 } from "./bundle.js";
 
-const BUTTON = componentKey("packages/web/src/spatial-ui/components.tsx", "SpatialButton");
+const BUTTON = componentKey(
+  "packages/web/src/spatial-ui/components.tsx",
+  "SpatialButton"
+);
 const ROW = componentKey("packages/web/src/proposals/row.tsx", "ProposalRow");
 
 function goodBundle(): Record<string, unknown> {
   return {
     version: STORYBOOK_BUNDLE_VERSION,
     generatedAt: "2026-11-23T15:00:00.000Z",
-    source: { repo: "Synap-core/app-bases", sha: "12813c62e", storybookVersion: "10.6.1" },
+    source: {
+      repo: "Synap-core/app-bases",
+      sha: "12813c62e",
+      storybookVersion: "10.6.1",
+    },
     components: [
       {
         key: BUTTON,
@@ -30,7 +37,14 @@ function goodBundle(): Record<string, unknown> {
         exportName: "SpatialButton",
         storyIds: ["inputs-spatialbutton--default"],
         screenshot: "0b8f4c7e-3a52-4e3b-9a0e-1f2d3c4b5a69",
-        props: [{ name: "variant", type: "ButtonVariant", required: false, values: ["primary"] }],
+        props: [
+          {
+            name: "variant",
+            type: "ButtonVariant",
+            required: false,
+            values: ["primary"],
+          },
+        ],
         family: "button",
         verdict: "ok",
         sourceHash: "h1",
@@ -81,9 +95,12 @@ function goodBundle(): Record<string, unknown> {
   };
 }
 
-const components = (b: Record<string, unknown>) => b.components as Record<string, unknown>[];
-const pages = (b: Record<string, unknown>) => b.pages as Record<string, unknown>[];
-const flows = (b: Record<string, unknown>) => b.flows as Record<string, unknown>[];
+const components = (b: Record<string, unknown>) =>
+  b.components as Record<string, unknown>[];
+const pages = (b: Record<string, unknown>) =>
+  b.pages as Record<string, unknown>[];
+const flows = (b: Record<string, unknown>) =>
+  b.flows as Record<string, unknown>[];
 
 describe("parseStorybookBundle", () => {
   it("reads a valid bundle into a clean copy (unknown fields dropped)", () => {
@@ -120,17 +137,25 @@ describe("parseStorybookBundle", () => {
     const read = parseStorybookBundle(b);
     expect(read.ok).toBe(false);
     expect(read.problems).toEqual([
-      expect.objectContaining({ code: "key-mismatch", path: "components[0].key" }),
+      expect.objectContaining({
+        code: "key-mismatch",
+        path: "components[0].key",
+      }),
     ]);
 
     const c = goodBundle();
     components(c)[2]!.key = "Legacy/Thing";
-    expect(parseStorybookBundle(c).problems.map((p) => p.code)).toEqual(["key-mismatch"]);
+    expect(parseStorybookBundle(c).problems.map((p) => p.code)).toEqual([
+      "key-mismatch",
+    ]);
   });
 
   it("keys a page by the title id its stories share, so reordering them changes nothing", () => {
     const b = goodBundle();
-    pages(b)[0]!.storyIds = ["pages-desktop-home--empty", "pages-desktop-home--full"];
+    pages(b)[0]!.storyIds = [
+      "pages-desktop-home--empty",
+      "pages-desktop-home--full",
+    ];
     const read = parseStorybookBundle(b);
     expect(read.problems).toEqual([]);
     expect(read.ok && read.value.pages[0]!.key).toBe("page:pages-desktop-home");
@@ -139,22 +164,27 @@ describe("parseStorybookBundle", () => {
   it("refuses a page with no story, or a story of another title", () => {
     const b = goodBundle();
     pages(b)[0]!.storyIds = [];
-    expect(parseStorybookBundle(b).problems.map((p) => [p.code, p.path])).toEqual([
+    expect(
+      parseStorybookBundle(b).problems.map((p) => [p.code, p.path])
+    ).toEqual([
       ["bad-value", "pages[0].storyIds"],
       // The refused page leaves the flow's step pointing at nothing.
       ["dangling-ref", "flows[0].steps[0].page"],
     ]);
     const c = goodBundle();
-    pages(c)[0]!.storyIds = ["pages-desktop-home--full", "pages-desktop-inbox--full"];
-    expect(parseStorybookBundle(c).problems.map((p) => [p.code, p.path])).toEqual([
-      ["bad-value", "pages[0].storyIds[1]"],
-    ]);
+    pages(c)[0]!.storyIds = [
+      "pages-desktop-home--full",
+      "pages-desktop-inbox--full",
+    ];
+    expect(
+      parseStorybookBundle(c).problems.map((p) => [p.code, p.path])
+    ).toEqual([["bad-value", "pages[0].storyIds[1]"]]);
     const d = goodBundle();
     // Keyed by a story id (the old rule): refused.
     pages(d)[0]!.key = "page:pages-desktop-home--full";
-    expect(parseStorybookBundle(d).problems.map((p) => [p.code, p.path])).toEqual(
-      expect.arrayContaining([["key-mismatch", "pages[0].key"]])
-    );
+    expect(
+      parseStorybookBundle(d).problems.map((p) => [p.code, p.path])
+    ).toEqual(expect.arrayContaining([["key-mismatch", "pages[0].key"]]));
   });
 
   it("holds pages and flows to Storybook's id format", () => {
@@ -162,8 +192,12 @@ describe("parseStorybookBundle", () => {
     pages(b)[0]!.storyIds = ["Pages Desktop/Home--Full"];
     pages(b)[0]!.key = "page:Pages Desktop/Home";
     flows(b)[0]!.key = "flow:Morning_Check";
-    flows(b)[0]!.steps = [{ page: "page:Pages Desktop/Home", label: "Open Home" }];
-    expect(parseStorybookBundle(b).problems.map((p) => [p.code, p.path])).toEqual([
+    flows(b)[0]!.steps = [
+      { page: "page:Pages Desktop/Home", label: "Open Home" },
+    ];
+    expect(
+      parseStorybookBundle(b).problems.map((p) => [p.code, p.path])
+    ).toEqual([
       ["key-mismatch", "pages[0].key"],
       ["key-mismatch", "flows[0].key"],
     ]);
@@ -201,7 +235,8 @@ describe("parseStorybookBundle", () => {
 
   it("refuses a machine path, a bad screenshot, a bad surface and a missing source, all at once", () => {
     const b = goodBundle();
-    components(b)[0]!.sourcePath = "/Users/someone/app/packages/web/src/spatial-ui/components.tsx";
+    components(b)[0]!.sourcePath =
+      "/Users/someone/app/packages/web/src/spatial-ui/components.tsx";
     components(b)[0]!.key = componentKey(
       "/Users/someone/app/packages/web/src/spatial-ui/components.tsx",
       "SpatialButton"
@@ -215,9 +250,19 @@ describe("parseStorybookBundle", () => {
     // key moved with its machine path, leaving the row's composedOf and variantOf
     // pointing at nothing; the refused page (bad surface) leaves the flow's step.
     expect(read.problems.map((p) => p.code).sort()).toEqual(
-      ["absolute-path", "bad-value", "bad-value", "dangling-ref", "dangling-ref", "dangling-ref", "missing-field"].sort()
+      [
+        "absolute-path",
+        "bad-value",
+        "bad-value",
+        "dangling-ref",
+        "dangling-ref",
+        "dangling-ref",
+        "missing-field",
+      ].sort()
     );
-    expect(read.problems.filter((p) => p.code === "dangling-ref").map((p) => p.path)).toEqual([
+    expect(
+      read.problems.filter((p) => p.code === "dangling-ref").map((p) => p.path)
+    ).toEqual([
       "components[1].composedOf[0]",
       "components[1].variantOf",
       "flows[0].steps[0].page",
