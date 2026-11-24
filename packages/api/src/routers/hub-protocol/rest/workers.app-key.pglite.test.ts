@@ -263,6 +263,9 @@ async function spaceWorker(ruleId: string, pb: string, workspaceId: string) {
           seed: {
             template: activatorSeedTemplate(pb),
             key: activatorKey(MONDAY),
+            // `readRuleSeed` drops a seed without its hash (the row would
+            // then read as no worker at all).
+            hash: "fixture",
           },
           behaviours: [],
         },
