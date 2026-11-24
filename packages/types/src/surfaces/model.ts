@@ -12,17 +12,26 @@
  * Pure + dependency-free, like the rest of `@synap-core/types/surfaces`.
  */
 
-/** The kinds of object a surface can be anchored to. */
-export const ANCHOR_KINDS = [
-  "entity",
-  "profile",
-  "workspace",
-  "project",
-  "track",
-  "playbook",
-  "session",
-] as const;
-export type AnchorKind = (typeof ANCHOR_KINDS)[number];
+/**
+ * The kinds of object a surface can be anchored to. A deliberate SUBSET of
+ * the links graph's endpoint types (`LinkEndpointType`), not a copy of it, so
+ * it is keyed as a record: `links-endpoint-type-ssot` checks that hand-written
+ * endpoint lists match the whole union, which this one must not.
+ */
+const ANCHOR_KIND_SET = {
+  entity: true,
+  profile: true,
+  workspace: true,
+  project: true,
+  track: true,
+  playbook: true,
+  session: true,
+} as const;
+export type AnchorKind = keyof typeof ANCHOR_KIND_SET;
+export const ANCHOR_KINDS = Object.keys(ANCHOR_KIND_SET) as [
+  AnchorKind,
+  ...AnchorKind[],
+];
 
 export interface SurfaceAnchor {
   kind: AnchorKind;

@@ -126,8 +126,13 @@ export interface RendererUsageReport {
    * entity floor. `null` when the count could not be taken.
    */
   perEntityOverrideCount: number | null;
-  /** The stores that could not be read, with their error: NOT "no bindings". */
-  unavailable: { source: string; error: string }[];
+  /**
+   * The stores that could not be read, with their error: NOT "no bindings".
+   * Always set by this builder; optional on the type because the field joined
+   * an existing door's output (an older pod omits it, and typed fixtures in
+   * dependent repos predate it).
+   */
+  unavailable?: { source: string; error: string }[];
 }
 
 export interface RendererUsageInput {
@@ -166,7 +171,7 @@ export async function buildRendererUsage(
   const { userId, cellKey } = input;
   const workspaceId = input.workspaceId ?? null;
 
-  const unavailable: RendererUsageReport["unavailable"] = [];
+  const unavailable: { source: string; error: string }[] = [];
   const read = <T>(source: string, fn: () => Promise<T>) =>
     readOrReport(source, fn, unavailable);
   const [

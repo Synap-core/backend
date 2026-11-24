@@ -86,7 +86,6 @@ export const TOOL_GROUPS = {
     "synap_template_health",
     "synap_get_flow",
     "synap_read_board",
-    "synap_find_surfaces",
   ],
   /** Precise writes beyond `capture`. */
   data: [

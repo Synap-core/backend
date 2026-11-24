@@ -73,6 +73,7 @@ import type {
   SurfaceRow,
   SurfacesForObject,
 } from "@synap-core/types/surfaces";
+import { resolveEntityRendererOverride } from "@synap-core/types/renderer-resolution";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
@@ -501,7 +502,7 @@ async function readRenders(
   }
   // An entity's own legacy override (the browser applies it above the
   // ladder, `entities.setEntityRenderer`). P3 migrates it to `attached`.
-  const override = loaded.entity?.systemData.renderer;
+  const override = resolveEntityRendererOverride(loaded.entity);
   if (override)
     out.push(rendererRow(override, "detail", anchor, "entity-override"));
   return out;

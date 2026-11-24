@@ -8,8 +8,7 @@
  *   - deleteView:  NOT exposed — agents cannot delete views
  */
 
-import { grantReadPredicate } from "../../access/grant-read.js";
-import { viewReadableWhere } from "../../utils/view-visibility.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router } from "../../trpc.js";
@@ -118,15 +117,13 @@ export const hubViewsRouter = router({
       })
     )
     .query(async ({ input, ctx }) => {
-      const db = await getDb();
-
-      const rows = await db.query.views.findMany({
+      // The access layer applies the visible floor (the `views` rule,
+      // `viewReadableWhere`) and the calling key's grant (`view` subject,
+      // narrow-only); the filters below only narrow inside it.
+      const rows = await scopedDb(
+        AccessContext.from(ctx as Parameters<typeof AccessContext.from>[0])
+      ).findMany<Record<string, unknown>>(views, {
         where: and(
-          // The visible floor. Without a floor the optional filters degrade
-          // to a null-where returning every view on the pod.
-          viewReadableWhere(ctx.userId as string, undefined),
-          // W1 — the calling key's grant (`view` subject), narrow-only.
-          grantReadPredicate(views),
           input.workspaceId
             ? eq(views.workspaceId, input.workspaceId)
             : undefined,
