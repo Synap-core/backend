@@ -491,9 +491,7 @@ describe("POST /workers/:ruleId/run — run now from the app", () => {
   it("without playbook.run it is refused 403 GRANT_DENIED and nothing runs", async () => {
     const res = await post("readOnly", `/workers/${RULE_CS}/run`, {});
     expect(res.status).toBe(403);
-    expect(((await res.json()) as { code?: string }).code).toBe(
-      "GRANT_DENIED"
-    );
+    expect(((await res.json()) as { code?: string }).code).toBe("GRANT_DENIED");
     expect(h.runs).toEqual([]);
   });
 });
