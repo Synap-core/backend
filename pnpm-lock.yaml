@@ -759,7 +759,14 @@ importers:
         specifier: ^4.0.7
         version: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.9.1)
 
-  packages/external-connect-client: {}
+  packages/external-connect-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.28
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
 
   packages/feed-service:
     dependencies:
