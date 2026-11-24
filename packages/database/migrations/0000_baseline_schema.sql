@@ -5699,6 +5699,56 @@ CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_idx"
   ON "entities" ("profile_id", "last_interaction_at")
   WHERE "deleted_at" IS NULL;
 
+-- 0412_composite_indexes_entities: composite indexes for common entity query patterns
+CREATE INDEX IF NOT EXISTS "entities_workspace_type_deleted_idx"
+  ON "entities" ("workspace_id", "type", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_workspace_profile_deleted_idx"
+  ON "entities" ("workspace_id", "profile_id", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_user_workspace_deleted_idx"
+  ON "entities" ("user_id", "workspace_id", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_podwide_type_deleted_idx"
+  ON "entities" ("type", "deleted_at")
+  WHERE "workspace_id" IS NULL AND "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_profile_workspace_deleted_idx"
+  ON "entities" ("profile_id", "workspace_id", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_profile_status_deleted_idx"
+  ON "entities" ("profile_id", "status", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_profile_last_interaction_deleted_idx"
+  ON "entities" ("profile_id", "last_interaction_at", "deleted_at")
+  WHERE "deleted_at" IS NULL;
+
+CREATE INDEX IF NOT EXISTS "entities_project_workspace_deleted_idx"
+  ON "entities" ("project_id", "workspace_id", "deleted_at")
+  WHERE "deleted_at" IS NULL AND "project_id" IS NOT NULL;
+
+-- Composite indexes for the list/exposure query patterns (性能 fix 2026-11).
+-- entities.list: isNull(deletedAt) + type + workspace_id + ORDER BY created_at DESC
+CREATE INDEX IF NOT EXISTS "entities_list_type_ws_created_idx"
+  ON "entities" ("deleted_at", "type", "workspace_id", "created_at" DESC);
+
+-- accessScopeWhere / exposure subqueries: relations by (type, target_entity_id)
+CREATE INDEX IF NOT EXISTS "relations_type_target_idx"
+  ON "relations" ("type", "target_entity_id");
+
+-- accessScopeWhere: project_members by (user_id, role) (guest/member split)
+CREATE INDEX IF NOT EXISTS "project_members_user_role_idx"
+  ON "project_members" ("user_id", "role");
+
+-- facet visibility: workspace_id + profile_id + deleted_at + entity_id
+CREATE INDEX IF NOT EXISTS "entity_facets_ws_profile_deleted_entity_idx"
+  ON "entity_facets" ("workspace_id", "profile_id", "deleted_at", "entity_id");
+
 -- 0376: the status watcher's episode claims (status-flow W6) — mirrors
 -- 0376_status_signal_raised.sql.
 CREATE TABLE IF NOT EXISTS "status_signal_raised" (
