@@ -19,7 +19,7 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import { getDb, and, eq } from "@synap/database";
+import { getDb, and, desc, eq } from "@synap/database";
 import { views } from "@synap/database/schema";
 import {
   bentoBlockArrangeErrors,
@@ -135,7 +135,7 @@ export const hubViewsRouter = router({
               undefined
             : undefined
         ),
-        orderBy: (views, { desc }) => [desc(views.updatedAt)],
+        orderBy: [desc(views.updatedAt)],
       });
 
       // If profileId requested, filter by scopeProfileIds

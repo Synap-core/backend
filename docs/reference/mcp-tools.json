@@ -42,8 +42,7 @@
       "synap_diagnose",
       "synap_template_health",
       "synap_get_flow",
-      "synap_read_board",
-      "synap_find_surfaces"
+      "synap_read_board"
     ],
     "data": [
       "synap_create_entity",
