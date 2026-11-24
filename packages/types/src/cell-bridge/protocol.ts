@@ -9,8 +9,12 @@
  * `write-ops.ts` to the pod's governed doors.
  */
 
+import type { SurfaceContext } from "./surface-context.js";
+
 /** Frame → host. */
 export type CellBridgeFrameMessage =
+  /** "Where am I?" (`window.synap.context()`, frame contract v3). */
+  | { type: "synap:context"; id: string }
   | {
       type: "synap:query";
       id: string;
@@ -33,6 +37,13 @@ export type CellBridgeFrameMessage =
  */
 export type CellBridgeHostMessage =
   | { type: "synap:query:result"; id: string; data?: unknown; error?: string }
+  /** The frame's context (`surface-context.ts`), or why there is none. */
+  | {
+      type: "synap:context:result";
+      id: string;
+      data?: SurfaceContext;
+      error?: string;
+    }
   | {
       type: "synap:mutate:result";
       id: string;
@@ -54,11 +65,17 @@ export function parseCellBridgeMessage(
 ): CellBridgeFrameMessage | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const msg = data as Record<string, unknown>;
-  if (msg.type !== "synap:query" && msg.type !== "synap:mutate") return null;
+  if (
+    msg.type !== "synap:query" &&
+    msg.type !== "synap:mutate" &&
+    msg.type !== "synap:context"
+  )
+    return null;
   const { id, operation } = msg;
   if (typeof id !== "string" || id.length === 0 || id.length > MAX_ID_LENGTH) {
     return null;
   }
+  if (msg.type === "synap:context") return { type: "synap:context", id };
   if (
     typeof operation !== "string" ||
     operation.length === 0 ||

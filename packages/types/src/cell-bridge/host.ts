@@ -13,7 +13,9 @@
  *     page that navigated its frame to a real address (https://…) no longer
  *     has it, so the bridge is shut to it even before the host notices;
  *   - it parses as a bridge message (`parseCellBridgeMessage`).
- * Then: every write is refused (`CELL_BRIDGE_WRITE_REFUSED`); an op outside
+ * Then: `synap:context` is answered with the host's context (`context()`,
+ * frame contract v3), or an error when the host gives none; every write is
+ * refused (`CELL_BRIDGE_WRITE_REFUSED`); an op outside
  * the shared table is refused; an allowed op is read with only its own params
  * (`pickBridgeParams`), by `read` (the viewer's own session, the host's lens).
  * The answer is posted back to that same window, only while it is still the
@@ -30,6 +32,11 @@ import {
   parseCellBridgeMessage,
   type CellBridgeHostMessage,
 } from "./protocol.js";
+import {
+  FRAME_NO_CONTEXT,
+  parseSurfaceContext,
+  type SurfaceContext,
+} from "./surface-context.js";
 import {
   isCellBridgeReadOp,
   pickBridgeParams,
@@ -57,6 +64,40 @@ export interface CellBridgeHostOptions {
     op: CellBridgeReadOp,
     params: Record<string, CellBridgeParamValue>
   ) => Promise<unknown>;
+  /**
+   * What the page is about (`window.synap.context()`): the anchor, its space,
+   * project and goal, the host's filters and the project's brand. Absent: the
+   * page reads an error. Throws on a failed read.
+   */
+  context?: () => SurfaceContext | Promise<SurfaceContext>;
+}
+
+/**
+ * The answer to `synap:context`: the context as plain contract data, or why
+ * there is none (no context here, a failed read, something that is not one).
+ */
+export async function cellBridgeContextAnswer(
+  id: string,
+  context: (() => SurfaceContext | Promise<SurfaceContext>) | undefined
+): Promise<CellBridgeHostMessage> {
+  if (!context)
+    return { type: "synap:context:result", id, error: FRAME_NO_CONTEXT };
+  try {
+    const data = parseSurfaceContext(await context());
+    return data
+      ? { type: "synap:context:result", id, data }
+      : {
+          type: "synap:context:result",
+          id,
+          error: "The frame's context could not be handed over.",
+        };
+  } catch (err) {
+    return {
+      type: "synap:context:result",
+      id,
+      error: cellBridgeErrorText(err),
+    };
+  }
 }
 
 /** The largest answer handed to a page: 1 M characters of JSON. */
@@ -122,6 +163,10 @@ export function createCellBridgeHost(options: CellBridgeHostOptions) {
       frame.postMessage(message, "*");
     };
 
+    if (msg.type === "synap:context") {
+      reply(await cellBridgeContextAnswer(msg.id, options.context));
+      return;
+    }
     if (msg.type === "synap:mutate") {
       reply({
         type: "synap:mutate:result",
