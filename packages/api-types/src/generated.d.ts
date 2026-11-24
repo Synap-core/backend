@@ -17606,8 +17606,10 @@ export interface UnifiedRun {
 	summary: string | null;
 	error: string | null;
 	/**
-	 * Why a run ended before it finished with nobody broken (`stop_reason`:
-	 * `budget`, `stages_left`, `no_effect`); null on every other ledger.
+	 * Why a failed run stopped before it finished (`stop_reason`): `budget` (it
+	 * reached a limit, nothing broke), `stages_left` (its turns kept ending
+	 * early: a fault), `no_effect` (its turn changed nothing). Null on every
+	 * other ledger.
 	 */
 	stopReason: string | null;
 	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
@@ -28424,6 +28426,8 @@ export interface RecentFlowRun {
 	status: RunStatus;
 	startedAt: Date;
 	completedAt: Date | null;
+	/** Why a failed run stopped (`stop_reason`; `UnifiedRun.stopReason`). */
+	stopReason: string | null;
 	/**
 	 * The focus session this run drives, or null when it has none — the door a
 	 * `waiting_on_you` mark opens (the owed slot lives on that session). A
