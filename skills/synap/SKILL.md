@@ -96,7 +96,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Inbox**           | needs-you signals       | what needs me?                        | one list: decisions, questions, routine changes, broken · not Work                                                                                                                                   |
 | **Questions**       | owed slot ask           | what did an agent ask me?             | an Inbox filter · answer it, the work resumes                                                                                                                                                        |
 | **Routine changes** | reversible proposal     | what can I approve in a batch?        | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                                                    |
-| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a stuck session                                                                                                                                                      |
+| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a run nobody claimed (`blocked`), a stuck session                                                                                                                                  |
 | **Library**         | data (things, files)    | what did we bring in?                 | what you and your agents kept or made: things, files, imports · not a space                                                                                                                          |
 | **Unfiled**         | entity in no project    | what is not filed yet?                | things outside every project · file them into one                                                                                                                                                    |
 | **Agents**          | agent users + keys      | who acts for me?                      | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                                               |
@@ -199,7 +199,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`, `timezone`: default the owner's zone) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into an automation the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 
@@ -396,7 +396,7 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 **Propose its `criteria` — do not grade yourself without them.** Two to five binary, observable statements the person can validate or rewrite ("`list_profiles` returns the `grp-run` kind"), not "the pack is good". They may equally be written by the person; what is not allowed is neither. A session with no criteria leaves you nothing to report against but your own opinion, which is how "85% complete" gets said about work nobody can check. Criteria are declarable at `synap_start_session` (as `outcomes` with `kind: 'fact'`, or the older `criteria`) and upserted later with `synap_update_session` — a session created inside a plan (`synap_capture` `sessions[]`) carries both: give each step its `criteria` with its `expectedOutputs`, and they land when the plan is approved.
 
-**A discovered prerequisite is a blocking child, not a paragraph in the same session.** When the goal cannot be finished until infrastructure exists, start that infrastructure as its own session: `parentSessionId` of the goal session, plus `suspendedIntent` — one line naming what the goal was about to do. That pair links the child (`spawned_from`) and blocks the parent (`blocked_by` the child). Work the child. Do not keep building the parent goal beside it. The parent stays open and waits; when the child is validated and closed, the parent unblocks and `suspendedIntent` is what you resume. A child that is only a slice of the same goal passes `parentSessionId` alone and does not block the parent.
+**A discovered prerequisite is a blocking child, not a paragraph in the same session.** When the goal cannot be finished until infrastructure exists, start that infrastructure as its own session: `parentSessionId` of the goal session, plus `suspendedIntent` — one line naming what the goal was about to do. That pair links the child (`spawned_from`) and blocks the parent (`blocked_by` the child). Work the child. Do not keep building the parent goal beside it. The parent stays open and waits; when the child closes done, the parent unblocks (a child closed not done, cancelled or failed holds it) and `suspendedIntent` is what you resume. A child that is only a slice of the same goal passes `parentSessionId` alone and does not block the parent.
 
 ### 1. Ask before you build (required)
 
@@ -426,7 +426,7 @@ Then **wait**. After that write lands (`proposed` is success), the _next_ turn m
 
 #### ONE write may be a whole connected PLAN
 
-`synap_capture` accepts `projects[]` / `sessions[]` / `documents[]` / `links[]` / `entities[]` / `relations[]` — and `skills[]` / `automations[]` / `rules[]` — in a **single call** that files **ONE proposal**. Steps reference each other by `ref`; ids exist only after approval. A plan carrying a session or project applies **all-or-none**, compensated if any step fails.
+`synap_capture` accepts `projects[]` / `sessions[]` / `documents[]` / `links[]` / `entities[]` / `relations[]` — and `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `skills[]` / `automations[]` / `rules[]` — in a **single call** that files **ONE proposal**. Steps reference each other by `ref`; ids exist only after approval, and the person's approval creates every step (an automation in it is turned on). A plan carrying a session or project applies **all-or-none**, compensated if any step fails.
 
 This is the difference between a reviewer seeing one graph and deciding once, and seeing fourteen cards with no visible relationship. **Prefer the plan whenever the structure is connected.** It is not a 7-step sequence — it is one decision about one shape.
 
@@ -480,7 +480,7 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                 |
 | a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                                          |
 
-**A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
+**A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. A goal grants no access: its agent works where its person is a member. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
 **Legacy only: goals with steps.** Goals have no stages. A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
 
@@ -777,7 +777,7 @@ GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
 ```
 
 `scope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
-`scope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).  
+`scope: "workspace"` = scoped to one workspace (deal, file, capture, and custom kinds declared so; a custom kind defaults to pod).  
 Each profile includes its full property schema. Use `createCommand` as a template.
 
 **2. Ask before answering**  
@@ -933,7 +933,7 @@ The person approves it on one page and may narrow it, never widen it; the key is
 
 1. The user explicitly says "in my `X` workspace" / "inside this space".
 2. You're inside a clear workspace context (the user is on a project page, discussing that project — new tasks go into that workspace).
-3. The profile is workspace-scoped by definition (`deal`, `file`, `capture`, and custom profiles). The backend already uses the user's active workspace when you don't pass one — usually this is what you want.
+3. The profile is workspace-scoped by definition (`deal`, `file`, `capture`, and any kind declared `entityScope: "workspace"`; a custom kind is pod-wide unless declared so). The backend already uses the user's active workspace when you don't pass one — usually this is what you want.
 
 **Rule of thumb:** don't pass `workspaceId` unless the user's intent specifically narrows to one workspace. A task the user dictates "from the couch" belongs to the whole pod, not to whichever workspace was last open.
 
@@ -1380,7 +1380,9 @@ retry it into another space.
 `synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
 the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
-`synap_move_entities`. All three are reviewed.
+`synap_move_entities`; a playbook: its `playbookIds` (it carries its
+automations). To let another space use a playbook or skill without moving it:
+`synap_grant_profile_access` (`playbookId` / `skillId`). All are reviewed.
 
 **Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
 
@@ -2496,7 +2498,7 @@ Every automation has:
 | Type      | Config                       | Example                              |
 | --------- | ---------------------------- | ------------------------------------ |
 | `event`   | `{ eventPattern, filters? }` | Entity created with specific profile |
-| `cron`    | `{ expression }`             | Daily at 9am: `"0 9 * * *"`          |
+| `cron`    | `{ expression, timezone? }`  | Daily at 9am: `"0 9 * * *"`          |
 | `webhook` | `{ webhookSubscriptionId }`  | External service sends data          |
 | `manual`  | `{}`                         | User-triggered from UI               |
 
@@ -2538,11 +2540,11 @@ Other subjects move through the same door and emit their own transition event, f
 
 **The pod applies some automations itself.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each shows in the same list as the person's automations (Built in, Declared on a link), applied by the pod after the move (`work-model`). Do not write an automation that repeats one.
 
-**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
+**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to an automation like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
 ### Cron Expressions
 
-Standard 5-field cron (minute hour day month weekday):
+Standard 5-field cron (minute hour day month weekday), read in `triggerConfig.timezone` (an IANA zone such as `"Europe/Paris"`). Without a zone it runs in UTC, so the person's 9am needs their zone; an unknown zone is refused.
 
 - `"0 9 * * *"` — daily at 9am
 - `"0 9 * * MON"` — every Monday at 9am
@@ -2687,7 +2689,7 @@ Only server-encrypted secrets can be resolved by the automation engine. The user
 2. **Name clearly** — Use descriptive labels: "When task created with high priority" not "Trigger 1".
 3. **One purpose** — Each automation should do one thing well. Compose multiple automations rather than building one complex flow.
 4. **Filter early** — Use trigger filters to avoid unnecessary execution. Don't use a condition step when a trigger filter suffices.
-5. **Test first** — Create automations as `draft` status. Let the user review the flow visualization before activating.
+5. **Review first** — An agent's create is a proposal: the person reviews the flow visualization, and approving it turns the automation on. Ask for `draft` only when they want to switch it on later themselves.
 
 ## Example: Auto-archive completed tasks
 
@@ -3484,7 +3486,7 @@ proposal; the review is the catalog commit.
 | `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`.                                                                                                                                                                               |
-| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition. |
+| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, `timezone`) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to an automation the owner can pause; it fires once per thing per transition. |
 | `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -3499,8 +3501,8 @@ lifecycle kinds with no process may only go down).
 
 `synap_create_playbook` takes the contract as-is. Before calling it, read the
 subject kind (`synap_list_profiles`) and copy the options of its lifecycle
-property exactly. Over MCP you cannot declare or change a lifecycle; it comes
-with the kind's template.
+property exactly. A kind with no lifecycle yet: `synap_declare_lifecycle`, or a
+`lifecycles[]` step in the same `synap_capture` plan as the kind and playbook.
 
 ```json
 {
@@ -3543,8 +3545,10 @@ with the kind's template.
 ```
 
 These are the Content OS post options; use the ones the kind really has. A
-batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
-"Idea", "mode": "propose" }` (one session over every post in Idea, weekly) or
+batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "timezone":
+"Europe/Paris", "status": "Idea", "mode": "propose" }` (one session over every
+post in Idea, Mondays at 8:00 Paris time; without `timezone` the cron is read in
+the playbook owner's zone) or
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
@@ -3687,7 +3691,7 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 - **`paused: true` → say it is paused** and that a person must resume it (Settings › Agents). Do not hand it off.
 - **`live: false` → say when it was last seen** (`lastSeenAt`) and that it picks the work up the next time it checks in. Hand off only if the person still wants it.
 - **Is a runner serving it? Read `servedAt` and `nobodyRuns`.** `nobodyRuns: false` (a recent `servedAt`): a runner serves it now. `nobodyRuns: true`: nothing on that computer runs it now; say so ("the agent on your Mac has not run since <servedAt>") and hand off only if the person wants the run to wait. `nobodyRuns: null`: the pod cannot tell (no runner ever stamped, or an old CLI); say "I cannot tell whether anything runs it; last seen <lastSeenAt>". `live` says only that its key was used.
-- **No runner online → recommend waiting, never a second path.** The session shows who holds it (nobody, or the agent stopped) until a runner picks it up. Do not do the same job another way; if the computer must be awake, that is the person's step.
+- **No runner online → recommend waiting, never a second path.** The run waits `queued` for its named holder; if nobody claims it in time it turns `blocked` and the person is asked who runs it instead. Do not do the same job another way; if the computer must be awake, that is the person's step.
 - **`canTakeYourWork: false`** — `whyNot` says why: `not_owned` (another person's agent: it would never see this work), `wrong_reach` (the pod's own agent: it answers in rooms, it never picks work up), `paused`.
 
 **2. Hand it — through a session.** The session's roster is how work reaches an agent.

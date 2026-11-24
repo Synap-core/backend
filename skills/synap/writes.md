@@ -100,7 +100,9 @@ retry it into another space.
 `synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
 the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
-`synap_move_entities`. All three are reviewed.
+`synap_move_entities`; a playbook: its `playbookIds` (it carries its
+automations). To let another space use a playbook or skill without moving it:
+`synap_grant_profile_access` (`playbookId` / `skillId`). All are reviewed.
 
 **Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
 
