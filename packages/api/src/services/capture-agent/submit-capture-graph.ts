@@ -261,8 +261,9 @@ export interface CapturePlanInput {
   tracks?: Array<Omit<CompositeCreateTrackOp, "op">>;
   /**
    * RE-PLAN edits on existing steps (`update_session`, `remove_link`),
-   * carried WITH their discriminant. Hub REST only: the re-plan loop files
-   * them; `synap_revise_proposal` takes them as operations.
+   * carried WITH their discriminant. Both capture doors (`synap_capture`
+   * declares them; Hub REST); `synap_revise_proposal` takes them as
+   * operations.
    */
   edits?: Array<CompositeUpdateSessionOp | CompositeRemoveLinkOp>;
   /**
