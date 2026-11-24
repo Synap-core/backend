@@ -859,6 +859,51 @@ export function selectClaimsWithEvidence(
   return out;
 }
 
+/** A claimed slot WITH evidence that its required criteria still hold. */
+export interface ClaimHeldByCriterion {
+  key: string;
+  label: string;
+  /** The required criteria naming it (`outputKey`), in declared order. */
+  criteria: Array<Pick<SessionCriterion, "key" | "statement" | "check">>;
+}
+
+/**
+ * The claims {@link selectClaimsWithEvidence} leaves open ONLY because a
+ * required criterion checks the slot: claimed, open, the agent's, evidence
+ * in place. Their reply must name that criterion, never say the evidence is
+ * missing (finding f301e997). Pure.
+ */
+export function selectClaimsHeldByCriterion(
+  outputs: readonly ExpectedOutput[],
+  evidenceByKey: ReadonlyMap<string, SlotEvidence>,
+  criteria: readonly SessionCriterion[]
+): ClaimHeldByCriterion[] {
+  const keys = deriveSlotKeys(outputs);
+  const out: ClaimHeldByCriterion[] = [];
+  outputs.forEach((slot, index) => {
+    const key = keys[index];
+    if (!slot || !key) return;
+    if (slot.claimedDone !== true) return;
+    if (slot.status === "done" || slot.retiredAt != null) return;
+    if (slot.owner === "human") return;
+    if (!(evidenceByKey.get(key) ?? refEvidence(slot))) return;
+    const holding = criteria.filter(
+      (c) => c.required !== false && c.outputKey === key
+    );
+    if (holding.length === 0) return;
+    out.push({
+      key,
+      label: slot.label,
+      criteria: holding.map((c) => ({
+        key: c.key,
+        statement: c.statement,
+        check: c.check,
+      })),
+    });
+  });
+  return out;
+}
+
 /**
  * The evidence stamp — status + the evidence it cites. Pure. Like
  * {@link stampSatisfied}, the `done` here always carries its lineage.
@@ -886,6 +931,8 @@ export interface SatisfyClaimsByEvidenceResult {
   satisfied: Array<{ key: string; label: string; evidence: SlotEvidence }>;
   /** The array as written, when anything was closed. */
   outputs?: ExpectedOutput[];
+  /** Claims with evidence left open for their required criteria. */
+  held?: ClaimHeldByCriterion[];
 }
 
 /**
@@ -952,7 +999,8 @@ export async function satisfyClaimsByEvidence(params: {
       evidenceByKey.set(key, { kind: "output", id: output.id });
     }
   }
-  const checkedKeys = checkedOutputKeys(readCriteria(session.criteria));
+  const criteria = readCriteria(session.criteria);
+  const checkedKeys = checkedOutputKeys(criteria);
 
   const now = params.now ?? new Date();
   return db
@@ -975,7 +1023,14 @@ export async function satisfyClaimsByEvidence(params: {
         evidenceByKey,
         checkedKeys
       );
-      if (picks.length === 0) return { satisfied: [] };
+      const held = selectClaimsHeldByCriterion(
+        current,
+        evidenceByKey,
+        criteria
+      );
+      if (picks.length === 0) {
+        return { satisfied: [], ...(held.length > 0 ? { held } : {}) };
+      }
       const next = stampEvidenced(current, picks, now);
       await tx
         .update(focusSessions)
@@ -996,6 +1051,7 @@ export async function satisfyClaimsByEvidence(params: {
           evidence: p.evidence,
         })),
         outputs: next,
+        ...(held.length > 0 ? { held } : {}),
       };
     })
     .then(async (r) => {

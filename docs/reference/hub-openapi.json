@@ -41445,6 +41445,10 @@
                           },
                           "required": ["kind"]
                         },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
                         "required": { "type": "boolean" },
                         "owner": {
                           "type": "string",
@@ -45808,6 +45812,10 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         },
                         "required": { "type": "boolean" },
                         "owner": {
