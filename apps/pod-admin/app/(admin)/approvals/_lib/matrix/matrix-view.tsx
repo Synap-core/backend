@@ -122,6 +122,7 @@ function PartialBanner({
 }: {
   partial: NonNullable<AgentMatrix["partial"]>;
 }) {
+  const t = useT(CATALOGS);
   return (
     <p
       role="status"
@@ -129,10 +130,12 @@ function PartialBanner({
     >
       <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
       <span>
-        Part of the pod is left out: {partial.agentsOmitted} agents and{" "}
-        {partial.columnsOmitted} columns past the limit of{" "}
-        {AGENT_MATRIX_LIMITS.agents} agents × {AGENT_MATRIX_LIMITS.columns}{" "}
-        columns.
+        {t("partial", {
+          agents: partial.agentsOmitted,
+          columns: partial.columnsOmitted,
+          maxAgents: AGENT_MATRIX_LIMITS.agents,
+          maxColumns: AGENT_MATRIX_LIMITS.columns,
+        })}
       </span>
     </p>
   );
@@ -230,6 +233,7 @@ function WholeGrid({
   matrix: AgentMatrix;
   onRefetch: () => void;
 }) {
+  const t = useT(CATALOGS);
   // Small pods open expanded; once the person toggles, their choice rules.
   const [expanded, setExpanded] = useState<Set<string> | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -266,7 +270,7 @@ function WholeGrid({
             radius="md"
             onPress={() => setShowAll(true)}
           >
-            Show all {matrix.groups.length} agent types
+            {t("showAllTypes", { n: matrix.groups.length })}
           </Button>
         </div>
       )}
@@ -288,9 +292,10 @@ function WholeGrid({
 }
 
 function Legend() {
+  const t = useT(CATALOGS);
   return (
     <ul
-      aria-label="Marks"
+      aria-label={t("legend.aria")}
       className="flex flex-wrap items-center gap-4 text-[12px] text-foreground/70"
     >
       {LEGEND.map((mark) => (
@@ -309,7 +314,7 @@ function Legend() {
       ))}
       <li className="flex items-center gap-1.5">
         <Lock className="h-3 w-3" aria-hidden />
-        Platform limit
+        {t("legend.platform")}
       </li>
     </ul>
   );
@@ -317,18 +322,20 @@ function Legend() {
 
 /** INVITE — the person fills it themselves, from a computer. */
 function NoAgents() {
+  const t = useT(CATALOGS);
   return (
     <div className="flex flex-col items-center gap-3 rounded-lg px-6 py-12 text-center ring-1 ring-inset ring-foreground/10">
       <Bot className="h-6 w-6 text-foreground/40" aria-hidden />
       <div className="flex flex-col gap-1">
-        <p className="text-[14px] font-medium text-foreground">No agents yet</p>
+        <p className="text-[14px] font-medium text-foreground">
+          {t("none.title")}
+        </p>
         <p className="max-w-md text-[12.5px] text-foreground/65">
-          Connect one from a computer. Each agent it sets up shows here with
-          what it may do in every space.
+          {t("none.body")}
         </p>
       </div>
       <Snippet symbol="" size="sm" className="font-mono">
-        synap init
+        {t("none.command")}
       </Snippet>
     </div>
   );
@@ -336,6 +343,7 @@ function NoAgents() {
 
 /** EXPLAIN — only installing or writing a process fills the process columns. */
 function NoProcesses() {
+  const t = useT(CATALOGS);
   return (
     <div className="flex items-start gap-3 rounded-lg px-4 py-3 ring-1 ring-inset ring-foreground/10">
       <Workflow
@@ -344,12 +352,10 @@ function NoProcesses() {
       />
       <div className="flex flex-1 flex-col gap-0.5">
         <p className="text-[13px] font-medium text-foreground">
-          No processes yet
+          {t("noProcesses.title")}
         </p>
         <p className="text-[12px] text-foreground/65">
-          A process is a playbook that works a kind&apos;s lifecycle; each gets
-          its own column here. Until then, Other work shows what each agent may
-          do in each space.
+          {t("noProcesses.body")}
         </p>
       </div>
       <Button
@@ -359,7 +365,7 @@ function NoProcesses() {
         variant="flat"
         radius="md"
       >
-        Browse templates
+        {t("noProcesses.browse")}
       </Button>
     </div>
   );

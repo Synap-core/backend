@@ -35,7 +35,7 @@ import { GRANT_PRESETS } from "@synap-core/types/grants";
 import { Outcome } from "../approve-agent/[keyId]/ApproveForm";
 import { WriteModeChoice } from "../_lib/write-mode-choice";
 import { useT } from "../../lib/i18n/locale-provider";
-import { en, fr } from "./copy";
+import { deviceT, en, fr } from "./copy";
 import {
   AGENT_WRITE_MODE_CHOICES,
   agentRoleSlug,
@@ -86,15 +86,18 @@ function Header({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
-const RUN_AGAIN = (
-  <>
-    Run{" "}
-    <code className="font-mono text-foreground/85">
-      {DEVICE_RUN_AGAIN_COMMAND}
-    </code>{" "}
-    again in your terminal for a new code.
-  </>
-);
+function RunAgain() {
+  const t = deviceT();
+  return (
+    <>
+      {t("run.before")}{" "}
+      <code className="font-mono text-foreground/85">
+        {DEVICE_RUN_AGAIN_COMMAND}
+      </code>{" "}
+      {t("run.after")}
+    </>
+  );
+}
 
 // ── Enter a code ─────────────────────────────────────────────────────────────
 
@@ -109,11 +112,12 @@ export function EnterCodeView({
   onSubmit: () => void;
   complete: boolean;
 }) {
+  const t = deviceT();
   return (
     <>
       <Header
         eyebrow={`Connect a ${COMPUTER_NOUN.toLowerCase()}`}
-        title="Enter the code from your terminal"
+        title={t("enter.title")}
       />
       <CardBody className={`${PAD} pb-7 pt-5`}>
         <form
@@ -124,7 +128,7 @@ export function EnterCodeView({
           }}
         >
           <Input
-            aria-label="Code"
+            aria-label={t("enter.code")}
             autoFocus
             autoComplete="one-time-code"
             autoCapitalize="characters"
@@ -140,7 +144,7 @@ export function EnterCodeView({
             className="font-medium"
             isDisabled={!complete}
           >
-            Continue
+            {t("enter.continue")}
           </Button>
         </form>
       </CardBody>
@@ -206,9 +210,7 @@ export function PendingView(p: PendingViewProps) {
       <CardBody className={`flex flex-col gap-5 ${PAD} pb-7 pt-5`}>
         {/* The device binding: the person compares, the pod already matched. */}
         <div className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-          <p className="text-small text-foreground/65">
-            Check your terminal shows
-          </p>
+          <p className="text-small text-foreground/65">{t("pending.check")}</p>
           <p
             data-testid="device-code"
             className="font-mono text-2xl font-semibold tracking-[0.2em] text-foreground"
@@ -248,7 +250,9 @@ export function PendingView(p: PendingViewProps) {
                 <Radio
                   key={c.id}
                   value={c.id}
-                  description={`Already connected · ${(c.agents ?? []).length} agent${(c.agents ?? []).length === 1 ? "" : "s"}`}
+                  description={t("pending.already", {
+                    n: (c.agents ?? []).length,
+                  })}
                 >
                   {c.name}
                 </Radio>
@@ -283,7 +287,7 @@ export function PendingView(p: PendingViewProps) {
 
           <Input
             size="sm"
-            label="Name"
+            label={t("pending.name")}
             value={p.computerName}
             onValueChange={p.onComputerName}
             isInvalid={!p.computerName.trim()}
@@ -389,7 +393,7 @@ export function PendingView(p: PendingViewProps) {
             }
             onPress={p.onApprove}
           >
-            Approve
+            {t("pending.approve")}
           </Button>
           <Button
             variant="flat"
@@ -399,30 +403,32 @@ export function PendingView(p: PendingViewProps) {
             isLoading={p.busy === "deny"}
             onPress={p.onDeny}
           >
-            This wasn&apos;t me
+            {t("pending.notMe")}
           </Button>
         </div>
 
         <details className="text-tiny text-foreground/65">
-          <summary className="cursor-pointer select-none">Details</summary>
+          <summary className="cursor-pointer select-none">
+            {t("pending.details")}
+          </summary>
           <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 pt-2">
-            <Detail label="Access">
+            <Detail label={t("detail.access")}>
               {r.accessName}
               {preset ? ` — ${preset.description}` : ""}
             </Detail>
-            <Detail label="Key lifetime">
+            <Detail label={t("detail.keyLifetime")}>
               {r.keyTtlDays} days, renewed by your terminal
             </Detail>
-            <Detail label="Requested from">
+            <Detail label={t("detail.requestedFrom")}>
               {r.requesterIp ?? "Unknown address"}
             </Detail>
-            <Detail label="Client">
+            <Detail label={t("detail.client")}>
               {[r.clientName, r.userAgent].filter(Boolean).join(" · ")}
             </Detail>
-            <Detail label="Requested">
+            <Detail label={t("detail.requested")}>
               {new Date(r.createdAt).toLocaleString()}
             </Detail>
-            <Detail label="Expires">
+            <Detail label={t("detail.expires")}>
               {new Date(r.expiresAt).toLocaleString()}
             </Detail>
           </dl>
@@ -649,12 +655,13 @@ function Detail({ label, children }: { label: string; children: ReactNode }) {
 // ── Terminal answers ─────────────────────────────────────────────────────────
 
 export function ApprovedView({ name }: { name: string }) {
+  const t = deviceT();
   return (
     <CardBody className={`${PAD} py-7`}>
       <Outcome
         tone="success"
         icon={<Check className="h-6 w-6" strokeWidth={2.2} />}
-        title="Return to your terminal"
+        title={t("done.title")}
         message={`${name} is connected. Your terminal finishes setting it up — you can close this tab.`}
       />
     </CardBody>
@@ -694,7 +701,7 @@ export function GoneView({
       </span>
       <p className="text-medium font-medium text-foreground">{title}</p>
       <p className="max-w-[20rem] text-small text-foreground/65">
-        Codes last 10 minutes and work once. {RUN_AGAIN}
+        Codes last 10 minutes and work once. <RunAgain />
       </p>
       <Button size="sm" variant="flat" onPress={onEnterAnother}>
         Enter another code
@@ -705,12 +712,13 @@ export function GoneView({
 
 /** EXPLAIN: too many wrong codes — the pod paused lookups for this person. */
 export function LockedView({ message }: { message: string }) {
+  const t = deviceT();
   return (
     <CardBody className={`${PAD} py-7`}>
       <Outcome
         tone="warning"
         icon={<AlertTriangle className="h-6 w-6" strokeWidth={2.2} />}
-        title="Too many wrong codes"
+        title={t("locked.title")}
         message={message}
       />
     </CardBody>
@@ -725,17 +733,16 @@ export function FailedView({
   message: string;
   onRetry: () => void;
 }) {
+  const t = deviceT();
   return (
     <CardBody className={`${PAD} py-7`}>
       <div
         role="alert"
         className="flex items-center justify-between gap-3 rounded-lg bg-danger/10 px-3.5 py-3 text-small ring-1 ring-inset ring-danger/30"
       >
-        <span className="text-foreground">
-          Couldn&apos;t read this request: {message}
-        </span>
+        <span className="text-foreground">{t("failed.read", { message })}</span>
         <Button size="sm" variant="flat" onPress={onRetry}>
-          Retry
+          {t("failed.retry")}
         </Button>
       </div>
     </CardBody>
@@ -743,9 +750,10 @@ export function FailedView({
 }
 
 export function LoadingView() {
+  const t = deviceT();
   return (
     <CardBody className={`${PAD} py-7`}>
-      <p className="text-small text-foreground/65">Reading…</p>
+      <p className="text-small text-foreground/65">{t("loading")}</p>
     </CardBody>
   );
 }
