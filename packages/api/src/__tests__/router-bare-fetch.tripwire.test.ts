@@ -55,10 +55,6 @@ const KNOWN: Record<string, { count: number; reason: string }> = {
     count: 1,
     reason: "the operator's CONTROL_PLANE_URL (configuration, not content)",
   },
-  "hub-protocol/rest/cells.ts": {
-    count: 1,
-    reason: "the operator's CONTROL_PLANE_URL (configuration, not content)",
-  },
   "hub-protocol/signals.ts": {
     count: 1,
     reason: "the operator's CONTROL_PLANE_URL source relay",

@@ -1,0 +1,80 @@
+{
+  "v": 5,
+  "entries": {
+    "introduction--docs": {
+      "id": "introduction--docs",
+      "title": "Introduction",
+      "name": "Docs",
+      "importPath": "./stories/Introduction.mdx",
+      "storiesImports": [],
+      "type": "docs",
+      "tags": ["dev", "test", "manifest", "unattached-mdx"]
+    },
+    "inputs-spatialbutton--default": {
+      "type": "story",
+      "subtype": "story",
+      "id": "inputs-spatialbutton--default",
+      "name": "Default",
+      "title": "Inputs/SpatialButton",
+      "importPath": "./stories/inputs/SpatialButton.stories.tsx",
+      "componentPath": "../../packages/web/src/spatial-ui/components.tsx",
+      "tags": ["dev", "test", "manifest", "autodocs", "canvas"],
+      "exportName": "Default"
+    },
+    "inputs-spatialbutton--danger": {
+      "type": "story",
+      "subtype": "story",
+      "id": "inputs-spatialbutton--danger",
+      "name": "Danger",
+      "title": "Inputs/SpatialButton",
+      "importPath": "./stories/inputs/SpatialButton.stories.tsx",
+      "componentPath": "../../packages/web/src/spatial-ui/components.tsx",
+      "tags": ["dev", "test", "manifest", "autodocs"],
+      "exportName": "Danger"
+    },
+    "data-actormark--default": {
+      "type": "story",
+      "subtype": "story",
+      "id": "data-actormark--default",
+      "name": "Default",
+      "title": "Data/ActorMark",
+      "importPath": "./stories/data/ActorMark.stories.tsx",
+      "componentPath": "../../packages/web/src/object-registry/react.tsx",
+      "tags": ["dev", "test", "manifest", "autodocs", "canvas"],
+      "exportName": "Default"
+    },
+    "data-objectchip--default": {
+      "type": "story",
+      "subtype": "story",
+      "id": "data-objectchip--default",
+      "name": "Default",
+      "title": "Data/ObjectChip",
+      "importPath": "./stories/data/ObjectChip.stories.tsx",
+      "componentPath": "../../packages/web/src/object-registry/react.tsx",
+      "tags": ["dev", "test", "manifest", "autodocs"],
+      "exportName": "Default"
+    },
+    "pages-desktop-home--full": {
+      "type": "story",
+      "subtype": "story",
+      "id": "pages-desktop-home--full",
+      "name": "Full",
+      "title": "Pages/Desktop/Home",
+      "importPath": "./stories/pages/desktop/Home.stories.tsx",
+      "componentPath": "../../packages/web/src/home/index.ts",
+      "tags": ["dev", "test", "manifest", "page"],
+      "exportName": "Full"
+    },
+    "pages-phone-settings--page": {
+      "type": "story",
+      "subtype": "story",
+      "id": "pages-phone-settings--page",
+      "name": "Page",
+      "title": "Pages/Phone/settings",
+      "importPath": "./stories/pages/phone/settings.stories.tsx",
+      "componentPath": "../../packages/web/src/settings/index.ts",
+      "tags": ["dev", "test", "manifest", "page"],
+      "exportName": "Page"
+    }
+  }
+}

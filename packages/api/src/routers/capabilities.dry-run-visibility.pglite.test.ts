@@ -47,6 +47,7 @@ import {
   podMembers,
   users,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { capabilitiesRouter } from "./capabilities.js";
 
@@ -115,6 +116,7 @@ beforeAll(async () => {
     podMembers,
     users,
     projectMembers,
+    spaceAccess,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }

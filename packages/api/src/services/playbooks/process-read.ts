@@ -52,6 +52,7 @@ import {
   automations,
   playbookAutomations,
   playbooks,
+  usableInSpaceWhere,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
 import {
@@ -943,14 +944,12 @@ async function listProcessCards(
   input: { workspaceId?: string | null }
 ): Promise<ProcessSummary[]> {
   const narrow =
-    typeof input.workspaceId === "string"
-      ? or(
-          isNull(playbooks.workspaceId),
-          eq(playbooks.workspaceId, input.workspaceId)
-        )
-      : input.workspaceId === null
-        ? isNull(playbooks.workspaceId)
-        : undefined;
+    input.workspaceId === undefined
+      ? undefined
+      : usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        });
   const rows = await scopedDb(AccessContext.from(reader)).findMany<Row>(
     playbooks,
     {

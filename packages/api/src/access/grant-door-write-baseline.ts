@@ -140,8 +140,6 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
   "POST /vault/redeem",
   "POST /webhooks",
   "POST /workers",
-  "POST /workers/:ruleId/paused",
-  "POST /workers/:ruleId/run",
   "POST /workspaces/:workspaceId/archive",
   "POST /workspaces/:workspaceId/purge",
   "POST /workspaces/:workspaceId/restore",
@@ -155,4 +153,4 @@ export const UNCLASSIFIED_WRITE_ROUTES: readonly string[] = [
 ];
 
 /** Lower it when the list shrinks; never raise it. */
-export const UNCLASSIFIED_WRITE_ROUTES_CAP = 130;
+export const UNCLASSIFIED_WRITE_ROUTES_CAP = 127;

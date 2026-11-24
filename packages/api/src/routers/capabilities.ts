@@ -54,6 +54,7 @@ import {
   inArray,
   drizzleSql,
   listableEntityWhere,
+  usableInSpaceWhere,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
@@ -558,10 +559,10 @@ async function findDependentProcesses(
         and(
           playbookVisibility,
           workspaceId
-            ? or(
-                isNull(playbooks.workspaceId),
-                eq(playbooks.workspaceId, workspaceId)
-              )
+            ? usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+                type: "playbook",
+                id: playbooks.id,
+              })
             : undefined,
           inArray(playbookAutomations.automationId, matchedAutomationIds)
         )

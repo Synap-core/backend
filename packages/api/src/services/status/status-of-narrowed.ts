@@ -5,10 +5,15 @@
  */
 import { STATUS_OF_NARROWED_INCLUDES } from "../../access/grant-door-fence.js";
 import type { StatusOfInclude, StatusOfAnswer } from "./status-read.js";
+import {
+  narrowStatusOfWork,
+  NO_WORK_CONTEXT,
+  type NarrowWorkContext,
+} from "./status-of-narrowed-work.js";
 
 /** What a narrowed answer leaves out, named on the wire so it is never read as empty. */
 export const STATUS_OF_WITHHELD_REASON =
-  "This key's grant does not read everything a full status answer reads (proposals, slots, holds, roles, the work packet): only the status, its moves and its history are shown, for the ids the grant reaches.";
+  "This key's grant does not read everything a full status answer reads (proposals, slots, holds, roles, links, rollups): only the status, its moves, its history and a floored projection of its work are shown, for the ids the grant reaches.";
 
 /** The asked parts split into those a narrowed key is answered and those withheld. */
 export function narrowStatusOfInclude(asked: readonly StatusOfInclude[]): {
@@ -27,7 +32,8 @@ export function narrowStatusOfInclude(asked: readonly StatusOfInclude[]): {
 /**
  * ALLOW-LIST of the answer's own keys a narrowed key keeps. A field added to
  * `StatusOf` later is withheld until someone lists it here
- * (`status-of-narrowed.test.ts` pins this exact set). `live` (is an agent
+ * (`status-of-narrowed.test.ts` pins this exact set). `work` is NOT copied:
+ * it is rebuilt field by field (`status-of-narrowed-work.ts`). `live` (is an agent
  * working on a session now), `stuck` (its own step's rule), `category` and
  * `tone` (its status word's class) are derived from the subject's own row, so
  * they are kept; everything that reads proposals, slots, holds or roles by
@@ -47,6 +53,7 @@ export const STATUS_OF_NARROWED_ANSWER_KEYS = [
   "live",
   "moves",
   "history",
+  "work",
   "link",
 ] as const;
 
@@ -74,13 +81,25 @@ function narrowHistory(history: unknown): unknown {
   return { events, truncated: h.truncated === true };
 }
 
-/** One answer cut back; an `unknown` id is returned as is. */
-export function narrowStatusOfAnswer(answer: StatusOfAnswer): StatusOfAnswer {
+/**
+ * One answer cut back; an `unknown` id is returned as is. `ctx` says what the
+ * work projection may show (the proposals the key reads, whether it reads the
+ * person's agents); left out, nothing of either.
+ */
+export function narrowStatusOfAnswer(
+  answer: StatusOfAnswer,
+  ctx: NarrowWorkContext = NO_WORK_CONTEXT
+): StatusOfAnswer {
   if (answer.type === "unknown") return answer;
   const src = answer as unknown as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   for (const key of STATUS_OF_NARROWED_ANSWER_KEYS)
     if (key in src)
-      out[key] = key === "history" ? narrowHistory(src[key]) : src[key];
+      out[key] =
+        key === "history"
+          ? narrowHistory(src[key])
+          : key === "work"
+            ? narrowStatusOfWork(src[key], ctx)
+            : src[key];
   return out as unknown as StatusOfAnswer;
 }

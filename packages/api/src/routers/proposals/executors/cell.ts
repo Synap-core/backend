@@ -14,10 +14,17 @@ import {
 } from "@synap/database/schema";
 import {
   registerProposalExecutor,
+  attachFailureMeta,
   type ProposalExecutorArgs,
 } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
 import { readCellPlacement } from "../../../services/cells/place-cell-on-view.js";
+import {
+  cellInstallRefusal,
+  cellRetireRefusal,
+  installMarketplaceCell,
+  retireCellType,
+} from "../../../services/cells/marketplace-cell-lifecycle.js";
 import {
   cellContentFingerprint,
   gatedRendererTypeOf,
@@ -341,5 +348,150 @@ export function registerCellExecutors(): void {
       );
       return { success: true };
     },
+  });
+
+  // ── cell / install ─────────────────────────────────────────────────────────
+  // An agent asked to install a marketplace cell (`POST /cells/install`).
+  // Approving installs it as the approver, who must be able to write in the
+  // space the proposal was REVIEWED at (never the payload's), through the same
+  // `installMarketplaceCell` the person's own call runs.
+  registerProposalExecutor({
+    key: "cell/install",
+    async execute({ proposal, payload, userId, input, deps }) {
+      if (await alreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const inner = innerDataOf(proposal.data);
+      const workspaceId = proposal.workspaceId;
+      const packageSlug = inner.packageSlug;
+      const cellKey = inner.cellKey;
+      if (
+        !workspaceId ||
+        typeof packageSlug !== "string" ||
+        typeof cellKey !== "string"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Cell install proposal is missing its space, package or cell key.",
+        });
+      }
+      const result =
+        (await cellInstallRefusal(userId, workspaceId)) ??
+        (await installMarketplaceCell({
+          packageSlug,
+          cellKey,
+          workspaceId,
+          userId,
+        }));
+      if (!result.ok) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Couldn't apply — ${result.error}. Nothing was installed.`,
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      await markApproved(input.proposalId, payload, userId, {
+        typeKey: result.typeKey,
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── cell / retire ──────────────────────────────────────────────────────────
+  // An agent asked to retire a cell type (`DELETE /cells/:typeKey`). Approving
+  // retires it as the approver, checked with the door's own floor: a pod admin
+  // for a pod-wide cell, a person who can write in the space otherwise. A cell
+  // already retired is a conflict, never a silent success.
+  registerProposalExecutor({
+    key: "cell/retire",
+    async execute({ proposal, payload, userId, input, deps }) {
+      if (await alreadyApproved(input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const inner = innerDataOf(proposal.data);
+      const typeKey = inner.typeKey;
+      if (typeof typeKey !== "string" || typeKey.length === 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Cell retire proposal is missing the cell's type key.",
+        });
+      }
+      // The scope this proposal was REVIEWED at, never the payload's.
+      const workspaceId = proposal.workspaceId ?? null;
+      const refused = await cellRetireRefusal(userId, workspaceId);
+      if (refused) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "FORBIDDEN",
+            message: `Couldn't apply — ${refused.error} Nothing was retired.`,
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      if (!(await retireCellType(typeKey, workspaceId))) {
+        throw attachFailureMeta(
+          new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Couldn't apply — this cell is already retired or gone. Nothing was retired.",
+          }),
+          { errorClass: "conflict" }
+        );
+      }
+      await markApproved(input.proposalId, payload, userId, {
+        retiredAt: new Date().toISOString(),
+      });
+      reportApproved(deps, proposal, input.proposalId);
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+}
+
+/** The gate's stored `data` (the door's own payload sits under `data`). */
+function innerDataOf(data: unknown): Record<string, unknown> {
+  const raw = (isPlainObject(data) ? data : {}) as Record<string, unknown>;
+  return isPlainObject(raw.data) ? raw.data : raw;
+}
+
+async function alreadyApproved(proposalId: string): Promise<boolean> {
+  const [current] = await db
+    .select({ status: proposals.status })
+    .from(proposals)
+    .where(eq(proposals.id, proposalId));
+  return current?.status === ProposalStatus.APPROVED;
+}
+
+/** Flip the proposal to approved, recording what was applied. */
+async function markApproved(
+  proposalId: string,
+  payload: ProposalExecutorArgs["payload"],
+  userId: string,
+  applied: Record<string, unknown>
+): Promise<void> {
+  await transitionProposal(db, {
+    to: ProposalStatus.APPROVED,
+    set: {
+      data: { ...payload, applied } as unknown as typeof payload,
+      reviewedBy: userId,
+      reviewedAt: new Date(),
+      updatedAt: new Date(),
+    },
+    where: eq(proposals.id, proposalId),
   });
 }

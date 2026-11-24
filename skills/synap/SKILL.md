@@ -74,7 +74,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                               |
 | **Approvals**       | governance rules        | which AI writes wait for me?          | decides review vs auto, does no work                                                                                                                                                                 |
 | **Tools**           | capability, skill, tool | what can it act with?                 | one word; the detail shows the kind                                                                                                                                                                  |
-| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · never Cell, Widget or Interface                                                                                                                              |
+| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · agents call it a **Cell** (decision of 23 Nov 2026): placed in a bento, a document or a board · "card" is also a renderer slot · never Widget or Interface   |
 | **Display**         | renderer                | how does this kind look?              | a card bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                     |
 | **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Card                                                                                                                                        |
 | **App**             | built-in surface        | what do I open in Synap?              | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                                                       |
@@ -369,7 +369,7 @@ Before the first write, name the layer in one word, then take its door. Most req
 | Layer          | The user wants…                                                        | Door                                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
-| **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
+| **surface**    | to SEE or SHOW something: a list, a board, a dashboard, a page, a deck, a brainstorm | Pick the body first and say which and why: records of one kind → a View; text to read → a Document (`synap_create_document`); a cockpit to monitor → a Bento (`synap_create_view` type `bento`); a page or deck for outside the pod → an HTML artifact (`synap_create_document` type `html`); thinking together → a Whiteboard. `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them. |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
 | **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
@@ -1910,11 +1910,11 @@ The loop has three moves that compound. Each takes a one-off act and, if it's wo
 
 When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The start door hands back the pod's matching playbooks (`playbooks.candidates`) — read them before working ad-hoc, and start again with `templateId` when one fits. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
 
-### 2. Create a cell to REPORT — don't dump data into chat
+### 2. Show it in the right body — don't dump data into chat
 
-When you have something to _show_ the user — a list of leads, a summary, a comparison, a chart — author a **cell** with `create_cell` instead of pasting rows into the message.
+When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_widgets` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
 
-- **Declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
+- **When you generate a cell, declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
 - Keep one cell to one job. A good, focused cell is the raw material for the next move.
 
 ### 3. Promote a good cell to a renderer — recurring presentation
@@ -2903,11 +2903,12 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 ### When to Use ViewFrame
 
-| Situation                                                              | Action                        |
-| ---------------------------------------------------------------------- | ----------------------------- |
-| An existing cell or view type covers the need                          | Use the existing cell or view |
-| User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
-| User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
+| Situation                                                                                                                    | Action                        |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| An existing cell or view type covers the need: check `synap_list_widgets` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
+| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                            | Generate a ViewFrame cell     |
+
+A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
 
 ### Default vs. generated — never the reflex, always the explicit ask
 
@@ -3004,20 +3005,6 @@ synap://open/cell/{typeKey}
 ```
 
 The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
-
-**Full AI artifact workflow over REST** (an MCP agent does step 1 with `synap_create_cell`):
-
-```
-// 1. Define the cell (an ES module or an HTML page)
-POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
-// → { "success": true, "typeKey": "generated:q2-revenue-report" }
-
-// 2. Open it in the user's browser
-synap://open/cell/generated:q2-revenue-report
-```
-
-The cell appears immediately in the side panel with "Q2 Revenue Report" as the tab title. It persists across sessions and is available from any workspace.
 
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
