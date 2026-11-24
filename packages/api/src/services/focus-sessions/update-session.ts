@@ -14,6 +14,7 @@
  * output RMW lock — they are intentionally distinct doors, not unified here.
  */
 
+import type { ClaimHeldByCriterion } from "./satisfy-expected-output.js";
 import type { PlaybookRunner } from "@synap/playbooks";
 import type { EnterStageResult } from "../playbooks/stage-runner.js";
 import { isDeepStrictEqual } from "node:util";
@@ -28,6 +29,8 @@ import {
   drizzleSql,
   LifecycleConflictError,
   oweSlotTransitions,
+  gradesComeDueOf,
+  stampOwedSinceOnDue,
   workUnitActorOf,
   writeSessionPatch,
   personTouchedSubjectIds,
@@ -1772,16 +1775,28 @@ export type CompleteOutputOutcome = {
  * the verdict closed are `verified`, and a claim fully verified reads
  * `completed`. Pure. `satisfied` names slots by key + stored label, matched to
  * the caller's ref the way `completeOutput` matched it (exact label or key).
+ *
+ * `held`: claims whose evidence is in place but that a required criterion
+ * holds (W4). Still `claimed`, but the sentence names the criterion it waits
+ * for: "no evidence" sent the agent to fix evidence it had (finding f301e997).
  */
 export function withEvidenceVerdict(
   report: CompleteOutputOutcome | undefined,
-  satisfied: ReadonlyArray<{ key: string; label: string }>
+  satisfied: ReadonlyArray<{ key: string; label: string }>,
+  held: readonly ClaimHeldByCriterion[] = []
 ): CompleteOutputOutcome | undefined {
   if (!report || report.result !== "claimed") return report;
   const verified = satisfied.filter(
     (s) => s.label === report.label || s.key === report.label
   ).length;
-  if (verified === 0) return report;
+  if (verified === 0) {
+    const waiting = held.find(
+      (h) => h.label === report.label || h.key === report.label
+    );
+    return waiting
+      ? { ...report, message: heldByCriterionMessage(report.label, waiting) }
+      : report;
+  }
   const { message: _pending, ...rest } = report;
   // Slots the report already counted as met (an earlier verdict) stay counted.
   return {
@@ -1789,6 +1804,31 @@ export function withEvidenceVerdict(
     verified: (report.verified ?? 0) + verified,
     result: "completed",
   };
+}
+
+/** A criterion's statement in a reply sentence, clipped. */
+const HELD_STATEMENT_MAX = 120;
+
+/**
+ * The claim's sentence when its evidence is in place and a required criterion
+ * holds it: which criterion (key and statement) and who checks it. Pure.
+ */
+export function heldByCriterionMessage(
+  label: string,
+  held: ClaimHeldByCriterion
+): string {
+  const named = held.criteria.map((c) => {
+    const statement =
+      c.statement.length > HELD_STATEMENT_MAX
+        ? `${c.statement.slice(0, HELD_STATEMENT_MAX - 1)}…`
+        : c.statement;
+    return `"${c.key}" (${statement})`;
+  });
+  const byPerson = held.criteria.every((c) => c.check.kind === "human");
+  const how = byPerson
+    ? "the person grades it"
+    : "check it with synap_evaluate_session";
+  return `Recorded your claim on "${label}"; its evidence is in place. It waits for its required criterion ${named.join(" and ")} to pass: ${how}.`;
 }
 
 /** The outputs array a patch produced, plus the report of what it refused. */
@@ -3062,6 +3102,15 @@ export async function updateFocusSession(
           // An agent's list adds and updates, never deletes (C6).
           { keepUnlisted: !!agentUserId, askedBy: agentUserId }
         );
+        // A declared grade this patch made due (its output made here) is
+        // owed from now: this door owes before it writes, so it stamps its
+        // own list (`oweSlotTransitions` restamps the doors that write first).
+        applied.outputs =
+          stampOwedSinceOnDue(
+            applied.outputs,
+            gradesComeDueOf(current, applied.outputs),
+            new Date().toISOString()
+          ) ?? applied.outputs;
         set.expectedOutputs = applied.outputs;
         completeOutputOutcome = applied.completeOutput;
         retireOutputOutcome = applied.retireOutput;
@@ -3213,7 +3262,8 @@ export async function updateFocusSession(
       }
       completeOutputOutcome = withEvidenceVerdict(
         completeOutputOutcome,
-        verdict.satisfied
+        verdict.satisfied,
+        verdict.held
       );
     } catch (err) {
       logger.warn(

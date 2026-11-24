@@ -64,6 +64,7 @@ import {
 } from "./match-session-template.js";
 import {
   droppedAskWarnings,
+  outputKeyWarnings,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
 import { stampAskProvenance } from "./slot-asked-event.js";
@@ -1777,6 +1778,9 @@ export async function createFocusSession(
       typeof droppedAskWarnings
     >[1]
   );
+  // A criterion whose outputKey names no output of the session as born: it
+  // checks nothing yet — said back, never refused (the update door's rule).
+  warnings.push(...outputKeyWarnings(criteria, sessionOut.expectedOutputs));
   if (gradeSlotsFailed) {
     warnings.push(
       "The grade cards this session's criteria declare could not be filed yet; they are filed on the next criteria change."
