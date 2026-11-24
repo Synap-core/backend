@@ -251,7 +251,7 @@ const TRACK_GOAL_PROPERTIES = {
     type: ["string", "null"],
     enum: [...PROJECT_TRACK_WORK_KINDS, null],
     description:
-      "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it.",
+      "Optional kind of work: project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (growth, or a one-off long plan). A PROPOSAL until the person confirms it.",
   },
   uncertainty: {
     type: ["string", "null"],
