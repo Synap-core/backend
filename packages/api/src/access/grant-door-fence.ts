@@ -45,6 +45,7 @@ import {
   WORK_RELEASE_SOURCE_STATES,
   type WorkReleasePart,
 } from "@synap-core/types/work-release";
+import { holderOfGrant, parsePlace } from "@synap-core/types/grants";
 import { UNCLASSIFIED_WRITE_ROUTES } from "./grant-door-write-baseline.js";
 
 /** How a fenced read door is bounded by a grant. */
@@ -221,6 +222,69 @@ const GET_CHANNEL = READS("channel");
  * pinned to a space, project or object never passes it.
  */
 const FIND = READS("tool", "command", "playbook", "automation");
+
+/**
+ * THE WORKERS READ (`listWorkersDoor`, Hub `GET /workers`): a playbook's
+ * enabled workers, each with its trigger, state, last and next run, run
+ * health and the approvals it waits on. Its playbooks are read through the
+ * `playbook` grant clause (`visiblePlaybooks`, `scopedDb`), so the door is
+ * `NARROWED("playbook", WORKER_VIEW_SUBJECTS)`: admitted on `playbook.read`,
+ * pinned or not. What a worker shows beyond its playbook lives in that
+ * playbook's space and reads no seam: its automation and runs (`automation`)
+ * and its pending approvals (`proposal`). A scoped key gets a worker only
+ * when it reads both there (`grantReadsInSpace`); the others are counted as
+ * withheld, never answered as an empty list. MCP `synap_list_workers` keeps
+ * its stricter `READS` declaration.
+ */
+export const WORKER_VIEW_SUBJECTS: readonly string[] = [
+  "automation",
+  "proposal",
+];
+const LIST_WORKERS = NARROWED("playbook", WORKER_VIEW_SUBJECTS);
+
+/**
+ * Does the grant read every one of `subjects` in space `workspaceId`? For
+ * each subject, one live scope that grants `<subject>.read` and whose place
+ * (the ONE parse, `parsePlace`) is anywhere (unbounded, or an app's pod-wide
+ * read: no space pins it, as the grant clause reads it), or spaces that
+ * include `workspaceId` (as the grant clause reads a table with a workspace
+ * column: `grantReadClause`). A scope pinned to projects or objects never
+ * qualifies (fail closed: a space-wide row such as an automation has no
+ * project or object path), nor any pinned scope for a row in no space
+ * (`null`). A scope whose place does not parse (an empty space list)
+ * reaches nothing.
+ */
+export function grantReadsInSpace(
+  grant: KeyGrant,
+  subjects: readonly string[],
+  workspaceId: string | null
+): boolean {
+  const holder = holderOfGrant(grant);
+  const reaches = (scope: GrantScope): boolean => {
+    if (scope.projectIds || scope.entityIds) return false;
+    let place: ReturnType<typeof parsePlace>;
+    try {
+      place = parsePlace(scope, holder);
+    } catch {
+      return false; // not a place (PlaceError): it reaches no space
+    }
+    if (place.kind === "unbounded" || place.kind === "pod") return true;
+    return (
+      place.kind === "spaces" &&
+      workspaceId !== null &&
+      place.ids.includes(workspaceId)
+    );
+  };
+  return subjects.every((subject) =>
+    grant.scopes.some(
+      (scope) =>
+        reaches(scope) &&
+        scope.permissions.some((p) =>
+          patternMatches(p, { subject, action: "read" })
+        )
+    )
+  );
+}
 
 /** Does one live scope grant `<subject>.read`, whatever it is pinned to? */
 function grantReadsSubject(grant: KeyGrant, subject: string): boolean {
@@ -1196,6 +1260,11 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   [/^\/status-of\/?$/, NARROWED("entity", STATUS_OF_SUBJECTS)],
   [/^\/profiles\/?$/, LIST_PROFILES],
   [/^\/automations\/?$/, LIST_AUTOMATIONS],
+  // A playbook's (or a goal's, a project's) workers (`listWorkersDoor`): the
+  // playbooks through the `playbook` grant clause, and a worker only where
+  // the key reads its automation and approvals too (LIST_WORKERS). A pod
+  // app's "Runs on its own" (Content Studio, plan e51783ca J2-be).
+  [/^\/workers\/?$/, LIST_WORKERS],
   [route("/threads/:id/context"), THREAD_CONTEXT],
   [/^\/channels\/personal\/?$/, GET_CHANNEL],
   // A board's content (`readBoardScene`, services/whiteboards/): the view row

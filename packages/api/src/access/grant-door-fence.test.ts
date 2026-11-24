@@ -18,6 +18,7 @@ import {
   hubRouteClass,
   GRANT_OWNER_WIDE_UNSUPPORTED,
   GRANT_WRITE_DOOR_UNSUPPORTED,
+  grantReadsInSpace,
   isFencedGrant,
   isUnboundedFullAccess,
   mcpToolAllowed,
@@ -34,6 +35,7 @@ import {
   timelineReach,
   workGraphReach,
   workReleaseReach,
+  WORKER_VIEW_SUBJECTS,
 } from "./grant-door-fence.js";
 
 describe("isFencedGrant", () => {
@@ -168,6 +170,64 @@ describe("GET /runs/:id (one run): admitted to a key that reads playbooks, narro
     expect(
       runDetailReadable(key({ permissions: ["*"], workspaceIds: ["w1"] }))
     ).toBe(false);
+  });
+});
+
+describe("GET /workers: admitted to a key that reads playbooks, a worker shown where it reads runs and approvals", () => {
+  it("an app pinned to its space with playbook.read is admitted; without it, refused", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workers",
+        key({ permissions: ["playbook.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(true);
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workers",
+        key({ permissions: ["automation.read", "proposal.read"] })
+      )
+    ).toBe(false);
+    expect(restDoorAllowed("GET", "/workers", key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+  it("grantReadsInSpace: every subject, in that space, never through a project or object pin", () => {
+    const both = ["automation.read", "proposal.read"];
+    const g = (scope: Record<string, unknown>) =>
+      grantReadsInSpace(key(scope), WORKER_VIEW_SUBJECTS, "w1");
+    expect(g({ permissions: both, workspaceIds: ["w1"] })).toBe(true);
+    expect(g({ permissions: both })).toBe(true); // unpinned
+    expect(g({ permissions: ["*"] })).toBe(true);
+    expect(g({ permissions: both, workspaceIds: ["w2"] })).toBe(false);
+    expect(g({ permissions: ["automation.read"], workspaceIds: ["w1"] })).toBe(
+      false
+    );
+    expect(
+      g({ permissions: both, workspaceIds: ["w1"], projectIds: ["p1"] })
+    ).toBe(false);
+    expect(g({ permissions: both, entityIds: ["e1"] })).toBe(false);
+    expect(g({ permissions: [] })).toBe(false);
+    // A row in no space: only an unpinned scope reads it.
+    expect(
+      grantReadsInSpace(
+        key({ permissions: both, workspaceIds: ["w1"] }),
+        WORKER_VIEW_SUBJECTS,
+        null
+      )
+    ).toBe(false);
+    // Two scopes, one subject each, both in the space: read (as the seams).
+    expect(
+      grantReadsInSpace(
+        key(
+          { permissions: ["automation.read"], workspaceIds: ["w1"] },
+          { permissions: ["proposal.read"], workspaceIds: ["w1"] }
+        ),
+        WORKER_VIEW_SUBJECTS,
+        "w1"
+      )
+    ).toBe(true);
   });
 });
 
