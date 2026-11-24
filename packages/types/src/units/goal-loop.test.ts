@@ -317,7 +317,10 @@ describe("loopBudgetHold — the holds every loop beside a goal shares", () => {
 });
 
 describe("decidePathwayReplan — the pathway re-plan (P9)", () => {
-  const ended = (sessionId: string, more: Partial<{ covered: boolean; retryOf: string | null }> = {}) => ({
+  const ended = (
+    sessionId: string,
+    more: Partial<{ covered: boolean; retryOf: string | null }> = {}
+  ) => ({
     sessionId,
     covered: false,
     retryOf: null,
@@ -375,12 +378,12 @@ describe("decidePathwayReplan — the pathway re-plan (P9)", () => {
 
   it("one pending revision per pathway, then the week's budget", () => {
     // Rules out: a second revision while the first waits on the person.
-    expect(
-      decidePathwayReplan({ ...base, pendingProposals: 1 })
-    ).toMatchObject({ hold: "proposal_pending" });
-    expect(
-      decidePathwayReplan({ ...base, proposedThisWeek: 3 })
-    ).toMatchObject({ hold: "budget_used" });
+    expect(decidePathwayReplan({ ...base, pendingProposals: 1 })).toMatchObject(
+      { hold: "proposal_pending" }
+    );
+    expect(decidePathwayReplan({ ...base, proposedThisWeek: 3 })).toMatchObject(
+      { hold: "budget_used" }
+    );
   });
 
   it("one revision re-plans at most PATHWAY_REPLAN_MAX_STEPS steps", () => {

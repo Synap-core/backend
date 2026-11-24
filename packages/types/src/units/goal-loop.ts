@@ -339,8 +339,6 @@ export function decidePathwayReplan(input: {
   if (budget) return { propose: false, hold: budget };
   return {
     propose: true,
-    replan: replan
-      .slice(0, PATHWAY_REPLAN_MAX_STEPS)
-      .map((s) => s.sessionId),
+    replan: replan.slice(0, PATHWAY_REPLAN_MAX_STEPS).map((s) => s.sessionId),
   };
 }

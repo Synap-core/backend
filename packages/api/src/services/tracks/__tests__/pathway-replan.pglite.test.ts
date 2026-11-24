@@ -237,7 +237,10 @@ describe("runPathwayReplan — ONE revision for a step that ended without delive
     const root = await step(g, { title: "Fund Synap" });
     const pitch = await step(g, { title: "Pitch deck", status: "cancelled" });
     await link("spawned_from", pitch, root);
-    const meetings = await step(g, { title: "Investor meetings", status: "forming" });
+    const meetings = await step(g, {
+      title: "Investor meetings",
+      status: "forming",
+    });
     const done = await step(g, { title: "Old follow-up", status: "closed" });
     const foreign = await step(g, { title: "Their step", owner: OTHER });
     for (const dep of [meetings, done, foreign]) {
@@ -256,7 +259,9 @@ describe("runPathwayReplan — ONE revision for a step that ended without delive
       author: PATHWAY_REPLAN_AUTHOR,
       data: { replanOf: g, replanFor: [pitch] },
     });
-    expect(String(filed.summary)).toContain('"Pitch deck" ended without delivering');
+    expect(String(filed.summary)).toContain(
+      '"Pitch deck" ended without delivering'
+    );
     const plan = lastPlan();
     expect(plan.sessions).toEqual([
       {
@@ -364,7 +369,12 @@ describe("one pending per pathway, budgeted, never the same step twice", () => {
       status: "proposed",
       replanFor: [b],
     });
-    expect(h.submits.map((s) => (s.filedByPod as { data: { replanFor: string[] } }).data.replanFor)).toEqual([[a], [b]]);
+    expect(
+      h.submits.map(
+        (s) =>
+          (s.filedByPod as { data: { replanFor: string[] } }).data.replanFor
+      )
+    ).toEqual([[a], [b]]);
   });
 
   it("the week's budget (the goal's own) caps it", async () => {
@@ -417,13 +427,16 @@ describe("its seams: the goal loop's", () => {
   it("a step's close reaches it through the goal-loop reactor", async () => {
     const g = await goal();
     const s = await step(g, { status: "cancelled" });
-    await goalLoopReactor.handler({
-      subjectType: "focus_session",
-      action: "closed",
-      subjectId: s,
-      userId: OWNER,
-      data: { sessionId: s },
-    } as never);
+    await goalLoopReactor.handler(
+      {
+        subjectType: "focus_session",
+        action: "closed",
+        subjectId: s,
+        userId: OWNER,
+        data: { sessionId: s },
+      } as never,
+      {} as never
+    );
     expect(h.submits).toHaveLength(1);
     expect(
       (h.submits[0]!.filedByPod as { data: { replanFor: string[] } }).data
@@ -439,7 +452,8 @@ describe("its seams: the goal loop's", () => {
     expect(swept.failed).toBe(0);
     expect(
       h.submits.some(
-        (s) => (s.filedByPod as { data: { replanOf: string } }).data.replanOf === g
+        (s) =>
+          (s.filedByPod as { data: { replanOf: string } }).data.replanOf === g
       )
     ).toBe(true);
   });
