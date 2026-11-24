@@ -1144,7 +1144,8 @@ function pickWorkerToEnable(
     if (read.status === "invalid") {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "That is not a time (HH:MM, in the playbook owner's time zone) or a day (0-6).",
+        message:
+          "That is not a time (HH:MM, in the playbook owner's time zone) or a day (0-6).",
       });
     }
     if (read.status !== "enable") return refuse("on that schedule");
