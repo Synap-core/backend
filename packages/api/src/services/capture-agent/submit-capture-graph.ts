@@ -493,6 +493,13 @@ export interface SubmitCaptureGraphInput {
    */
   plan?: CapturePlanInput;
   summary?: string;
+  /**
+   * A proposal the POD files (a loop: the pathway re-plan), never a person's
+   * own act nor an agent's: `author` is the row's `createdBy`, and `data`
+   * carries the loop's own facts (what its budget and one-pending rule
+   * count). Always the pending path: refused with an agent key.
+   */
+  filedByPod?: { author: `system:${string}`; data: Record<string, unknown> };
 }
 
 /**
@@ -1152,6 +1159,10 @@ export async function submitCaptureGraph(
 ): Promise<SubmitCaptureGraphResult> {
   const { userId } = input;
   let workspaceId = input.workspaceId ?? null;
+  if (input.filedByPod && input.agentUserId) {
+    // An agent key would auto-apply what the pod may only propose.
+    throw new Error("A proposal the pod files carries no agent key.");
+  }
 
   // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
   // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
@@ -1971,6 +1982,8 @@ export async function submitCaptureGraph(
     // dedup. A webhook/cron/human-confirm caller still has no agentUserId, so
     // it stays correctly unattributed.
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+    // The pod's own proposal (a loop): its machine author, not the person.
+    ...(input.filedByPod ? { createdBy: input.filedByPod.author } : {}),
     // Why an agent's graph waits: the duplicate door (B2c), else the reason
     // the first proposing member was given, as the single-entity gate stores.
     ...(input.agentUserId && (possibleDuplicate || memberReason)
@@ -1991,6 +2004,8 @@ export async function submitCaptureGraph(
     // `bindings` rides alongside operations; the approve flow applies them after
     // materialization (resolving entityRef → real id).
     data: {
+      // The loop's own facts first: nothing it says can replace the plan.
+      ...(input.filedByPod?.data ?? {}),
       operations,
       // This is the actual origin stamped at materialization; graph is a
       // transport shape, not an origin the entity router understands.

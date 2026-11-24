@@ -7,7 +7,10 @@ import {
   GOAL_LOOP_DEFAULT_ON,
   GOAL_LOOP_DEFAULT_PER_WEEK,
   GOAL_LOOP_MAX_PER_WEEK,
+  PATHWAY_REPLAN_MAX_STEPS,
   decideGoalNextRun,
+  decidePathwayReplan,
+  loopBudgetHold,
   goalCriteriaFailedTwice,
   readGoalLoop,
   type GoalLoopStop,
@@ -296,5 +299,95 @@ describe("decideGoalNextRun", () => {
         stops: [{ key: "a", sessionIds: ["s1", "s2"] }],
       })
     ).toMatchObject({ hold: "stopped" });
+  });
+});
+
+describe("loopBudgetHold — the holds every loop beside a goal shares", () => {
+  it("one pending outranks the budget; under both, nothing holds", () => {
+    expect(
+      loopBudgetHold({ pendingProposals: 1, proposedThisWeek: 3, perWeek: 3 })
+    ).toBe("proposal_pending");
+    expect(
+      loopBudgetHold({ pendingProposals: 0, proposedThisWeek: 3, perWeek: 3 })
+    ).toBe("budget_used");
+    expect(
+      loopBudgetHold({ pendingProposals: 0, proposedThisWeek: 2, perWeek: 3 })
+    ).toBeNull();
+  });
+});
+
+describe("decidePathwayReplan — the pathway re-plan (P9)", () => {
+  const ended = (sessionId: string, more: Partial<{ covered: boolean; retryOf: string | null }> = {}) => ({
+    sessionId,
+    covered: false,
+    retryOf: null,
+    ...more,
+  });
+  const base = {
+    isPathway: true,
+    category: "active" as const,
+    ended: [ended("s1")],
+    pendingProposals: 0,
+    proposedThisWeek: 0,
+    perWeek: 3,
+  };
+
+  it("proposes ONE revision for the unexpected ends no revision named yet", () => {
+    // Rules out: re-planning a step a revision already named (covered).
+    expect(
+      decidePathwayReplan({
+        ...base,
+        ended: [ended("s1"), ended("s2", { covered: true }), ended("s3")],
+      })
+    ).toEqual({ propose: true, replan: ["s1", "s3"] });
+  });
+
+  it("only a pathway, only while it is active", () => {
+    // Rules out: the loop firing on any goal's step.
+    expect(decidePathwayReplan({ ...base, isPathway: false })).toEqual({
+      propose: false,
+      hold: "not_pathway",
+    });
+    expect(decidePathwayReplan({ ...base, category: "done" })).toMatchObject({
+      hold: "not_active",
+    });
+  });
+
+  it("nothing ended unexpectedly: nothing to propose", () => {
+    expect(decidePathwayReplan({ ...base, ended: [] })).toMatchObject({
+      hold: "nothing_ended",
+    });
+  });
+
+  it("a retry the loop proposed that ends without delivering stops it (two tries)", () => {
+    // Rules out: retrying forever.
+    expect(
+      decidePathwayReplan({ ...base, ended: [ended("r1", { retryOf: "s1" })] })
+    ).toEqual({ propose: false, hold: "stopped", stoppedOn: ["r1"] });
+    // A stopped step never holds the others back.
+    expect(
+      decidePathwayReplan({
+        ...base,
+        ended: [ended("r1", { retryOf: "s1" }), ended("s4")],
+      })
+    ).toEqual({ propose: true, replan: ["s4"] });
+  });
+
+  it("one pending revision per pathway, then the week's budget", () => {
+    // Rules out: a second revision while the first waits on the person.
+    expect(
+      decidePathwayReplan({ ...base, pendingProposals: 1 })
+    ).toMatchObject({ hold: "proposal_pending" });
+    expect(
+      decidePathwayReplan({ ...base, proposedThisWeek: 3 })
+    ).toMatchObject({ hold: "budget_used" });
+  });
+
+  it("one revision re-plans at most PATHWAY_REPLAN_MAX_STEPS steps", () => {
+    const many = Array.from({ length: PATHWAY_REPLAN_MAX_STEPS + 2 }, (_, i) =>
+      ended(`s${i}`)
+    );
+    const d = decidePathwayReplan({ ...base, ended: many });
+    expect(d.propose && d.replan).toHaveLength(PATHWAY_REPLAN_MAX_STEPS);
   });
 });
