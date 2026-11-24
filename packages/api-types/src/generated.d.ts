@@ -24232,7 +24232,7 @@ export interface CapabilityCredentialView {
 	 * pod reads that holds no secret at all (a Storybook: its account hint names
 	 * it), else 'vault' (direct key).
 	 */
-	kind: "nango" | "vault" | "source";
+	kind: "nango" | "source" | "vault";
 	/**
 	 * Pod-wide (0211): a shared vault key any member may USE for this capability
 	 * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
