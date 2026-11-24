@@ -183,6 +183,7 @@ registerVisibility({
     kind: "workspace",
     workspaceColumn: playbooks.workspaceId,
     nullWorkspaceMeans: "podGlobalConfig",
+    sharedAs: { type: "playbook", id: playbooks.id },
   },
 });
 registerVisibility({

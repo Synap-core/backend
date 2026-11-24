@@ -67,6 +67,8 @@ const NO_VERSION: Record<string, string> = {
     "writes the activators' memory into metadata",
   "api:services/capabilities/create-from-definition.ts":
     "stamps metadata.sourceCapability",
+  "api:services/move-to-space.ts":
+    "moves a playbook to another space (workspace_id only)",
 };
 
 const WRITE_CALL = /\.(insert|update)\(\s*(playbooks|playbooksTable)\s*\)/g;

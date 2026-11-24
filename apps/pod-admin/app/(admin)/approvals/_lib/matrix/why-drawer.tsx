@@ -45,6 +45,7 @@ import {
 } from "../../../../../lib/agent-matrix/matrix-view-model";
 import { ConfirmModal } from "../../../components/confirm-modal";
 import { DetailDrawer } from "../../../components/detail-drawer";
+import { matrixT } from "./copy";
 import { toneTextClass } from "./mark-tone";
 import { useWidenCell } from "../../../../_lib/presence/use-sensitive-actions";
 
@@ -113,6 +114,7 @@ function AgentWhy({
   column: MatrixColumn;
   onChanged: () => void;
 }) {
+  const t = matrixT();
   const cell = agent.cells[column.id];
   const probes = useMemo(
     () => (cell ? probeViews(column, cell) : []),
@@ -176,13 +178,13 @@ function AgentWhy({
       {agent.paused && (
         <p className="flex items-center gap-2 text-[12.5px] text-status-stale">
           <Pause className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          Paused — it takes no work until someone resumes it.
+          {t("why.paused")}
         </p>
       )}
       {column.kind === "floors" && (
         <p className="flex items-center gap-2 text-[12.5px] text-foreground/70">
           <Lock className="h-3.5 w-3.5 shrink-0" aria-hidden />
-          Platform limits. No rule can widen them.
+          {t("why.floors")}
         </p>
       )}
 
@@ -208,7 +210,9 @@ function AgentWhy({
                 </span>
               </div>
               <p className="pl-6 text-[12px] text-foreground/70">
-                Decided by: {resolveGovernanceRungLabel(p.answer.rung)}
+                {t("why.decidedBy", {
+                  rung: resolveGovernanceRungLabel(p.answer.rung),
+                })}
               </p>
               <p className="pl-6 text-[11.5px] text-foreground/65">
                 {p.answer.reason}
@@ -219,7 +223,7 @@ function AgentWhy({
                 p.answer.computerAsks &&
                 p.answer.rung !== "host-asks-first" && (
                   <p className="pl-6 text-[11.5px] text-foreground/65">
-                    Its computer asks first here too.
+                    {t("why.computerAsks")}
                   </p>
                 )}
               {p.answer.ruleId && (
@@ -231,7 +235,7 @@ function AgentWhy({
                     variant="flat"
                     radius="md"
                   >
-                    Open approval
+                    {t("why.openApproval")}
                   </Button>
                   <Button
                     size="sm"
@@ -240,7 +244,7 @@ function AgentWhy({
                     radius="md"
                     onPress={() => setRevokeId(p.answer.ruleId)}
                   >
-                    Take back
+                    {t("why.takeBack")}
                   </Button>
                 </div>
               )}
@@ -252,8 +256,7 @@ function AgentWhy({
       {heldBy && (
         <div className="flex flex-wrap items-center gap-3 border-t border-foreground/[0.06] pt-4">
           <p className="min-w-0 flex-1 text-[12.5px] text-foreground/70">
-            An agent never does more than the computer it runs on, so a rule for
-            this agent alone would change nothing here.
+            {t("why.heldBy")}
           </p>
           <Button
             as={Link}
@@ -262,7 +265,7 @@ function AgentWhy({
             variant="flat"
             radius="md"
           >
-            Open its computer
+            {t("why.openComputer")}
           </Button>
         </div>
       )}
@@ -299,7 +302,7 @@ function AgentWhy({
         isOpen={revokeId !== null}
         onClose={() => setRevokeId(null)}
         onConfirm={() => revokeId && revoke.mutate({ id: revokeId })}
-        title="Take back this approval?"
+        title={t("why.takeBack.title")}
         consequence="The agent asks first again for everything this approval allowed, in every cell it decided. You can widen it again later."
         confirmLabel="Take back"
         isPending={revoke.isPending}
@@ -315,6 +318,7 @@ function GroupWhy({
   target: WhyTarget;
   onOpenAgent: (agent: MatrixAgentRow) => void;
 }) {
+  const t = matrixT();
   const [showAll, setShowAll] = useState(false);
   const members = showAll
     ? target.row.members
@@ -363,7 +367,7 @@ function GroupWhy({
           radius="md"
           onPress={() => setShowAll(true)}
         >
-          Show all {target.row.members.length}
+          {t("why.showAll", { n: target.row.members.length })}
         </Button>
       )}
     </div>

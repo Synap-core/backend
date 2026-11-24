@@ -42,6 +42,8 @@ import {
   archiveWorkspaceDoor,
   fileIntoProjectDoor,
   grantProfileAccessDoor,
+  movePlaybooksDoor,
+  shareWithSpaceDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
   setStartPageDoor,
@@ -1015,14 +1017,30 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_move_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const entityIds = Array.isArray(args.entityIds)
-      ? args.entityIds.filter((v): v is string => typeof v === "string")
-      : [];
+    const ids = (v: unknown) =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string")
+        : [];
+    const entityIds = ids(args.entityIds);
+    const playbookIds = ids(args.playbookIds);
     const workspaceId = args.workspaceId;
-    if (entityIds.length === 0 || typeof workspaceId !== "string") {
+    if (
+      (entityIds.length === 0) === (playbookIds.length === 0) ||
+      typeof workspaceId !== "string"
+    ) {
       return ok({
-        error: "entityIds (non-empty) and workspaceId are required",
+        error:
+          "workspaceId and one of entityIds or playbookIds (non-empty) are required",
       });
+    }
+    if (playbookIds.length > 0) {
+      return ok(
+        await movePlaybooksDoor(opsActor(ctx), {
+          playbookIds,
+          workspaceId,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await moveEntitiesDoor(opsActor(ctx), {
@@ -1060,11 +1078,25 @@ export const workspaceHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
     const targetWorkspaceId = args.targetWorkspaceId;
-    if (
-      typeof profileId !== "string" ||
-      typeof targetWorkspaceId !== "string"
-    ) {
-      return ok({ error: "profileId and targetWorkspaceId are required" });
+    const named = (["profileId", "playbookId", "skillId"] as const).filter(
+      (k) => typeof args[k] === "string"
+    );
+    if (named.length !== 1 || typeof targetWorkspaceId !== "string") {
+      return ok({
+        error:
+          "targetWorkspaceId and exactly one of profileId, playbookId or skillId are required",
+      });
+    }
+    if (typeof profileId !== "string") {
+      return ok(
+        await shareWithSpaceDoor(opsActor(ctx), {
+          objectType: named[0] === "playbookId" ? "playbook" : "skill",
+          objectId: args[named[0]!] as string,
+          targetWorkspaceId,
+          revoke: args.revoke === true,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await grantProfileAccessDoor(opsActor(ctx), {

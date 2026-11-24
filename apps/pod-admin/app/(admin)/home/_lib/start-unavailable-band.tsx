@@ -14,12 +14,14 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ResourceRowError } from "../../components/resource-row";
 import { SectionCard } from "../../components/section-card";
+import { homeT } from "./copy";
 import {
   startBandStep,
   startStepNumber,
 } from "../../../start/_lib/start-model";
 
 export function StartUnavailableBand() {
+  const t = homeT();
   const params = useSearchParams();
   const router = useRouter();
   const param = params.get("start");
@@ -29,17 +31,14 @@ export function StartUnavailableBand() {
     // and keep the one real door (change the start) open.
     const { n, of } = startStepNumber(step);
     return (
-      <SectionCard title="Getting started" className="mb-4">
+      <SectionCard title={t("band.title")} className="mb-4">
         <div className="flex flex-col gap-1.5 px-3 py-4 text-[13px] text-foreground/80">
-          <p>
-            Your setup is saved at step {n} of {of}. The next steps are not in
-            the console yet.
-          </p>
+          <p>{t("band.saved", { n, of })}</p>
           <Link
             href="/start?step=intent"
             className="text-primary underline-offset-2 hover:underline"
           >
-            Change what Synap runs first
+            {t("band.change")}
           </Link>
         </div>
       </SectionCard>
@@ -47,9 +46,9 @@ export function StartUnavailableBand() {
   }
   if (param !== "unavailable") return null;
   return (
-    <SectionCard title="Getting started" className="mb-4">
+    <SectionCard title={t("band.title")} className="mb-4">
       <ResourceRowError
-        message="Couldn't load your setup progress."
+        message={t("band.failed")}
         onRetry={() => router.push("/")}
       />
     </SectionCard>

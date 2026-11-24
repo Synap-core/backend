@@ -40277,7 +40277,7 @@
       "get": {
         "tags": ["System"],
         "summary": "Where each id stands, per subject (narrowed for scoped keys)",
-        "description": "?ids=a,b (at most 10) and ?include=moves,history,... answer where each thing, goal, session or run stands, through the same reader as `GET /orient?statusOf=`. Every id is read through the floors that AND the key's grant: an id it cannot read answers `unknown`, as one that does not exist. A key that does not read every subject unbounded (a pod app pinned to spaces) is answered the status, `moves` and `history` only; `withheld` names the parts left out.",
+        "description": "?ids=a,b (at most 10) and ?include=moves,history,... answer where each thing, goal, session or run stands, through the same reader as `GET /orient?statusOf=`. Every id is read through the floors that AND the key's grant: an id it cannot read answers `unknown`, as one that does not exist. A key that does not read every subject unbounded (a pod app pinned to spaces) is answered the status, `moves`, `history` and a floored projection of `work` (the sessions its grant reads; a gate's proposal only when it may read it); `withheld` names the parts and fields left out.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {

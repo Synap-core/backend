@@ -20,6 +20,7 @@ import {
   isAgentWriteMode,
   type AgentWriteMode,
 } from "@synap-core/types/agents";
+import { appT } from "./copy";
 
 /** The rows to draw: the recommended one and the current one, or all. */
 export function visibleWriteModeChoices(
@@ -50,6 +51,7 @@ export function WriteModeChoice({
    */
   lines?: Readonly<Partial<Record<AgentWriteMode, string>>>;
 }) {
+  const t = appT();
   const [expanded, setExpanded] = useState(false);
   const shown = visibleWriteModeChoices(value, expanded);
   const hidden = AGENT_WRITE_MODE_CHOICES.length - shown.length;
@@ -73,7 +75,7 @@ export function WriteModeChoice({
             {c.label}
             {c.recommended ? (
               <span className="ml-1.5 text-tiny text-foreground/65">
-                (recommended)
+                {t("writeMode.recommended")}
               </span>
             ) : null}
           </Radio>
@@ -86,7 +88,7 @@ export function WriteModeChoice({
           className="min-h-10 self-start"
           onPress={() => setExpanded(true)}
         >
-          {`Show all ${AGENT_WRITE_MODE_CHOICES.length}`}
+          {t("writeMode.showAll", { n: AGENT_WRITE_MODE_CHOICES.length })}
         </Button>
       )}
     </div>

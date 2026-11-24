@@ -99,6 +99,14 @@ beforeAll(async () => {
       created_at timestamptz not null default now(),
       primary key (playbook_id, version)
     );
+    create table space_access (
+      object_type text not null,
+      object_id uuid not null,
+      workspace_id uuid not null,
+      granted_by text,
+      granted_at timestamptz not null default now(),
+      primary key (object_type, object_id, workspace_id)
+    );
   `);
 });
 

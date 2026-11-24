@@ -49,6 +49,7 @@ import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
+import { scopedDb } from "../../access/scoped-db.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
@@ -752,7 +753,7 @@ async function diagnoseObject(
         .where(
           and(
             eq(playbooks.id, id),
-            userVisibleWhere(playbooks.workspaceId, userId)
+            scopedDb(AccessContext.from({ userId })).predicate(playbooks)
           )
         )
         .limit(1);

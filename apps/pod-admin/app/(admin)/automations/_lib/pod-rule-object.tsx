@@ -34,6 +34,7 @@ import {
   ResourceRowEmpty,
   ResourceRowError,
 } from "../../components/resource-row";
+import { automationsT } from "./copy";
 import { objectPage } from "../../../_lib/object/content/markdown-model";
 import {
   reactionOriginLine,
@@ -44,6 +45,7 @@ import {
 } from "./reaction-rule-rows";
 
 export function PodRuleObject({ id }: { id: string }) {
+  const t = automationsT();
   const utils = trpc.useUtils();
   const query = trpc.skills.listReactionRules.useQuery(
     { recent: 20 },
@@ -61,20 +63,20 @@ export function PodRuleObject({ id }: { id: string }) {
   if (query.isError || !rule) {
     return (
       <PageShell>
-        <PageHeader title="Automation" />
+        <PageHeader title={t("obj.title")} />
         {query.isError ? (
           <ResourceRowError
-            message="This automation couldn’t be read."
+            message={t("obj.readFailed")}
             onRetry={() => void query.refetch()}
           />
         ) : (
-          <ResourceRowEmpty message="No automation by this name, or you can’t see it." />
+          <ResourceRowEmpty message={t("obj.missing")} />
         )}
         <Link
           href={navHref("automations")}
           className="mt-4 inline-block text-[13px] underline underline-offset-2"
         >
-          Back to the automations
+          {t("obj.back")}
         </Link>
       </PageShell>
     );
@@ -107,7 +109,7 @@ export function PodRuleObject({ id }: { id: string }) {
         href={navHref("automations")}
         className="mb-3 inline-block text-[12.5px] text-foreground/65 hover:text-foreground"
       >
-        Automations
+        {t("obj.crumb")}
       </Link>
       <PageHeader
         title={rule.title}
@@ -116,7 +118,7 @@ export function PodRuleObject({ id }: { id: string }) {
           <>
             <StatusPill
               kind={rule.enabled ? "healthy" : "unknown"}
-              label={rule.enabled ? "On" : "Paused"}
+              label={rule.enabled ? t("obj.on") : t("obj.paused")}
             />
             <Button
               size="md"
@@ -134,11 +136,11 @@ export function PodRuleObject({ id }: { id: string }) {
       />
 
       <div className="flex flex-col gap-6">
-        <SectionCard variant="flat" title="What it does">
+        <SectionCard variant="flat" title={t("obj.what")}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[13px]">
-            <dt className="text-foreground/65">When</dt>
+            <dt className="text-foreground/65">{t("obj.when")}</dt>
             <dd className="text-foreground">{rule.when}</dd>
-            <dt className="text-foreground/65">Then</dt>
+            <dt className="text-foreground/65">{t("obj.then")}</dt>
             <dd className="text-foreground">
               {rule.via} {rule.do}
             </dd>
@@ -148,9 +150,9 @@ export function PodRuleObject({ id }: { id: string }) {
         {rule.recent.length > 0 && (
           <SectionCard
             variant="flat"
-            title="What it did lately"
+            title={t("obj.lately")}
             count={rule.recent.length}
-            hint="Its last moves that touched your things, newest first."
+            hint={t("obj.latelyHint")}
           >
             <ul className="flex flex-col gap-3">
               {rule.recent.map((o, i) => {
@@ -173,7 +175,7 @@ export function PodRuleObject({ id }: { id: string }) {
                             }
                             className="underline underline-offset-2"
                           >
-                            Open the proposal
+                            {t("obj.openProposal")}
                           </Link>
                         </>
                       )}
@@ -188,16 +190,16 @@ export function PodRuleObject({ id }: { id: string }) {
           </SectionCard>
         )}
 
-        <SectionCard variant="flat" title="About it">
+        <SectionCard variant="flat" title={t("obj.about")}>
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-[13px]">
-            <dt className="text-foreground/65">Owner</dt>
+            <dt className="text-foreground/65">{t("obj.owner")}</dt>
             <dd className="text-foreground">
               {rule.owner?.name ??
                 (rule.owner ? "A person in this pod" : "The pod")}
             </dd>
-            <dt className="text-foreground/65">Done or lost</dt>
+            <dt className="text-foreground/65">{t("obj.doneOrLost")}</dt>
             <dd className="text-foreground">{reactionTerminalLine(rule)}</dd>
-            <dt className="text-foreground/65">Its moves</dt>
+            <dt className="text-foreground/65">{t("obj.moves")}</dt>
             <dd className="text-foreground">
               {rule.chains
                 ? "Can set off other automations (at most 3 moves deep)."
@@ -221,10 +223,7 @@ export function PodRuleObject({ id }: { id: string }) {
         }
         consequence={
           turnOn ? (
-            <>
-              From now on the pod applies it, for everyone in this pod, each
-              time its trigger happens.
-            </>
+            <>{t("obj.turnOn.body")}</>
           ) : (
             <>{reactionPauseConsequence(rule)}</>
           )

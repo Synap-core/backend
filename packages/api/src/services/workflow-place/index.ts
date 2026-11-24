@@ -49,6 +49,7 @@ import {
   userVisibleWhere,
   workspaceLensWhere,
 } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { listRuns } from "../runs/index.js";
@@ -175,7 +176,10 @@ async function loadDefinition(
     })
     .from(playbooks)
     .where(
-      and(eq(playbooks.id, id), userVisibleWhere(playbooks.workspaceId, userId))
+      and(
+        eq(playbooks.id, id),
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
+      )
     )
     .limit(1);
   if (!row) return null;

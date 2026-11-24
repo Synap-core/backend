@@ -140,7 +140,8 @@ vi.mock("../../focus-sessions/block-guidelines.js", async (orig) => ({
   guidanceForBlockedSlots: async () => undefined,
 }));
 
-import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import type { PgTable } from "drizzle-orm/pg-core";
+import { pgliteSchemaDdl } from "../../../__tests__/pglite-ddl.js";
 import {
   events,
   focusSessions,
@@ -191,23 +192,6 @@ const STAGES = [
   },
 ];
 
-const BASIC =
-  /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
-function ddlFor(table: PgTable): string {
-  const cfg = getTableConfig(table);
-  const cols = cfg.columns.map((c) => {
-    const t = c.getSQLType();
-    const type = BASIC.test(t) ? t.replace(/\(.*\)/, "") : "text";
-    const def =
-      c.name === "id"
-        ? " default gen_random_uuid()"
-        : c.name === "started_at" || c.name === "created_at"
-          ? " default now()"
-          : "";
-    return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
-  });
-  return `create table "${cfg.name}" (${cols.join(", ")});`;
-}
 const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 const human = { userId: USER };
@@ -224,29 +208,29 @@ const of = <K extends TrackHistoryEvent["kind"]>(kind: K) =>
   >;
 
 beforeAll(async () => {
-  for (const t of [
-    events,
-    focusSessions,
-    proposals,
-    users,
-    workspaces,
-    workspaceMembers,
-    apiKeys,
-    links,
-    playbooks,
-    projects,
-    // A goal's status flip owes its transition here (status-flow W1).
-    lifecycleTransitionOutbox,
-    sessionEvaluations,
-    podMembers,
-    projectMembers,
-    channels,
-    channelMembers,
-    // Who is on a goal (0348): `startTrack` seeds the owner row.
-    trackParticipants,
-  ]) {
-    await h.client!.exec(ddlFor(t as unknown as PgTable));
-  }
+  await h.client!.exec(
+    pgliteSchemaDdl([
+      events,
+      focusSessions,
+      proposals,
+      users,
+      workspaces,
+      workspaceMembers,
+      apiKeys,
+      links,
+      playbooks,
+      projects,
+      // A goal's status flip owes its transition here (status-flow W1).
+      lifecycleTransitionOutbox,
+      sessionEvaluations,
+      podMembers,
+      projectMembers,
+      channels,
+      channelMembers,
+      // Who is on a goal (0348): `startTrack` seeds the owner row.
+      trackParticipants,
+    ] as unknown as PgTable[])
+  );
   await q(
     `insert into users (id, email, name, user_type, agent_metadata) values
       ($1, 'ana@example.test', 'Ana', 'human', null),

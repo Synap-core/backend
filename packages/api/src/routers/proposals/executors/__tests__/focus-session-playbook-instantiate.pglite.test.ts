@@ -73,6 +73,7 @@ import {
   focusSessions,
   proposals,
   playbooks,
+  spaceAccess,
   entities,
   lifecycleTransitionOutbox,
 } from "@synap/database";
@@ -166,6 +167,7 @@ beforeAll(async () => {
     proposals,
     playbooks,
     entities,
+    spaceAccess,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
