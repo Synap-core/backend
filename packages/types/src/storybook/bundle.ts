@@ -32,6 +32,7 @@ import {
   type StorybookProblem,
   type StorybookRead,
 } from "./problems.js";
+import { isUuid } from "../property-render/structured-value.js";
 import { componentIdOfStory } from "./sources.js";
 
 export const STORYBOOK_BUNDLE_VERSION = "synap.storybook-bundle/v1";
@@ -194,12 +195,9 @@ export const pageTitleIdOf = (storyId: string): string =>
   componentIdOfStory(storyId) ?? storyId;
 export const flowKey = (flowId: string): string => `flow:${flowId}`;
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /** A screenshot is a pod file id (the `file` entity the kinds' `screenshot` names). */
 export function isScreenshotRef(v: string): boolean {
-  return UUID_RE.test(v);
+  return isUuid(v);
 }
 
 export function isHttpsUrl(v: string): boolean {
