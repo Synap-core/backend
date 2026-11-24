@@ -15,6 +15,7 @@ import {
   seatLine,
 } from "@synap-core/types/agents";
 import { trpc } from "../../../../lib/trpc";
+import { objectViewsT } from "./copy";
 
 export function AgentJob({
   agentUserId,
@@ -29,6 +30,7 @@ export function AgentJob({
   name: string | null;
   seat: string | null;
 }) {
+  const t = objectViewsT();
   const utils = trpc.useUtils();
   const [label, setLabel] = useState(role ? (name ?? "") : "");
   const [osUser, setOsUser] = useState(
@@ -46,12 +48,12 @@ export function AgentJob({
   return (
     <section className="flex flex-col gap-2.5" data-testid="agent-job">
       <h2 className="text-tiny font-medium uppercase tracking-wide text-foreground/65">
-        Job on {computerName}
+        {t("job.title", { computer: computerName })}
       </h2>
       <Input
         size="sm"
-        label="Job"
-        placeholder="None — its engine's own agent"
+        label={t("job.label")}
+        placeholder={t("job.placeholder")}
         value={label}
         maxLength={80}
         onValueChange={setLabel}
@@ -60,8 +62,8 @@ export function AgentJob({
       {seatEditable ? (
         <Input
           size="sm"
-          label="Runs as OS user"
-          placeholder="e.g. antoine"
+          label={t("job.osUser")}
+          placeholder={t("job.osUser.placeholder")}
           value={osUser}
           maxLength={64}
           onValueChange={setOsUser}
@@ -69,12 +71,10 @@ export function AgentJob({
         />
       ) : (
         <p className="text-small text-foreground/65">
-          Runs as {seatLine(seat)}.
+          {t("job.runsAs", { seat: seatLine(seat) ?? "" })}
         </p>
       )}
-      <p className="text-small text-foreground/65">
-        Same agent and key: nothing is reconnected.
-      </p>
+      <p className="text-small text-foreground/65">{t("job.same")}</p>
       {save.error && (
         <p role="alert" className="text-small text-danger">
           {save.error.message}
@@ -95,7 +95,7 @@ export function AgentJob({
           })
         }
       >
-        Save job
+        {t("job.save")}
       </Button>
     </section>
   );

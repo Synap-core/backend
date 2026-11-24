@@ -116,10 +116,12 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
   })),
 }));
 // The goals' names go through the project_tracks floor (`scopedDb`), proven
-// in the access suites; here the floor lets the caller see both goals.
+// in the access suites; here the floor lets the caller see both goals, and
+// every playbook (the playbook floor is proven in move-to-space.pglite).
 vi.mock("../../../access/index.js", () => ({
   AccessContext: { from: (a: unknown) => a },
   scopedDb: () => ({
+    predicate: () => undefined,
     findMany: async () => [
       { id: "99999999-9999-4999-8999-999999999991", name: "Ship weekly" },
       { id: "99999999-9999-4999-8999-999999999992", name: "Keep docs fresh" },

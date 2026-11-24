@@ -11,6 +11,7 @@ import { Button } from "@heroui/react";
 import { Laptop } from "lucide-react";
 import type { AgentWriteMode } from "@synap-core/types/agents";
 import { WriteModeChoice } from "../../_lib/write-mode-choice";
+import { approveAgentT } from "./copy";
 import { shownWriteMode, type AgentInComputerView } from "./agent-in-computer";
 
 export function AgentInComputerBlock({
@@ -24,6 +25,7 @@ export function AgentInComputerBlock({
   onWriteMode: (m: AgentWriteMode | null) => void;
   isDisabled?: boolean;
 }) {
+  const t = approveAgentT();
   const shown = shownWriteMode(view, writeMode);
   const question = `How ${view.name}'s changes land`;
   return (
@@ -41,7 +43,9 @@ export function AgentInComputerBlock({
         </span>
       </p>
       {view.seat && (
-        <p className="text-small text-foreground/65">Runs as {view.seat}.</p>
+        <p className="text-small text-foreground/65">
+          {t("inComputer.runsAs", { seat: view.seat })}
+        </p>
       )}
       {shown ? (
         <WriteModeChoice
@@ -53,8 +57,9 @@ export function AgentInComputerBlock({
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           <p className="text-small text-foreground/85">
-            Keeps its permission
-            {view.currentModeLabel ? `: ${view.currentModeLabel}` : ""}.
+            {view.currentModeLabel
+              ? t("inComputer.keepsMode", { mode: view.currentModeLabel })
+              : t("inComputer.keeps")}
           </p>
           <Button
             size="sm"
@@ -62,7 +67,7 @@ export function AgentInComputerBlock({
             isDisabled={isDisabled}
             onPress={() => onWriteMode(view.currentMode ?? "pod-default")}
           >
-            Change…
+            {t("inComputer.change")}
           </Button>
         </div>
       )}

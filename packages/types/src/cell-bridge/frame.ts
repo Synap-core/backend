@@ -6,6 +6,7 @@
 import { CELL_BRIDGE_SDK } from "./sdk.js";
 import { CELL_FRAME_LINK_DOOR } from "./frame-links.js";
 import { frameExternalOrigins } from "./external-origins.js";
+import { frameTokensWithBrand } from "./surface-context.js";
 
 /**
  * The iframe `sandbox` value, exactly. Scripts run; nothing else is granted:
@@ -98,16 +99,22 @@ export interface CellFrameOptions {
    * the tokens in.
    */
   tokens?: string;
+  /**
+   * The project's brand, as CSS (`SurfaceContext.brand.css`, built by the pod
+   * with `brandFrameCss`): written right after the host's tokens in the same
+   * `<style>` (`frameTokensWithBrand`), so the brand's values win where it
+   * sets one and the host's stay everywhere else.
+   */
+  brand?: string | null;
 }
 
 /** The block injected ahead of everything the author wrote. */
 export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
+  // `<\/` is the same text to CSS, and cannot end the element.
+  const tokens = frameTokensWithBrand(options.tokens ?? "", options.brand);
   return (
     `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">` +
-    (options.tokens
-      ? // `<\/` is the same text to CSS, and cannot end the element.
-        `<style data-synap-tokens>${options.tokens.replace(/<\//g, "<\\/")}</style>`
-      : "") +
+    (tokens ? `<style data-synap-tokens>${tokens}</style>` : "") +
     `<script>${CELL_BRIDGE_SDK}</script>` +
     (options.links ? `<script>${CELL_FRAME_LINK_DOOR}</script>` : "")
   );

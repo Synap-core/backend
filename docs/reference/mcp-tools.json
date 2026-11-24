@@ -1810,7 +1810,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a standalone document. THREE modes: (1) authored text — pass `content` (markdown) for meeting notes, research, plans that don't fit entity properties. (2) external reference — pass `url` (no `content`) to reference a file/page you have a LINK to but no bytes to upload (e.g. a Google Doc, a PDF URL); this is the agent-appropriate way to add a 'file' since an agent has no filesystem. (3) a page — `type: \"html\"` with `content` a whole HTML page: pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN, no remote font or image; live pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown; the page opens at `/open/<id>`). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. If you're also creating the entity, prefer synap_create_entity with `content` (entity + body in ONE call). To store real file bytes, use `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
+      "description": "Create a Document: text to read or write (spec, memo, brief, research, notes, a status read-out, a report's source); a dashboard to monitor is a bento (synap_create_view), not a document of embeds. THREE modes: (1) markdown — `content`, with live embeds (:::synap-view, :::synap-entity, :::synap-cell). (2) a link — `url` (no `content`) for a file or page you have a LINK to but no bytes (a Google Doc, a PDF URL). (3) an HTML artifact — `type: \"html\"`, `content` a whole page to present or share outside the pod (a report: markdown first, its HTML generated from it). Pod admin RUNS it at `/open/<id>` in an isolated frame (scripts run; no network, so inline every script, style, font and image: no CDN; pod data only through the read-only bridge `window.synap.query(op, params)`; at most 2 MB, a bigger page shows as source only). The receipt's `warnings` name what will not run. A page is not taken with `url` (send it as `content`) or `entityId` (an entity body is read as markdown). Pass `entityId` to make it an existing entity's BODY: an entity has ONE body, so when it already has one the call is REFUSED before anything is written (`replaceBody: true` replaces it on purpose). A RELATED document is its own entity, linked with synap_link_entities. Also creating the entity? Prefer synap_create_entity with `content` (one call). Real file bytes: `synap_store_file` (≤10MB inline; bigger: `synap_request_upload`, then `synap_store_file({uploadToken})`). Attachment only happens when the document auto-approved; a proposal-gated one has no row to link yet, and the response says so. Needs the person's decision? Embed a `:::synap-ask` block, not a prose question (synap_load_skill(\"system/synap/document-embeds\")).",
       "parameters": [
         {
           "name": "idempotencyKey",
@@ -3439,6 +3439,10 @@
                   },
                   "required": ["kind"]
                 },
+                "outputKey": {
+                  "type": "string",
+                  "description": "kind 'fact' only: the key of the output it checks."
+                },
                 "required": {
                   "type": "boolean",
                   "description": "Default true."
@@ -3985,6 +3989,10 @@
                     "params": { "type": "object" }
                   },
                   "required": ["kind"]
+                },
+                "outputKey": {
+                  "type": "string",
+                  "description": "kind 'fact' only: the key of the output it checks."
                 },
                 "required": {
                   "type": "boolean",
@@ -5748,7 +5756,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Define (create or update) a ViewFrame cell from raw renderer source — idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a tile; else it shows nowhere until placed or bound (synap_promote_cell_to_renderer).",
+      "description": "Define (create or update) a Cell type from raw renderer source, only when synap_list_widgets lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status=\"proposed\" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).",
       "parameters": [
         {
           "name": "name",
@@ -5875,7 +5883,7 @@
         "destructiveHint": true,
         "openWorldHint": false
       },
-      "description": "Escalation L4: bind a cell that already proved itself as a renderer. For a kind's records (profileSlug; slots list|detail|card|dashboard) or ONE capability, playbook or view (target {kind,id}; slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
+      "description": "Escalation L4: make a proven Cell a KIND's look (profileSlug; slots list|detail|card|dashboard), bound per kind, never as every kind's default. A report, cockpit or page for one object is a document, bento or HTML artifact, not a renderer. ONE capability, playbook or view: target {kind,id} (slot detail, a capability also dashboard). The cell must exist; clear unbinds. Governed (may propose). Targets and scopes: system/synap/viewframe-cells.",
       "parameters": [
         {
           "name": "profileSlug",
@@ -6215,7 +6223,7 @@
           "name": "workspaceId",
           "type": "string",
           "required": false,
-          "description": "Workspace ID to scope the lookup (optional — falls back to the user's first workspace). Pod-wide playbooks match regardless."
+          "description": "Workspace ID to scope the lookup (optional — falls back to the user's first active workspace). Pod-wide playbooks match regardless."
         },
         {
           "name": "intentText",
@@ -6249,7 +6257,7 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Workspace ID to scope the lookup (optional — falls back to the user's first workspace). Pod-wide playbooks match regardless."
+            "description": "Workspace ID to scope the lookup (optional — falls back to the user's first active workspace). Pod-wide playbooks match regardless."
           },
           "intentText": {
             "type": "string",
@@ -7741,13 +7749,13 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "THE write door — everything worth remembering goes through here, in whatever shape you already have it. Never classify your input first: the payload is a GRADIENT, and you send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n• + `projects[]` / `tracks[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nCOUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs` — the plan's object list IS the definition of done, so the person sees what is owed, not a percentage.\nCall it AFTER learning something durable, unasked. Placement uses EXISTING spaces only. `global:true` stores a pod-wide runbook (text only).\nDEDUP: the strong identity signals are the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername` (exact spellings). A URL under any other key (e.g. `url`) is NOT a dedup signal: it duplicates the entity.\n\nEXAMPLES: synap_load_skill(\"system/synap/multi-entity-capture\").\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug (default slugs resolve pod-wide, no `workspaceId` needed).\nTHE DOOR MAY REJECT, and a rejection is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
+      "description": "THE write door for everything worth remembering, in whatever shape you have it: never classify first, send as much structure as you have.\n• `text` alone → free text, AI-structured into the right entities (the raw text is kept as provenance).\n• `entities[]` → you already know the kind + fields (discover slugs with synap_list_profiles). `ref` is optional for a single entity.\n• `entities[]` + `relations[]` → a graph. Refs let you link things that don't exist yet; the whole graph is ONE reviewable proposal, so nothing half-lands. To link something that already exists, give it a `ref` plus `existingEntityId`.\n• + `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `views[]` / `cells[]` / `renderers[]` → a whole DOMAIN in the same plan, approved once.\n• + `projects[]` / `tracks[]` / `sessions[]` / `documents[]` / `links[]` → a CONNECTED PLAN: build a project, its sessions (parent = `parentRef`, dependencies = `blockedByRefs`, or edges in `links[]`), a spec document and the entities they are about — ONE proposal, refs across all of it, applied ALL-OR-NONE on approval. Reference plan items by REF; ids exist only after approval (the receipt lists each step with `id: null`; once applied, `synap_list_proposals` shows `materializedIds` ref → id). To change the plan, revise it (full updated operations, re-validated by the pod) — never file a second proposal that points at pending items.\nCOUNT BEFORE YOU FILE: if you are about to make a SECOND `synap_create_*` call for objects that reference each other (a kind and the playbook using it, a project and its sessions, a skill and the automation calling it), they belong in ONE call here. N proposals for connected objects exhaust your pending cap; re-sending a capped write elsewhere lands the playbook twice. Give each `sessions[]` step its `expectedOutputs`: the definition of done, so the person sees what is owed.\nCall it AFTER learning something durable, unasked. Placement uses EXISTING spaces only. `global:true` stores a pod-wide runbook (text only).\nDEDUP signals: the property keys `email`, `phone`, `website`, `linkedinUrl`, `twitterHandle`, `githubUsername`, spelled exactly; a URL under another key (e.g. `url`) duplicates the entity.\n\nEXAMPLES: synap_load_skill(\"system/synap/multi-entity-capture\").\nALWAYS returns the same receipt: { status, scope: { workspaceId, projectId, sessionId }, writeReceipt }. `status: \"proposed\"` is SUCCESS, not an error — writeReceipt.reviewUrl is a clickable link you MUST surface as a markdown link in your reply, e.g. \"Queued that for your review: [Review proposal](<reviewUrl>)\" — never report a proposed write as simply done, and never withhold the link.\n`status: \"partial\"` means the entities landed but at least one `relations[]` edge did NOT — the failed edges are named in `relationsFailed[]` with a reason. Do not report a partial capture as done: say which edges did not land. Usual cause: a `type` naming no relation def; re-send those edges with a real slug.\nA REJECTION is a CORRECT outcome — do not retry it: `status: \"rejected\"` with reason \"already-known\" (a lone entity carrying nothing but identity signals that already resolve to an existing one — its id is returned; re-send with content / extra properties / relations to ENRICH it instead), \"no-durable-content\" (nothing storable was sent). When the AI structurer is DOWN the text lane no longer rejects — it saves your text as a plain unstructured note and returns `degraded: true` with a `degradedNotice`: the note LANDED, but it is NOT the person/task/decision it describes, so relay that notice to the user instead of reporting a normal capture.",
       "parameters": [
         {
           "name": "text",
           "type": "string",
           "required": false,
-          "description": "Free-form text to parse (max 8000 chars), when you have prose. Sent with `entities[]`, the structured payload is used and this text is kept as provenance."
+          "description": "Free-form prose to parse (max 8000 chars). With `entities[]`, kept as provenance."
         },
         {
           "name": "entities",
@@ -7796,6 +7804,12 @@
           "type": "array<object>",
           "required": false,
           "description": "PLAN: edges. `blocked_by`: from waits on to (`toEntity…`: a decision, + `option` for one arm; `toTrack…`: a goal). `spawned_from`: to is from's parent (from: a session here). Cycles refused."
+        },
+        {
+          "name": "edits",
+          "type": "array<object>",
+          "required": false,
+          "description": "RE-PLAN existing steps: `update_session` / `remove_link` ops (from-intent §2d)."
         },
         {
           "name": "skills",
@@ -7943,7 +7957,7 @@
         "properties": {
           "text": {
             "type": "string",
-            "description": "Free-form text to parse (max 8000 chars), when you have prose. Sent with `entities[]`, the structured payload is used and this text is kept as provenance."
+            "description": "Free-form prose to parse (max 8000 chars). With `entities[]`, kept as provenance."
           },
           "entities": {
             "type": "array",
@@ -8216,10 +8230,20 @@
                 "fromRef": { "type": "string" },
                 "fromSessionId": { "type": "string" },
                 "toRef": { "type": "string" },
-                "toSessionId": { "type": "string" }
+                "toSessionId": { "type": "string" },
+                "toEntityRef": { "type": "string" },
+                "toEntityId": { "type": "string" },
+                "toTrackRef": { "type": "string" },
+                "toTrackId": { "type": "string" },
+                "option": { "type": "string" }
               },
               "required": ["type"]
             }
+          },
+          "edits": {
+            "type": "array",
+            "description": "RE-PLAN existing steps: `update_session` / `remove_link` ops (from-intent §2d).",
+            "items": { "type": "object" }
           },
           "skills": {
             "type": "array",
@@ -8952,7 +8976,7 @@
           "name": "workKind",
           "type": "enum",
           "required": false,
-          "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it.",
+          "description": "Optional kind of work: project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (growth, or a one-off long plan). A PROPOSAL until the person confirms it.",
           "enum": [
             "project",
             "flow",
@@ -9114,7 +9138,7 @@
               "pathway",
               null
             ],
-            "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it."
+            "description": "Optional kind of work: project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (growth, or a one-off long plan). A PROPOSAL until the person confirms it."
           },
           "uncertainty": {
             "type": ["string", "null"],
@@ -10051,7 +10075,7 @@
           "name": "workKind",
           "type": "enum",
           "required": false,
-          "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it.",
+          "description": "Optional kind of work: project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (growth, or a one-off long plan). A PROPOSAL until the person confirms it.",
           "enum": [
             "project",
             "flow",
@@ -10211,7 +10235,7 @@
               "pathway",
               null
             ],
-            "description": "Optional: the kind of work — project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (a person's growth). Your choice is a PROPOSAL until the person confirms it."
+            "description": "Optional kind of work: project (a one-off result), flow (a steady stream), operation (keep something running; closes as 'retired'), investigation (find something out; criteria about the method), incident (restore after a break), commission (made for someone else), pathway (growth, or a one-off long plan). A PROPOSAL until the person confirms it."
           },
           "uncertainty": {
             "type": ["string", "null"],
@@ -10965,14 +10989,15 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead). You must be able to write the destination. Per entity: returns { moved, proposed, errors } — a proposed move is success.",
+      "description": "Move entities into another Space (workspace; e.g. a mis-routed lead), or playbooks (`playbookIds`: each takes its automations; refused when something left behind uses it). You must be able to write both spaces. Returns { moved, proposed, errors } per item — a proposed move is success.",
       "parameters": [
         {
           "name": "entityIds",
           "type": "array<string>",
-          "required": true,
+          "required": false,
           "description": "Entity UUIDs to move (1-500)."
         },
+        { "name": "playbookIds", "type": "array<string>", "required": false },
         {
           "name": "workspaceId",
           "type": "string",
@@ -11000,6 +11025,7 @@
             "items": { "type": "string" },
             "description": "Entity UUIDs to move (1-500)."
           },
+          "playbookIds": { "type": "array", "items": { "type": "string" } },
           "workspaceId": {
             "type": "string",
             "description": "Destination workspace UUID."
@@ -11013,7 +11039,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["entityIds", "workspaceId"]
+        "required": ["workspaceId"]
       }
     },
     {
@@ -11273,14 +11299,17 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Let another Space (workspace) see and use a SHARED kind (profile). Widens visibility, so it is always a proposal for an agent. Find ids with synap_list_profiles / synap_list_workspaces.",
+      "description": "Let another Space (workspace) use a SHARED kind (profile), or a playbook or skill (`playbookId` / `skillId`; `revoke` undoes it). Widens visibility: always a proposal for an agent. Ids: synap_list_profiles / synap_list_workspaces.",
       "parameters": [
         {
           "name": "profileId",
           "type": "string",
-          "required": true,
+          "required": false,
           "description": "Profile UUID."
         },
+        { "name": "playbookId", "type": "string", "required": false },
+        { "name": "skillId", "type": "string", "required": false },
+        { "name": "revoke", "type": "boolean", "required": false },
         {
           "name": "targetWorkspaceId",
           "type": "string",
@@ -11310,6 +11339,9 @@
         "type": "object",
         "properties": {
           "profileId": { "type": "string", "description": "Profile UUID." },
+          "playbookId": { "type": "string" },
+          "skillId": { "type": "string" },
+          "revoke": { "type": "boolean" },
           "targetWorkspaceId": {
             "type": "string",
             "description": "Workspace UUID that gains access."
@@ -11327,7 +11359,7 @@
             "description": "Optional: the session these writes belong to — one you started, or the one a previous write reply named in `attribution.filed` (`handle` when your call named no conversation). Omit it and your writes are grouped for you. A grouped session closes after 2 h idle; a closed or foreign id is reported in `attribution.ignoredSession`, never an error."
           }
         },
-        "required": ["profileId", "targetWorkspaceId"]
+        "required": ["targetWorkspaceId"]
       }
     },
     {
@@ -11451,7 +11483,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Create a view in a workspace (recovery when the right view is missing, or proactive once data warrants it). Call synap_list_views first — don't duplicate. For a bento, call synap_list_widgets first and only place keys from that list (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. To edit a view after create (a bento's blocks, its name): synap_update_view. For a whiteboard, pass initialContent to seed the shapes — it is the ONLY way to put content on a board, because content cannot be updated after create. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
+      "description": "Create a View or board in a space. Pick the body first: records of one kind → a View; monitor or operate something living (KPIs, a cockpit) → type \"bento\"; think together → type \"whiteboard\"; text, or a page or deck for outside the pod → synap_create_document. Call synap_list_views first — don't duplicate. Type: one of sheet, list, grid, gallery, kanban, matrix, masonry, calendar, gantt, timeline, graph, flow, map, bento, whiteboard, pipeline (sheet is the table door). profileId scopes to one entity type. A pipeline is a kind's declared lifecycle as columns: pass config {profileSlug}; a kind with no lifecycle is refused (synap_declare_lifecycle first), and its columns always come from that declaration, never from config. For a bento, place only cells synap_list_widgets lists (stat-card needs profileSlug; view needs a saved viewId, not a profileSlug). For a whiteboard, initialContent seeds the shapes; synap_update_view_content changes them. To edit a view after create (a bento's blocks, its name): synap_update_view. Governed: may propose. On success the result includes `link` (`${PUBLIC_URL}/open/<id>`) — surface that URL to the user.",
       "parameters": [
         { "name": "name", "type": "string", "required": true },
         {
@@ -11685,7 +11717,7 @@
         "destructiveHint": false,
         "openWorldHint": false
       },
-      "description": "Edit an existing view you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every widget you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the widget catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
+      "description": "Edit a View or board you own: rename it and/or REPLACE its config. For a bento, read its config first (synap_list_views detail:'full'), change config.blocks and send the whole config back; each block is stored as {id, kind:'widget', widgetType, config, pos:{x,y,w,h}} (or kind 'view' + viewId, kind 'entity' + entityId), and every cell you add or change must come from synap_list_widgets (blocks kept unchanged are not re-checked). The config is checked against the view's type and the cell catalog BEFORE anything is filed, so an error names each bad field or block and nothing is proposed. Governed: an agent's edit is a proposal — `proposed` is success. Whiteboard shapes: synap_update_view_content.",
       "parameters": [
         {
           "name": "viewId",

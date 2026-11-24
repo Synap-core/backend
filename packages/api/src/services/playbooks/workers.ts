@@ -60,7 +60,6 @@ import {
   focusSessions,
   countWorkerPendingApprovalsBulk,
   personTimeZone,
-  userVisibleWhere,
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
@@ -205,7 +204,9 @@ async function visiblePlaybooks(input: {
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
+          playbooks
+        ),
         ...(input.playbookId ? [eq(playbooks.id, input.playbookId)] : []),
         ...(input.playbookIds
           ? [inArray(playbooks.id, [...input.playbookIds])]
@@ -376,7 +377,7 @@ async function recentRunMarksOf(
 export async function listEnabledWorkers(
   input: ListEnabledWorkersInput
 ): Promise<EnabledWorker[]> {
-  return (await readEnabledWorkers(input)).map((r) => r.worker);
+  return (await readEnabledWorkers(input)).found.map((r) => r.worker);
 }
 
 /**
@@ -389,7 +390,28 @@ export async function listEnabledWorkers(
 export async function listWorkerViews(
   input: ListEnabledWorkersInput
 ): Promise<GoalWorkerView[]> {
-  const found = await readEnabledWorkers(input);
+  return workerViewsOf((await readEnabledWorkers(input)).found);
+}
+
+/**
+ * {@link listWorkerViews} for a caller whose reach stops at some spaces (a
+ * scoped key, `listWorkersDoor`): a worker is listed only when
+ * `spaceReadable` admits the space its playbook lives in (where its rule,
+ * automation, runs and approvals are). `withheld` counts the workers the
+ * query matched that were left out, so a page says "not shown" instead of
+ * reading an empty list as "no worker".
+ */
+export async function listWorkerViewsInReach(
+  input: ListEnabledWorkersInput,
+  spaceReadable: (workspaceId: string | null) => boolean
+): Promise<{ items: GoalWorkerView[]; withheld: number }> {
+  const { found, withheld } = await readEnabledWorkers(input, spaceReadable);
+  return { items: await workerViewsOf(found), withheld };
+}
+
+async function workerViewsOf(
+  found: Awaited<ReturnType<typeof readEnabledWorkers>>["found"]
+): Promise<GoalWorkerView[]> {
   const ruleOfAutomation = new Map<string, string>();
   for (const f of found) {
     for (const id of f.automations.all)
@@ -476,12 +498,21 @@ export async function goalRunsOf(input: {
   );
 }
 
-async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
-  Array<{
+/**
+ * `spaceReadable` (a scoped caller's reach, `listWorkerViewsInReach`) leaves
+ * out the workers of a playbook whose space it does not admit, counted in
+ * `withheld`; without it nothing is withheld.
+ */
+async function readEnabledWorkers(
+  input: ListEnabledWorkersInput,
+  spaceReadable?: (workspaceId: string | null) => boolean
+): Promise<{
+  found: Array<{
     worker: EnabledWorker;
     automations: { current: RuleAutomation | null; all: string[] };
-  }>
-> {
+  }>;
+  withheld: number;
+}> {
   let projectId = input.projectId ?? null;
   if (input.trackId) {
     const { getTrack } = await import("../tracks/tracks-service.js");
@@ -498,7 +529,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     projectId = track.projectId;
   }
   const trackSet = input.trackIds ? new Set(input.trackIds) : null;
-  if (trackSet && trackSet.size === 0) return [];
+  if (trackSet && trackSet.size === 0) return { found: [], withheld: 0 };
   const pbs = await visiblePlaybooks({
     userId: input.userId,
     playbookId: input.playbookId,
@@ -521,6 +552,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
     en: NonNullable<ReturnType<typeof enablementOf>>;
     paused: boolean;
   }> = [];
+  let withheld = 0;
   for (const pb of pbs) {
     const process = readPlaybookProcess(pb.subjectProfile);
     const rows = [
@@ -548,6 +580,10 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
         continue;
       const paused = row.meta.draft === true;
       if (input.liveOnly && paused) continue;
+      if (spaceReadable && !spaceReadable(pb.workspaceId)) {
+        withheld++;
+        continue;
+      }
       found.push({ pb, process, row, en, paused });
     }
   }
@@ -636,7 +672,7 @@ async function readEnabledWorkers(input: ListEnabledWorkersInput): Promise<
       },
     });
   }
-  return out;
+  return { found: out, withheld };
 }
 
 /**
@@ -1194,6 +1230,22 @@ export async function setWorkerPaused(input: {
     scope: row.meta.scope,
     draft: input.paused,
     auditSource: "playbook-worker",
+    // Pausing or resuming a playbook's worker is a change to how THAT
+    // playbook runs, so `playbook.update` in its space also permits it at
+    // rung 0 (the key's grant): a pod app the person gave `playbook.update`
+    // (Content Studio's "Runs on its own") pauses and resumes as the person,
+    // while `rule.update` stays out of every key's grant. Rung 0 only: an
+    // agent's press still proposes (`rule/update` is a gate door). A
+    // pod-wide playbook names no space, so no named permission there.
+    ...(pb?.workspaceId
+      ? {
+          grantNamedPermission: {
+            subject: "playbook",
+            action: "update",
+            workspaceId: pb.workspaceId,
+          },
+        }
+      : {}),
   });
   if (r.status === "updated") {
     await applyPlaybookActivators({

@@ -78,12 +78,27 @@ const OWING_TABLES: readonly PgTable[] = [
   schema.focusSessions,
 ];
 
-/** The DDL for several tables, in order (plus the outbox an owing table needs). */
+/**
+ * The tables whose reads also read `space_access` (a playbook or skill is
+ * usable and readable where it is shared: `usableInSpaceWhere`,
+ * `sharedReadableWhere`).
+ */
+const SHARED_TABLES: readonly PgTable[] = [schema.playbooks, schema.skills];
+
+/**
+ * The DDL for several tables, in order, plus what they need: the outbox an
+ * owing table writes, the grants a shareable table's reads join.
+ */
 export function pgliteSchemaDdl(tables: readonly PgTable[]): string {
-  const owes =
-    tables.some((t) => OWING_TABLES.includes(t)) &&
-    !tables.includes(schema.lifecycleTransitionOutbox);
-  return [...tables, ...(owes ? [schema.lifecycleTransitionOutbox] : [])]
+  const needs = (of: readonly PgTable[], table: PgTable) =>
+    tables.some((t) => of.includes(t)) && !tables.includes(table);
+  return [
+    ...tables,
+    ...(needs(OWING_TABLES, schema.lifecycleTransitionOutbox)
+      ? [schema.lifecycleTransitionOutbox]
+      : []),
+    ...(needs(SHARED_TABLES, schema.spaceAccess) ? [schema.spaceAccess] : []),
+  ]
     .map(pgliteTableDdl)
     .join("\n");
 }

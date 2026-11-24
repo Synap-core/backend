@@ -15,6 +15,10 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
+import {
+  grantSpaceAccess,
+  revokeSpaceAccess,
+} from "../utils/usable-in-space.js";
 import { unionAll } from "drizzle-orm/pg-core";
 import {
   memberWorkspaceIds as memberWorkspaceIdsQuery,
@@ -615,30 +619,23 @@ export class ProfileRepository {
     workspaceId: string,
     grantedBy?: string
   ): Promise<void> {
-    await this.db
-      .insert(spaceAccess)
-      .values({
-        objectType: "profile",
-        objectId: profileId,
-        workspaceId,
-        grantedBy: grantedBy ?? null,
-      })
-      .onConflictDoNothing();
+    await grantSpaceAccess(this.db, {
+      objectType: "profile",
+      objectId: profileId,
+      workspaceId,
+      grantedBy,
+    });
   }
 
   /**
    * Revoke a workspace's access to a shared profile.
    */
   async revokeAccess(profileId: string, workspaceId: string): Promise<void> {
-    await this.db
-      .delete(spaceAccess)
-      .where(
-        and(
-          eq(spaceAccess.objectType, "profile"),
-          eq(spaceAccess.objectId, profileId),
-          eq(spaceAccess.workspaceId, workspaceId)
-        )
-      );
+    await revokeSpaceAccess(this.db, {
+      objectType: "profile",
+      objectId: profileId,
+      workspaceId,
+    });
   }
 
   /**

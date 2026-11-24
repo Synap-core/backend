@@ -31,6 +31,7 @@ import {
   playbooks,
   usableInSpace,
   usableInSpaceWhere,
+  withSpaceGrants,
   type SQL,
 } from "@synap/database";
 import type { PlaybookActivator } from "@synap/playbooks";
@@ -58,6 +59,7 @@ interface PlaybookNode {
   workspaceId: string | null;
   subjectProfile: unknown;
   stages: unknown;
+  sharedWith: readonly string[];
 }
 
 /** The playbooks a playbook in `workspaceId` may link to (usable there), oldest first. */
@@ -65,7 +67,7 @@ async function linkablePlaybooks(
   workspaceId: string | null,
   only?: SQL
 ): Promise<PlaybookNode[]> {
-  return db
+  const rows = await db
     .select({
       id: playbooks.id,
       name: playbooks.name,
@@ -77,25 +79,34 @@ async function linkablePlaybooks(
     .where(
       and(
         ne(playbooks.status, "archived"),
-        usableInSpaceWhere(playbooks.workspaceId, workspaceId),
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        }),
         only
       )
     )
     .orderBy(asc(playbooks.createdAt), asc(playbooks.id));
+  return withSpaceGrants(db, "playbook", rows);
 }
 
 /**
  * The ONE name rule: an id names itself; a name matches case-insensitively,
- * the space's own playbook before a pod-wide one, then the oldest.
+ * the space's own playbook first, then one shared with it, then a pod-wide
+ * one, then the oldest.
  */
 function pick<
   T extends { id: string; name: string; workspaceId: string | null },
->(ref: string, rows: readonly T[]): T | undefined {
+>(ref: string, rows: readonly T[], workspaceId: string | null): T | undefined {
   const name = ref.toLowerCase();
   const hits = isUuid(ref)
     ? rows.filter((r) => r.id === ref)
     : rows.filter((r) => r.name.toLowerCase() === name);
-  return hits.find((r) => r.workspaceId !== null) ?? hits[0];
+  return (
+    hits.find((r) => r.workspaceId === workspaceId) ??
+    hits.find((r) => r.workspaceId !== null) ??
+    hits[0]
+  );
 }
 
 /**
@@ -123,7 +134,7 @@ export async function resolveLinkedPlaybooks(
     )
   );
   for (const ref of refs) {
-    const hit = pick(ref, rows);
+    const hit = pick(ref, rows, workspaceId);
     if (hit) out.set(ref, hit);
   }
   return out;
@@ -165,6 +176,8 @@ export async function findPlaybookLinkCycle(self: {
       workspaceId: self.workspaceId,
       subjectProfile: { activators: self.activators },
       stages: self.stages,
+      // Self is the playbook being written: its grants are not read here.
+      sharedWith: [],
     },
     ...(await linkablePlaybooks(self.workspaceId)).filter(
       (n) => n.id !== self.id
@@ -175,7 +188,8 @@ export async function findPlaybookLinkCycle(self: {
   const resolve = (ref: string, from: PlaybookNode) =>
     pick(
       ref,
-      nodes.filter((n) => usableInSpace(n, from.workspaceId))
+      nodes.filter((n) => usableInSpace(n, from.workspaceId)),
+      from.workspaceId
     )?.id ?? (ref === self.id ? SELF : undefined);
   const next = new Map<string, Set<string>>(
     nodes.map((n) => [n.id, new Set()])
