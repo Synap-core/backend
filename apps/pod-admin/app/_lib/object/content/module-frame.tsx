@@ -574,18 +574,21 @@ export function ModuleFrame({
   // Built once per cell and run, and only once the frame nears the viewport:
   // a theme change is POSTED to the running frame (`synap:theme`) instead of
   // rebuilding megabytes of srcdoc.
+  // The frame's context comes first, so it is built once, in its brand.
   const srcDoc = useMemo(
     () =>
-      refusal || !near || contextWaits
+      refusal || !near
         ? ""
-        : buildCellModuleFrameSrcdoc({
-            code,
-            language: "react",
-            theme: themeRef.current,
-            externalHosts: hostsKey ? hostsKey.split(" ") : [],
-            hostModules,
-            brandCss,
-          }),
+        : contextWaits
+          ? ""
+          : buildCellModuleFrameSrcdoc({
+              code,
+              language: "react",
+              theme: themeRef.current,
+              externalHosts: hostsKey ? hostsKey.split(" ") : [],
+              hostModules,
+              brandCss,
+            }),
     // The theme is read through its ref: a change is posted, not rebuilt.
     [code, hostsKey, hostModules, refusal, run, near, contextWaits, brandCss]
   );

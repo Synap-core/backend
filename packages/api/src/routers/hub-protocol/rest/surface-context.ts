@@ -14,8 +14,9 @@
  *   404 the anchor does not exist, or the caller cannot read it
  *   5xx a failed read, never an empty context
  *
- * A scoped (fenced) key is refused by the grant fence: the route is not a
- * declared read (`access/grant-door-fence.ts`).
+ * A scoped (fenced) key passes only when one of its scopes reads every
+ * subject the route reads, unpinned (`GRANT_REST_GET_READS`,
+ * `access/grant-door-fence.ts`).
  */
 
 import { z } from "@hono/zod-openapi";
