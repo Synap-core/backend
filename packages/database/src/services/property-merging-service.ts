@@ -3,6 +3,7 @@
  *
  * Merges properties from multiple profiles for views.
  * Handles property discovery, merging, and indexing status.
+ * Includes in-memory caching with TTL to avoid re-merging on every request.
  */
 
 import { ProfileResolutionService } from "./profile-resolution-service.js";
@@ -25,14 +26,46 @@ export interface MergedProperty {
   constraints?: Record<string, unknown>;
 }
 
+interface CacheEntry {
+  value: Map<string, MergedProperty>;
+  expiresAt: number;
+}
+
 /**
  * Service to merge properties from multiple profiles
+ * Caches results with 5-minute TTL to avoid re-merging on every request.
  */
 export class PropertyMergingService {
   private profileResolution: ProfileResolutionService;
+  private cache = new Map<string, CacheEntry>();
+  private readonly CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   constructor(db: PostgresJsDatabase<typeof schema>) {
     this.profileResolution = new ProfileResolutionService(db);
+  }
+
+  private getCacheKey(
+    scopeProfileIds: string[],
+    workspaceId?: string | null
+  ): string {
+    return `${scopeProfileIds.sort().join(",")}|${workspaceId ?? "null"}`;
+  }
+
+  private getFromCache(key: string): Map<string, MergedProperty> | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.value;
+  }
+
+  private setCache(key: string, value: Map<string, MergedProperty>): void {
+    this.cache.set(key, {
+      value,
+      expiresAt: Date.now() + this.CACHE_TTL_MS,
+    });
   }
 
   /**
@@ -59,6 +92,8 @@ export class PropertyMergingService {
    * When `workspaceId` is provided, overlay props owned by other workspaces
    * are excluded from the merge — a view rendered in workspace A sees A's
    * own overlays plus all base props, never B's overlays.
+   *
+   * Results are cached for 5 minutes to avoid re-merging on every request.
    */
   async mergePropertiesFromProfiles(
     scopeProfileIds: string[],
@@ -67,6 +102,13 @@ export class PropertyMergingService {
   ): Promise<Map<string, MergedProperty>> {
     if (scopeProfileIds.length === 0) {
       return new Map();
+    }
+
+    // Check cache first
+    const cacheKey = this.getCacheKey(scopeProfileIds, workspaceId);
+    const cached = this.getFromCache(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     const merged = new Map<string, MergedProperty>();
@@ -140,6 +182,9 @@ export class PropertyMergingService {
         }
       }
     }
+
+    // Store in cache
+    this.setCache(cacheKey, merged);
 
     return merged;
   }
