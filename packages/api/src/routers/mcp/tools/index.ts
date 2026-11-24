@@ -3647,7 +3647,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Find every Surface an object carries before you make one: its kind's renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not \"nothing there\". Read-only.",
+          'Find every Surface an object carries before you make one: its kind\'s renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not "nothing there". Read-only.',
         inputSchema: {
           type: "object",
           properties: {

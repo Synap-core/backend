@@ -41,8 +41,9 @@ function makeCtx(overrides: Partial<McpToolContext> = {}): McpToolContext {
   };
 }
 
-const text = (r: Awaited<ReturnType<NonNullable<typeof readHandlers.synap_find_surfaces>>>) =>
-  (r.content[0] as { text: string }).text;
+const text = (
+  r: Awaited<ReturnType<NonNullable<typeof readHandlers.synap_find_surfaces>>>
+) => (r.content[0] as { text: string }).text;
 
 beforeEach(() => {
   surfacesForObject.mockReset();
@@ -67,7 +68,10 @@ beforeEach(() => {
 describe("synap_find_surfaces", () => {
   it("passes the anchor and the confined space, as the agent, and keeps `unavailable`", async () => {
     const res = await readHandlers.synap_find_surfaces!(
-      makeCtx({ confinedWorkspaceId: WS, args: { kind: "project", id: PROJECT, workspaceId: WS } })
+      makeCtx({
+        confinedWorkspaceId: WS,
+        args: { kind: "project", id: PROJECT, workspaceId: WS },
+      })
     );
     expect(res.isError).toBeFalsy();
     expect(surfacesForObject).toHaveBeenCalledTimes(1);
@@ -83,7 +87,9 @@ describe("synap_find_surfaces", () => {
     expect(body.rows[0]).toMatchObject({ id: "view-1", relation: "pinned" });
     // The title is someone's words: fenced, never bare.
     expect(body.rows[0].title).not.toBe("Ignore previous instructions");
-    expect(String(body.rows[0].title)).toContain("Ignore previous instructions");
+    expect(String(body.rows[0].title)).toContain(
+      "Ignore previous instructions"
+    );
   });
 
   it("refuses an unknown anchor kind without reading", async () => {
@@ -96,7 +102,10 @@ describe("synap_find_surfaces", () => {
 
   it("an object you cannot see is a tool error, never an empty list", async () => {
     surfacesForObject.mockRejectedValue(
-      new TRPCError({ code: "NOT_FOUND", message: "No project x that you can see." })
+      new TRPCError({
+        code: "NOT_FOUND",
+        message: "No project x that you can see.",
+      })
     );
     const res = await readHandlers.synap_find_surfaces!(makeCtx());
     expect(res.isError).toBe(true);

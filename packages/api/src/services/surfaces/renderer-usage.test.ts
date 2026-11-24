@@ -50,12 +50,7 @@ vi.mock("../../access/scoped-db.js", () => ({
 }));
 
 import { buildRendererUsage } from "./renderer-usage.js";
-import {
-  workspaces,
-  views,
-  entities,
-  rendererBindings,
-} from "@synap/database";
+import { workspaces, views, entities, rendererBindings } from "@synap/database";
 import type { AccessContext } from "../../access/context.js";
 
 const USER = "user-1";

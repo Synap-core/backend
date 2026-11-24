@@ -16,7 +16,11 @@
  */
 
 import { z } from "@hono/zod-openapi";
-import { ANCHOR_KINDS, SURFACE_BODIES, SURFACE_RELATIONS } from "@synap-core/types/surfaces";
+import {
+  ANCHOR_KINDS,
+  SURFACE_BODIES,
+  SURFACE_RELATIONS,
+} from "@synap-core/types/surfaces";
 
 import { AccessContext } from "../../../access/context.js";
 import { surfacesForObject } from "../../../services/surfaces/for-object.js";

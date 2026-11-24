@@ -753,9 +753,7 @@ export const readHandlers: McpHandlerMap = {
    * not be read comes back in `unavailable`, never as "nothing there".
    * Titles are what people and agents named their surfaces: fenced.
    */
-  synap_find_surfaces: async (
-    ctx: McpToolContext
-  ): Promise<CallToolResult> => {
+  synap_find_surfaces: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const { ANCHOR_KINDS } = await import("@synap-core/types/surfaces");
@@ -788,7 +786,10 @@ export const readHandlers: McpHandlerMap = {
       );
       const fence = "a surface title (anyone who made it may have written it)";
       return ok({
-        rows: found.rows.map((r) => ({ ...r, title: untrusted(r.title, fence) })),
+        rows: found.rows.map((r) => ({
+          ...r,
+          title: untrusted(r.title, fence),
+        })),
         unavailable: found.unavailable,
       });
     } catch (err) {

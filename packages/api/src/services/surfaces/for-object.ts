@@ -77,7 +77,6 @@ import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { openLink } from "../../utils/deep-links.js";
-import { RENDERER_SLOTS } from "../profiles/renderer-slots.js";
 import { readBoundRenderer } from "../renderers/renderer-target-checks.js";
 import { RENDERER_TARGETS } from "../renderers/renderer-targets.js";
 
@@ -212,8 +211,7 @@ async function loadAnchor(
           p.id === input.id ||
           (p as unknown as { slug?: string }).slug === input.id
       ) as unknown as
-        | { id: string; slug: string; workspaceId?: string | null }
-        | undefined;
+        { id: string; slug: string; workspaceId?: string | null } | undefined;
       if (!profile) throw notFound(anchor);
       return {
         anchor,
@@ -227,7 +225,10 @@ async function loadAnchor(
         .select({ id: workspaces.id, settings: workspaces.settings })
         .from(workspaces)
         .where(
-          and(eq(workspaces.id, input.id), userVisibleWhere(workspaces.id, ctx.userId))
+          and(
+            eq(workspaces.id, input.id),
+            userVisibleWhere(workspaces.id, ctx.userId)
+          )
         )
         .limit(1);
       if (!row) throw notFound(anchor);
@@ -273,7 +274,10 @@ function sourcesFor(
         { source: "renderers", read: () => readRenders(ctx, loaded) },
         { source: "entity-body", read: () => readEntityBody(access, loaded) },
         { source: "views", read: () => readEntityBento(access, loaded) },
-        { source: "cell-relations", read: () => readCellRelations(access, anchor) }
+        {
+          source: "cell-relations",
+          read: () => readCellRelations(access, anchor),
+        }
       );
       break;
     case "profile":
@@ -381,9 +385,7 @@ function viewBody(type: string): SurfaceBody {
 }
 
 function isScopedSurface(metadata: unknown): boolean {
-  return (
-    (metadata as Record<string, unknown> | null)?.scopedSurface === true
-  );
+  return (metadata as Record<string, unknown> | null)?.scopedSurface === true;
 }
 
 interface ViewRow {
@@ -492,12 +494,16 @@ async function readRenders(
       userId: ctx.userId,
       workspaceId: loaded.workspaceId,
     });
-    if (bound) out.push(rendererRow(bound.ref, slot, anchor, `renderer:${bound.source}`));
+    if (bound)
+      out.push(
+        rendererRow(bound.ref, slot, anchor, `renderer:${bound.source}`)
+      );
   }
   // An entity's own legacy override (the browser applies it above the
   // ladder, `entities.setEntityRenderer`). P3 migrates it to `attached`.
   const override = loaded.entity?.systemData.renderer;
-  if (override) out.push(rendererRow(override, "detail", anchor, "entity-override"));
+  if (override)
+    out.push(rendererRow(override, "detail", anchor, "entity-override"));
   return out;
 }
 
@@ -612,7 +618,9 @@ async function readCellRelations(
     }
   );
   const ids = [
-    ...new Set(links.map((l) => l.sourceCellId).filter((id): id is string => !!id)),
+    ...new Set(
+      links.map((l) => l.sourceCellId).filter((id): id is string => !!id)
+    ),
   ];
   if (ids.length === 0) return [];
   const cells = await scoped.findMany<{
@@ -642,13 +650,17 @@ async function readStartPage(
   loaded: LoadedAnchor
 ): Promise<SurfaceRow[]> {
   const layout = loaded.workspaceSettings?.layout as
-    | { primarySurface?: Record<string, unknown> | null }
-    | undefined;
+    { primarySurface?: Record<string, unknown> | null } | undefined;
   const ps = layout?.primarySurface;
   if (!ps || typeof ps !== "object") return [];
   const { anchor } = loaded;
   const title = typeof ps.title === "string" ? ps.title : "";
-  const base = { relation: "home" as const, anchor, readOnly: false, source: "start-page" };
+  const base = {
+    relation: "home" as const,
+    anchor,
+    readOnly: false,
+    source: "start-page",
+  };
   switch (ps.kind) {
     case "view": {
       const [v] = await readViewsByIds(access, [String(ps.viewId)]);
@@ -720,17 +732,22 @@ async function readSessionOutputs(
     },
   });
   const live = rows.filter((a) => a.state !== "swept");
-  const viewIds = live.filter((a) => a.kind === "view" && a.refId).map((a) => a.refId!);
+  const viewIds = live
+    .filter((a) => a.kind === "view" && a.refId)
+    .map((a) => a.refId!);
   const docIds = live
     .filter((a) => a.kind === "document" && a.refId)
     .map((a) => a.refId!);
   const [viewsFound, docsFound] = await Promise.all([
     readViewsByIds(access, viewIds),
     docIds.length
-      ? scoped.findMany<{ id: string; title: string; type: string }>(documents, {
-          where: inArray(documents.id, docIds),
-          columns: { id: true, title: true, type: true },
-        })
+      ? scoped.findMany<{ id: string; title: string; type: string }>(
+          documents,
+          {
+            where: inArray(documents.id, docIds),
+            columns: { id: true, title: true, type: true },
+          }
+        )
       : Promise.resolve([]),
   ]);
   const viewById = new Map(viewsFound.map((v) => [v.id, v]));
@@ -799,7 +816,10 @@ async function readSites(
       body: "site" as const,
       relation: "exposed" as const,
       anchor,
-      title: typeof title === "string" && title ? title : `Site (${s.state ?? "draft"})`,
+      title:
+        typeof title === "string" && title
+          ? title
+          : `Site (${s.state ?? "draft"})`,
       // The public address is a token shown once; the project page manages it.
       openUrl: openLink(anchor.id),
       readOnly: true,

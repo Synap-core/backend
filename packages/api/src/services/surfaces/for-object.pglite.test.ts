@@ -240,7 +240,11 @@ describe("surfaces.forObject", () => {
     expect(unavailable).toEqual([]);
     expect(rows).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: V_HOME, body: "bento", relation: "home" }),
+        expect.objectContaining({
+          id: V_HOME,
+          body: "bento",
+          relation: "home",
+        }),
         expect.objectContaining({
           id: "home-cell",
           body: "cell",
@@ -252,9 +256,9 @@ describe("surfaces.forObject", () => {
   });
 
   it("an object you cannot see is NOT_FOUND, never an empty list", async () => {
-    await expect(forObject({ kind: "workspace", id: W2 })).rejects.toMatchObject(
-      { code: "NOT_FOUND" }
-    );
+    await expect(
+      forObject({ kind: "workspace", id: W2 })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
   it("hub listViews (synap_list_views, GET /views): the VISIBLE floor, narrowed by project", async () => {

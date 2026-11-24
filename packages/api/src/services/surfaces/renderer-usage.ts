@@ -586,7 +586,10 @@ async function readOrReport<T>(
   try {
     return await fn();
   } catch (err) {
-    logger.warn({ store: source, err }, "buildRendererUsage: store unavailable");
+    logger.warn(
+      { store: source, err },
+      "buildRendererUsage: store unavailable"
+    );
     unavailable.push({
       source,
       error: err instanceof Error ? err.message : String(err),

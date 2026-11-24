@@ -108,7 +108,10 @@ describe("GET /surfaces", () => {
     expect(bad.status).toBe(400);
 
     surfacesForObject.mockRejectedValue(
-      new TRPCError({ code: "NOT_FOUND", message: "No project that you can see." })
+      new TRPCError({
+        code: "NOT_FOUND",
+        message: "No project that you can see.",
+      })
     );
     const missing = await buildApp().request(
       `/surfaces?kind=project&id=${PROJECT}`

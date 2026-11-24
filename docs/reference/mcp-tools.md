@@ -2,7 +2,7 @@
 
 # MCP tools
 
-The pod's MCP server lists 126 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
+The pod's MCP server lists 127 tools. A new agent key lists the `entry` tools; the others arrive by group when an agent calls `synap_load_skill` with `tools:<group>` (or `tools:builder` for every group). A group narrows what is listed; it is not a permission. A call still runs under the key's scopes and the pod's governance.
 
 | Tool                                                                      | Title                             | Group        | Read-only |
 | ------------------------------------------------------------------------- | --------------------------------- | ------------ | --------- |
@@ -51,6 +51,7 @@ The pod's MCP server lists 126 tools. A new agent key lists the `entry` tools; t
 | [`synap_needs_you`](#synap_needs_you)                                     | What needs the person             | sessions     | yes       |
 | [`synap_get_flow`](#synap_get_flow)                                       | Get the flow of a kind or role    | read         | yes       |
 | [`synap_read_board`](#synap_read_board)                                   | Read a whiteboard                 | read         | yes       |
+| [`synap_find_surfaces`](#synap_find_surfaces)                             | Find an object's surfaces         | build        | yes       |
 | [`synap_list_sessions`](#synap_list_sessions)                             | List focus sessions               | sessions     | yes       |
 | [`synap_get_work_graph`](#synap_get_work_graph)                           | Get the work graph                | sessions     | yes       |
 | [`synap_get_work_release`](#synap_get_work_release)                       | Get the release state             | sessions     | yes       |
@@ -883,6 +884,18 @@ What a whiteboard holds, in ONE read — read-only. `scene.shapes`: each shape's
 | `frameId` | string | no       | Optional: only what this frame or artboard holds (a shape id from a previous read). |
 | `offset`  | number | no       | Skip this many shapes (use `scene.window.nextOffset`).                              |
 | `limit`   | number | no       | Shapes per read (default 15, max 60).                                               |
+
+## synap_find_surfaces
+
+**Find an object's surfaces** · Group: `build` · readOnlyHint: true · openWorldHint: false
+
+Find every Surface an object carries before you make one: its kind's renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not "nothing there". Read-only.
+
+| Parameter     | Type   | Required | Description                                                                                                                                                         |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`        | enum   | yes      | The anchor's kind (profile = a kind of record, by id or slug; track = a goal). One of: `entity`, `profile`, `workspace`, `project`, `track`, `playbook`, `session`. |
+| `id`          | string | yes      | The anchor's id (a profile also by its slug).                                                                                                                       |
+| `workspaceId` | string | no       | Optional space to narrow to. Omit for everything you can see.                                                                                                       |
 
 ## synap_list_sessions
 
@@ -1801,16 +1814,17 @@ Edit a View or board you own: rename it and/or REPLACE its config. For a bento, 
 
 **List views** · Group: `build` · readOnlyHint: true · openWorldHint: false
 
-List views you own, optionally narrowed by workspaceId, type, or profileId. Call this BEFORE synap_create_view so you do not duplicate an existing board. Owner-only (same floor as hub listViews). Omit filters for the full catalog.
+List the Views and boards you can see (not only your own), narrowed by workspaceId, projectId, type or profileId. Call it before synap_create_view so you do not duplicate one. For what ONE object already carries (its views, bentos, documents, HTML artifacts, renders), use synap_find_surfaces. `type` accepts every view type, bento and whiteboard included.
 
-| Parameter     | Type   | Required | Description                                                                                                                                                        |
-| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `detail`      | enum   | no       | lean (default) = a digest to pick an id from (the heavy config/graph omitted, see `note`); full = complete rows — pair with a small limit. One of: `lean`, `full`. |
-| `workspaceId` | string | no       | Optional workspace UUID to narrow to. Omit for every view you own.                                                                                                 |
-| `type`        | string | no       | Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow).                                                                          |
-| `profileId`   | string | no       | Optional profile UUID to filter views scoped to that entity type.                                                                                                  |
-| `limit`       | number | no       | Page size, default 50                                                                                                                                              |
-| `offset`      | number | no       | From nextOffset                                                                                                                                                    |
+| Parameter     | Type   | Required | Description                                                                                                                                                                                      |
+| ------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `detail`      | enum   | no       | lean (default) = a digest to pick an id from (the heavy config/graph omitted, see `note`); full = complete rows — pair with a small limit. One of: `lean`, `full`.                               |
+| `workspaceId` | string | no       | Optional workspace UUID to narrow to. Omit for every view you can see.                                                                                                                           |
+| `projectId`   | string | no       | Optional project UUID: only views pinned to or exposed in that project.                                                                                                                          |
+| `type`        | string | no       | Optional view type filter: sheet, table, list, grid, gallery, kanban, pipeline, matrix, masonry, calendar, gantt, timeline, graph, flow, branch_tree, bento, whiteboard, mindmap, map, zoom_map. |
+| `profileId`   | string | no       | Optional profile UUID to filter views scoped to that entity type.                                                                                                                                |
+| `limit`       | number | no       | Page size, default 50                                                                                                                                                                            |
+| `offset`      | number | no       | From nextOffset                                                                                                                                                                                  |
 
 ## synap_list_widgets
 
