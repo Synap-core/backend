@@ -20,7 +20,10 @@
  * an agent's write answers 202 `status: 'proposed'` (`jsonGoverned`).
  */
 import { z } from "zod";
+import { z as zo } from "@hono/zod-openapi";
 import type { Context } from "hono";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
 import {
   enableWorkerDoor,
   listWorkersDoor,
@@ -202,7 +205,87 @@ function errorResponse(c: HubContext, err: unknown, label: string) {
   );
 }
 
+/**
+ * The wire shape of one worker (`GoalWorkerView`, `@synap-core/types/workers/
+ * health`), documented for the clients that read it (a pod app's "Runs on its
+ * own"). Passthrough: the type is the contract, this names its fields.
+ */
+const WorkerViewSchema = zo
+  .object({
+    ruleId: zo.string(),
+    playbookId: zo.string(),
+    playbookName: zo.string(),
+    activatorKey: zo.string(),
+    scope: zo.enum(["space", "project", "session"]),
+    mode: zo.string(),
+    state: zo.enum(["running", "paused", "stopped"]),
+    projectId: zo.string().nullable(),
+    trackId: zo.string().nullable(),
+    automationId: zo.string().nullable(),
+    pendingApprovals: zo.number(),
+    maxPendingApprovals: zo.number(),
+    trigger: zo.object({
+      kind: zo.string(),
+      words: zo.string().nullable(),
+    }),
+    lastRunAt: zo.string().nullable(),
+    nextRunAt: zo.string().nullable(),
+    health: zo.object({ state: zo.string() }).passthrough(),
+  })
+  .passthrough()
+  .openapi("GoalWorkerView");
+
+const ListWorkersResponseSchema = zo
+  .object({
+    items: zo.array(WorkerViewSchema),
+    withheld: zo
+      .object({
+        workers: zo.number(),
+        needs: zo.array(zo.string()),
+      })
+      .optional()
+      .openapi({
+        description:
+          "A scoped key's left-out workers: their playbook is one it reads, not their automation and approvals in its space.",
+      }),
+  })
+  .openapi("ListWorkersResponse");
+
 export function registerWorkersRoutes(app: HubHono): void {
+  registerOpenApi(app, {
+    method: "get",
+    path: "/workers",
+    tags: ["Playbooks"],
+    summary: "List workers (a goal's, a project's or a playbook's)",
+    description:
+      "The workers enabled on a goal (trackId, strict), over a project (projectId), " +
+      "or of one playbook (playbookId: every enablement, the space-wide one included). " +
+      "A scoped key (a pod app) needs playbook.read; it gets a worker only where it also " +
+      "reads automation and proposal in the playbook's space, the rest counted in `withheld`.",
+    request: {
+      query: zo.object({
+        trackId: zo.string().uuid().optional(),
+        projectId: zo.string().uuid().optional(),
+        playbookId: zo.string().uuid().optional(),
+      }),
+    },
+    responses: {
+      200: { description: "The workers", schema: ListWorkersResponseSchema },
+      400: {
+        description: "No filter, or a malformed id",
+        schema: ErrorSchema,
+      },
+      403: {
+        description: "Refused by the key's scope or grant",
+        schema: ErrorSchema,
+      },
+      404: {
+        description: "The goal is not one you can see",
+        schema: ErrorSchema,
+      },
+    },
+  });
+
   app.get("/workers", async (c) => {
     if (!hasScope(c.get("scopes"), "hub-protocol.read")) {
       return c.json({ error: "Missing scope: hub-protocol.read" }, 403);

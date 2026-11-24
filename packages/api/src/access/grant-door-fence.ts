@@ -45,6 +45,7 @@ import {
   WORK_RELEASE_SOURCE_STATES,
   type WorkReleasePart,
 } from "@synap-core/types/work-release";
+import { holderOfGrant, parsePlace } from "@synap-core/types/grants";
 import { UNCLASSIFIED_WRITE_ROUTES } from "./grant-door-write-baseline.js";
 
 /** How a fenced read door is bounded by a grant. */
@@ -243,30 +244,45 @@ const LIST_WORKERS = NARROWED("playbook", WORKER_VIEW_SUBJECTS);
 
 /**
  * Does the grant read every one of `subjects` in space `workspaceId`? For
- * each subject, one live scope that grants `<subject>.read` and is either
- * unpinned or pinned to spaces that include `workspaceId` (as the grant
- * clause reads a table with a workspace column: `grantReadClause`). A scope
- * pinned to projects or objects never qualifies (fail closed: a space-wide
- * row such as an automation has no project or object path), nor does any
- * scope for a row in no space (`null`) unless it is unpinned.
+ * each subject, one live scope that grants `<subject>.read` and whose place
+ * (the ONE parse, `parsePlace`) is anywhere (unbounded, or an app's pod-wide
+ * read: no space pins it, as the grant clause reads it), or spaces that
+ * include `workspaceId` (as the grant clause reads a table with a workspace
+ * column: `grantReadClause`). A scope pinned to projects or objects never
+ * qualifies (fail closed: a space-wide row such as an automation has no
+ * project or object path), nor any pinned scope for a row in no space
+ * (`null`). A scope whose place does not parse (an empty space list)
+ * reaches nothing.
  */
 export function grantReadsInSpace(
   grant: KeyGrant,
   subjects: readonly string[],
   workspaceId: string | null
 ): boolean {
+  const holder = holderOfGrant(grant);
+  const reaches = (scope: GrantScope): boolean => {
+    if (scope.projectIds || scope.entityIds) return false;
+    let place: ReturnType<typeof parsePlace>;
+    try {
+      place = parsePlace(scope, holder);
+    } catch {
+      return false; // not a place (PlaceError): it reaches no space
+    }
+    if (place.kind === "unbounded" || place.kind === "pod") return true;
+    return (
+      place.kind === "spaces" &&
+      workspaceId !== null &&
+      place.ids.includes(workspaceId)
+    );
+  };
   return subjects.every((subject) =>
-    grant.scopes.some((scope) => {
-      if (scope.projectIds || scope.entityIds) return false;
-      if (
-        scope.workspaceIds &&
-        (workspaceId === null || !scope.workspaceIds.includes(workspaceId))
-      )
-        return false;
-      return scope.permissions.some((p) =>
-        patternMatches(p, { subject, action: "read" })
-      );
-    })
+    grant.scopes.some(
+      (scope) =>
+        reaches(scope) &&
+        scope.permissions.some((p) =>
+          patternMatches(p, { subject, action: "read" })
+        )
+    )
   );
 }
 
