@@ -1764,7 +1764,7 @@ async function applyProposedOutputMutations(
         sessionId,
         userId: ownerUserId,
       });
-      report = withEvidenceVerdict(report, verdict.satisfied);
+      report = withEvidenceVerdict(report, verdict.satisfied, verdict.held);
     } catch {
       // The claim stands, unverified — reported below like any open claim.
     }

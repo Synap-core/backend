@@ -4419,6 +4419,83 @@
         },
         "required": ["userId", "workspaceId", "slug", "valueType"]
       },
+      "ListWorkersResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/GoalWorkerView" }
+          },
+          "withheld": {
+            "type": "object",
+            "properties": {
+              "workers": { "type": "number" },
+              "needs": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["workers", "needs"],
+            "description": "A scoped key's left-out workers: their playbook is one it reads, not their automation and approvals in its space."
+          }
+        },
+        "required": ["items"]
+      },
+      "GoalWorkerView": {
+        "type": "object",
+        "properties": {
+          "ruleId": { "type": "string" },
+          "playbookId": { "type": "string" },
+          "playbookName": { "type": "string" },
+          "activatorKey": { "type": "string" },
+          "scope": {
+            "type": "string",
+            "enum": ["space", "project", "session"]
+          },
+          "mode": { "type": "string" },
+          "state": {
+            "type": "string",
+            "enum": ["running", "paused", "stopped"]
+          },
+          "projectId": { "type": ["string", "null"] },
+          "trackId": { "type": ["string", "null"] },
+          "automationId": { "type": ["string", "null"] },
+          "pendingApprovals": { "type": "number" },
+          "maxPendingApprovals": { "type": "number" },
+          "trigger": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string" },
+              "words": { "type": ["string", "null"] }
+            },
+            "required": ["kind", "words"]
+          },
+          "lastRunAt": { "type": ["string", "null"] },
+          "nextRunAt": { "type": ["string", "null"] },
+          "health": {
+            "type": "object",
+            "properties": { "state": { "type": "string" } },
+            "required": ["state"],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ruleId",
+          "playbookId",
+          "playbookName",
+          "activatorKey",
+          "scope",
+          "mode",
+          "state",
+          "projectId",
+          "trackId",
+          "automationId",
+          "pendingApprovals",
+          "maxPendingApprovals",
+          "trigger",
+          "lastRunAt",
+          "nextRunAt",
+          "health"
+        ],
+        "additionalProperties": {}
+      },
       "SiteStatus": {
         "type": ["object", "null"],
         "properties": {
@@ -29118,6 +29195,68 @@
         }
       }
     },
+    "/workers": {
+      "get": {
+        "tags": ["Playbooks"],
+        "summary": "List workers (a goal's, a project's or a playbook's)",
+        "description": "The workers enabled on a goal (trackId, strict), over a project (projectId), or of one playbook (playbookId: every enablement, the space-wide one included). A scoped key (a pod app) needs playbook.read; it gets a worker only where it also reads automation and proposal in the playbook's space, the rest counted in `withheld`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "playbookId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workers",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListWorkersResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "No filter, or a malformed id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused by the key's scope or grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "The goal is not one you can see",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
     "/shares/sites": {
       "get": {
         "tags": ["Shares"],
@@ -41306,6 +41445,10 @@
                           },
                           "required": ["kind"]
                         },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
                         "required": { "type": "boolean" },
                         "owner": {
                           "type": "string",
@@ -45669,6 +45812,10 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         },
                         "required": { "type": "boolean" },
                         "owner": {

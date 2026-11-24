@@ -506,10 +506,10 @@
   --synap-page-gutter-expanded: var(--synap-space-400);
 
   /* ── Section rhythm (Design app W3, plan 0fc746f4 §2.5) ──────────────────
-   * The block padding of a page section, per width class. */
-  --synap-section-y-compact: var(--synap-space-600);
-  --synap-section-y-medium: var(--synap-space-800);
-  --synap-section-y-expanded: var(--synap-space-1000);
+   * The block padding of a page section, per width class. A section pads both edges, so two sections sit TWICE the token apart: 32 / 40 / 48 (the scale's large section gap and layout gaps), the rhythm of an app screen. Was 48 / 64 / 80 (a marketing page's): 160px between two sections of the first agent-made app screen (design bd3f5ba6, 2026-11-20). */
+  --synap-section-y-compact: var(--synap-space-200);
+  --synap-section-y-medium: var(--synap-space-250);
+  --synap-section-y-expanded: var(--synap-space-300);
 
   /* ── Row heights (surfaces W0, 2026-10-12) ───────────────────────────────
    * The ONE height scale for list rows and cards, shared by web and relay:

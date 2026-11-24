@@ -685,6 +685,10 @@ const SESSION_OUTCOMES_PROPERTY = {
         },
         required: ["kind"],
       },
+      outputKey: {
+        type: "string",
+        description: "kind 'fact' only: the key of the output it checks.",
+      },
       required: { type: "boolean", description: "Default true." },
       owner: {
         type: "string",
@@ -4135,7 +4139,7 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Workspace ID to scope the lookup (optional — falls back to the user's first workspace). Pod-wide playbooks match regardless.",
+                "Workspace ID to scope the lookup (optional — falls back to the user's first active workspace). Pod-wide playbooks match regardless.",
             },
             intentText: {
               type: "string",

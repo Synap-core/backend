@@ -534,6 +534,8 @@ export {
 export {
   oweSlotTransitions,
   slotTransitionsOf,
+  gradesComeDueOf,
+  stampOwedSinceOnDue,
   type SlotForTransition,
   type SlotSessionPlace,
 } from "./services/lifecycle/slot-transition.js";
