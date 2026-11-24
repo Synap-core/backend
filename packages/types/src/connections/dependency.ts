@@ -15,8 +15,10 @@
  * kind's status vocabulary ({@link classifyDependencyBlocker}):
  *
  *            DELIVERED (clears)     DROPPED (still holds)   OPEN (holds)
- *   session  `closed`               `cancelled` · `failed`  anything else —
- *                                                           incl. `stale`
+ *   session  category `done` and   category `lost`         anything else —
+ *            `closedAs` done        (`cancelled`, `failed`), incl. `stale`
+ *            (`closed`, nothing     or `closed` with
+ *            required left open)    `closedAs` not_done
  *   track    lifecycle category     category `lost`         anything else
  *            `done` (`completed`)   (`archived`: the goal
  *                                   was dropped)
@@ -26,7 +28,10 @@
  *            ({@link ENTITY_DELIVERED_STATUSES})
  *
  * ONLY A DELIVERED BLOCKER CLEARS (founder decision, 2026-10-22). A blocker
- * that ended WITHOUT delivering — cancelled, failed, archived, lost — used to
+ * that ended WITHOUT delivering — cancelled, failed, archived, lost, or a
+ * session closed anyway with required work open (founder, 2026-11-20:
+ * "delivered" means the work was done, not that the session closed;
+ * `sessionClosedAs`, focus-sessions/statuses.ts) — used to
  * settle exactly like a delivered one, so its dependent went ahead as if the
  * work it waited on existed. It now stays a blocker marked `dropped: true`,
  * and the dependent must RE-PLAN: remove the edge (the work no longer needs
@@ -43,16 +48,32 @@
  * hold it forever nor clear it early. Linking a replacement is therefore one
  * of the two ways a DROPPED blocker stops holding its dependent.
  *
+ * DECISION ARMS (founder decision P5, 21 Nov 2026) — "every branch is a
+ * decision". A `blocked_by` edge to a decision may name ONE of its options in
+ * `links.metadata.option` ({@link DECISION_ARM_OPTION_KEY}): the step waits
+ * for THAT answer ({@link classifyArmBlocker}). The decision accepted with
+ * that option delivers; accepted with another option (or none) the arm is
+ * NOT TAKEN: the step still holds (`dropped`, `notTaken`) and the pod closes
+ * it as skipped (`decision-arms.ts`); rejected, it holds like any dropped
+ * blocker until its owner re-plans. An edge with no option reads as before.
+ * A SKIPPED step (ended as an arm not taken) does not hold ITS dependents:
+ * for ordering it counts as delivered (`skipped` on the session's state), so
+ * a step that joins two exclusive arms waits only on the arm taken.
+ *
  * A blocker whose row no longer exists (deleted) does not block — the pod's
  * session reader drops it the same way (inner join). A blocker the reader
  * cannot SEE is still a blocker: hiding it would read as "free to go", a calm
  * wrong answer. Callers report it as `hidden`, never omit it.
  *
- * Pure. Its one runtime import is the track status declaration, a leaf
- * (`units/track-status.ts`) with no runtime imports; the rest are types.
+ * Pure. Its runtime imports are the session and track status declarations,
+ * leaves (`focus-sessions/statuses.ts`, `units/track-status.ts`); the rest are
+ * types.
  */
 
-import type { TerminalSessionStatus } from "../focus-sessions/statuses.js";
+import {
+  sessionStatusCategory,
+  type SessionClosedAs,
+} from "../focus-sessions/statuses.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import { trackStatusCategory } from "../units/track-status.js";
 
@@ -60,6 +81,40 @@ import { trackStatusCategory } from "../units/track-status.js";
 export const DEPENDENCY_LINK_TYPE = "blocked_by" as const;
 /** `A --replaces--> B`: A is the attempt that replaces B. */
 export const REPLACES_LINK_TYPE = "replaces" as const;
+
+/**
+ * `links.metadata.option` on a `blocked_by` edge to a decision: the option key
+ * (`askOptionKey`: `value ?? label`) the waiting step is the arm of. Written
+ * by the session doors (`<id>:<option>`, {@link parseArmRef}) and by a
+ * capture plan's cross-kind `links[]` (a step → a decision, `option`).
+ */
+export const DECISION_ARM_OPTION_KEY = "option" as const;
+
+/** The arm option an edge's metadata names, or `null` (a plain wait). */
+export function armOptionOf(metadata: unknown): string | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return null;
+  }
+  const v = (metadata as Record<string, unknown>)[DECISION_ARM_OPTION_KEY];
+  return typeof v === "string" && v.trim() ? v : null;
+}
+
+/**
+ * The compact form an agent door takes for an arm: `<decision id>:<option>`.
+ * A UUID is 36 characters, so a `:` right after them splits (an option may
+ * hold more `:`). A bare ref is a plain wait (`option: null`). An empty
+ * option is `null`: never read as "no arm". The caller checks the id.
+ */
+export function parseArmRef(
+  ref: string
+): { id: string; option: string | null } | null {
+  if (ref.length <= ARM_ID_LENGTH || ref[ARM_ID_LENGTH] !== ":") {
+    return { id: ref, option: null };
+  }
+  const option = ref.slice(ARM_ID_LENGTH + 1);
+  return option.trim() ? { id: ref.slice(0, ARM_ID_LENGTH), option } : null;
+}
+const ARM_ID_LENGTH = 36;
 
 /** The link types this module reads — the user/agent-authorable work edges. */
 export const DEPENDENCY_LINK_TYPES = [
@@ -108,13 +163,38 @@ export function isDependencyLinkType(
 export const SERVES_LINK_TYPE = "serves" as const;
 
 /**
+ * `G --advances--> W`: goal G moves space W of its project forward — W is a
+ * PILLAR of the project (the project `uses` W). NOT a dependency: no blocker
+ * reader follows it. The pillar health read does
+ * (`services/projects/pillar-health.ts`).
+ */
+export const ADVANCES_LINK_TYPE = "advances" as const;
+
+/**
+ * `links.metadata.primary: true` on a `serves` (goal → goal) or `advances`
+ * edge: the goal's PRIMARY parent or pillar — at most one of each per goal.
+ * A goal rolls up fully to its primary only; elsewhere it is listed.
+ */
+export const LINK_PRIMARY_KEY = "primary" as const;
+
+/** Does this link metadata mark the edge primary? */
+export function isPrimaryLinkMetadata(metadata: unknown): boolean {
+  return (
+    metadata != null &&
+    typeof metadata === "object" &&
+    (metadata as Record<string, unknown>)[LINK_PRIMARY_KEY] === true
+  );
+}
+
+/**
  * The work edges THE dependency door writes: the dependency edges plus
- * `serves`. Readers of "what waits on what" keep reading
+ * `serves` and `advances`. Readers of "what waits on what" keep reading
  * {@link DEPENDENCY_LINK_TYPES}; only the door widens to this list.
  */
 export const WORK_LINK_TYPES = [
   ...DEPENDENCY_LINK_TYPES,
   SERVES_LINK_TYPE,
+  ADVANCES_LINK_TYPE,
 ] as const;
 export type WorkLinkType = (typeof WORK_LINK_TYPES)[number];
 
@@ -135,20 +215,13 @@ export function isServesPair(fromType: string, toType: string): boolean {
   );
 }
 
+/** Is `from --advances--> to` the pair the edge allows (track → workspace)? */
+export function isAdvancesPair(fromType: string, toType: string): boolean {
+  return fromType === "track" && toType === "workspace";
+}
+
 /** What became of a blocker — see the table at the top of this module. */
 export type DependencyOutcome = "open" | "delivered" | "dropped";
-
-// Hand-listed only until sessions declare categories (a session status
-// declaration beside the track's); then derived from it like a track's.
-/** A `focus_sessions.status` that DELIVERED — the only one that clears. */
-export const SESSION_DELIVERED_STATUSES = [
-  "closed",
-] as const satisfies readonly TerminalSessionStatus[];
-/** A `focus_sessions.status` that ENDED without delivering. */
-export const SESSION_DROPPED_STATUSES = [
-  "cancelled",
-  "failed",
-] as const satisfies readonly TerminalSessionStatus[];
 
 /**
  * Entity `status` property values that read as DELIVERED, when the reader does
@@ -210,19 +283,29 @@ function outcomeOfCategory(
 
 /**
  * THE classification — what became of a blocker of this kind, in this status
- * (and, for an entity, this lifecycle category when the reader resolved it).
- * Unknown kinds and unknown values are OPEN: a dependency nobody can reason
- * about stays declared.
+ * (and, for an entity, this lifecycle category when the reader resolved it;
+ * for a session, its `closedAs` when the reader read it). Unknown kinds and
+ * unknown values are OPEN: a dependency nobody can reason about stays
+ * declared.
  */
 export function classifyDependencyBlocker(
   kind: string,
   status: string | null | undefined,
-  category?: LifecycleCategory | null
+  category?: LifecycleCategory | null,
+  closedAs?: SessionClosedAs | null,
+  skipped?: boolean | null
 ): DependencyOutcome {
   switch (kind) {
-    case "session":
-      if (has(SESSION_DELIVERED_STATUSES, status)) return "delivered";
-      return has(SESSION_DROPPED_STATUSES, status) ? "dropped" : "open";
+    case "session": {
+      // A step skipped as a decision's arm not taken holds nobody (P5).
+      if (skipped === true && isEndedSessionStatus(status)) return "delivered";
+      // Read off the declaration's categories; a `closed` session delivered
+      // only when it closed with nothing required left open.
+      const outcome = outcomeOfCategory(sessionStatusCategory(status));
+      return outcome === "delivered" && closedAs === "not_done"
+        ? "dropped"
+        : outcome;
+    }
     case "track":
       return outcomeOfCategory(trackStatusCategory(status));
     case "entity": {
@@ -235,6 +318,55 @@ export function classifyDependencyBlocker(
     default:
       return "open";
   }
+}
+
+/** A session that has ended (done or lost) — only such a one can be skipped. */
+function isEndedSessionStatus(status: string | null | undefined): boolean {
+  const c = sessionStatusCategory(status);
+  return c === "done" || c === "lost";
+}
+
+/** What became of a decision for ONE arm of it (P5). */
+export type ArmOutcome = DependencyOutcome | "not_taken";
+
+/**
+ * A blocker's outcome for the edge that waits on it (P5): with no `option`,
+ * the blocker's own outcome. With one, a DELIVERED decision delivers only
+ * when it chose that option; another choice (or none) is `not_taken`. A
+ * dropped (rejected) or open decision keeps its outcome: every arm holds.
+ */
+export function classifyArmBlocker(
+  outcome: DependencyOutcome,
+  option: string | null | undefined,
+  chosenOption: string | null | undefined
+): ArmOutcome {
+  if (!option || outcome !== "delivered") return outcome;
+  return chosenOption === option ? "delivered" : "not_taken";
+}
+
+/**
+ * What an ACCEPTED decision does to the steps that are its arms (P5):
+ *   · some arm names the chosen option ⇒ that arm is taken; every step on
+ *     another arm is SKIPPED ("not taken");
+ *   · no arm names it (or nothing was chosen) ⇒ `unmatched`: nothing is
+ *     skipped, every arm holds and the person is told — never a silent green
+ *     (the n8n trap: a branch that matches nothing must not read as done).
+ * Pure; the pod applies it (`decision-arms.ts`).
+ */
+export function planDecisionArms(
+  chosenOption: string | null | undefined,
+  arms: ReadonlyArray<{ stepId: string; option: string }>
+): { skip: string[]; unmatched: boolean } {
+  const taken = !!chosenOption && arms.some((a) => a.option === chosenOption);
+  if (!taken) return { skip: [], unmatched: arms.length > 0 };
+  return {
+    skip: [
+      ...new Set(
+        arms.filter((a) => a.option !== chosenOption).map((a) => a.stepId)
+      ),
+    ],
+    unmatched: false,
+  };
 }
 
 /**
@@ -264,17 +396,26 @@ export interface DependencyEdge {
   toType: string;
   toId: string;
   linkType: string;
+  /** A `blocked_by` edge's arm ({@link armOptionOf}); absent = a plain wait. */
+  option?: string | null;
 }
 
 /**
  * What the caller knows about one node. `missing` = the row is gone (does not
  * block). `hidden` = it exists but the reader may not see it (still blocks,
  * reported without a name). `category` = an entity's lifecycle category, when
- * the reader resolved its kind's lifecycle. `title` = its display name.
+ * the reader resolved its kind's lifecycle. `closedAs` = how a session ended
+ * (`sessionClosedAs`), when the reader read it; absent on a closed session
+ * reads as delivered. `title` = its display name.
  */
 export interface DependencyNodeState {
   status?: string | null;
   category?: LifecycleCategory | null;
+  closedAs?: SessionClosedAs | null;
+  /** A session that ended as a decision's arm not taken (P5): holds nobody. */
+  skipped?: boolean;
+  /** A decision's chosen option key (`chosenOption`), read by an arm edge. */
+  chosenOption?: string | null;
   title?: string | null;
   missing?: boolean;
   hidden?: boolean;
@@ -285,11 +426,17 @@ export interface OpenBlocker extends DependencyNodeRef {
   replaces?: DependencyNodeRef;
   hidden: boolean;
   /**
-   * It ENDED without delivering (cancelled, failed, archived, lost) and still
-   * holds the dependent: the work it waited on never happened, so the
-   * dependent re-plans — remove the edge, or link a replacement.
+   * It ENDED without delivering (cancelled, failed, archived, lost, closed
+   * with required work open) and still holds the dependent: the work it
+   * waited on never happened, so the dependent re-plans — remove the edge,
+   * or link a replacement.
    */
   dropped: boolean;
+  /**
+   * With `dropped`: the step is an arm of this decision that was NOT taken
+   * (P5). It holds until the pod closes the step as skipped.
+   */
+  notTaken?: true;
   /** Its own raw status, when the reader may see it. */
   status?: string | null;
   /** Its display name, when the reader may see it. */
@@ -324,14 +471,15 @@ export function deriveOpenBlockers(
   const resolve = (
     ref: DependencyNodeRef,
     declared: DependencyNodeRef,
-    seen: Set<string>
+    seen: Set<string>,
+    option: string | null
   ): void => {
     const k = keyOf(ref);
     if (seen.has(k)) return; // a replacement cycle settles nothing — stop
     seen.add(k);
     const replacements = replacementsOf.get(k);
     if (replacements && replacements.length > 0) {
-      for (const r of replacements) resolve(r, declared, new Set(seen));
+      for (const r of replacements) resolve(r, declared, new Set(seen), option);
       return;
     }
     const state = stateOf(ref);
@@ -340,7 +488,17 @@ export function deriveOpenBlockers(
     // purpose: what the reader cannot see is never called delivered.
     const visible = state && !state.hidden ? state : undefined;
     const outcome = visible
-      ? classifyDependencyBlocker(ref.kind, visible.status, visible.category)
+      ? classifyArmBlocker(
+          classifyDependencyBlocker(
+            ref.kind,
+            visible.status,
+            visible.category,
+            visible.closedAs,
+            visible.skipped
+          ),
+          option,
+          visible.chosenOption
+        )
       : "open";
     if (outcome === "delivered") return;
     if (!out.has(k)) {
@@ -348,7 +506,8 @@ export function deriveOpenBlockers(
         kind: ref.kind,
         id: ref.id,
         hidden: state?.hidden === true,
-        dropped: outcome === "dropped",
+        dropped: outcome === "dropped" || outcome === "not_taken",
+        ...(outcome === "not_taken" ? { notTaken: true as const } : {}),
         ...(visible && visible.status !== undefined
           ? { status: visible.status }
           : {}),
@@ -364,7 +523,7 @@ export function deriveOpenBlockers(
     if (e.linkType !== DEPENDENCY_LINK_TYPE) continue;
     if (e.fromType !== node.kind || e.fromId !== node.id) continue;
     const blocker = { kind: e.toType, id: e.toId };
-    resolve(blocker, blocker, new Set([keyOf(node)]));
+    resolve(blocker, blocker, new Set([keyOf(node)]), e.option ?? null);
   }
   return [...out.values()];
 }

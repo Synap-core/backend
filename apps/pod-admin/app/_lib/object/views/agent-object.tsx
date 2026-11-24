@@ -65,6 +65,7 @@ import {
 import { computerHref } from "../../../../lib/console-nav";
 import { WriteModeChoice } from "../../write-mode-choice";
 import { agentTrustDoor } from "./agent-trust-door";
+import { AgentApprovals } from "./agent-approvals";
 import { AgentJob } from "./agent-job";
 import { objectViewsT } from "./copy";
 import {
@@ -295,6 +296,7 @@ export function AgentScorecard({
   ownerId: string | null | undefined;
   ownerName: OwnerName;
 }) {
+  const t = objectViewsT();
   const card = trpc.diagnose.agent.useQuery(
     { agentId },
     { enabled: readable, staleTime: 60_000 }
@@ -303,7 +305,7 @@ export function AgentScorecard({
   if (!readable) {
     const owner = ownerName(ownerId);
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <p className="text-[12.5px] text-foreground/65">
           {owner
             ? `Only the agent's owner (${owner}) or a pod admin can see its scorecard.`
@@ -315,14 +317,14 @@ export function AgentScorecard({
 
   if (card.isLoading) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <div className="h-16 rounded-lg bg-foreground/[0.04] shimmer-pulse" />
       </Section>
     );
   }
   if (card.isError || !card.data || "error" in card.data) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <div className="flex items-center gap-3">
           <p className="text-[12.5px] text-status-down">
             Couldn&apos;t load the scorecard.
@@ -343,7 +345,7 @@ export function AgentScorecard({
   const s = card.data;
   if (s.counts.total === 0) {
     return (
-      <Section title="Scorecard">
+      <Section title={t("scorecard.title")}>
         <p className="text-[12.5px] text-foreground/65">
           It has not proposed a change you can see yet.
         </p>
@@ -351,16 +353,16 @@ export function AgentScorecard({
     );
   }
   return (
-    <Section title="Scorecard">
+    <Section title={t("scorecard.title")}>
       <p className="text-[12.5px] text-foreground">
         {percent(s.rates.approveRate)} of its last {s.counts.total} changes were
         approved, {percent(s.rates.rejectRate)} refused.
       </p>
       <dl className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-        <Stat label="Approved" value={s.counts.approved} />
-        <Stat label="Refused" value={s.counts.rejected} />
-        <Stat label="Waiting" value={s.counts.pending} />
-        <Stat label="Edited first" value={s.counts.revised} />
+        <Stat label={t("scorecard.approved")} value={s.counts.approved} />
+        <Stat label={t("scorecard.refused")} value={s.counts.rejected} />
+        <Stat label={t("scorecard.waiting")} value={s.counts.pending} />
+        <Stat label={t("scorecard.edited")} value={s.counts.revised} />
       </dl>
       {s.rejectionReasons.length > 0 && (
         <p className="text-[12px] text-foreground/65">
@@ -395,7 +397,8 @@ function Stat({ label, value }: { label: string; value: number }) {
 // ─── Governance ─────────────────────────────────────────────────────
 
 /**
- * How its writes land: the one sentence, and — for the person who connected
+ * What it may do: how its writes land (its posture) and its own approvals
+ * (lane W3, `agent-approvals.tsx`). How its writes land: the one sentence, and — for the person who connected
  * it or a pod admin (`mayChange`, the server's own gate) — the control that
  * sets it pod-wide (`agentUsers.setPosture`, THE posture writer). Per-space
  * ask-first overrides stay listed under it: inside that space they win.
@@ -403,9 +406,12 @@ function Stat({ label, value }: { label: string; value: number }) {
 export function AgentGovernance({
   agentUserId,
   mayChange,
+  viewerIsPodAdmin,
 }: {
   agentUserId: string;
   mayChange: boolean;
+  /** Offers the doors into the console and the way back of each approval. */
+  viewerIsPodAdmin: boolean;
 }) {
   const t = objectViewsT();
   const utils = trpc.useUtils();
@@ -434,7 +440,7 @@ export function AgentGovernance({
     },
   });
   return (
-    <Section title="How its writes land">
+    <Section title={t("agent.approvals.title")}>
       {gov.isLoading ? (
         <div className="h-10 rounded-lg bg-foreground/[0.04] shimmer-pulse" />
       ) : gov.error?.data?.code === "NOT_FOUND" ? (
@@ -516,6 +522,8 @@ export function AgentGovernance({
           </div>
         </>
       )}
+      {/* Lane W3: the same approval rows Approvals lists, for this agent. */}
+      <AgentApprovals agentUserId={agentUserId} readOnly={!viewerIsPodAdmin} />
     </Section>
   );
 }
@@ -916,7 +924,11 @@ export function AgentObject({
           />
           {/* Off the roster its creator is unknown here: the control is
               offered to a pod admin only (the server decides either way). */}
-          <AgentGovernance agentUserId={id} mayChange={viewerIsPodAdmin} />
+          <AgentGovernance
+            agentUserId={id}
+            mayChange={viewerIsPodAdmin}
+            viewerIsPodAdmin={viewerIsPodAdmin}
+          />
         </div>
       ),
       advanced: { ids: [{ label: "Agent id", value: id }] },
@@ -967,6 +979,7 @@ export function AgentObject({
             creatorId: row.createdByUserId,
             viewerIsPodAdmin,
           })}
+          viewerIsPodAdmin={viewerIsPodAdmin}
         />
         <AgentPause row={row} />
         {/* 0395: what it is FOR on its computer — its owner only. */}

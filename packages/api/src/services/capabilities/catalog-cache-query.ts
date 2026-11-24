@@ -47,7 +47,7 @@ export function officialCatalogCondition() {
 }
 
 export interface QueryCatalogCacheOptions {
-  /** Ranked tokenized substring match over name + tags + description. */
+  /** Ranked tokenized substring match over name + slug, tags, description. */
   query?: string;
   /**
    * Exact kind filter. `workspace` is an alias for the cache kind `template`
@@ -110,8 +110,12 @@ export async function queryCatalogCache(
   }));
 
   if (opts?.query && opts.query.trim().length > 0) {
+    // The slug is a primary field beside the name: it is what an agent holds
+    // ("media-ffmpeg") and what every other door names a package by. Without
+    // it a slug query matched only the rows whose DESCRIPTION mentions the
+    // slug, never the package itself (dogfood 2026-11-10).
     return rankByTerms(opts.query, entries, (entry) => ({
-      primary: entry.name,
+      primary: [entry.name, entry.slug],
       secondary: entry.tags ?? [],
       tertiary: entry.description,
     }))

@@ -16,6 +16,7 @@ import {
   describeISFailure,
   describeISHttpError,
 } from "@synap/intelligence-client";
+import { classifyAiFailure } from "../../utils/ai-failure.js";
 
 vi.mock("../../utils/intelligence-routing.js", () => ({
   getDefaultActiveService: vi.fn(async () => ({
@@ -127,6 +128,40 @@ describe("IS call budget", () => {
     expect(err.message).toContain("HTTP 502 Bad Gateway");
     expect(err.message).toContain("payloadChars=42");
     expect(err.message.length).toBeLessThan(600);
+  });
+
+  it("carries the IS's failure envelope, so the one classifier reads its code", () => {
+    const ctx = {
+      kind: "generation" as const,
+      endpoint: "https://is.test.internal/api/judge-criteria",
+      payloadChars: 42,
+      startedAt: Date.now(),
+      budgetMs: 180_000,
+    };
+    const refused = describeISHttpError(
+      ctx,
+      429,
+      "Too Many Requests",
+      JSON.stringify({
+        error: "Token quota exceeded",
+        failure: { code: "account_quota_exceeded", retryable: false },
+      })
+    );
+    expect((refused as { status?: unknown }).status).toBe(429);
+    expect((refused as { failure?: unknown }).failure).toEqual({
+      code: "account_quota_exceeded",
+      retryable: false,
+    });
+    expect(classifyAiFailure(refused)).toBe("account_quota");
+    // No envelope (the IS judge route's generic 502): the status decides.
+    const generic = describeISHttpError(
+      ctx,
+      502,
+      "Bad Gateway",
+      JSON.stringify({ error: "Judge error", message: "boom" })
+    );
+    expect((generic as { failure?: unknown }).failure).toBeUndefined();
+    expect(classifyAiFailure(generic)).toBe("upstream");
   });
 
   it("generateViaIS surfaces the attributed message (the real 2026-07-31 path)", async () => {

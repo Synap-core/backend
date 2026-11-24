@@ -122,6 +122,7 @@ import {
   messages,
   apiKeys,
   sessionEvaluations,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   secrets,
@@ -236,6 +237,7 @@ const SECRET = "sk_live_DO_NOT_STORE_123";
 describe("param / criterion / provide / room question on the ONE answer door", () => {
   beforeAll(async () => {
     for (const t of [
+      lifecycleTransitionOutbox,
       focusSessions,
       notifications,
       notificationPreferences,
@@ -494,13 +496,14 @@ describe("param / criterion / provide / room question on the ONE answer door", (
   // ── a person's task that meets a criterion (plan aac47c4a, Q7.4) ─────────
 
   // How an outcome declared `owner: "human"` + `verify` is stored: one slot
-  // and one criterion under ONE key (`outcome-declarations.ts`).
+  // and one criterion naming it (`outputKey`, `outcome-declarations.ts`).
   const SIGNED = [
     {
       key: "contract-signed",
       statement: "The contract is signed",
       required: true,
       check: { kind: "human" },
+      outputKey: "contract-signed",
     },
   ];
   const actTask = (key = "contract-signed") => ({
@@ -526,7 +529,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
       )
     ).rows;
 
-  it("'I did this' on an act task under a criterion's key grades that criterion PASS through the grade door", async () => {
+  it("'I did this' on an act task a criterion checks grades that criterion PASS through the grade door", async () => {
     const { sessionId } = await seed([actTask()], { criteria: SIGNED });
     const r = await attestSessionSlot({
       sessionId,
@@ -547,7 +550,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect((await slotOf(sessionId, "Sign the contract")).status).toBe("done");
   });
 
-  it("an act task under no criterion's key grades nothing", async () => {
+  it("an act task no criterion checks grades nothing", async () => {
     const { sessionId } = await seed([actTask("other-task")], {
       criteria: SIGNED,
     });
@@ -562,12 +565,26 @@ describe("param / criterion / provide / room question on the ONE answer door", (
 
   it("only a person's DEED meets a criterion: an answer, an agent's slot or an escalated criterion slot never does", () => {
     const criteria = [
-      { key: "contract-signed", check: { kind: "human" as const } },
-      { key: "no-stale", check: { kind: "human" as const } },
+      {
+        key: "contract-signed",
+        check: { kind: "human" as const },
+        outputKey: "contract-signed",
+      },
+      {
+        key: "no-stale",
+        check: { kind: "human" as const },
+        outputKey: "no-stale",
+      },
     ];
     expect(criterionMetBy([actTask() as never], 0, criteria)).toBe(
       "contract-signed"
     );
+    // Sharing the key pairs nothing: only `outputKey` names the slot (W4).
+    expect(
+      criterionMetBy([actTask() as never], 0, [
+        { key: "contract-signed", check: { kind: "human" as const } },
+      ])
+    ).toBeNull();
     expect(
       criterionMetBy(
         [
@@ -605,19 +622,24 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     for (const kind of ["evidence", "capability", "judge"] as const) {
       expect(
         criterionMetBy([actTask() as never], 0, [
-          { key: "contract-signed", check: { kind } },
+          {
+            key: "contract-signed",
+            check: { kind },
+            outputKey: "contract-signed",
+          },
         ])
       ).toBeNull();
     }
   });
 
-  it("'I did this' never grades a MACHINE-checked criterion under the task's key", async () => {
+  it("'I did this' never grades a MACHINE-checked criterion on the task", async () => {
     const { sessionId } = await seed([actTask()], {
       criteria: [
         {
           key: "contract-signed",
           statement: "The contract is signed",
           check: { kind: "evidence", evidenceKey: "docusign" },
+          outputKey: "contract-signed",
         },
       ],
     });
@@ -691,7 +713,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
     expect(JSON.stringify(await roomMessages(channelId))).not.toContain(id);
   });
 
-  it("provide under a criterion's key: handing it over grades the criterion PASS; the slot keeps its own answer rule", async () => {
+  it("provide a criterion checks: handing it over grades the criterion PASS; the slot keeps its own answer rule", async () => {
     const id = await seedSecret({ userId: OWNER });
     const { sessionId } = await seed(
       [
@@ -706,6 +728,7 @@ describe("param / criterion / provide / room question on the ONE answer door", (
             key: "stripe-key",
             statement: "The live Stripe key is in the vault",
             check: { kind: "human" },
+            outputKey: "stripe-key",
           },
         ],
       }

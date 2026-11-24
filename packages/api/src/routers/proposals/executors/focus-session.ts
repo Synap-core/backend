@@ -17,8 +17,6 @@ import {
   recordSessionSpawn,
   drizzleSql,
   and,
-  or,
-  isNull,
   ne,
   playbooks,
   projectTracks,
@@ -28,10 +26,20 @@ import {
   appendSessionStageHistory,
   startedByAgentPatch,
   insertFocusSessionRow,
+  workspacePlacementPatchFromProposal,
+  getRequestGrant,
+  usableInSpaceWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { isTrackClosed } from "@synap-core/types/units";
+import {
+  STEP_DUE_BY_KEY,
+  STEP_PLANNED_FOR_KEY,
+  isStepDate,
+  isTrackClosed,
+  nameSharedKeyOutputs,
+  stepBirthStatus,
+} from "@synap-core/types/units";
 import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import {
   registerProposalExecutor,
@@ -47,6 +55,7 @@ import {
   applyOutputMutations,
   addOutputWireSchema,
   expectedOutputWireSchema,
+  mergeSessionMetadataSql,
   sanitizeDeclaredOutputs,
   withEvidenceVerdict,
   type CompleteOutputOutcome,
@@ -54,11 +63,14 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import { resolveSpawnTarget } from "../../../services/focus-sessions/lane-rollup.js";
+import { applyUnitBlockerEdits } from "../../../services/links/unit-blockers.js";
 import {
   findOpenSessionTwin,
   sessionTwinLockKey,
 } from "../../../services/focus-sessions/find-open-session-twin.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
+import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { approvedSessionGoal } from "../../../services/focus-sessions/session-update-goal.js";
 import { isUndoableSessionPatch } from "../../../services/focus-sessions/session-undo.js";
 import {
@@ -288,6 +300,13 @@ export function registerFocusSessionExecutors(): void {
             : {}),
           // The proposing agent started it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(proposal.agentUserId),
+          // The rung that placed it in its space, as the direct insert stamps it.
+          ...workspacePlacementPatchFromProposal(
+            innerData.workspacePlacement,
+            proposal.workspaceId
+          ),
+          // The step's window and deadline (B5), as the direct start stores them.
+          ...approvedStepBirth(innerData).time,
         };
         // THE ONE row writer (`insert-focus-session.ts`). The fixed id is
         // conflict-safe: a row already at it writes nothing (zero rows).
@@ -296,6 +315,8 @@ export function registerFocusSessionExecutors(): void {
           {
             // id = proposal.targetId so any link built at propose time resolves.
             id: proposal.targetId,
+            // P4: born planned exactly as the direct start would have been.
+            status: approvedStepBirth(innerData).status,
             // The proposal's chain id, so a later create on the same chain finds
             // this row through the correlation idempotency instead of minting a
             // twin (the create-session door has always stamped its own).
@@ -526,6 +547,13 @@ export function registerFocusSessionExecutors(): void {
       // own `.returning()` / affected-row count as the evidence, never re-derive
       // it from the code path that decided to write.
       const created = insertedSessions[0];
+      // GRADES DECLARED UP FRONT (W5), as the direct create files them: after
+      // the commit, never thrown over the session that exists.
+      if (created) {
+        const { fileDeclaredGradeSlots } =
+          await import("../../../services/focus-sessions/evaluations/record.js");
+        await fileDeclaredGradeSlots(created.id);
+      }
       const effect: ProposalEffect = {
         applied: "verified",
         rows: insertedSessions.length,
@@ -559,6 +587,23 @@ export function registerFocusSessionExecutors(): void {
         );
       } else if (created && typeof innerData.parentSessionId === "string") {
         try {
+          // The output this child is spawned FOR (W7): the same check as the
+          // direct path, on the agent that proposed the start.
+          const target =
+            typeof innerData.forOutput === "string" &&
+            innerData.forOutput.trim()
+              ? await resolveSpawnTarget({
+                  parentSessionId: innerData.parentSessionId,
+                  userId: proposal.subjectUserId as string,
+                  agentUserId: proposal.agentUserId ?? null,
+                  forOutput: innerData.forOutput,
+                })
+              : undefined;
+          if (target?.status === "refused") {
+            lineageRefusals.push(
+              `This session's target output "${target.key}" was not recorded (${target.reason}).`
+            );
+          }
           const spawn = await recordSessionSpawn({
             childSessionId: created.id,
             parentSessionId: innerData.parentSessionId,
@@ -568,6 +613,7 @@ export function registerFocusSessionExecutors(): void {
               typeof innerData.suspendedIntent === "string"
                 ? innerData.suspendedIntent
                 : null,
+            forOutput: target?.status === "recorded" ? target.key : null,
           });
           if (!spawn.linked) {
             lineageRefusals.push(
@@ -636,6 +682,43 @@ export function registerFocusSessionExecutors(): void {
             if (r.status === "failed") {
               lineageRefusals.push(
                 `Blocker session ${r.blockerSessionId} was not linked (${r.reason})${r.message ? `: ${r.message}` : ""}.`
+              );
+            }
+          }
+        }
+      }
+
+      // A decision (entity) or a goal it waits on, carried the same way and
+      // floored on the same principal: THE governed dependency door, applied
+      // as this approval (no second gate).
+      const idsOf = (v: unknown) =>
+        Array.isArray(v)
+          ? v.filter((id): id is string => typeof id === "string")
+          : [];
+      const unitAdd = {
+        entity: idsOf(innerData.blockedByEntityIds),
+        track: idsOf(innerData.blockedByTrackIds),
+      };
+      if (created && unitAdd.entity.length + unitAdd.track.length > 0) {
+        const floorUserId = proposal.subjectUserId;
+        if (!floorUserId) {
+          lineageRefusals.push(
+            `Blockers ${[...unitAdd.entity, ...unitAdd.track].join(", ")} were not linked: the proposal records no owner (subject_user_id).`
+          );
+        } else {
+          const { links } = await applyUnitBlockerEdits({
+            from: { type: "session", id: created.id },
+            add: unitAdd,
+            remove: { entity: [], track: [] },
+            userId: floorUserId,
+            sessionId: created.id,
+            approvedProposalId: input.proposalId,
+            door: "focus_session/create approval",
+          });
+          for (const r of links) {
+            if (r.status === "failed") {
+              lineageRefusals.push(
+                `Blocker ${r.blockerEntityId ?? r.blockerTrackId} was not linked (${r.reason})${r.message ? `: ${r.message}` : ""}.`
               );
             }
           }
@@ -853,6 +936,7 @@ export function registerFocusSessionExecutors(): void {
         const goalChange = approvedSessionGoal(innerData, session.goal);
         if (goalChange.goal !== undefined) set.goal = goalChange.goal;
         // `null` (or blank) is the CLEAR — same explicit arm as the subject.
+        const metadataPatch: Record<string, unknown> = {};
         if (innerData.title === null || typeof innerData.title === "string") {
           set.title = storedTitle(innerData.title);
           // Provenance rides the rename: an agent's title is never replaced by
@@ -860,9 +944,16 @@ export function registerFocusSessionExecutors(): void {
           const titleSource: SessionTitleSource = set.title
             ? "agent"
             : "derived";
-          set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
-            { titleSource }
-          )}::jsonb`;
+          metadataPatch.titleSource = titleSource;
+        }
+        // The step's time (B5), re-checked: the payload sat in the queue. A
+        // date that no longer reads is dropped, never stored; `null` clears.
+        for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+          const v = innerData[key];
+          if (v === null || isStepDate(v)) metadataPatch[key] = v;
+        }
+        if (Object.keys(metadataPatch).length > 0) {
+          set.metadata = mergeSessionMetadataSql(metadataPatch);
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
@@ -887,6 +978,25 @@ export function registerFocusSessionExecutors(): void {
           typeof innerData.subjectEntityId === "string"
         ) {
           set.subjectEntityId = innerData.subjectEntityId;
+        }
+        // DEFENCE IN DEPTH (the filing rule, W1 review N1): approving a
+        // filing under a key's grant needs a write on the session where it
+        // lives now, with no project (`filesIntoProject`). The decide fence
+        // already refuses a project pin (`proposalIsFiling`).
+        if (
+          getRequestGrant() &&
+          ("projectId" in innerData || "trackId" in innerData)
+        ) {
+          const denial = await grantWriteDenial({
+            subjectType: "focus_session",
+            action: "update",
+            workspaceId: session.workspaceId ?? null,
+            data: { id: sessionId },
+            filesIntoProject: true,
+          });
+          if (denial) {
+            throw new TRPCError({ code: "FORBIDDEN", message: denial });
+          }
         }
         // FILING. Carried by `updateFocusSession`'s gate payload in the same
         // hunk as this arm. The target is re-floored at approval: the project
@@ -998,15 +1108,36 @@ export function registerFocusSessionExecutors(): void {
         // nothing. Parsed with the SAME strict schema the doors use, because
         // the payload may predate a schema change: a bad list is dropped and
         // REPORTED on `refusals`, never thrown over the rest of the patch.
-        if (innerData.criteria !== undefined) {
-          const criteriaRefusals: string[] = [];
-          const criteria = parseProposedCriteria(
-            innerData.criteria,
-            sessionId,
-            criteriaRefusals
-          );
-          if (criteriaRefusals.length === 0) set.criteria = criteria;
-          outputRefusals.push(...criteriaRefusals);
+        const criteriaRefusals: string[] = [];
+        const sentCriteria =
+          innerData.criteria !== undefined
+            ? parseProposedCriteria(
+                innerData.criteria,
+                sessionId,
+                criteriaRefusals
+              )
+            : undefined;
+        outputRefusals.push(...criteriaRefusals);
+        // A criterion sharing a slot's key names it (`outputKey`, W4), against
+        // the slots as this patch left them: the criteria it sent, or the
+        // stored ones when it changed only the slots.
+        const [after] = await db
+          .select({
+            expectedOutputs: focusSessions.expectedOutputs,
+            criteria: focusSessions.criteria,
+          })
+          .from(focusSessions)
+          .where(eq(focusSessions.id, sessionId))
+          .limit(1);
+        if (sentCriteria && criteriaRefusals.length === 0) {
+          set.criteria = [
+            ...nameSharedKeyOutputs(sentCriteria, after?.expectedOutputs),
+          ];
+        } else if (after && Array.isArray(after.criteria)) {
+          const stored = after.criteria as unknown[];
+          const named = nameSharedKeyOutputs(stored, after.expectedOutputs);
+          if (named !== stored)
+            set.criteria = [...named] as typeof set.criteria;
         }
 
         // Roster append. Carried by BOTH proposing doors (`update-session.ts`
@@ -1096,6 +1227,14 @@ export function registerFocusSessionExecutors(): void {
           before: undoBefore,
           after: updated,
         });
+
+        // GRADES DECLARED UP FRONT (W5): an approved criteria change keeps the
+        // grade slots in step, as the direct door does. Never throws.
+        if (set.criteria !== undefined && updated) {
+          const { fileDeclaredGradeSlots } =
+            await import("../../../services/focus-sessions/evaluations/record.js");
+          await fileDeclaredGradeSlots(sessionId);
+        }
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =
@@ -1267,7 +1406,9 @@ export function registerFocusSessionExecutors(): void {
   // An agent handing a session to ANOTHER agent (`agent-hand-off.ts`) lands here
   // once a person approves it: the named agent is appended through the ONE
   // roster door, floored on the session's OWN owner (the approver may be a
-  // different human). Idempotent — the door is, and an already-approved
+  // different human). A hand-off that carries a slot (`delegateExpectedOutput`)
+  // is then finished by that same door: the slot is delegated, the ask posted
+  // and the turn started. Idempotent — the doors are, and an already-approved
   // proposal returns before it.
   registerProposalExecutor({
     key: "focus_session/assign_agent",
@@ -1305,7 +1446,7 @@ export function registerFocusSessionExecutors(): void {
 
       // THE route again, at approval: the agent may have been paused (or
       // lost its link to the owner) since the hand-off was proposed.
-      const { handOffRefusal } =
+      const { handOffRefusal, requeueRunForHandOff } =
         await import("../../../services/focus-sessions/agent-hand-off.js");
       const refused = await handOffRefusal({
         ownerId: session.userId,
@@ -1331,6 +1472,35 @@ export function registerFocusSessionExecutors(): void {
           message: `Focus session ${sessionId} not found`,
         });
       }
+      const refusals: string[] = [];
+      if (typeof innerData.expectedLabel === "string") {
+        const { delegateExpectedOutput } =
+          await import("../../../services/focus-sessions/delegate-output.js");
+        const delegated = await delegateExpectedOutput({
+          sessionId,
+          userId: session.userId,
+          expectedLabel: innerData.expectedLabel,
+          agentType:
+            typeof innerData.agentType === "string"
+              ? innerData.agentType
+              : null,
+          actingAgentUserId: proposal.agentUserId ?? null,
+          approvedHandOff: { proposalId: input.proposalId, agentId },
+        });
+        if (delegated.status !== "delegated") {
+          refusals.push(
+            `The agent is on the session, but "${innerData.expectedLabel}" was not handed to it (${delegated.status}).`
+          );
+        }
+      }
+
+      // Last: the run waits for the agent only once the hand-off landed.
+      await requeueRunForHandOff({
+        sessionId,
+        ownerId: session.userId,
+        agentId,
+        proposalId: input.proposalId,
+      });
 
       reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
@@ -1339,7 +1509,11 @@ export function registerFocusSessionExecutors(): void {
         "approved",
         userId
       );
-      return { success: true, agentIds: attached.agentIds };
+      return {
+        success: true,
+        agentIds: attached.agentIds,
+        ...(refusals.length > 0 ? { refusals } : {}),
+      };
     },
   });
 }
@@ -1385,12 +1559,10 @@ async function visibleTemplateCriteria(
     .where(
       and(
         eq(playbooks.id, templateId as string),
-        workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, workspaceId)
-            )
-          : isNull(playbooks.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       )
     )
     .limit(1);
@@ -1474,9 +1646,50 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
-    metadata: startedByAgentPatch(args.startedByAgentId),
+    // P4 / B5: born planned with its time, as the direct start.
+    status: approvedStepBirth(innerData).status,
+    metadata: {
+      ...startedByAgentPatch(args.startedByAgentId),
+      ...workspacePlacementPatchFromProposal(
+        innerData.workspacePlacement,
+        args.workspaceId
+      ),
+      ...approvedStepBirth(innerData).time,
+    },
   });
   return row ? [row] : [];
+}
+
+/**
+ * The birth status and time an approved start carries (P4, B5): THE rule
+ * (`stepBirthStatus`) over what rode the proposal — `startNow`,
+ * `awaitsBlockers`, any `blockedBy*Ids`, and the dates the start door already
+ * validated (re-checked here: the payload sat in the queue). A date that no
+ * longer reads is dropped, never stored.
+ */
+function approvedStepBirth(innerData: Record<string, unknown>): {
+  status: "active" | "forming";
+  time: Record<string, string>;
+} {
+  const time: Record<string, string> = {};
+  for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+    const v = innerData[key];
+    if (isStepDate(v)) time[key] = v;
+  }
+  const count = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  return {
+    status: stepBirthStatus({
+      startNow: innerData.startNow === true,
+      hasBlockers:
+        innerData.awaitsBlockers === true ||
+        count(innerData.blockedBySessionIds) +
+          count(innerData.blockedByEntityIds) +
+          count(innerData.blockedByTrackIds) >
+          0,
+      plannedFor: time[STEP_PLANNED_FOR_KEY] ?? null,
+    }),
+    time,
+  };
 }
 
 /**
@@ -1551,7 +1764,7 @@ async function applyProposedOutputMutations(
         sessionId,
         userId: ownerUserId,
       });
-      report = withEvidenceVerdict(report, verdict.satisfied);
+      report = withEvidenceVerdict(report, verdict.satisfied, verdict.held);
     } catch {
       // The claim stands, unverified — reported below like any open claim.
     }

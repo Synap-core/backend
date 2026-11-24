@@ -671,6 +671,7 @@ const SUPPLEMENTARY_TABLES: Record<
           id: row.id as string,
           workspaceId: row.workspaceId as string,
           createdBy: (row.createdBy as string) ?? "sync",
+          agentUserId: (row.agentUserId as string) ?? null,
           name: (row.name as string) ?? "Synced Automation",
           description: (row.description as string) ?? null,
           triggerType:
@@ -702,6 +703,8 @@ const SUPPLEMENTARY_TABLES: Record<
             : new Date(),
         };
         const updateSet: Partial<typeof automations.$inferInsert> = {
+          createdBy: values.createdBy,
+          agentUserId: values.agentUserId,
           name: values.name,
           description: values.description,
           triggerConfig: values.triggerConfig,
@@ -729,6 +732,8 @@ const SUPPLEMENTARY_TABLES: Record<
             "Replicated automation has an invalid flowDefinition — storing it anyway (replica fidelity)"
           );
         }
+        // A status word this pod's CHECK does not know (a newer peer) fails
+        // the upsert: the row is logged and skipped below, kept on the peer.
         await db.insert(automations).values(values).onConflictDoUpdate({
           target: automations.id,
           set: updateSet,
@@ -778,6 +783,7 @@ const SUPPLEMENTARY_TABLES: Record<
           outputSummary: values.outputSummary,
           completedAt: values.completedAt,
         };
+        // Same as automations: an unknown status word is logged and skipped.
         await db.insert(automationRuns).values(values).onConflictDoUpdate({
           target: automationRuns.id,
           set: updateSet,

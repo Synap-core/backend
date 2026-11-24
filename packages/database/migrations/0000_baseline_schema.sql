@@ -364,6 +364,8 @@ ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_templates" text[
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_reasons" jsonb NOT NULL DEFAULT '{}'::jsonb;
 -- 0379: the permissions it asks for pod-wide (`synap_requests[].scope = "pod"`).
 ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_pod_wide" text[] NOT NULL DEFAULT '{}';
+-- 0437: the entries that list their kinds (`synap_requests[].kinds`), as declared.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_kind_groups" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS "oauth_authorization_codes" (
   "code_hash"      text PRIMARY KEY,
@@ -649,6 +651,21 @@ ALTER TABLE "profile_workspace_access" ADD COLUMN IF NOT EXISTS "granted_at" tim
 
 CREATE INDEX IF NOT EXISTS "profile_workspace_access_workspace_idx"
   ON "profile_workspace_access" ("workspace_id");
+
+-- space_access (0448): an object homed in one space shared with another; it
+-- takes over from profile_workspace_access (0448 copies, mirrors and adds the
+-- delete triggers).
+CREATE TABLE IF NOT EXISTS "space_access" (
+  "object_type"  text NOT NULL,
+  "object_id"    uuid NOT NULL,
+  "workspace_id" uuid NOT NULL REFERENCES "workspaces"("id") ON DELETE CASCADE,
+  "granted_by"   text,
+  "granted_at"   timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT "space_access_pkey" PRIMARY KEY ("object_type", "object_id", "workspace_id")
+);
+
+CREATE INDEX IF NOT EXISTS "space_access_workspace_idx"
+  ON "space_access" ("workspace_id");
 
 -- ─── 5. relation_defs ────────────────────────────────────────────────────────
 -- Must come before property_defs (which references it)
@@ -2332,6 +2349,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS "knowledge_facts_dedup_uq"
 CREATE TABLE IF NOT EXISTS "skills" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"         text    NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "workspace_id"    uuid    REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "kind"            text    NOT NULL DEFAULT 'code',
   "scope"           text    NOT NULL DEFAULT 'pod',
@@ -2395,6 +2414,7 @@ ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "input_map" jsonb;
 ALTER TABLE "skills" ADD COLUMN IF NOT EXISTS "url_patterns" text[];
 
 CREATE INDEX IF NOT EXISTS "skills_user_id_idx"     ON "skills" ("user_id");
+CREATE INDEX IF NOT EXISTS "skills_agent_user_id_idx" ON "skills" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "skills_workspace_id_idx" ON "skills" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "skills_status_idx"       ON "skills" ("status");
 CREATE INDEX IF NOT EXISTS "idx_skills_approved"     ON "skills" ("approved");
@@ -2594,6 +2614,8 @@ CREATE TABLE IF NOT EXISTS "automations" (
   "id"              uuid    PRIMARY KEY DEFAULT gen_random_uuid(),
   "workspace_id" uuid REFERENCES "workspaces"("id") ON DELETE CASCADE,
   "created_by"      text    NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"   text    REFERENCES "users"("id") ON DELETE SET NULL,
   "name"            text    NOT NULL,
   "description"     text,
   "trigger_type"    text    NOT NULL,
@@ -2646,6 +2668,9 @@ CREATE INDEX IF NOT EXISTS "automations_next_run_at_idx"
 
 CREATE INDEX IF NOT EXISTS "automations_created_by_idx"
   ON "automations" ("created_by");
+
+CREATE INDEX IF NOT EXISTS "automations_agent_user_id_idx"
+  ON "automations" ("agent_user_id");
 
 -- Name-identity backstop (0230): at-most-one non-archived automation per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
@@ -4387,6 +4412,8 @@ CREATE TABLE IF NOT EXISTS "tools" (
   "id"             uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"   uuid,
   "created_by"     text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"  text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"           text        NOT NULL,
   "description"    text,
   "kind"           text        NOT NULL,
@@ -4411,6 +4438,7 @@ ALTER TABLE "tools" ADD COLUMN IF NOT EXISTS "auth_binding" text NOT NULL DEFAUL
 CREATE INDEX IF NOT EXISTS "idx_tools_workspace_id" ON "tools" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_tools_kind"         ON "tools" ("kind");
 CREATE INDEX IF NOT EXISTS "idx_tools_approved"     ON "tools" ("approved");
+CREATE INDEX IF NOT EXISTS "idx_tools_agent_user_id" ON "tools" ("agent_user_id");
 -- Generalized from the old nango://-only index (mig 0132 → 0140): ONE pod-wide
 -- tool per distinct non-null credential_ref, scheme-agnostic. NULL credential_ref
 -- (builtin/script) and workspace-scoped tools are excluded.
@@ -4424,6 +4452,8 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
   "id"           uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id" uuid,
   "created_by"   text        NOT NULL,
+  -- 0445: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id" text       REFERENCES "users"("id") ON DELETE SET NULL,
   "name"         text        NOT NULL,
   "description"  text,
   "approved"     boolean     NOT NULL DEFAULT false,
@@ -4436,6 +4466,7 @@ CREATE TABLE IF NOT EXISTS "capabilities" (
 );
 CREATE INDEX IF NOT EXISTS "idx_capabilities_workspace_id" ON "capabilities" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_created_by"   ON "capabilities" ("created_by");
+CREATE INDEX IF NOT EXISTS "idx_capabilities_agent_user_id" ON "capabilities" ("agent_user_id");
 CREATE INDEX IF NOT EXISTS "idx_capabilities_template_key" ON "capabilities" ("template_key");
 -- NULL workspace_id coalesced to a sentinel so pod-wide containers participate
 -- in uniqueness (plain UNIQUE would treat NULLs as distinct). 0242.
@@ -4450,6 +4481,8 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
   "id"               uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "workspace_id"     uuid,
   "created_by"       text        NOT NULL,
+  -- 0442: the agent that authored it (the actor); NULL for a person's own.
+  "agent_user_id"    text        REFERENCES "users"("id") ON DELETE SET NULL,
   "name"             text        NOT NULL,
   "description"      text,
   "goal_template"    text        NOT NULL,
@@ -4470,6 +4503,7 @@ CREATE TABLE IF NOT EXISTS "playbooks" (
 );
 CREATE INDEX IF NOT EXISTS "idx_playbooks_workspace_id" ON "playbooks" ("workspace_id");
 CREATE INDEX IF NOT EXISTS "idx_playbooks_status"       ON "playbooks" ("status");
+CREATE INDEX IF NOT EXISTS "idx_playbooks_agent_user_id" ON "playbooks" ("agent_user_id");
 -- TOCTOU race backstop (0227): at-most-one non-archived playbook per
 -- (workspace | pod-wide, lower(name)). NULL workspace coalesced to sentinel so
 -- pod-wide rows participate. Soft-archive of pre-existing name clones is only
@@ -4517,6 +4551,13 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "playbook_id" uuid;
 CREATE INDEX IF NOT EXISTS "idx_focus_sessions_playbook_id"
   ON "focus_sessions" ("playbook_id")
   WHERE "playbook_id" IS NOT NULL;
+-- 0427: one live run per object. A run started by the run door holds its
+-- object's one live slot; at most one live slot-holder per (playbook,
+-- subject, owner).
+ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "one_live_per_subject" boolean NOT NULL DEFAULT false;
+CREATE UNIQUE INDEX IF NOT EXISTS "uniq_focus_sessions_one_live_run"
+  ON "focus_sessions" ("playbook_id", "subject_entity_id", "user_id")
+  WHERE "one_live_per_subject" AND "status" IN ('active', 'paused', 'forming', 'stale');
 
 -- ── Playbook Runs (0129_playbook_runs.sql catch-up) ───────────────────────────
 -- The run ledger — one row per execution of a Playbook (executor spine, P3).
@@ -4548,6 +4589,13 @@ ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "replay_of" uuid;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "external_agent" jsonb;
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "stop_reason" text;  -- 0361 ('budget' = an unattended run ended at its limit)
 ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "run_on" jsonb;  -- 0403 (who ran it and why: RunOn)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "generation" jsonb;  -- 0417 (a one-shot run's record: prompt, model, tokens, proposal)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "holder" jsonb;  -- 0446 (who holds it, when it was claimed)
+ALTER TABLE "playbook_runs" ADD COLUMN IF NOT EXISTS "agent_user_id" text;  -- 0446 (the agent that started it; created_by = the person)
+ALTER TABLE "playbook_runs" ALTER COLUMN "status" DROP DEFAULT;  -- 0446 (every birth names its status and holder)
+CREATE INDEX IF NOT EXISTS "idx_playbook_runs_generation_subject"
+  ON "playbook_runs" ("playbook_id", (("generation"->>'subjectId')))
+  WHERE "generation" IS NOT NULL;
 CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
   ON "playbook_runs" ((("external_agent"->>'status')))
   WHERE "external_agent" IS NOT NULL;
@@ -4555,7 +4603,9 @@ CREATE INDEX IF NOT EXISTS "idx_playbook_runs_external_agent_active"
 -- ── Playbook Automations (0179_playbook_automations.sql catch-up) ─────────────
 -- First-class, editable composition of a playbook's automations (promotes the
 -- read-only `automation --member_of--> playbook` link edges). Soft links: no FK
--- to playbooks or automations (enforced at the application layer).
+-- to playbooks or automations (enforced at the application layer). Since 0425
+-- the ONE store of a playbook's automations: its schedule (role `schedule`),
+-- its canvas flow (`flow`), its activators (`activator`), its members.
 CREATE TABLE IF NOT EXISTS "playbook_automations" (
   "id"            uuid        PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
   "playbook_id"   uuid        NOT NULL,
@@ -4815,6 +4865,9 @@ ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "created_by" text;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "expires_at" timestamptz;
 ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "revoked_reason" text; -- 0380
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "target_subject_id" uuid; -- 0420
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "target_subject_version" integer; -- 0420
+ALTER TABLE "governance_rules" ADD COLUMN IF NOT EXISTS "principal_owner_id" text; -- 0420
 
 CREATE INDEX IF NOT EXISTS "governance_rules_scope_principal_idx"
   ON "governance_rules" ("scope_kind", "workspace_id", "principal_kind", "agent_user_id")
@@ -4949,6 +5002,9 @@ ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispat
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'automation_ai_dispatch_daily';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_pending_approvals';
 ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'worker_irreversible_sends_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_invitations_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'linkedin_actions_daily';
+ALTER TYPE governance_ceiling_axis ADD VALUE IF NOT EXISTS 'compute_spend_daily_cents';
 CREATE TABLE IF NOT EXISTS "governance_ceilings" (
   "id"                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   "axis"                governance_ceiling_axis NOT NULL,
@@ -5000,11 +5056,51 @@ ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "title" varchar(200);  -- 
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "focus_sessions" ADD COLUMN IF NOT EXISTS "criteria" jsonb NOT NULL DEFAULT '[]'::jsonb;
 -- 0291: the ABSTRACT intents a playbook needs the pod to be able to do
--- (capability_intents vocabulary). WHAT IT NEEDS, not what the pod has: a
--- playbook may declare an intent nothing installed serves, and that gap is
--- what a later install is checked against — so it is reported, never rejected.
+-- (capability_intents vocabulary). Unread and unwritten since 0419 folded it
+-- into `tools`; kept until a release carrying 0419 has shipped (forward-only).
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "required_intents" jsonb NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "guidance" jsonb NOT NULL DEFAULT '[]'::jsonb;  -- 0411 (the rules a playbook follows, by kind or skill ref)
+-- 0416: who runs a playbook by default (a PlaybookRunner; NULL = nobody
+-- named), the tools every step needs (capability keys), and every kept
+-- version of a playbook's definition — what a step pinned with `uses` runs.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "runner" jsonb;
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "requires" jsonb NOT NULL DEFAULT '[]'::jsonb;
+-- 0419: the ONE list of what a run of the playbook may use beyond its class
+-- floor (run tools, intents, capabilities); "only these". Replaces
+-- required_intents (kept one release for a rollback), grants links as run
+-- tools, stages[].grants and the space's taskIntents.
+ALTER TABLE "playbooks" ADD COLUMN IF NOT EXISTS "tools" jsonb NOT NULL DEFAULT '[]'::jsonb;
+CREATE TABLE IF NOT EXISTS "playbook_versions" (
+  "playbook_id" uuid        NOT NULL,
+  "version"     integer     NOT NULL,
+  "definition"  jsonb       NOT NULL,
+  "created_by"  text,
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("playbook_id", "version")
+);
+-- 0422: one row per step entry of a playbook run (who works it, where, why it waits).
+CREATE TABLE IF NOT EXISTS "session_stage_runs" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "session_id"           uuid        NOT NULL,
+  "playbook_run_id"      uuid,
+  "stage_key"            text        NOT NULL,
+  "attempt"              integer     NOT NULL DEFAULT 1,
+  "runner_agent_user_id" text,
+  "runner_via"           text        NOT NULL,
+  "preset_key"           text,
+  "computer_user_id"     text,
+  "child_session_id"     uuid,
+  "external_agent"       jsonb,
+  "status"               text        NOT NULL DEFAULT 'running',
+  "requires_report"      jsonb,
+  "passed_over"          jsonb,
+  "started_at"           timestamptz NOT NULL DEFAULT now(),
+  "ended_at"             timestamptz
+);
+CREATE INDEX IF NOT EXISTS "session_stage_runs_session_stage_idx"
+  ON "session_stage_runs" ("session_id", "stage_key");
+-- 0424: a `forEach` step's batches and child runs.
+ALTER TABLE "session_stage_runs" ADD COLUMN IF NOT EXISTS "fan_out" jsonb;
 -- 0270: a session's OWN phases. `expected_outputs` and `criteria` above are
 -- both seeded from the playbook and authorable afterwards; `stages` was the
 -- missing third, and without it a session running no playbook could not have
@@ -5197,6 +5293,144 @@ CREATE TABLE IF NOT EXISTS "capability_intents" (
 -- 0368: the ONE input shape of an intent (JSON Schema); its seed is in 0368.
 ALTER TABLE "capability_intents" ADD COLUMN IF NOT EXISTS "input_schema" jsonb;
 
+-- Needs (0426): what a space needs filled, once, by one provider. A named
+-- group of capability intents; packs declare which they fill.
+CREATE TABLE IF NOT EXISTS "needs" (
+  "slug"        text        PRIMARY KEY,
+  "label"       text        NOT NULL,
+  "description" text        NOT NULL,
+  "intents"     text[]      NOT NULL DEFAULT '{}',
+  "aliases"     text[]      NOT NULL DEFAULT '{}',
+  "created_at"  timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "needs_slug_check" CHECK ("slug" ~ '^[a-z][a-z0-9-]{0,63}$')
+);
+
+INSERT INTO "needs" ("slug", "label", "description", "intents", "aliases")
+VALUES
+  ('code-host', 'Code host', 'Where the code lives: repositories, branches, pull requests.',
+   ARRAY['fetch_record', 'list_records', 'run_external_job'], ARRAY['git-host', 'repository']),
+  ('deploy-target', 'Deploy target', 'Where a change is deployed and served.',
+   ARRAY['run_external_job', 'fetch_record'], ARRAY['hosting']),
+  ('gate', 'Gate', 'What checks a change before it lands: tests, typecheck, CI.',
+   ARRAY['run_external_job', 'fetch_record'], ARRAY['ci']),
+  ('payments', 'Payments', 'Where money is charged and recorded.',
+   ARRAY['list_records', 'fetch_record'], ARRAY[]::text[]),
+  ('messaging', 'Messaging', 'Where messages are sent to people outside the pod.',
+   ARRAY['send_message', 'request_connection'], ARRAY['chat']),
+  ('email', 'Email', 'The mailbox that sends and reads email.',
+   ARRAY['send_message', 'list_records', 'fetch_record'], ARRAY['mail']),
+  ('calendar', 'Calendar', 'Where meetings and events are scheduled.',
+   ARRAY['schedule_event', 'list_records'], ARRAY[]::text[]),
+  ('file-store', 'File store', 'Where files are kept outside the pod.',
+   ARRAY['manage_file', 'fetch_record', 'list_records'], ARRAY['storage', 'drive']),
+  ('media-generation', 'Media generation', 'What makes and edits images, video and audio.',
+   ARRAY['generate_media', 'edit_video', 'transcribe_media'], ARRAY['media']),
+  ('social-publishing', 'Social publishing', 'Where posts are published to social networks.',
+   ARRAY['publish_post'], ARRAY['social']),
+  ('linkedin-reach', 'LinkedIn reach', 'What finds people and reaches them on LinkedIn.',
+   ARRAY['find_people', 'request_connection', 'send_message', 'enrich_entity'], ARRAY['linkedin']),
+  ('analytics', 'Analytics', 'Where usage and traffic are measured.',
+   ARRAY['list_records', 'fetch_record'], ARRAY[]::text[])
+ON CONFLICT ("slug") DO NOTHING;
+
+-- Compute leases (0431, 0432): one row per compute start; the TTL sweeper
+-- destroys each active lease past `expires_at`, except a new pod's server
+-- that registered (`kept`, 0432). Mirrors 0431 and 0432.
+CREATE TABLE IF NOT EXISTS "compute_leases" (
+  "id"                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"              text        NOT NULL,
+  "workspace_id"         uuid,
+  "agent_user_id"        text,
+  "proposal_id"          uuid,
+  "session_id"           uuid,
+  "provision_skill_id"   uuid,
+  "provision_verb"       text        NOT NULL,
+  "release_verb"         text        NOT NULL,
+  "connection_selector"  jsonb,
+  "resource_id"          text,
+  "registration_code_hash" text,
+  "ttl_minutes"          integer     NOT NULL,
+  "max_spend_cents"      integer     NOT NULL,
+  "state"                text        NOT NULL DEFAULT 'starting',
+  "expires_at"           timestamptz NOT NULL,
+  "release_attempts"     integer     NOT NULL DEFAULT 0,
+  "last_release_error"   text,
+  "release_result"       jsonb,
+  "released_at"          timestamptz,
+  "created_at"           timestamptz NOT NULL DEFAULT now(),
+  "updated_at"           timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "compute_leases_state_check"
+    CHECK ("state" IN ('starting', 'active', 'released', 'not_started', 'unknown', 'kept')),
+  CONSTRAINT "compute_leases_ttl_check" CHECK ("ttl_minutes" > 0),
+  CONSTRAINT "compute_leases_spend_check" CHECK ("max_spend_cents" > 0)
+);
+
+-- The sweeper's read: active leases past their TTL.
+CREATE INDEX IF NOT EXISTS "compute_leases_due_idx"
+  ON "compute_leases" ("expires_at") WHERE "state" = 'active';
+-- The ceiling's read: the day's starts.
+CREATE INDEX IF NOT EXISTS "compute_leases_created_idx"
+  ON "compute_leases" ("created_at");
+-- A manual destroy closes the lease of the machine it names.
+CREATE INDEX IF NOT EXISTS "compute_leases_resource_idx"
+  ON "compute_leases" ("user_id", "resource_id") WHERE "state" = 'active';
+
+-- Realtime room tickets (0438): a pod app's single-use, 60 s ticket for ONE
+-- document's live Yjs room (sha256 only). Mirrors 0438.
+CREATE TABLE IF NOT EXISTS "realtime_room_tickets" (
+  "ticket_hash"  text        PRIMARY KEY,
+  "user_id"      text        NOT NULL,
+  "document_id"  uuid        NOT NULL,
+  "access"       text        NOT NULL,
+  "api_key_id"   uuid        NOT NULL,
+  "expires_at"   timestamptz NOT NULL,
+  "consumed_at"  timestamptz,
+  "created_at"   timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT "realtime_room_tickets_access_check"
+    CHECK ("access" IN ('read', 'edit'))
+);
+CREATE INDEX IF NOT EXISTS "realtime_room_tickets_expires_idx"
+  ON "realtime_room_tickets" ("expires_at");
+
+-- Renderer bundles (0436): a bundle row (its defaults are the host fallback,
+-- never a renderer binding) and its ONE host-module set per pod (unique on
+-- `module`; the modules' FK is checked at commit). Mirrors 0436.
+CREATE TABLE IF NOT EXISTS "renderer_bundles" (
+  "slug"          text        PRIMARY KEY,
+  "version"       text        NOT NULL,
+  "set_sha256"    text        NOT NULL,
+  "react_version" text        NOT NULL,
+  "kit_exports"   jsonb       NOT NULL DEFAULT '[]'::jsonb,
+  "defaults"      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+  "source"        text        NOT NULL,
+  "installed_by"  text        NOT NULL,
+  "installed_at"  timestamptz NOT NULL DEFAULT now(),
+  "updated_at"    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_host_modules" (
+  "bundle_slug" text    NOT NULL,
+  "module"      text    NOT NULL,
+  "source"      text    NOT NULL,
+  "sha256"      text    NOT NULL,
+  "byte_length" integer NOT NULL,
+  PRIMARY KEY ("bundle_slug", "module")
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'renderer_host_modules_bundle_fk'
+  ) THEN
+    ALTER TABLE "renderer_host_modules" ADD CONSTRAINT "renderer_host_modules_bundle_fk"
+      FOREIGN KEY ("bundle_slug") REFERENCES "renderer_bundles"("slug")
+      ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED;
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
+  ON "renderer_host_modules" ("module");
+
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.
 CREATE TABLE IF NOT EXISTS "account_recovery_codes" (
@@ -5286,6 +5520,8 @@ CREATE TABLE IF NOT EXISTS "apps" (
   "logo_url"          text,
   "mode"              text        NOT NULL DEFAULT 'specific',
   "approved_requests" jsonb,
+  -- 0434: the approval in its v2 form (what + where per tier), or NULL.
+  "approved_access"   jsonb,
   "metadata"          jsonb       NOT NULL DEFAULT '{}'::jsonb,
   "last_used_at"      timestamptz,
   "created_at"        timestamptz NOT NULL DEFAULT now(),
@@ -5839,9 +6075,42 @@ CREATE TABLE IF NOT EXISTS "presence_disowned_passkeys" (
   PRIMARY KEY ("user_id", "credential_id")
 );
 
+-- 0412: proof of presence, "Add this device" (device-link requests; the
+-- session a passkey-change grant is bound to) — mirrors 0412_presence_device_links.sql.
+CREATE TABLE IF NOT EXISTS "presence_device_links" (
+  "id"                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"           text        NOT NULL,
+  "kind"              text        NOT NULL,
+  "label"             text        NOT NULL,
+  "requester_session" text        NOT NULL,
+  "key_fingerprint"   text,
+  "match_number"      text        NOT NULL,
+  "choices"           text[]      NOT NULL,
+  "status"            text        NOT NULL DEFAULT 'pending',
+  "created_at"        timestamptz NOT NULL DEFAULT now(),
+  "expires_at"        timestamptz NOT NULL,
+  "decided_at"        timestamptz,
+  "approved_method"   text,
+  "redeemed_at"       timestamptz,
+  CONSTRAINT "presence_device_links_kind_check"
+    CHECK ("kind" IN ('passkey', 'device_key')),
+  CONSTRAINT "presence_device_links_status_check"
+    CHECK ("status" IN ('pending', 'approved', 'declined', 'redeemed', 'replaced'))
+);
+
+CREATE INDEX IF NOT EXISTS "presence_device_links_user_idx"
+  ON "presence_device_links" ("user_id", "created_at");
+
+CREATE UNIQUE INDEX IF NOT EXISTS "presence_device_links_one_pending"
+  ON "presence_device_links" ("user_id") WHERE "status" = 'pending';
+
+ALTER TABLE "presence_challenges"
+  ADD COLUMN IF NOT EXISTS "grant_session" text;
+
 -- 0409: installations — capabilities installed on the person's own computers,
--- of kind service or tool (installations, installation_bindings, host_jobs,
--- intent_defaults). Read floor = the owner. Mirrors 0409_installations.sql.
+-- of kind service or tool (installations, installation_bindings, host_jobs).
+-- Read floor = the owner. Mirrors 0409_installations.sql; 0426 retired
+-- intent_defaults and widened installation_bindings to a space's need binding.
 CREATE TABLE IF NOT EXISTS "installations" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"            text        NOT NULL,
@@ -5954,6 +6223,41 @@ CREATE INDEX IF NOT EXISTS "idx_installation_bindings_provider"
   ON "installation_bindings" ("provider_capability_id")
   WHERE "provider_capability_id" IS NOT NULL;
 
+-- 0426: a row with NO installation is a space's need binding (D3): the space,
+-- the need slug in need_key, the provider. One live binding per (space, need).
+ALTER TABLE "installation_bindings" ALTER COLUMN "installation_id" DROP NOT NULL;
+ALTER TABLE "installation_bindings" ALTER COLUMN "intent" DROP NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_scope_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_scope_check"
+      CHECK (
+        ("installation_id" IS NOT NULL AND "intent" IS NOT NULL)
+        OR ("installation_id" IS NULL AND "workspace_id" IS NOT NULL)
+      );
+  END IF;
+END $$;
+
+-- 0426: who chose the provider (person | automatic).
+ALTER TABLE "installation_bindings" ADD COLUMN IF NOT EXISTS "origin" text NOT NULL DEFAULT 'person';
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'installation_bindings_origin_check'
+  ) THEN
+    ALTER TABLE "installation_bindings" ADD CONSTRAINT "installation_bindings_origin_check"
+      CHECK ("origin" IN ('person', 'automatic'));
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_installation_bindings_space_need"
+  ON "installation_bindings" ("workspace_id", "need_key")
+  WHERE "installation_id" IS NULL AND "state" <> 'revoked';
+
 CREATE TABLE IF NOT EXISTS "host_jobs" (
   "id"                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "kind"               text        NOT NULL,
@@ -6013,16 +6317,18 @@ CREATE INDEX IF NOT EXISTS "idx_host_jobs_queue"
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_installation"
   ON "host_jobs" ("installation_id", "queued_at" DESC);
 
--- At most ONE open job per installation (the pod-side reconciler queues the
--- next one only once this one settles): a sleeping laptop holds one queued
--- job, never a pile.
-CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_per_installation"
+-- At most ONE open LIFECYCLE job per installation (the pod-side reconciler
+-- queues the next one only once this one settles): a sleeping laptop holds one
+-- queued check, never a pile. Hosted verb runs (`verb`) queue beside it (0415).
+CREATE UNIQUE INDEX IF NOT EXISTS "uq_host_jobs_one_open_lifecycle_per_installation"
   ON "host_jobs" ("installation_id")
-  WHERE "status" IN ('queued', 'leased', 'running');
+  WHERE "status" IN ('queued', 'leased', 'running') AND "kind" <> 'verb';
 
 CREATE INDEX IF NOT EXISTS "idx_host_jobs_user_queued"
   ON "host_jobs" ("user_id", "queued_at" DESC);
 
+-- intent_defaults (0409): retired by 0426 (no code declares it); dropped by a
+-- later contract-step migration once 0426 has shipped (forward-only).
 CREATE TABLE IF NOT EXISTS "intent_defaults" (
   "id"                     uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   "user_id"                text        NOT NULL,
@@ -6050,4 +6356,46 @@ BEGIN
         AND NOT coalesce(("constraints" -> 'auth' -> 'anyOf') ? 'public', false)
       );
   END IF;
+END $$;
+
+-- 0447: the declared machines' status CHECKs (same block as the migration).
+DO $$
+DECLARE
+  spec record;
+  stray text;
+BEGIN
+  FOR spec IN
+    SELECT * FROM (VALUES
+      ('automations', 'automations_status_check',
+       ARRAY['draft', 'active', 'paused', 'error', 'archived']),
+      ('automation_runs', 'automation_runs_status_check',
+       ARRAY['running', 'completed', 'failed', 'cancelled', 'skipped', 'blocked_by_policy', 'waiting_on_you']),
+      ('playbooks', 'playbooks_status_check',
+       ARRAY['draft', 'active', 'paused', 'archived']),
+      ('session_stage_runs', 'session_stage_runs_status_check',
+       ARRAY['running', 'waiting_tools', 'waiting_child', 'waiting_start', 'unreached', 'done', 'failed', 'cancelled'])
+    ) AS t(tbl, con, allowed)
+  LOOP
+    CONTINUE WHEN to_regclass(spec.tbl) IS NULL;
+    CONTINUE WHEN EXISTS (
+      SELECT 1 FROM pg_constraint
+       WHERE conname = spec.con AND conrelid = to_regclass(spec.tbl)
+    );
+    -- NOT VALID first (a short lock), then VALIDATE (no write lock while it
+    -- scans) when no row holds a stray word.
+    EXECUTE format(
+      'ALTER TABLE %I ADD CONSTRAINT %I CHECK ("status" = ANY (%L::text[])) NOT VALID',
+      spec.tbl, spec.con, spec.allowed
+    );
+    EXECUTE format(
+      'SELECT string_agg(DISTINCT "status", '', '') FROM %I WHERE "status" <> ALL ($1)',
+      spec.tbl
+    ) INTO stray USING spec.allowed;
+    IF stray IS NULL THEN
+      EXECUTE format('ALTER TABLE %I VALIDATE CONSTRAINT %I', spec.tbl, spec.con);
+    ELSE
+      RAISE NOTICE '0447: % holds undeclared status values (%); % added NOT VALID',
+        spec.tbl, stray, spec.con;
+    END IF;
+  END LOOP;
 END $$;

@@ -35,6 +35,14 @@
  *     when its OWN run has ended: the automation run or every playbook run is
  *     terminal, or the intake is idle with nothing left to review (the receipt
  *     rule). The work reaper never stales a run (`runSessionWhere`, below).
+ *  5. A PLANNED step (`forming`) whose blockers delivered and whose date came
+ *     WAKES to active (`planned-wake.ts`, founder P3): the net under the
+ *     unblock reactor, and the only waker of a date.
+ *  6. A step on an arm NOT taken by an accepted decision is SKIPPED, or the
+ *     owner is told no arm matches (`decision-arms.ts`, founder P5): the net
+ *     under the unblock reactor. Before it, a decision past its `answerBy`
+ *     takes the default its PERSON set, else they are reminded
+ *     (`decision-timeout.ts`).
  *
  * Nothing here closes a session that owes the person something: every
  * selection carries the owed / waiting-on-person predicate the needs-you tray
@@ -52,6 +60,7 @@ import {
   focusSessions,
   owedSlotWhere,
   focusSessionWaitsOnPersonWhere,
+  stageGatePendingIn,
   onlyOpenPullRequestsWhere,
   outstandingSlotExistsIn,
   personTouchedSubjectIds,
@@ -62,7 +71,11 @@ import type { SQL } from "@synap/database";
 import { parsePullRequestRef, type PullRequestRef } from "@synap-core/types";
 import { holdDevMovesRef, type Hold } from "@synap-core/types/lifecycle";
 import { workClockIn } from "@synap-core/types/work-clock";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  runStatusesIn,
+} from "@synap-core/types/units";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { sessionKindWhere } from "./session-kind.js";
 import { attachNextMove } from "./session-path-sections.js";
@@ -78,9 +91,6 @@ export const LONG_STALE_DAYS = workClockIn("stuck", "days");
 const STALE_HOURS = workClockIn("stale", "hours");
 /** Most sessions each move handles per tick (each runs a full door). */
 const BATCH = 200;
-
-/** Statuses an open session stands in that these moves may end. */
-const OPEN = ["active", "paused", "stale"] as const;
 
 /**
  * SQL: a RUN session — the session kind's own predicate, NULL-safe. `NOT` of
@@ -111,7 +121,7 @@ const nothingOwed = () =>
 export function metWorkSessionWhere(): SQL {
   return and(
     sessionKindWhere("work"),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     quietFor(MET_CLOSE_QUIET_HOURS),
     drizzleSql`jsonb_typeof(${focusSessions.expectedOutputs}) = 'array' AND jsonb_array_length(${focusSessions.expectedOutputs}) > 0`,
     drizzleSql`NOT ${outstandingSlotExistsIn(focusSessions.expectedOutputs)}`,
@@ -306,8 +316,8 @@ const AUTOMATION_RUN_ENDED = [
   "skipped",
   "blocked_by_policy",
 ] as const;
-/** The playbook run statuses after which nothing more runs. */
-const PLAYBOOK_RUN_ENDED = ["completed", "failed", "cancelled"] as const;
+/** The playbook run statuses after which nothing more runs (done or lost). */
+const PLAYBOOK_RUN_ENDED = runStatusesIn(["done", "lost"]);
 
 const sqlList = (values: readonly string[]) =>
   drizzleSql.raw(values.map((v) => `'${v}'`).join(", "));
@@ -337,11 +347,19 @@ export function endedRunSessionWhere(): SQL {
     ))`;
   return and(
     runSessionWhere(),
-    inArray(focusSessions.status, [...OPEN]),
+    inArray(focusSessions.status, [...UNDERWAY_SESSION_STATUSES]),
     drizzleSql`(${automationEnded} OR ${playbookEnded} OR ${intakeEnded})`,
-    nothingOwed()
+    nothingOwed(),
+    // A run paused at its human stage gate has "ended" its turn, not its
+    // work: the gate is the person's, and approving it continues the run
+    // (`stage-gate-wait.ts`). Closing it left the gate approvable into nothing.
+    drizzleSql`NOT ${stageGatePendingIn(focusSessions.id)}`
   ) as SQL;
 }
+
+/** What an ended run's session says when it is closed for it (move 4 and 4b). */
+export const ENDED_RUN_CLOSE_SUMMARY =
+  "Closed automatically: its run has ended.";
 
 export async function closeEndedRunSessions(): Promise<number> {
   const rows = await db
@@ -357,7 +375,7 @@ export async function closeEndedRunSessions(): Promise<number> {
         sessionId: row.id,
         userId: row.userId,
         terminalStatus: "closed",
-        summary: "Closed automatically: its run has ended.",
+        summary: ENDED_RUN_CLOSE_SUMMARY,
         actor: { kind: "system", userId: row.userId },
       });
       closed++;
@@ -371,6 +389,71 @@ export async function closeEndedRunSessions(): Promise<number> {
   return closed;
 }
 
+// ── 4b. A one-turn run, closed when its turn completes ─────────────────────
+
+/**
+ * SQL: a run with NO stages — neither the session nor any of its runs' frozen
+ * definitions (`definitionSnapshot.stages`, what the stage gate resolves
+ * against first) declares one. A staged run moves through its stages; its
+ * session is never closed at a turn's end.
+ */
+function stagelessRunSessionWhere(): SQL {
+  return drizzleSql`(coalesce(jsonb_array_length(CASE WHEN jsonb_typeof(${focusSessions.stages}) = 'array' THEN ${focusSessions.stages} END), 0) = 0
+    AND NOT EXISTS (
+      SELECT 1 FROM playbook_runs pr
+      WHERE pr.session_id = ${focusSessions.id}
+        AND jsonb_typeof(pr.definition_snapshot -> 'stages') = 'array'
+        AND jsonb_array_length(pr.definition_snapshot -> 'stages') > 0
+    ))` as SQL;
+}
+
+/** SQL: a proposal filed in this session still waits for a decision. */
+function noPendingProposalWhere(): SQL {
+  return drizzleSql`NOT EXISTS (
+    SELECT 1 FROM proposals p
+    WHERE p.session_id = ${focusSessions.id} AND p.status = 'pending'
+  )` as SQL;
+}
+
+/**
+ * Move 4 for ONE session, at once (founder, 9 Nov 2026): called when a run's
+ * IS turn reports `completed` (`run-turn-end.ts`), so a one-turn run's
+ * session does not read "running" until the next hourly tick (the caption
+ * run `1e0e3210` stayed active 50 minutes after its run completed, and
+ * Content Studio showed "Writing the caption…" all that time).
+ *
+ * The same rule as move 4 (`endedRunSessionWhere`: a run session, every run
+ * of it ended, nothing owed to the person), the same door and words, and
+ * narrower: the run has no stages and no proposal in it waits for the
+ * person. Anything that waits on them keeps the session open where they will
+ * answer it; the sweep stays the backstop. Returns whether it closed.
+ */
+export async function closeStagelessRunSessionAtTurnEnd(
+  sessionId: string
+): Promise<boolean> {
+  const [row] = await db
+    .select({ id: focusSessions.id, userId: focusSessions.userId })
+    .from(focusSessions)
+    .where(
+      and(
+        eq(focusSessions.id, sessionId),
+        endedRunSessionWhere(),
+        stagelessRunSessionWhere(),
+        noPendingProposalWhere()
+      )
+    )
+    .limit(1);
+  if (!row) return false;
+  const closed = await completeFocusSession({
+    sessionId: row.id,
+    userId: row.userId,
+    terminalStatus: "closed",
+    summary: ENDED_RUN_CLOSE_SUMMARY,
+    actor: { kind: "system", userId: row.userId },
+  });
+  return closed?.session.status === "closed";
+}
+
 // ── The tick ───────────────────────────────────────────────────────────────
 
 export interface SessionLifecycleSweepResult {
@@ -378,6 +461,14 @@ export interface SessionLifecycleSweepResult {
   heldOnMerge: number;
   longStaleCancelled: number;
   runsClosed: number;
+  /** `forEach` steps with a batch whose run never started, pumped again. */
+  fanOutsPumped: number;
+  /** Decisions past `answerBy` that took the default their person set. */
+  decisionsTimedOut: number;
+  /** Steps on a decision's arm not taken, closed as skipped. */
+  armsSkipped: number;
+  /** Planned steps (`forming`) whose blockers delivered and date came, woken. */
+  plannedWoken: number;
   failed: string[];
 }
 
@@ -388,6 +479,10 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     heldOnMerge: 0,
     longStaleCancelled: 0,
     runsClosed: 0,
+    fanOutsPumped: 0,
+    decisionsTimedOut: 0,
+    armsSkipped: 0,
+    plannedWoken: 0,
     failed: [],
   };
   const step = async (
@@ -403,7 +498,32 @@ export async function sweepSessionLifecycle(): Promise<SessionLifecycleSweepResu
     }
   };
   await step("runs", closeEndedRunSessions, (n) => (result.runsClosed = n));
+  await step(
+    "fan-out",
+    async () =>
+      (await import("../playbooks/stage-for-each.js")).sweepOrphanedFanOuts(),
+    (n) => (result.fanOutsPumped = n)
+  );
   await step("met", closeMetWorkSessions, (n) => (result.metClosed = n));
+  await step(
+    "decision-timeout",
+    async () =>
+      (
+        await import("../decisions/decision-timeout.js")
+      ).sweepDecisionTimeouts(),
+    (n) => (result.decisionsTimedOut = n)
+  );
+  await step(
+    "decision-arms",
+    async () => (await import("./decision-arms.js")).sweepDecisionArms(),
+    (n) => (result.armsSkipped = n)
+  );
+  await step(
+    "planned-wake",
+    async () =>
+      (await import("./planned-wake.js")).sweepPlannedSessions(new Date()),
+    (n) => (result.plannedWoken = n)
+  );
   await step(
     "merge-hold",
     holdSessionsWaitingOnMerge,

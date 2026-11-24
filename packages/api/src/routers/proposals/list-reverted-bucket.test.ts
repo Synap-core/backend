@@ -24,6 +24,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { ProposalStatus } from "@synap/database/schema";
+import { UNDECIDED_PROPOSAL_STATUSES } from "@synap-core/types/proposals/attention";
 import { PROPOSAL_ROW_STATUSES } from "../hub-protocol/rest/_codecs/proposal.js";
 
 const src = readFileSync(
@@ -66,12 +67,17 @@ describe("the `reverted` bucket", () => {
     expect(validated).toContain("ProposalStatus.APPROVED");
     expect(validated).toContain("ProposalStatus.AUTO_APPROVED");
     expect(validated).not.toContain("ProposalStatus.REVERTED");
-    // …and `pending` must still carry APPROVAL_FAILED, the actionable zombie.
+    // …and `pending` must still carry APPROVAL_FAILED, the actionable zombie,
+    // through the one undecided list.
     const pending = src.slice(
       src.indexOf('if (input.status === "pending") {'),
       src.indexOf('} else if (input.status === "validated") {')
     );
-    expect(pending).toContain("ProposalStatus.APPROVAL_FAILED");
+    expect(pending).toContain("[...UNDECIDED_PROPOSAL_STATUSES]");
+    expect([...UNDECIDED_PROPOSAL_STATUSES]).toEqual([
+      ProposalStatus.PENDING,
+      ProposalStatus.APPROVAL_FAILED,
+    ]);
     expect(pending).not.toContain("ProposalStatus.REVERTED");
   });
 

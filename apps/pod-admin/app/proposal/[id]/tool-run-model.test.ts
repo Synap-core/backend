@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  changedDrafts,
   reviewToolRun,
+  runResultSplit,
   toolRunArguments,
+  toolRunSplit,
   toolRunValue,
 } from "./tool-run-model";
 
@@ -82,5 +85,91 @@ describe("reviewToolRun", () => {
     expect(reviewToolRun({})).toBeNull();
     expect(reviewToolRun({ toolRun: { action: 1 } })).toBeNull();
     expect(reviewToolRun(undefined)).toBeNull();
+  });
+});
+
+describe("the card shows what the tool does", () => {
+  const post = {
+    action: "Publish post",
+    tool: "LinkedIn",
+    parameters: [
+      {
+        key: "accountId",
+        label: "Account",
+        value: "9b2d7a1c-3f4e-4c1a-8f00-2f6f6d1e0a11",
+      },
+      { key: "text", label: "Text", value: "Hello world" },
+      { key: "apiKey", label: "Api key", secret: true as const },
+      { key: "visibility", label: "Visibility", value: "public" },
+    ],
+  };
+
+  it("leads with the text; ids and credentials wait behind Details", () => {
+    const { shown, detail } = toolRunSplit(post);
+    expect(shown.map((a) => a.key)).toEqual(["text", "visibility"]);
+    expect(detail.map((a) => a.key).sort()).toEqual(["accountId", "apiKey"]);
+  });
+
+  it("only text can be edited: never an id, a credential or a link", () => {
+    const args = toolRunArguments({
+      ...post,
+      parameters: [
+        ...post.parameters,
+        { key: "url", label: "Link", value: "https://example.com/a" },
+      ],
+    });
+    expect(args.filter((a) => a.editable).map((a) => a.key)).toEqual([
+      "text",
+      "visibility",
+    ]);
+  });
+
+  it("sends only the drafts that differ from what was proposed", () => {
+    expect(
+      changedDrafts(post, {
+        text: "Hello, LinkedIn",
+        visibility: "public",
+        accountId: "other",
+        apiKey: "x",
+        nope: "y",
+      })
+    ).toEqual({ text: "Hello, LinkedIn" });
+    expect(changedDrafts(post, { text: "Hello world" })).toEqual({});
+  });
+});
+
+/**
+ * What an approved run returned (report 48dbf93b: the approved fal run had made
+ * two images, and the review page could not show them).
+ */
+describe("runResultSplit", () => {
+  it("the stamped result reads field by field, links as links, ids behind Details", () => {
+    const split = runResultSplit({
+      skillId: "s1",
+      runResult: {
+        success: true,
+        imageUrl: "https://v3.fal.media/files/out-1.png",
+        imageCount: 2,
+        model: "fal-ai/flux-pro/kontext/max/multi",
+        proposalId: "8d2f4c1e-0b7a-4c55-9a7e-3f1f0d1c2b3a",
+      },
+    });
+    expect(split).not.toBeNull();
+    expect(split!.shown.map((a) => [a.label, a.value.kind])).toEqual([
+      ["Image URL", "link"],
+      ["Image count", "text"],
+      ["Model", "text"],
+    ]);
+    expect(split!.detail.map((a) => a.key)).toEqual(["proposalId"]);
+    // The status word is the outcome mark's, never a row.
+    expect(split!.shown.some((a) => a.key === "success")).toBe(false);
+    expect(split!.shown.every((a) => !a.editable)).toBe(true);
+  });
+
+  it("nothing returned yet (pending, or a run that returns nothing): no section", () => {
+    expect(runResultSplit({ skillId: "s1" })).toBeNull();
+    expect(runResultSplit({ runResult: null })).toBeNull();
+    expect(runResultSplit({ runResult: { success: true } })).toBeNull();
+    expect(runResultSplit(null)).toBeNull();
   });
 });

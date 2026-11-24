@@ -65,9 +65,42 @@ export function pgliteTableDdl(table: PgTable): string {
   return `create table "${cfg.name}" (${cols.join(", ")});`;
 }
 
-/** The DDL for several tables, in order. */
+/**
+ * The tables whose status door OWES a transition in the same statement or
+ * transaction: a proposal's (`transitionProposal`), a run's (`setRunStatus`), a
+ * session's and its slots' (`setSessionStatus`, `oweSlotTransitions`). A
+ * fixture that stands one of them up gets the outbox with it, so the next door
+ * that owes does not break it again.
+ */
+const OWING_TABLES: readonly PgTable[] = [
+  schema.proposals,
+  schema.playbookRuns,
+  schema.focusSessions,
+];
+
+/**
+ * The tables whose reads also read `space_access` (a playbook or skill is
+ * usable and readable where it is shared: `usableInSpaceWhere`,
+ * `sharedReadableWhere`).
+ */
+const SHARED_TABLES: readonly PgTable[] = [schema.playbooks, schema.skills];
+
+/**
+ * The DDL for several tables, in order, plus what they need: the outbox an
+ * owing table writes, the grants a shareable table's reads join.
+ */
 export function pgliteSchemaDdl(tables: readonly PgTable[]): string {
-  return tables.map(pgliteTableDdl).join("\n");
+  const needs = (of: readonly PgTable[], table: PgTable) =>
+    tables.some((t) => of.includes(t)) && !tables.includes(table);
+  return [
+    ...tables,
+    ...(needs(OWING_TABLES, schema.lifecycleTransitionOutbox)
+      ? [schema.lifecycleTransitionOutbox]
+      : []),
+    ...(needs(SHARED_TABLES, schema.spaceAccess) ? [schema.spaceAccess] : []),
+  ]
+    .map(pgliteTableDdl)
+    .join("\n");
 }
 
 /**

@@ -8,7 +8,8 @@
  *     goal (`trackId`) arrives on a session that still follows nothing.
  *
  * Going through `followPlaybook` keeps every rule of a follow: criteria and
- * deliverables MERGE (nothing is overwritten), no stage is seeded mid-flight,
+ * deliverables MERGE (nothing is overwritten), no stage is seeded mid-flight
+ * (a bind at the start is a birth: it enters the first stage),
  * the definition is pinned on a run row, an unanswered required param becomes
  * a slot owed by the person. Two extra floors here, because nobody asked for
  * this bind:
@@ -30,11 +31,12 @@ import {
   eq,
   and,
   drizzleSql,
+  firstStageKey,
   getParentSessionId,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   getLinksFor,
   resolveGrantedCapabilities,
@@ -109,19 +111,19 @@ export async function loadBindingFacts(input: {
     .from(playbooks)
     .where(
       and(
-        userVisibleWhere(playbooks.workspaceId, input.userId),
+        scopedDb(AccessContext.from({ userId: input.userId })).predicate(
+          playbooks
+        ),
         eq(playbooks.status, "active")
       )
     )) as BindingPlaybook[];
 
   // The subject was floored by the door that set it (`isOutputRefVisible`).
   let subject: BindingSituation["subject"] = null;
-  let subjectWorkspaceId: string | null = null;
   if (input.subjectEntityId && isUuid(input.subjectEntityId)) {
     const [row] = await db
       .select({
         kind: profiles.slug,
-        workspaceId: entities.workspaceId,
         properties: entities.properties,
       })
       .from(entities)
@@ -130,10 +132,10 @@ export async function loadBindingFacts(input: {
       .limit(1);
     if (row) {
       subject = {
+        id: input.subjectEntityId.toLowerCase(),
         kind: row.kind ?? null,
         properties: (row.properties as Record<string, unknown> | null) ?? {},
       };
-      subjectWorkspaceId = row.workspaceId ?? null;
     }
   }
 
@@ -156,12 +158,14 @@ export async function loadBindingFacts(input: {
     parent = row ?? null;
   }
 
+  // The session's own space: the session space ladder placed it from the
+  // same chain (playbook, subject, parent, project home, focus) and only where
+  // the actor may work (W3). Binding reads that placement; it keeps no ladder
+  // of its own.
   return {
     situation: {
       title: input.title,
-      // A project session has no space of its own: its subject's space is
-      // where its playbooks live.
-      workspaceId: input.workspaceId ?? subjectWorkspaceId,
+      workspaceId: input.workspaceId,
       subject,
       parent,
     },
@@ -232,12 +236,20 @@ export async function bindOnFacts(
     );
   }
 
+  // A bind at the START is a birth: the session enters the playbook's first
+  // stage, as one born on it does. A late bind joins work mid-flight and
+  // names no stage.
+  const birthStage =
+    input.phase === "start"
+      ? firstStageKey(pool.find((p) => p.id === decision.playbookId)?.stages)
+      : null;
   const { followPlaybook } = await import("./follow-playbook.js");
   const followed = await followPlaybook({
     sessionId: input.sessionId,
     userId: input.userId,
     agentUserId: input.agentUserId,
     followPlaybookId: decision.playbookId,
+    ...(birthStage ? { followStageKey: birthStage } : {}),
     ...(decision.params ? { params: decision.params } : {}),
   });
   if (followed.status !== "ok") {

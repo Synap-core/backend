@@ -28,6 +28,10 @@ import { jsonGoverned } from "../proposal-response.js";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 import { attachCreatedDocument } from "../attach-created-document.js";
 import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
+import {
+  bodyPlacementFor,
+  withPlacementWarning,
+} from "../../../services/entity-body/body-placement.js";
 import type { Context } from "hono";
 import type { HubVariables } from "./_shared.js";
 
@@ -183,17 +187,26 @@ export function registerDocumentsRoutes(app: HubHono): void {
         sourceMessageId: body.sourceMessageId,
         sessionId,
       });
-      // Refuse an attach that would replace a body BEFORE the document exists.
-      if (body.entityId) {
-        await preflightAttachToEntity({
-          entityId: body.entityId,
-          userId: acting.userId,
-          replaceBody: body.replaceBody === true,
-        });
-      }
+      // Refuse an attach that would replace a body BEFORE the document exists,
+      // and file the body where its entity lives (a part follows its whole).
+      const placement = body.entityId
+        ? bodyPlacementFor(
+            await preflightAttachToEntity({
+              entityId: body.entityId,
+              userId: acting.userId,
+              replaceBody: body.replaceBody === true,
+            }),
+            workspaceId,
+            {
+              keyType: c.get("keyType") as string | undefined,
+              keyWorkspaceId: c.get("keyWorkspaceId") as
+                string | null | undefined,
+            }
+          )
+        : undefined;
       const result = await caller.documents.createDocument({
         userId: acting.userId,
-        workspaceId,
+        workspaceId: placement ? placement.workspaceId : workspaceId,
         title: body.title,
         content: body.content ?? "",
         type: body.type ?? "markdown",
@@ -210,21 +223,27 @@ export function registerDocumentsRoutes(app: HubHono): void {
       if (!body.entityId) return jsonGoverned(c, result);
       return jsonGoverned(
         c,
-        await attachCreatedDocument({
-          created: result,
-          entityId: body.entityId,
-          replaceBody: body.replaceBody === true,
-          userId: acting.userId,
-          scopes: c.get("scopes") as string[],
-          // The confined, acting-resolved workspace — not the raw body id.
-          workspaceId,
-          sessionId,
-          sourceMessageId: body.sourceMessageId ?? null,
-          ...(resolvedAgentUserId ? { agentUserId: resolvedAgentUserId } : {}),
-          keyType: c.get("keyType") as string | undefined,
-          keyWorkspaceId: c.get("keyWorkspaceId") as string | null | undefined,
-          reasoning: "Attach document created via Hub REST POST /documents",
-        })
+        withPlacementWarning(
+          await attachCreatedDocument({
+            created: result,
+            entityId: body.entityId,
+            replaceBody: body.replaceBody === true,
+            userId: acting.userId,
+            scopes: c.get("scopes") as string[],
+            // The confined, acting-resolved workspace — not the raw body id.
+            workspaceId,
+            sessionId,
+            sourceMessageId: body.sourceMessageId ?? null,
+            ...(resolvedAgentUserId
+              ? { agentUserId: resolvedAgentUserId }
+              : {}),
+            keyType: c.get("keyType") as string | undefined,
+            keyWorkspaceId: c.get("keyWorkspaceId") as
+              string | null | undefined,
+            reasoning: "Attach document created via Hub REST POST /documents",
+          }),
+          placement
+        )
       );
     } catch (err) {
       // Item 3 Part 3: a bound service key targeting another workspace throws

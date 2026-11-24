@@ -242,3 +242,69 @@ describe("collectDiagnostics", () => {
     ]);
   });
 });
+
+describe("synap-ask — a session's real question, as an embed", () => {
+  const SESSION = "05bb1d2e-0000-4000-8000-000000000001";
+  const PROSE = "Which do you prefer, **A** or **B**?";
+
+  it("is a reference embed, never a frame", async () => {
+    const { EMBED_DIRECTIVES, isFrameDirective } = await import("./embeds.js");
+    expect(EMBED_DIRECTIVES).toContain("synap-ask");
+    expect(isFrameDirective("synap-ask")).toBe(false);
+  });
+
+  it("round trips through serializeEmbed / readEmbed with its prose fallback", () => {
+    const md = serializeEmbed({
+      directive: "synap-ask",
+      ref: { sessionId: SESSION, slot: "Ship it?" },
+      fallback: PROSE,
+    });
+    expect(md).toBe(
+      [
+        `:::synap-ask{sessionId="${SESSION}" slot="Ship it?"}`,
+        PROSE,
+        ":::",
+      ].join("\n")
+    );
+    const e = firstEmbed(md);
+    expect(e.kind).toBe("ask");
+    expect(e.ref).toEqual({ sessionId: SESSION, slot: "Ship it?" });
+    expect(e.diagnostics).toEqual([]);
+    expect(e.fallback).toHaveLength(1);
+  });
+
+  it("an unlisted attribute is dropped by the registry allowlist", async () => {
+    const { remarkSynapDirectives } = await import("./directive-registry.js");
+    const tree = parseMarkdown(
+      `:::synap-ask{sessionId="${SESSION}" slot="x" onclick="evil()"}\n${PROSE}\n:::`
+    ) as any;
+    remarkSynapDirectives()(tree);
+    const props = tree.children[0].data.hProperties;
+    expect(props).toEqual({ sessionId: SESSION, slot: "x" });
+    expect(tree.children[0].data.hName).toBe("synap-ask");
+    // the fallback children survive for readers that do not draw the card
+    expect(tree.children[0].children.length).toBe(1);
+  });
+
+  it.each([
+    ["no session", `:::synap-ask{slot="x"}\n${PROSE}\n:::`],
+    ["no slot", `:::synap-ask{sessionId="${SESSION}"}\n${PROSE}\n:::`],
+    ["no attributes", `:::synap-ask\n${PROSE}\n:::`],
+    ["blank slot", `:::synap-ask{sessionId="${SESSION}" slot=" "}\n:::`],
+  ])("%s is diagnosed missing-ref (error), never silent", (_n, md) => {
+    const diagnostics = collectDiagnostics(md);
+    const d = diagnostics.find((x) => x.code === "missing-ref");
+    expect(d?.severity).toBe("error");
+    expect(d?.directive).toBe("synap-ask");
+    expect(d?.message).toContain("sessionId and slot");
+    expect(diagnostics.some((x) => x.code === "unknown-directive")).toBe(false);
+  });
+
+  it("an unterminated one is repaired and flagged like its siblings", () => {
+    const md = `:::synap-ask{sessionId="${SESSION}" slot="x"}\n${PROSE}\n`;
+    expect(collectDiagnostics(md).map((d) => d.code)).toContain(
+      "unterminated-embed"
+    );
+    expect(firstEmbed(md).unterminated).toBe(true);
+  });
+});

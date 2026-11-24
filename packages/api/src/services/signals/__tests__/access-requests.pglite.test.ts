@@ -50,6 +50,7 @@ import {
   federatedApplicationConnectionRequests,
   trustedIssuers,
   workspaceMembers,
+  apiKeys,
   workspaces,
 } from "@synap/database";
 import {
@@ -91,6 +92,7 @@ beforeAll(async () => {
   for (const t of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     trustedIssuers,
     federatedApplicationConnectionRequests,
   ]) {

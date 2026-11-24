@@ -154,7 +154,11 @@ const POST_READS = new Set([
  * (bounded by the gate) pass. `[method, path, pinned key passes]`.
  */
 const FENCE_ROWS: Array<[Method, string, boolean]> = [
-  ["GET", "/search", false], // unseamed read
+  // /search is a bounded read since backend#927: the route filters by the key's reach, so a pin passes the fence.
+  ["GET", "/search", true],
+  ["GET", "/ai-providers/available", true], // the enabled-models list an app picks from (chat.stream; `*` holds it)
+  ["GET", "/ai-providers", false], // the operator list (base URL, priority): unseamed, refused
+  ["GET", "/events", false], // unseamed read: still refused
   ["POST", "/knowledge/ask", false], // aggregate read: a pin cannot bound it
   ["GET", "/entities", true], // seamed read
   ["POST", "/entities", true], // a write: bounded by the gate

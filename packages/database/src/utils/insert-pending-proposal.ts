@@ -7,6 +7,7 @@ import {
   isNull,
   ne,
   sql as drizzleSql,
+  type SQL,
 } from "drizzle-orm";
 import { db } from "../client-pg.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
@@ -24,9 +25,14 @@ import {
   type StoredProposalData,
 } from "@synap-core/types/proposals";
 import { isUniqueViolation } from "./pg-errors.js";
-import { transitionProposal } from "./proposal-transition.js";
+import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
+  transitionProposal,
+} from "./proposal-transition.js";
 import {
   callingKeyAttribution,
+  getOpenSupersedes,
   isDerivedSession,
   type SessionSource,
 } from "./request-write-context.js";
@@ -198,13 +204,6 @@ export interface SupersededVersion {
 /** `proposals.data` key on a superseded row: the id of the version that replaced it. */
 export const SUPERSEDED_BY_KEY = "supersededBy" as const;
 /**
- * The withdrawn row's reason line, on the key a person's own withdraw uses
- * (`data.withdrawReason`, `proposals.withdraw`) — never `rejectionReason`,
- * which the agent scorecard reads as a rejection.
- */
-export const SUPERSEDED_REASON = "Replaced by a newer version";
-
-/**
  * Does a new pending proposal REPLACE the agent's earlier pending versions of
  * itself? (founder, 2026-10-26: "supersede = same agent +
  * same session + same target, updates/patches only".)
@@ -315,6 +314,12 @@ const VOLATILE_DEDUP_KEYS = new Set([
   "summary",
   "previousData",
   "targetName",
+  // Written onto the stored row AFTER filing, never part of the change: a
+  // revise's `_summary`, and the derived-session marker (`sessionSource`).
+  // Without them a reopened failed row hashed apart from the same request
+  // filed again (plan 8032a127 Q7).
+  "_summary",
+  SESSION_SOURCE_MARKER_KEY,
   // The duplicate door's answer (B2): computed against the queue AS IT IS NOW,
   // so a second copy of the same create sees the first one as a candidate and
   // would otherwise hash differently from it — the exact layer would then never
@@ -324,15 +329,44 @@ const VOLATILE_DEDUP_KEYS = new Set([
 
 /**
  * What makes two proposed creates the SAME record: the record the create door
- * handed the gate, minus its per-attempt minted `id`. The ONE rule both the
- * dedup hash (two pending copies) and `expirePendingCreatesOfLandedRecord`
- * (a pending copy of a record that has since landed) apply.
+ * handed the gate, minus its per-attempt minted `id` and minus the install
+ * clock on its package source-link (`metadata.marketSource.installedAt`). The
+ * ONE rule both the dedup hash (two pending copies) and
+ * `expirePendingCreatesOfLandedRecord` (a pending copy of a record that has
+ * since landed) apply.
+ *
+ * The install clock: every package install/update run stamps
+ * `installedAt: new Date().toISOString()` into the source-link it writes on a
+ * created playbook (`package-apply-post-workspace.ts`, via
+ * `stampPlaybookMarketSource`; the same `marketSource` shape is built by
+ * `services/capabilities/market-source.ts`). It is when the run happened, not
+ * what the record is: with it in the hash, each `synap templates update`
+ * filed a fresh pending `create playbook` beside the last one (live
+ * 2026-11-16: seven pending copies of three playbooks). Only that one leaf is
+ * dropped: the rest of `marketSource` (package slug, version, baseline) is
+ * the record's content and still tells two creates apart.
  */
 export function createdRecordIdentity(
   record: Record<string, unknown>
 ): Record<string, unknown> {
   const { id: _mintedId, ...rest } = record;
-  return rest;
+  return withoutInstallClock(rest);
+}
+
+/** `record` without `metadata.marketSource.installedAt`, never mutating it. */
+function withoutInstallClock(
+  record: Record<string, unknown>
+): Record<string, unknown> {
+  const metadata = record.metadata;
+  if (!isPlainObject(metadata)) return record;
+  const source = metadata.marketSource;
+  if (!isPlainObject(source) || !("installedAt" in source)) return record;
+  const { installedAt: _installClock, ...sourceRest } = source;
+  return { ...record, metadata: { ...metadata, marketSource: sourceRest } };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
@@ -378,19 +412,25 @@ export function computeProposalDedupHash(p: {
   // other keys (a `summary` property, a `reasoning` field) are the change.
   // Without this every agent entity create hashed uniquely (live 2026-10-18:
   // three byte-identical decision creates filed as three pending rows).
+  //
+  // Any OTHER action (an update's patch) keeps its `id` — it names the
+  // target, which the hash carries anyway — but drops the install clock the
+  // same way: a package reconcile replays the whole source-link on every
+  // run (`reconcile-installed-playbooks.ts` → `playbooks.update` with
+  // `metadata.marketSource`), so with the clock in the hash each
+  // `synap templates update` filed a fresh pending update beside the last.
   const record = payload.data;
   if (
-    isCreate &&
     // The REQUEST ENVELOPE `checkPermissionOrPropose` writes —
     // `{ requestId, targetType, changeType, data: <the record>, … }` — rather
     // than a flat record. The guard reads any object (it widens its argument
     // back to a record itself); the cast only meets its parameter type.
     isRequestShapedProposalData(p.data as unknown as StoredProposalData) &&
-    record !== null &&
-    typeof record === "object" &&
-    !Array.isArray(record)
+    isPlainObject(record)
   ) {
-    payload.data = createdRecordIdentity(record as Record<string, unknown>);
+    payload.data = isCreate
+      ? createdRecordIdentity(record)
+      : withoutInstallClock(record);
   }
   const canonical = {
     workspaceId: p.workspaceId ?? null,
@@ -578,6 +618,219 @@ export async function deriveProposalProjectId(
 export async function insertPendingProposal(
   input: InsertPendingProposalInput,
   executor: typeof db | DbTx = db
+): Promise<InsertPendingProposalResult> {
+  const replaces = getOpenSupersedes();
+  if (!replaces) return insertPendingProposalRow(input, executor);
+  // THIS FILING REPLACES A FAILED PROPOSAL (plan 8032a127 D3, see
+  // `runWithSupersedes`). Checked BEFORE anything is filed, and against the
+  // request this row IS (the same predicate the end runs, `sameRequestAs`):
+  // a filing that could not end the failed one files nothing. The check holds
+  // the failed row locked until the end commits, so no decision or retry can
+  // slip between them.
+  const result = await (executor as typeof db).transaction(async (tx) => {
+    const problem = await supersedesProblem(
+      replaces.proposalId,
+      input.subjectUserId ?? null,
+      tx,
+      {
+        proposalType: input.proposalType,
+        targetType: input.targetType,
+        targetId: input.targetId,
+      }
+    );
+    if (problem) {
+      const refused = new SupersedesRefusedError(replaces.proposalId, problem);
+      // Recorded on the slot too: a route that catches the throw and answers
+      // its own way still reaches the door as a refusal (`fileSuperseding`).
+      replaces.refused = refused.message;
+      throw refused;
+    }
+    const filed = await insertPendingProposalRow(input, tx);
+    const ended = await endReplacedProposal(tx, {
+      replacedId: replaces.proposalId,
+      replacement: filed.proposal,
+      from: [ProposalStatus.APPROVAL_FAILED],
+    });
+    return { filed, ended };
+  });
+  replaces.filed ??= result.filed.proposal.id;
+  // Claimed only when the failed row really ended. After the locked check
+  // above it always does; were it not to, the door says "filed, but the
+  // failed one did not end" (`leftFailedNote`), never "filed nothing".
+  if (result.ended.length > 0) replaces.replacedBy = result.filed.proposal.id;
+  return {
+    ...result.filed,
+    superseded: [...(result.filed.superseded ?? []), ...result.ended],
+  };
+}
+
+/** A `supersedes` the filing door refused: nothing was filed. */
+export class SupersedesRefusedError extends Error {
+  readonly code = "SUPERSEDES_REFUSED";
+  constructor(
+    readonly proposalId: string,
+    readonly problem: string
+  ) {
+    super(`supersedes ${proposalId}: ${problem} Nothing was filed.`);
+    this.name = "SupersedesRefusedError";
+  }
+}
+
+/** Which request a proposal is: what it does, to what. */
+export interface ProposalRequest {
+  proposalType: string;
+  targetType: string;
+  targetId: string;
+}
+
+/**
+ * Does `proposalType` mint its own target id per attempt? A create's target is
+ * the record it will make, a capture or import graph's a fresh id: two filings
+ * of the same request never share it, so it says nothing about sameness.
+ */
+function mintsItsTarget(proposalType: string): boolean {
+  const action = proposalType.slice(proposalType.lastIndexOf(".") + 1);
+  return action === "create" || action === "graph";
+}
+
+/**
+ * THE one "same request" predicate, over a `proposals` row: the same proposal
+ * type and target type, and the same target unless the type mints its own.
+ * {@link supersedesProblem} refuses with it and {@link endReplacedProposal}
+ * ends with it, so a replacement is filed only when its filing ends the
+ * failed one (wave-2 code review 1: the two used to differ, and a fix of
+ * another kind was filed beside a failure that never ended).
+ */
+function sameRequestAs(request: ProposalRequest): SQL {
+  return and(
+    eq(proposals.proposalType, request.proposalType),
+    eq(proposals.targetType, request.targetType),
+    ...(mintsItsTarget(request.proposalType)
+      ? []
+      : [eq(proposals.targetId, request.targetId)])
+  )!;
+}
+
+/**
+ * Why `failedId` cannot be replaced by a filing for `ownerUserId`, or null.
+ *
+ * Only a FAILED proposal: a pending one is revised (its author) or decided (a
+ * person about to approve it must not lose it under them). Only one filed for
+ * the SAME person, which is the whole authority: the agent may be another one
+ * than its author (Ask AI wakes the orchestrator), but the person's queue
+ * keeps one request, the newer one, and never loses one of another person's.
+ * Never a plan that partly applied ({@link NOT_PARTLY_APPLIED}). And, once
+ * the filing's `request` is known (the insert door), only the SAME request
+ * ({@link sameRequestAs}): a filing of another kind would leave the failed one
+ * open beside it. The doors call it without `request` first, before the
+ * route runs, so a wrong name is refused before any work.
+ *
+ * Read with a `request` (the insert door, on its transaction), the failed row
+ * stays locked until that transaction ends.
+ */
+export async function supersedesProblem(
+  failedId: string,
+  ownerUserId: string | null,
+  executor: typeof db | DbTx = db,
+  request?: ProposalRequest
+): Promise<string | null> {
+  if (!isUuid(failedId)) return "is not a proposal id.";
+  const query = executor
+    .select({
+      status: proposals.status,
+      subjectUserId: proposals.subjectUserId,
+      proposalType: proposals.proposalType,
+      targetType: proposals.targetType,
+      settled: drizzleSql<boolean>`${NOT_PARTLY_APPLIED}`,
+      sameRequest: request
+        ? drizzleSql<boolean>`${sameRequestAs(request)}`
+        : drizzleSql<boolean>`true`,
+    })
+    .from(proposals)
+    .where(eq(proposals.id, failedId))
+    .limit(1);
+  const [failed] = await (request ? query.for("update") : query);
+  // One sentence for "absent" and "another person's": no existence oracle.
+  if (!failed || !ownerUserId || failed.subjectUserId !== ownerUserId) {
+    return "is not a proposal filed for the same person as this one.";
+  }
+  if (failed.status !== ProposalStatus.APPROVAL_FAILED) {
+    return failed.status === ProposalStatus.PENDING
+      ? "is still pending: revise it (synap_revise_proposal) instead of filing a new one."
+      : `is ${failed.status}, not failed: only a proposal whose approval failed is replaced this way.`;
+  }
+  if (!failed.settled) {
+    return "partly applied and could not be undone: it stays for the person to see what landed.";
+  }
+  if (request && !failed.sameRequest) {
+    const sameKind =
+      failed.proposalType === request.proposalType &&
+      failed.targetType === request.targetType;
+    return sameKind
+      ? "is the same kind of request on another record: only the same request on the same record replaces it. File it for that record, or file this one without `supersedes`."
+      : `is another kind of request (${failed.proposalType} on ${failed.targetType}) than this call files (${request.proposalType} on ${request.targetType}): only the same request replaces it. File it again the way it was filed, or file this one without \`supersedes\`.`;
+  }
+  return null;
+}
+
+/**
+ * End a proposal a newer filing REPLACED (plan 8032a127 D3 and the one
+ * undecided send per channel): `withdrawn`, pointing at its replacement on the
+ * key the pending supersede writes (`supersededBy`, which Relay links), and
+ * its notifications leave the bell. Only by the same request
+ * ({@link sameRequestAs}, the predicate `supersedesProblem` refuses with), never a plan
+ * that partly applied, and naming no person (`endedByNoPersonSet`). Not
+ * scored. Returns what ended, for the caller's after-commit side effects
+ * (`settleSupersededProposals`).
+ */
+export async function endReplacedProposal(
+  executor: typeof db | DbTx,
+  args: {
+    replacedId: string;
+    replacement: {
+      id: string;
+      proposalType: string;
+      targetType: string;
+      targetId: string;
+    };
+    from: readonly ProposalStatus[];
+  }
+): Promise<SupersededVersion[]> {
+  const { replacement } = args;
+  // Why it ended is `data.ended` (`superseded`); never a sentence stored as
+  // `withdrawReason`, which reads as its author's own words.
+  const stamp = JSON.stringify({ [SUPERSEDED_BY_KEY]: replacement.id });
+  const at = new Date();
+  const ended = await transitionProposal(executor, {
+    to: ProposalStatus.WITHDRAWN,
+    from: args.from,
+    ended: { reason: "superseded", supersededBy: replacement.id },
+    set: {
+      ...endedByNoPersonSet(),
+      updatedAt: at,
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || ${stamp}::jsonb`,
+    },
+    where: and(
+      eq(proposals.id, args.replacedId),
+      ne(proposals.id, replacement.id),
+      sameRequestAs(replacement),
+      NOT_PARTLY_APPLIED
+    ),
+  }).returning({
+    id: proposals.id,
+    workspaceId: proposals.workspaceId,
+    data: proposals.data,
+  });
+  if (ended.length > 0) {
+    await actionProposalNotifications([args.replacedId], executor);
+  }
+  return ended;
+}
+
+/** {@link insertPendingProposal} without a replaced failure. */
+async function insertPendingProposalRow(
+  input: InsertPendingProposalInput,
+  executor: typeof db | DbTx
 ): Promise<InsertPendingProposalResult> {
   // DEDUP GUARD (agent/automation-authored only): prevent a duplicate pending
   // proposal at the door instead of creating-then-rejecting. When an identical
@@ -769,14 +1022,12 @@ async function supersedeEarlierVersions(
     )
     .map((c) => c.id);
   if (covered.length === 0) return [];
-  const stamp = JSON.stringify({
-    [SUPERSEDED_BY_KEY]: latest.id,
-    withdrawReason: SUPERSEDED_REASON,
-  });
+  const stamp = JSON.stringify({ [SUPERSEDED_BY_KEY]: latest.id });
   // `reviewedAt` like the person's withdraw: the row was decided, now.
   const at = new Date();
   const replaced = await transitionProposal(tx, {
     to: ProposalStatus.WITHDRAWN,
+    ended: { reason: "superseded", supersededBy: latest.id },
     set: {
       reviewedAt: at,
       updatedAt: at,

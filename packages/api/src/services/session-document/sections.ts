@@ -167,3 +167,106 @@ export function upsertSectionInMarkdown(
     replaced: false,
   };
 }
+
+/** A level-1 or level-2 heading line: where a plain heading block ends. */
+const BLOCK_END_LINE = /^#{1,2}(?:\s|$)/;
+const BLOCK_END_HEADING = /^#{1,2}(?:\s|$)/m;
+
+/**
+ * Which lines sit inside a top-level fenced code block (``` or ~~~, the
+ * fence lines included): a heading there is code, never a block boundary.
+ */
+function fencedLines(lines: readonly string[]): boolean[] {
+  const out: boolean[] = new Array(lines.length).fill(false);
+  let open: { char: string; length: number } | null = null;
+  lines.forEach((line, i) => {
+    const m = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (open) {
+      out[i] = true;
+      if (
+        m &&
+        m[1]![0] === open.char &&
+        m[1]!.length >= open.length &&
+        line.slice(line.indexOf(m[1]!) + m[1]!.length).trim() === ""
+      ) {
+        open = null;
+      }
+    } else if (m) {
+      out[i] = true;
+      open = { char: m[1]![0]!, length: m[1]!.length };
+    }
+  });
+  return out;
+}
+
+/**
+ * A PLAIN heading block: a `## <title>` line at the document's top level (not
+ * inside any `:::` container or fenced code block), and every line after it up
+ * to the next level-1 or level-2 heading (`# ` / `## `, outside fenced code),
+ * the next top-level container, or the end. This is how an app
+ * writes a person's own words into a document (Content Studio's `## Caption`,
+ * `lib/content/pieces.ts` withCaption), so it carries no owner attribute: it
+ * is the person's.
+ *
+ * Replace that block's body in place, or append the block at the end when the
+ * document has none. Refuses (`SectionBodyError`) a title held by two blocks
+ * (which one is the person's cannot be guessed) and a body holding a `# ` or
+ * `## ` line (part of it would read back as another block). Every line outside the
+ * block is preserved exactly.
+ */
+export function upsertHeadingBlockInMarkdown(
+  markdown: string,
+  input: { title: string; body: string }
+): { markdown: string; replaced: boolean } {
+  const title = input.title.replace(/[\r\n]+/g, " ").trim();
+  const body = input.body.replace(/\r\n?/g, "\n").trim();
+  if (BLOCK_END_HEADING.test(body)) {
+    throw new SectionBodyError(
+      `The "${title}" text holds a line starting with "# " or "## ", which would split it into another block: remove it.`
+    );
+  }
+  const lines = markdown.split("\n");
+  const topLevel = scanContainers(markdown).containers.filter(
+    (c) => c.depth === 0
+  );
+  const inContainer = (i: number) =>
+    topLevel.some((c) => i >= c.startLine && i <= c.endLine);
+  const inFence = fencedLines(lines);
+  const heading = /^##[ \t]+(.*?)[ \t]*$/;
+  const at = lines
+    .map((line, i) => ({ i, m: heading.exec(line) }))
+    .filter(({ i, m }) => m && m[1] === title && !inContainer(i) && !inFence[i])
+    .map(({ i }) => i);
+  if (at.length > 1) {
+    throw new SectionBodyError(
+      `The document has ${at.length} "## ${title}" blocks, so the one to replace cannot be told apart: merge them into one first.`
+    );
+  }
+  const block = [`## ${title}`, ...(body ? ["", body] : [])];
+  if (at.length === 0) {
+    const head = markdown.replace(/\s+$/, "");
+    return {
+      markdown: head
+        ? `${head}\n\n${block.join("\n")}\n`
+        : `${block.join("\n")}\n`,
+      replaced: false,
+    };
+  }
+  const start = at[0]!;
+  let end = start + 1;
+  while (
+    end < lines.length &&
+    !(BLOCK_END_LINE.test(lines[end]!) && !inFence[end]) &&
+    !topLevel.some((c) => c.startLine === end)
+  ) {
+    end++;
+  }
+  const following = end < lines.length;
+  // One blank line after the block: before what follows, or as the final newline.
+  lines.splice(start, end - start, ...block, "");
+  const out = lines.join("\n");
+  return {
+    markdown: following ? out : out.replace(/\n*$/, "\n"),
+    replaced: true,
+  };
+}

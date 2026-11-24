@@ -129,6 +129,20 @@ describe("workerWhen — a schedule is said in words (D3)", () => {
     ).toBe("On a custom schedule");
     expect(workerWhen(worker({ activator: { on: "schedule" } }))).toBeNull();
   });
+
+  it("names the schedule's own zone", () => {
+    expect(
+      workerWhen(
+        worker({
+          activator: {
+            on: "schedule",
+            cron: "0 9 * * 1",
+            timezone: "Europe/Paris",
+          },
+        })
+      )
+    ).toBe("Every Monday at 09:00 Europe/Paris");
+  });
 });
 
 describe("goalRhythmWords — a goal's rhythm comes from its workers", () => {

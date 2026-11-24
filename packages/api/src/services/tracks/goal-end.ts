@@ -117,6 +117,7 @@ export async function settleEndedGoal(input: {
 
     const expired = await transitionProposal(db, {
       to: ProposalStatus.EXPIRED,
+      ended: { reason: "goal_ended" },
       set: {
         updatedAt: now,
       },

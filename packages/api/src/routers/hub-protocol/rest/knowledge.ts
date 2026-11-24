@@ -161,7 +161,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     summary: "Full-text search knowledge entries",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
+      "DEPRECATED — prefer POST /knowledge/search, whose procedural lane calls the exact same searchFullText. Still functional for existing integrations.",
     request: {
       query: z.object({
         q: z.string().optional(),
@@ -961,7 +961,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
     method: "post",
     path: "/knowledge/ask",
     tags: ["Knowledge"],
-    summary: "DEPRECATED alias of /knowledge/search — raw retrieval door",
+    summary: "DEPRECATED alias of POST /knowledge/search — raw retrieval door",
     deprecated: true,
     description:
       "DEPRECATED alias of POST /knowledge/search; retained for back-compat. " +
@@ -1018,7 +1018,7 @@ export function registerKnowledgeRoutes(app: HubHono): void {
 
   // ── POST /knowledge/answer ────────────────────────────────────────────────
   // The "answer" door (tier-2 = retrieve + synthesize). Same retrieval as
-  // /knowledge/ask (the ONE read door), then ONE focused LLM call in the IS to
+  // POST /knowledge/search (the ONE read door), then ONE focused LLM call in the IS to
   // synthesize a direct answer over the matched context. Explicit doors:
   // `ask` = search (raw matches), `answer` = synthesized. If synthesis is
   // unavailable the answer is null but sources are still returned so callers
@@ -1030,6 +1030,15 @@ export function registerKnowledgeRoutes(app: HubHono): void {
       title: z.string(),
     })
     .openapi("KnowledgeAnswerSource");
+  // A matched runbook quoted when synthesis did not run (`SynthesisExcerpt`).
+  const ExcerptSchema = z
+    .object({
+      substrate: z.string(),
+      id: z.string(),
+      title: z.string(),
+      text: z.string(),
+    })
+    .openapi("KnowledgeAnswerExcerpt");
   // A matched record that was REPLACED (`supersededBy` set): left out of the
   // answer and of `sources`, named here with its replacement's id.
   const SupersededSourceSchema = z
@@ -1097,6 +1106,10 @@ export function registerKnowledgeRoutes(app: HubHono): void {
               // Where the asked-about kinds live (see retrieval schema).
               spaces: askSpacesHintSchema.optional(),
               queue: askQueueSchema.optional(),
+              // Present only with `error`: the opening of each matched runbook
+              // (at most 3, 600 chars each), so an agent keeps its guidance
+              // when the AI answer layer is down.
+              excerpts: z.array(ExcerptSchema).optional(),
               error: z.string().optional(),
               // WHY synthesis did not run, classified by the ONE failure door
               // (`utils/ai-failure.ts`) — the same `describeAiFailure` shape
@@ -1193,8 +1206,12 @@ export function registerKnowledgeRoutes(app: HubHono): void {
         logger.error({ userId }, "knowledge/answer IS call failed");
       }
       // Classify the synthesis outage once, through the one failure door.
+      // The IS envelope rides in so the words end with the payer action the
+      // IS stated for this caller (`top_up`, `ask_admin`, …).
       const failure = synthesis.error
-        ? describeAiFailure(synthesis.failureClass ?? "unknown")
+        ? describeAiFailure(synthesis.failureClass ?? "unknown", {
+            envelope: synthesis.failure,
+          })
         : null;
       return c.json(
         {
@@ -1226,6 +1243,9 @@ export function registerKnowledgeRoutes(app: HubHono): void {
           ...(synthesis.truncated ? { truncated: synthesis.truncated } : {}),
           // Replaced records the answer left out, each with its replacement.
           ...(synthesis.superseded ? { superseded: synthesis.superseded } : {}),
+          // The matched runbooks, quoted, when synthesis did not run: the
+          // guidance an agent needs most when AI is down.
+          ...(synthesis.excerpts ? { excerpts: synthesis.excerpts } : {}),
           ...(synthesis.error && failure
             ? {
                 error: synthesis.error,

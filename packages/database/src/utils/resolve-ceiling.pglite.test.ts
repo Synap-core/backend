@@ -27,6 +27,16 @@ const M0330 = readFileSync(
   resolve(HERE, "../../migrations/0330_governance_ceiling_axes_fold.sql"),
   "utf8"
 );
+// 0427 adds the two per-LinkedIn-account axes.
+const M0427 = readFileSync(
+  resolve(HERE, "../../migrations/0427_linkedin_account_ceilings.sql"),
+  "utf8"
+);
+// 0430 adds the compute spend axis.
+const M0430 = readFileSync(
+  resolve(HERE, "../../migrations/0430_compute_spend_ceiling.sql"),
+  "utf8"
+);
 
 const AGENT = "22222222-2222-4222-8222-222222222222";
 const OTHER_AGENT = "33333333-3333-4333-8333-333333333333";
@@ -64,6 +74,8 @@ beforeAll(async () => {
   // As the migrator runs it: one transaction — and a second time, idempotent.
   for (let i = 0; i < 2; i++) {
     await pg.exec(`BEGIN; ${M0330} COMMIT;`);
+    await pg.exec(`BEGIN; ${M0427} COMMIT;`);
+    await pg.exec(`BEGIN; ${M0430} COMMIT;`);
   }
   await pg.query(
     `INSERT INTO users (id, agent_type) VALUES ($1, 'claude-code'), ($2, 'codex')`,
@@ -108,7 +120,7 @@ async function row(p: {
 const subject = { type: "automation", id: AUTOMATION };
 
 describe("resolveCeiling", () => {
-  it("migration 0330 added the four axes and the subject columns", async () => {
+  it("migrations 0330, 0427 and 0430 added every axis and the subject columns", async () => {
     const axes = await pg.query<{ v: string }>(
       `SELECT unnest(enum_range(NULL::governance_ceiling_axis))::text AS v`
     );

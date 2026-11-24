@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  IN_FLIGHT_SESSION_STATUSES,
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
   SUSPENDED_SESSION_STATUSES,
@@ -7,7 +8,70 @@ import {
   isSuspendedSessionStatus,
   closedRunRefusal,
   isCancelledRunReopen,
+  LIVE_RUN_SESSION_STATUSES,
+  SESSION_STATUS_DECLARATION,
+  sessionClosedAs,
+  sessionStatusesIn,
 } from "./statuses.js";
+
+// The sets are DERIVED from the declaration's categories now (status axis W0,
+// 2026-11-20). Behaviour-neutral: each keeps exactly the members it held as a
+// hand list — pinned here as values, since two derivations agreeing on a
+// wrong set would pass any sameness check.
+describe("status sets read off SESSION_STATUS_DECLARATION", () => {
+  it("each named set keeps its members", () => {
+    expect([...OPEN_SESSION_STATUSES]).toEqual([
+      "active",
+      "paused",
+      "forming",
+      "scheduled",
+    ]);
+    expect([...TERMINAL_SESSION_STATUSES].sort()).toEqual([
+      "cancelled",
+      "closed",
+      "failed",
+    ]);
+    // Started only: a planned step and an appointment are not where work is
+    // filed (P1).
+    expect([...IN_FLIGHT_SESSION_STATUSES]).toEqual(["active", "paused"]);
+    expect([...LIVE_RUN_SESSION_STATUSES].sort()).toEqual([
+      "active",
+      "forming",
+      "paused",
+      "stale",
+    ]);
+  });
+
+  it("a category set is exactly the statuses declared in it, every status in one", () => {
+    expect(sessionStatusesIn(["paused"]).sort()).toEqual(["paused", "stale"]);
+    expect(sessionStatusesIn(["open"]).sort()).toEqual([
+      "forming",
+      "scheduled",
+    ]);
+    const all = sessionStatusesIn(["open", "active", "paused", "done", "lost"]);
+    expect([...all].sort()).toEqual([...SESSION_STATUSES].sort());
+    expect(Object.keys(SESSION_STATUS_DECLARATION).sort()).toEqual(
+      [...SESSION_STATUSES].sort()
+    );
+  });
+});
+
+// "Delivered" means the work was done, not that the session closed (founder,
+// 2026-11-20). Rules out "closed ⇒ done" (the close event's rule and the
+// dependency rule each used to decide this on their own).
+describe("sessionClosedAs — how a session ended", () => {
+  it("closed is done only with no close-anyway record", () => {
+    expect(sessionClosedAs("closed", false)).toBe("done");
+    expect(sessionClosedAs("closed", true)).toBe("not_done");
+  });
+  it("a lost session did not deliver; a live one has not ended", () => {
+    expect(sessionClosedAs("cancelled", false)).toBe("not_done");
+    expect(sessionClosedAs("failed", false)).toBe("not_done");
+    for (const s of [...LIVE_RUN_SESSION_STATUSES, "scheduled", null]) {
+      expect(sessionClosedAs(s, false), String(s)).toBeNull();
+    }
+  });
+});
 
 describe("SUSPENDED_SESSION_STATUSES — the one reading of `stale`", () => {
   it("is exactly paused + stale, every member a real status", () => {

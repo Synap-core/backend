@@ -49,6 +49,7 @@ import {
   apps,
   oauthAuthorizationCodes,
   profiles,
+  projects,
   users,
   webhookSubscriptions,
   workspaceMembers,
@@ -56,6 +57,7 @@ import {
   KEY_PREFIXES,
   isPodWideReadPermission,
   type AppApprovedRequest,
+  type RequestedKindGroup,
 } from "@synap/database/schema";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import {
@@ -90,25 +92,43 @@ import {
   parseOauthKeyInstanceId,
 } from "../routers/oauth/config.js";
 import { findOrCreateServiceAgentUser } from "./agent-identity-service.js";
-import { createAndVerifyHubInboundKey } from "./external-registration.js";
-import { revokeActiveHubInboundKeysForUser } from "./hub-integration-registration.js";
 import { revokeConnectionRefreshTokens } from "../routers/oauth/refresh.js";
-import {
-  isSynapApp,
-  podAppActsAs,
-  type PodAppActsAs,
-} from "../routers/oauth/config.js";
+import { isSynapApp, type PodAppActsAs } from "../routers/oauth/config.js";
 import type { Context } from "../types/context.js";
 import { isAgentCaller } from "./library/agent-door.js";
 import { assertPresencePass, type PresencePass } from "./presence/pass.js";
+import { AccessContext } from "../access/context.js";
+import { projectVisibleWhere } from "../access/project-visibility.js";
 import {
+  addPermissionsToAccess,
+  appAccessBeyond,
+  appAccessGivesAnything,
+  reconsentProposal,
+  normalizeAppAccess,
+  pairsOfAccess,
+  type AccessBeyond,
+  type AccessWritePlace,
+  type AppAccessCeiling,
+  type NamedAppAccess,
+  type NamedProject,
+  type NamedSpace,
+  type ReconsentView,
+  type ReconsentWas,
+  appAccessWithin,
   assertNeverPlace,
   EVERYWHERE_IN_POD,
-  parsePlace,
+  grantScopesForAccess,
+  liftApprovedRequests,
+  pairsOfRequests,
+  pairsWithin,
+  expandAppAccess,
+  parseAppAccess,
   parseRequestPlace,
   permissionWithin,
   PlaceError,
+  permissionsForKinds,
   withAppRequestScope,
+  type AppAccess,
   type Place,
 } from "@synap-core/types/grants";
 
@@ -468,8 +488,8 @@ async function spacesOwnerMayWriteIn(
 /**
  * An owner gives an app only what they can do themselves (invariant 1 at the
  * GIVING side). `resolveRequests` bounds a request by the spaces the owner can
- * READ — member ∪ owned ∪ pod-visible — but approving a WRITE makes the app's
- * agent an `editor` member there (`syncAppAgentMemberships`). So a write
+ * READ — member ∪ owned ∪ pod-visible — but approving a WRITE lets the app's
+ * agent write there through the owner's membership. So a write
  * (anything but `…read`, `*` included) needs the owner to OWN the space or be
  * an owner / admin / editor member of it; a read stays bounded by what they
  * can read. Run when the request is filed AND when it is approved (a role can
@@ -559,7 +579,7 @@ export function assertPodWideReadsOnly(
   if (beyond.length > 0) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `Only a read of one kind can be given everywhere in your pod (entity.<kind>.read); every other permission is given in a space: ${beyond
+      message: `Only a read of one kind, or of a subject on the pod-wide list, can be given everywhere in your pod; every other permission is given in a space: ${beyond
         .map((r) => r.permission)
         .join(", ")}.`,
     });
@@ -670,14 +690,59 @@ const touchesAsked = (fields: unknown): boolean => {
   );
 };
 
+/** An approval in either form: the old pairs, or a v2 access (W2). */
+export type AppApprovalForm = readonly AppApprovedRequest[] | AppAccess;
+
+const isAccessForm = (form: AppApprovalForm): form is AppAccess =>
+  !Array.isArray(form);
+
+/** The v2 form of an approval: itself, or the lossless lift of its pairs. */
+function accessOfForm(form: AppApprovalForm): AppAccess | null {
+  if (isAccessForm(form)) return form;
+  const lifted = liftApprovedRequests(form, { examples: false });
+  return "access" in lifted ? lifted.access : null;
+}
+
 /**
  * approved ⊆ asked for an APP, place by place. An app's ask with no space is a
  * pod-wide read (decision e1b59d38 "B"): it covers that same pod-wide read and
  * never the read in one space, so a forged consent cannot turn "read decisions
  * everywhere" into "member of FINANCE". An AI's ask with no space does cover
  * any space (`requestsWithin`, agent-connect).
+ *
+ * Two sets of pairs are compared as pairs (`pairRequestsWithin`), the rule
+ * every approval was checked by before W2. With a v2 form on either side
+ * (W2), approved is within asked when v2 against v2 says so place by place
+ * (`appAccessWithin`, the pairs side lifted by `liftApprovedRequests`), or
+ * when every pair of approved (a v2 form expanded) is within asked's pairs
+ * at its own place, as the pair rule reads them. Both answers are sound, so
+ * either suffices; a pair no app may hold is within nothing.
+ *
+ * Why pairs stay pairs: the lift compares by MEANING (W3c), so the v2 form
+ * of an ask may hold a space read through its pod-wide read
+ * (`entity.note.read` pod-wide and in A, where the app also writes, lifts to
+ * reads in All spaces). Read back as v2 that ask no longer names
+ * `entity.note.read` in A, and an approval of exactly that pair would be
+ * refused although it was asked. The pair rule never loses it.
  */
 export function appRequestsWithin(
+  approved: AppApprovalForm,
+  asked: AppApprovalForm
+): boolean {
+  if (!isAccessForm(approved) && !isAccessForm(asked))
+    return pairRequestsWithin(approved, asked);
+  if (!isAccessForm(approved) && pairsOfRequests(approved).unplaceable.length)
+    return false;
+  const a = accessOfForm(approved);
+  const b = accessOfForm(asked);
+  if (a && b && appAccessWithin(a, b)) return true;
+  const pairs = (form: AppApprovalForm) =>
+    isAccessForm(form) ? expandAppAccess(form) : pairsOfRequests(form).pairs;
+  return pairsWithin(pairs(approved), pairs(asked));
+}
+
+/** The pair comparison (each approved pair within the asked ones at its space). */
+function pairRequestsWithin(
   approved: readonly AppApprovedRequest[],
   asked: readonly AppApprovedRequest[]
 ): boolean {
@@ -714,16 +779,124 @@ export function appApprovalWithinAsked(args: {
 }
 
 /**
- * The grants an app's key carries for what its owner approved: ONE grant per
- * workspace, holding exactly the permissions approved IN that workspace, plus
- * ONE grant with no workspace for the pod-wide reads, if any.
+ * The grants an app's key carries for what its owner approved (pairs: an
+ * app's `approved_requests`, or a person's sign-in reach).
+ *
+ * The pairs are read as their v2 access when they lift
+ * (`liftApprovedRequests`, W2): at most four scopes — reads in the read
+ * spaces, reads in the read projects, writes in the write spaces, writes in
+ * the write projects (`grantScopesForAccess`). A lift is lossless, so these
+ * scopes give the app exactly the reach the per-space grants below give: the
+ * same permits and the same spaces, as viewer or editor (types
+ * `grants/app-access.test.ts` compares both on every subset of four pair
+ * universes, subsumption included; `app-access-v2.pglite.test.ts` on
+ * fixtures). Pairs that do not lift (a re-consent) keep the per-space grants.
  *
  * Never one grant of (all permissions × all workspaces): approving "create
  * People in Sales" and "read Notes in Finance" would then also allow creating
- * People in Finance — a reach nobody approved. The key may act where ANY one
- * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ * People in Finance — a reach nobody approved. Both forms keep each pair
+ * bounded to its own place.
  */
 export function grantsForApprovedRequests(
+  approved: readonly AppApprovedRequest[]
+): GrantInput[] {
+  const lifted = liftApprovedRequests(approved, { examples: false });
+  return "access" in lifted
+    ? grantScopesForAccess(lifted.access)
+    : grantsForPairs(approved);
+}
+
+/** An app's approval as stored, read once (W3d). */
+export interface AppApproval {
+  /**
+   * Its v2 access: the stored `approved_access` when valid (the AUTHORITY
+   * since W3d), else the lossless lift of its pairs, else null (the pairs
+   * cannot become v2 as they are: it re-consents and keeps its pairs, Q3).
+   */
+  access: AppAccess | null;
+  /** The stored pairs (derived from v2 since W3d; the only form before). */
+  pairs: AppApprovedRequest[];
+  /** Was anything approved at all (`approved_requests` is not null)? */
+  approved: boolean;
+}
+
+/**
+ * The ONE read of an app's approval (W3d). `approved_requests IS NULL` is no
+ * approval at all (never approved, or revived after a revoke): nothing, even
+ * beside a stored v2. Otherwise the stored v2 WINS (the consent writes it
+ * first and derives the pairs, `AppRepository.setApprovedAccess`); a row
+ * written before W3d with no valid v2 reads as the lift of its pairs.
+ */
+export function appApprovalOf(
+  app: {
+    approvedRequests: readonly AppApprovedRequest[] | null;
+    approvedAccess?: unknown;
+  },
+  options: {
+    /**
+     * false: a row with no stored v2 reads `access: null` (its pairs) without
+     * lifting them. For the per-request path (`appSignInGrant`): a lift is
+     * lossless, so the pairs give the same reach, and a lift per request
+     * would cost up to `LIFT_PROBE_BUDGET` evaluations.
+     */
+    lift?: boolean;
+  } = {}
+): AppApproval {
+  if (app.approvedRequests === null || app.approvedRequests === undefined)
+    return { access: null, pairs: [], approved: false };
+  const pairs = [...app.approvedRequests];
+  const stored = parseAppAccess(app.approvedAccess ?? null);
+  if (stored) return { access: stored, pairs, approved: true };
+  if (options.lift === false) return { access: null, pairs, approved: true };
+  const lifted = liftApprovedRequests(pairs, { examples: false });
+  return {
+    access: "access" in lifted ? lifted.access : null,
+    pairs,
+    approved: true,
+  };
+}
+
+/** Does this approval give the app anything (v2, else its pairs)? */
+export function approvalGivesAnything(approval: AppApproval): boolean {
+  if (!approval.approved) return false;
+  return approval.access
+    ? appAccessGivesAnything(approval.access)
+    : approval.pairs.length > 0;
+}
+
+/**
+ * The grants for an app's approval as STORED (W3d: the stored v2 is the
+ * AUTHORITY, `appApprovalOf`). Its v2 access minted per tier and kind of
+ * place (`grantScopesForAccess`; "all" projects as `allProjects`, the
+ * projects resolved at this mint), else the per-space grants of its pairs (a
+ * re-consent row keeps today's behaviour until W5, Q3). No approval (null
+ * pairs): nothing, whatever v2 was left beside it.
+ *
+ * Before W3d a stored v2 that no longer said what the pairs said lost to the
+ * pairs (it could only be a stale derivation). Now v2 is written first and
+ * the pairs derived from it, so v2 wins.
+ */
+export function grantsForApp(
+  app: {
+    approvedRequests: readonly AppApprovedRequest[] | null;
+    approvedAccess?: unknown;
+  },
+  options: { allProjects?: readonly string[] } = {}
+): GrantInput[] {
+  const approval = appApprovalOf(app);
+  if (!approval.approved) return [];
+  if (approval.access) return grantScopesForAccess(approval.access, options);
+  return grantsForPairs(approval.pairs);
+}
+
+/**
+ * The per-space grants of a set of pairs: ONE grant per workspace, holding
+ * exactly the permissions approved IN that workspace, plus ONE grant with no
+ * workspace for the pod-wide reads, if any. What every app got before W2,
+ * and what pairs that do not lift still get. The key may act where ANY one
+ * grant permits (`KeyGrant`), so each pair stays bounded to its own workspace.
+ */
+export function grantsForPairs(
   approved: readonly AppApprovedRequest[]
 ): GrantInput[] {
   const byWorkspace = new Map<string, Set<string>>();
@@ -748,6 +921,9 @@ export function grantsForApprovedRequests(
         break;
       case "unbounded":
         // A write with no space: an app never holds one (dropped).
+        break;
+      case "projects":
+        // A pair names no project: an app's projects are its v2 access.
         break;
       default:
         assertNeverPlace(place);
@@ -799,92 +975,34 @@ export async function ensureAppAgent(
 }
 
 /**
- * The app agent's workspace memberships = EXACTLY the workspaces its owner
- * approved (the RBAC floor every agent write is checked against —
- * `verifyPermission` on the acting agent). The approval of `app/connect` is
- * the consent; the grant still bounds which permissions apply in each.
- * `viewer` where everything approved there is a read, else `editor`. A
- * workspace no longer approved loses the membership; `[]` removes them all
- * (revoke).
- */
-async function syncAppAgentMemberships(
-  agentUserId: string,
-  ownerUserId: string,
-  approved: readonly AppApprovedRequest[]
-): Promise<void> {
-  const roles = new Map<string, "viewer" | "editor">();
-  for (const r of approved) {
-    // A pod-wide read is no space's membership: the grant alone carries it.
-    if (r.workspaceId === null) continue;
-    const isRead = parsePermission(r.permission).at(-1) === "read";
-    const prior = roles.get(r.workspaceId);
-    roles.set(
-      r.workspaceId,
-      prior === "editor" || !isRead ? "editor" : "viewer"
-    );
-  }
-  const current = await db
-    .select({
-      id: workspaceMembers.id,
-      workspaceId: workspaceMembers.workspaceId,
-      role: workspaceMembers.role,
-    })
-    .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, agentUserId));
-  const stale = current.filter((m) => !roles.has(m.workspaceId));
-  if (stale.length > 0) {
-    await db.delete(workspaceMembers).where(
-      inArray(
-        workspaceMembers.id,
-        stale.map((m) => m.id)
-      )
-    );
-  }
-  for (const [workspaceId, role] of roles) {
-    const held = current.find((m) => m.workspaceId === workspaceId);
-    if (held) {
-      if (held.role !== role) {
-        await db
-          .update(workspaceMembers)
-          .set({ role })
-          .where(eq(workspaceMembers.id, held.id));
-      }
-      continue;
-    }
-    await db
-      .insert(workspaceMembers)
-      .values({
-        workspaceId,
-        userId: agentUserId,
-        role,
-        invitedBy: ownerUserId,
-      })
-      .onConflictDoNothing();
-  }
-}
-
-/**
- * Make the app's reach EQUAL what its owner approved: the agent's workspace
- * memberships (the RBAC floor) and each given key's grants (one per approved
- * workspace), both derived from `approved`. The ONE derivation behind
- * `issueKey`, `adoptLegacyAppKey` and a re-approval (`applyApprovedReach`).
- * Idempotent: the memberships converge and `attachMany` replaces a key's
- * active grant set, so a re-run with the same approval changes nothing.
+ * Make the app's reach EQUAL what its owner approved: each given key's grants
+ * (one per approved workspace), derived from `approved`. The app's agent is
+ * never a space member: it acts through its owner's membership, within these
+ * grants. The ONE derivation behind `issueKey`, `adoptLegacyAppKey` and a
+ * re-approval (`applyApprovedReach`). Idempotent: `attachMany` replaces a
+ * key's active grant set, so a re-run with the same approval changes nothing.
  */
 async function setApprovedReach(args: {
-  app: { publicId: string; ownerUserId: string };
+  app: {
+    publicId: string;
+    ownerUserId: string;
+    approvedRequests: readonly AppApprovedRequest[] | null;
+    /** The approval's v2 form (`apps.approved_access`): the authority (W3d). */
+    approvedAccess?: unknown;
+  };
   agentUserId: string;
-  approved: readonly AppApprovedRequest[];
   apiKeyIds: readonly string[];
 }): Promise<void> {
   const owner = args.app.ownerUserId;
-  await syncAppAgentMemberships(args.agentUserId, owner, args.approved);
+  const grants = grantsForApp(args.app, {
+    allProjects: await allProjectsFor(owner, args.app),
+  });
   for (const apiKeyId of args.apiKeyIds) {
     await attachGrantsOrRevoke({
       apiKeyId,
       principalUserId: args.agentUserId,
       onBehalfOf: owner,
-      grants: grantsForApprovedRequests(args.approved),
+      grants,
       expiresAt: null,
       createdBy: owner,
       clientId: args.app.publicId,
@@ -903,9 +1021,13 @@ async function setApprovedReach(args: {
  */
 export async function applyApprovedReach(appId: string): Promise<number> {
   const app = await new AppRepository(db).get(appId);
-  const approved = app?.approvedRequests ?? [];
-  if (app && !app.revokedAt) await narrowAppPersonTokens(app, approved);
-  if (!app?.agentUserId || app.revokedAt || approved.length === 0) return 0;
+  if (app && !app.revokedAt) await narrowAppPersonTokens(app);
+  if (
+    !app?.agentUserId ||
+    app.revokedAt ||
+    !approvalGivesAnything(appApprovalOf(app))
+  )
+    return 0;
   const live = await db
     .select({ id: apiKeys.id })
     .from(apiKeys)
@@ -916,7 +1038,6 @@ export async function applyApprovedReach(appId: string): Promise<number> {
   await setApprovedReach({
     app,
     agentUserId: app.agentUserId,
-    approved,
     apiKeyIds: live.map((k) => k.id),
   });
   return live.length;
@@ -926,20 +1047,24 @@ export async function applyApprovedReach(appId: string): Promise<number> {
  * "Sign in with Synap": the people signed in to this app hold tokens whose
  * grant was what they CONSENTED to ∩ the approval at the time. A new approval
  * may only NARROW them — never widen past what each person saw — so each live
- * token keeps (its current pairs ∩ the new approval); one with nothing left is
- * revoked. Tokens are found by their instance (`oauth:<client_id>:<person>`,
- * the client_id being the public id, or a Synap pod app connection's CIMD
- * URL), which only the app-person-token door writes with this key type.
+ * token keeps what it holds that the reach rule still allows NOW
+ * (`appSignInGrant`: the new approval ∩ what the owner can give ∩ the
+ * person's reach), compared BY MEANING (W3d, review finding 4 of #1196:
+ * `scopesWithinBound`, never literal (permission, space) keys, so a read
+ * held through a wider pattern is not lost, and a project scope is kept when
+ * the reach still holds it). One with nothing left is revoked. Tokens are
+ * found by their instance (`oauth:<client_id>:<person>`, the client_id being
+ * the public id, or a Synap pod app connection's CIMD URL), which only the
+ * app-person-token door writes with this key type.
  */
-async function narrowAppPersonTokens(
-  app: {
-    publicId: string;
-    ownerUserId: string;
-    mode: string;
-    oauthClientId: string | null;
-  },
-  approved: readonly AppApprovedRequest[]
-): Promise<void> {
+async function narrowAppPersonTokens(app: {
+  publicId: string;
+  ownerUserId: string;
+  mode: string;
+  oauthClientId: string | null;
+  approvedRequests: readonly AppApprovedRequest[] | null;
+  approvedAccess?: unknown;
+}): Promise<void> {
   const clientId =
     app.mode === "oauth" && app.oauthClientId
       ? app.oauthClientId
@@ -958,30 +1083,27 @@ async function narrowAppPersonTokens(
         drizzleSql`starts_with(${apiKeys.instanceId}, ${oauthClientInstancePrefix(clientId)})`
       )
     );
-  const allowed = new Set(
-    approved.map((r) => `${r.workspaceId} ${r.permission}`)
-  );
+  if (tokens.length === 0) return;
+  const { appSignInGrant, narrowKeyGrant } =
+    await import("../routers/oauth/app-client.js");
   for (const token of tokens) {
     if (parseOauthKeyInstanceId(token.instanceId)?.clientId !== clientId)
       continue;
     const live = await liveGrantsOfKey(token.id);
-    const kept: AppApprovedRequest[] = [];
-    let before = 0;
-    for (const scope of live) {
-      // A scope with no space holds the pod-wide reads (`workspaceId: null`);
-      // anything else in it has no approved pair, so it is not kept.
-      const place = parsePlace(scope, "app");
-      const places: Array<string | null> =
-        place.kind === "spaces" ? [...place.ids] : [null];
-      for (const workspaceId of places) {
-        for (const permission of scope.permissions) {
-          before += 1;
-          if (allowed.has(`${workspaceId} ${permission}`))
-            kept.push({ permission, workspaceId });
-        }
-      }
-    }
-    if (kept.length === before) continue;
+    const reach = await appSignInGrant(app, token.userId);
+    const kept =
+      reach === "not_for_you"
+        ? []
+        : narrowKeyGrant(
+            { clientId: app.publicId, scopes: live },
+            reach
+          ).scopes.filter((s) => s.permissions.length > 0);
+    const keys = (xs: ReadonlyArray<{ permissions: readonly string[] }>) =>
+      xs
+        .map((x) => JSON.stringify(scopeShape(x)))
+        .sort()
+        .join("\n");
+    if (kept.length === live.length && keys(kept) === keys(live)) continue;
     if (kept.length === 0) {
       await new GrantRepository(db).revokeForKeys([token.id], app.ownerUserId);
       await revokeApiKeys(db, {
@@ -996,12 +1118,89 @@ async function narrowAppPersonTokens(
       apiKeyId: token.id,
       principalUserId: token.userId,
       onBehalfOf: token.userId,
-      grants: grantsForApprovedRequests(kept),
+      grants: kept.map(scopeShape),
       expiresAt: endsAt,
       createdBy: app.ownerUserId,
       clientId: app.publicId,
     });
   }
+}
+
+/** A scope as the grant door takes it (no nulls, ids sorted). */
+function scopeShape(scope: {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+}): GrantInput {
+  // A list copied as a list (sorted), never read for what "no list" means.
+  const ws = sortedIdList(scope.workspaceIds);
+  const pj = sortedIdList(scope.projectIds);
+  return {
+    permissions: [...scope.permissions].sort(),
+    ...(ws ? { workspaceIds: ws } : {}),
+    ...(pj ? { projectIds: pj } : {}),
+  };
+}
+
+/** A non-empty id list, copied and sorted; null for none. */
+function sortedIdList(
+  ids: readonly string[] | null | undefined
+): string[] | null {
+  return Array.isArray(ids) && ids.length > 0 ? [...ids].sort() : null;
+}
+
+/** What a person may give an app, read now (W3d): their floor per tier. */
+export interface AccessFloor {
+  /** Spaces they read in (`getUserWorkspaceIds`). */
+  readSpaces: string[];
+  /** Of the asked write spaces, those they may write in. */
+  writeSpaces: string[];
+  /** Projects they see (`oauthAppProjectOffer.readable`); [] unless asked. */
+  readProjects: string[];
+  /** Projects they may write in (`oauthAppProjectOffer.writable`); [] unless asked. */
+  writeProjects: string[];
+}
+
+/**
+ * A person's floor for an app's reach, read NOW (an approval outlives a
+ * role, PR #29 H1/L1): the spaces they read, which of `writeSpaces` they may
+ * still write in, and (only when `projects`, a read the token needs only
+ * when the access names projects) the projects they see and write in.
+ */
+export async function ownerAccessFloor(
+  userId: string,
+  options: { projects: boolean; writeSpaces: readonly string[] }
+): Promise<AccessFloor> {
+  const [readSpaces, writeSpaces, projectOffer] = await Promise.all([
+    getUserWorkspaceIds(userId),
+    spacesOwnerMayWriteIn(userId, options.writeSpaces),
+    options.projects ? oauthAppProjectOffer(userId) : null,
+  ]);
+  return {
+    readSpaces,
+    writeSpaces: options.writeSpaces.filter((id) => writeSpaces.has(id)),
+    readProjects: projectOffer?.readable.map((p) => p.projectId) ?? [],
+    writeProjects: projectOffer?.writable.map((p) => p.projectId) ?? [],
+  };
+}
+
+/**
+ * What "all" projects means for an app key minted now (W3d, a live pin): the
+ * projects its owner sees, read only when the access asks for them.
+ */
+async function allProjectsFor(
+  ownerUserId: string,
+  app: {
+    approvedRequests: readonly AppApprovedRequest[] | null;
+    approvedAccess?: unknown;
+  }
+): Promise<string[]> {
+  const access = appApprovalOf(app).access;
+  if (!access || access.read.spaces === "all" || access.read.projects !== "all")
+    return [];
+  return (await oauthAppProjectOffer(ownerUserId)).readable.map(
+    (p) => p.projectId
+  );
 }
 
 /**
@@ -1022,12 +1221,11 @@ export async function adoptLegacyAppKey(args: {
 }): Promise<string | null> {
   const repo = new AppRepository(db);
   const found = await repo.getByPublicId(args.publicId);
-  const approved = found?.app.approvedRequests ?? [];
   if (
     !found ||
     found.app.ownerUserId !== args.keyOwnerUserId ||
     found.app.revokedAt ||
-    approved.length === 0
+    !approvalGivesAnything(appApprovalOf(found.app))
   ) {
     return null;
   }
@@ -1048,7 +1246,6 @@ export async function adoptLegacyAppKey(args: {
   await setApprovedReach({
     app: found.app,
     agentUserId,
-    approved,
     apiKeyIds: [args.apiKeyId],
   });
   await repo.adoptKey({
@@ -1178,8 +1375,7 @@ export async function issueKey(args: {
   });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
-  const approved = found.app.approvedRequests ?? [];
-  if (approved.length === 0) {
+  if (!approvalGivesAnything(appApprovalOf(found.app))) {
     throw new TRPCError({
       code: "CONFLICT",
       message:
@@ -1215,7 +1411,6 @@ export async function issueKey(args: {
   await setApprovedReach({
     app: found.app,
     agentUserId,
-    approved,
     apiKeyIds: [keyRow.id],
   });
   await recordAppEvent(found, userId, APP_EVENT_ACTIONS.keyIssued, {
@@ -1248,6 +1443,17 @@ export const APP_OAUTH_ACCESS_TTL_SECONDS = 60 * 60;
 export const APP_OAUTH_DEAD_KEYS_KEPT = 2;
 const APP_OAUTH_KEY_SWEEP_BATCH = 100;
 
+/** One `synap_requests` entry that listed its kinds (F4), as declared. */
+export type OAuthAppKindGroup = RequestedKindGroup;
+
+/** A project the consenting person may give an app a permission in. */
+export interface OAuthAppOfferProject {
+  projectId: string;
+  projectName: string;
+  /** Its home space, or null for a project that lives in no space. */
+  workspaceId: string | null;
+}
+
 /** One permission a pod app asks for, and the spaces it may be given in. */
 export interface OAuthAppOfferItem {
   permission: string;
@@ -1261,6 +1467,130 @@ export interface OAuthAppOfferItem {
      */
     templateSlug: string | null;
   }>;
+  /**
+   * With `kindGroups` (the consent screen): the entry this permission was
+   * declared in when that entry listed its kinds (F4: `{permission:
+   * "entity.read", kinds}`), else null. Items that share one draw as ONE row
+   * ("Records: N kinds"). Display only: the permission is still given and
+   * checked per kind (D4).
+   */
+  kindGroup?: OAuthAppKindGroup | null;
+  /**
+   * With `projects` (the consent screen, app permissions W3c): the projects
+   * the person may give this permission in, by name — every project they can
+   * see for a read, only those they may write in for anything else
+   * (`oauthAppProjectOffer`). Offered only: no consent mints a project grant
+   * yet.
+   */
+  projects?: OAuthAppOfferProject[];
+}
+
+/** What else the consent screen's offer carries (each additive). */
+export interface OAuthAppOfferOptions {
+  /**
+   * The cached document's kinds grouping (`requestedKindGroups`, F4). Read
+   * defensively (`kindGroupIndex`): a malformed row names no group.
+   */
+  kindGroups?: readonly unknown[];
+  /** Offer projects beside the spaces (W3c). */
+  projects?: boolean;
+}
+
+/**
+ * Each permission a cached kinds grouping (`requestedKindGroups`, F4)
+ * declares, to the entry it was declared in. Built once per offer. Each
+ * group is expanded again (`permissionsForKinds`) rather than trusted, so a
+ * group can only ever name the permissions it expands to. A malformed group
+ * (not an object, no permission string, kinds that are not a list of kind
+ * slugs, a kind-specific or non-record permission) names NONE: its kinds
+ * then show one row each, never a failed consent. The first group that
+ * declares a permission keeps it.
+ */
+export function kindGroupIndex(
+  groups: readonly unknown[] | null | undefined
+): ReadonlyMap<string, OAuthAppKindGroup> {
+  const out = new Map<string, OAuthAppKindGroup>();
+  for (const raw of Array.isArray(groups) ? groups : []) {
+    if (!raw || typeof raw !== "object") continue;
+    const { permission, kinds } = raw as Record<string, unknown>;
+    if (typeof permission !== "string" || !Array.isArray(kinds)) continue;
+    let expanded: string[];
+    try {
+      expanded = permissionsForKinds(permission, kinds);
+    } catch {
+      // KindsRequestError, or anything a malformed row throws: no group.
+      continue;
+    }
+    const group = { permission, kinds: kinds as string[] };
+    for (const p of expanded) if (!out.has(p)) out.set(p, group);
+  }
+  return out;
+}
+
+/**
+ * The entry a permission was declared in, when that entry listed its kinds
+ * (F4), or null (`kindGroupIndex`, for one permission).
+ */
+export function kindGroupOf(
+  permission: string,
+  groups: readonly unknown[] | null | undefined
+): OAuthAppKindGroup | null {
+  return kindGroupIndex(groups).get(permission) ?? null;
+}
+
+/**
+ * The projects a person may give an app a permission in (app permissions
+ * W3c; offered only, nothing mints a project grant yet):
+ *  - `readable`: every project they can SEE (`projectVisibleWhere`, THE
+ *    project visibility predicate: a member of its home space, the owner of a
+ *    project in no space, or a member of the project), except an archived
+ *    project or one whose home space is archived (nothing works there);
+ *  - `writable`: of those, the projects whose home space they may WRITE in
+ *    (`spacesOwnerMayWriteIn`, the rule the space offer and
+ *    `assertOwnerMayGrant` use), and the projects in no space they OWN (the
+ *    owner floor such a project's writes gate on). A project role alone
+ *    (`project_members`) gives no write here: a project's own writes are
+ *    gated on its home space.
+ * Sorted by name.
+ */
+export async function oauthAppProjectOffer(ownerUserId: string): Promise<{
+  readable: OAuthAppOfferProject[];
+  writable: OAuthAppOfferProject[];
+}> {
+  const rows = await db
+    .select({
+      id: projects.id,
+      name: projects.name,
+      workspaceId: projects.workspaceId,
+      userId: projects.userId,
+    })
+    .from(projects)
+    .leftJoin(workspaces, eq(workspaces.id, projects.workspaceId))
+    .where(
+      and(
+        projectVisibleWhere(AccessContext.operator({ userId: ownerUserId })),
+        ne(projects.status, "archived"),
+        isNull(workspaces.archivedAt)
+      )
+    );
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const homes = [
+    ...new Set(rows.flatMap((r) => (r.workspaceId ? [r.workspaceId] : []))),
+  ];
+  const mayWrite = await spacesOwnerMayWriteIn(ownerUserId, homes);
+  const offer = (r: (typeof rows)[number]): OAuthAppOfferProject => ({
+    projectId: r.id,
+    projectName: r.name,
+    workspaceId: r.workspaceId ?? null,
+  });
+  return {
+    readable: rows.map(offer),
+    writable: rows
+      .filter((r) =>
+        r.workspaceId ? mayWrite.has(r.workspaceId) : r.userId === ownerUserId
+      )
+      .map(offer),
+  };
 }
 
 /**
@@ -1269,10 +1599,16 @@ export interface OAuthAppOfferItem {
  * for a read, only the spaces they may WRITE in (`spacesOwnerMayWriteIn`, the
  * rule `assertOwnerMayGrant` enforces) for anything else. The person ticks a
  * subset; the offer is what that subset is checked against.
+ *
+ * The consent screen also asks (`options`, each additive, W3c): each item's
+ * kinds group (F4), and the projects it may be given in, by the same read /
+ * write rule (`oauthAppProjectOffer`). Without options the items are exactly
+ * as before.
  */
 export async function oauthAppOffer(
   ownerUserId: string,
-  permissions: readonly string[]
+  permissions: readonly string[],
+  options: OAuthAppOfferOptions = {}
 ): Promise<OAuthAppOfferItem[]> {
   const readable = await getUserWorkspaceIds(ownerUserId);
   const rows =
@@ -1296,6 +1632,12 @@ export async function oauthAppOffer(
         rows.map((r) => r.id)
       )
     : new Set<string>();
+  const projectOffer = options.projects
+    ? await oauthAppProjectOffer(ownerUserId)
+    : null;
+  const kindGroups = options.kindGroups
+    ? kindGroupIndex(options.kindGroups)
+    : null;
   return permissions.map((permission) => ({
     permission,
     workspaces: rows
@@ -1305,6 +1647,14 @@ export async function oauthAppOffer(
         workspaceName: r.name,
         templateSlug: r.templateSlug ?? null,
       })),
+    ...(kindGroups ? { kindGroup: kindGroups.get(permission) ?? null } : {}),
+    ...(projectOffer
+      ? {
+          projects: isReadPermission(permission)
+            ? projectOffer.readable
+            : projectOffer.writable,
+        }
+      : {}),
   }));
 }
 
@@ -1379,6 +1729,12 @@ export async function oauthAppPodWideKinds(
  * Re-consent (same person, same app): the row is reused and the new approval
  * replaces the old one, narrowing (or widening, on this very screen) the live
  * key at once (`applyApprovedReach`).
+ *
+ * The SHORT consent (`ask`, the app's `synap_ask`, plan 647ebfd4 option C):
+ * `asked` is only the pairs the app asked for that are on offer, and the
+ * approval is filed with `mode: "add"`, so the executor MERGES them into what
+ * the app already holds; nothing it held before is dropped. Only an
+ * interrupted consent is withdrawn, never the app's own asks still waiting.
  */
 export async function connectOAuthApp(args: {
   ownerUserId: string;
@@ -1403,6 +1759,11 @@ export async function connectOAuthApp(args: {
    * and approves in the same call has no proposal a client could name first.
    */
   presenceChecked?: "oauth.consent";
+  /**
+   * The app's `synap_ask` pairs, resolved server-side within its ceiling
+   * (`resolveAskPairs`): the short consent, whose approval ADDS.
+   */
+  ask?: readonly AppApprovedRequest[];
 }): Promise<{ appId: string; publicId: string; proposalId: string }> {
   assertOwnerCredential("connect an app", {
     agentUserId: args.ctx.agentUserId,
@@ -1420,7 +1781,7 @@ export async function connectOAuthApp(args: {
     args.ownerUserId,
     args.permissions.filter((p) => !podWide.includes(p))
   );
-  const asked: AppApprovedRequest[] = [
+  const offered: AppApprovedRequest[] = [
     ...offer.flatMap((o) =>
       o.workspaces.map((w) => ({
         permission: o.permission,
@@ -1429,6 +1790,16 @@ export async function connectOAuthApp(args: {
     ),
     ...podWide.map((permission) => ({ permission, workspaceId: null })),
   ];
+  const add = args.ask !== undefined;
+  // The short consent: only what the app asked, of what is on offer.
+  const asked = add
+    ? offered.filter((o) =>
+        args.ask!.some(
+          (a) =>
+            a.permission === o.permission && a.workspaceId === o.workspaceId
+        )
+      )
+    : offered;
   const nameOf = new Map<string | null, string>([
     ...offer.flatMap((o) =>
       o.workspaces.map((w) => [w.workspaceId, w.workspaceName] as const)
@@ -1456,13 +1827,6 @@ export async function connectOAuthApp(args: {
     oauthClientId: args.oauthClientId,
     name: args.name,
   });
-  // A request left waiting by an interrupted consent is superseded by this one.
-  await repo.withdrawPendingRequests(
-    app.id,
-    args.ownerUserId,
-    "Superseded by a new consent."
-  );
-
   const requests = approved.map((r) => ({
     ...withAppRequestScope(r),
     workspaceName: nameOf.get(r.workspaceId) ?? null,
@@ -1484,6 +1848,7 @@ export async function connectOAuthApp(args: {
           name: app.name,
           oauthClientId: args.oauthClientId,
           via: "oauth-consent",
+          ...(add ? { mode: "add" } : {}),
           requests,
           asked,
         },
@@ -1494,6 +1859,15 @@ export async function connectOAuthApp(args: {
       },
       tx as never
     )
+  );
+  // A request left waiting by an interrupted consent is superseded by this
+  // one: it ends as `superseded`, naming this request (its end line's door),
+  // never with an English sentence stored as if its author wrote it.
+  await repo.withdrawPendingRequests(
+    app.id,
+    args.ownerUserId,
+    { reason: "superseded", supersededBy: proposal.id },
+    add ? "oauth-consent" : undefined
   );
   await recordAppEvent(
     { app } as AppWithGrants,
@@ -1522,6 +1896,14 @@ export async function connectOAuthApp(args: {
       message: "The connection could not be approved.",
     });
   }
+  // What the person consented to is THIS document: an app that is not a
+  // Synap app acts as them only while its document is unchanged
+  // (`consentedDocumentHolds`). The consent screen was rendered from the
+  // cached document this authorization just validated.
+  const { currentDocumentSha256 } =
+    await import("../routers/oauth/app-client.js");
+  const documentSha256 = await currentDocumentSha256(args.oauthClientId);
+  if (documentSha256) await repo.setConsentedDocument(app.id, documentSha256);
   return { appId: app.id, publicId: app.publicId, proposalId: proposal.id };
 }
 
@@ -1566,7 +1948,7 @@ export interface AppOAuthAccessKey {
   accessToken: string;
   keyId: string;
   expiresAt: Date;
-  /** Who the key acts as (`podAppActsAs`): the person, or the app's agent. */
+  /** Who the key acts as (`podAppActsAs`): the person, for every pod app. */
   actsAs: PodAppActsAs;
   /** The app's agent holding the key; null when the PERSON holds it. */
   agentUserId: string | null;
@@ -1581,6 +1963,12 @@ export interface AppOAuthAccessKey {
     AppApprovedRequest & { workspaceName: string | null; templateSlug?: string }
   >;
   user: { id: string; name: string | null };
+  /**
+   * What the key reaches in v2 terms, named (W3d, `synap_access`): the
+   * projects it reaches too, which a pair cannot say. null for a connection
+   * that keeps its pairs until it re-consents (Q3).
+   */
+  access: NamedAppAccess | null;
 }
 
 /** Who a pod app's access token is for: the connection and its key slot. */
@@ -1619,7 +2007,7 @@ async function loadAppOAuthConnection(args: AppOAuthKeyArgs) {
     });
   }
   const approved = app.approvedRequests ?? [];
-  if (approved.length === 0) {
+  if (!approvalGivesAnything(appApprovalOf(app))) {
     throw new TRPCError({
       code: "CONFLICT",
       message: "This app has nothing approved.",
@@ -1640,39 +2028,13 @@ async function loadAppOAuthConnection(args: AppOAuthKeyArgs) {
   return { app, approved, person, found };
 }
 
-/** A pod app key's scopes: `.write` only when something approved is a write. */
-function appOAuthKeyScope(approved: readonly AppApprovedRequest[]): string[] {
-  return approved.some((r) => !isReadPermission(r.permission))
+/** A pod app key's scopes: `.write` only when something it holds is a write. */
+function appOAuthKeyScope(
+  grants: ReadonlyArray<{ permissions: readonly string[] }>
+): string[] {
+  return grants.some((g) => g.permissions.some((p) => !isReadPermission(p)))
     ? ["hub-protocol.read", "hub-protocol.write"]
     : ["hub-protocol.read"];
-}
-
-/**
- * `setApprovedReach`, spelled out so the grant expires WITH the token: the
- * agent's memberships = the approved spaces, one grant per approved space
- * (`attachMany` replaces the key's live grants). Then the /token answer.
- */
-async function grantAppOAuthKey(
-  conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
-  key: {
-    agentUserId: string;
-    keyId: string;
-    accessToken: string;
-    expiresAt: Date;
-  }
-): Promise<AppOAuthAccessKey> {
-  const { app, approved } = conn;
-  await syncAppAgentMemberships(key.agentUserId, app.ownerUserId, approved);
-  await attachGrantsOrRevoke({
-    apiKeyId: key.keyId,
-    principalUserId: key.agentUserId,
-    onBehalfOf: app.ownerUserId,
-    grants: grantsForApprovedRequests(approved),
-    expiresAt: key.expiresAt,
-    createdBy: app.ownerUserId,
-    clientId: app.publicId,
-  });
-  return appOAuthAnswer(conn, key, approved, "agent");
 }
 
 /** The /token answer for a key and the reach it carries. */
@@ -1685,7 +2047,11 @@ async function appOAuthAnswer(
     expiresAt: Date;
   },
   grant: readonly AppApprovedRequest[],
-  actsAs: PodAppActsAs
+  actsAs: PodAppActsAs,
+  reach: { access: AppAccess | null; allProjects: readonly string[] } = {
+    access: null,
+    allProjects: [],
+  }
 ): Promise<AppOAuthAccessKey> {
   const spaces = new Map(
     (grant.length > 0
@@ -1723,23 +2089,26 @@ async function appOAuthAnswer(
       };
     }),
     user: { id: conn.person.id, name: conn.person.name ?? null },
+    access: reach.access
+      ? await nameAppAccess(reach.access, conn.app.ownerUserId)
+      : null,
   };
 }
 
 /** Why a Synap app's person token was refused, as the /token door says it. */
 const PERSON_TOKEN_REFUSALS = {
-  not_verified: "This app is not a Synap app.",
   not_a_person: "Only a person's connection can be used.",
+  reconsent:
+    "Connect this app again: it changed, or it was connected before apps acted as the person who connects them.",
   app_unavailable: "This app's connection was revoked.",
   nothing_left:
     "Nothing you approved for this app is in a space you can still reach.",
 } as const;
 
 /**
- * A SYNAP app's access token (`podAppActsAs` = "person", founder decision
- * 2026-10-22): minted by the ONE app-person-token door — held by the person,
- * the connection's approval ∩ their reach — then the slot's bookkeeping
- * (event, webhooks, GC) exactly as for an agent key.
+ * A pod app's access token (`podAppActsAs` = "person"): minted by the ONE
+ * app-person-token door — held by the person, the connection's approval ∩
+ * their reach — then the slot's bookkeeping (event, webhooks, GC).
  */
 async function mintPersonOAuthAccessKey(
   conn: Awaited<ReturnType<typeof loadAppOAuthConnection>>,
@@ -1778,89 +2147,34 @@ async function mintPersonOAuthAccessKey(
       expiresAt,
     },
     minted.grant,
-    "person"
+    "person",
+    { access: minted.access, allProjects: minted.allProjects }
   );
 }
 
 /**
- * Mint a pod app's access token: an `api_keys` row held by the app's OWN agent
- * (one per person × app, `ensureAppAgent`, ask-first) and linked to the
- * person, carrying EXACTLY the approved reach (`setApprovedReach`: one grant
- * per approved space, `client_id` = the app's public_id) and expiring in
- * 1 h. Never a `claude-web*` agent, never `*`, never `mcp.*`: its scopes are
- * `hub-protocol.read`, plus `.write` only when something approved is a write.
+ * Mint a pod app's access token. An app is not an AI agent (founder, 12 Nov
+ * 2026: "connecting is the approval"): the token is HELD BY THE PERSON who
+ * consented (`app_person`, `mintPersonOAuthAccessKey`), carries what they
+ * ticked ∩ their reach now (never the review verbs for an app that is not a
+ * Synap app, `appSignInReach`), `client_id` = the connection's public id
+ * ("via <app>"), and expires in 1 h. Before 12 Nov every app but a Synap app
+ * got a key held by its own ask-first agent; such a slot's agent key is
+ * revoked by the first person mint (`mintPodAppPersonToken`), so a live
+ * connection switches at its next refresh.
  *
- * The connection's previous key (instance `instanceId`) is revoked first, so
- * one connection holds one live key. Refused (FORBIDDEN / CONFLICT) when the
- * code's app is not this person's live pod app connection for this client,
- * has nothing approved, or the person is no longer a human user.
+ * Refused (FORBIDDEN / CONFLICT) when the code's app is not this person's
+ * live pod app connection for this client, has nothing approved, or the
+ * person is no longer a human user.
  *
  * `plainKey`: the refresh grant passes the key its successor refresh token
  * re-derives (`successorAccessToken`, refresh.ts), so the reuse grace can hand
  * this same key back (`reuseAppOAuthAccessKey`). Random otherwise.
- *
- * A SYNAP app (`podAppActsAs` = "person") is never minted its agent's key:
- * its token is the PERSON's (`mintPersonOAuthAccessKey`), same slot, same
- * 1 h, same refresh family.
  */
 export async function mintAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { plainKey?: string }
 ): Promise<AppOAuthAccessKey> {
-  const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
-    return mintPersonOAuthAccessKey(conn, args);
-  }
-  const { app, approved, found } = conn;
-  const agentUserId = await ensureAppAgent(found, "ui");
-  await revokeActiveHubInboundKeysForUser(db, {
-    userId: agentUserId,
-    instanceId: args.instanceId,
-    revokedBy: app.ownerUserId,
-    revokedReason: `Rotated by a new access token for ${app.name}`,
-  });
-  const expiresAt = new Date(Date.now() + APP_OAUTH_ACCESS_TTL_SECONDS * 1000);
-  const minted = await createAndVerifyHubInboundKey(
-    new ApiKeyRepository(db, new EventRepository(sql)),
-    {
-      keyName: `${app.name} (pod app)`,
-      scope: appOAuthKeyScope(approved),
-      userId: agentUserId,
-      linkedUserId: app.ownerUserId,
-      keyType: "hub_inbound",
-      instanceId: args.instanceId,
-      expiresAt,
-      description: `Access token for ${app.name} (${app.publicId}), issued by this pod's OAuth door`,
-      ...(args.plainKey ? { plainKey: args.plainKey } : {}),
-    },
-    app.ownerUserId,
-    agentUserId
-  );
-  if (minted.outcome !== "CONNECTED_VERIFIED") {
-    await revokeApiKeys(db, {
-      where: eq(apiKeys.id, minted.apiKey.id),
-      revokedBy: app.ownerUserId,
-      reason: "Pod app access token failed verification",
-    });
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "The access token could not be verified.",
-    });
-  }
-  const answer = await grantAppOAuthKey(conn, {
-    agentUserId,
-    keyId: minted.apiKey.id,
-    accessToken: minted.plainKey,
-    expiresAt,
-  });
-  await recordAppEvent(found, app.ownerUserId, APP_EVENT_ACTIONS.keyIssued, {
-    keyId: minted.apiKey.id,
-    via: "oauth",
-    expiresAt: expiresAt.toISOString(),
-  });
-  // Before the sweep: a subscription still on a swept key would cascade away.
-  await moveSlotWebhooks(agentUserId, args.instanceId, minted.apiKey.id);
-  await sweepDeadOAuthKeys(agentUserId, args.instanceId);
-  return answer;
+  return mintPersonOAuthAccessKey(await loadAppOAuthConnection(args), args);
 }
 
 /**
@@ -1876,46 +2190,7 @@ export async function mintAppOAuthAccessKey(
 export async function reuseAppOAuthAccessKey(
   args: AppOAuthKeyArgs & { accessToken: string }
 ): Promise<AppOAuthAccessKey | null> {
-  const conn = await loadAppOAuthConnection(args);
-  if (podAppActsAs(args.oauthClientId) === "person") {
-    return reusePersonOAuthAccessKey(conn, args);
-  }
-  const agentUserId = conn.app.agentUserId;
-  if (!agentUserId) return null;
-  const [key] = await db
-    .select({
-      id: apiKeys.id,
-      scope: apiKeys.scope,
-      expiresAt: apiKeys.expiresAt,
-    })
-    .from(apiKeys)
-    .where(
-      and(
-        eq(
-          apiKeys.keyLookupHash,
-          createHash("sha256").update(args.accessToken).digest("hex")
-        ),
-        eq(apiKeys.userId, agentUserId),
-        eq(apiKeys.instanceId, args.instanceId),
-        eq(apiKeys.isActive, true),
-        drizzleSql`${apiKeys.expiresAt} > now()`
-      )
-    )
-    .limit(1);
-  if (!key?.expiresAt) return null;
-  const scope = appOAuthKeyScope(conn.approved);
-  if (
-    key.scope.length !== scope.length ||
-    !scope.every((s) => key.scope.includes(s))
-  ) {
-    return null;
-  }
-  return grantAppOAuthKey(conn, {
-    agentUserId,
-    keyId: key.id,
-    accessToken: args.accessToken,
-    expiresAt: key.expiresAt,
-  });
+  return reusePersonOAuthAccessKey(await loadAppOAuthConnection(args), args);
 }
 
 /**
@@ -1951,10 +2226,10 @@ async function reusePersonOAuthAccessKey(
     )
     .limit(1);
   if (!key?.expiresAt) return null;
-  const { appSignInReach } = await import("../routers/oauth/app-client.js");
-  const reach = await appSignInReach(conn.app, person);
-  if (reach === "not_for_you" || reach.length === 0) return null;
-  const scope = appOAuthKeyScope(reach);
+  const { appSignInGrant } = await import("../routers/oauth/app-client.js");
+  const reach = await appSignInGrant(conn.app, person);
+  if (reach === "not_for_you" || reach.scopes.length === 0) return null;
+  const scope = appOAuthKeyScope(reach.scopes);
   if (
     key.scope.length !== scope.length ||
     !scope.every((s) => key.scope.includes(s))
@@ -1965,7 +2240,7 @@ async function reusePersonOAuthAccessKey(
     apiKeyId: key.id,
     principalUserId: person,
     onBehalfOf: person,
-    grants: grantsForApprovedRequests(reach).map((g) => ({
+    grants: reach.scopes.map((g) => ({
       ...g,
       label: `Signed in to ${conn.app.name}`,
     })),
@@ -1981,8 +2256,9 @@ async function reusePersonOAuthAccessKey(
       accessToken: args.accessToken,
       expiresAt: key.expiresAt,
     },
-    reach,
-    "person"
+    reach.pairs,
+    "person",
+    { access: reach.access, allProjects: reach.allProjects }
   );
 }
 
@@ -2100,7 +2376,7 @@ export async function revokeApp(args: {
   const withdrawn = await repo.withdrawPendingRequests(
     found.app.id,
     args.ownerUserId,
-    "The app was revoked."
+    { reason: "app_revoked" }
   );
   if (withdrawn.length > 0) {
     const { emitProposalReviewed } =
@@ -2123,11 +2399,9 @@ export async function revokeApp(args: {
     args.ownerUserId,
     `App revoked: ${found.app.name}`
   );
-  // Its agent leaves every workspace: a revoked app reaches nothing. Its
-  // write mode goes back to ask-first (F6), so connecting it again starts
-  // where every new connection starts, never at "apply automatically".
+  // Its write mode goes back to ask-first (F6), so connecting it again
+  // starts where every new connection starts, never at "apply automatically".
   if (found.app.agentUserId) {
-    await syncAppAgentMemberships(found.app.agentUserId, args.ownerUserId, []);
     await applyAgentPosture({
       db,
       agentUserId: found.app.agentUserId,
@@ -2347,10 +2621,11 @@ const pairKey = (r: AppApprovedRequest) =>
  * exact (permission, space) pairs of the current approval, at least one (all
  * gone is Revoke). Anything not already approved is refused.
  *
- * The live access shrinks now: a pod app's live key is revoked (its 1 h
- * token cannot be re-issued to the app from here), and its next refresh is
- * minted from the narrowed approval (`mintAppOAuthAccessKey` reads the current
- * one); its agent leaves the spaces it lost. An App Connect app's long-lived
+ * The live access shrinks now: a pod app's live key is revoked, the
+ * person's token as much as a legacy agent's (its 1 h token cannot be
+ * re-issued to the app from here), and its next refresh is minted from the
+ * narrowed approval (`mintAppOAuthAccessKey` reads the current one); a legacy
+ * agent leaves the spaces it lost. An App Connect app's long-lived
  * key is re-derived in place (`applyApprovedReach`).
  *
  * Who may: the app's owner signed in as themselves (`assertOwnerCredential`),
@@ -2370,6 +2645,17 @@ export async function narrowApp(args: {
   });
   const found = await loadOwnedApp(args.publicId, args.ownerUserId);
   assertNotRevoked(found);
+  // A connection whose access names projects is narrowed through its access
+  // (`apps.updateAccess`): pairs cannot hold its projects, and narrowing them
+  // would silently drop every project (review of #1197).
+  const stored = appApprovalOf(found.app, { lift: false }).access;
+  if (stored && !pairsOfAccess(stored).exact) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This app's access names projects: change it with the access editor on its page, which keeps them.",
+    });
+  }
   const current = dedupeRequests(found.app.approvedRequests ?? []);
   const keep = dedupeRequests(args.approved);
   if (keep.length === 0) {
@@ -2394,18 +2680,14 @@ export async function narrowApp(args: {
   const repo = new AppRepository(db);
   await repo.setApprovedRequests(found.app.id, keep);
   if (found.app.mode === "oauth") {
-    if (found.app.agentUserId) {
-      await syncAppAgentMemberships(
-        found.app.agentUserId,
-        found.app.ownerUserId,
-        keep
-      );
-      await revokeActiveHubInboundKeysForUser(db, {
-        userId: found.app.agentUserId,
-        revokedBy: args.ownerUserId,
-        revokedReason: `Access narrowed for ${found.app.name}: the next token carries the narrower reach`,
-      });
-    }
+    // The connection's live key, whoever holds it: the person's token (every
+    // pod app since 12 Nov 2026) or, for a connection not refreshed since,
+    // its agent's. Its grants go with it (`revokeAppKeys`).
+    await revokeAppKeys(
+      found,
+      args.ownerUserId,
+      `Access narrowed for ${found.app.name}: the next token carries the narrower reach`
+    );
   } else {
     await applyApprovedReach(found.app.id);
   }
@@ -2529,6 +2811,18 @@ export interface PodAppView {
   verified: boolean;
   /** What the person approved, per space — what Narrow edits. */
   approved: NamedApprovedRequest[];
+  /**
+   * What it may do and where, v2, named (W3d): the stored access, or the
+   * exact lift of its pairs; null when it must re-consent (`reconsent`).
+   */
+  access: NamedAppAccess | null;
+  /**
+   * Its old pairs cannot become v2 as they are (Q3): Connected shows "Needs
+   * your review". Its old access keeps working until W5. `proposed` is the
+   * pairs' v2 form, NOT clamped here (the editor, `apps.accessOffer`, clamps
+   * it to what the person may give now).
+   */
+  reconsent: ReconsentView | null;
   /** When this person last connected it (the newest consent). */
   connected_at: Date | null;
   /** The newest use of any of its access tokens. */
@@ -2547,7 +2841,9 @@ export async function podAppViews(
   keysByPublicId: ReadonlyMap<
     string,
     ReadonlyArray<{ lastUsedAt: Date | null; createdAt: Date }>
-  >
+  >,
+  /** Who reads the rows: only the names of places they see are shown. */
+  viewerUserId: string | null = null
 ): Promise<Map<string, PodAppView>> {
   const pod = rows.filter((r) => r.app.mode === "oauth" && r.app.oauthClientId);
   if (pod.length === 0) return new Map();
@@ -2599,9 +2895,30 @@ export async function podAppViews(
     ),
   });
   const podDefaultEnabled = (await readReversibleDefault(db)).enabled;
+  // Each row's v2 access and re-consent, named in ONE read for every row
+  // (W3d; S7: a fixed number of queries whatever the number of rows).
+  const v2 = new Map(
+    pod.map((r) => {
+      const approval = appApprovalOf(r.app);
+      return [
+        r.app.publicId,
+        { access: approval.access, reconsent: reconsentOf(approval) },
+      ] as const;
+    })
+  );
+  const v2Ids = [...v2.values()].flatMap((x) => [
+    ...(x.access ? [accessPlaceIds(x.access)] : []),
+    ...(x.reconsent ? [reconsentPlaceIds(x.reconsent)] : []),
+  ]);
+  const v2Names = await placeNames(
+    v2Ids.flatMap((x) => x.spaces),
+    v2Ids.flatMap((x) => x.projects),
+    { userId: viewerUserId }
+  );
   const out = new Map<string, PodAppView>();
   for (const row of pod) {
     const clientId = row.app.oauthClientId!;
+    const rowV2 = v2.get(row.app.publicId)!;
     const keys = keysByPublicId.get(row.app.publicId) ?? [];
     const newestOf = (dates: Array<Date | null | undefined>) =>
       dates.reduce<Date | null>(
@@ -2626,6 +2943,10 @@ export async function podAppViews(
           ? (names.get(a.workspaceId) ?? null)
           : null,
       })),
+      access: rowV2.access ? nameAppAccessWith(rowV2.access, v2Names) : null,
+      reconsent: rowV2.reconsent
+        ? reconsentViewWith(rowV2.reconsent, v2Names)
+        : null,
       connected_at: connectedAt.get(row.app.id) ?? null,
       last_used_at: newestOf([
         row.lastUsedAt,
@@ -2670,14 +2991,16 @@ export interface AdminPodAppGroup {
  * gates (pod admin, never an agent). Removed rows are not listed; revoked
  * ones are, so the admin sees what was cut off.
  */
-export async function adminPodApps(): Promise<AdminPodAppGroup[]> {
+export async function adminPodApps(
+  viewerUserId: string | null = null
+): Promise<AdminPodAppGroup[]> {
   const repo = new AppRepository(db);
   const rows = (await repo.listAll({ includeRevoked: true })).filter(
     (r) => r.app.mode === "oauth" && r.app.oauthClientId
   );
   if (rows.length === 0) return [];
   const keys = await repo.keysByApp(rows.map((r) => r.app.publicId));
-  const views = await podAppViews(rows, keys);
+  const views = await podAppViews(rows, keys, viewerUserId);
   const ownerIds = [...new Set(rows.map((r) => r.app.ownerUserId))];
   const owners = new Map(
     (
@@ -2752,4 +3075,871 @@ export async function adminRevokePodAppClient(args: {
     });
   }
   return { revoked: live.length };
+}
+
+// ─── The consent SAVES AppAccess v2 (app permissions W3d) ────────────────────
+//
+// Decisions 51ad8d1e (F1-F4) and fc37f740 (design A, Q1-Q4). The person's
+// choice is a v2 access, checked against what the app ASKED ∩ what the person
+// may GIVE (`appAccessBeyond`, `@synap-core/types/grants`), stored FIRST
+// (`AppRepository.setApprovedAccess`, the pairs derived from it) and minted
+// exactly (`grantScopesForAccess`). Contract: pod document be6caecc ("W3d
+// consent contract").
+
+/** What an app asked, in v2 terms: one item per permission (W3d). */
+export interface AccessAskedItem {
+  permission: string;
+  tier: "read" | "write";
+  /** The developer's words (`synap_requests[].reason`), shown as text. */
+  reason: string | null;
+  /** The F4 entry it was declared in, to draw ONE row per group. */
+  kindGroup: OAuthAppKindGroup | null;
+  /** May it hold in All spaces (declared pod-wide AND a pod-wide read)? */
+  allSpaces: boolean;
+  /** Can the person give it anywhere? false: the "can't give" fold. */
+  offerable: boolean;
+}
+
+/** What an app asked, as the server reads it from its cached document. */
+export interface AccessAsked {
+  /** Each permission it asked AND declared (review verbs already filtered). */
+  permissions: readonly string[];
+  /** Of those, the ones it declared pod-wide (`synap_requests[].scope = "pod"`). */
+  podWide: readonly string[];
+  reasons?: Readonly<Record<string, string>>;
+  kindGroups?: readonly unknown[];
+  /** `synap_templates`: the pre-tick of the write places. */
+  templates?: readonly string[];
+}
+
+/** The places the person may give, per tier, named (W3d). */
+export interface AccessPlacesOffer {
+  read: {
+    /** Every asked read may ride All spaces. */
+    allSpaces: boolean;
+    spaces: NamedSpace[];
+    projects: NamedProject[];
+  };
+  write: {
+    spaces: NamedSpace[];
+    projects: NamedProject[];
+    /** Write spaces made from a declared template: the pre-tick ([] = none). */
+    suggestedSpaceIds: string[];
+  };
+}
+
+/** The asked access and what the person may give, read now (W3d). */
+export interface AccessOffer {
+  asked: { permissions: AccessAskedItem[]; templates: string[] };
+  places: AccessPlacesOffer;
+  /** The same, as the ceiling every v2 approval is checked against. */
+  ceiling: AppAccessCeiling;
+}
+
+/**
+ * What a person may give an app, read NOW (W3d): the asked permissions, and
+ * per tier the places they may give: reads in the spaces they read (not
+ * archived) and the projects they see; writes in the spaces they write in
+ * and the projects they may write in (`oauthAppProjectOffer`); All spaces
+ * only for reads declared pod-wide that are pod-wide reads (D1).
+ */
+export async function appAccessOffer(
+  ownerUserId: string,
+  asked: AccessAsked
+): Promise<AccessOffer> {
+  const readable = await getUserWorkspaceIds(ownerUserId);
+  const rows =
+    readable.length > 0
+      ? await db
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            templateSlug: workspaces.packageSlug,
+          })
+          .from(workspaces)
+          .where(
+            and(inArray(workspaces.id, readable), isNull(workspaces.archivedAt))
+          )
+      : [];
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  const [writable, projects] = await Promise.all([
+    spacesOwnerMayWriteIn(
+      ownerUserId,
+      rows.map((r) => r.id)
+    ),
+    oauthAppProjectOffer(ownerUserId),
+  ]);
+  const space = (r: (typeof rows)[number]): NamedSpace => ({
+    id: r.id,
+    name: r.name,
+    templateSlug: r.templateSlug ?? null,
+  });
+  const project = (p: OAuthAppOfferProject): NamedProject => ({
+    id: p.projectId,
+    name: p.projectName,
+    workspaceId: p.workspaceId,
+  });
+  const readSpaces = rows.map(space);
+  const writeSpaces = rows.filter((r) => writable.has(r.id)).map(space);
+  const readProjects = projects.readable.map(project);
+  const writeProjects = projects.writable.map(project);
+  const permissions = [...new Set(asked.permissions)];
+  const podWide = new Set(asked.podWide);
+  const allSpacesReads = permissions.filter(
+    (p) => isReadPermission(p) && podWide.has(p) && isPodWideReadPermission(p)
+  );
+  const groups = kindGroupIndex(asked.kindGroups ?? []);
+  const templates = [...(asked.templates ?? [])];
+  const items: AccessAskedItem[] = permissions.map((permission) => {
+    const read = isReadPermission(permission);
+    const allSpaces = allSpacesReads.includes(permission);
+    return {
+      permission,
+      tier: read ? "read" : "write",
+      reason:
+        asked.reasons && Object.hasOwn(asked.reasons, permission)
+          ? asked.reasons[permission] || null
+          : null,
+      kindGroup: groups.get(permission) ?? null,
+      allSpaces,
+      offerable: read
+        ? allSpaces || readSpaces.length > 0 || readProjects.length > 0
+        : writeSpaces.length > 0 || writeProjects.length > 0,
+    };
+  });
+  const reads = items.filter((i) => i.tier === "read");
+  return {
+    asked: { permissions: items, templates },
+    places: {
+      read: {
+        allSpaces: reads.length > 0 && reads.every((i) => i.allSpaces),
+        spaces: readSpaces,
+        projects: readProjects,
+      },
+      write: {
+        spaces: writeSpaces,
+        projects: writeProjects,
+        suggestedSpaceIds: writeSpaces
+          .filter((s) => s.templateSlug && templates.includes(s.templateSlug))
+          .map((s) => s.id),
+      },
+    },
+    ceiling: {
+      permissions,
+      allSpacesReads,
+      read: {
+        spaces: readSpaces.map((s) => s.id),
+        projects: readProjects.map((p) => p.id),
+      },
+      write: {
+        spaces: writeSpaces.map((s) => s.id),
+        projects: writeProjects.map((p) => p.id),
+      },
+    },
+  };
+}
+
+/**
+ * Who reads the names (review of #1197): a person, whose spaces and projects
+ * decide which names they may see, or `trusted` for ids already cut to what
+ * the person sees (`describeBeyond`).
+ */
+type NamesViewer = { userId: string | null } | "trusted";
+
+/**
+ * Space and project names for display (never a raw id alone), only those
+ * the viewer can see now: a stored id of a space or project they no longer
+ * see is shown as "a space you no longer see" (review of #1197). A viewer
+ * with no user sees no name (fail closed).
+ */
+async function placeNames(
+  spaceIds: readonly string[],
+  projectIds: readonly string[],
+  viewer: NamesViewer
+): Promise<{
+  space: (id: string) => NamedSpace;
+  project: (id: string) => NamedProject;
+}> {
+  const trusted = viewer === "trusted";
+  const viewerId = viewer === "trusted" ? null : viewer.userId;
+  const [seenSpaces, seenProjects] = await Promise.all([
+    trusted || spaceIds.length === 0 || !viewerId
+      ? null
+      : getUserWorkspaceIds(viewerId).then((ids) => new Set(ids)),
+    trusted || projectIds.length === 0 || !viewerId
+      ? null
+      : db
+          .select({ id: projects.id })
+          .from(projects)
+          .where(
+            and(
+              inArray(projects.id, [...new Set(projectIds)]),
+              projectVisibleWhere(AccessContext.operator({ userId: viewerId }))
+            )
+          )
+          .then((rows) => new Set(rows.map((r) => r.id))),
+  ]);
+  const seesSpace = (id: string) => trusted || (seenSpaces?.has(id) ?? false);
+  const seesProject = (id: string) =>
+    trusted || (seenProjects?.has(id) ?? false);
+  const [spaceRows, projectRows] = await Promise.all([
+    spaceIds.length > 0
+      ? db
+          .select({
+            id: workspaces.id,
+            name: workspaces.name,
+            templateSlug: workspaces.packageSlug,
+          })
+          .from(workspaces)
+          .where(inArray(workspaces.id, [...new Set(spaceIds)]))
+      : [],
+    projectIds.length > 0
+      ? db
+          .select({
+            id: projects.id,
+            name: projects.name,
+            workspaceId: projects.workspaceId,
+          })
+          .from(projects)
+          .where(inArray(projects.id, [...new Set(projectIds)]))
+      : [],
+  ]);
+  const spaces = new Map(spaceRows.map((r) => [r.id, r]));
+  const projectsById = new Map(projectRows.map((r) => [r.id, r]));
+  return {
+    space: (id) => {
+      if (!seesSpace(id))
+        return { id, name: "a space you no longer see", templateSlug: null };
+      const r = spaces.get(id);
+      return {
+        id,
+        name: r?.name ?? "a space that no longer exists",
+        templateSlug: r?.templateSlug ?? null,
+      };
+    },
+    project: (id) => {
+      if (!seesProject(id))
+        return { id, name: "a project you no longer see", workspaceId: null };
+      const r = projectsById.get(id);
+      return {
+        id,
+        name: r?.name ?? "a project that no longer exists",
+        workspaceId: r?.workspaceId ?? null,
+      };
+    },
+  };
+}
+
+/** The space and project ids an access names (W3d). */
+function accessPlaceIds(access: AppAccess): {
+  spaces: string[];
+  projects: string[];
+} {
+  const ids = (x: AccessAllOrIdsLike) => (x === "all" ? [] : [...x]);
+  return {
+    spaces: [...ids(access.read.spaces), ...access.write.spaces],
+    projects: [...ids(access.read.projects), ...access.write.projects],
+  };
+}
+
+type PlaceNames = Awaited<ReturnType<typeof placeNames>>;
+
+/** `nameAppAccess` with the names already read (one read for many rows). */
+function nameAppAccessWith(
+  input: AppAccess,
+  names: PlaceNames
+): NamedAppAccess {
+  const access = normalizeAppAccess(input);
+  return {
+    version: 2,
+    permissions: [...access.permissions],
+    read: {
+      spaces:
+        access.read.spaces === "all"
+          ? "all"
+          : access.read.spaces.map(names.space),
+      projects:
+        access.read.spaces === "all" || access.read.projects === "all"
+          ? "all"
+          : access.read.projects.map(names.project),
+    },
+    write: {
+      spaces: access.write.spaces.map(names.space),
+      projects: access.write.projects.map(names.project),
+    },
+  };
+}
+
+/**
+ * A v2 access with its places NAMED (W3d): what every screen shows. Under All
+ * spaces the read projects show as "all" (Q1: every project is included).
+ */
+export async function nameAppAccess(
+  input: AppAccess,
+  viewerUserId: string
+): Promise<NamedAppAccess> {
+  const access = normalizeAppAccess(input);
+  const ids = accessPlaceIds(access);
+  return nameAppAccessWith(
+    access,
+    await placeNames(ids.spaces, ids.projects, { userId: viewerUserId })
+  );
+}
+
+type AccessAllOrIdsLike = "all" | readonly string[];
+
+/**
+ * The words for one refusal of `appAccessBeyond`, with names, but only the
+ * names of places the person can see (`ceiling.read`): a space or project
+ * they cannot see is never named, whatever id was sent.
+ */
+async function describeBeyond(
+  beyond: readonly AccessBeyond[],
+  ceiling: AppAccessCeiling
+): Promise<string> {
+  const seenSpaces = new Set(ceiling.read.spaces);
+  const seenProjects = new Set(ceiling.read.projects);
+  const names = await placeNames(
+    beyond.flatMap((b) =>
+      b.where?.kind === "space" && seenSpaces.has(b.where.id)
+        ? [b.where.id]
+        : []
+    ),
+    beyond.flatMap((b) =>
+      b.where?.kind === "project" && seenProjects.has(b.where.id)
+        ? [b.where.id]
+        : []
+    ),
+    "trusted"
+  );
+  const parts = beyond.slice(0, 8).map((b) => {
+    switch (b.reason) {
+      case "not-asked":
+        return `${b.permission} (the app did not ask for it)`;
+      case "not-all-spaces":
+        return `${b.permission} in all spaces (the app asked for it in chosen spaces only)`;
+      case "not-offered": {
+        const where =
+          b.where?.kind === "space"
+            ? seenSpaces.has(b.where.id)
+              ? `space ${names.space(b.where.id).name}`
+              : "a space you cannot see"
+            : b.where?.kind === "project"
+              ? seenProjects.has(b.where.id)
+                ? `project ${names.project(b.where.id).name}`
+                : "a project you cannot see"
+              : "that place";
+        return b.tier === "write"
+          ? `changes in ${where} (you cannot edit there)`
+          : `reading in ${where} (you cannot see it)`;
+      }
+      default:
+        return "something it did not ask for";
+    }
+  });
+  return parts.join("; ");
+}
+
+/**
+ * Refuse an access beyond its ceiling (FORBIDDEN, each part named) or that
+ * gives nothing at all (BAD_REQUEST). The ONE check of every v2 door: the
+ * consent, the re-consent, the app page and the short ask, and the
+ * `app/connect` executor again at approval time.
+ */
+export async function assertAccessWithinCeiling(
+  access: AppAccess,
+  ceiling: AppAccessCeiling
+): Promise<void> {
+  const beyond = appAccessBeyond(access, ceiling);
+  if (beyond.length > 0) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `You can only give this app what it asked for, where you may give it. Not on offer: ${await describeBeyond(beyond, ceiling)}.`,
+    });
+  }
+  if (!appAccessGivesAnything(access)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Choose at least one place: a space or a project for what it reads or changes.",
+    });
+  }
+}
+
+/** What a re-consent shows, before naming: null when it holds v2 or nothing. */
+function reconsentOf(
+  approval: AppApproval,
+  ceiling?: AppAccessCeiling | null
+): {
+  reason: ReconsentView["reason"];
+  pairs: ReturnType<typeof pairsOfRequests>["pairs"];
+  proposed: AppAccess;
+} | null {
+  if (!approval.approved || approval.access || approval.pairs.length === 0)
+    return null;
+  const lifted = liftApprovedRequests(approval.pairs, { examples: false });
+  if ("access" in lifted) return null;
+  const { pairs } = pairsOfRequests(approval.pairs);
+  return {
+    reason: lifted.reconsent.reason,
+    pairs,
+    // Never wider than the old pairs: one click on Allow never widens.
+    proposed: reconsentProposal(pairs, ceiling),
+  };
+}
+
+/** The ids a re-consent names (its pairs and its proposal). */
+function reconsentPlaceIds(r: NonNullable<ReturnType<typeof reconsentOf>>) {
+  const proposed = accessPlaceIds(r.proposed);
+  return {
+    spaces: [
+      ...r.pairs.flatMap((p) => (p.where.kind === "space" ? [p.where.id] : [])),
+      ...proposed.spaces,
+    ],
+    projects: [
+      ...r.pairs.flatMap((p) =>
+        p.where.kind === "project" ? [p.where.id] : []
+      ),
+      ...proposed.projects,
+    ],
+  };
+}
+
+function reconsentViewWith(
+  r: NonNullable<ReturnType<typeof reconsentOf>>,
+  names: PlaceNames
+): ReconsentView {
+  const was: ReconsentWas[] = r.pairs.map((p) => {
+    switch (p.where.kind) {
+      case "space":
+        return {
+          permission: p.permission,
+          place: {
+            kind: "space",
+            id: p.where.id,
+            name: names.space(p.where.id).name,
+          },
+        };
+      case "project":
+        return {
+          permission: p.permission,
+          place: {
+            kind: "project",
+            id: p.where.id,
+            name: names.project(p.where.id).name,
+          },
+        };
+      default:
+        return {
+          permission: p.permission,
+          place: { kind: "pod", id: null, name: EVERYWHERE_IN_POD },
+        };
+    }
+  });
+  return {
+    reason: r.reason,
+    was,
+    proposed: nameAppAccessWith(r.proposed, names),
+  };
+}
+
+/**
+ * Why a connection asks again, named (Q3): its old pairs cannot become v2 as
+ * they are. `was` lists them, each place named; `proposed` is the v2 form the
+ * pairs hold, NEVER wider than them (`reconsentProposal`), clamped to `ceiling` when given (the
+ * screen's pre-fill). null when the connection holds a v2 access, or nothing.
+ */
+export async function reconsentViewOf(
+  approval: AppApproval,
+  viewerUserId: string,
+  ceiling?: AppAccessCeiling | null
+): Promise<ReconsentView | null> {
+  const r = reconsentOf(approval, ceiling);
+  if (!r) return null;
+  const ids = reconsentPlaceIds(r);
+  return reconsentViewWith(
+    r,
+    await placeNames(ids.spaces, ids.projects, { userId: viewerUserId })
+  );
+}
+
+/**
+ * What a pod app connection asked, read from the document the pod holds
+ * (the one the person consented to): every permission it declared, the
+ * review verbs left out for an app that is not a Synap app (as the consent
+ * screen's `appPermissions`). null when the pod holds no document for it.
+ */
+export async function askedOfConnection(app: {
+  oauthClientId: string | null;
+}): Promise<AccessAsked | null> {
+  if (!app.oauthClientId) return null;
+  const { findClient } = await import("../routers/oauth/store.js");
+  const { grantsDecision } = await import("../routers/oauth/app-client.js");
+  const client = await findClient(app.oauthClientId);
+  if (!client || client.clientKind !== "cimd") return null;
+  const synapApp = isSynapApp(client.clientId);
+  return {
+    permissions: client.requestedPermissions.filter(
+      (p) => synapApp || !grantsDecision(p)
+    ),
+    podWide: client.requestedPodWide ?? [],
+    reasons: client.requestedReasons ?? {},
+    kindGroups: client.requestedKindGroups ?? [],
+    templates: client.requestedTemplates ?? [],
+  };
+}
+
+/** The asked access as frozen in an `app/connect` proposal (W3d). */
+export interface FrozenAsked {
+  permissions: string[];
+  podWide: string[];
+}
+
+/** Read a frozen `askedAccess` back, or null when it is not one. */
+export function readFrozenAsked(raw: unknown): FrozenAsked | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const list = (v: unknown) =>
+    Array.isArray(v) && v.every((x) => typeof x === "string")
+      ? (v as string[])
+      : null;
+  const permissions = list(r.permissions);
+  const podWide = list(r.podWide);
+  return permissions && podWide ? { permissions, podWide } : null;
+}
+
+/**
+ * The full consent and the re-consent, v2 (W3d): ONE act that files the pod
+ * app's `app/connect` proposal carrying the person's v2 access AND approves
+ * it as them, through the one approve door (`applyProposalApproval` → the
+ * `app/connect` executor, which checks it again against the ceiling read at
+ * approval time). The asked half is the pod's own (`asked`, re-derived from
+ * the document), never the caller's; `access` (untrusted wire input) is
+ * refused when anything is beyond `asked ∩ what the person may give`.
+ *
+ * The short ask (`add`): the proposal carries the permissions to ADD and,
+ * Q4, the write place the person picked for a first write; the executor adds
+ * them to the access as it stands then (`AppRepository.updateApprovedAccess`).
+ */
+export async function connectOAuthAppAccess(args: {
+  ownerUserId: string;
+  oauthClientId: string;
+  name: string;
+  asked: AccessAsked;
+  /** The full consent: the person's choice. */
+  access?: AppAccess;
+  /** The short ask: the permissions to add, and Q4's write place. */
+  add?: {
+    permissions: readonly string[];
+    writePlace?: AccessWritePlace | null;
+  };
+  ctx: Context;
+  presenceChecked?: "oauth.consent";
+}): Promise<{ appId: string; publicId: string; proposalId: string }> {
+  assertOwnerCredential("connect an app", {
+    agentUserId: args.ctx.agentUserId,
+    keyType: args.ctx.keyType,
+  });
+  const offer = await appAccessOffer(args.ownerUserId, args.asked);
+  const repo = new AppRepository(db);
+  const existing = await db
+    .select({
+      approvedRequests: apps.approvedRequests,
+      approvedAccess: apps.approvedAccess,
+      revokedAt: apps.revokedAt,
+    })
+    .from(apps)
+    .where(
+      and(
+        eq(apps.ownerUserId, args.ownerUserId),
+        eq(apps.oauthClientId, args.oauthClientId),
+        isNull(apps.revokedAt)
+      )
+    )
+    .limit(1);
+  let access: AppAccess;
+  if (args.add) {
+    const current = existing[0] ? appApprovalOf(existing[0]).access : null;
+    if (!current) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message:
+          "Connect this app again first: its access must be confirmed before it can ask for more.",
+      });
+    }
+    access = addedAccessOrThrow(current, args.add);
+  } else {
+    const parsed = parseAppAccess(args.access ?? null);
+    if (!parsed) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "Choose what this app may do, and where (changes go in chosen places only).",
+      });
+    }
+    access = parsed;
+  }
+  await assertAccessWithinCeiling(access, offer.ceiling);
+
+  const app = await repo.registerOAuth({
+    ownerUserId: args.ownerUserId,
+    oauthClientId: args.oauthClientId,
+    name: args.name,
+  });
+  const frozen: FrozenAsked = {
+    permissions: [...offer.ceiling.permissions],
+    podWide: [...args.asked.podWide],
+  };
+  // The old pairs ride along for every reader of a request (cards, timeline),
+  // named; the v2 access is what the executor stores.
+  const names = await placeNames(
+    pairsOfAccess(access).pairs.flatMap((p) =>
+      p.workspaceId ? [p.workspaceId] : []
+    ),
+    [],
+    { userId: args.ownerUserId }
+  );
+  const requests = pairsOfAccess(access).pairs.map((r) => ({
+    ...withAppRequestScope(r),
+    workspaceName: r.workspaceId ? names.space(r.workspaceId).name : null,
+  }));
+  // The card reads `access` (what is applied) and names its places from this
+  // (review of #1197): every space and project it names, as the person sees.
+  const accessIds = accessPlaceIds(access);
+  const accessNameOf = await placeNames(accessIds.spaces, accessIds.projects, {
+    userId: args.ownerUserId,
+  });
+  const accessNames: Record<string, string> = Object.fromEntries([
+    ...accessIds.spaces.map((id) => [id, accessNameOf.space(id).name]),
+    ...accessIds.projects.map((id) => [id, accessNameOf.project(id).name]),
+  ]);
+  const proposal = await db.transaction((tx) =>
+    createPendingProposal(
+      {
+        userId: args.ownerUserId,
+        workspaceId: null,
+        targetType: "app",
+        targetId: app.id,
+        proposalType: "connect",
+        data: {
+          appId: app.id,
+          publicId: app.publicId,
+          name: app.name,
+          oauthClientId: args.oauthClientId,
+          via: "oauth-consent",
+          ...(args.add
+            ? {
+                mode: "add",
+                addPermissions: [...args.add.permissions],
+                ...(args.add.writePlace
+                  ? {
+                      writePlace: {
+                        spaces: [...args.add.writePlace.spaces],
+                        projects: [...args.add.writePlace.projects],
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
+          access,
+          accessNames,
+          askedAccess: frozen,
+          requests,
+        },
+        agentUserId: null,
+        createdBy: args.ownerUserId,
+        proposedByUserId: args.ownerUserId,
+        notificationDescription: `${app.name} is asking for access`,
+      },
+      tx as never
+    )
+  );
+  await repo.withdrawPendingRequests(
+    app.id,
+    args.ownerUserId,
+    { reason: "superseded", supersededBy: proposal.id },
+    args.add ? "oauth-consent" : undefined
+  );
+  await recordAppEvent(
+    { app } as AppWithGrants,
+    args.ownerUserId,
+    APP_EVENT_ACTIONS.requested,
+    { proposalId: proposal.id, access, via: "oauth-consent" }
+  );
+  const [row] = await db
+    .select()
+    .from(proposals)
+    .where(eq(proposals.id, proposal.id))
+    .limit(1);
+  const { applyProposalApproval } =
+    await import("../routers/proposals/apply-approval.js");
+  const result = await applyProposalApproval({
+    proposal: row as never,
+    userId: args.ownerUserId,
+    input: { proposalId: proposal.id },
+    ctx: args.ctx,
+    presenceChecked: args.presenceChecked,
+  });
+  if (!result.success) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "The connection could not be approved.",
+    });
+  }
+  const { currentDocumentSha256 } =
+    await import("../routers/oauth/app-client.js");
+  const documentSha256 = await currentDocumentSha256(args.oauthClientId);
+  if (documentSha256) await repo.setConsentedDocument(app.id, documentSha256);
+  return { appId: app.id, publicId: app.publicId, proposalId: proposal.id };
+}
+
+/** `addPermissionsToAccess`, its refusals as the person reads them. */
+export function addedAccessOrThrow(
+  current: AppAccess,
+  add: { permissions: readonly string[]; writePlace?: AccessWritePlace | null }
+): AppAccess {
+  const out = addPermissionsToAccess(current, add.permissions, add.writePlace);
+  if ("access" in out) return out.access;
+  if ("needsWritePlace" in out)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This app has nowhere to make changes yet: choose a space or a project for its first change.",
+    });
+  if ("writePlaceNotNeeded" in out)
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This app already makes changes somewhere: its places do not change here.",
+    });
+  throw new TRPCError({
+    code: "BAD_REQUEST",
+    message:
+      "This app reads nowhere yet: connect it again to choose where it reads.",
+  });
+}
+
+/** The app page's editor (`apps.accessOffer`, W3d): offer, current, re-consent. */
+export async function appAccessEditor(args: {
+  publicId: string;
+  ownerUserId: string;
+}): Promise<{
+  asked: AccessOffer["asked"];
+  places: AccessPlacesOffer;
+  current: NamedAppAccess | null;
+  reconsent: ReconsentView | null;
+}> {
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  assertNotRevoked(found);
+  const asked = await askedOfConnection(found.app);
+  if (found.app.mode !== "oauth" || !asked) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Only a pod app's access is edited here; connect it again to change it.",
+    });
+  }
+  const offer = await appAccessOffer(args.ownerUserId, asked);
+  const approval = appApprovalOf(found.app);
+  return {
+    asked: offer.asked,
+    places: offer.places,
+    current: approval.access
+      ? await nameAppAccess(approval.access, args.ownerUserId)
+      : null,
+    reconsent: await reconsentViewOf(approval, args.ownerUserId, offer.ceiling),
+  };
+}
+
+/**
+ * The app page edits a pod app's access (W3d, `apps.updateAccess`): the same
+ * check as the consent (`assertAccessWithinCeiling`, the ceiling read now
+ * from the document the pod holds and the person's places). Q2: it may WIDEN
+ * within what the app asked, never beyond; anything else needs the app to
+ * ask again. The person's own act, with proof of presence (it can widen a
+ * credential): applied at once, v2 stored first. The live token stops now
+ * (`revokeAppKeys`) and the next one carries the new access; the app's agent
+ * follows the new spaces.
+ */
+export async function updateAppAccess(args: {
+  publicId: string;
+  ownerUserId: string;
+  access: AppAccess;
+  actorAgentUserId?: string | null;
+  actorKeyType?: string | null;
+  presence: PresencePass | null;
+}): Promise<AppWithGrants> {
+  assertPresencePass(args.presence, {
+    actions: ["apps.updateAccess"],
+    userId: args.ownerUserId,
+  });
+  assertOwnerCredential("change an app's access", {
+    agentUserId: args.actorAgentUserId,
+    keyType: args.actorKeyType,
+  });
+  const found = await loadOwnedApp(args.publicId, args.ownerUserId);
+  assertNotRevoked(found);
+  const asked = await askedOfConnection(found.app);
+  if (found.app.mode !== "oauth" || !asked) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Only a pod app's access is edited here; connect it again to change it.",
+    });
+  }
+  const offer = await appAccessOffer(args.ownerUserId, asked);
+  const access = parseAppAccess(args.access);
+  if (!access) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Choose what this app may do, and where (changes go in chosen places only).",
+    });
+  }
+  await assertAccessWithinCeiling(access, offer.ceiling);
+  const before = appApprovalOf(found.app);
+  const repo = new AppRepository(db);
+  const updated = await repo.setApprovedAccess(found.app.id, access);
+  if (!updated) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Could not record the app's access.",
+    });
+  }
+  await revokeAppKeys(
+    found,
+    args.ownerUserId,
+    `Access changed for ${found.app.name}: the next token carries the new access`
+  );
+  await recordAppEvent(found, args.ownerUserId, APP_EVENT_ACTIONS.approved, {
+    via: "update",
+    access,
+    before: before.access,
+  });
+  return loadOwnedApp(args.publicId, args.ownerUserId);
+}
+
+/**
+ * This person's live connection of this pod app, its approval read once
+ * (`appApprovalOf`), or null when there is none (W3d).
+ */
+export async function currentOAuthAppApproval(
+  ownerUserId: string,
+  oauthClientId: string
+): Promise<AppApproval | null> {
+  const [row] = await db
+    .select({
+      approvedRequests: apps.approvedRequests,
+      approvedAccess: apps.approvedAccess,
+    })
+    .from(apps)
+    .where(
+      and(
+        eq(apps.ownerUserId, ownerUserId),
+        eq(apps.oauthClientId, oauthClientId),
+        isNull(apps.revokedAt)
+      )
+    )
+    .limit(1);
+  return row ? appApprovalOf(row) : null;
 }

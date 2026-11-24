@@ -51,12 +51,14 @@ import {
   playbooks,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   users,
   projectMembers,
   projects,
   projectTracks,
   skills,
+  spaceAccess,
 } from "@synap/database/schema";
 import { runWithGrant, type KeyGrant } from "@synap/database";
 
@@ -129,6 +131,7 @@ beforeAll(async () => {
     playbooks,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     users,
     projectMembers,
@@ -137,6 +140,7 @@ beforeAll(async () => {
     // The list reads each playbook's worker rules (goals that run): a
     // playbook with no subject may carry a clock a person chose.
     skills,
+    spaceAccess,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }

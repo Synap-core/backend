@@ -32,9 +32,10 @@ export const hubAutomationsRouter = router({
           nodes: z.array(z.record(z.string(), z.unknown())),
           edges: z.array(z.record(z.string(), z.unknown())),
         }),
-        status: z.enum(["draft", "active", "paused", "error"]).default("draft"),
+        status: z.enum(["draft", "active", "paused", "error"]).optional(),
         metadata: z.record(z.string(), z.unknown()).optional(),
         state: z.record(z.string(), z.unknown()).optional(),
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -60,6 +61,7 @@ export const hubAutomationsRouter = router({
         status: input.status,
         metadata: input.metadata,
         state: input.state,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         agentUserId,
         source: agentUserId ? "agent" : "intelligence",
       });
@@ -76,6 +78,7 @@ export const hubAutomationsRouter = router({
         workspaceId: z.string().uuid().nullable().optional(),
         status: z.enum(["draft", "active", "paused", "error"]).optional(),
         limit: z.number().min(1).max(100).optional(),
+        offset: z.number().int().min(0).optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -91,6 +94,7 @@ export const hubAutomationsRouter = router({
         workspaceId: input.workspaceId ?? null,
         status: input.status,
         limit: input.limit,
+        offset: input.offset,
       });
     }),
 

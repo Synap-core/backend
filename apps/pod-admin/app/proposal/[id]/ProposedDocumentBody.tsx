@@ -12,6 +12,8 @@ import { useState } from "react";
 import { Button } from "@heroui/react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { ContentBody } from "../../_lib/object/content/content-block";
+import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
+import { proposalPageT } from "./copy";
 import { documentReading } from "./proposal-record-model";
 
 export function ProposedDocumentBody({
@@ -22,13 +24,27 @@ export function ProposedDocumentBody({
   /** Start with the whole document open (the reader asked, or a test). */
   defaultOpen?: boolean;
 }) {
+  const t = proposalPageT();
   const [open, setOpen] = useState(defaultOpen);
+  // A whole HTML document (a report an agent made) is drawn as the page, not
+  // as markdown. Only a doctype or <html> opening counts: markdown may open
+  // with an inline tag.
+  if (/^\uFEFF?\s*<(?:!doctype\s+html|html[\s>])/i.test(content)) {
+    return (
+      <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
+        <span className="text-[12.5px] font-medium text-foreground/70">
+          {t("doc.content")}
+        </span>
+        <HtmlPagePreview html={content} title={t("doc.preview")} />
+      </div>
+    );
+  }
   const { preview, full, hasMore } = documentReading(content);
   const shown = open ? full : preview;
   return (
     <div data-proposed-document="" className="flex min-w-0 flex-col gap-2">
-      <span className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
-        Content
+      <span className="text-[12.5px] font-medium text-foreground/70">
+        {t("doc.content")}
       </span>
       <div
         data-proposed-document-body={open ? "whole" : "preview"}
@@ -37,8 +53,7 @@ export function ProposedDocumentBody({
         <ContentBody prepared={shown} />
         {open && full.truncated && (
           <p className="mt-2 text-[12.5px] text-foreground/65">
-            Only the first {full.shownPercent}% is drawn here. The whole text is
-            in Advanced, under the request.
+            {t("doc.truncated", { percent: full.shownPercent })}
           </p>
         )}
         {!open && hasMore && (
@@ -62,7 +77,7 @@ export function ProposedDocumentBody({
           }
           onPress={() => setOpen((v) => !v)}
         >
-          {open ? "Show less" : "Read the whole document"}
+          {open ? t("doc.showLess") : t("doc.readWhole")}
         </Button>
       )}
     </div>

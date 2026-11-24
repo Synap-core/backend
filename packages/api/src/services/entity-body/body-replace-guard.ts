@@ -95,17 +95,26 @@ export async function assertBodyNotReplacedSilently(
  * refused attach never leaves a fresh document attached to nothing. Reads the
  * entity under the WRITE floor `entities.update` uses, so an attach to an
  * entity the caller cannot write is also refused before anything exists.
+ * Returns the entity's placement, where the new body is filed
+ * (`bodyPlacementFor`).
  */
 export async function preflightAttachToEntity(input: {
   entityId: string;
   userId: string;
   replaceBody?: boolean;
-}): Promise<void> {
+}): Promise<{
+  id: string;
+  workspaceId: string | null;
+  homeWorkspaceId: string | null;
+}> {
   const [entity] = await defaultDb
     .select({
       id: entities.id,
       documentId: entities.documentId,
       properties: entities.properties,
+      // Where the body will be filed (`bodyPlacementFor`).
+      workspaceId: entities.workspaceId,
+      homeWorkspaceId: entities.homeWorkspaceId,
     })
     .from(entities)
     .where(
@@ -126,4 +135,9 @@ export async function preflightAttachToEntity(input: {
     entity,
     replaceBody: input.replaceBody,
   });
+  return {
+    id: entity.id,
+    workspaceId: entity.workspaceId ?? null,
+    homeWorkspaceId: entity.homeWorkspaceId ?? null,
+  };
 }

@@ -30,7 +30,7 @@ export function registerSearchRoutes(app: HubHono): void {
     summary: "Search a single Typesense collection",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+      "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchCollectionQuerySchema,
     },
@@ -49,7 +49,7 @@ export function registerSearchRoutes(app: HubHono): void {
     summary: "Cross-collection Typesense search",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+      "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchQuerySchema,
     },
@@ -68,7 +68,7 @@ export function registerSearchRoutes(app: HubHono): void {
     summary: "Search documents only",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask, which routes across all substrates. Still functional for existing integrations.",
+      "DEPRECATED — prefer POST /knowledge/search, which routes across all substrates. Still functional for existing integrations.",
     request: {
       query: SearchDocumentsQuerySchema,
     },
@@ -90,7 +90,7 @@ export function registerSearchRoutes(app: HubHono): void {
     summary: "PGVector semantic search",
     deprecated: true,
     description:
-      "DEPRECATED — prefer POST /knowledge/ask (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
+      "DEPRECATED — prefer POST /knowledge/search (the SRE already uses pgvector internally as one signal). Disabled on shared pods (returns empty / 503 when VECTOR_SEARCH_ENABLED=false).",
     request: {
       query: VectorSearchQuerySchema,
     },

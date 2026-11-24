@@ -19,7 +19,9 @@ export const en = {
   "passkeys.page.lead":
     "A passkey signs you in with this device’s lock, and confirms it’s you for sensitive approvals.",
   "passkeys.relayOnly":
-    "Your account is protected by Face ID in Relay, so a new passkey needs a confirmation from Relay first, and Relay can’t give it yet.",
+    "Your account is protected by Face ID in Relay. Approve this device from Relay or another device you use, then create its passkey here.",
+  "passkeys.relayOnly.action": "Set up this device",
+  "passkeys.link": "Approve from another device",
   "passkeys.devicesFailed":
     "Couldn’t check which devices protect your account.",
   "passkeys.retry": "Try again",
@@ -73,7 +75,9 @@ export const fr: Catalog<typeof en> = {
   "passkeys.page.lead":
     "Une clé d’accès vous connecte avec le verrouillage de cet appareil, et confirme que c’est vous pour les approbations sensibles.",
   "passkeys.relayOnly":
-    "Votre compte est protégé par Face ID dans Relay : une nouvelle clé d’accès doit d’abord être confirmée dans Relay, ce que Relay ne permet pas encore.",
+    "Votre compte est protégé par Face ID dans Relay. Approuvez cet appareil depuis Relay ou un autre appareil que vous utilisez, puis créez sa clé d’accès ici.",
+  "passkeys.relayOnly.action": "Configurer cet appareil",
+  "passkeys.link": "Approuver depuis un autre appareil",
   "passkeys.devicesFailed":
     "Impossible de vérifier quels appareils protègent votre compte.",
   "passkeys.retry": "Réessayer",

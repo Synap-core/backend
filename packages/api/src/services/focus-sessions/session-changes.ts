@@ -70,9 +70,10 @@
  *                          on and how it resumes. When both kinds are asked
  *                          for, such a move is reported once, as `hold_set`.
  *   - `blocker_ended`    — a session this one waits on (`blocked_by`) ended:
- *                          `delivered` = it closed, false = it was cancelled
- *                          or failed (re-plan: the edge does not clear by
- *                          itself). `at` = when its end was recorded.
+ *                          `delivered` = it closed done, false = it closed
+ *                          not done, was cancelled or failed (re-plan: the
+ *                          edge does not clear by itself). `at` = when its
+ *                          end was recorded.
  *   - `signal_raised`    — the status watcher raised a "Needs a look" on the
  *                          session (`focus_session.signal.completed`,
  *                          `services/status/watcher.ts`): its pause is past
@@ -150,8 +151,10 @@ import {
   SESSION_CHANGE_KINDS,
   isWakeWorthy,
   resolveSessionTitle,
+  sessionClosedAs,
   type SessionChangeKind,
 } from "@synap-core/types/focus-sessions";
+import { closedNotDoneRecordedSql } from "./session-closed-as.js";
 import type {
   LifecycleCategory,
   RecordedHold,
@@ -167,6 +170,7 @@ import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { eventVisibleWhere } from "../../access/event-visibility.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 import { fenceUntrustedData } from "../agent-dispatch/binding-call.js";
+import { stageLedgerEventId } from "./stage-ledger-event.js";
 import type {
   SessionPostIntent,
   SessionPostMeta,
@@ -342,7 +346,7 @@ type SessionChangeEventBody =
         /** Null when the reader may not see that session. */
         title: string | null;
         status: string;
-        /** It closed (done). False: cancelled or failed — re-plan the wait. */
+        /** It closed done (`sessionClosedAs`). False: closed not done, cancelled or failed — re-plan the wait. */
         delivered: boolean;
       };
     })
@@ -411,14 +415,21 @@ export function sessionDevFactWhere(
   sessionId: string,
   refs: readonly PullRequestRef[]
 ) {
-  const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
   return or(
     drizzleSql`${eventsTable.data}->>'sessionId' = ${sessionId}`,
-    ...refs.map(
-      (r) =>
-        drizzleSql`(${eventsTable.data}->>'sessionId' is null and lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>(case when ${eventsTable.type} = ${ci} then 'pr' else 'number' end) = ${String(r.number)})`
-    )
+    ...refs.map(unstampedPullRequestFactWhere)
   )!;
+}
+
+/**
+ * The second half of {@link sessionDevFactWhere}: a fact that names NO session
+ * and is about this pull request (a PR fact by its `number`, a CI run by its
+ * `pr`). Exported so a batched read (the timeline's, over a page of sessions)
+ * says which session a fact belongs to by the SAME clause.
+ */
+export function unstampedPullRequestFactWhere(r: PullRequestRef) {
+  const ci = DEV_LOOP_EVENT_TYPES.ciFinished;
+  return drizzleSql`(${eventsTable.data}->>'sessionId' is null and lower(${eventsTable.data}->>'repo') = ${r.repo.toLowerCase()} and ${eventsTable.data}->>(case when ${eventsTable.type} = ${ci} then 'pr' else 'number' end) = ${String(r.number)})`;
 }
 
 /** A timestamp column truncated to the millisecond, as a UTC ISO string. */
@@ -548,7 +559,7 @@ export async function listSessionChanges(p: {
       ledgerStageMoves++;
       cursored.push({
         kind: "stage_moved",
-        id: `stage:${session.id}:${e.enteredAt}:${e.stageKey}`,
+        id: stageLedgerEventId(session.id, e),
         at: e.enteredAt,
         from: typeof e.fromStage === "string" ? e.fromStage : null,
         to: e.stageKey,
@@ -927,6 +938,7 @@ export async function listSessionChanges(p: {
               id: focusSessions.id,
               title: focusSessions.title,
               goal: focusSessions.goal,
+              closedNotDone: closedNotDoneRecordedSql(),
             })
             .from(focusSessions)
             .where(
@@ -972,6 +984,9 @@ export async function listSessionChanges(p: {
       const titleOf = new Map(
         named.map((r) => [r.id, resolveSessionTitle(r) || null])
       );
+      const closedNotDoneOf = new Map(
+        named.map((r) => [r.id, r.closedNotDone])
+      );
       sourceHasMore ||= rows.length > limit;
       for (const r of rows.slice(0, limit)) {
         const t = readTransition(r.transition);
@@ -986,7 +1001,11 @@ export async function listSessionChanges(p: {
             sessionId: t.subjectId,
             title: titleOf.get(t.subjectId) ?? null,
             status: t.to,
-            delivered: t.category === "done",
+            delivered:
+              sessionClosedAs(
+                t.to,
+                closedNotDoneOf.get(t.subjectId) ?? false
+              ) === "done",
           },
         });
       }

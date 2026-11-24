@@ -1,12 +1,20 @@
 /**
  * Hub Protocol REST — brand kit (Content × Brand C2).
  *
- * GET /brand/kit?format=json|css|frame-md[&projectId][&workspaceId]
+ * GET /brand/kit?format=json|css|frame-md|od-design-system|dtcg|synap-css|css-shadcn
+ *     [&projectId][&workspaceId]
  *
  * The ONE door every agent, the CLI and the IS use to read the caller's brand:
  * it resolves the Brand space and the brand identity in it for the project
  * (or the default brand) — see `services/brand/brand-kit-service.ts` — and
  * returns the kit rendered by the shared `@synap-core/types/brand-kit` module.
+ *
+ * `dtcg`, `synap-css` and `css-shadcn` render the brand's approved DTCG token
+ * set instead of the kit: `dtcg` is the file, `css-shadcn` its shadcn
+ * variables (a client app's kit, W6), `synap-css` its `--synap-*` declarations as JSON
+ * `{vars, light, dark}` with no selector (the caller scopes them). Their `hash`
+ * names the token set. A brand with no DTCG token set renders `{}` and empty
+ * declarations: the caller keeps Synap's own values.
  *
  *   200 `{ format, content, hash, brandWorkspaceId, brandIdentityId,
  *          projectId, resolvedVia: "project" | "default-flag" | "only-brand" }`
@@ -70,13 +78,19 @@ export function registerBrandRoutes(app: HubHono): void {
     method: "get",
     path: "/brand/kit",
     tags: ["Brand"],
-    summary: "The caller's brand kit (json, css, frame-md or od-design-system)",
+    summary:
+      "The caller's brand kit (json, css, frame-md, od-design-system, dtcg, synap-css or css-shadcn)",
     description:
       "Resolves the Brand space (the given workspace or the brand source it " +
       "declares, else the pod's brand provider) and the brand identity in it — " +
       "the project's brand, else the brand flagged default, else the only " +
       "brand — and returns that brand's kit with a deterministic content " +
-      "`hash`. 404 with a typed `reason` and a human `message` when there is " +
+      "`hash`. `dtcg`, `synap-css` and `css-shadcn` render the brand's " +
+      "approved DTCG token set instead (the file, its `--synap-*` " +
+      "declarations, or its shadcn variables for a client app's kit, as JSON " +
+      "`{vars, light, dark}` with no selector), hashed by that set; a brand " +
+      "with none renders `{}` and empty declarations. " +
+      "404 with a typed `reason` and a human `message` when there is " +
       "no brand; a failed read is a 5xx, never an empty kit.",
     request: { query: BrandKitQuerySchema },
     responses: {

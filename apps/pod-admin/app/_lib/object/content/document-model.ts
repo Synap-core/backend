@@ -24,6 +24,8 @@ import {
 /** The slice of the `documents.get` answer this reads. */
 export interface DocumentReadAnswer {
   document: {
+    /** The document's id: what a running page is anchored to (its context, its brand). */
+    id?: string | null;
     type?: string | null;
     storageKey?: string | null;
     storageUrl?: string | null;
@@ -44,7 +46,13 @@ export interface DocumentReadAnswer {
   contentOmitted?: "binary";
 }
 
-const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(EMBED_DIRECTIVES);
+/**
+ * The embeds that make a page live. A `synap-ask` is not one: its card is live
+ * and answerable right here, so it never sends the page to the app.
+ */
+const REFERENCE_EMBEDS: ReadonlySet<string> = new Set(
+  (EMBED_DIRECTIVES as readonly string[]).filter((name) => name !== "synap-ask")
+);
 
 /**
  * A LIVING document: a page whose parts move without anyone editing it — it
@@ -94,6 +102,8 @@ export type DocumentContent =
       tooLarge: boolean;
       /** The page's space — the lens its reads are stamped with. */
       workspaceId: string | null;
+      /** The document it is: the page's anchor (its context and brand). */
+      documentId: string | null;
       source: PreparedContent;
     }
   | { kind: "error" };
@@ -193,6 +203,7 @@ export function documentContent(
       bytes,
       tooLarge: bytes > CELL_FRAME_MAX_BYTES,
       workspaceId: document.workspaceId ?? null,
+      documentId: document.id ?? null,
       source: prepareContent(content, format),
     };
   }

@@ -32,6 +32,35 @@ vi.mock("../../utils/pending-capture-dedup.js", () => ({
   findPendingTextMatches: vi.fn().mockResolvedValue([]),
 }));
 
+// The catalog lane (skills, rules, playbooks through the find door) has its
+// own PGlite suite (__tests__/ask-catalog-lane.pglite.test.ts); here the door
+// answers "searched, nothing fit" per catalog unless a test says otherwise.
+const findByIntentMock = vi.fn();
+vi.mock("../capabilities/find-intent.js", () => ({
+  findByIntent: (...args: unknown[]) => findByIntentMock(...args),
+}));
+const emptyFind = async (input: { catalogs?: string[] }) =>
+  input.catalogs?.includes("playbooks")
+    ? { playbooks: { candidates: [], optOut: "pass templateId: null" } }
+    : { skills: { matches: [] } };
+
+// The project source reads the `projects` table (its floor is the find door's,
+// `project-lane.ts`); here the read is a stub and the id rule a copy of its
+// contract (lens first, then a `project`-kind hit), so the ROUTER is tested.
+const readProjectsMock = vi.fn();
+vi.mock("./project-lane.js", () => ({
+  projectIdsForAsk: (
+    projectId: string | null | undefined,
+    hits: Array<{ id?: string; type?: string }>
+  ) => [
+    ...new Set([
+      ...(projectId ? [projectId] : []),
+      ...hits.filter((h) => h.type === "project").map((h) => h.id!),
+    ]),
+  ],
+  readProjectsForAsk: (...args: unknown[]) => readProjectsMock(...args),
+}));
+
 const { ask } = await import("./ask.js");
 
 const baseParams = {
@@ -59,6 +88,8 @@ beforeEach(() => {
   libraryLaneMock
     .mockReset()
     .mockResolvedValue({ items: [], readTextSearch: "ok" });
+  findByIntentMock.mockReset().mockImplementation(emptyFind);
+  readProjectsMock.mockReset().mockResolvedValue([]);
 });
 
 describe("ask router", () => {
@@ -108,21 +139,85 @@ describe("ask router", () => {
     expect(r.answers[0].substrate).toBe("episodic");
   });
 
+  it("episodic sources: one per fact text, and a capability run that found nothing is not one (d1fe02c8)", async () => {
+    const empty =
+      'Ran capability "market.search" → {"entries":[],"message":"Nothing matched the marketplace either."}';
+    searchFactsMock.mockResolvedValue([
+      { id: "6e44bab4", fact: empty },
+      { id: "f07faba5", fact: empty },
+      { id: "6d0f512c", fact: `${empty} ` },
+      { id: "c76dad8a", fact: "Approval_failed proposals: 5 of 8 forks wrong" },
+      { id: "c76dad8b", fact: "Approval_failed proposals: 5 of 8 forks wrong" },
+      {
+        id: "run-hit",
+        fact: 'Ran capability "market.search" → {"entries":[{"slug":"crm"}]}',
+      },
+    ]);
+    const r = await ask({
+      ...baseParams,
+      query: "what did I decide about how failed proposals should be handled",
+    });
+    const episodic = r.answers.find((a) => a.substrate === "episodic")!;
+    expect(episodic.items.map((i) => i.id)).toEqual(["c76dad8a", "run-hit"]);
+  });
+
   it("orders three substrates primary-first, semantic-before-episodic for the rest", async () => {
     const r = await ask({ ...baseParams, query: "remember how to deploy" });
     // classifier: procedural primary, also episodic. semantic always runs.
+    // A how-to cue also runs the catalog lane (skills, rules, playbooks).
     expect(r.routedTo).toEqual([
       "semantic",
       "procedural",
       "episodic",
       "library",
+      "catalog",
     ]);
     expect(r.answers.map((a) => a.substrate)).toEqual([
       "procedural", // primary
       "semantic", // then natural order
       "episodic",
       "library",
+      "catalog",
     ]);
+  });
+
+  // ── The catalog lane: errored ≠ empty, one arm down ≠ both ───────────────
+  it("catalog: both find arms failing is status:'error' + degraded 'catalog'", async () => {
+    findByIntentMock.mockRejectedValue(new Error("find down"));
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const lane = r.answers.find((a) => a.substrate === "catalog");
+    expect(lane?.status).toBe("error");
+    expect(lane?.items).toEqual([]);
+    expect(r.degraded).toContain("catalog");
+  });
+
+  it("catalog: one arm failing keeps the other's items and tags 'catalog:partial'", async () => {
+    findByIntentMock.mockImplementation(
+      async (input: { catalogs?: string[] }) => {
+        if (input.catalogs?.includes("playbooks")) throw new Error("down");
+        return {
+          skills: {
+            matches: [
+              {
+                kind: "skill",
+                id: "s1",
+                title: "Deploy the backend",
+                why: "How we deploy",
+                open: "/open/s1",
+                ref: "team/deploy",
+              },
+            ],
+          },
+        };
+      }
+    );
+    const r = await ask({ ...baseParams, query: "how to deploy" });
+    const lane = r.answers.find((a) => a.substrate === "catalog");
+    expect(lane?.status).toBe("ok");
+    expect(lane?.items).toEqual([
+      expect.objectContaining({ id: "s1", kind: "skill", ref: "team/deploy" }),
+    ]);
+    expect(r.degraded).toEqual(["catalog:partial"]);
   });
 
   // ── Glass-box honesty: errored ≠ empty ────────────────────────────────────
@@ -270,9 +365,14 @@ describe("ask router — procedural lane vs project lens (X1)", () => {
       query: "what is the revenue model for the business",
     });
     expect(searchFullTextMock).not.toHaveBeenCalled();
-    // The Library lane runs, NARROWED to the project's runs (it forwards the lens).
-    expect(r.routedTo).toEqual(["semantic", "library"]);
-    expect(r.answers.map((a) => a.substrate)).toEqual(["semantic", "library"]);
+    // The Library lane runs, NARROWED to the project's runs (it forwards the
+    // lens), and the lensed project's own row is read (8e2c7018).
+    expect(r.routedTo).toEqual(["semantic", "library", "project"]);
+    expect(r.answers.map((a) => a.substrate)).toEqual([
+      "semantic",
+      "project",
+      "library",
+    ]);
     expect(libraryLaneMock.mock.calls[0]![0]).toMatchObject({
       projectId: "872bbecc-0000-4000-8000-000000000000",
     });
@@ -363,5 +463,68 @@ describe("ask router — library lane", () => {
   it("parseOnly never touches the Library", async () => {
     await ask({ ...baseParams, query: "terracotta palette", parseOnly: true });
     expect(libraryLaneMock).not.toHaveBeenCalled();
+  });
+});
+
+// ── 8e2c7018: a project answers from the projects TABLE ───────────────────
+// Migration 0151 copied each project entity into `projects` with the SAME id
+// and left the entity behind; recall read entities only, so "what is Synap"
+// answered from July's copy while the table held November's description.
+describe("ask router — the project source (8e2c7018)", () => {
+  const P = "d4b84ad8-0000-4000-8000-000000000000";
+  const ROW = {
+    id: P,
+    kind: "project",
+    name: "Synap",
+    content: "A personal backend you own.",
+    status: "active",
+  };
+
+  it("a project-kind hit is answered by its row, and the stale twin leaves the semantic block", async () => {
+    retrieveMock.mockResolvedValue({
+      ...semanticResult,
+      entities: [
+        { id: P, type: "project", title: "Synap" },
+        { id: "e2", type: "note", title: "Synap notes" },
+      ],
+    });
+    readProjectsMock.mockResolvedValue([ROW]);
+    const r = await ask({ ...baseParams, query: "what is Synap" });
+    expect(readProjectsMock).toHaveBeenCalledWith({
+      userId: "user-1",
+      projectIds: [P],
+    });
+    const project = r.answers.find((a) => a.substrate === "project");
+    expect(project).toEqual({
+      substrate: "project",
+      items: [ROW],
+      status: "ok",
+    });
+    const semantic = r.answers.find((a) => a.substrate === "semantic")!;
+    expect(semantic.items.map((i) => i.id)).toEqual(["e2"]);
+    expect(r.routedTo).toContain("project");
+  });
+
+  it("no lens and no project hit: the projects table is not read", async () => {
+    retrieveMock.mockResolvedValue(semanticResult);
+    const r = await ask({ ...baseParams, query: "who is Acme" });
+    expect(readProjectsMock).not.toHaveBeenCalled();
+    expect(r.answers.some((a) => a.substrate === "project")).toBe(false);
+  });
+
+  it("a failed project read is `error` + degraded, and the twin is kept (never an empty answer)", async () => {
+    retrieveMock.mockResolvedValue({
+      ...semanticResult,
+      entities: [{ id: P, type: "project", title: "Synap" }],
+    });
+    readProjectsMock.mockRejectedValue(new Error("projects read down"));
+    const r = await ask({ ...baseParams, query: "what is Synap" });
+    expect(r.degraded).toContain("project");
+    expect(r.answers.find((a) => a.substrate === "project")?.status).toBe(
+      "error"
+    );
+    expect(
+      r.answers.find((a) => a.substrate === "semantic")!.items.map((i) => i.id)
+    ).toEqual([P]);
   });
 });

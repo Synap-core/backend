@@ -41,6 +41,7 @@ import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { ruleSentenceSchema } from "../../../services/rules/sentence-schema.js";
 import {
   ok,
+  readReasoning,
   requireScope,
   type McpToolContext,
   type CallToolResult,
@@ -152,8 +153,8 @@ export const ruleHandlers: McpHandlerMap = {
     // that is how a caller targets a workspace other than its focus, and it is
     // the same precedence `synap_create_project` uses (`requestedWorkspaceId`,
     // handlers/workspace.ts). Safe because it is not the authorization: the
-    // gate floors on membership (`permission-check.ts` — a non-member agent
-    // gets a `workspace.join` proposal, never a write), and a bound service key
+    // gate floors on membership (`permission-check.ts` — an agent whose person
+    // is not a member is refused, never a write), and a bound service key
     // is confined before it reaches here. The comment previously claimed the
     // lens was preferred, which the code has never done.
     const workspaceId = parsed.data.workspaceId ?? lensWorkspaceId;
@@ -202,6 +203,7 @@ export const ruleHandlers: McpHandlerMap = {
       ...(parsed.data.expiresAt ? { expiresAt: parsed.data.expiresAt } : {}),
       automationIds: [],
       ...(sentence ? { sentence } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -278,6 +280,7 @@ export const ruleHandlers: McpHandlerMap = {
           ? { draft: parsed.data.draft }
           : {}),
         automationIds: [],
+        ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       });
       return ok(result);
     } catch (err) {

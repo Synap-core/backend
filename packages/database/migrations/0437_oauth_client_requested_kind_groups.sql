@@ -1,0 +1,19 @@
+-- 0437 — the kinds grouping of a pod app's requests (app permissions W3c,
+-- founder decision 51ad8d1e F4): a `synap_requests` entry may list its kinds,
+-- `{permission: "entity.read", kinds: ["note", "task"]}`. The pod grants it
+-- per kind (D4), so `requested_permissions` holds it expanded
+-- (`entity.note.read`, `entity.task.read`); this column keeps the entry as
+-- declared, `[{permission, kinds}]`, so the consent screen can show it as one
+-- row ("Records: 29 kinds") instead of 29.
+--
+-- 0435 and 0436 are taken by open PRs; the migrator records applied files by
+-- NAME, so their order is free.
+--
+-- Additive + idempotent: IF NOT EXISTS. Fresh installs also get the column
+-- from 0000_baseline_schema.sql. '[]' for a DCR row, for a document with no
+-- such entry, and for a document cached before this ran: the next read of
+-- the document fills it (the consent screen reads it again before a person
+-- decides, and every copy expires within 24 h). Until then its kinds are
+-- shown one per row, as before. Display only: it never changes what is
+-- asked, offered or granted.
+ALTER TABLE "oauth_clients" ADD COLUMN IF NOT EXISTS "requested_kind_groups" jsonb NOT NULL DEFAULT '[]'::jsonb;

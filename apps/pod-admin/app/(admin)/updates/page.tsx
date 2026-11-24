@@ -13,6 +13,9 @@
  *   • Update now     — the exact host command. The console cannot run host
  *                      commands (the engine runs on the machine hosting the
  *                      pod), so it says so and offers the command to copy.
+ *   • Renderers      — whether Synap's renderers are installed, and Install /
+ *                      Reinstall latest (`_lib/renderers-card.tsx`). Its own
+ *                      read: it shows even when the update status cannot.
  *
  * A failed read is an error with Retry, never the default setting shown as the
  * owner's choice; a 404 is an older pod that cannot do this yet.
@@ -47,6 +50,7 @@ import {
   readPodUpdatesResponse,
   usePodUpdates,
 } from "./_lib/use-pod-updates";
+import { RenderersCard } from "./_lib/renderers-card";
 
 export default function UpdatesPage() {
   const q = usePodUpdates();
@@ -84,6 +88,9 @@ export default function UpdatesPage() {
           <UpdateNowCard channel={q.data.settings.channel} />
         </div>
       )}
+      <div className="mt-4">
+        <RenderersCard />
+      </div>
     </PageShell>
   );
 }

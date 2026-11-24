@@ -114,8 +114,8 @@ beforeAll(async () => {
   await h.client!.exec(`
     create unique index if not exists profile_properties_pk
       on profile_properties (profile_id, property_def_id);
-    create unique index if not exists profile_workspace_access_pk
-      on profile_workspace_access (profile_id, workspace_id);
+    create unique index if not exists space_access_pk
+      on space_access (object_type, object_id, workspace_id);
     create unique index if not exists profile_properties_one_lifecycle_uniq
       on profile_properties (profile_id) where is_lifecycle;
   `);
@@ -127,7 +127,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from profile_properties; delete from property_defs; delete from profile_workspace_access; delete from profiles; delete from workspaces;`
+    `delete from profile_properties; delete from property_defs; delete from space_access; delete from profiles; delete from workspaces;`
   );
   WS = randomUUID();
   await q(

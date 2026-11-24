@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { SKILL_METADATA_READ_ONLY } from "../../services/capabilities/capability-drift.js";
 
 export const CreateVerbInput = z
   .object({
@@ -45,6 +46,9 @@ export const CreateVerbInput = z
       })
       .optional(),
     parameters: z.record(z.string(), z.unknown()).optional(),
+    // Stored as the skill's `metadata.readOnly`, the declaration the gate
+    // auto-runs on (`verbDeclaresReadOnly`).
+    readOnly: z.boolean().optional(),
     workspaceId: z.string().uuid().optional(),
   })
   // Cross-field: a GraphQL verb REQUIRES `graphql.query`, and the two transports
@@ -69,6 +73,15 @@ export const CreateVerbInput = z
   });
 
 export type CreateVerbInput = z.infer<typeof CreateVerbInput>;
+
+/** The skill `metadata` a created verb carries: its read-only declaration. */
+export function createdVerbMetadata(
+  input: Pick<CreateVerbInput, "readOnly">
+): Record<string, unknown> | undefined {
+  return input.readOnly === undefined
+    ? undefined
+    : { [SKILL_METADATA_READ_ONLY]: input.readOnly };
+}
 
 export type ValidateCreateVerbResult =
   { ok: true; data: CreateVerbInput } | { ok: false; error: string };

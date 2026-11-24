@@ -10,10 +10,13 @@
  * tighten, so it is the one verdict that ranks ABOVE the floors (a floor
  * proposes; "Never" refuses).
  *
- * Resolution (rung 2.8, `resolveAgentGovernanceDecision`) ranks matching rows
- * by specificity — agent > any, workspace > pod, exact action > profile >
- * glob > `*` — and takes the top-ranked active row. This schema file defines
- * storage only; the resolver and engine wiring are a separate wave.
+ * Resolution (rung 2.8, `resolveGovernanceRule` in
+ * utils/resolve-agent-governance-decision.ts, wired into the engine and the
+ * capability gate) ranks matching rows by specificity — agent > class > any,
+ * workspace > pod, exact action > profile or tool > glob > `*` — and takes
+ * the top-ranked active row. For a tool run (target `capability`) it is the
+ * ONLY answer to "may this run without asking?" (decision D2, 0435): a grant
+ * means only "may use".
  */
 
 import {
@@ -21,6 +24,7 @@ import {
   pgEnum,
   uuid,
   text,
+  integer,
   timestamp,
   index,
 } from "drizzle-orm/pg-core";
@@ -96,6 +100,14 @@ export const governanceRules = pgTable(
     targetPattern: text("target_pattern").notNull(),
     // Entity profile slug when target_kind = 'profile'.
     targetProfile: text("target_profile"),
+    // ONE object an exact action rule is narrowed to (0420), at the version a
+    // person approved: today a playbook for `playbook.run` ("let agents run
+    // this without asking"). A version bump leaves the rule matching nothing.
+    targetSubjectId: uuid("target_subject_id"),
+    targetSubjectVersion: integer("target_subject_version"),
+    // The person whose agents a rule naming one object covers (0420): only an
+    // agent acting for this person matches it.
+    principalOwnerId: text("principal_owner_id"),
 
     verdict: governanceVerdictEnum("verdict").notNull(),
 

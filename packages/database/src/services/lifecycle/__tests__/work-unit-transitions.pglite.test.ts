@@ -24,6 +24,7 @@ import { ddlFor } from "./lifecycle-pglite.js";
 import { TrackRepository } from "../../../repositories/track-repository.js";
 import { claimTransitionOutbox } from "../transition-outbox.js";
 import { setSessionStatus, writeSessionPatch } from "../session-status.js";
+import { expireOrphanedStageGates } from "../../../utils/stage-gate-wait.js";
 import { eq } from "drizzle-orm";
 
 let pg: PGlite;
@@ -40,6 +41,7 @@ beforeAll(async () => {
     schema.projectTracks,
     schema.focusSessions,
     schema.lifecycleTransitionOutbox,
+    schema.proposals,
   ]) {
     await pg.exec(ddlFor(t as unknown as PgTable));
   }
@@ -129,6 +131,41 @@ describe("a goal's status flip owes its transition", () => {
       fromCategory: "paused",
       category: "active",
     });
+  });
+
+  it("a move a rule caused carries its cause; one nobody caused carries none", async () => {
+    const { trackId } = await goal("active");
+    await repo.transitionStatus(
+      trackId,
+      {
+        from: "active",
+        to: "paused",
+        actor: { kind: "system", userId: OWNER },
+        cause: {
+          reactionId: "rule-1",
+          transitionId: "t-src",
+          chainId: "t-src",
+          depth: 1,
+        },
+      },
+      OWNER
+    );
+    const [t] = await owedFor(trackId);
+    expect(t).toMatchObject({
+      cause: {
+        reactionId: "rule-1",
+        transitionId: "t-src",
+        chainId: "t-src",
+        depth: 1,
+      },
+    });
+    const other = await goal("active");
+    await repo.transitionStatus(
+      other.trackId,
+      { from: "active", to: "paused" },
+      OWNER
+    );
+    expect((await owedFor(other.trackId))[0]).not.toHaveProperty("cause");
   });
 
   it("a lost compare-and-set owes nothing and emits no receipt", async () => {
@@ -389,5 +426,192 @@ describe("setSessionStatus — the one session status write", () => {
       );
     }
     expect((await row(id)).status).toBe("active");
+  });
+});
+
+describe("a session that ENDS takes its pending stage gates with it", () => {
+  // Live 9 Nov 2026: gate 9c527c67 stayed pending on run be143ceb after the
+  // run closed; the person approved it and nothing could happen.
+  async function session(status: string) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO focus_sessions (id, user_id, goal, status, workspace_id)
+       VALUES (gen_random_uuid(), $1, 'g', $2, $3) RETURNING id`,
+      [OWNER, status, WORKSPACE]
+    );
+    return r.rows[0]!.id;
+  }
+  async function proposal(sessionId: string, proposalType: string) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO proposals (target_type, target_id, proposal_type, data, status, session_id)
+       VALUES ('focus_session', $1, $2, '{"stageKey":"draft"}'::jsonb, 'pending', $3::uuid) RETURNING id`,
+      [sessionId, proposalType, sessionId]
+    );
+    return r.rows[0]!.id;
+  }
+  const proposalRow = async (id: string) =>
+    (
+      await pg.query<{
+        status: string;
+        data: Record<string, unknown>;
+        reviewed_by: string | null;
+        reviewed_at: Date | null;
+      }>(
+        `SELECT status, data, reviewed_by, reviewed_at FROM proposals WHERE id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  /** A gate whose approval FAILED: the person clicked approve, it could not apply. */
+  async function failedGate(sessionId: string, data: object = {}) {
+    const r = await pg.query<{ id: string }>(
+      `INSERT INTO proposals (target_type, target_id, proposal_type, data, status, session_id, reviewed_by, reviewed_at)
+       VALUES ('focus_session', $1, 'playbook.stage_gate', $2::jsonb, 'approval_failed', $4::uuid, $3, now())
+       RETURNING id`,
+      [
+        sessionId,
+        JSON.stringify({
+          stageKey: "draft",
+          failure: { errorClass: "conflict" },
+          ...data,
+        }),
+        OWNER,
+        sessionId,
+      ]
+    );
+    return r.rows[0]!.id;
+  }
+
+  for (const to of ["closed", "failed", "cancelled"] as const) {
+    it(`${to}: its pending stage gate is EXPIRED and says why`, async () => {
+      const id = await session("paused");
+      const gate = await proposal(id, "playbook.stage_gate");
+      await setSessionStatus(db, {
+        sessionId: id,
+        from: ["paused"],
+        to,
+        actor: { kind: "system" },
+      });
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        stageKey: "draft",
+        expiredBy: "session_ended",
+        sessionEndedAs: to,
+      });
+    });
+  }
+
+  it("leaves other proposals of the session, and gates of other sessions, pending", async () => {
+    const ended = await session("paused");
+    const other = await session("paused");
+    const handOff = await proposal(ended, "assign_agent");
+    const otherGate = await proposal(other, "playbook.stage_gate");
+    await setSessionStatus(db, {
+      sessionId: ended,
+      from: ["paused"],
+      to: "closed",
+      actor: { kind: "system" },
+    });
+    expect((await proposalRow(handOff)).status).toBe("pending");
+    expect((await proposalRow(otherGate)).status).toBe("pending");
+  });
+
+  it("the sweep expires the gates a session left pending when it ended before the rule", async () => {
+    // Live 16 Nov 2026: gate 491def0c still pending on session 432f5ac2,
+    // closed 9 Nov; approving such a gate can only fail.
+    const ended: Record<string, string> = {};
+    for (const status of ["closed", "failed", "cancelled"]) {
+      ended[status] = await proposal(
+        await session(status),
+        "playbook.stage_gate"
+      );
+    }
+    const live: string[] = [];
+    for (const status of ["paused", "stale", "active"]) {
+      live.push(await proposal(await session(status), "playbook.stage_gate"));
+    }
+    const closedHandOff = await proposal(
+      await session("closed"),
+      "assign_agent"
+    );
+
+    const expired = await expireOrphanedStageGates(db);
+
+    expect([...expired].sort()).toEqual(Object.values(ended).sort());
+    for (const [status, gate] of Object.entries(ended)) {
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        stageKey: "draft",
+        expiredBy: "session_ended",
+        sessionEndedAs: status,
+      });
+    }
+    for (const gate of live) {
+      expect((await proposalRow(gate)).status).toBe("pending");
+    }
+    expect((await proposalRow(closedHandOff)).status).toBe("pending");
+    // A second pass finds nothing left to expire.
+    expect(await expireOrphanedStageGates(db)).toEqual([]);
+  });
+
+  it("a FAILED gate of an ended run is expired too, by the sweep and by the end, naming no person", async () => {
+    // Census bcef4627 group G: gates 1836fd6e, 28c3b2e2, 88431e30 of runs
+    // closed on 9 Nov, approved and failed (class `conflict`, kept off the
+    // lapse clock): their only way out was a person's reject.
+    const swept = await failedGate(await session("closed"));
+    const live = await failedGate(await session("paused"));
+    const partly = await failedGate(await session("closed"), {
+      planFailure: {
+        compensation: { notCompensated: [{ ref: "$op1", reason: "x" }] },
+      },
+    });
+    const ending = await session("paused");
+    const atTheEnd = await failedGate(ending);
+
+    expect(await expireOrphanedStageGates(db)).toEqual([swept]);
+    await setSessionStatus(db, {
+      sessionId: ending,
+      from: ["paused"],
+      to: "cancelled",
+      actor: { kind: "system" },
+    });
+
+    for (const [gate, endedAs] of [
+      [swept, "closed"],
+      [atTheEnd, "cancelled"],
+    ] as const) {
+      const g = await proposalRow(gate);
+      expect(g.status).toBe("expired");
+      expect(g.data).toMatchObject({
+        expiredBy: "session_ended",
+        sessionEndedAs: endedAs,
+        ended: { reason: "session_ended" },
+      });
+      // Nobody reviewed the end: not the person whose approve failed.
+      expect(g.reviewed_by).toBeNull();
+      expect(g.reviewed_at).toBeNull();
+    }
+    // A live run keeps its failed gate; a plan that partly applied stays
+    // failed so a person sees what landed.
+    expect((await proposalRow(live)).status).toBe("approval_failed");
+    expect((await proposalRow(partly)).status).toBe("approval_failed");
+  });
+
+  it("a pause or a resume expires nothing", async () => {
+    const id = await session("active");
+    const gate = await proposal(id, "playbook.stage_gate");
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: ["active"],
+      to: "paused",
+      actor: { kind: "system" },
+    });
+    await setSessionStatus(db, {
+      sessionId: id,
+      from: ["paused"],
+      to: "active",
+      actor: { kind: "human", userId: OWNER },
+    });
+    expect((await proposalRow(gate)).status).toBe("pending");
   });
 });

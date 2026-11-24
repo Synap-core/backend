@@ -99,6 +99,7 @@ import {
   tools,
   focusSessions,
   playbookRuns,
+  lifecycleTransitionOutbox,
   proposals,
   entities,
 } from "@synap/database";
@@ -209,6 +210,7 @@ describe("external agent status poll", () => {
       playbookRuns,
       proposals,
       entities,
+      lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }

@@ -39,7 +39,11 @@ beforeAll(async () => {
       created_at timestamptz NOT NULL DEFAULT now(),
       revoked_at timestamptz,
       expires_at timestamptz,
-      revoked_reason text
+      revoked_reason text,
+      -- 0420: a rule naming one object at one version
+      target_subject_id uuid,
+      target_subject_version integer,
+      principal_owner_id text
     );
     -- The mirror reads an agent's computer (host seed, 0388): no host here.
     CREATE TABLE users (id text PRIMARY KEY, host_user_id text);

@@ -728,12 +728,18 @@ const WITHHELD_FILES: Record<string, string> = {
   "services/capabilities/verb-write-back.ts": "write target",
   "services/capture-agent/submit-capture-graph.ts":
     "capture duplicate door scope + strong-match write gate (dedup)",
+  "services/capture-agent/capture-table-links.ts":
+    "capture table linkBy: an exact property value → the existing record it names (a link target, not a listing)",
   "services/capture-agent/degraded-capture-identity.ts":
     "degraded capture: strong-match recheck by id + duplicate door scope (dedup)",
   "services/channels/linkedin-reach-read.ts":
     "one person's LinkedIn reach: the person read by id (POST /channels/linkedin-reach/:personId)",
   "services/channels/person-channels.ts":
     "one person's channels: the person read by id (GET /entities/:id/channels)",
+  "services/designs/app-kit.ts":
+    "one app, by id (its design kit: design.catalog, GET /designs/kit)",
+  "services/designs/design-door.ts":
+    "one design, by id (design.read / design.apply, GET /designs/:id)",
   "services/diagnose/index.ts": "diagnose one object, by id",
   "services/diagnose/resolve-object-kind.ts": "resolves one id's kind",
   "services/entities/update-entities.ts": "batch-update targets",
@@ -752,13 +758,21 @@ const WITHHELD_FILES: Record<string, string> = {
     "edges of a focal object (opening it), not an entity listing",
   "services/object-graph/graph-service.ts":
     "a focal object's graph neighbourhood (opening it) + name resolution",
+  "services/playbooks/generate-run.ts":
+    "a one-shot run's subject, by id: the one record its prompt reads",
+  "services/playbooks/playbook-lifecycle.ts":
+    "a run's name: the title of the one object a param names, by id",
   "services/postiz/record-postiz-published.ts": "match by external id",
   "services/projects/create-project.ts": "validates evidence ids",
+  "services/proposals/landed-read.ts":
+    "the profile slug of the entities a proposal landed, by id",
   "services/proposals/redecide-graph-revision.ts":
     "the capture duplicate door's record scope, re-run for a revised graph (dedup)",
   "services/retrieval/grant-bounded-search-hits.ts":
     "narrows hits a door already passed through withoutUnlistableEntityHits (search.search applies the rule first)",
   "services/runs/index.ts": "one run's produced records, by id",
+  "services/runs/run-record-for-key.ts":
+    "a one-shot run's subject, by id: may the key read the run's record",
   "services/status/status-facts.ts":
     "a step's wait: the asked things and the one each step names, by id",
   "services/status/status-floor.ts":
@@ -767,6 +781,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "renderer-removal impact count: a demo row's override is affected too",
   "services/timeline/read-timeline.ts":
     "one thing's status history (statusOf include=history), by id",
+  "services/workspace-ops-doors.ts":
+    "move: a bound key's write targets' spaces, by id (TF-1)",
   "utils/identity-resolve-response.ts": "strong-match recheck, by id (dedup)",
   "utils/project-subject.ts": "a project's subject name + bind gate",
 };

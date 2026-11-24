@@ -124,16 +124,21 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   focusSessions,
   playbooks,
+  playbookAutomations,
+  playbookVersions,
   projects,
   proposals,
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
   links,
   sessionEvaluations,
   podMembers,
   projectMembers,
   trackParticipants,
+  lifecycleTransitionOutbox,
+  spaceAccess,
 } from "@synap/database";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
 import { buildHandlers } from "../../../routers/mcp/handlers/build.js";
@@ -160,7 +165,9 @@ function ddlFor(table: PgTable): string {
         ? " default gen_random_uuid()"
         : c.name === "started_at" || c.name === "created_at"
           ? " default now()"
-          : "";
+          : c.name === "version"
+            ? " default 1"
+            : "";
     return `"${c.name}" ${type}${c.primary ? " primary key" : ""}${def}`;
   });
   return `create table "${cfg.name}" (${cols.join(", ")});`;
@@ -171,19 +178,27 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     focusSessions,
     proposals,
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     links,
     playbooks,
+    // Every kept version of a playbook (0416): the create door writes it.
+    playbookVersions,
+    // The ONE playbook → automation link (0425): the create door reads a
+    // playbook's driving automation from it.
+    playbookAutomations,
     projects,
     sessionEvaluations,
     podMembers,
     projectMembers,
     // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,
+    spaceAccess,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

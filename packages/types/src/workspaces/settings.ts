@@ -596,6 +596,14 @@ export interface SpaceBriefSeed {
   fields: Partial<Record<string, string>>;
 }
 
+/**
+ * What a kind is to its space: an `output` (the default) or a `helper`,
+ * worked here to serve an output without being one (a story for a feature).
+ * The primary output is never a helper.
+ */
+export const SPACE_KIND_AS = ["output", "helper"] as const;
+export type SpaceKindAs = (typeof SPACE_KIND_AS)[number];
+
 /** `settings.intent` — what a space produces, as its template declared it. */
 export interface WorkspaceIntentSettings {
   /** The purpose word shown first ("Product · Dev"). */
@@ -607,6 +615,8 @@ export interface WorkspaceIntentSettings {
    * one of `produces`; absent = none declared (a library never has one).
    */
   primary?: string;
+  /** The kinds of `produces` that are helpers (`SpaceKindAs`); absent = none. */
+  helpers?: string[];
   source: "template";
 }
 
@@ -859,6 +869,9 @@ export interface WorkspaceSettings {
   /** Slug of the control plane package used to create this workspace. */
   packageSlug?: string;
   /**
+   * @deprecated 0426: no longer written (a space's needs are derived from its
+   * processes, `@synap-core/types/needs`); an older space may still hold it.
+   *
    * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (the pod's
    * `capability_intents` closed vocabulary) the template declared as this
    * space's task requirements.
@@ -1003,12 +1016,11 @@ export interface WorkspaceSettings {
   linkedAgentId?: string;
 
   /**
-   * Workspace governance mode.
-   * - "standard"    — default: workspace owner has full control.
-   * - "agent-owned" — the AI agent is workspace owner (creative authority);
-   *                   the human is admin (irreversibility guard).
-   *                   All destructive actions by the agent require a proposal
-   *                   even if the agent holds the owner role.
+   * Workspace governance mode, set only by the workspace's person (never
+   * stamped by provisioning; absent = "standard"). An agent never owns a
+   * space. "agent-owned" makes every destructive agent action propose, which
+   * the destructive floor already does unless destructive auto-approval is
+   * turned on.
    */
   governanceMode?: "standard" | "agent-owned";
 

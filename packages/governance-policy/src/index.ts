@@ -76,8 +76,7 @@
  *                                    byte-identical — see below). An `auto`
  *                                    rule on a move INTO done/lost applies
  *                                    only if it names the write; else 2.85
- *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute;
- *        a session END move skips 2.85, its end being the guardrail)
+ *   2.85 lifecycle move into done/lost → propose (2.86 other moves → execute)
  *   2.88 NAMED_RULE_ONLY_EVENT_KEYS → propose (a capability run or a session's
  *                                    tool grant that no rule NAMING it widened
  *                                    at 2.8; ownership and the auto-approve
@@ -237,6 +236,7 @@ export const DEFAULT_AUTO_APPROVE: readonly string[] = [
 // the "always" menus' derivation in @synap-core/types, which cannot import
 // this engine, so both read ONE list.
 export {
+  PROPOSE_ONLY_CAPABILITY_INTENTS,
   PROPOSE_ONLY_CAPABILITY_VERBS,
   capabilityVerbAllowsRuleWiden,
 } from "@synap-core/types/proposals";
@@ -335,6 +335,34 @@ export const DEFAULT_DAILY_WRITE_CEILING: number | null = null;
 export const WORKER_IRREVERSIBLE_DAILY_CEILING = 50;
 
 /**
+ * LinkedIn connection requests ONE connected LinkedIn account may send per UTC
+ * day, through every door (the channel send door and a verb's provider call).
+ * Past it, the send is HELD and goes the next day
+ * (`services/channels/linkedin-account-limits.ts`). The default of the
+ * `linkedin_invitations_daily` axis; a row whose subject is the account
+ * (`messaging_account` + its row id) sets another value for that account.
+ */
+export const LINKEDIN_INVITATIONS_DAILY_LIMIT = 20;
+
+/**
+ * LinkedIn actions (messages and connection requests together) ONE connected
+ * LinkedIn account may make per UTC day. The default of the
+ * `linkedin_actions_daily` axis, per account like
+ * {@link LINKEDIN_INVITATIONS_DAILY_LIMIT}.
+ */
+export const LINKEDIN_ACTIONS_DAILY_LIMIT = 50;
+
+/**
+ * The spend maximums (`maxSpendCents`) of the compute an agent may start in
+ * one UTC day, summed, before a start that would run is proposed instead
+ * (0430, `COMPUTE_SPEND_CEILING` in @synap/capability-gate). The default of
+ * the `compute_spend_daily_cents` axis: `null`, NO limit (founder, 18 Nov
+ * 2026: opt-in per pod, like the daily-write limit). Every start carries its
+ * own required maximum whatever this says.
+ */
+export const DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS: number | null = null;
+
+/**
  * THE CAPS FOLD (agent routing W1c, 0330): the fallback value of every
  * `governance_ceilings` axis, in ONE table. A stored row overrides it for its
  * (subject, principal, scope); `resolveCeiling` (@synap/database) is the one
@@ -352,6 +380,10 @@ export const CEILING_DEFAULTS = {
   automation_ai_dispatch_daily: 50,
   worker_pending_approvals: 20,
   worker_irreversible_sends_daily: WORKER_IRREVERSIBLE_DAILY_CEILING,
+  linkedin_invitations_daily: LINKEDIN_INVITATIONS_DAILY_LIMIT,
+  linkedin_actions_daily: LINKEDIN_ACTIONS_DAILY_LIMIT,
+  /** No ceiling by default: opt-in per pod (a stored row). */
+  compute_spend_daily_cents: DEFAULT_COMPUTE_SPEND_DAILY_CEILING_CENTS,
 } as const;
 
 /**
@@ -729,6 +761,30 @@ export const HUMAN_GATE_EVENT_KEYS: readonly string[] = [
   // or a "make a rule from this" would compose.
   "trusted_issuer.trusted_issuer.widen_scopes" satisfies DirectProposalEventKey,
   "trusted_issuer.widen_scopes",
+  // CREDENTIAL WIDENINGS (ticket 370ee329). Each write below is approved by an
+  // executor that declares `widensCredential`: approving it is a person's act
+  // on the console, after a fresh sign-in (`assertFreshAuthentication`). A
+  // rule that executed it would skip both, so no rule may (tripwire
+  // `credential-writes-are-floored`, derived from the executors). An agent
+  // never installs on a computer by itself (decision c78d8bcf): its install
+  // ask reaches the gate, so this floor is live for it.
+  "installation.request" satisfies GateEventKey,
+  // Filed directly today (`createPendingProposal` / `insertPendingProposal`),
+  // so these never reach the engine: the floor holds the day one does, and
+  // refuses "Make a rule from this" for them.
+  "app.connect" satisfies GateEventKey,
+  "agent.connect" satisfies DirectProposalEventKey,
+  "vault.vault.request" satisfies DirectProposalEventKey,
+  "capability.capability.install" satisfies DirectProposalEventKey,
+  "capability.capability.update" satisfies DirectProposalEventKey,
+  "webhook.inbound_source.connect" satisfies DirectProposalEventKey,
+  // Gate doors, live for an agent (founder, 21 Nov 2026, wave 9563b6f7): an
+  // agent's tool can carry a credential (`credentialRef`), and adopting a
+  // template into a space installs its capabilities. Each is a proposal
+  // whatever rule or preset says, like an install since #1200 (findings
+  // cdc41c35, 61ed6cb5).
+  "tool.create" satisfies GateEventKey,
+  "workspace.adopt" satisfies GateEventKey,
 ];
 
 /** `${targetType}.${proposalType}` for a direct proposal door. */
@@ -825,10 +881,14 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "automation/update": "floored",
   "cell/create": "floored",
   "cell/define": "floored",
+  // Installing a marketplace cell type, or retiring one (soft-delete of the
+  // `widget_definitions` row): what the pod can draw, for every view that uses it.
+  "cell/install": "floored",
+  "cell/retire": "floored",
   "playbook/create": "floored",
   "playbook/promote": "floored",
-  // Editing a playbook can switch on its schedule, which materialises an ACTIVE
-  // cron automation (services/playbooks/cron-automation.ts).
+  // Editing a playbook can switch on its schedule activator, which compiles an
+  // ACTIVE cron rule.
   "playbook/update": "floored",
   // Choosing who runs a playbook for the person from now on (run choice v3,
   // decision D7): an agent or a third-party app may ASK, the person approves it
@@ -850,14 +910,16 @@ export const AGENT_STRUCTURE_DOOR_CLASS = {
   "workspace/restore": "other-floor", // 2 admin
   "profile/grant_access": "other-floor", // 2 admin (scope change)
   "profile/change_scope": "other-floor", // 2 admin (scope change)
+  "workspace/adopt": "other-floor", // 2.05 human gate (credential write, finding 61ed6cb5)
   // Widenable on purpose.
   "automation/execute": "widenable", // runs an automation a person activated
   "cell/update": "widenable", // config patch of an existing placement
   "playbook/run": "widenable", // runs an existing playbook
   // Outside D1/D2 — open questions in plans/reports/door-g.md.
-  "workspace/adopt": "widenable",
   "workspace/configure_public_projection": "widenable",
   "workspace/declare_source": "widenable",
+  // Filling a space's need (0426): which provider every run of the space uses.
+  "workspace/bind_need": "widenable",
 } as const satisfies Record<
   StructureDoor,
   "floored" | "other-floor" | "widenable"
@@ -955,6 +1017,9 @@ export type KnownGovernanceAction =
   | "grant_capability"
   // An agent handing a session to ANOTHER agent (roster add ≠ itself).
   | "assign_agent"
+  // One orchestrator started over several running sessions (D5, plan
+  // b38bc224): creates it, links and holds each picked session.
+  | "orchestrate"
   | "register"
   | "arrange"
   | "invite"
@@ -962,6 +1027,8 @@ export type KnownGovernanceAction =
   | "activate"
   | "declare_source"
   | "configure_public_projection"
+  // A space's need filled by a provider (0426, `services/needs`).
+  | "bind_need"
   // Work model L2: the `moveStatus` door's lifecycle move (entity.transition).
   | "transition"
   | "write";
@@ -1022,6 +1089,7 @@ export function requiredPermissionFor(
     action === "set_run_choice" ||
     action === "grant_capability" ||
     action === "assign_agent" ||
+    action === "orchestrate" ||
     action === "register" ||
     action === "arrange" ||
     action === "invite" ||
@@ -1032,6 +1100,8 @@ export function requiredPermissionFor(
     // Enterprise-OS Wave 0: declaring a workspace data edge
     // (synap_declare_workspace_source / Hub source-edges) is a governed write.
     action === "declare_source" ||
+    // Filling a space's need (0426): the same editor+ floor.
+    action === "bind_need" ||
     // Setting a workspace's public-projection config (Hub
     // public-projection door) is a governed write — same editor+ floor.
     action === "configure_public_projection" ||
@@ -1156,6 +1226,9 @@ const GRANT_SUBJECT_FOLDS: Readonly<Record<string, string>> = {
  */
 const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   "focus_session/assign_agent": "update",
+  // Starting an orchestrator creates a session and pauses the picked ones: a
+  // key that may update sessions may ASK for it; the door proposes.
+  "focus_session/orchestrate": "update",
   // The same hand-off, of a GOAL (W3): a key that may update a track may ask
   // to hand it to another agent as a delegate.
   "track/assign_agent": "update",
@@ -1176,6 +1249,11 @@ const GRANT_ACTION_FOLDS: Readonly<Record<string, string>> = {
   // Choosing who runs a playbook is part of running it (run choice v3): the
   // grant that may run it may ask to remember who does.
   "playbook/set_run_choice": "run",
+  // Installing a marketplace cell type or retiring one writes the same
+  // `widget_definitions` row a define writes: a key that may define a cell may
+  // ASK to install or retire one. The doors govern it (both floored, 2.09).
+  "cell/install": "define",
+  "cell/retire": "define",
 };
 
 /** `relationDef` → `relation_def`, `renderer.set` → `renderer_set`. */
@@ -1377,19 +1455,14 @@ export interface AgentPolicyInput {
    */
   capabilityGovernance?: "auto" | "propose" | "block" | null;
   /**
-   * The GRANT's exec-mode (the `grant_exec_mode` enum / `@synap/playbooks
-   * ExecMode` — the PERSISTABLE truth: `auto | propose`). Narrows the
-   * capability's own approval-state for THIS grant: "propose" forces a reviewable
-   * per-run proposal even if the capability is "auto". When present it takes
-   * precedence over capabilityGovernance in rung 2.7.
-   *
-   * NOTE: exec-mode lives in TWO layers. `dry-run` is the third persistable
-   * grant_exec_mode value but is a GATE-level concern — `gateCapabilityExecution`
-   * short-circuits it to a preview BEFORE calling `decideAgentPolicy`, so it never
-   * reaches this policy union. The retired `propose-each`/`block` values were
-   * orphaned (never persistable in the grant column); `propose` already covers
-   * what `propose-each` meant, and deny comes from no-grant / not-approved, not a
-   * `block` mode.
+   * The run's exec mode from its APPROVAL ROW (decision D2, document b387ca45:
+   * a `governance_rules` capability row is the ONLY answer to "may this run
+   * without asking?"; a grant means only "may use", and the grant's
+   * `exec_mode` column is no longer read since migration 0435). `gateCapabilityExecution`
+   * passes `auto` when the best-ranked row for this agent says auto; an "ask
+   * first" row or no row never reaches the policy (the gate proposes first).
+   * When present it takes precedence over capabilityGovernance in rung 2.7, so
+   * an "auto" row still meets rung 7's channel tightening.
    */
   capabilityExecMode?: "auto" | "propose" | null;
   /**
@@ -1442,16 +1515,6 @@ export interface AgentPolicyInput {
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
-    /**
-     * The move is a session END move (`subjectProfile.onEnd`, applied by the
-     * one close door after the session closed): the session having to END is
-     * the guardrail, so the done/lost default (2.85) and its named-rule-only
-     * widening do NOT apply — the move is governed like any other write of the
-     * closer (founder, 2026-11-05, plan b38e5e64 §7.2): a `propose` rule (an
-     * "ask first" agent) still proposes, and the humanOnly floor (2.075) still
-     * holds. Set ONLY by the close door's writer (`moveStatus.atSessionEnd`).
-     */
-    atSessionEnd?: boolean;
     /**
      * The thing is CURRENTLY in a done or lost option and the move takes it
      * to an open/active/paused one (a reopen). A fact the `moveStatus` door
@@ -1887,7 +1950,7 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // guarantees as 2.075. A session started into a playbook's first stage on a
   // thing already done or lost would take it back to that stage's status:
   // the person confirms the reopen, no rule widens it (finding 2d84febb).
-  // Stage advances and end moves never set `atSessionBirth`.
+  // Stage advances never set `atSessionBirth`.
   if (
     input.lifecycleMove?.atSessionBirth === true &&
     input.lifecycleMove.outOfTerminal === true
@@ -2047,16 +2110,17 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
   // (the two new fields absent → byte-identical to the prior verdict). Sits after
   // CBAC (rung 1) and ADMIN_ACTIONS (rung 2) — a capability the agent isn't
   // allowed must still deny first, and admin actions are non-negotiable — but
-  // BEFORE ownership/autoApprove/writesRequireProposal, because the per-grant
-  // exec-mode is the most specific, operator-authored signal about THIS run and
-  // must not be silently overridden by the routing workspace.
+  // BEFORE ownership/autoApprove/writesRequireProposal, because the run's
+  // approval row (its exec mode, D2) is the most specific, person-authored
+  // signal about THIS run and must not be silently overridden by the routing
+  // workspace.
   if (input.capabilityGovernance) {
     const mode = input.capabilityExecMode ?? input.capabilityGovernance;
     //   "auto"    → execute (operator pre-approved this capability)
     //   "propose" → propose  (reviewable capability.run proposal)
     //   "block"   → deny     (capability present but disabled — reachable only via
-    //                         capabilityGovernance; the grant exec-mode is just
-    //                         auto|propose, dry-run handled at the gate)
+    //                         capabilityGovernance; the approval row's exec mode
+    //                         is just auto|propose)
     if (mode === "block") {
       return { verdict: "deny", reason: CAPABILITY_BLOCKED_REASON };
     }
@@ -2130,11 +2194,9 @@ function decideForPrincipal(input: AgentPolicyInput): AgentPolicyVerdict {
     input.governanceRuleVerdict === "auto" &&
     isNamedRuleOnlyWrite(eventKey) &&
     input.governanceRuleNamesWrite !== true;
-  // The done/lost floor: a terminal move, unless it is a session END move
-  // (the session's end is its guardrail, `lifecycleMove.atSessionEnd`).
-  const terminalFloor =
-    input.lifecycleMove?.intoTerminal === true &&
-    input.lifecycleMove.atSessionEnd !== true;
+  // The done/lost floor: every terminal move (a session's end moves nothing,
+  // so none is exempt; decision 5e377b06).
+  const terminalFloor = input.lifecycleMove?.intoTerminal === true;
   const broadAutoOnTerminalMove =
     input.governanceRuleVerdict === "auto" &&
     terminalFloor &&
@@ -2374,6 +2436,8 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "capability/renderer.set": "disruptive", // struct: how a capability renders everywhere
   "cell/create": "disruptive", // struct (2.09)
   "cell/define": "disruptive", // struct (2.09)
+  "cell/install": "disruptive", // struct (2.09)
+  "cell/retire": "disruptive", // struct (2.09): every view drawing it loses its renderer
   "cell/update": "reversible", // config patch of an existing placement
   "channel/bind": "disruptive", // scope: wires a room to a bridge
   "channel/create_branch": "disruptive", // struct: a new room the person must see
@@ -2403,6 +2467,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "facet/detach": "reversible", // soft-delete; re-attach recovers it
   "facet/update": "reversible",
   "focus_session/assign_agent": "disruptive", // effect: another agent starts work
+  "focus_session/orchestrate": "disruptive", // effect: pauses other running work, wakes its agents
   "focus_session/create": "reversible",
   "focus_session/grant_capability": "disruptive", // egress
   "focus_session/update": "reversible", // a criteria change is floored (2.1)
@@ -2472,6 +2537,7 @@ export const REVERSIBILITY_DOOR_CLASS = {
   "workspace/configure_public_projection": "disruptive", // scope: public
   "workspace/create": "disruptive", // struct (2.09)
   "workspace/declare_source": "disruptive", // scope: a data edge
+  "workspace/bind_need": "disruptive", // scope: the provider every run uses
   "workspace/delete": "disruptive", // destroy / ADMIN
   "workspace/restore": "disruptive", // ADMIN
   "workspace/update": "disruptive", // ADMIN
@@ -2648,6 +2714,10 @@ export const GATE_WRITE_DOORS = {
   "capability/renderer.set": "gate",
   "cell/create": "gate",
   "cell/define": "gate",
+  // `POST /cells/install` and `DELETE /cells/:typeKey` (Hub REST). Approved by
+  // `routers/proposals/executors/cell.ts`.
+  "cell/install": "gate",
+  "cell/retire": "gate",
   "cell/update": "gate",
   "channel/bind": "gate",
   "channel/create_branch": "gate",
@@ -2711,6 +2781,12 @@ export const GATE_WRITE_DOORS = {
   // it. A person staffing their own session, and an agent adding ITSELF, never
   // reach this door (`services/focus-sessions/agent-hand-off.ts`).
   "focus_session/assign_agent": "gate",
+  // Starting an orchestrator over N running sessions (D5): it pauses each one
+  // on the person's yes and posts into their rooms, waking their agents —
+  // work other agents were doing stops, which approving cannot undo. Its own
+  // door, NOT in DEFAULT_AUTO_APPROVE: an agent (the Operations view, a
+  // pod-app) proposes; a person in a signed-in client applies it at once.
+  "focus_session/orchestrate": "gate",
   "focus_session/create": "gate",
   "focus_session/grant_capability": "gate",
   "focus_session/update": "gate+automation",
@@ -2853,6 +2929,9 @@ export const GATE_WRITE_DOORS = {
   "workspace/configure_public_projection": "gate",
   "workspace/create": "gate",
   "workspace/declare_source": "gate",
+  // A space's need filled by a provider (0426): Hub `PUT /needs/:need/binding`
+  // and tRPC `needs.bind`; replayed by `routers/proposals/executors/workspace.ts`.
+  "workspace/bind_need": "gate",
   "workspace/delete": "gate",
   "workspace/update": "gate",
   "workspaceMember/add": "gate",
@@ -2949,10 +3028,20 @@ export const DIRECT_PROPOSAL_DOORS = {
   // kind every space may read — always a pending proposal, for anyone; the
   // approval half re-runs the preflight and calls `declareLifecycle`.
   "profile/declare_lifecycle": "direct",
+  // Relabelling, reordering or retiring a declared lifecycle's options
+  // (`services/lifecycle/change-lifecycle-options.ts`, ticket fd146324): the
+  // same policy — always a pending proposal; the approval half runs the
+  // lifecycle door (`changeLifecycleOptions`), which re-decides.
+  "property_def/change_lifecycle_options": "direct",
   "profile/merge": "direct",
   "pod_hygiene/cleanup_pack": "direct",
   "vault/vault.request": "direct",
-  "workspace/join": "direct",
+  // Wiring a space's inbound webhook source into a host (decision abaaa696):
+  // the Synap Core verb `inbound_source.connect` ALWAYS files this, for anyone
+  // (`services/webhooks/connect-inbound-source.ts`). Approved by
+  // `routers/proposals/executors/webhook.ts` (pod admin, console only): it
+  // mints the source and hands its secret to the host, never to a person.
+  "webhook/inbound_source.connect": "direct",
   // D7 — owner consent to a trusted issuer's wider scopes. Filed at boot by
   // `services/trusted-issuers/scope-request-proposal.ts`; approved by
   // `routers/proposals/executors/trusted-issuer.ts` (pod admin, a person —
@@ -3031,10 +3120,22 @@ export const COMPOSITE_OP_GATE_PAIRS = {
   create_skill: { subjectType: "skill", action: "create" },
   create_automation: { subjectType: "automation", action: "create" },
   create_rule: { subjectType: "rule", action: "create" },
-  // A DRAFT process from a capture — the `playbooks.create` door.
+  // A process — the `playbooks.create` door.
   create_playbook: { subjectType: "playbook", action: "create" },
   // A List over the bundle's things — the `views.create` door.
   create_view: { subjectType: "view", action: "create" },
+  // A playbook's UI: a generated cell — the `cell/define` door…
+  create_cell: { subjectType: "cell", action: "define" },
+  // …and the page it shows on — the `profile/renderer.set` door, which binds
+  // a playbook's or a view's own page too (per-object binding).
+  bind_renderer: { subjectType: "profile", action: "renderer.set" },
+  // A plan's domain: its space and its kinds — the doors
+  // `synap_create_workspace` and `synap_define_kind` file through. The
+  // lifecycle door is direct (always pending, no gate pair): it gates on the
+  // kind's own schema door.
+  create_workspace: { subjectType: "workspace", action: "create" },
+  define_kind: { subjectType: "profile", action: "create" },
+  declare_lifecycle: { subjectType: "profile", action: "create" },
   // A Library rebuild's CHANGES to what it made before — each the update door
   // of the object it rewrites (never a create: no twin is minted).
   update_skill: { subjectType: "skill", action: "update" },
@@ -3064,15 +3165,28 @@ export type CompositeOpName = keyof typeof COMPOSITE_OP_GATE_PAIRS;
 const COMPOSITE_OP_BLAST_RADIUS: Record<CompositeOpName, number> = {
   create_rule: 4,
   create_skill: 3,
-  // A process is configuration like an automation, and is likewise born
-  // inert (always `draft`); it outranks the automation because a process,
-  // once completed, ORCHESTRATES runs, sessions and their outputs.
+  // A process is configuration like an automation, born by the same rule
+  // (`statusAtCreate`); it outranks the automation because a process
+  // ORCHESTRATES runs, sessions and their outputs.
   create_playbook: 2.5,
   create_automation: 2,
   create_entity: 1,
   // A saved query over data that already exists: presentational, reversible,
   // mints no identity — below an entity, above a bare edge.
   create_view: 0.5,
+  // Generated CODE that runs in the frame and writes through the bridge
+  // (governed): configuration that acts, like an automation, ranked just
+  // above it; it never runs unattended.
+  create_cell: 2.2,
+  // Changes how one object's page renders: presentational and revocable,
+  // above a view (it replaces a page a person reads), below a record.
+  bind_renderer: 0.8,
+  // A domain's structure, read by every space and every later write: a space
+  // and a kind outrank a rule's halves; a lifecycle changes how every thing
+  // of a kind moves.
+  create_workspace: 3.7,
+  define_kind: 3.6,
+  declare_lifecycle: 3.5,
   create_relation: 0,
   // An update rewrites a row a person already approved once: ranked with the
   // create of the same object, a hair below it (it mints no identity).
@@ -3246,3 +3360,7 @@ export type GateEventKey<K extends GateWriteDoor = GateWriteDoor> =
 
 // The one content check + switch for a shell command the pod runs (audit F8).
 export * from "./command-policy.js";
+
+// THE ranking of approval rows for a tool run (finding ac28928c): one spelling
+// for the resolver, the action-mode read and pod admin's tool page.
+export * from "./rule-ranking.js";

@@ -153,6 +153,43 @@ describe("applyMarketInstall — by-key fallback", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  // 237175b5: the CP answers 404 for a package it does not have AND for a
+  // private one (to anyone but its author). With no catalog row, "not in the
+  // catalog" comes first; only a 401/403 is named private.
+  it("a package the catalog does not have reads as not in the catalog, not as private", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("Not found", { status: 404 })
+    ) as unknown as typeof fetch;
+
+    const refused = (await applyMarketInstall({
+      kind: "template",
+      slug: "ghost-pack",
+      userId: "user-1",
+      workspaceId: null,
+    }).catch((e: unknown) => e)) as { code?: string; message?: string };
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(refused.message).toMatch(
+      /the catalog has no public package "ghost-pack"/
+    );
+    expect(refused.message).not.toMatch(/identity seam/);
+    expect(createWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("a package the CP refuses to serve (403) is named private", async () => {
+    global.fetch = vi.fn(
+      async () => new Response("Forbidden", { status: 403 })
+    ) as unknown as typeof fetch;
+
+    await expect(
+      applyMarketInstall({
+        kind: "template",
+        slug: "someone-private",
+        userId: "user-1",
+        workspaceId: null,
+      })
+    ).rejects.toThrow(/isn't fetchable by this pod. Private packages/);
+  });
+
   it("re-resolves a cell with NO cache row by key from CP marketplace/cells, carrying the full field set", async () => {
     const CELL_ROW = {
       key: "chart",

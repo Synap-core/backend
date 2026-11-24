@@ -64,12 +64,24 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     const byId = Object.fromEntries(out.candidates.map((c) => [c.id, c]));
     expect(byId["pb-track"]).toMatchObject({
       scope: "project",
-      templateKind: "Goal template",
+      templateKind: "Goal process",
     });
     expect(byId["pb-twin"]).toMatchObject({
       scope: "session",
-      templateKind: "Work template",
+      templateKind: "Process",
     });
+  });
+
+  it("carries each candidate's description, and none for a playbook without one (finding 9463e6b3)", async () => {
+    const out = await matchSessionTemplate({
+      userId: "u1",
+      goal: "business model interrogation",
+    });
+    const byId = Object.fromEntries(out.candidates.map((c) => [c.id, c]));
+    expect(byId["pb-track"]!.description).toBe(
+      "Run the business model interrogation as a track"
+    );
+    expect("description" in byId["pb-twin"]!).toBe(false);
   });
 
   it("honours the caller's limit, and keeps the default cap of 5 without one (ticket a9d88abf)", async () => {
@@ -93,7 +105,7 @@ describe("matchSessionTemplate — template kind on every candidate", () => {
     });
     expect(session.candidates.map((c) => c.id)).toEqual(["pb-twin"]);
     expect(
-      session.candidates.some((c) => c.templateKind === "Goal template")
+      session.candidates.some((c) => c.templateKind === "Goal process")
     ).toBe(false);
     const find = await matchSessionTemplate(input);
     expect(find.candidates.map((c) => c.id)).toContain("pb-track");

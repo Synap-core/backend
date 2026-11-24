@@ -96,25 +96,19 @@ function resolvePrimary(
     presentation?.family === "link" ? copies[0] : undefined;
 
   const fromSource = (source: PresentationMediaSource): MediaRef | null => {
-    if ("property" in source) {
-      const value = firstString(props[source.property]);
-      if (value && HTTP_URL.test(value)) {
-        // (a) the pod holds a copy of it: never hot-link (an <img> on a third-party
-        // URL leaks the viewer's IP/referrer and dies with the source).
-        const copy = copies.find((c) => c.sourceUrl === value) ?? derivedCopy();
-        if (copy) return copyRef(copy);
-        // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
-        return { via: "external", url: value, kind };
-      }
-      if (value && isUuid(value)) return stored({ documentId: value, mime });
-    } else if ("documentId" in source) {
-      const documentId = str(entity.documentId);
-      if (documentId) return stored({ documentId, mime });
-    } else {
-      const entityId = firstString(props[source.entityRef]);
-      if (entityId && isUuid(entityId)) return { via: "stored", entityId };
+    const hit = readDeclaredSource(source, props, entity.documentId);
+    if (!hit) return null;
+    if ("url" in hit) {
+      // (a) the pod holds a copy of it: never hot-link (an <img> on a third-party
+      // URL leaks the viewer's IP/referrer and dies with the source).
+      const copy = copies.find((c) => c.sourceUrl === hit.url) ?? derivedCopy();
+      if (copy) return copyRef(copy);
+      // (b) not copied (yet): an external reference, drawn as a link, never an <img>.
+      return { via: "external", url: hit.url, kind };
     }
-    return null;
+    if ("documentId" in hit)
+      return stored({ documentId: hit.documentId, mime });
+    return { via: "stored", entityId: hit.entityId };
   };
 
   // (a)/(b) for `source`, then each fallback in declared order: first hit wins.
@@ -132,6 +126,45 @@ function resolvePrimary(
   if (copies[0]) return copyRef(copies[0]);
 
   return { via: "none" };
+}
+
+type DeclaredSourceHit =
+  { url: string } | { documentId: string } | { entityId: string };
+
+/** What one declared source holds, read with the resolver's own rules. */
+function readDeclaredSource(
+  source: PresentationMediaSource,
+  props: Record<string, unknown>,
+  ownDocumentId: string | null | undefined
+): DeclaredSourceHit | null {
+  if ("property" in source) {
+    const value = firstString(props[source.property]);
+    if (value && HTTP_URL.test(value)) return { url: value };
+    if (value && isUuid(value)) return { documentId: value };
+  } else if ("documentId" in source) {
+    const documentId = str(ownDocumentId);
+    if (documentId) return { documentId };
+  } else {
+    const entityId = firstString(props[source.entityRef]);
+    if (entityId && isUuid(entityId)) return { entityId };
+  }
+  return null;
+}
+
+/**
+ * Would this declared source yield a reference for these properties? The same
+ * reading `resolveEntityMedia` does (one code path), minus the pod-held copies
+ * of step (a). `documentId`: the entity's own linked document: its id, or
+ * `true` when the host only knows that one exists.
+ */
+export function declaredSourceYields(
+  source: PresentationMediaSource,
+  props: Record<string, unknown> | null | undefined,
+  own: { documentId?: string | boolean | null | undefined }
+): boolean {
+  const documentId =
+    own.documentId === true ? "own" : own.documentId || undefined;
+  return readDeclaredSource(source, props ?? {}, documentId) !== null;
 }
 
 /**

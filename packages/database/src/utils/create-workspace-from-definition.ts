@@ -750,7 +750,9 @@ export async function createWorkspaceFromDefinition(
   // stored as-authored, gaps are reported and can be proposed for, never
   // reconciled away here.
   if (definition.taskIntents) {
-    settings.taskIntents = definition.taskIntents;
+    // `settings.taskIntents` is retired (0426): a space's needs are derived
+    // from the `need:` refs of its processes (`services/needs`), and no
+    // runtime path read taskIntents since 0419. Not written any more.
   }
   const intent = projectTemplateIntent(definition.intent);
   if (intent) {
@@ -795,11 +797,6 @@ export async function createWorkspaceFromDefinition(
   if (systemSlug) settings.systemSlug = systemSlug;
   if (opts.workspaceType) settings.workspaceType = opts.workspaceType;
   if (opts.linkedAgentId) settings.linkedAgentId = opts.linkedAgentId;
-  // Agent workspaces invert the normal hierarchy: the AI agent is owner
-  // (creative authority) and the human is admin (irreversibility guard).
-  if (opts.workspaceType === "agent") {
-    settings.governanceMode = "agent-owned";
-  }
 
   // 1. Create workspace
   const workspaceRepo = new WorkspaceRepository(dbConn, eventRepo);

@@ -137,6 +137,12 @@ export function revertTargetsFromPlan(
       id,
     })),
     ...(plan.viewIds ?? []).map((id) => ({ kind: "view" as const, id })),
+    // A playbook's UI: bindings are revoked before the cells they show.
+    ...(plan.rendererBindingIds ?? []).map((id) => ({
+      kind: "renderer_binding" as const,
+      id,
+    })),
+    ...(plan.cellIds ?? []).map((id) => ({ kind: "cell" as const, id })),
     // Config rows a rebuild's `update_*` ops changed (absent on older records).
     ...(plan.rowPatches ?? []).map((p) => ({
       kind: "row_patch" as const,
@@ -251,6 +257,8 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
       | "ruleIds"
       | "playbookIds"
       | "viewIds"
+      | "cellIds"
+      | "rendererBindingIds"
       | "sessionIds"
       | "projectIds"
       | "linkIds"
@@ -264,6 +272,8 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
     ruleIds: [],
     playbookIds: [],
     viewIds: [],
+    cellIds: [],
+    rendererBindingIds: [],
     sessionIds: [],
     projectIds: [],
     linkIds: [],
@@ -334,6 +344,12 @@ function undoneRecord(reverted: RevertTarget[]): CompleteMaterializedRecord {
         break;
       case "view":
         record.viewIds.push(target.id);
+        break;
+      case "cell":
+        record.cellIds.push(target.id);
+        break;
+      case "renderer_binding":
+        record.rendererBindingIds.push(target.id);
         break;
     }
   }

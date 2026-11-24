@@ -26,6 +26,7 @@ import {
 import { resolveServiceName } from "../service-marks/index.js";
 import type { SessionPostIntent } from "./session-post.js";
 import { resolveUnitState, type UnitStateView } from "../units/state.js";
+import { LIVE_RUN_STATUSES } from "../units/run-status.js";
 import { workClockIn } from "../work-clock/index.js";
 
 /**
@@ -717,18 +718,6 @@ export const EXTERNAL_AGENT_STATUSES = [
 export type ExternalAgentStatus = (typeof EXTERNAL_AGENT_STATUSES)[number];
 
 /**
- * Run statuses a cancel can act on — a MIRROR of `LIVE_RUN_STATUSES`
- * (`@synap/database` utils/live-run-status.ts), which this leaf cannot import.
- * `services/agent-dispatch/__tests__/external-agent-live-mirror.test.ts` (packages/api) fails
- * when the two disagree.
- */
-export const EXTERNAL_AGENT_LIVE_RUN_STATUSES = [
-  "running",
-  "waiting_on_you",
-  "stale",
-] as const;
-
-/**
  * Consecutive failed status reads after which the task reads "Can't reach
  * <service>" instead of its last known state. One or two misses are a blip the
  * next tick usually heals; three in a row (minutes, at the poll's cadence) is
@@ -1017,9 +1006,7 @@ export function resolveExternalAgentView(
     // proposal is the way (its run is `proposed`, never live, either way).
     cancellable:
       !pendingStart &&
-      (EXTERNAL_AGENT_LIVE_RUN_STATUSES as readonly string[]).includes(
-        agent.runStatus
-      ),
+      (LIVE_RUN_STATUSES as readonly string[]).includes(agent.runStatus),
     // The provider door is primary when the agent waits on the person — but a
     // pending start's move is the PROPOSAL, so the provider stays secondary.
     openProminent: mark.state === "needs_you" && !pendingStart,

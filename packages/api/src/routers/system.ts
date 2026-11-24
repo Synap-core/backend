@@ -842,7 +842,34 @@ export const systemRouter = router({
       });
     }
 
-    // 5. Trusted issuers startup seed check
+    // 5. PDF engine (Stirling PDF, PDF tools W1). OPTIONAL: a pod that has not
+    // turned it on (no STIRLING_URL) is not unhealthy, so "off" adds no row —
+    // this list's statuses are healthy/degraded/unhealthy only, and a client
+    // reads anything else as a fault. Configured: UP within 3 s, or unhealthy.
+    {
+      const { probePdfEngine } =
+        await import("../services/pdf/stirling-client.js");
+      const start = Date.now();
+      const state = await probePdfEngine();
+      if (state !== "off") {
+        services.push(
+          state === "ok"
+            ? {
+                name: "stirling-pdf",
+                status: "healthy",
+                latency: Date.now() - start,
+              }
+            : {
+                name: "stirling-pdf",
+                status: "unhealthy",
+                message:
+                  "STIRLING_URL is set but the engine did not answer UP at /api/v1/info/status within 3 s",
+              }
+        );
+      }
+    }
+
+    // 6. Trusted issuers startup seed check
     const issuerSeed = getTrustedIssuerSeedHealth();
     services.push({
       name: "TrustedIssuersSeed",
@@ -1729,7 +1756,7 @@ export const systemRouter = router({
 
         // 2. Agent users this human spawned. Identified via
         //    users.agent_metadata->>'createdByUserId' = <target.id>. Their
-        //    own memberships and api keys are cleaned up alongside.
+        //    api keys are cleaned up alongside.
         const childAgents = await tx
           .select({ id: users.id })
           .from(users)
@@ -1741,9 +1768,6 @@ export const systemRouter = router({
           );
         const childAgentIds = childAgents.map((row) => row.id);
         if (childAgentIds.length > 0) {
-          await tx
-            .delete(workspaceMembers)
-            .where(inArray(workspaceMembers.userId, childAgentIds));
           // Through the revoke door first: a hard DELETE alone leaves the
           // keys validating from the verification cache for up to 30s.
           await revokeApiKeys(tx, {

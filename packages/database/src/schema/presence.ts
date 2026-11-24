@@ -39,6 +39,12 @@ export const presenceChallenges = pgTable(
      * (0401): one proof, one passkey change.
      */
     redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+    /**
+     * The session a `passkey_change` grant may be redeemed by (0412, founder
+     * decision of 9 Nov 2026): `kratos:<id>` or `device:<id>`, stamped by
+     * `presence.authorizePasskeyChange`. A grant with none is not redeemable.
+     */
+    grantSession: text("grant_session"),
     /** How it was answered: `passkey` | `device_key`. */
     method: text("method"),
     deviceKeyId: uuid("device_key_id"),
@@ -162,6 +168,50 @@ export const presenceDisownedPasskeys = pgTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.userId, t.credentialId] }),
+  })
+);
+
+/**
+ * "Add this device" (0412, founder decision of 9 Nov 2026): a NEW device asks,
+ * a device the person already uses approves it (number matching and a proof
+ * from an existing factor), then the new device adds its own passkey or device
+ * key with no further proof, once. `requester_session` binds the request to
+ * the session that asked; `expired` is derived when read, never stored. One
+ * pending request per person.
+ */
+export const presenceDeviceLinks = pgTable(
+  "presence_device_links",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: text("user_id").notNull(),
+    /** `passkey` | `device_key` (CHECK in 0412). */
+    kind: text("kind").notNull(),
+    /** What the new device calls itself ("iPhone · Safari"). */
+    label: text("label").notNull(),
+    /** `kratos:<session id>` or `device:<person_devices id>`. */
+    requesterSession: text("requester_session").notNull(),
+    /** `device_key` only: `presenceKeyFingerprint` of the key it will enrol. */
+    keyFingerprint: text("key_fingerprint"),
+    /** The two digits the new device shows. Never sent to another device. */
+    matchNumber: text("match_number").notNull(),
+    /** Three two-digit numbers, the match among them, shuffled. */
+    choices: text("choices").array().notNull(),
+    /** `pending` | `approved` | `declined` | `redeemed` | `replaced` (CHECK in 0412). */
+    status: text("status").notNull().default("pending"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    /** How the approving device proved presence (a proof kind), or null in `report`. */
+    approvedMethod: text("approved_method"),
+    redeemedAt: timestamp("redeemed_at", { withTimezone: true }),
+  },
+  (t) => ({
+    userIdx: index("presence_device_links_user_idx").on(t.userId, t.createdAt),
+    onePending: uniqueIndex("presence_device_links_one_pending")
+      .on(t.userId)
+      .where(sql`${t.status} = 'pending'`),
   })
 );
 

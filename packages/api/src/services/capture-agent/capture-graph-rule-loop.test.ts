@@ -31,6 +31,8 @@ const { resolveProfile, validateEntityCreateForProposal } = vi.hoisted(() => ({
     valid: true,
     errors: [] as string[],
     unmodeled: [] as Array<{ key: string; didYouMean?: string }>,
+    modeled: [],
+    moved: [],
   })),
 }));
 
@@ -230,7 +232,6 @@ describe("an automation may reference a skill the SAME batch creates", () => {
     expect(result.automations).toEqual([
       expect.objectContaining({
         automationId: "auto-Create client subfolder",
-        enabled: false,
       }),
     ]);
   });

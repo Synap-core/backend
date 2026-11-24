@@ -135,6 +135,7 @@ describe("reconcileInstalledPacks", () => {
           kind: "proposed",
           applied: ["stages"],
           ownerOwned: [],
+          held: [],
         },
       ],
       missing: [],

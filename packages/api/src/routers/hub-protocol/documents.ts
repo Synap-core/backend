@@ -14,7 +14,11 @@ import { scopedProcedure } from "../../middleware/api-key-auth.js";
 import { TRPCError } from "@trpc/server";
 import { documentsRouter as regularDocumentsRouter } from "../documents.js";
 import { readableFileEntityIdForDocument } from "../../utils/stored-file-access.js";
-import { actingAgentUserId, createHubProtocolCallerContext } from "./utils.js";
+import {
+  actingAgentUserId,
+  ambientSessionOf,
+  createHubProtocolCallerContext,
+} from "./utils.js";
 import {
   db,
   normalizeDocumentType,
@@ -32,7 +36,11 @@ import {
 import { createLogger } from "@synap-core/core";
 import { auditLog } from "../../utils/audit-log.js";
 import { emitSideEffects } from "@synap/events";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  type PermissionCheckOpts,
+} from "../../utils/permission-check.js";
+import { assertQuestionMayBeFiled } from "../../services/document-patch/ask-governance.js";
 import {
   resolveWriteIdempotencyKey,
   idempotencyWindowSeconds,
@@ -52,6 +60,11 @@ import {
   loadPatchDocument,
 } from "../../services/document-patch/apply-document-patch.js";
 import { DocumentPatchOpsSchema } from "../../services/document-patch/patch-ops.js";
+import {
+  holdsAskDefinition,
+  materializeAskDefinitions,
+} from "../../services/document-patch/materialize-asks.js";
+import { askNudgeFor } from "../../services/document-patch/ask-nudge.js";
 import { diagnoseHtmlPage } from "../../services/document-patch/document-diagnostics.js";
 import {
   podDocumentScopeFloor,
@@ -261,7 +274,7 @@ export const documentsRouter = router({
       });
 
       // Governance check — AI agent creating a document requires proposal by default
-      const perm = await checkPermissionOrPropose({
+      const gateOpts = {
         userId: agentUserId,
         agentUserId,
         workspaceId: input.workspaceId ?? undefined,
@@ -293,7 +306,33 @@ export const documentsRouter = router({
           // approval re-reads them through the floor.
           ...scoped,
         },
-      });
+      } satisfies PermissionCheckOpts;
+      // A question DEFINITION in an agent's markdown (`:::synap-ask` + `ask`)
+      // becomes a real question on the author's verified session and the body
+      // (stored, or carried by the proposal) holds the reference form
+      // (`materialize-asks.ts`). Filed only once a dry run of governance (and
+      // the agent's proposal cap) does not refuse the write; a replay that
+      // already landed returned above and files nothing.
+      if (
+        actingAgent &&
+        !input.url &&
+        normalizeDocumentType(input.type, "markdown") === "markdown" &&
+        input.content &&
+        holdsAskDefinition([input.content])
+      ) {
+        await assertQuestionMayBeFiled(gateOpts, actingAgent);
+        const materialized = await materializeAskDefinitions([input.content], {
+          userId,
+          agentUserId: actingAgent,
+          sessionId: ambientSessionOf(ctx),
+          namedSessionId: ctx.sessionId ?? null,
+        });
+        if (materialized.changed) {
+          input.content = materialized.texts[0]!;
+          gateOpts.data.content = input.content;
+        }
+      }
+      const perm = await checkPermissionOrPropose(gateOpts);
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
@@ -318,23 +357,29 @@ export const documentsRouter = router({
         ...(slotClaimWarning ? [slotClaimWarning] : []),
         ...pageWarnings,
       ];
-      const receiptWarnings = warnings.length > 0 ? { warnings } : {};
+      // A question for the person written as prose, with no ask block in the
+      // document: one advisory line, never a refusal (`ask-nudge.ts`).
+      const nudge =
+        actingAgent &&
+        !input.url &&
+        normalizeDocumentType(input.type, "markdown") === "markdown"
+          ? askNudgeFor([input.content ?? ""])
+          : null;
+      const receiptWarnings = {
+        ...(warnings.length > 0 ? { warnings } : {}),
+        ...(nudge ? { nudge } : {}),
+      };
 
       if ("proposalId" in perm) {
         // Not auto-approved: content is stored in proposal JSONB.
         // MinIO upload happens in proposals.approve when the user accepts.
         // `deduped` = the proposal SSOT returned an existing identical proposal
         // (an idempotent replay), so report duplicate-ignored, not a fresh propose.
-        const { isJoinGate, proposedMessageFor } =
+        const { proposedMessageFor } =
           await import("../../utils/permission-check.js");
-        // JOIN GATE: no document proposal was filed at all (a workspace-join
-        // request was filed instead), so the pre-allocated `documentId` can
-        // never resolve. Same family as the PHANTOM ENVELOPE ID FIX in
-        // `entities/create.ts`: an id that cannot resolve is worse than an
-        // absent field.
-        const joinGate = isJoinGate(perm.proposalType);
         return {
-          ...(joinGate ? {} : { id: documentId, documentId }),
+          id: documentId,
+          documentId,
           status: "proposed" as const,
           proposalType: perm.proposalType,
           ackState: perm.deduped
@@ -347,10 +392,9 @@ export const documentsRouter = router({
           reviewUrl: perm.reviewUrl,
           message: proposedMessageFor(
             perm.proposalType,
-            "Document creation proposed, awaiting approval",
-            perm.deferred
+            "Document creation proposed, awaiting approval"
           ),
-          // Join gate that KEPT the write: replayed once the join is approved.
+          // KEPT on today's held-writes pack: replayed once it is approved.
           ...(perm.deferred
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
@@ -590,6 +634,7 @@ export const documentsRouter = router({
         sourceMessageId:
           input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
         provenanceSessionId: ctx.sessionId ?? null,
+        ambientSessionId: ambientSessionOf(ctx),
       })
     ),
 
@@ -631,6 +676,7 @@ export const documentsRouter = router({
         sourceMessageId:
           input.sourceMessageId ?? ctx.sourceMessageId ?? undefined,
         provenanceSessionId: ctx.sessionId ?? null,
+        ambientSessionId: ambientSessionOf(ctx),
       });
     }),
 
@@ -670,7 +716,7 @@ export const documentsRouter = router({
         // body-only agent id is how agent writes previously ran as the human.
         agentUserId: (await actingAgentUserId(ctx, input.agentUserId)) ?? null,
         sessionId: input.sessionId,
-        ambientSessionId: ctx.sessionId ?? null,
+        ambientSessionId: ambientSessionOf(ctx),
         sectionId: input.sectionId,
         title: input.title,
         body: input.body,

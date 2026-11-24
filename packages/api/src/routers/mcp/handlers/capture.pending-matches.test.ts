@@ -192,7 +192,12 @@ describe("synap_capture — fuzzy pending twins are advice (C2-b)", () => {
   it("returns pendingMatches with their reviewUrl, and the write is still filed", async () => {
     findPendingTextMatches.mockResolvedValue([match("prop-old", 2)]);
     const out = await call({
-      entities: [{ profileSlug: "note", title: "Acme onboarding notes" }],
+      // Two entities: ONE plain entity is a typed create (see
+      // capture.single-entity-create.test.ts), not a graph.
+      entities: [
+        { profileSlug: "note", title: "Acme onboarding notes" },
+        { profileSlug: "note", title: "Acme onboarding checklist" },
+      ],
     });
     expect(submitCaptureGraph).toHaveBeenCalledTimes(1);
     expect(out.status).toBe("proposed");
@@ -245,7 +250,12 @@ describe("synap_capture — fuzzy pending twins are advice (C2-b)", () => {
     h.submitResult = filed("prop-twin", true);
     findPendingTextMatches.mockResolvedValue([match("prop-twin", 2)]);
     const out = await call({
-      entities: [{ profileSlug: "note", title: "Acme onboarding notes" }],
+      // Two entities: ONE plain entity is a typed create (see
+      // capture.single-entity-create.test.ts), not a graph.
+      entities: [
+        { profileSlug: "note", title: "Acme onboarding notes" },
+        { profileSlug: "note", title: "Acme onboarding checklist" },
+      ],
     });
     expect(out.status).toBe("duplicate");
     expect(out.pendingMatches).toBeUndefined();
@@ -254,7 +264,12 @@ describe("synap_capture — fuzzy pending twins are advice (C2-b)", () => {
   it("a failed scan drops the advice, never the write", async () => {
     findPendingTextMatches.mockRejectedValue(new Error("db down"));
     const out = await call({
-      entities: [{ profileSlug: "note", title: "Acme onboarding notes" }],
+      // Two entities: ONE plain entity is a typed create (see
+      // capture.single-entity-create.test.ts), not a graph.
+      entities: [
+        { profileSlug: "note", title: "Acme onboarding notes" },
+        { profileSlug: "note", title: "Acme onboarding checklist" },
+      ],
     });
     expect(submitCaptureGraph).toHaveBeenCalledTimes(1);
     expect(out.status).toBe("proposed");

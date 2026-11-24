@@ -25,6 +25,7 @@ import {
   type NeedsYouInvite,
   type NeedsYouRow,
 } from "../needs-you/index.js";
+import type { NeedsYouBlocks } from "../needs-you/context.js";
 import {
   resolveUnitState,
   unitStateInputOfWaitKind,
@@ -137,6 +138,12 @@ export interface LensRow {
    * Absent = nothing says; draw nothing.
    */
   unblocks?: string;
+  /**
+   * The THING an owed ask holds up, with its status now and the status it
+   * cannot reach until the person answers (the pod's `Signal.blocks`, named
+   * under the reader's entity floor). Absent = the ask names no thing.
+   */
+  blocks?: NeedsYouBlocks;
   /**
    * The KIND of ask, as a glyph key (`needsYouReasonOf`: decision · ask ·
    * review · failure · an owed slot's blocker) — drawn as the row's reason
@@ -272,6 +279,8 @@ export interface LensNeedsYouSignal extends GroupableSignal {
   subjectKind?: string | null;
   /** `owed-slot`: what the answer unblocks (`Signal.unblocks`). */
   unblocks?: string | null;
+  /** `owed-slot`: the thing the ask holds up (`Signal.blocks`). */
+  blocks?: NeedsYouBlocks | null;
   title: string;
   category?: string | null;
   /** Notification registry type — `placeSignal` reads it for the banner rule. */
@@ -695,6 +704,7 @@ export function lensRowOfNeedsYou<T extends LensNeedsYouSignal>(
       ...(s.kind === "owed-slot" && s.unblocks?.trim()
         ? { unblocks: s.unblocks.trim() }
         : {}),
+      ...(s.kind === "owed-slot" && s.blocks ? { blocks: s.blocks } : {}),
       reasonKind: needsYouReasonOf(s),
       ...(s.subjectKind?.trim() ? { subjectKind: s.subjectKind.trim() } : {}),
       repeat: repeatLabel(s),

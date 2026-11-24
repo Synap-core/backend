@@ -7,6 +7,10 @@
  *                            re-running its preflight (the same always-pending
  *                            schema policy as property_def/retire, so it
  *                            shares this file's approval bookkeeping)
+ *   property_def/change_lifecycle_options
+ *                            relabel, reorder or retire a lifecycle's options
+ *                            through the lifecycle door (same always-pending
+ *                            schema policy)
  *   profile/merge            the retire refusal's merge suggestion, applied by
  *                            the conversions engine (pod admin only)
  *   pod_hygiene/cleanup_pack apply the APPROVED items of a pack through the
@@ -17,7 +21,6 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  and,
   eq,
   drizzleSql,
   proposals,
@@ -25,6 +28,10 @@ import {
   focusSessions,
   ProposalStatus,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
+  and,
 } from "@synap/database";
 import {
   readPackItems,
@@ -48,6 +55,10 @@ import {
   applyKindLifecycle,
   kindLifecycleInputFromProposal,
 } from "../../../services/lifecycle/declare-kind-lifecycle.js";
+import {
+  applyLifecycleOptionsChange,
+  lifecycleOptionsChangeInputFromProposal,
+} from "../../../services/lifecycle/change-lifecycle-options.js";
 import {
   registerProposalExecutor,
   type ProposalExecutorArgs,
@@ -166,18 +177,24 @@ async function applyPackItem(
         .select({ data: proposals.data })
         .from(proposals)
         .where(eq(proposals.id, targetId));
+      // Pending, or failed on approval (plan 8032a127 D2), never as a reject
+      // that would score its agent. The pack row names who approved it.
       const rows = await transitionProposal(db, {
         to: ProposalStatus.EXPIRED,
+        from: UNDECIDED_PROPOSAL_STATUSES,
+        ended: { reason: "cleanup_pack" },
         set: {
+          ...endedByNoPersonSet(),
           updatedAt: new Date(),
           data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('expiredByCleanupPack', ${ctx.packId}::text)`,
         },
-        where: and(
-          eq(proposals.id, targetId),
-          eq(proposals.status, ProposalStatus.PENDING)
-        ),
+        where: and(eq(proposals.id, targetId), NOT_PARTLY_APPLIED),
       }).returning({ id: proposals.id });
-      if (rows.length === 0) throw new Error("Proposal is no longer pending");
+      if (rows.length === 0) {
+        throw new Error(
+          "Proposal was already decided, or part of it landed and it stays for a person"
+        );
+      }
       markProposalNotificationsActioned([targetId]);
       await discardProposalSourceBlob({
         database: db,
@@ -403,6 +420,38 @@ export function registerPodHygieneExecutors(): void {
           ids: [result.propertyDefId],
           subject: "property_defs",
         },
+      };
+    },
+  });
+
+  registerProposalExecutor({
+    key: "property_def/change_lifecycle_options",
+    async execute(args): Promise<ProposalExecutorResult> {
+      if (await alreadyApproved(args.input.proposalId)) {
+        return { success: true, alreadyApproved: true };
+      }
+      const result = await applyLifecycleOptionsChange({
+        approverUserId: args.userId,
+        sourceProposalId: args.input.proposalId,
+        input: lifecycleOptionsChangeInputFromProposal(args.proposal),
+      });
+      await markApproved(args, { lifecycleChange: result });
+      return {
+        success: true,
+        primaryId: args.proposal.targetId,
+        effect:
+          result.status === "changed"
+            ? {
+                applied: "verified",
+                rows: 1,
+                ids: [args.proposal.targetId],
+                subject: "property_defs",
+              }
+            : {
+                applied: "none",
+                reason:
+                  "The lifecycle already had these options when it was approved.",
+              },
       };
     },
   });

@@ -97,6 +97,13 @@ import {
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  SiteStatusByProjectQuerySchema,
+  SiteStatusOrNoneSchema,
+  SiteStatusPageQuerySchema,
+  SiteStatusParamsSchema,
+  SiteStatusSchema,
+} from "./_codecs/site-status.js";
+import {
   PublishChartsBodySchema,
   PublishChartsResultSchema,
   SiteIdParamsSchema,
@@ -203,6 +210,55 @@ export function registerSharesRoutes(app: HubHono): void {
     } catch (err) {
       return fail(c, err, "GET /shares/policy");
     }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/shares/sites",
+    tags: ["Shares"],
+    summary: "A project's site, as its owner sees it",
+    description:
+      "The project's live site (state, config, collection counts, one page of members; never a token), or null when it has none. " +
+      "A key holding share.create reads only a site its grant reaches, and only the members of the spaces it reaches.",
+    request: { query: SiteStatusByProjectQuerySchema },
+    responses: {
+      200: { description: "The site, or null", schema: SiteStatusOrNoneSchema },
+      400: { description: "Invalid query", schema: ErrorSchema },
+      403: {
+        description: "Missing scope, or not the project's owner",
+        schema: ErrorSchema,
+      },
+      404: {
+        description: "Project not found, or outside the key's grant",
+        schema: ErrorSchema,
+      },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/shares/sites/{id}",
+    tags: ["Shares"],
+    summary: "One site, as its owner sees it",
+    description:
+      "State, config, collection counts and one page of members; never a token. " +
+      "A key holding share.create reads only a site its grant reaches, and only the members of the spaces it reaches.",
+    request: {
+      params: SiteStatusParamsSchema,
+      query: SiteStatusPageQuerySchema,
+    },
+    responses: {
+      200: { description: "The site", schema: SiteStatusSchema },
+      400: { description: "Invalid id or query", schema: ErrorSchema },
+      403: {
+        description: "Missing scope, or not the site's owner",
+        schema: ErrorSchema,
+      },
+      404: {
+        description: "Site not found, or outside the key's grant",
+        schema: ErrorSchema,
+      },
+    },
   });
 
   app.get("/shares/sites", async (c) => {

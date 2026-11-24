@@ -19,6 +19,7 @@ import {
   parseBoxDeclaration,
 } from "../services/box-runs/box-spec.js";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import { spacesCoveredWhole } from "@synap-core/types/grants";
 import { isAiWriteRequest } from "./ai-write.js";
 import { classifySpaceOperation } from "@synap-core/types/workspaces";
 import {
@@ -43,6 +44,7 @@ import {
   getRequestGrant,
   recordWriteSessionFiling,
   derivedReceiptProjectFor,
+  getNamedSessionId,
   callingKeyAttribution,
   computeProposalDedupHash,
   type InsertPendingProposalResult,
@@ -59,6 +61,7 @@ import {
   resolveOriginTrust,
   resolvePendingProposalCap,
   isOwnSessionBookkeeping,
+  type RuleSubject,
 } from "@synap/database/agent-governance";
 import {
   GOVERNANCE_DECISION_KEY,
@@ -85,7 +88,6 @@ import { randomUUID } from "crypto";
 import { resolveProposalTargetId } from "./proposal-target-id.js";
 import { createLogger } from "@synap-core/core";
 import {
-  DEFERRED_WRITES_MAX,
   readDeferredWrites,
   replayableDeferredPair,
   type DeferredWrite,
@@ -118,6 +120,7 @@ import {
   resolveProposalAction,
 } from "@synap-core/types/proposals";
 import { broadcastNotification } from "@synap/jobs";
+import { queueReceiptReactions } from "@synap/jobs/workers/reactions.js";
 import type { WorkspaceSettings } from "@synap/database/schema";
 import { NotificationService } from "../notifications/NotificationService.js";
 import { notifyProposalCreatedOrdered } from "../notifications/notify-proposal-created-ordered.js";
@@ -145,6 +148,7 @@ import {
   slotKeyAt,
 } from "../services/focus-sessions/slot-keys.js";
 import { reviveSessionForWrite } from "../services/focus-sessions/revive-stale-session.js";
+import { isDoNotContactSetWrite } from "../services/channels/do-not-contact-fields.js";
 import { stampWritingRunner } from "../services/focus-sessions/session-runners.js";
 import { normalizeExpectedLabel } from "../services/focus-sessions/expected-label.js";
 import { logEvent } from "../lib/event-helpers.js";
@@ -215,6 +219,34 @@ function isFocusSessionLifecycleClose(
 ): boolean {
   if (subjectType !== "focus_session" || action !== "update") return false;
   return data?.status === "closed";
+}
+
+/**
+ * DE-ESCALATION escape: an entity update that ONLY SETS a person's
+ * do-not-contact flag (`isDoNotContactSetWrite`, proven from `data`, never
+ * from a caller's word) executes where the agent ladder would propose it.
+ * Setting the flag only reduces what the pod does: the send door then refuses
+ * every message to that person (`services/channels/do-not-contact.ts`), and an
+ * opt-out an app records must hold at once (CNIL), like pausing an automation
+ * (ticket 68aeb326). NOT a bypass of anything else: a deny (RBAC, the key's
+ * grant, a person's "Never" rule) has already returned, an untrusted issuer
+ * has already proposed, and an explicit `opts.forcePropose` still proposes.
+ * Clearing the flag is never this (the update door proposes it for an app or
+ * an agent, `routers/entities/mutate.ts`). The execute path stamps its
+ * receipt with Undo, so the person sees it and can lift it.
+ */
+function isDoNotContactSetEscape(opts: {
+  subjectType: string;
+  action: string;
+  data?: Record<string, unknown>;
+  forcePropose?: boolean;
+}): boolean {
+  return (
+    opts.forcePropose !== true &&
+    opts.subjectType === "entity" &&
+    opts.action === "update" &&
+    isDoNotContactSetWrite(opts.data)
+  );
 }
 
 /**
@@ -609,15 +641,21 @@ export type PermissionResult =
        * the write is NOT miscounted as an "ungoverned AI write" (0231).
        */
       autoApprovedProposalId?: string;
+      /**
+       * The `governance_rules` row that decided NAMES this write's subject at
+       * its version (`opts.ruleSubject`, 0420): a person allowed this one
+       * object. Present only then, never for a broad rule or the default, so a
+       * door may lift a hold only a named approval lifts (an agent's playbook
+       * run, `runPlaybook`).
+       */
+      preApprovedByRuleId?: string;
     }
   | {
       granted: false;
       proposalId: string;
       /**
-       * The proposal's type: "join" for a workspace-join gate, "held_writes"
-       * for a write held past the agent's daily ceiling, else
-       * "<subject>.<action>" (e.g. "entity.create"). Lets callers distinguish
-       * a membership gate from a content proposal.
+       * The proposal's type: "held_writes" for a write held past the agent's
+       * daily ceiling, else "<subject>.<action>" (e.g. "entity.create").
        */
       proposalType: string;
       /** Short human-readable summary: e.g., `Delete task "Q2 plan review"`. */
@@ -636,10 +674,10 @@ export type PermissionResult =
        */
       deduped?: boolean;
       /**
-       * JOIN GATE or HELD WRITES ONLY — the write was KEPT on the join or on
-       * today's held-writes pack (`data.deferredWrites`) and is replayed as
-       * the agent once that is approved. The agent must not resend it. Absent
-       * for a pair that cannot be deferred: that write was not kept.
+       * HELD WRITES ONLY — the write was KEPT on today's held-writes pack
+       * (`data.deferredWrites`) and is replayed as the agent once that is
+       * approved. The agent must not resend it. Absent for a pair that cannot
+       * be deferred: that write was not kept.
        */
       deferred?: true;
       /** The kept write's `ref` (`data.deferredOutcomes[ref]`). */
@@ -651,7 +689,8 @@ export type PermissionResult =
       /**
        * A typed refusal: `DENIED_BY_RULE` = a person's stored "Never" for this
        * agent and this kind of act (0381). The reason text opens with it too,
-       * for doors that forward only the text.
+       * for doors that forward only the text. Or the code of a proposal
+       * that cannot apply, refused when filed (`can-apply.ts`).
        */
       reasonCode?: string;
       /**
@@ -803,6 +842,9 @@ export async function getEffectiveGovernance(workspaceId: string): Promise<{
         ),
         eq(governanceRules.principalKind, "any"),
         eq(governanceRules.targetKind, "action"),
+        // A rule naming ONE object (0420) allows that object only: it is
+        // never the space's baseline for the whole action.
+        isNull(governanceRules.targetSubjectId),
         or(
           eq(governanceRules.scopeKind, "pod"),
           and(
@@ -1022,6 +1064,21 @@ export interface PermissionCheckBaseOpts {
    */
   grantWorkspaceId?: string | null;
   /**
+   * This write files the row into or out of a project (a session's filing):
+   * rung 0 checks it where the row lives now with NO project, so a key pinned
+   * to projects never covers it (`grant-write-check.ts`, the filing rule).
+   * Rung 0 only.
+   */
+  grantFilesIntoProject?: boolean;
+  /**
+   * `projectId` is the row's STORED project, read by the door from the row
+   * itself (a goal's project, a session's): rung 0 checks a key's project
+   * pin against it. Without this flag a non-create write's `projectId` is a
+   * lens or a provenance tag, which never places a row for a key's grant
+   * (`grant-write-check.ts`, the filing rule). Rung 0 only.
+   */
+  grantProjectIdIsStored?: boolean;
+  /**
    * A NAMED permission that also permits this write at rung 0 (the key's
    * grant), when the door's act is narrower than its gate subject/action:
    * `package.install` for a template apply (`workspace.create` /
@@ -1080,7 +1137,11 @@ export interface PermissionCheckBaseOpts {
   commandRunId?: string;
   /** Provenance: which specific message triggered this proposal */
   sourceMessageId?: string;
-  /** Session ID to link proposals to the active focus session */
+  /**
+   * Session ID to link proposals to the active focus session. Absent ⇒ the
+   * session the caller NAMED at the MCP or Hub door, if any
+   * (`withNamedSession`); a door that files elsewhere on purpose passes it.
+   */
   sessionId?: string;
   /**
    * The declared output slot this write fulfils, as the CALLER named it
@@ -1147,6 +1208,13 @@ export interface PermissionCheckBaseOpts {
    */
   heldAsDraft?: boolean;
   /**
+   * The ONE object this write acts on and its version (0420), for a rule that
+   * names it: `playbooks.run` passes the playbook and `playbooks.version`.
+   * Only a rule naming this subject at this version matches it, and then the
+   * grant carries `preApprovedByRuleId`.
+   */
+  ruleSubject?: RuleSubject;
+  /**
    * The duplicate door (`findDuplicateCandidates`) found a possible twin of
    * this create (same kind, same name or strong identity, as a record or a
    * pending proposal). An AI write is then proposed with the
@@ -1181,15 +1249,13 @@ export interface PermissionCheckBaseOpts {
    * The write MOVES a lifecycle status (work model W14) — set ONLY by the
    * `moveStatus` door and the create/attach doors for an initial status. Feeds
    * rungs 2.075 (human-only option) / 2.85 (into done/lost: propose by default)
-   * / 2.86 (other moves: execute once attributed). `atSessionEnd`: a session
-   * END move, which skips 2.85; `atSessionBirth` + `outOfTerminal`: a session
-   * BIRTH move reopening a done/lost thing, which always proposes (2.076)
-   * (governance-policy `lifecycleMove`).
+   * / 2.86 (other moves: execute once attributed). `atSessionBirth` +
+   * `outOfTerminal`: a session BIRTH move reopening a done/lost thing, which
+   * always proposes (2.076) (governance-policy `lifecycleMove`).
    */
   lifecycleMove?: {
     intoTerminal: boolean;
     humanOnly: boolean;
-    atSessionEnd?: boolean;
     outOfTerminal?: boolean;
     atSessionBirth?: boolean;
   };
@@ -1273,8 +1339,9 @@ export type PermissionCheckOpts = PermissionCheckBaseOpts & GovernedWritePair;
  * 7. Otherwise → return { granted: true }
  */
 export async function checkPermissionOrPropose(
-  opts: PermissionCheckOpts
+  callerOpts: PermissionCheckOpts
 ): Promise<PermissionResult> {
+  const opts = withNamedSession(callerOpts);
   const result = await evaluatePermission(opts, false);
   if ("__dryRunPropose" in result) {
     // Unreachable: the sentinel is only ever returned in dry-run mode. Treated
@@ -1304,7 +1371,6 @@ export async function checkPermissionOrPropose(
  *   - no `proposals` row (pending OR auto-approved receipt)
  *   - no `.requested` event append
  *   - no notification / broadcast / side-effect emission
- *   - no `workspace.join` proposal
  *   - no daily agent-proposal-cap consumption (the cap is not even read)
  *
  * Reads (RBAC lookup, profile resolution, governance rules, workspace settings,
@@ -1321,13 +1387,32 @@ export async function checkPermissionOrPropose(
 export async function previewPermissionDecision(
   opts: PermissionCheckOpts
 ): Promise<PermissionDecisionPreview> {
-  const result = await evaluatePermission(opts, true);
+  const result = await evaluatePermission(withNamedSession(opts), true);
   if ("__dryRunPropose" in result) return { decision: "propose" };
   if ("denied" in result) return { decision: "deny", reason: result.reason };
   if (result.granted === true) return { decision: "execute" };
   // Defensive: no propose path reaches createProposal in dry-run mode, so a
   // granted:false result should be impossible here.
   return { decision: "propose" };
+}
+
+/**
+ * Plan a640c5bb (ticket 4bc6b9f4): the session the caller NAMED at the MCP
+ * or Hub door (`runWithNamedSession`) fills the gate's `sessionId` when the
+ * door passed none. Most write doors never forward `ctx.sessionId`, so the gate
+ * used to run the client ladder and file the write into the client's newest
+ * session. One read here, not one per call site.
+ *
+ * A door's own `sessionId` always wins. A `focus_session` subject is never
+ * filled: those doors name the session they write about (`data.id`), and a
+ * session's update belongs to that session, not to the one the caller is in.
+ */
+function withNamedSession(opts: PermissionCheckOpts): PermissionCheckOpts {
+  if (opts.sessionId !== undefined) return opts;
+  if (opts.subjectType.startsWith("focus_session")) return opts;
+  const named = getNamedSessionId();
+  if (!named) return opts;
+  return { ...opts, sessionId: named, sessionSource: "explicit" as const };
 }
 
 /**
@@ -1367,7 +1452,6 @@ interface AnonymousPolicyFacts {
     | {
         intoTerminal: boolean;
         humanOnly: boolean;
-        atSessionEnd?: boolean;
         outOfTerminal?: boolean;
         atSessionBirth?: boolean;
       }
@@ -1616,6 +1700,10 @@ async function evaluatePermission(
     projectId,
     data: data as Record<string, unknown> | undefined,
     namedPermission: opts.grantNamedPermission,
+    ...(opts.grantFilesIntoProject ? { filesIntoProject: true } : {}),
+    ...(opts.grantProjectIdIsStored
+      ? { storedProjectIds: projectId ? [projectId] : null }
+      : {}),
   });
   const beyondGrant =
     !!grantDenied && !!opts.proposeBeyondGrant && !!agentUserId;
@@ -1665,10 +1753,8 @@ async function evaluatePermission(
   // 2. Determine required permission (canonical map in @synap/governance-policy)
   const requiredPermission = requiredPermissionFor(action);
 
-  // 3. Determine effective user for permission check
-  const effectiveUserId = agentUserId || userId;
-
-  // 4. Check workspace permission using the effective user's role
+  // 3-4. Check workspace permission with the person's role: an agent is
+  // never a member, it acts through its person's membership.
   try {
     const { eq } = await import("@synap/database");
 
@@ -1678,58 +1764,21 @@ async function evaluatePermission(
     if (workspaceId) {
       const result = await verifyWorkspaceAccess({
         userId,
-        agentUserId,
         workspaceId,
         requiredPermission,
-        subjectType,
-        action,
-        data,
-        sessionId,
+        asAgent: !!agentUserId,
       });
 
       if (!result.allowed) {
-        // PRODUCT DECISION ("agent asks to join"): an agent actor that is not yet
-        // a member of the workspace does not hard-deny — instead it files a
-        // `workspace.join` proposal the human can approve. Approval materializes a
-        // workspace_members row (`workspace/join` executor) and replays the
-        // write when its pair is replayable (deferred writes — see
-        // `maybeCreateWorkspaceJoinProposal`); any other write the agent
-        // retries. Any OTHER denial (insufficient role for a
-        // member, etc.) still hard-denies. Gated on the membership-miss reason so a
-        // member-but-under-privileged agent is NOT silently escalated to a join.
         const isMembershipMiss = result.reason === WORKSPACE_MEMBERSHIP_MISS;
         if (isMembershipMiss && agentUserId) {
-          const join = await maybeCreateWorkspaceJoinProposal({
-            dryRun,
-            agentUserId,
-            requesterUserId: userId,
-            workspaceId,
-            correlationId,
-            threadId,
-            commandRunId,
-            sourceMessageId,
-            sessionId,
-            // Thread the original subject + data so the proposal card shows
-            // WHAT the agent wanted to do (e.g. create a session with goal X).
-            // Without this, every join proposal looks identical — the reviewer
-            // can't tell if the agent wants to create a session, write an entity,
-            // or execute a capability.
-            requestedSubjectType: subjectType,
-            requestedAction: action,
-            requestedData: data,
-            requestedProjectId: projectId,
-            requestedReasoning: opts.reasoning,
-            requestedExpectedLabel: opts.expectedLabel,
-          });
-          if (join) return join;
-          // Not an agent user row (defence-in-depth) → fall through to deny.
+          return { denied: true, reason: AGENT_PERSON_NOT_MEMBER };
         }
-        // AGENT + insufficient ROLE (a member, but its role lacks this
-        // permission — e.g. an editor agent attempting a destructive `delete`,
-        // which needs owner): route to a PROPOSAL rather than hard-denying.
-        // Extends the same "agent denial → reviewable proposal" philosophy as
-        // the workspace-join branch above — an agent's role gates AUTO
-        // execution, not the ability to PROPOSE. The human owner (who DOES hold
+        // AGENT + insufficient ROLE (its person is a member, but that role
+        // lacks this permission — e.g. an editor attempting a destructive
+        // `delete`, which needs owner): route to a PROPOSAL rather than
+        // hard-denying. The role gates AUTO execution, not the ability to
+        // PROPOSE. The human owner (who DOES hold
         // the permission) authorizes it at approval time. Direct users are NOT
         // affected: a user is the authority, so an under-privileged user is
         // still correctly denied. Guarded to genuine agent user rows.
@@ -1841,7 +1890,7 @@ async function evaluatePermission(
         }
         logger.warn(
           {
-            userId: effectiveUserId,
+            userId,
             workspaceId,
             requiredPermission,
             reason: result.reason,
@@ -2179,6 +2228,7 @@ async function evaluatePermission(
         // forcePropose above wins at 2.1); the proof only reaches the store.
         ownWorkOrganise: opts.ownWorkOrganise,
         heldAsDraft: opts.heldAsDraft,
+        ...(opts.ruleSubject ? { ruleSubject: opts.ruleSubject } : {}),
         podAdminSchemaChange,
         // #4 instruction-provenance (rung 2.55): the acting channel + the human
         // owner let the ladder classify origin trust server-side and force-propose
@@ -2340,9 +2390,10 @@ async function evaluatePermission(
       // now run focus_session/update → complete, but the escape still prefers
       // auto-execute so complete is not blocked under agent all-writes.
       const lifecycleCloseEscape =
-        opts.ignoreSessionForcePropose === true &&
-        opts.forcePropose !== true &&
-        isFocusSessionLifecycleClose(subjectType, action, data);
+        (opts.ignoreSessionForcePropose === true &&
+          opts.forcePropose !== true &&
+          isFocusSessionLifecycleClose(subjectType, action, data)) ||
+        isDoNotContactSetEscape(opts);
 
       if (gov.decision === "propose" && !lifecycleCloseEscape) {
         if (dryRun) return DRY_RUN_PROPOSE;
@@ -2572,6 +2623,9 @@ async function evaluatePermission(
           // `.completed` event (events.proposal_id, 0231) — proving this agent
           // write WAS governed (auto-approved), not an ungoverned direct write.
           autoApprovedProposalId = receipt?.id;
+          // Born decided, so its insert owes no transition: the rules that
+          // listen to an approval (pod default 3) are queued here instead.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, agentUserId, eventKey },
@@ -2630,7 +2684,15 @@ async function evaluatePermission(
           }
         }
 
-        return { granted: true, autoApprovedProposalId };
+        return {
+          granted: true,
+          autoApprovedProposalId,
+          ...(gov.decision === "execute" &&
+          gov.namesSubject &&
+          gov.governanceRuleId
+            ? { preApprovedByRuleId: gov.governanceRuleId }
+            : {}),
+        };
       }
 
       // gov.decision === "not-agent": the user row is not an agent (defence-in-
@@ -2771,6 +2833,9 @@ async function evaluatePermission(
         );
       }
 
+      // Setting a person's do-not-contact flag only restricts: it executes.
+      if (!autoExecute && isDoNotContactSetEscape(opts)) autoExecute = true;
+
       if (autoExecute) {
         // DRY RUN: the verdict is "execute"; skip the receipt INSERT (the only
         // side effect on this branch) and report it.
@@ -2891,6 +2956,8 @@ async function evaluatePermission(
             })
             .returning({ id: proposals.id });
           autoApprovedProposalId = receipt?.id;
+          // Born decided: the rules that listen to an approval are queued here.
+          if (receipt?.id) await queueReceiptReactions(receipt.id);
         } catch (err) {
           logger.error(
             { err, workspaceId, userId, eventKey },
@@ -2973,7 +3040,7 @@ function singularSubjectType(subjectType: string): string {
  * The cell a `renderer.set` payload actually binds, as a human word.
  *
  * `ref.cellKey` is NOT always the cell: `buildCellRendererRef`
- * (`routers/hub-protocol/profiles.ts`) wraps an iframe/native cell by rewriting
+ * (`services/renderers/renderer-target-checks.ts`) wraps an iframe/native cell by rewriting
  * `cellKey` to the shared host `"iframe-widget"` and moving the real typeKey
  * into `props.typeKey`. Reading `cellKey` alone would print the same word
  * ("Iframe widget") for every iframe cell ever proposed.
@@ -3701,32 +3768,6 @@ function fieldSlugList(fields: unknown[]): string {
   return ` ${listed}${more}`;
 }
 
-/**
- * The `proposalType` a WORKSPACE-JOIN gate carries. `maybeCreateWorkspaceJoinProposal`
- * is the only producer; every governed write door can receive it, because the gate
- * fires for ANY agent write into a workspace the agent is not yet a member of.
- */
-export const JOIN_GATE_PROPOSAL_TYPE = "join";
-
-/**
- * Summary for a proposed response that turned out to be a JOIN gate. Doors that
- * SYNTHESIZE a summary from (subjectType, action) must use this instead — the
- * synthesized "Update entity …" narrates a write that was never proposed.
- */
-export const JOIN_GATE_SUMMARY =
-  "Workspace access required — a workspace JOIN request is pending review";
-
-/**
- * The words for a join gate that KEPT the write (`perm.deferred`). "Proposed is
- * success" holds: approving the join replays the write as the agent, through
- * the normal ladder — it may then apply, or ask for its own review.
- */
-export const JOIN_GATE_DEFERRED_MESSAGE =
-  "Workspace access was required, so a workspace JOIN request was filed for " +
-  "review, and this write was kept on it. When the join is approved, the write " +
-  "is replayed for you (it then applies, or asks for its own review) — do not " +
-  "resend it, and do not retry it into a different workspace.";
-
 // The held-writes pack's identity lives in a leaf module so a reader of it
 // (`session-content-redaction.ts`) does not import this whole gate.
 export {
@@ -3749,43 +3790,17 @@ export const HELD_WRITE_MESSAGE =
   "of today's in ONE review for the person. Each write they keep is replayed " +
   "for you when they approve — do not resend it.";
 
-/** True when a proposed-branch result is a workspace-JOIN gate, not the requested write. */
-export function isJoinGate(proposalType: string | undefined | null): boolean {
-  return proposalType === JOIN_GATE_PROPOSAL_TYPE;
-}
-
 /**
- * The `message` a governed door returns on its proposed branch.
- *
- * WHY THIS EXISTS: the join gate DEGRADES the write — it files a
- * `workspace.join` proposal INSTEAD of the content proposal the caller asked
- * for. A door that hardcodes "<X> proposed for review" then narrates a write
- * that was never proposed, and the agent reading it builds a wrong theory of
- * what is pending. `proposalType` is the discriminator that already rides the
- * result; this derives the prose FROM it instead of ignoring it.
- *
- * Same family as the "PHANTOM ENVELOPE ID FIX" in `entities/create.ts`: on a
- * join gate, also OMIT any pre-allocated id (`proposedEntityId` and friends) —
- * an id that can never resolve is worse than an absent field.
- *
- * `deferred` is the gate's `perm.deferred`: the write was KEPT on the join and
- * is replayed as the agent once the join is approved, so it must not be resent.
+ * The `message` a governed door returns on its proposed branch: a write held
+ * on today's pack says so, any other proposal says what was proposed.
  */
 export function proposedMessageFor(
   proposalType: string | undefined | null,
-  contentMessage: string,
-  deferred?: boolean
+  contentMessage: string
 ): string {
-  if (proposalType === HELD_WRITES_PROPOSAL_TYPE) return HELD_WRITE_MESSAGE;
-  if (!isJoinGate(proposalType)) return contentMessage;
-  if (deferred) return JOIN_GATE_DEFERRED_MESSAGE;
-  return (
-    "Workspace access was required, so a workspace JOIN request was filed for " +
-    "review INSTEAD of the requested write — nothing about the write itself is " +
-    "pending yet, and no id was allocated for it. Approve the join, then retry " +
-    "the write. If you cannot wait for approval, ASK THE USER where this should " +
-    "go — do not retry into a different workspace hoping it lands."
-  );
+  return proposalType === HELD_WRITES_PROPOSAL_TYPE
+    ? HELD_WRITE_MESSAGE
+    : contentMessage;
 }
 
 /**
@@ -3956,13 +3971,18 @@ export async function createPendingProposal(
    * the caller's transaction and notifications are SKIPPED here — the caller must
    * invoke notifyProposalCreated() AFTER the tx commits (see createProposal).
    */
-  tx?: DbTx
+  tx?: DbTx,
+  /**
+   * `canApplyAsked`: the caller asked the one filing check itself, before
+   * the event it writes first (`createEventBackedProposal`).
+   */
+  opts: { canApplyAsked?: true } = {}
 ) {
   // Public shape unchanged (returns the row) so the many simple callers stay
   // as-is; they still benefit transparently from the SSOT's dedup guard (they
   // get the existing row back, no duplicate). Only createProposal needs the
   // `deduped` signal — it uses createPendingProposalRow directly.
-  const { proposal } = await createPendingProposalRow(input, tx);
+  const { proposal } = await createPendingProposalRow(input, tx, opts);
   return proposal;
 }
 
@@ -4020,8 +4040,38 @@ export async function resolveAgentRunReceipt(input: {
  */
 async function createPendingProposalRow(
   input: CreatePendingProposalInput,
-  tx?: DbTx
+  tx?: DbTx,
+  opts: {
+    /**
+     * The caller asked the one filing check itself, before its transaction
+     * (`createProposal`). Every other caller is asked here.
+     */
+    canApplyAsked?: true;
+  } = {}
 ): Promise<InsertPendingProposalResult> {
+  // CAN IT APPLY? The ONE check per proposal kind (`can-apply.ts`, plan
+  // 8032a127 D1), asked here because every API door files through this row:
+  // a proposal its approval would refuse is refused NOW, before a receipt
+  // session is minted or a row inserted, with the approval's own sentence.
+  // A read that fails files as before. Its own reads go through the caller's
+  // transaction when there is one.
+  if (!opts.canApplyAsked) {
+    const { proposalCannotApply, ProposalCannotApplyError } =
+      await import("../services/proposals/can-apply.js");
+    const cannotApply = await proposalCannotApply({
+      targetType: input.targetType,
+      targetId: input.targetId,
+      proposalType: input.proposalType,
+      data: input.data,
+      userId: input.userId,
+      workspaceId: input.workspaceId ?? null,
+      agentUserId: input.agentUserId ?? null,
+      sessionId: input.sessionId ?? null,
+      ...(tx ? { reader: tx } : {}),
+    });
+    if (cannotApply) throw new ProposalCannotApplyError(cannotApply);
+  }
+
   // Wave 2 — agent writes without a session get packaged into a focus session
   // (teammate metaphor). Humans and already-sessioned callers are untouched.
   // Never mint for focus_session self-writes (recursion). Best-effort.
@@ -4799,6 +4849,30 @@ async function createProposal(args: {
   // `.requested` append failure now ROLLS BACK the proposal instead of being
   // swallowed — an un-traceable proposal is worse than a surfaced error.
   // Notifications run AFTER commit (never hold the tx across network/queue work).
+  //
+  // CAN IT APPLY? The ONE filing check (`can-apply.ts`), asked HERE, before
+  // the transaction: its reads are not the transaction's, and a proposal its
+  // approval would refuse writes neither the event nor the row. It comes
+  // back as this gate's denial, with the approval's own sentence and code.
+  const { proposalCannotApply } =
+    await import("../services/proposals/can-apply.js");
+  const cannotApply = await proposalCannotApply({
+    targetType: singularType,
+    targetId,
+    proposalType: action,
+    data: storedData,
+    userId,
+    workspaceId: workspaceId ?? null,
+    agentUserId: attributionAgentUserId ?? null,
+    sessionId: sessionId ?? null,
+  });
+  if (cannotApply) {
+    return {
+      denied: true,
+      reason: cannotApply.message,
+      reasonCode: cannotApply.reasonCode,
+    };
+  }
   const { proposal, pendingInput, deduped, superseded } = await db.transaction(
     async (tx) => {
       let reqEventId = requestedEventId;
@@ -4849,7 +4923,9 @@ async function createProposal(args: {
         proposal: created,
         deduped,
         superseded,
-      } = await createPendingProposalRow(pendingInput, tx);
+      } = await createPendingProposalRow(pendingInput, tx, {
+        canApplyAsked: true,
+      });
       return { proposal: created, pendingInput, deduped, superseded };
     }
   );
@@ -4883,331 +4959,133 @@ async function createProposal(args: {
 export const WORKSPACE_MEMBERSHIP_MISS =
   "User is not a member of this workspace";
 
+/** An agent's write in a space its person is not a member of. */
+export const AGENT_PERSON_NOT_MEMBER =
+  "The person you act for is not a member of this space. An agent works only " +
+  "where its person is a member: an owner of the space can add them. Nothing was written.";
+
 /**
- * THE membership check of the gate (rung 4): may the actor (the agent when
- * there is one, else the person) do `requiredPermission` in `workspaceId`?
- * A started track admits its agent into the track's step spaces, scoped to
- * that track's sessions (DECISION 2a, `services/tracks/track-space-grant.ts`):
- * only a membership MISS by an agent is asked, and an admitted one is allowed.
- *
- * Shared by `checkPermissionOrPropose` and `parkWriteOnWorkspaceJoin`, so a
- * door that checks membership BEFORE it writes reads the same answer the gate
- * gives at each write.
+ * THE membership check of the gate (rung 4): may `userId` (the person, never
+ * the agent acting for them) do `requiredPermission` in `workspaceId`? An
+ * agent acts with the person's role capped at editor (`asAgent`). Shared with
+ * the doors that check membership BEFORE they write, so they read the same
+ * answer the gate gives at each write.
  */
 async function verifyWorkspaceAccess(opts: {
   userId: string;
-  agentUserId?: string;
   workspaceId: string;
   requiredPermission: ReturnType<typeof requiredPermissionFor>;
-  subjectType: string;
-  action: string;
-  data?: Record<string, unknown>;
-  sessionId?: string;
+  asAgent?: boolean;
 }) {
   const { verifyPermission } = await import("@synap/database");
-  const result = await verifyPermission({
+  return verifyPermission({
     db,
-    userId: opts.agentUserId || opts.userId,
+    userId: opts.userId,
     workspace: { id: opts.workspaceId },
     requiredPermission: opts.requiredPermission,
+    asAgent: opts.asAgent,
   });
-  if (
-    !result.allowed &&
-    result.reason === WORKSPACE_MEMBERSHIP_MISS &&
-    opts.agentUserId &&
-    (await (
-      await import("../services/tracks/track-space-grant.js")
-    ).admittedByTrackSpaceGrant(db, {
-      userId: opts.userId,
-      agentUserId: opts.agentUserId,
-      workspaceId: opts.workspaceId,
-      requiredPermission: opts.requiredPermission,
-      subjectType: opts.subjectType,
-      action: opts.action,
-      data: opts.data,
-      sessionId: opts.sessionId,
-    }))
-  ) {
-    result.allowed = true;
-  }
-  return result;
 }
 
 /**
- * Park a WHOLE multi-step write on a workspace join BEFORE any of it is
- * written (finding 590ca76a). A door whose one call makes several writes (a
- * capture graph) cannot let the gate decide at each write: the first write
- * into a space the agent has not joined is kept on the join, the door then
- * stops, and the steps before and after are lost or orphaned. So the door
- * asks here first, for every space the write lands in. When the agent misses
- * membership of one, the whole write is kept on that space's join as ONE
- * deferred write (`subjectType/action` must be a replayable pair), the same
- * join and the same replay every other door uses, and nothing is written.
- *
- * Returns null when there is nothing to park: no agent, every space admits
- * it, or the actor is not an agent user row (the door's own gate then denies,
- * as it always did). Otherwise the gate's own answer: the join's proposed
- * envelope (`deferred: true` when the write was kept), or a refusal (an
- * archived space, the join's cap).
+ * Would the gate's membership check admit this write in `workspaceId`? Asked
+ * before a door picks a space: the session space ladder
+ * (`resolveSessionWorkspacePlacement`) places a start only where this says
+ * yes, so the ladder and the gate cannot disagree.
  */
-export async function parkWriteOnWorkspaceJoin(opts: {
+export async function gateAdmitsWorkspace(opts: {
   userId: string;
-  agentUserId: string | null | undefined;
-  /** Every space the write lands in (null = pod-wide, never a join). */
-  workspaceIds: ReadonlyArray<string | null | undefined>;
-  /** The permission the write needs in each space (its steps' action). */
-  permissionAction: string;
-  /** The replayable pair the whole write is kept under. */
-  subjectType: string;
+  workspaceId: string;
   action: string;
-  /** What the replay door rebuilds the write from. */
-  data: Record<string, unknown>;
-  sessionId?: string;
-  projectId?: string | null;
-  sourceMessageId?: string;
-  threadId?: string;
-  reasoning?: string;
-}): Promise<PermissionResult | null> {
-  const agentUserId = getActingAgentUserId() ?? opts.agentUserId ?? undefined;
-  if (!agentUserId) return null;
-  const requiredPermission = requiredPermissionFor(opts.permissionAction);
-  const spaces = [
-    ...new Set(
-      opts.workspaceIds.filter((w): w is string => typeof w === "string")
-    ),
-  ];
-  for (const workspaceId of spaces) {
-    const access = await verifyWorkspaceAccess({
-      userId: opts.userId,
-      agentUserId,
-      workspaceId,
-      requiredPermission,
-      subjectType: opts.subjectType,
-      action: opts.action,
-      data: opts.data,
-      sessionId: opts.sessionId,
-    });
-    if (access.allowed || access.reason !== WORKSPACE_MEMBERSHIP_MISS) continue;
-    const join = await maybeCreateWorkspaceJoinProposal({
-      agentUserId,
-      requesterUserId: opts.userId,
-      workspaceId,
-      sessionId: opts.sessionId,
-      sourceMessageId: opts.sourceMessageId,
-      threadId: opts.threadId,
-      requestedSubjectType: opts.subjectType,
-      requestedAction: opts.action,
-      requestedData: opts.data,
-      requestedProjectId: opts.projectId,
-      requestedReasoning: opts.reasoning,
-    });
-    // Never the dry-run sentinel: this call is not a dry run.
-    return join && !("__dryRunPropose" in join) ? join : null;
-  }
-  return null;
+}): Promise<boolean> {
+  const result = await verifyWorkspaceAccess({
+    userId: opts.userId,
+    workspaceId: opts.workspaceId,
+    requiredPermission: requiredPermissionFor(opts.action),
+  });
+  return result.allowed;
 }
 
+/** What {@link requestWorkspaceJoin} answers. */
+export type WorkspaceJoinRequestResult =
+  | {
+      status: "member";
+      workspaceId: string;
+      /** The person's role in the space. */
+      role: string | null;
+      /** Set when the role does not cover writing: writes are proposed. */
+      note?: string;
+    }
+  | { status: "refused"; workspaceId: string; reason: string };
+
 /**
- * Workspace-join proposal: an agent actor that is not yet a member of the
- * workspace files this instead of being hard-denied. On approval the
- * `workspace/join` executor inserts the workspace_members row and replays the
- * deferred writes (`services/governance/deferred-writes.ts`).
- *
- * Returns the standard proposed envelope, or `null` when the actor is NOT an
- * agent user row (so the caller falls through to a hard deny). DEDUPE: if a
- * pending `workspace.join` proposal already exists for (agentUserId,
- * workspaceId), its id is returned rather than creating a second one.
- *
- * DEFERRED WRITES (#6): a write whose pair is replayable
- * (`REPLAYABLE_DEFERRED_PAIRS`) is KEPT on the join's `data.deferredWrites` —
- * on the create path AND on the dedupe path, so every write the agent makes
- * while the join is pending is kept, not only the first. Capped at
- * `DEFERRED_WRITES_MAX`; the next one is refused in words. A resend of the
- * same write (same fingerprint) returns the kept ref instead of queueing it
- * twice. Any other pair is not kept: the agent retries it after approval.
+ * May this caller work in `workspaceId`? An agent never joins a space: it
+ * works where its person is a member, within its key's grant. Answers the
+ * person's membership, or why not (the grant does not cover the space whole,
+ * no such space, an archived space, the person is not a member).
  */
-async function maybeCreateWorkspaceJoinProposal(opts: {
-  /**
-   * Decision-only mode: resolve the SAME verdict (is this actor an agent that
-   * would file a join proposal?) and return the dry-run sentinel instead of
-   * creating anything. The agent-user confirmation above the short-circuit is a
-   * READ and still runs, so the non-agent → `null` → hard-deny fallthrough is
-   * preserved verbatim.
-   */
-  dryRun?: boolean;
-  agentUserId: string;
-  requesterUserId: string;
+export async function requestWorkspaceJoin(opts: {
+  userId: string;
+  agentUserId?: string;
   workspaceId: string;
-  correlationId?: string;
-  threadId?: string;
-  commandRunId?: string;
-  sourceMessageId?: string;
-  sessionId?: string;
-  /** The original subjectType the agent wanted to act on (e.g. "focus_session"). */
-  requestedSubjectType?: string;
-  /** The original action (e.g. "create"). */
-  requestedAction?: string;
-  /** The original data payload (e.g. { goal, templateId } for sessions). */
-  requestedData?: Record<string, unknown>;
-  /** Gate provenance the replay hands back to the write's door. */
-  requestedProjectId?: string | null;
-  requestedReasoning?: string;
-  requestedExpectedLabel?: string;
-}): Promise<PermissionResult | DryRunPropose | null> {
-  const {
-    dryRun,
-    agentUserId,
-    requesterUserId,
-    workspaceId,
-    correlationId,
-    threadId,
-    commandRunId,
-    sourceMessageId,
-    sessionId,
-    requestedSubjectType,
-    requestedAction,
-    requestedData,
-  } = opts;
-
-  // Defence-in-depth: confirm the actor really is an agent user row before
-  // minting a join proposal on its behalf.
-  const [agentUser] = await db
-    .select({ userType: users.userType, name: users.name })
-    .from(users)
-    .where(eq(users.id, agentUserId))
-    .limit(1);
-  if (agentUser?.userType !== "agent") return null;
-
+}): Promise<WorkspaceJoinRequestResult> {
+  const { workspaceId } = opts;
+  const grant = getRequestGrant();
+  if (
+    grant &&
+    !grant.scopes.some((scope) => {
+      const spaces = spacesCoveredWhole(scope);
+      return (
+        spaces === "anywhere" ||
+        (spaces !== null && spaces.includes(workspaceId))
+      );
+    })
+  ) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason:
+        "This key's grant does not reach this whole space. The person can add the space to this key's permissions, or give you a key that has it.",
+    };
+  }
   const [ws] = await db
     .select({ name: workspaces.name, archivedAt: workspaces.archivedAt })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  // An archived space takes no new member: a join filed there could only be
-  // approved into a retired space (ticket 86b6faae). Refused in words, in
-  // dry-run too, since it is the verdict.
-  if (ws?.archivedAt) {
+  if (!ws) {
     return {
-      denied: true,
-      reason: `The space "${ws.name}" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.`,
+      status: "refused",
+      workspaceId,
+      reason: "No space has this id: find it with synap_list_workspaces.",
     };
   }
-
-  // Verdict resolved (agent → join proposal). In dry-run stop here: everything
-  // below either reads to build the card or WRITES the proposal.
-  if (dryRun) return DRY_RUN_PROPOSE;
-
-  const role = "editor";
-  const agentName = agentUser.name ?? "Agent";
-  const workspaceName = ws?.name ?? workspaceId;
-  // Enrich the summary when we know WHAT the agent wanted to do — a join
-  // proposal for a session carries the goal so the reviewer sees the full
-  // picture before approving workspace access.
-  const summary =
-    requestedSubjectType === "focus_session" && requestedData?.goal
-      ? `Agent ${agentName} wants to create a session in ${workspaceName}: "${String(requestedData.goal)}"`
-      : `Agent ${agentName} requests to join workspace ${workspaceName} as ${role}`;
-  const reasoning =
-    requestedSubjectType === "focus_session"
-      ? `The agent needs workspace access to create a focus session (${requestedAction}). Once joined, it will start working on: ${String(requestedData?.goal ?? "an unspecified goal")}.`
-      : summary;
-
-  // The write to keep, when its pair can be replayed.
-  const deferredWrite: DeferredWrite | null =
-    requestedSubjectType &&
-    requestedAction &&
-    requestedData &&
-    replayableDeferredPair(requestedSubjectType, requestedAction)
-      ? buildDeferredWrite({
-          subjectType: requestedSubjectType,
-          action: requestedAction,
-          data: requestedData,
-          workspaceId,
-          agentUserId,
-          userId: requesterUserId,
-          sessionId: sessionId ?? null,
-          projectId: opts.requestedProjectId,
-          reasoning: opts.requestedReasoning,
-          expectedLabel: opts.requestedExpectedLabel,
-          sourceMessageId,
-        })
-      : null;
-
-  const proposedEnvelope = (
-    proposalId: string,
-    kept?: { ref: string; deduped?: boolean }
-  ): PermissionResult => ({
-    granted: false,
-    proposalId,
-    proposalType: "join",
-    summary,
-    reasoning: kept ? JOIN_GATE_DEFERRED_MESSAGE : reasoning,
-    reviewPath: openPath(proposalId),
-    reviewUrl: openLink(proposalId),
-    ...(kept?.deduped ? { deduped: true } : {}),
-    ...(kept ? { deferred: true as const, deferredRef: kept.ref } : {}),
-  });
-
-  // DEDUPE: return an existing pending join proposal for this (agent, workspace)
-  // rather than stacking duplicates each time the agent retries the write.
-  const [existing] = await db
-    .select({ id: proposals.id })
-    .from(proposals)
-    .where(
-      and(
-        eq(proposals.workspaceId, workspaceId),
-        eq(proposals.targetType, "workspace"),
-        eq(proposals.proposalType, "join"),
-        eq(proposals.agentUserId, agentUserId),
-        eq(proposals.status, ProposalStatus.PENDING)
-      )
-    )
-    .limit(1);
-
-  if (existing) {
-    if (!deferredWrite) return proposedEnvelope(existing.id);
-    const kept = await appendDeferredWrite(existing.id, deferredWrite);
-    if ("refused" in kept) return { denied: true, reason: kept.refused };
-    return proposedEnvelope(existing.id, kept);
+  if (ws.archivedAt) {
+    return {
+      status: "refused",
+      workspaceId,
+      reason: `The space "${ws.name}" is archived, so an agent cannot write there. A person must do this, or restore the space first.`,
+    };
   }
-
-  const { createEventBackedProposal } =
-    await import("./event-backed-proposal.js");
-  const { proposal: row } = await createEventBackedProposal({
-    userId: requesterUserId,
+  const access = await verifyWorkspaceAccess({
+    userId: opts.userId,
     workspaceId,
-    targetType: "workspace",
-    targetId: workspaceId,
-    proposalType: "join",
-    action: "join",
-    source: "intelligence",
-    summary,
-    agentUserId,
-    createdBy: agentUserId,
-    threadId: threadId ?? null,
-    commandRunId: commandRunId ?? null,
-    sourceMessageId: sourceMessageId ?? null,
-    sessionId: sessionId ?? null,
-    data: {
-      role,
-      agentUserId,
-      requestedBy: "ai",
-      // Surface WHAT the agent wanted to do so the proposal card renders
-      // rich context (session goal, expected outputs, etc.) instead of a
-      // generic "join workspace" card.
-      ...(requestedSubjectType ? { requestedSubjectType } : {}),
-      ...(requestedAction ? { requestedAction } : {}),
-      ...(requestedData ? { requestedData } : {}),
-      ...(deferredWrite ? { deferredWrites: [deferredWrite] } : {}),
-      source: "agent",
-      ...(correlationId ? { correlationId } : {}),
-    },
+    requiredPermission: requiredPermissionFor("create"),
+    asAgent: !!opts.agentUserId,
   });
-
-  return proposedEnvelope(
-    row.id,
-    deferredWrite ? { ref: deferredWrite.ref } : undefined
-  );
+  if (access.reason === WORKSPACE_MEMBERSHIP_MISS) {
+    return { status: "refused", workspaceId, reason: AGENT_PERSON_NOT_MEMBER };
+  }
+  return {
+    status: "member",
+    workspaceId,
+    role: access.role ?? null,
+    ...(access.allowed
+      ? {}
+      : {
+          note: `${access.reason}: a write beyond this role is proposed for the person's review.`,
+        }),
+  };
 }
 
 /** The deferred-write record for one blocked write (pure but for the grant read). */
@@ -5262,7 +5140,7 @@ function buildDeferredWrite(w: {
 }
 
 /**
- * Keep `write` on the pending join (or held-writes pack) `proposalId`. ONE
+ * Keep `write` on the pending held-writes pack `proposalId`. ONE
  * statement appends it, so concurrent writes all land, and the WHERE holds the
  * three rules: still pending, under the cap, not already kept (same
  * fingerprint). When nothing was written the row is re-read to say which rule
@@ -5270,12 +5148,11 @@ function buildDeferredWrite(w: {
  */
 async function appendDeferredWrite(
   proposalId: string,
-  write: DeferredWrite,
-  holder: "join" | "held" = "join"
+  write: DeferredWrite
 ): Promise<
   { ref: string; deduped?: boolean } | { refused: string; decided?: true }
 > {
-  const max = holder === "held" ? HELD_WRITES_MAX : DEFERRED_WRITES_MAX;
+  const max = HELD_WRITES_MAX;
   const appended = await db
     .update(proposals)
     .set({
@@ -5306,19 +5183,15 @@ async function appendDeferredWrite(
   if (row?.status === ProposalStatus.PENDING) {
     return {
       refused:
-        holder === "held"
-          ? `Today's held writes already number ${kept.length} (the limit ` +
-            `is ${max}). Nothing was kept for this one: stop writing until ` +
-            "the person reviews them, or until the next UTC day."
-          : `This workspace's join request already holds ${kept.length} writes ` +
-            `waiting for approval (the limit is ${max}). Nothing ` +
-            "was kept for this one: wait until the join is approved, then send it again.",
+        `Today's held writes already number ${kept.length} (the limit ` +
+        `is ${max}). Nothing was kept for this one: stop writing until ` +
+        "the person reviews them, or until the next UTC day.",
     };
   }
   return {
     refused:
-      "The workspace join request was decided while this write was being " +
-      "kept, so it was not kept. Send the write again.",
+      "Today's held writes were decided while this write was being kept, " +
+      "so it was not kept. Send the write again.",
     decided: true,
   };
 }
@@ -5371,7 +5244,7 @@ async function joinTodaysHeldWrites(
     )
     .limit(1);
   if (!pack) return null;
-  const kept = await appendDeferredWrite(pack.id, write, "held");
+  const kept = await appendDeferredWrite(pack.id, write);
   if ("refused" in kept) {
     return kept.decided ? null : { denied: true, reason: kept.refused };
   }

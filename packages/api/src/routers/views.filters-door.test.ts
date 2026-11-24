@@ -77,13 +77,13 @@ const GRAMMAR_ISSUE = {
 const BAD_FILTERS: Array<[Record<string, unknown>]> = [
   [{ field: "properties.n", operator: "between", value: [1, 2] }],
   [{ field: "properties.status", operator: "in", value: "open" }],
-  [{ field: "status", operator: "equals", value: "open" }],
+  [{ field: "priority", operator: "equals", value: "open" }],
 ];
 
 /** Stored rows written before the grammar existed. */
 const STORED_LEGACY = [
   { field: "properties.n", operator: "between", value: [1, 5] },
-  { field: "status", operator: "equals", value: "open" }, // unrepairable
+  { field: "priority", operator: "equals", value: "open" }, // unrepairable
 ];
 
 function storedView(filters: unknown[] = STORED_LEGACY) {

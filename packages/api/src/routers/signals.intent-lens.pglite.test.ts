@@ -98,6 +98,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   proposals,
@@ -114,7 +115,7 @@ import {
   links,
   playbookRuns,
   relations,
-  profileWorkspaceAccess,
+  spaceAccess,
   profileProperties,
   propertyDefs,
 } from "@synap/database";
@@ -210,6 +211,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     projectMembers,
     proposals,
@@ -231,7 +233,7 @@ beforeAll(async () => {
     // (plan e7f753db §9), which reads project relations and, for the
     // role-as-lens branch, which spaces a profile reaches.
     relations,
-    profileWorkspaceAccess,
+    spaceAccess,
     // ...and its lifecycle (getEffectiveLifecycles: profiles, then the
     // lifecycle links and their property defs).
     profileProperties,

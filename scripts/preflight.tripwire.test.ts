@@ -188,6 +188,102 @@ describe("preflight --ci: door-tool-names against a CP catalog file", () => {
   });
 });
 
+// door-tool-names reads control-plane-api at the commit sibling-pins.json pins
+// (plan b5820982 §2 P0), never at CP main: a CP change reaches the table only
+// through a pull request that bumps the pin. GitHub is a fake that records
+// the ref it is asked for.
+describe("preflight: door-tool-names reads CP at the pin", () => {
+  const doorToolNames = CHECKS.find(
+    (c: { id: string }) => c.id === "door-tool-names"
+  );
+  const generated = readFileSync(
+    join(REPO, "packages/api/src/routers/mcp/door-tool-names.generated.ts"),
+    "utf8"
+  );
+  const catalog = `export const CURATED = [\n${[
+    ...generated.matchAll(
+      /"pod-mcp":\s*"(synap_[a-z_]+)",\s*"cp-connector":\s*"pod__([a-z_]+)"/g
+    ),
+  ]
+    .map((m) => `  { name: "${m[2]}", podToolName: "${m[1]}" },`)
+    .join("\n")}\n];\n`;
+  const PIN = "1".repeat(40);
+  const pinsAt = (ref: string) => {
+    const file = join(mkdtempSync(join(tmpdir(), "pins-")), "pins.json");
+    writeFileSync(
+      file,
+      JSON.stringify({
+        repos: [
+          {
+            dir: "synap-control-plane-api",
+            repo: "Synap-core/control-plane-api",
+            ref,
+          },
+        ],
+      })
+    );
+    return file;
+  };
+  const run = async (pinsFile: string, text = catalog) => {
+    const asked: string[] = [];
+    const result = await doorToolNames.run({
+      env: {},
+      prBody: "",
+      pinsFile,
+      ghRaw: async (repo: string, path: string, ref: string) => {
+        asked.push(`${repo}/${path}@${ref}`);
+        return { text };
+      },
+      ghJson: async (path: string) => {
+        asked.push(path);
+        return [{ sha: PIN, commit: { message: "feat: x" } }];
+      },
+    });
+    return { result, asked };
+  };
+
+  it("asks GitHub for the catalog and its last commit at the pin, and says so", async () => {
+    const { result, asked } = await run(pinsAt(PIN));
+    expect(asked).toEqual([
+      `Synap-core/control-plane-api/src/routes/mcp-pod-tools.ts@${PIN}`,
+      `repos/Synap-core/control-plane-api/commits?sha=${PIN}&path=src/routes/mcp-pod-tools.ts&per_page=1`,
+    ]);
+    expect(asked.join(" ")).not.toContain("main");
+    expect(result.verdict).toBe("PASS");
+    expect(result.detail).toContain(`@${PIN.slice(0, 10)} (the pin)`);
+  });
+
+  it("stale against the pin: red, naming the pin", async () => {
+    const { result } = await run(
+      pinsAt(PIN),
+      catalog.replace(/\n {2}\{[^\n]*\},/, "")
+    );
+    expect(result.verdict).toBe("FAIL");
+    expect(result.detail).toContain("(the pin)");
+  });
+
+  it("a malformed or missing pin is red, never a read of main", async () => {
+    for (const file of [pinsAt("main"), join(tmpdir(), "no-such-pins.json")]) {
+      const { result, asked } = await run(file);
+      expect(result.verdict, file).toBe("FAIL");
+      expect(asked).toEqual([]);
+    }
+    const none = join(mkdtempSync(join(tmpdir(), "pins-")), "pins.json");
+    writeFileSync(none, JSON.stringify({ repos: [] }));
+    const { result } = await run(none);
+    expect(result.verdict).toBe("FAIL");
+    expect(result.detail).toContain("pins no synap-control-plane-api");
+  });
+
+  it("a CP Depends-On still skips: the Full suite compares against that ref", async () => {
+    const result = await doorToolNames.run({
+      env: {},
+      prBody: "Depends-On: control-plane-api#12",
+    });
+    expect(result.verdict).toBe("SKIP");
+  });
+});
+
 // cp-pod-tools-drift: control-plane-api's mcp-pod-tools-drift test, run from
 // the backend side (backend#366 → CP red, 28 Oct). Each row of the pure part
 // is one rule of CP's test; the seam runs the CLI on catalog + registry files

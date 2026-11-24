@@ -10,6 +10,7 @@ import { TRPCError } from "@trpc/server";
 import { AccessContext } from "../../../access/index.js";
 import {
   INSTALLATION_REQUEST_ACTIONS,
+  getInstallationDetail,
   listInstallations,
   loadInstallableCapability,
   type InstallationRequestAction,
@@ -22,7 +23,13 @@ import {
   requestInstallation,
   requestPodInstall,
 } from "../../../services/installations/request-installation.js";
-import { ok, requireScope, type McpHandlerMap } from "./shared.js";
+import {
+  ok,
+  readReasoning,
+  requireScope,
+  type McpHandlerMap,
+} from "./shared.js";
+import { fullUuidError } from "../tool-errors.js";
 
 /** Where a refused capability CAN go: its computer blocks, read once. */
 async function manifestFor(
@@ -39,6 +46,24 @@ const SLUG = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 export const installationHandlers: McpHandlerMap = {
   synap_list_installations: async (ctx) => {
     requireScope(ctx.apiKeyScopes, "mcp.read", ctx.toolName);
+    const access = AccessContext.agent({
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId,
+    });
+    // DETAIL: one installation with its approved snapshot and its drift
+    // against the pod's current definition (ticket c5e95df3).
+    if (typeof ctx.args.installationId === "string") {
+      const id = ctx.args.installationId.trim();
+      const badId = fullUuidError(ctx.toolName, "installationId", id);
+      if (badId) return badId;
+      const installation = await getInstallationDetail(access, id);
+      return installation
+        ? ok({ installation })
+        : ok({
+            error:
+              "No live installation of the person has this id: list them without installationId.",
+          });
+    }
     const computerId =
       typeof ctx.args.computerId === "string" && ctx.args.computerId.trim()
         ? ctx.args.computerId.trim()
@@ -53,16 +78,10 @@ export const installationHandlers: McpHandlerMap = {
           "capabilityKey is a capability's catalog slug, e.g. media-transcribe.",
       });
     }
-    const installations = await listInstallations(
-      AccessContext.agent({
-        userId: ctx.userId,
-        agentUserId: ctx.agentUserId,
-      }),
-      {
-        ...(computerId ? { computerId } : {}),
-        ...(capabilityKey ? { capabilityKey } : {}),
-      }
-    );
+    const installations = await listInstallations(access, {
+      ...(computerId ? { computerId } : {}),
+      ...(capabilityKey ? { capabilityKey } : {}),
+    });
     return ok({ installations });
   },
   synap_request_installation: async (ctx) => {
@@ -160,6 +179,9 @@ export const installationHandlers: McpHandlerMap = {
         action,
         version,
         ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
+        ...(readReasoning(ctx.args)
+          ? { reasoning: readReasoning(ctx.args) }
+          : {}),
         fromCatalog: true,
       });
       if (out.status !== "refused") return ok(out);

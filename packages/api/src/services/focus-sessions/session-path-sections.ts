@@ -64,6 +64,7 @@ import {
 import type { SessionReader } from "../../access/session-visibility.js";
 import {
   resolveSessionTitle,
+  sessionClosedAs,
   sessionStatusCategory,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
@@ -94,7 +95,12 @@ import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 import { readDependencyFacts } from "../links/dependency-links.js";
 import { readOpenInboxes } from "./session-inbox.js";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import {
+  closedNotDoneRecordedSql,
+  notTakenRecordedSql,
+} from "./session-closed-as.js";
 import { projectTriage } from "./triage.js";
+import { stagesLeft } from "../runs/stages-left.js";
 import { extractProposalName } from "../proposals/fingerprint.js";
 
 const logger = createLogger({ module: "session-path-sections" });
@@ -134,6 +140,14 @@ export interface PathSourceRow {
    * Absent on a row with criteria ⇒ read here.
    */
   verdict?: Pick<SessionVerdict, "state" | "requiredUnmet">;
+  /**
+   * The session's declared stages and the one it stands on: the next move of
+   * a session that ENDED before its last stage reads them (`stopped_early`,
+   * the packet's rung 4). Optional: a row selected without them reads as
+   * having no stages left, exactly as before.
+   */
+  stages?: unknown;
+  currentStage?: string | null;
 }
 
 /** The sections every path/map row carries. */
@@ -291,6 +305,8 @@ async function readEdges(
       title: focusSessions.title,
       goal: focusSessions.goal,
       status: focusSessions.status,
+      closedNotDone: closedNotDoneRecordedSql().as("closed_not_done"),
+      skipped: notTakenRecordedSql().as("not_taken"),
       rn: drizzleSql<number>`row_number() over (partition by ${anchor}, ${links.linkType} order by ${statusOrder}, ${focusSessions.createdAt} asc)`.as(
         "rn"
       ),
@@ -324,6 +340,8 @@ async function readEdges(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })
   );
 }
@@ -752,6 +770,7 @@ export async function attachPathSections<R extends PathSourceRow>(
         holds.status === "ok"
           ? { status: "ok", hold: holds.value.get(row.id) ?? null }
           : holds,
+      stagesLeft: stagesLeft(row.stages, row.currentStage),
     });
     return {
       ...row,

@@ -17,6 +17,7 @@
  * - Complete audit trail.
  */
 
+import { withProposalTargetPlace } from "../access/proposal-target-place.js";
 import { presenceInput } from "../utils/presence-input.js";
 import { presenceProofSchema } from "@synap-core/types/presence";
 import { assertPresenceForApproval } from "../services/presence/gate.js";
@@ -44,6 +45,7 @@ import {
   assertGrantScoped,
   getActingAgentUserId,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import {
   proposals,
@@ -63,6 +65,7 @@ import type {
   SecretConsumerType,
 } from "@synap-core/types";
 import { makeVaultReference } from "@synap-core/types/vault";
+import { isProposalUndecided } from "@synap-core/types/proposals/attention";
 import { auditLog } from "../utils/audit-log.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import {
@@ -202,7 +205,6 @@ function getRepository(): SecretsVaultRepository {
 type VaultGrantRow = {
   id: string;
   grantableId: string;
-  execMode: string;
   grantedTo: string | null;
   proposalId: string | null;
   scope: string;
@@ -1031,10 +1033,7 @@ export const secretsVaultRouter = router({
       // Only an OPEN request is granted: one decided elsewhere (rejected in
       // the console, approved on the phone) must not hand the agent a secret
       // from a card that is still on screen. A failed approval stays open.
-      if (
-        proposalRow.status !== ProposalStatus.PENDING &&
-        proposalRow.status !== ProposalStatus.APPROVAL_FAILED
-      ) {
+      if (!isProposalUndecided(proposalRow.status)) {
         throw new TRPCError({
           code: "CONFLICT",
           message:
@@ -1042,7 +1041,11 @@ export const secretsVaultRouter = router({
         });
       }
       // D3: a key bounded to some spaces grants only there.
-      assertMayDecideProposalAt("approve", "approve", proposalRow);
+      assertMayDecideProposalAt(
+        "approve",
+        "approve",
+        await withProposalTargetPlace(proposalRow)
+      );
 
       // Workspace from the request, not the UI. If the proposal is workspace-
       // scoped, require the approver to be a member of THAT workspace (defense
@@ -1103,7 +1106,7 @@ export const secretsVaultRouter = router({
       // 6. Insert the grant row (the enforcement record consulted at redemption).
       //    A vault secret is just one grantable KIND — write the generalized
       //    capability-grant columns (grantableType='secret', grantableId=secret
-      //    id, execMode='auto'). The legacy `secret_id` column still exists in
+      //    id). The legacy `secret_id` column still exists in
       //    the DB (kept for audit) but is no longer in the Drizzle model — the
       //    subject is carried by grantableId now.
       //    The grant and the approval commit together: the status door matches
@@ -1115,7 +1118,6 @@ export const secretsVaultRouter = router({
           .values({
             grantableType: "secret",
             grantableId: secret.id,
-            execMode: "auto",
             proposalId: input.proposalId,
             grantedTo,
             workspaceId: grantWorkspaceId,
@@ -1132,7 +1134,7 @@ export const secretsVaultRouter = router({
         //    and no status guard.
         const approved = await transitionProposal(tx, {
           to: ProposalStatus.APPROVED,
-          from: [ProposalStatus.PENDING, ProposalStatus.APPROVAL_FAILED],
+          from: UNDECIDED_PROPOSAL_STATUSES,
           set: {
             reviewedBy: ctx.userId,
             reviewedAt: new Date(),

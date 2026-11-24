@@ -72,6 +72,68 @@ describe("app/connect proposal words", () => {
     expect(s.sentence).not.toContain("uuid-123");
   });
 
+  // Rules out: an app's ask for one more thing titled as a whole new
+  // request ("asks for access"), and a title written by hand per surface.
+  it("an additive ask reads '<app> asks to <verb> in <space>'", () => {
+    const one = describeAppConnectProposal(
+      {
+        ...PROPOSAL,
+        data: {
+          ...PROPOSAL.data,
+          mode: "add",
+          requests: [{ permission: "entity.note.read", workspaceId: "ws-fin" }],
+        },
+      },
+      NAMES
+    )!;
+    expect(one.mode).toBe("add");
+    expect(one.title).toBe("synap.live asks to read notes in Finance");
+    const two = describeAppConnectProposal(
+      {
+        ...PROPOSAL,
+        data: { ...PROPOSAL.data, mode: "add" },
+      },
+      NAMES
+    )!;
+    expect(two.title).toBe(
+      "synap.live asks to create people in Sales and read notes in Finance"
+    );
+    // Without the mode, the same request keeps the whole-request title.
+    expect(describeAppConnectProposal(PROPOSAL, NAMES)!.title).toBe(
+      "synap.live asks for access"
+    );
+  });
+
+  // Rules out: an AI's ask for one more thing (`agent/connect` of mode
+  // "add", services/agent-access-ask.ts) titled as a whole new connection.
+  it("an AI's additive ask reads '<agent> asks to <verb> in <space>'", () => {
+    const ask = describeAppConnectProposal(
+      {
+        targetType: "agent",
+        proposalType: "connect",
+        data: {
+          agentUserId: "u1",
+          keyId: "k1",
+          name: "Claude Code on devbox",
+          mode: "add",
+          requests: [
+            {
+              permission: "entity.note.update",
+              workspaceId: "ws-fin",
+              workspaceName: "Finance",
+            },
+          ],
+        },
+      },
+      NAMES
+    )!;
+    expect(ask.holderKind).toBe("agent");
+    expect(ask.mode).toBe("add");
+    expect(ask.title).toBe(
+      "Claude Code on devbox asks to update notes in Finance"
+    );
+  });
+
   it("is null for other proposals and for unreadable data (fallback, not a half sentence)", () => {
     expect(
       isAppConnectProposal({ targetType: "app", proposalType: "revoke" })
@@ -173,5 +235,52 @@ describe("describeAppConnectProposal carries what the holder reader needs", () =
       targetType: "agent",
     })!;
     expect(ai.holderKind).toBe("agent");
+  });
+});
+
+// Review of #1197 (W3d): a v2 approval APPLIES `data.access`, so its card
+// reads that, projects included, never only the derived pairs (`requests`),
+// which a forged or stale row could make say something else.
+describe("app/connect with a v2 access: the card shows what is applied", () => {
+  const v2 = {
+    targetType: "app",
+    proposalType: "connect",
+    data: {
+      appId: "a1",
+      publicId: "app_d2f2",
+      name: "synap.live",
+      via: "oauth-consent",
+      // What the pairs alone say: notes in Sales.
+      requests: [{ permission: "entity.note.read", workspaceId: "ws-sales" }],
+      access: {
+        version: 2,
+        permissions: ["entity.note.read", "entity.note.create"],
+        read: { spaces: ["ws-sales"], projects: ["p-acme"] },
+        write: { spaces: [], projects: ["p-acme"] },
+      },
+      accessNames: { "ws-sales": "Sales", "p-acme": "Acme" },
+    },
+  };
+
+  it("names every place of the access, the project included", () => {
+    const s = describeAppConnectProposal(v2)!;
+    const wheres = s.lines.map((l) => l.where);
+    expect(wheres).toContain("Sales");
+    expect(wheres.some((w) => w.includes("Acme"))).toBe(true);
+    // The write in the project is a line of its own.
+    expect(
+      s.lines.some(
+        (l) => l.place.kind === "projects" && /create|add|new/i.test(l.what)
+      )
+    ).toBe(true);
+  });
+
+  it("an unreadable access is no card (never the pairs instead)", () => {
+    expect(
+      describeAppConnectProposal({
+        ...v2,
+        data: { ...v2.data, access: { version: 2, write: { spaces: "all" } } },
+      })
+    ).toBeNull();
   });
 });

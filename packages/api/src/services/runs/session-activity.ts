@@ -472,7 +472,9 @@ export async function loadSessionActivity(
       ? (session.expectedOutputs as ExpectedOutput[])
       : [];
     for (const slot of slots) {
-      if (!slot || typeof slot !== "object" || !isOwedSlot(slot)) continue;
+      if (!slot || typeof slot !== "object" || !isOwedSlot(slot, slots)) {
+        continue;
+      }
       const label = str(slot.label);
       if (!label) continue;
       const owedSince = str((slot as { owedSince?: unknown }).owedSince);

@@ -1,6 +1,6 @@
 /**
- * The rules a person set from a request — "Approve and always allow…" (an
- * `auto` row) and "Reject and never allow…" (a `deny` row) — as Settings
+ * The rules a person set from a request — "Always approve…" (an
+ * `auto` row) and "Always reject…" (a `deny` row) — as Settings
  * lists them, so each one has a place to be read and taken back. Both menus
  * stamp `sourceProposalId`; the settings mirrors and the posture rows never
  * do, so that stamp is what makes a row the person's own answer. The

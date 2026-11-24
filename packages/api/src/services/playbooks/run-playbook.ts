@@ -40,8 +40,14 @@ import {
   countWorkerPendingApprovals,
   listWorkerTargetsInFlight,
   startedByAgentPatch,
+  setRunStatus,
+  claimedHolderSql,
+  insertPlaybookRun,
+  runHolder,
+  uniqueViolationConstraint,
   type PlaybookRunWorkerSpec,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import type {
   FocusSession,
   PlaybookRun,
@@ -54,6 +60,7 @@ import {
   ChannelMemberKind,
   ChannelMemberRole,
   FocusSessionStatus,
+  ONE_LIVE_RUN_INDEX,
 } from "@synap/database/schema";
 import { enrollRoomMember } from "../messaging/enroll-room-member.js";
 import { notifySessionNeedsYou } from "../focus-sessions/notify-needs-you.js";
@@ -69,14 +76,23 @@ import type {
   ChannelSpec,
   RunResult,
   InputStrategy,
+  PlaybookRunner,
   PlaybookStage,
 } from "@synap/playbooks";
+import { requiresOf } from "./requires-of.js";
 import {
   instantiateSession,
   runPromptFor,
   resolveRunnablePlaybook,
   resolveGoal,
+  RUN_PARAMS_METADATA_KEY,
 } from "./playbook-lifecycle.js";
+import { playbookAtVersion } from "./playbook-versions.js";
+import {
+  STAGE_OF_METADATA_KEY,
+  scopePlaybookToStage,
+  type StageOf,
+} from "./stage-of.js";
 import {
   resolveGrantedCapabilities,
   getLinksFor,
@@ -86,6 +102,10 @@ import { workerIrreversibleSendCeiling } from "./worker-send-ceiling.js";
 import {
   WORKER_BATCH_LIMIT,
   WORKER_SKIP_REASONS,
+  isScheduleActivatorKey,
+  skippedByOnly,
+  skippedByUnless,
+  workerStatuses,
   type WorkerSkipReason,
 } from "@synap-core/types/workers";
 import { resolveExecutor } from "./executors/registry.js";
@@ -95,9 +115,13 @@ import {
   routeRefusalLine,
 } from "../agent-dispatch/route.js";
 import { readStoredRunChoice } from "../agent-dispatch/agent-assignment.js";
-import type { RunOn } from "@synap-core/types/agents";
+import { resolveRunner } from "../agent-dispatch/runner.js";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import { isLikelyUUID } from "@synap-core/types/proposals";
+import { TERMINAL_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { assertRunSubjectMatchesPlaybook } from "./assert-subject-kind.js";
 import { findUnenabledPlaybookSkills } from "./playbook-skill-preflight.js";
+import { refuseRunMissingTools } from "./run-tools-missing.js";
 import { readPlaybookProcess } from "../../schemas/playbook-process.js";
 import { proposeCapabilityEnable } from "../capabilities/propose-capability-enable.js";
 import { createLogger } from "@synap-core/core";
@@ -122,9 +146,21 @@ import {
 import {
   findFallbackSubject,
   loadVisibleEntityIds,
+  storedFilterSql,
 } from "./pinned-subject-query.js";
 import { QueryFilterParseError } from "@synap/jobs/workers/query-dsl.js";
 import { trialSessionMetadata, type TrialRunInput } from "./trial-run.js";
+import {
+  decidePreApprovedRun,
+  type PreApprovalHeldReason,
+} from "./pre-approved-run.js";
+import type { GeneratedRunAnswer } from "./generate-run.js";
+import { runSubjectMatches } from "./run-subject.js";
+import {
+  findLiveRunOfSubject,
+  type AlreadyRunningReason,
+  type LiveRunOfSubject,
+} from "./live-run-of-subject.js";
 
 const logger = createLogger({ module: "run-playbook" });
 
@@ -220,6 +256,13 @@ export interface RunPlaybookInput {
    */
   runOn?: "synap_ai";
   /**
+   * WHO works each step of THIS run, by stage key (spec 7111934d §2.4): the
+   * stage runner's second rung, after a runner named when the step is
+   * entered and before the step's own `runner`. Stored on the run's input
+   * (`playbook_runs.input.stageRunners`), where `enterStage` reads it.
+   */
+  stageRunners?: Record<string, PlaybookRunner>;
+  /**
    * The agent that STARTED this run directly (no proposal). The run is still
    * the PERSON's (`userId`): the agent rides first on the roster and the
    * session waits as a triage DRAFT (`origin: "agent"`) for the person to
@@ -229,12 +272,40 @@ export interface RunPlaybookInput {
    */
   agentUserId?: string;
   /**
+   * A person let agents run this playbook at this version (founder, 10 Nov
+   * 2026): the `governance_rules` row the run door's grant named
+   * (`PermissionResult.preApprovedByRuleId`). With `agentUserId`, the run
+   * starts at once, its draft accepted in advance, when it stays what was
+   * allowed ({@link decidePreApprovedRun}); otherwise it is held as before.
+   */
+  preApprovedByRuleId?: string;
+  /**
    * Idempotency by subject: when true AND `subjectId` is set, reuse the existing
    * active session for this playbook+subject instead of starting a new run. Makes
-   * a scheduled playbook_run safe (start-if-missing, no-op-if-present). Manual
-   * runs leave this false so each click starts a fresh run.
+   * a scheduled playbook_run safe (start-if-missing, no-op-if-present), and
+   * holds a subject whose latest run failed recently (the cooldown). The
+   * automation path's flag; a person's run uses `oneLivePerSubject` instead,
+   * which has no cooldown.
    */
   idempotentBySubject?: boolean;
+  /**
+   * ONE LIVE RUN PER OBJECT (founder, 2026-11-16): set ONLY by the run door
+   * (`playbooks.run`, and so Hub REST, MCP and the approved replay) for a
+   * person's run without "start another". With `subjectId`: when this person
+   * already has a live run of the playbook on the subject
+   * (`findLiveRunOfSubject`), nothing starts and the result is
+   * `alreadyRunning` with that run; otherwise the run's session holds the
+   * object's live slot (`focus_sessions.one_live_per_subject`), and a
+   * concurrent start that loses the race on the 0427 index gets the same
+   * answer. No cooldown: a failed run never blocks a person's click.
+   *
+   * Never set by fan-out (`forEach`) children, hand-off children, the static
+   * / rotating fan-out items after the first, give-to-agent, automations,
+   * redispatch or rerun: they start their own sessions exactly as before.
+   * Ignored for a trial, a one-shot (`generate`) run and a run with no
+   * subject.
+   */
+  oneLivePerSubject?: boolean;
   /**
    * A TRIAL run (the rule lab, design b199a3a4 slice 1b, `trial-run.ts`): the
    * drafts render in place of the current versions they name, the session is
@@ -283,6 +354,30 @@ export interface RunPlaybookInput {
    * as `createFocusSession`). Absent ⇒ a slice that does not block the parent.
    */
   suspendedIntent?: string;
+  /**
+   * Run the playbook as it stood at this KEPT version (`playbook_versions`),
+   * not its live definition: a step that `uses` a playbook is pinned (spec
+   * 7111934d §2.3). Refused when the version is not kept. Absent ⇒ the live
+   * definition, as every other run.
+   */
+  pinnedVersion?: number;
+  /**
+   * This run WORKS A STEP of another run (a stage that `uses` this playbook):
+   * stamped on the session (`metadata.stageOf`), where the child-close reactor
+   * finds the parent step to hand its outputs back to (`stage-child.ts`).
+   */
+  stageOf?: StageOf;
+  /**
+   * Run ONE stage of the playbook (`scopePlaybookToStage`): a child run of a
+   * `forEach` step that names no `uses` playbook, pinned at the parent's
+   * version. Absent ⇒ every stage.
+   */
+  stageOnly?: string;
+  /**
+   * The run's own title (a `forEach` child: its step, part and items), kept
+   * over the derived "<playbook> — <subject>" name. Absent ⇒ derived.
+   */
+  ownTitle?: string;
   /**
    * The PROJECT this run is filed into (`focus_sessions.project_id`). Must be
    * visible to `userId`; refused otherwise.
@@ -380,6 +475,8 @@ type PlaybookRunStarted = {
    * draft (B6; {@link startHeldRun}). `run` is null.
    */
   held?: true;
+  /** Why a held run was not started by the person's pre-approval, when one applied or was outdated. */
+  heldBecause?: PreApprovalHeldReason;
   /**
    * The agent this run was handed to — named by the caller, or the agent a
    * person assigned to the playbook — so the reply says who has it. Absent
@@ -388,17 +485,60 @@ type PlaybookRunStarted = {
   handedTo?: RunHandedTo;
   /** Present only on the no-subject branch, so both union members share the key. */
   skipped?: undefined;
+  /** Present only on a one-shot run (`executor: "generate"`). */
+  generated?: undefined;
+  /** Present only when a live run was found instead (`oneLivePerSubject`). */
+  alreadyRunning?: undefined;
+};
+
+/**
+ * ONE LIVE RUN PER OBJECT: the person already has a live run of this playbook
+ * on the subject (`RunPlaybookInput.oneLivePerSubject`), so NOTHING started —
+ * no session, room, run row or dispatch. `session` is the live one (the run
+ * to open); `run` its newest ledger row, null for a held draft.
+ */
+type PlaybookRunAlreadyRunning = {
+  run: PlaybookRun | null;
+  session: FocusSession;
+  alreadyRunning: { reason: AlreadyRunningReason };
+  reused?: undefined;
+  skipped?: undefined;
+  generated?: undefined;
+  parentLink?: undefined;
+  held?: undefined;
+  heldBecause?: undefined;
+  handedTo?: undefined;
+};
+
+/**
+ * A ONE-SHOT run (`executor: "generate"`, `generate-run.ts`): no session, one
+ * run row, its result filed as a proposal on the subject (`generated`).
+ */
+type PlaybookRunGenerated = {
+  run: PlaybookRun;
+  session: null;
+  generated: GeneratedRunAnswer;
+  /** An earlier run's still-pending proposal was returned (idempotency). */
+  reused?: true;
+  skipped?: undefined;
+  parentLink?: undefined;
+  held?: undefined;
+  heldBecause?: undefined;
+  handedTo?: undefined;
+  alreadyRunning?: undefined;
 };
 
 /** Who a run was handed to, as the run reply names it. */
 export interface RunHandedTo {
   agentUserId: string;
   name: string | null;
-  via: "named" | "assigned";
+  via: "named" | "authored" | "assigned";
 }
 
 export type RunPlaybookResult =
   | PlaybookRunStarted
+  | PlaybookRunGenerated
+  | PlaybookRunAlreadyRunning
   | {
       /** A pinned playbook had nobody eligible and the fallback matched nothing.
        *  No session, no run, no event stamp. */
@@ -417,7 +557,10 @@ export type RunPlaybookResult =
       reused?: undefined;
       parentLink?: undefined;
       held?: undefined;
+      heldBecause?: undefined;
       handedTo?: undefined;
+      generated?: undefined;
+      alreadyRunning?: undefined;
     };
 
 /**
@@ -502,9 +645,11 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
   params: unknown;
   expectedOutputs: unknown;
   criteria: unknown;
-  requiredIntents: unknown;
+  tools: unknown;
   guidance: unknown;
   subjectProfile: unknown;
+  runner: unknown;
+  requires: unknown;
 } {
   return {
     version: playbook.version,
@@ -513,11 +658,10 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     params: playbook.params,
     expectedOutputs: playbook.expectedOutputs,
     criteria: playbook.criteria,
-    // WHAT THIS RUN ASKED THE POD TO BE ABLE TO DO. Snapshotted with the rest
-    // so "what ran" includes the requirements the run was launched under, not
-    // only the template it was launched from — a run whose playbook has since
-    // been re-declared must still read as what it actually needed.
-    requiredIntents: playbook.requiredIntents,
+    // WHAT THIS RUN COULD USE ("only these", 0419). Snapshotted with the rest
+    // so "what ran" includes the tools the run was launched under, not only
+    // the template it was launched from.
+    tools: playbook.tools,
     // The rules the run was DECLARED to follow (refs). What it actually USED
     // (each current version's id and content hash) is stamped next to it by
     // the executor that renders the method (`recordRunGuidance`), replacing
@@ -525,46 +669,30 @@ export function buildDefinitionSnapshot(playbook: Playbook): {
     guidance: { declared: playbook.guidance },
     // The kind the run's subject must be (the subject-kind floor).
     subjectProfile: playbook.subjectProfile,
+    // Who the run was declared to be done by, and the tools it needs (0416):
+    // the stage runner reads them from this frozen copy, never the live row.
+    runner: playbook.runner,
+    requires: playbook.requires,
   };
 }
 
 /**
  * Idempotency-by-subject reuses an existing (playbook, subject) session instead
- * of dispatching a fresh run — UNLESS that session is in one of these TERMINAL
- * states, in which case a new run is allowed again.
+ * of dispatching a fresh run, except in these statuses: the terminal set
+ * (`TERMINAL_SESSION_STATUSES`) plus `scheduled`.
  *
- * The bug this closes (Stellar runaway): keying reuse on `status === 'active'`
- * alone re-spawned a fresh session+run on EVERY daily cron once a stuck session
- * aged out of 'active'. The focus-session reaper flips an idle session
- * active/paused → 'stale' at 24h (focus-session-reaper.ts), and the playbook-run
- * reaper later force-fails its orphaned run and flips the session → 'closed'
- * (playbook-run-reaper.ts). Reusing across every IN-FLIGHT state (active,
- * paused, stale, forming) means a stuck/in-flight subject is not re-dispatched
- * daily; only once the run is terminally failed/closed — session in ('closed' |
- * 'failed' | 'cancelled') — is a new run allowed, so a subject always has a
- * legitimate path back to eligibility and is never permanently locked out.
- * Exported so a test can lock the SHAPE of this decision.
- */
-export const IDEMPOTENCY_TERMINAL_SESSION_STATUSES = [
-  "closed",
-  "failed",
-  "cancelled",
-] as const;
-
-/**
- * The statuses subject-idempotency must NOT reuse: the terminal set above, plus
- * `scheduled`.
+ * Every in-flight state (active, paused, stale, forming) is reused, so a stuck
+ * subject is not re-dispatched by every daily cron (Stellar runaway: reuse on
+ * `active` alone re-spawned a run daily once the reaper aged the session to
+ * `stale`); a terminal one is not, so a subject always gets back to eligible.
  *
- * `scheduled` is not terminal, but it is not in flight either — it is an
- * APPOINTMENT (`materializeScheduledSession`): a person's future slot that has
- * executed nothing. Reusing it returned `{ run: null, reused: true }` — a run
- * that reads as handled and never ran — and because an unopened appointment
- * rolls forward and stays `scheduled`, it could suppress that subject's run for
- * weeks. Appointments do not need this reuse to avoid duplicates: the
- * scheduler enforces one open appointment per calendar with its own lookup.
+ * `scheduled` is an APPOINTMENT (`materializeScheduledSession`) that has
+ * executed nothing: reusing it returned a run that reads as handled and never
+ * ran, and could suppress the subject's run for weeks while the appointment
+ * rolled forward. The scheduler keeps one open appointment per calendar itself.
  */
 export const IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES = [
-  ...IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
+  ...TERMINAL_SESSION_STATUSES,
   FocusSessionStatus.SCHEDULED,
 ] as const;
 
@@ -611,53 +739,69 @@ function readInputStrategy(value: unknown): InputStrategy {
  *   - none / static-empty → exactly ONE run with the caller's params (the
  *     baseline behavior; `static` with items fans one run per item).
  *   - static  → one run per declared item.
- *   - rotating → advance a cursor stored in `playbook.metadata.inputCursor`
- *     (NO new column) and run for the CURRENT item only.
+ *   - rotating → run for the CURRENT item only; `advanceCursor` moves the
+ *     cursor stored in the strategy (NO new column) to the next item. The
+ *     caller advances it once the run is not a duplicate that lost the race
+ *     to a live run (one live run per object): a click that started nothing
+ *     must not skip an item.
  *   - query   → TODO(P-query): resolve `sourceSubscriptionId` into a live item
  *     set. Not yet implemented — runs ONCE with the caller's params so the
  *     playbook still fires (we do NOT fabricate items).
  *   - pinned  → exactly ONE run. The subject is chosen before this function
  *     (caller, else the pin list, else one fallback row). No fan-out.
  *
- * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT.
+ * Returns the per-run `input` payloads, capped at MAX_INPUT_FANOUT, and the
+ * cursor advance (a no-op for every strategy but `rotating`).
  */
 async function resolveInputItems(
   playbook: Playbook,
   baseParams: Record<string, unknown>
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{
+  items: Array<Record<string, unknown>>;
+  advanceCursor: () => Promise<void>;
+}> {
   const strategy = readInputStrategy(playbook.inputStrategy);
+  const noCursor = async () => undefined;
 
   switch (strategy.kind) {
     case "none":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     case "static": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
-      return items
-        .slice(0, MAX_INPUT_FANOUT)
-        .map((item) => ({ ...baseParams, item }));
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
+      return {
+        items: items
+          .slice(0, MAX_INPUT_FANOUT)
+          .map((item) => ({ ...baseParams, item })),
+        advanceCursor: noCursor,
+      };
     }
 
     case "rotating": {
       const items = strategy.items ?? [];
-      if (items.length === 0) return [baseParams];
+      if (items.length === 0)
+        return { items: [baseParams], advanceCursor: noCursor };
       const cursor = typeof strategy.cursor === "number" ? strategy.cursor : 0;
       const idx = ((cursor % items.length) + items.length) % items.length;
       const item = items[idx];
 
-      // Persist the advanced cursor back into the strategy (JSONB, no new column).
-      const db = await getDb();
-      const nextStrategy: InputStrategy = {
-        ...strategy,
-        cursor: (idx + 1) % items.length,
+      // Persist the advanced cursor back into the strategy (JSONB, no new
+      // column), when the caller says the run counts.
+      const advanceCursor = async () => {
+        const db = await getDb();
+        const nextStrategy: InputStrategy = {
+          ...strategy,
+          cursor: (idx + 1) % items.length,
+        };
+        await db
+          .update(playbooks)
+          .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
+          .where(eq(playbooks.id, playbook.id));
       };
-      await db
-        .update(playbooks)
-        .set({ inputStrategy: nextStrategy, updatedAt: new Date() })
-        .where(eq(playbooks.id, playbook.id));
 
-      return [{ ...baseParams, item }];
+      return { items: [{ ...baseParams, item }], advanceCursor };
     }
 
     case "query": {
@@ -672,15 +816,27 @@ async function resolveInputItems(
         },
         "inputStrategy 'query' not yet implemented — running once with caller params"
       );
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
     }
 
     case "pinned":
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
 
     default:
-      return [baseParams];
+      return { items: [baseParams], advanceCursor: noCursor };
   }
+}
+
+/**
+ * The run lost the race on the one-live-run index (0427) to a run that has
+ * since ended: `executeSingleRun` answers it with a CONFLICT whose cause is
+ * the unique violation. Like an `alreadyRunning` answer, it started nothing.
+ */
+function lostOneLiveRunRace(err: unknown): boolean {
+  return (
+    err instanceof TRPCError &&
+    uniqueViolationConstraint(err.cause) === ONE_LIVE_RUN_INDEX
+  );
 }
 
 /**
@@ -797,8 +953,13 @@ interface RunHandOff {
   reach: "dispatch" | "pull";
   /** The agent's name, for the reply that says who has the run. */
   name: string | null;
-  /** Named by the caller, or the agent a person assigned to this playbook. */
-  via: "named" | "assigned";
+  /**
+   * Named by the caller, the runner the playbook names (`playbooks.runner`),
+   * or the agent a person assigned to this playbook.
+   */
+  via: "named" | "authored" | "assigned";
+  /** Its computer (`users.host_user_id`); null = none known. */
+  computerUserId?: string | null;
 }
 
 /**
@@ -833,7 +994,11 @@ export async function resolveRunHandOff(
   }
   const db = await getDb();
   const [agent] = await db
-    .select({ name: users.name, userType: users.userType })
+    .select({
+      name: users.name,
+      userType: users.userType,
+      hostUserId: users.hostUserId,
+    })
     .from(users)
     .where(eq(users.id, agentUserId))
     .limit(1);
@@ -871,6 +1036,7 @@ export async function resolveRunHandOff(
     reach: routed.reach,
     name: agent.name?.trim() || null,
     via: "named",
+    computerUserId: agent.hostUserId ?? null,
   };
 }
 
@@ -899,7 +1065,7 @@ async function resolveAssignedRunHandOff(
   }
   const db = await getDb();
   const [agent] = await db
-    .select({ name: users.name })
+    .select({ name: users.name, hostUserId: users.hostUserId })
     .from(users)
     .where(eq(users.id, routed.agentUserId))
     .limit(1);
@@ -908,6 +1074,7 @@ async function resolveAssignedRunHandOff(
     reach: routed.reach,
     name: agent?.name?.trim() || null,
     via: "assigned",
+    computerUserId: agent?.hostUserId ?? null,
   };
 }
 
@@ -917,26 +1084,126 @@ export interface ResolvedRunChoice {
   handOff: RunHandOff | null;
   /** Recorded on the run (`playbook_runs.run_on`). */
   runOn: RunOn;
+  /**
+   * An agent-only run no rung could give to an agent: the agents the person
+   * would choose among (empty = none can take it).
+   */
+  agentCandidates?: string[];
+  /**
+   * Synap AI named by the playbook's runner as a persona
+   * (`{ synapAi: { persona } }`): the run's `agentType` when the caller gave
+   * none.
+   */
+  persona?: string | null;
+}
+
+/**
+ * What the run is about, for the run choice's last rungs: the session's
+ * roster, its subject, its project, and the agent the person answered on it
+ * ("Choose an agent"). A run not born yet passes what its session will carry.
+ */
+export interface RunWork {
+  roster?: readonly string[];
+  /** The session's space (else the run's `workspaceId`). */
+  workspaceId?: string | null;
+  subjectId?: string | null;
+  projectId?: string | null;
+  answeredAgentUserId?: string | null;
+}
+
+/** A live session's {@link RunWork}, as it stands. */
+export function runWorkOfSession(session: {
+  agentIds?: string[] | null;
+  workspaceId?: string | null;
+  subjectEntityId?: string | null;
+  projectId?: string | null;
+  metadata?: unknown;
+}): RunWork {
+  const params = (session.metadata as Record<string, unknown> | null)?.[
+    RUN_PARAMS_METADATA_KEY
+  ] as Record<string, unknown> | undefined;
+  const answered = params?.agentUserId;
+  return {
+    roster: Array.isArray(session.agentIds) ? session.agentIds : [],
+    workspaceId: session.workspaceId ?? null,
+    subjectId: session.subjectEntityId ?? null,
+    projectId: session.projectId ?? null,
+    answeredAgentUserId:
+      typeof answered === "string" && answered.trim() !== "" ? answered : null,
+  };
+}
+
+/** The kind (profile row) of the run's subject, for the assignment rung. */
+async function subjectProfileId(
+  subjectId: string | null | undefined
+): Promise<string | null> {
+  if (!subjectId || !isLikelyUUID(subjectId)) return null;
+  const db = await getDb();
+  const [row] = await db
+    .select({ profileId: entities.profileId })
+    .from(entities)
+    .where(eq(entities.id, subjectId))
+    .limit(1);
+  return row?.profileId ?? null;
+}
+
+/**
+ * The run choice's last rungs for an agent-only run nothing above gave to an
+ * agent: THE route (`agent-dispatch/route.ts`) for dispatch reach, over the
+ * session's roster, then the agent assigned to what the run is about (its
+ * playbook, its subject's kind, its project, its space), then the single
+ * agent bound for dispatch, else the person chooses.
+ */
+async function routeRunAgent(p: {
+  ownerId: string;
+  playbookId: string;
+  workspaceId: string | null;
+  work?: RunWork;
+}) {
+  return route({
+    ownerId: p.ownerId,
+    accept: ["dispatch"],
+    roster: p.work?.roster ?? [],
+    targets: {
+      playbook: p.playbookId,
+      profile: await subjectProfileId(p.work?.subjectId),
+      project: p.work?.projectId ?? null,
+      workspace: p.workspaceId,
+    },
+    pool: "owned",
+  });
 }
 
 /**
  * THE rule for who runs a playbook for a person (slice 5a, plan v2 66d229dc;
- * founder Q1: ask once, then remember). First match wins:
+ * founder Q1: ask once, then remember; runner engine slice 2, spec 7111934d
+ * §2.5 with the founder's flip of D1 via the lead, 9 Nov 2026: the playbook's
+ * own runner beats the person's remembered choice). First match wins:
  *   1. named     this run's choice: `runOn: "synap_ai"`, or `handToAgentId`
  *                (an agent named for this run never falls through: refused
  *                by name, as {@link resolveRunHandOff} says);
- *   2. stored    the person's remembered choice for the playbook (the
+ *   2. authored  the runner the playbook names (`playbooks.runner`, 0413),
+ *                resolved by `resolveRunner`: the first of its choices that
+ *                the route admits and that is awake, preferring one whose
+ *                computer has every tool the playbook `requires`; the choices
+ *                passed over are recorded (`runOn.runnerPassedOver`) on
+ *                whatever rung takes the run;
+ *   3. stored    the person's remembered choice for the playbook (the
  *                assignment edge, `readStoredRunChoice`): Synap AI, or an
  *                agent that is AWAKE now (`deriveAgentWake`, the roster's
  *                `wake`) and that the route admits;
- *   3. fallback  a remembered agent that cannot take it now: Synap AI runs it,
+ *   4. fallback  a remembered agent that cannot take it now: Synap AI runs it,
  *                when the playbook allows it (`executor` is not
  *                `external-agent`), and the run says which agent was passed
  *                over and why;
- *   4. default   nothing chosen (or a choice the playbook cannot use): the
- *                playbook's own executor, exactly as before.
+ *   5. default   nothing chosen (or a choice the playbook cannot use): the
+ *                playbook's own executor. For an agent-only playbook, the
+ *                agent the person answered on the session, else
+ *                {@link routeRunAgent} (roster, assignment, single bound
+ *                agent); nobody ⇒ no agent, with the candidates.
  * A playbook that only runs on agents (`external-agent`) never falls to Synap
  * AI: its remembered agent takes it awake or not, as an assignment did.
+ * A playbook with no `runner` decides exactly as before rung 2 existed.
  * Read-only: the run door and the "who runs it" read (`playbooks.runChoice`)
  * ask it with the same inputs, so the preview is what the run does.
  */
@@ -945,10 +1212,19 @@ export async function resolveRunChoice(
     RunPlaybookInput,
     "handToAgentId" | "agentUserId" | "userId" | "runOn"
   > & {
-    playbook: Pick<Playbook, "id" | "executor">;
+    playbook: Pick<Playbook, "id" | "executor"> &
+      Partial<Pick<Playbook, "runner" | "requires">>;
+    /** The run's space: a `need:` entry of `requires` names its bound provider. */
+    workspaceId?: string | null;
+    /** What the run is about, for the last rungs ({@link RunWork}). */
+    work?: RunWork;
   }
 ): Promise<ResolvedRunChoice> {
-  const executor = input.playbook.executor;
+  // A one-shot (`generate`) playbook is run by the pod itself: Synap AI.
+  const executor =
+    input.playbook.executor === "generate"
+      ? ("is-agent" as const)
+      : input.playbook.executor;
   const synapAiAllowed = executor !== "external-agent";
   const named = input.handToAgentId?.trim() || null;
   if (input.runOn === "synap_ai") {
@@ -989,13 +1265,110 @@ export async function resolveRunChoice(
         agentUserId: named,
         via: "named",
         passedOver: null,
+        ...(handOff?.computerUserId
+          ? { computerUserId: handOff.computerUserId }
+          : {}),
       },
     };
   }
 
-  const fallbackDefault: ResolvedRunChoice = {
+  // 2. The playbook's own runner.
+  const { resolveRequiresNeeds } = await import("../needs/space-needs.js");
+  const requires = await resolveRequiresNeeds(
+    requiresOf(input.playbook),
+    input.workspaceId
+  );
+  const authored =
+    input.playbook.runner !== null && input.playbook.runner !== undefined
+      ? await resolveRunner({
+          ownerId: input.userId,
+          runner: input.playbook.runner as PlaybookRunner,
+          requires,
+          synapAiAllowed,
+        })
+      : null;
+  const runnerPassedOver =
+    authored && authored.passedOver.length > 0 ? authored.passedOver : null;
+  /** Every later rung still says which of the playbook's choices were passed over. */
+  const decided = (r: ResolvedRunChoice): ResolvedRunChoice =>
+    runnerPassedOver ? { ...r, runOn: { ...r.runOn, runnerPassedOver } } : r;
+  if (authored?.chosen) {
+    const c = authored.chosen;
+    const report =
+      Object.keys(c.requires).length > 0 ? { requires: c.requires } : {};
+    if (c.kind === "synap_ai") {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "is-agent",
+          agentUserId: null,
+          via: "authored",
+          passedOver: null,
+          ...report,
+        },
+        persona: c.persona,
+      });
+    }
+    return decided({
+      handOff: {
+        agentUserId: c.agentUserId,
+        reach: c.reach,
+        name: c.name,
+        via: "authored",
+        computerUserId: c.computerUserId,
+      },
+      runOn: {
+        executor: "external-agent",
+        agentUserId: c.agentUserId,
+        via: "authored",
+        passedOver: null,
+        ...(c.computerUserId ? { computerUserId: c.computerUserId } : {}),
+        ...(c.preset ? { preset: c.preset } : {}),
+        ...report,
+      },
+    });
+  }
+
+  const fallbackDefault: ResolvedRunChoice = decided({
     handOff: null,
     runOn: { executor, agentUserId: null, via: "default", passedOver: null },
+  });
+  /** Rung 5; for an agent-only run, its last rungs. */
+  const byDefault = async (): Promise<ResolvedRunChoice> => {
+    if (executor !== "external-agent") return fallbackDefault;
+    const answered = input.work?.answeredAgentUserId?.trim() || null;
+    if (answered) {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "external-agent",
+          agentUserId: answered,
+          via: "named",
+          passedOver: null,
+        },
+      });
+    }
+    const routed = await routeRunAgent({
+      ownerId: input.userId,
+      playbookId: input.playbook.id,
+      workspaceId: input.work?.workspaceId ?? input.workspaceId ?? null,
+      work: input.work,
+    });
+    if (routed.kind === "routed") {
+      return decided({
+        handOff: null,
+        runOn: {
+          executor: "external-agent",
+          agentUserId: routed.agentUserId,
+          via: "default",
+          passedOver: null,
+        },
+      });
+    }
+    return {
+      ...fallbackDefault,
+      agentCandidates: routed.kind === "choose" ? routed.candidates : [],
+    };
   };
   const stored = await readStoredRunChoice({
     ownerId: input.userId,
@@ -1005,7 +1378,7 @@ export async function resolveRunChoice(
     // A remembered Synap AI on a playbook that only runs on agents is a
     // choice it cannot use: its own executor picks, as with none.
     return synapAiAllowed
-      ? {
+      ? decided({
           handOff: null,
           runOn: {
             executor: "is-agent",
@@ -1013,8 +1386,8 @@ export async function resolveRunChoice(
             via: "stored",
             passedOver: null,
           },
-        }
-      : fallbackDefault;
+        })
+      : byDefault();
   }
 
   // The remembered agent is read through THE route's assigned rung, as a run
@@ -1028,19 +1401,18 @@ export async function resolveRunChoice(
   const agentUserId =
     handOff?.agentUserId ??
     (stored?.executor === "external-agent" ? stored.agentUserId : null);
-  if (!agentUserId) return fallbackDefault;
+  if (!agentUserId) return byDefault();
+  const storedRunOn = (h: RunHandOff): RunOn => ({
+    executor: "external-agent",
+    agentUserId: h.agentUserId,
+    via: "stored",
+    passedOver: null,
+    ...(h.computerUserId ? { computerUserId: h.computerUserId } : {}),
+  });
   if (!synapAiAllowed) {
     return handOff
-      ? {
-          handOff,
-          runOn: {
-            executor: "external-agent",
-            agentUserId: handOff.agentUserId,
-            via: "stored",
-            passedOver: null,
-          },
-        }
-      : fallbackDefault;
+      ? decided({ handOff, runOn: storedRunOn(handOff) })
+      : byDefault();
   }
   // Presence: only an agent that is awake NOW takes it; anything else would
   // leave the run waiting for an agent nothing runs (slice 1's wake rule).
@@ -1050,17 +1422,9 @@ export async function resolveRunChoice(
     (a) => a.agentUserId === agentUserId
   );
   if (handOff && row?.wake.state === "awake") {
-    return {
-      handOff,
-      runOn: {
-        executor: "external-agent",
-        agentUserId: handOff.agentUserId,
-        via: "stored",
-        passedOver: null,
-      },
-    };
+    return decided({ handOff, runOn: storedRunOn(handOff) });
   }
-  return {
+  return decided({
     handOff: null,
     runOn: {
       executor,
@@ -1072,7 +1436,7 @@ export async function resolveRunChoice(
         why: !handOff ? "refused" : (row?.wake.why ?? "not_awake"),
       },
     },
-  };
+  });
 }
 
 /**
@@ -1153,9 +1517,10 @@ export async function refuseUnattendedRunIfSkillsOff(input: {
 
 /**
  * The propose-mode rule's readiness gate (the `registerPlaybookReadinessGate`
- * slot, @synap/jobs): the same playbook resolution as {@link runPlaybook}, then
- * the same unattended rule. Without it an automation filed run proposals that
- * could only fail on approval while the owner's manual run was blocked.
+ * slot, @synap/jobs): the same playbook resolution and runner choice as
+ * {@link runPlaybook}, then the same unattended rule. Without it an
+ * automation filed run proposals that could only fail on approval: skills
+ * off, or no runner at all (an agent-only playbook no agent can take).
  */
 export async function checkUnattendedPlaybookReadiness(input: {
   playbookId?: string;
@@ -1168,6 +1533,12 @@ export async function checkUnattendedPlaybookReadiness(input: {
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  const nobody = await refuseRunNobodyCanTake({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (nobody) return { ready: false, message: nobody };
   const message = await refuseUnattendedRunIfSkillsOff({
     playbook,
     userId: input.userId,
@@ -1175,6 +1546,30 @@ export async function checkUnattendedPlaybookReadiness(input: {
     agentUserId: null,
   });
   return message ? { ready: false, message } : { ready: true };
+}
+
+/**
+ * The refusal of a run no runner can take, `null` when one can: the runner
+ * choice ({@link resolveRunChoice}) left an agent-only playbook with no agent
+ * and nobody to choose among.
+ */
+export async function refuseRunNobodyCanTake(input: {
+  playbook: Playbook;
+  userId: string;
+  workspaceId: string;
+}): Promise<string | null> {
+  const { runOn, agentCandidates } = await resolveRunChoice({
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    playbook: input.playbook,
+  });
+  if (agentCandidates === undefined || agentCandidates.length > 0) {
+    return null;
+  }
+  const passed = (runOn.runnerPassedOver ?? [])
+    .map((p) => passedOverLine(p))
+    .join("; ");
+  return `Nothing filed: "${input.playbook.name}" runs only on an agent, and none of your agents can take it${passed ? ` (${passed})` : ""}. Bind an agent to its provider in Settings, Agents.`;
 }
 
 /**
@@ -1188,36 +1583,102 @@ export async function checkUnattendedPlaybookReadiness(input: {
  * (first) run + session is returned for the stable single-result contract;
  * any additional fan-out runs execute as side effects.
  */
+/**
+ * What a one-shot (`generate`) run cannot be: handed to an agent, a trial of
+ * draft rules (a trial renders on a session), or a per_moment worker batch
+ * (one session over many things). Refused by name, before anything exists.
+ */
+function refuseOneShotRunShape(
+  playbook: Pick<Playbook, "name">,
+  input: RunPlaybookInput
+): void {
+  const refuse = (why: string) => {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `"${playbook.name}" runs as one draft the pod writes (executor generate), so ${why}`,
+    });
+  };
+  if (input.handToAgentId?.trim()) {
+    refuse("it cannot be handed to an agent: run it without handToAgentId.");
+  }
+  if (input.trial) refuse("it has no trial of draft rules yet.");
+  if (input.worker?.size === "per_moment") {
+    refuse("it drafts for one record at a time, never a batch.");
+  }
+}
+
 export async function runPlaybook(
   rawInput: RunPlaybookInput
 ): Promise<RunPlaybookResult> {
-  const input = trialRunInput(rawInput);
+  let input = trialRunInput(rawInput);
   // Resolve the playbook — by id, else by NAME within this workspace (then a
   // pod-wide NULL-workspace playbook), with the cross-workspace visibility guard.
   // The ONE door (playbook-lifecycle.ts): the appointment materializer resolves
   // through the same function, so the by-name fallback and the write-side IDOR
   // floor exist once, not once per scheduled door.
-  const playbook = await resolveRunnablePlaybook({
+  const live = await resolveRunnablePlaybook({
     playbookId: input.playbookId,
     playbookName: input.playbookName,
     workspaceId: input.workspaceId,
   });
+  // A step that IS this playbook runs the version it is pinned at: the run,
+  // its snapshot and its session follow that kept definition, never the live
+  // row (spec 7111934d §3.2).
+  const pinned =
+    input.pinnedVersion !== undefined
+      ? await playbookAtVersion(await getDb(), live, input.pinnedVersion)
+      : live;
+  // A child run of a `forEach` step runs that one step.
+  const playbook = input.stageOnly
+    ? scopePlaybookToStage(pinned, input.stageOnly)
+    : pinned;
 
   // FILING — the project/track this run lands in, resolved ONCE for every
   // fan-out item. Before any session, channel or run row exists, so a bad
   // handle refuses cleanly instead of leaving a half-filed run.
   const filing = await resolveRunFiling(input);
 
+  // A ONE-SHOT playbook (`executor: "generate"`) is one model call the pod
+  // makes, filed as a proposal: no agent takes it, no session holds it. What
+  // needs a session or an agent is refused here, before anything exists.
+  const oneShot = playbook.executor === "generate";
+  if (oneShot) refuseOneShotRunShape(playbook, input);
+
   // RUN CHOICE — who does this run, resolved ONCE for every fan-out item,
   // before anything exists (an unknown / paused / foreign agent named for it
   // refuses the run; a remembered agent that is not awake falls to Synap AI).
-  const { handOff, runOn } = await resolveRunChoice({
-    userId: input.userId,
-    agentUserId: input.agentUserId,
-    handToAgentId: input.handToAgentId,
-    runOn: input.runOn,
-    playbook,
-  });
+  // A one-shot run is always the pod's own call (Synap AI): a remembered
+  // agent, or a runner the playbook names, does not apply to it.
+  const choice = oneShot
+    ? {
+        handOff: null,
+        runOn: {
+          executor: "is-agent" as const,
+          agentUserId: null,
+          via: input.runOn ? ("named" as const) : ("default" as const),
+          passedOver: null,
+        },
+        persona: null,
+      }
+    : await resolveRunChoice({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        agentUserId: input.agentUserId,
+        handToAgentId: input.handToAgentId,
+        runOn: input.runOn,
+        playbook,
+        work: {
+          roster: startRosterOf(input) ?? [],
+          subjectId: input.subjectId ?? null,
+          projectId: filing.projectId ?? null,
+        },
+      });
+  let { handOff, runOn } = choice;
+  // The playbook's runner named a Synap AI persona: it answers this run,
+  // unless the caller named one.
+  if (choice.persona && !input.agentType) {
+    input = { ...input, agentType: choice.persona };
+  }
 
   // D3 — an UNATTENDED run (the scheduled path) has no caller to answer, so a
   // playbook depending on not-enabled skills files ONE enable request per pack
@@ -1232,6 +1693,16 @@ export async function runPlaybook(
     });
     if (refusal) throw new Error(refusal);
   }
+
+  // TOOLS — a run on the pod's AI whose tools lack what a step declares
+  // never starts (founder, 10 Nov 2026), before any session or run row.
+  await refuseRunMissingTools({
+    playbook,
+    workspaceId: input.workspaceId,
+    userId: input.userId,
+    handedToAgent: handOff !== null,
+    executor: runOn.executor,
+  });
 
   // STAGE WORKER: decide whether this fire starts anything, before any
   // session exists. A per_moment worker runs ONE session over its set and
@@ -1255,6 +1726,9 @@ export async function runPlaybook(
         handOff
       );
     }
+    if (!input.subjectId && isScheduleActivatorKey(input.worker.key)) {
+      return runWorkerEach(playbook, input, input.worker, filing);
+    }
   }
 
   // Pinned subject, BEFORE any session and before a rotating cursor could
@@ -1277,6 +1751,26 @@ export async function runPlaybook(
         chosen.subjectId
       ),
     };
+    // An agent-only run's last rungs read the subject's kind: ask them
+    // again with the subject the pin chose.
+    if (
+      !handOff &&
+      runOn.executor === "external-agent" &&
+      runOn.via === "default" &&
+      chosen.subjectId !== input.subjectId
+    ) {
+      ({ handOff, runOn } = await resolveRunChoice({
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        agentUserId: input.agentUserId,
+        playbook,
+        work: {
+          roster: startRosterOf(input) ?? [],
+          subjectId: chosen.subjectId,
+          projectId: filing.projectId ?? null,
+        },
+      }));
+    }
   }
 
   // The subject must be the kind the playbook runs on: checked after the
@@ -1288,30 +1782,65 @@ export async function runPlaybook(
     workspaceId: input.workspaceId,
   });
 
+  // ONE LIVE RUN PER OBJECT: the person's live run of this playbook on the
+  // subject comes back instead of a second one — before a rotating cursor
+  // advances and before anything is written. The index (0427) is the floor
+  // under this read: see `executeSingleRun`.
+  const oneLive =
+    runInput.oneLivePerSubject === true &&
+    !oneShot &&
+    !input.trial &&
+    typeof runInput.subjectId === "string" &&
+    runInput.subjectId !== "";
+  runInput = { ...runInput, oneLivePerSubject: oneLive };
+  if (oneLive) {
+    const live = await findLiveRunOfSubject({
+      playbookId: playbook.id,
+      subjectId: runInput.subjectId!,
+      userId: input.userId,
+    });
+    if (live) return alreadyRunningResult(live);
+  }
+
   // S9: resolve the input strategy into per-run param payloads. The first item
   // is the primary (returned) run; the rest fan out as side effects.
-  const runItems = await resolveInputItems(
+  const { items: runItems, advanceCursor } = await resolveInputItems(
     playbook,
     (runInput.params ?? {}) as Record<string, unknown>
   );
 
-  const primary = await executeSingleRun(
-    playbook,
-    runInput,
-    runItems[0] ?? {},
-    filing,
-    undefined,
-    handOff,
-    runOn
-  );
+  // A rotating cursor advances for every run that counts, a failed one
+  // included (as before), but never for a click that lost the race to a live
+  // run: that click started nothing, so moving the cursor would skip an item.
+  let primary: RunPlaybookResult;
+  try {
+    primary = await executeSingleRun(
+      playbook,
+      runInput,
+      runItems[0] ?? {},
+      filing,
+      undefined,
+      handOff,
+      runOn
+    );
+  } catch (err) {
+    if (!lostOneLiveRunRace(err)) await advanceCursor();
+    throw err;
+  }
+  // Lost the race to a concurrent start: that run is the answer, and its own
+  // call fans out the other items.
+  if (primary.alreadyRunning) return primary;
+  await advanceCursor();
 
   // Fan-out: additional items each get their own session/channel/run. Failures
-  // are logged but never abort the primary result. A trial is ONE run.
+  // are logged but never abort the primary result. A trial is ONE run. Only
+  // the primary run holds the object's live slot: the items are parts of the
+  // same click, never a second run of it.
   for (let i = 1; !input.trial && i < runItems.length; i++) {
     try {
       await executeSingleRun(
         playbook,
-        runInput,
+        { ...runInput, oneLivePerSubject: false },
         runItems[i],
         filing,
         undefined,
@@ -1338,7 +1867,20 @@ export function handedToLine(h: RunHandedTo | undefined): string {
   const who = h.name ?? `agent ${h.agentUserId}`;
   return h.via === "assigned"
     ? ` It is handed to ${who}, the agent assigned to this playbook.`
-    : ` It is handed to ${who}.`;
+    : h.via === "authored"
+      ? ` It is handed to ${who}, the runner this playbook names.`
+      : ` It is handed to ${who}.`;
+}
+
+/** The result of a run that did not start because one is live (`oneLivePerSubject`). */
+function alreadyRunningResult(
+  live: LiveRunOfSubject
+): PlaybookRunAlreadyRunning {
+  return {
+    run: live.run,
+    session: live.session,
+    alreadyRunning: { reason: live.reason },
+  };
 }
 
 /** Names the hand-off on a run that started or was held with it. */
@@ -1346,7 +1888,8 @@ function withHandedTo(
   result: RunPlaybookResult,
   handOff: RunHandOff | null
 ): RunPlaybookResult {
-  if (!handOff || !result.session || result.reused) return result;
+  if (!handOff || !result.session || result.reused || result.alreadyRunning)
+    return result;
   return {
     ...result,
     handedTo: {
@@ -1379,6 +1922,18 @@ function trialRunInput(input: RunPlaybookInput): RunPlaybookInput {
   return { ...input, runOn: "synap_ai" };
 }
 
+/** The roster a run's session is born with: the agent that started it first. */
+function startRosterOf(
+  input: Pick<RunPlaybookInput, "agentUserId" | "agentIds">
+): string[] | undefined {
+  return input.agentUserId
+    ? [
+        input.agentUserId,
+        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
+      ]
+    : input.agentIds;
+}
+
 /**
  * Execute ONE playbook run for a single resolved param payload: instantiate a
  * session, create the run channel, record the run ledger row, and dispatch to
@@ -1401,30 +1956,96 @@ async function executeSingleRun(
   // agent that started it is the first on the roster — the starter every
   // surface names (`attachSessionParticipants`) — and the run waits as a draft.
   const actorId = input.userId;
+  // An agent's run waits as the person's draft (B6) unless the person allowed
+  // this playbook beforehand and the run stays what they allowed.
+  const preApproval = input.agentUserId
+    ? await decidePreApprovedRun({
+        db,
+        playbook,
+        preApprovedByRuleId: input.preApprovedByRuleId,
+        handedOff: !!handOff,
+        userId: input.userId,
+      })
+    : null;
   const startedByAgent = !!input.agentUserId;
-  const startRoster = input.agentUserId
-    ? [
-        input.agentUserId,
-        ...(input.agentIds ?? []).filter((id) => id !== input.agentUserId),
-      ]
-    : input.agentIds;
+  const preApprovedRuleId =
+    preApproval?.runs === true ? preApproval.ruleId : null;
+  const startRoster = startRosterOf(input);
   // A handed run's roster carries the agent it is handed to, from birth.
   const rosterAgentIds = handOff
     ? [...new Set([...(startRoster ?? []), handOff.agentUserId])]
     : startRoster;
+
+  // ONE-SHOT: no session, no room, no agent turn. One model call through
+  // `ai.generate`, the result filed as a proposal on the subject, one run row
+  // with the call's record (`generate-run.ts`). Its own idempotency: an
+  // earlier run's still-pending proposal on the subject.
+  if (playbook.executor === "generate") {
+    const goalOverride =
+      (input.goalResolver
+        ? input.goalResolver(
+            input.goalTemplateOverride ?? playbook.goalTemplate
+          )
+        : undefined) ??
+      (input.goalTemplateOverride
+        ? resolveGoal(input.goalTemplateOverride, params, playbook.id)
+        : undefined);
+    if (input.idempotentBySubject && input.subjectId) {
+      const cooling = await latestRunFailedWithinCooldown(
+        playbook.id,
+        input.subjectId
+      );
+      if (cooling) {
+        return {
+          run: null,
+          session: null,
+          skipped: AUTOMATION_SKIP_REASONS.coolingDown,
+        };
+      }
+    }
+    // Loaded here, not at module load: the one-shot path reads documents
+    // and the model door, which no other run needs.
+    const { executeGenerateRun } = await import("./generate-run.js");
+    const done = await executeGenerateRun({
+      playbook,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      subjectId: input.subjectId ?? null,
+      params,
+      runOn: runOn ?? null,
+      ...(input.idempotentBySubject ? { idempotentBySubject: true } : {}),
+      ...(goalOverride !== undefined ? { goalOverride } : {}),
+    });
+    return {
+      run: done.run,
+      session: null,
+      generated: done.generated,
+      ...(done.reused ? { reused: true as const } : {}),
+    };
+  }
 
   // 0. Idempotency by subject — if a NON-TERMINAL session for this playbook +
   // subject already exists, REUSE it rather than starting a duplicate. This makes
   // a playbook_run safe on a schedule (e.g. a daily client-sync that ensures every
   // client has a session): start-if-missing, no-op-if-present. Reuse spans every
   // in-flight state (see IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES) so a stuck
-  // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in;
-  // manual runs leave `idempotentBySubject` false so each click starts fresh.
+  // subject the reaper aged active→'stale' is not re-dispatched daily. Opt-in:
+  // the AUTOMATION path's flag, with its failed-run cooldown below. A person's
+  // run never comes here — its reuse is `oneLivePerSubject` (one live run per
+  // object, per person, no cooldown), answered in `runPlaybook` before any
+  // item resolves and floored by the 0427 index at the insert below.
   if (input.idempotentBySubject && input.subjectId) {
     const existing = await db.query.focusSessions.findFirst({
       where: and(
         eq(focusSessions.playbookId, playbook.id),
         eq(focusSessions.subjectEntityId, input.subjectId),
+        // The OWNER's run only (the session's owner is always the person the
+        // run is for, `actorId` below). Without it, an automation of one
+        // member of a shared space was answered with ANOTHER member's private
+        // session of a pod-wide playbook on the same record: its id and room
+        // landed in the automation's step output, and the owner's run never
+        // started. The same key as a person's one live run per object.
+        eq(focusSessions.userId, input.userId),
         // Reuse any IN-FLIGHT session (active/paused/stale/forming), not just
         // 'active': a stuck subject whose session the focus-session reaper aged
         // active→'stale' must NOT re-spawn a fresh run on the next daily cron.
@@ -1491,6 +2112,23 @@ async function executeSingleRun(
     // A trial (the rule lab): the drafts it renders, and the stamp every
     // write door refuses a write on.
     ...(input.trial ? trialSessionMetadata(input.trial) : {}),
+    // Pre-approved: the person's rule is the acceptance, so the agent's run is
+    // born accepted (`triage.ts` receipt) and names the rule that let it start.
+    ...(preApprovedRuleId
+      ? {
+          triage: {
+            acceptedAt: new Date().toISOString(),
+            acceptedBy: input.userId,
+            preApprovedByRuleId: preApprovedRuleId,
+          },
+        }
+      : preApproval && !preApproval.runs && preApproval.reason
+        ? // Held although the person allowed it (or an earlier version):
+          // the draft says why (`projectTriage` → `triage.heldBecause`).
+          { triage: { heldBecause: preApproval.reason } }
+        : {}),
+    // The step of another run this run works (a stage that `uses` it).
+    ...(input.stageOf ? { [STAGE_OF_METADATA_KEY]: input.stageOf } : {}),
     // `profileSlug` = the lifecycle the worker follows: process-sync settles
     // a target only on a move of THAT lifecycle (`listOpenWorkerTargetSessions`).
     ...(input.worker
@@ -1507,8 +2145,20 @@ async function executeSingleRun(
   // 1. Instantiate the runtime session (no channel yet — wired below). The goal
   // is resolved by the caller's resolver when provided (scheduled path resolves
   // against the automation StepContext), else substituted against `params`.
-  const session = await instantiateSession({
+  // A person's run (`oneLivePerSubject`) is born holding the object's live
+  // slot; the session insert is the run's first write, so a start that loses
+  // the race on the 0427 index has written nothing and answers with the run
+  // that won.
+  const oneLive = input.oneLivePerSubject === true && !!input.subjectId;
+  const born = await instantiateSession({
+    ...(oneLive ? { oneLivePerSubject: true } : {}),
     playbookId: playbook.id,
+    // The session's stages and slots come from the pinned version too.
+    ...(input.pinnedVersion !== undefined
+      ? { pinnedVersion: input.pinnedVersion }
+      : {}),
+    ...(input.stageOnly ? { stageOnly: input.stageOnly } : {}),
+    ...(input.ownTitle ? { ownTitle: input.ownTitle } : {}),
     workspaceId: input.workspaceId,
     userId: actorId,
     // The birth stage's subject move is governed as the agent that ran it.
@@ -1543,7 +2193,30 @@ async function executeSingleRun(
         ? resolveGoal(input.goalTemplateOverride, params, playbook.id)
         : undefined),
     metadata: sessionMetadata,
-  });
+  }).then(
+    (created) => ({ created }),
+    async (err: unknown) => {
+      if (oneLive && uniqueViolationConstraint(err) === ONE_LIVE_RUN_INDEX) {
+        const live = await findLiveRunOfSubject({
+          playbookId: playbook.id,
+          subjectId: input.subjectId!,
+          userId: input.userId,
+        });
+        if (live) return { live };
+        // The run that won ended between its insert and this read: the
+        // object is free again, and the person's next click starts a run.
+        throw new TRPCError({
+          code: "CONFLICT",
+          message:
+            "Another run of this playbook on this record was starting at the same moment. Run it again.",
+          cause: err,
+        });
+      }
+      throw err;
+    }
+  );
+  if ("live" in born) return alreadyRunningResult(born.live);
+  const session = born.created;
 
   // The batch's TARGETS, born with the session (before any agent can act on
   // them): one `session --targets--> entity` edge per thing, no result yet,
@@ -1706,7 +2379,7 @@ async function executeSingleRun(
   // session (`metadata.heldRun`, server-owned), and the ONE acceptance door
   // (`acceptFromTriage`) starts it through {@link startHeldRun}. Discarding
   // the draft cancels the session, so a held run never runs.
-  if (startedByAgent) {
+  if (startedByAgent && !preApprovedRuleId) {
     const held: HeldRun = {
       params,
       agentType: input.agentType ?? null,
@@ -1715,6 +2388,7 @@ async function executeSingleRun(
       ...(handOff ? { handToAgentId: handOff.agentUserId } : {}),
       // A run asked for Synap AI stays on Synap AI when it is accepted.
       ...(input.runOn ? { runOn: input.runOn } : {}),
+      ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
       heldAt: new Date().toISOString(),
     };
     const [heldSession] = await db
@@ -1726,6 +2400,9 @@ async function executeSingleRun(
       run: null,
       session: heldSession as FocusSession,
       held: true,
+      ...(preApproval && !preApproval.runs && preApproval.reason
+        ? { heldBecause: preApproval.reason }
+        : {}),
       ...(parentLink ? { parentLink } : {}),
     };
   }
@@ -1741,6 +2418,8 @@ async function executeSingleRun(
     agentType: input.agentType ?? null,
     handOff: handOff ?? null,
     runOn: runOn ?? null,
+    stageRunners: input.stageRunners,
+    agentUserId: input.agentUserId ?? null,
   });
 
   // Re-load the session so the returned row reflects the wired channelId.
@@ -1765,6 +2444,8 @@ interface HeldRun {
   handToAgentId?: string;
   /** Synap AI was asked for this run (`RunPlaybookInput.runOn`). */
   runOn?: "synap_ai";
+  /** Who works each step (`RunPlaybookInput.stageRunners`). */
+  stageRunners?: Record<string, PlaybookRunner>;
   heldAt: string;
 }
 
@@ -1785,6 +2466,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
       ? { handToAgentId: h.handToAgentId }
       : {}),
     ...(h.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+    ...(h.stageRunners &&
+    typeof h.stageRunners === "object" &&
+    !Array.isArray(h.stageRunners)
+      ? { stageRunners: h.stageRunners }
+      : {}),
     heldAt: typeof h.heldAt === "string" ? h.heldAt : "",
   };
 }
@@ -1793,10 +2479,11 @@ function readHeldRun(metadata: unknown): HeldRun | null {
  * Steps 4–6 of a run, on a session whose channel is wired: the run ledger row,
  * the subject's enrollment, the granted capabilities, the executor dispatch and
  * the ONE result write. Shared by a run that starts at once
- * ({@link executeSingleRun}) and a held run the person just accepted
- * ({@link startHeldRun}) — one dispatch path, never two.
+ * ({@link executeSingleRun}), a held run the person just accepted
+ * ({@link startHeldRun}) and a stopped run the person continues at its stage
+ * (`continue-run.ts`) — one dispatch path, never three.
  */
-async function dispatchRunOnSession(p: {
+export async function dispatchRunOnSession(p: {
   playbook: Playbook;
   sessionId: string;
   channelId: string;
@@ -1810,6 +2497,10 @@ async function dispatchRunOnSession(p: {
   handOff?: RunHandOff | null;
   /** Who runs it and why ({@link resolveRunChoice}), recorded on the run. */
   runOn?: RunOn | null;
+  /** Who works each step (`RunPlaybookInput.stageRunners`), kept on the run's input. */
+  stageRunners?: Record<string, PlaybookRunner>;
+  /** The agent that started the run, when one did (the run's actor). */
+  agentUserId?: string | null;
 }): Promise<PlaybookRun> {
   const db = await getDb();
   const { playbook, actorId, params } = p;
@@ -1822,22 +2513,28 @@ async function dispatchRunOnSession(p: {
   })) as FocusSession;
   const subjectId = p.subjectId ?? undefined;
 
-  // 4. Insert the run ledger row (status "running"). Snapshot the resolved
-  // definition (D3c) so "what ran" survives later edits to the playbook config.
-  const [run] = await db
-    .insert(playbookRuns)
-    .values({
-      workspaceId: p.workspaceId,
-      playbookId: playbook.id,
-      sessionId: session.id,
-      executor: executorRef,
-      ...(p.runOn ? { runOn: p.runOn } : {}),
-      status: "running",
-      input: params,
-      createdBy: actorId,
-      definitionSnapshot: buildDefinitionSnapshot(playbook),
-    })
-    .returning();
+  // 4. The run ledger row, `queued` with its holder: it is `running` only
+  // once that holder claims it (the IS turn starting, the agent's provider
+  // task, its first write). Snapshot the resolved definition (D3c) so "what
+  // ran" survives later edits to the playbook config.
+  const run = await insertPlaybookRun(db, {
+    workspaceId: p.workspaceId,
+    playbookId: playbook.id,
+    sessionId: session.id,
+    executor: executorRef,
+    ...(p.runOn ? { runOn: p.runOn } : {}),
+    holder: handOff
+      ? runHolder("agent", handOff.agentUserId)
+      : executorRef === "external-agent"
+        ? runHolder("agent", p.runOn?.agentUserId ?? null)
+        : runHolder("synap_ai", null),
+    input: p.stageRunners
+      ? { ...params, stageRunners: p.stageRunners }
+      : params,
+    writerUserId: actorId,
+    agentUserId: p.agentUserId,
+    definitionSnapshot: buildDefinitionSnapshot(playbook),
+  });
 
   // 4b. Enroll the subject entity in the playbook so running a playbook FOR an
   // entity also populates its funnel/cohort. Only when the playbook actually has
@@ -1872,6 +2569,18 @@ async function dispatchRunOnSession(p: {
     }
   }
 
+  // 4c. BIRTH: the run's first stage starts now — the stage runner records
+  // who works it and hands it over when the stage names another runner
+  // (`enterStage`, spec 7111934d §3.1). Never throws.
+  if (session.currentStage) {
+    const { enterStage } = await import("./stage-runner.js");
+    await enterStage({
+      sessionId: session.id,
+      stageKey: session.currentStage,
+      cause: { kind: "birth" },
+    });
+  }
+
   // 5. Resolve the playbook's granted capabilities (its `grants` links) into
   //    CapabilityRef[] and dispatch to the executor.
   const playbookLinks = await getLinksFor(actorId, "playbook", playbook.id);
@@ -1902,7 +2611,7 @@ async function dispatchRunOnSession(p: {
     // hand-off through `external-agent`, with the agent named as its selector.
     result =
       handOff?.reach === "pull"
-        ? { status: "running" }
+        ? { status: "queued" }
         : await resolveExecutor(executorRef).run({
             workspaceId: p.workspaceId ?? "",
             userId: actorId,
@@ -1930,7 +2639,9 @@ async function dispatchRunOnSession(p: {
             input: {
               ...params,
               runId: run.id,
-              ...(handOff ? { agentUserId: handOff.agentUserId } : {}),
+              ...(handOff || p.runOn?.agentUserId
+                ? { agentUserId: handOff?.agentUserId ?? p.runOn!.agentUserId }
+                : {}),
             },
             capabilities,
           });
@@ -1982,11 +2693,13 @@ export async function startHeldRun(
   // may have been paused since): a refusal throws here, before the claim, so
   // the hold stays rather than starting the playbook's own executor instead.
   // The person's remembered choice applies too: it is their run now.
-  const { handOff, runOn } = await resolveRunChoice({
+  const { handOff, runOn, persona } = await resolveRunChoice({
     userId: session.userId,
+    workspaceId: session.workspaceId,
     handToAgentId: held.handToAgentId ?? null,
     runOn: held.runOn,
     playbook,
+    work: runWorkOfSession(session),
   });
   const [claimed] = await db
     .update(focusSessions)
@@ -2009,9 +2722,10 @@ export async function startHeldRun(
     workspaceId: session.workspaceId ?? null,
     params: held.params,
     subjectId: session.subjectEntityId ?? null,
-    agentType: held.agentType,
+    agentType: held.agentType ?? persona ?? null,
     handOff,
     runOn,
+    stageRunners: held.stageRunners,
   });
   return { status: "started", run };
 }
@@ -2062,7 +2776,8 @@ export async function gateWorkerRun(
       return WORKER_SKIP_REASONS.volumeCeiling;
     }
   }
-  if (worker.size === "per_thing" && worker.status && input.subjectId) {
+  const statuses = workerStatuses(worker.status);
+  if (worker.size === "per_thing" && statuses.length && input.subjectId) {
     const { readSubjectProfile } = await import("./playbook-activators.js");
     const { lifecycleProperty } = await readSubjectProfile(
       worker.profileSlug,
@@ -2081,7 +2796,7 @@ export async function gateWorkerRun(
         .from(entities)
         .where(eq(entities.id, input.subjectId))
         .limit(1);
-      return thing?.value === worker.status
+      return thing?.value && statuses.includes(thing.value)
         ? null
         : WORKER_SKIP_REASONS.staleTransition;
     }
@@ -2109,13 +2824,159 @@ export async function gateWorkerRun(
 const loadStatusGroups = () => import("../lifecycle/status-groups.js");
 
 /**
- * A per_moment worker run: the things in the worker's status under its scope
- * (the board's own set — `listThingsInStatus`), minus those this enablement
- * is already working, capped at `WORKER_BATCH_LIMIT`. ONE session, no
- * subject, one target edge per thing. Nothing in the set ⇒ `no-subject` (a
- * quiet moment, no session); a `count` worker under its threshold ⇒
- * `below_threshold` — the threshold counts the things in the status that
- * this enablement is NOT already working, so it gathers N fresh things
+ * A per_thing SCHEDULE tick: refused once when no runner can take the
+ * playbook; else one run per thing of the worker's set
+ * ({@link workerSet}, at most {@link WORKER_EACH_LIMIT}), each through this
+ * same door with that thing as its subject, so its gate, its one live run and
+ * its param binding are the ones every run has. Nothing in the set ⇒
+ * `no-subject`. The first run is the reply; a failed one is logged and the
+ * others still run (all failing throws the last error).
+ */
+async function runWorkerEach(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  worker: RunWorker,
+  filing: RunFiling
+): Promise<RunPlaybookResult> {
+  // Asked once for the tick: a playbook no runner can take would otherwise
+  // be born blocked once per thing.
+  const nobody = await refuseRunNobodyCanTake({
+    playbook,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+  });
+  if (nobody) throw new Error(nobody);
+  const { items } = await workerSet(playbook, input, worker, filing, {
+    limit: WORKER_EACH_LIMIT,
+  });
+  let first: RunPlaybookResult | null = null;
+  let lastError: unknown = null;
+  for (const { id } of items) {
+    try {
+      const result = await runPlaybook({
+        ...input,
+        subjectId: id,
+        params: fillSoleRequiredEntityParam(
+          (input.params ?? {}) as Record<string, unknown>,
+          playbook.params,
+          id
+        ),
+      });
+      first ??= result;
+    } catch (err) {
+      lastError = err;
+      logger.error(
+        { err, playbookId: playbook.id, subjectId: id },
+        "per_thing schedule run failed (the other things still run)"
+      );
+    }
+  }
+  if (first) return first;
+  if (lastError) throw lastError;
+  return { run: null, session: null, skipped: "no-subject" };
+}
+
+/** The most runs ONE per_thing tick starts (the kind-bound schedule's cap). */
+const WORKER_EACH_LIMIT = 100;
+/**
+ * HIDDEN LIMIT: `only` / `unless` are read off each thing after the listing,
+ * so a set they narrow lists this many times its cap first.
+ */
+const WORKER_SET_SCAN_FACTOR = 4;
+
+/**
+ * THE set a worker works over, for a per_moment batch and a per_thing tick
+ * alike: the things of its kind under its scope (the board's own base set,
+ * `listThingsInStatus`) in its status — the lifecycle column when the status
+ * lives there, else the playbook's `statusProperty` — and matching the
+ * playbook's stored `subjectProfile.filter`, both in the query; then kept by
+ * `only` / `unless`, read off each thing. `total` counts the query's set
+ * (before `only` / `unless`).
+ */
+async function workerSet(
+  playbook: Playbook,
+  input: RunPlaybookInput,
+  worker: RunWorker,
+  filing: RunFiling,
+  opts: {
+    limit: number;
+    excludeIds?: readonly string[];
+    onlyIds?: readonly string[];
+  }
+): Promise<{
+  items: Array<{ id: string; name: string | null }>;
+  total: number;
+}> {
+  const { readSubjectProfile } = await import("./playbook-activators.js");
+  const { lifecycleProperty } = await readSubjectProfile(
+    worker.profileSlug,
+    input.workspaceId
+  );
+  const statusProperty =
+    readPlaybookProcess(playbook.subjectProfile).statusProperty ??
+    lifecycleProperty;
+  const statuses = workerStatuses(worker.status);
+  const onColumn = !statusProperty || statusProperty === lifecycleProperty;
+  const where = [
+    ...storedFilterSql(
+      (playbook.subjectProfile as { filter?: unknown } | null)?.filter
+    ),
+    ...(!onColumn && statuses.length > 0
+      ? [
+          inArray(
+            drizzleSql`${entities.properties}->>${statusProperty}`,
+            statuses
+          ),
+        ]
+      : []),
+  ];
+  const perThing = !!worker.only || !!worker.unless;
+  const { listThingsInStatus } = await loadStatusGroups();
+  const set = await listThingsInStatus({
+    profileSlug: worker.profileSlug,
+    status: onColumn ? statuses : null,
+    userId: input.userId,
+    workspaceId: input.workspaceId,
+    projectId: filing.projectId,
+    limit: perThing ? opts.limit * WORKER_SET_SCAN_FACTOR : opts.limit,
+    excludeIds: opts.excludeIds,
+    onlyIds: opts.onlyIds,
+    where,
+  });
+  if (!perThing || set.items.length === 0) return set;
+  const db = await getDb();
+  const rows = await db
+    .select({ id: entities.id, properties: entities.properties })
+    .from(entities)
+    .where(
+      inArray(
+        entities.id,
+        set.items.map((i) => i.id)
+      )
+    );
+  const props = new Map(
+    rows.map((r) => [r.id, (r.properties as Record<string, unknown>) ?? {}])
+  );
+  return {
+    items: set.items
+      .filter((i) => {
+        const p = props.get(i.id) ?? {};
+        return (
+          !skippedByOnly(worker.only, p) && !skippedByUnless(worker.unless, p)
+        );
+      })
+      .slice(0, opts.limit),
+    total: set.total,
+  };
+}
+
+/**
+ * A per_moment worker run: the worker's set ({@link workerSet}) minus what
+ * this enablement is already working, capped at `WORKER_BATCH_LIMIT`. ONE
+ * session, no subject, one target edge per thing. Nothing in the set ⇒
+ * `no-subject` (a quiet moment, no session); a `count` worker under its
+ * threshold ⇒ `below_threshold` — the threshold counts the things in the set
+ * that this enablement is NOT already working, so it gathers N fresh things
  * before it runs again.
  */
 async function runWorkerBatch(
@@ -2129,13 +2990,7 @@ async function runWorkerBatch(
   const inFlight = worker.automationId
     ? await listWorkerTargetsInFlight(worker.automationId)
     : [];
-  const { listThingsInStatus } = await loadStatusGroups();
-  const set = await listThingsInStatus({
-    profileSlug: worker.profileSlug,
-    status: worker.status ?? null,
-    userId: input.userId,
-    workspaceId: input.workspaceId,
-    projectId: filing.projectId,
+  const set = await workerSet(playbook, input, worker, filing, {
     limit: WORKER_BATCH_LIMIT,
     excludeIds: inFlight,
   });
@@ -2143,15 +2998,10 @@ async function runWorkerBatch(
     // The threshold counts the things NOT already being worked (backend F11):
     // once a batch over N runs, every later entry would otherwise find
     // total ≥ N and start a session over that one new thing. Things in flight
-    // that are still in the status are taken off the status total.
+    // that are still in the set are taken off its total.
     const busy = inFlight.length
       ? (
-          await listThingsInStatus({
-            profileSlug: worker.profileSlug,
-            status: worker.status ?? null,
-            userId: input.userId,
-            workspaceId: input.workspaceId,
-            projectId: filing.projectId,
+          await workerSet(playbook, input, worker, filing, {
             limit: 1,
             onlyIds: inFlight,
           })
@@ -2201,11 +3051,12 @@ async function latestRunFailedWithinCooldown(
       recent: drizzleSql<boolean>`COALESCE(${playbookRuns.completedAt}, ${playbookRuns.startedAt}) > now() - (${AI_DISPATCH_GUARDRAILS.failedSubjectCooldownHours}::int * interval '1 hour')`,
     })
     .from(playbookRuns)
-    .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
+    .leftJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
     .where(
       and(
         eq(playbookRuns.playbookId, playbookId),
-        eq(focusSessions.subjectEntityId, subjectId)
+        // A guardrail of the run door: a system read of what the run is about.
+        runSubjectMatches(subjectId, null)
       )
     )
     .orderBy(desc(playbookRuns.startedAt))
@@ -2221,6 +3072,18 @@ async function latestRunFailedWithinCooldown(
  * external-agent hand-off stores its `externalAgent` receipt. The ONE write
  * after `Executor.run`, for `runPlaybook` and for a re-dispatch of the same
  * run (`services/agent-dispatch/redispatch-on-choice.ts`).
+ *
+ * COMPARE-AND-SET: written only onto a run that is still LIVE. Every caller
+ * writes onto a run it holds live — `runPlaybook` inserts it `queued`, the
+ * one-shot `generate-run` `running`, the re-dispatch re-queues it — so LIVE
+ * is the one expected set. `queued` (handed over, nobody claimed it yet) is
+ * written only onto a run still queued: a holder that claimed it while the
+ * executor returned keeps its `running`. `running` IS the claim: the
+ * executor saw its holder take it (a provider task started).
+ * An executor call can be long, and the run can end under it (the person
+ * cancels the session, an IS turn completes it first): that verdict stands.
+ * Then nothing is written or settled, it is logged, and the run is returned
+ * as it now stands, so the caller reports the truth.
  */
 export async function recordExecutorResult(
   runId: string,
@@ -2234,21 +3097,51 @@ export async function recordExecutorResult(
   const externalAgentPatch = result.externalAgent
     ? { externalAgent: result.externalAgent }
     : {};
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: result.status,
+  const handedOver = result.status === "queued";
+  const claimPatch =
+    result.status === "running"
+      ? {
+          holder: claimedHolderSql(
+            result.externalAgent
+              ? { kind: "agent", id: result.externalAgent.agentUserId }
+              : {}
+          ),
+        }
+      : {};
+  const {
+    rows: [updated],
+  } = await setRunStatus(db, {
+    runId,
+    from: handedOver ? "queued" : LIVE_RUN_STATUSES,
+    to: result.status,
+    // The executor reports; the run's own door records it.
+    actor: { kind: "system" },
+    set: {
       summary: result.summary ?? null,
       error: result.error ?? null,
       completedAt: terminal ? new Date() : null,
       // The hand-off receipt of an external-agent dispatch (0315) — what the
       // status poll and the cancel door read. Absent for every other executor.
-      // (Built outside this literal: the terminal-settles tripwire parses a
-      // brace-free `.set({...})`, and a nested object would blind it.)
       ...externalAgentPatch,
-    })
-    .where(eq(playbookRuns.id, runId))
-    .returning();
+      ...claimPatch,
+    },
+  });
+  if (!updated) {
+    const [current] = await db
+      .select()
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    // Claimed while the executor returned: the claim is the newer truth.
+    if (handedOver && current?.status === "running") {
+      return current as PlaybookRun;
+    }
+    logger.warn(
+      { runId, wanted: result.status, status: current?.status ?? null },
+      "recordExecutorResult: the run was no longer live; its verdict stands and the executor's result was not written"
+    );
+    return current as PlaybookRun;
+  }
   // A failed child of an automation run settles its parent (never throws).
   if (terminal)
     await settleParentAutomationRunFromChild({ playbookRunId: runId });

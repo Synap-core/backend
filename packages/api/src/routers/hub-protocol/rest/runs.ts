@@ -17,13 +17,23 @@
  */
 
 import { z } from "zod";
-import { db, eq, focusSessions, playbookRuns } from "@synap/database";
+import {
+  db,
+  eq,
+  focusSessions,
+  getRequestGrant,
+  playbookRuns,
+  workUnitActorOf,
+} from "@synap/database";
 import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
 import { applyRunCapture } from "../../../services/runs/apply-run-capture.js";
 import { reviveSessionForWrite } from "../../../services/focus-sessions/revive-stale-session.js";
 import { cancelRun } from "../../../services/agent-dispatch/cancel-run.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { listRuns, getRun } from "../../../services/runs/index.js";
+import { RUN_STATUSES } from "../../../services/runs/types.js";
+import { readRunRecordForKey } from "../../../services/runs/run-record-for-key.js";
+import { runDetailReadable } from "../../../access/grant-door-fence.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
@@ -45,16 +55,7 @@ const FlowTypeSchema = z.enum([
   "session",
   "chat",
 ]);
-const RunStatusSchema = z.enum([
-  "running",
-  "completed",
-  "failed",
-  "proposed",
-  "cancelled",
-  "skipped",
-  "blocked_by_policy",
-  "waiting_on_you",
-]);
+const RunStatusSchema = z.enum(RUN_STATUSES);
 
 // ── Wire schemas ─────────────────────────────────────────────────────────────
 
@@ -227,6 +228,24 @@ export function registerRunsRoutes(app: HubHono): void {
     }
     const id = requireUuidParam(c, "id");
     if (id instanceof Response) return id;
+    // A key that does not read every subject of the detail (an app pinned to
+    // its spaces) reads a one-shot playbook run's record only, the rest
+    // withheld (`runDetailReadable`, `readRunRecordForKey`).
+    if (!runDetailReadable(getRequestGrant())) {
+      if (parsedFt.data !== "playbook") {
+        return c.json(
+          {
+            error:
+              "This key reads only a playbook run's record: the detail of other runs holds what its grant does not reach.",
+            code: "GRANT_DOOR_UNSUPPORTED",
+          },
+          403
+        );
+      }
+      const record = await readRunRecordForKey({ userId, runId: id });
+      if (!record) return c.json({ error: "Run not found" }, 404);
+      return c.json(record);
+    }
     const detail = await getRun({
       userId,
       flowType: parsedFt.data,
@@ -467,6 +486,10 @@ export function registerRunsRoutes(app: HubHono): void {
         error: body.error,
         producedEntityIds: body.producedEntityIds,
         usedCapabilities: body.usedCapabilities,
+        actor: workUnitActorOf(
+          acting.userId,
+          agentUserId !== acting.userId ? agentUserId : null
+        ),
       });
       if (!updated) {
         // The run reached a verdict in between (cancelled / finished): no

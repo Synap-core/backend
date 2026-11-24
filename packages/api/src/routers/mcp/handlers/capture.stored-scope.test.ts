@@ -176,7 +176,11 @@ describe("graph lane", () => {
     };
 
     const out = await call({
-      entities: [{ profileSlug: "note", title: "Ada prefers async" }],
+      // Two entities: ONE plain entity is a typed create, not a graph.
+      entities: [
+        { profileSlug: "note", title: "Ada prefers async" },
+        { profileSlug: "note", title: "Ada prefers short standups" },
+      ],
     });
 
     expect(out.scope).toEqual({

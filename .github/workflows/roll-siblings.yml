@@ -1,0 +1,105 @@
+name: Roll siblings
+
+# DRY RUN ONLY (design 4ce56489, plan b5820982 section 2, build step 3).
+# Reads what a sibling roll WOULD do, hourly, so the plan can be watched for a
+# week before any write path exists: the current pin in sibling-pins.json, the
+# sibling's head, how many commits the pin lags, and (when a checkout is at the
+# target) whether the mirrors would change. It runs `node scripts/ci/roll.mjs
+# plan` and prints the result to the job summary.
+#
+# It NEVER writes the pin, pushes a branch or opens a pull request: this file
+# has no write permission, no write token and no step that could. The write
+# path, the merge-bot trust rule and the dashboard button are later steps
+# (tripwire scripts/ci/roll-workflow.tripwire.test.ts holds this file to that).
+#
+# Sibling heads are read through the GitHub REST API with the Synap Reader App
+# token (contents: read on control-plane-api only), never a clone.
+#
+# NOT in environment `ci-bots` yet: that environment keeps the Merge Bot App's
+# WRITE secrets, which a read-only dry run must not hold. The Reader App id and
+# key are repo-level (vars.SYNAP_READER_APP_ID, secrets.SYNAP_READER_APP_KEY),
+# the same ones ci.yml and clock-shift.yml use. The write step will add the
+# environment.
+#
+# `mirrors` stays "unknown" here: it needs the sibling checked out at the
+# target, and this job does not clone. Lag and the target are the signal.
+
+on:
+  schedule:
+    # hourly, off the :00/:30 marks other schedules crowd
+    - cron: "11 * * * *"
+  workflow_dispatch:
+    inputs:
+      sibling:
+        description: "Sibling dir to plan (empty = every registered sibling)"
+        required: false
+        default: ""
+      ref:
+        description: "Sibling sha or branch to plan against (empty = its default branch head)"
+        required: false
+        default: ""
+      dry_run:
+        description: "Must stay true: the write path is not built yet"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: roll-siblings
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ".node-version"
+
+      - name: Refuse a non-dry run
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'true' }}
+        run: |
+          if [ "${DRY_RUN}" != "true" ]; then
+            echo "::error::dry_run=false asked, but the roll's write path is a later step: nothing here writes."
+            exit 1
+          fi
+
+      - name: Mint the sibling read token (Synap Reader App)
+        id: reader-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          private-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          owner: Synap-core
+          repositories: control-plane-api
+          permission-contents: read
+
+      - name: Plan the roll
+        env:
+          CP_READ_TOKEN: ${{ steps.reader-token.outputs.token }}
+          INPUT_SIBLING: ${{ inputs.sibling }}
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ -n "${INPUT_SIBLING}" ]; then args+=(--sibling "${INPUT_SIBLING}"); fi
+          if [ -n "${INPUT_REF}" ]; then args+=(--ref "${INPUT_REF}"); fi
+          node scripts/ci/roll.mjs plan "${args[@]}" | tee plan.txt
+          {
+            echo "## Sibling roll plan (dry run, nothing written)"
+            echo
+            echo '```'
+            cat plan.txt
+            echo '```'
+          } >> "${GITHUB_STEP_SUMMARY}"

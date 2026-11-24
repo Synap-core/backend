@@ -30,11 +30,13 @@
  * tripwire lives at
  * `packages/database/src/services/view-filter-operators-parity.test.ts`.
  *
- * Pure: depends only on zod. Safe in browser, Electron, Node and relay.
+ * Pure: depends only on zod and the lifecycle categories. Safe in browser,
+ * Electron, Node and relay.
  */
 
 import { z } from "zod";
 import type { PropertyValueType } from "../profiles/index.js";
+import { LIFECYCLE_CATEGORIES } from "../lifecycle/option.js";
 
 /** The canonical operator set, in menu order. */
 export const VIEW_FILTER_OPERATORS = [
@@ -213,10 +215,28 @@ export function normalizeViewFilter<T>(filter: T): T {
 const FilterScalarSchema = z.union([z.string(), z.number(), z.boolean()]);
 
 /**
- * The entity columns a filter may name directly. Anything else is a property
- * and must be spelled `properties.<slug>` — a bare `status` names nothing the
- * compiler can read, and used to compile to "no condition" (every row back,
- * looking filtered). The pod's compiler reads this list (re-exported as its
+ * The STATUS of the listed thing: the lifecycle value (`status`) and its
+ * category (`statusCategory`, one of `LIFECYCLE_CATEGORIES`). Not a column
+ * name but a primitive, compiled PER SUBJECT: a kind's status is
+ * `entities.status` / `status_category`; when the list or view is scoped to a
+ * ROLE, it is that role's facet (`entity_facets.status` / `status_category`).
+ * Never the `properties.<slug>` projection: the columns are the truth.
+ */
+export const VIEW_FILTER_STATUS_FIELDS = ["status", "statusCategory"] as const;
+
+/** A status primitive field (see {@link VIEW_FILTER_STATUS_FIELDS}). */
+export function isViewFilterStatusField(
+  field: string
+): field is (typeof VIEW_FILTER_STATUS_FIELDS)[number] {
+  return (VIEW_FILTER_STATUS_FIELDS as readonly string[]).includes(field);
+}
+
+/**
+ * The fields a filter may name directly: entity columns plus the status
+ * primitive. Anything else is a property and must be spelled
+ * `properties.<slug>` — an unknown bare field names nothing the compiler can
+ * read, and used to compile to "no condition" (every row back, looking
+ * filtered). The pod's compiler reads this list (re-exported as its
  * `VIEW_FILTER_CORE_FIELDS`).
  */
 export const VIEW_FILTER_CORE_FIELDS = [
@@ -225,6 +245,7 @@ export const VIEW_FILTER_CORE_FIELDS = [
   "type",
   "createdAt",
   "updatedAt",
+  ...VIEW_FILTER_STATUS_FIELDS,
 ] as const;
 
 const PROPERTY_FIELD = /^properties\.[^.]+$/;
@@ -243,8 +264,8 @@ export function isViewFilterField(field: string): boolean {
  * an unknown operator, or a value of the wrong shape for its operator, is
  * rejected.
  *
- * `field` is `title` / `preview` / `type` / `createdAt` / `updatedAt` or
- * `properties.<slug>`.
+ * `field` is `title` / `preview` / `type` / `createdAt` / `updatedAt`, the
+ * status primitive `status` / `statusCategory`, or `properties.<slug>`.
  */
 export const ViewFilterSchema = z.preprocess(
   normalizeViewFilter,
@@ -273,6 +294,25 @@ export const ViewFilterSchema = z.preprocess(
               ? `Filter operator "${filter.operator}" takes a list of values`
               : `Filter operator "${filter.operator}" takes one string, number or boolean value`,
         });
+        return;
+      }
+      // A category is a closed set: an unknown one is a typo, refused — never
+      // a filter that silently matches nothing. (A `status` VALUE is declared
+      // per lifecycle, so an unknown one matches no row, like any column.)
+      if (filter.field === "statusCategory" && shape !== "none") {
+        const values = Array.isArray(filter.value)
+          ? filter.value
+          : [filter.value];
+        const unknown = values.filter(
+          (v) => !(LIFECYCLE_CATEGORIES as readonly unknown[]).includes(v)
+        );
+        if (unknown.length > 0) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["value"],
+            message: `statusCategory is one of ${LIFECYCLE_CATEGORIES.join(", ")} (got ${unknown.map((v) => JSON.stringify(v)).join(", ")})`,
+          });
+        }
       }
     })
 );

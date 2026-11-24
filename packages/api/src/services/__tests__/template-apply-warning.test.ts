@@ -5,7 +5,7 @@
  * The live awaiting-approval read is pinned on PGlite in
  * `rest/packages.finish-template-apply.pglite.test.ts`.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import {
   STALE_BUILD_MS,
   dataChangesHeldSentence,
@@ -15,21 +15,33 @@ import {
 import { readTemplateState } from "@synap/database";
 
 const NOW = Date.parse("2026-10-15T12:00:00Z");
+
+// The next steps are links on this pod's public origin.
+const savedPublicUrl = process.env.PUBLIC_URL;
+beforeAll(() => {
+  process.env.PUBLIC_URL = "https://pod.example.com";
+});
+afterAll(() => {
+  if (savedPublicUrl === undefined) delete process.env.PUBLIC_URL;
+  else process.env.PUBLIC_URL = savedPublicUrl;
+});
+const FINISH_CRM =
+  "Not finished: finish the update of crm: https://pod.example.com/open/update/crm (or run `synap templates update crm`).";
 const rec = (state: string) => ({
   templateApply: { state, version: "h", at: "t" },
 });
 
 describe("templateApplyWarning — one wording", () => {
-  it("awaiting approval names the still-pending proposals; none pending ⇒ the rest is left to run", () => {
+  it("awaiting approval links the still-pending proposals, then the page that finishes it; none pending ⇒ the rest is left to run", () => {
     expect(
       templateApplyWarning("crm", rec("awaiting-approval"), ["p1", "p2"])
     ).toBe(
-      "Waiting on your approval of 2 proposals (p1, p2), then run `synap templates update crm`."
+      "Waiting on your approval of 2 proposals: https://pod.example.com/open/p1, https://pod.example.com/open/p2. Then finish the update: https://pod.example.com/open/update/crm (or run `synap templates update crm`)."
     );
     // Every proposal decided: nothing waits, but the update is not finished —
     // never a silent null under a "waiting" state (review2 UX-M4).
     expect(templateApplyWarning("crm", rec("awaiting-approval"), [])).toBe(
-      "Not finished: run `synap templates update crm` to apply the rest of crm."
+      FINISH_CRM
     );
   });
 
@@ -71,7 +83,7 @@ describe("templateApplyWarning — one wording", () => {
       "Not finished: part of crm did not apply. Run `synap templates update crm` to retry."
     );
     expect(templateApplyWarning("crm", rec("layer-2-not-run"), [])).toBe(
-      "Not finished: run `synap templates update crm` to apply the rest of crm."
+      FINISH_CRM
     );
     expect(
       templateApplyWarning("crm", { provisioningStatus: "failed" }, [])

@@ -14,15 +14,30 @@
  *     every dev hold (a fact recorded while the queue was down, or before
  *     the pause). Either way the ONE rule decides (`holdDevRefMet`,
  *     `@synap-core/types`) over the facts the hold's owner recorded.
+ *   - `until.moves` = `ai:available`: the pod's pull of its AI availability
+ *     (`cp-entitlement-sync`) wakes this queue (`wakeAiHolds`) when it sees
+ *     AI come back and on every tick while AI holds wait and AI is
+ *     available; the hourly sweep re-checks every AI hold too. Met while the
+ *     latest pull reads available, checked after the pause began
+ *     (`aiHoldMet`, over the pod's own record: availability is the pod's).
+ *   - A session's CHECK GATE hold (`check:<stage>`, on AI or on a dated
+ *     retry) is RE-GRADED when it comes due, never only un-paused (the
+ *     registered `AiHeldGateRegrader`): a pass moves on, a judge that still
+ *     cannot run keeps it held, a real verdict holds it as the check's own
+ *     hold. An AI hold still held is woken again once the AI service's
+ *     entitlement cache has caught up (`AI_HOLD_RETRY_AFTER_S`).
  *   - `until.moves` naming a WAIT (`answer:<session>/<slot>`,
  *     `proposal:<id>`, plan 07f8a997 W1 part C): the answer door
- *     (`answerExpectedOutput`) and the review door (`emitProposalReviewed`)
- *     send this queue `waits` when one lands, the reactor below sends it when
- *     a pause that names a wait is recorded (the Inngest trap: an answer given
- *     BEFORE the wait began must still resume it, at once), and the hourly
- *     sweep re-checks every wait hold. Met = the slot of a session the hold's
- *     OWNER owns carries an answer, or the proposal (filed under a session the
- *     owner owns) is no longer pending (`waitHoldsMet`).
+ *     (`answerExpectedOutput`) sends this queue `waits` when an answer lands;
+ *     the reactor below sends it on every proposal's transition (a decision,
+ *     an expiry, a withdrawal) and when a pause that names a wait is recorded
+ *     (the Inngest trap: an answer given BEFORE the wait began must still
+ *     resume it, at once); the hourly sweep re-checks every wait hold. Met = the slot of a session the hold's
+ *     OWNER owns carries an answer, or that session ENDED (closed, cancelled,
+ *     failed) without one — nobody will answer it now, so the wait is over,
+ *     as a proposal's is when it expires — or the proposal (filed under a
+ *     session the owner owns) is no longer pending (`waitHoldsMet`). A
+ *     session's end sends `waits` for its slots (the reactor below).
  *
  * A passed `reviewBy` is NOT a move: it is a signal the watcher reads
  * (`CurrentHold.reviewDue`). The holds are read with the one helper
@@ -39,6 +54,7 @@ import {
   TrackRepository,
   and,
   applyStatusMove,
+  readPodAiAvailability,
   db,
   desc,
   drizzleSql,
@@ -50,6 +66,7 @@ import {
   listHolds,
   proposals,
   resolveStatusMoveTarget,
+  setRunStatus,
   setSessionStatus,
   sql,
   type CurrentHold,
@@ -57,31 +74,67 @@ import {
 import {
   dispatchLifecycleTransition,
   emitSideEffects,
+  getBoss,
   registerReactor,
   type Reactor,
 } from "@synap/events";
+import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 import { createLogger } from "@synap-core/core";
 import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
-import type { SessionStatus } from "@synap-core/types/focus-sessions";
+import {
+  isTerminalSessionStatus,
+  type SessionStatus,
+} from "@synap-core/types/focus-sessions";
 import {
   holdWaitSlotMatches,
   holdWokenBy,
   parseHoldDevRef,
   parseHoldWaitRef,
-  type HoldDevRef,
+  HOLD_AI_MOVES,
   type HoldWaitRef,
 } from "@synap-core/types/lifecycle";
 import {
   DEV_LOOP_EVENT_TYPES,
+  aiHoldMet,
   devboxJobWorkflow,
   holdDevRefMet,
   type DevLoopEventRowLike,
+  type HoldDevEventRef,
 } from "@synap-core/types";
-import type { ProjectTrackStatus } from "@synap/database/schema";
+import type {
+  PlaybookRunStatus,
+  ProjectTrackStatus,
+} from "@synap/database/schema";
 
 const logger = createLogger({ module: "hold-resume" });
 
 export const HOLD_RESUME_QUEUE = "hold-resume";
+
+/**
+ * How long a check gate still held after AI came back waits before it is
+ * graded again: the AI service caches a pod's entitlement for 120 s, so a
+ * top-up can read "available" on the Control Plane while the judge is still
+ * refused.
+ */
+export const AI_HOLD_RETRY_AFTER_S = 120;
+
+/**
+ * Wake the holds that wait on AI (`until: ai:available`): now, or after
+ * `afterSeconds` (one delayed wake per window, however many ask for it).
+ */
+export async function wakeAiHolds(afterSeconds = 0): Promise<void> {
+  await getBoss().send(
+    HOLD_RESUME_QUEUE,
+    { devFact: HOLD_AI_MOVES } satisfies HoldResumeJobData,
+    afterSeconds > 0
+      ? {
+          startAfter: afterSeconds,
+          singletonKey: "hold-resume:ai-retry",
+          singletonSeconds: afterSeconds,
+        }
+      : {}
+  );
+}
 /** Hourly: a hold whose date has come resumes within the hour. */
 export const HOLD_RESUME_CRON = "23 * * * *";
 
@@ -127,7 +180,7 @@ export interface HoldResumeJobData {
  * waits on it — what the per-hold `limit 1` read before.
  */
 async function readDevFactRows(
-  holds: ReadonlyArray<{ ref: HoldDevRef; h: CurrentHold }>
+  holds: ReadonlyArray<{ ref: HoldDevEventRef; h: CurrentHold }>
 ): Promise<DevLoopEventRowLike[][]> {
   const select = {
     userId: events.userId,
@@ -262,15 +315,24 @@ async function readDevFactRows(
   });
 }
 
-/** The dev holds whose fact is in, with the ref each waited on. */
+/**
+ * The dev holds whose fact is in, with the ref each waited on. An AI hold
+ * (`ai:available`) is flagged `ai`: what it waited on is the pod's own
+ * availability record, and a check gate held on it is re-graded.
+ */
 async function devHoldsMet(
   held: readonly CurrentHold[]
-): Promise<Array<{ h: CurrentHold; moves: string }>> {
+): Promise<Array<{ h: CurrentHold; moves: string; ai?: true }>> {
+  const ai: CurrentHold[] = [];
   const dev = held.flatMap((h) => {
     const until = h.hold.until;
     if (!until || !("moves" in until)) return [];
     const ref = parseHoldDevRef(until.moves);
     if (!ref) return [];
+    if (ref.kind === "ai") {
+      ai.push(h);
+      return [];
+    }
     // One pause whose start does not parse is one bad row: skipped and
     // logged, never a failed read of every other dev hold.
     if (Number.isNaN(Date.parse(h.hold.since))) {
@@ -286,11 +348,22 @@ async function devHoldsMet(
     }
     return [{ h, ref, until, moves: until.moves }];
   });
-  if (dev.length === 0) return [];
-  const rows = await readDevFactRows(dev);
-  return dev.flatMap(({ h, ref, until, moves }, i) =>
-    holdDevRefMet(ref, until, h.hold.since, rows[i]!) ? [{ h, moves }] : []
-  );
+  const [rows, latest] = await Promise.all([
+    dev.length > 0 ? readDevFactRows(dev) : Promise.resolve([]),
+    ai.length > 0
+      ? readPodAiAvailability().then((r) => r.availability)
+      : Promise.resolve(null),
+  ]);
+  return [
+    ...dev.flatMap(({ h, ref, until, moves }, i) =>
+      holdDevRefMet(ref, until, h.hold.since, rows[i]!) ? [{ h, moves }] : []
+    ),
+    ...ai.flatMap((h) =>
+      aiHoldMet(h.hold.since, latest)
+        ? [{ h, moves: HOLD_AI_MOVES, ai: true as const }]
+        : []
+    ),
+  ];
 }
 
 /** Does a wait hold name this trigger's session or proposal (none named: every one)? */
@@ -314,7 +387,7 @@ function waitNamed(
 async function waitHoldsMet(
   held: readonly CurrentHold[],
   on: NonNullable<HoldResumeJobData["waits"]> = {}
-): Promise<Array<{ h: CurrentHold; moves: string }>> {
+): Promise<Array<{ h: CurrentHold; moves: string; ended?: true }>> {
   const waits = held.flatMap((h) => {
     const until = h.hold.until;
     if (!until || !("moves" in until)) return [];
@@ -340,6 +413,7 @@ async function waitHoldsMet(
           .select({
             id: focusSessions.id,
             userId: focusSessions.userId,
+            status: focusSessions.status,
             expectedOutputs: focusSessions.expectedOutputs,
           })
           .from(focusSessions)
@@ -378,7 +452,13 @@ async function waitHoldsMet(
           typeof slot.answer?.answeredAt === "string" &&
           slot.answer.answeredBy === s.userId
       );
-      return met ? [{ h, moves }] : [];
+      if (met) return [{ h, moves }];
+      // The asking session ended without the answer: the wait is over (an
+      // orchestrator closed before its plan-approval never strands the
+      // sessions it held).
+      return isTerminalSessionStatus(s.status)
+        ? [{ h, moves, ended: true as const }]
+        : [];
     }
     const p = decided.get(ref.proposalId);
     return p && p.ownerId === h.userId && p.status !== "pending"
@@ -393,10 +473,15 @@ export async function handleHoldResume(
 ): Promise<{ resumed: number; skipped: number }> {
   const moved = data.awaiting;
   const devFact = data.devFact ? parseHoldDevRef(data.devFact) : null;
-  let held: Array<{ h: CurrentHold; reason: string }>;
+  let held: Array<{ h: CurrentHold; reason: string; ai?: true }>;
   if (moved) {
     held = (await listHolds(db, { awaiting: moved }, now))
-      .filter((h) => holdWokenBy(h.hold.until, moved))
+      // A WAIT (`proposal:<id>`, `answer:…`) is resumed only by the wait
+      // check, which re-reads the owner floor: a proposal's own transition
+      // names the same ref, and sends that check instead.
+      .filter(
+        (h) => !isWaitHold(h.hold.until) && holdWokenBy(h.hold.until, moved)
+      )
       .map((h) => ({
         h,
         reason: `What it waited on (${moved.subjectType}:${moved.subjectId}) moved to ${moved.to}.`,
@@ -407,7 +492,7 @@ export async function handleHoldResume(
         await listHolds(db, { awaitingWaitRefs: true }, now),
         data.waits
       )
-    ).map(({ h, moves }) => ({ h, reason: waitReason(moves) }));
+    ).map(({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) }));
   } else if (data.devFact) {
     const i = data.devFact.indexOf(":");
     held = devFact
@@ -424,7 +509,11 @@ export async function handleHoldResume(
               now
             )
           )
-        ).map(({ h, moves }) => ({ h, reason: devFactReason(moves) }))
+        ).map(({ h, moves, ai }) => ({
+          h,
+          reason: devFactReason(moves),
+          ...(ai ? { ai } : {}),
+        }))
       : [];
   } else {
     const [dated, dev, waits] = await Promise.allSettled([
@@ -454,20 +543,32 @@ export async function handleHoldResume(
         h,
         reason: `Its hold ran until ${(h.hold.until as { date: string }).date}.`,
       })),
-      ...(dev.status === "fulfilled" ? dev.value : []).map(({ h, moves }) => ({
-        h,
-        reason: devFactReason(moves),
-      })),
+      ...(dev.status === "fulfilled" ? dev.value : []).map(
+        ({ h, moves, ai }) => ({
+          h,
+          reason: devFactReason(moves),
+          ...(ai ? { ai } : {}),
+        })
+      ),
       ...(waits.status === "fulfilled" ? waits.value : []).map(
-        ({ h, moves }) => ({ h, reason: waitReason(moves) })
+        ({ h, moves, ended }) => ({ h, reason: waitReason(moves, ended) })
       ),
     ];
   }
   const woken = Boolean(moved || data.devFact || data.waits);
   let resumed = 0;
   let failure: unknown = null;
-  for (const { h, reason } of held) {
+  let aiStillHeld = false;
+  for (const { h, reason, ai } of held) {
     try {
+      // A check gate's own hold is never un-paused here: only its check
+      // passing releases it (a stale session's included: it is left as is).
+      if (isCheckGateHold(h)) {
+        const graded = await regradeAiHeldGate(h);
+        if (graded === "passed") resumed++;
+        if (graded === "held" && ai) aiStillHeld = true;
+        continue;
+      }
       if (await resumeHold(h, reason)) resumed++;
     } catch (err) {
       failure = err;
@@ -479,6 +580,9 @@ export async function handleHoldResume(
       );
     }
   }
+  // AI is back by the pull but the judge still could not run: the AI
+  // service's entitlement cache lags a top-up. Graded again once it caught up.
+  if (aiStillHeld) await wakeAiHolds(AI_HOLD_RETRY_AFTER_S);
   // A move happens once: a failed wake is retried by pg-boss (what already
   // resumed is no longer held, so a retry never moves it twice). The hourly
   // sweep needs no retry: the next tick finds the hold still due.
@@ -502,14 +606,68 @@ export async function handleHoldResume(
   return { resumed, skipped: held.length - resumed };
 }
 
+/**
+ * What the api's check gate does when the hold its AI judge left comes due
+ * (AI is back, or its retry date came; `regradeAiHeldGate`, api
+ * `focus-sessions/ai-held-gate.ts`): it grades the stage again, and a pass
+ * moves on. `not_gate` = the session no longer stands paused at that gate
+ * (closed, staled, moved): nothing is done. A hold on `ai:available` that is
+ * not a check gate's (an agent's own pause) resumes like any hold. `@synap/api` depends on this package, so apps/api
+ * fills the slot at boot (`registerAiHeldGateRegrader`, as
+ * `registerHoldResumeFollowUp`).
+ */
+export type AiHeldGateRegrader = (held: {
+  sessionId: string;
+  userId: string;
+  /** What the hold that came due waited on: the same wait still held is kept. */
+  until: CurrentHold["hold"]["until"];
+}) => Promise<"not_gate" | "passed" | "held">;
+
+let aiHeldGateRegrader: AiHeldGateRegrader | null = null;
+
+export function registerAiHeldGateRegrader(fn: AiHeldGateRegrader): void {
+  aiHeldGateRegrader = fn;
+}
+
+/** The hold a session's check gate records (`check:<stage>`, api stage-gate.ts). */
+function isCheckGateHold(h: CurrentHold): boolean {
+  return h.subjectType === "focus_session" && /^check:/.test(h.hold.ref ?? "");
+}
+
+async function regradeAiHeldGate(
+  h: CurrentHold
+): Promise<"not_gate" | "passed" | "held"> {
+  if (!aiHeldGateRegrader) {
+    // Never fall back to a bare resume: that would walk a check gate whose
+    // check never passed. The hold stays; the next sweep tries again.
+    logger.warn(
+      { sessionId: h.subjectId },
+      "AI held gate regrader not registered — apps/api must call registerAiHeldGateRegrader() at boot"
+    );
+    return "held";
+  }
+  return aiHeldGateRegrader({
+    sessionId: h.subjectId,
+    userId: h.userId,
+    until: h.hold.until,
+  });
+}
+
 function devFactReason(moves: string): string {
   return `What it waited on (${moves}) is in.`;
 }
 
-function waitReason(moves: string): string {
+function waitReason(moves: string, ended?: boolean): string {
+  if (ended) return `What it waited on (${moves}) ended without an answer.`;
   return moves.startsWith("answer:")
     ? `The person answered what it waited on (${moves}).`
     : `What it waited on (${moves}) was decided.`;
+}
+
+function isWaitHold(until: CurrentHold["hold"]["until"]): boolean {
+  return (
+    until != null && "moves" in until && parseHoldWaitRef(until.moves) != null
+  );
 }
 
 /** Move one held thing back to the status its pause began from; false when it did not move. */
@@ -590,6 +748,33 @@ async function resumeHold(h: CurrentHold, reason: string): Promise<boolean> {
       if (rows.length > 0) await followUp(h, to);
       return rows.length > 0;
     }
+    case "playbook_run": {
+      // A run's own door. A run's pause resumes to where it was (live, as a
+      // rule); a run that a pause leaves into a verdict settles its parent
+      // like every terminal writer (tripwire playbook-run-terminal-settles-parent).
+      const { rows, transitions } = await setRunStatus(db, {
+        runId: h.subjectId,
+        from: h.status as PlaybookRunStatus,
+        to: to as PlaybookRunStatus,
+        actor: { kind: "system" },
+        reason,
+      });
+      for (const t of transitions) {
+        await dispatchLifecycleTransition(t.transitionId);
+      }
+      if (
+        transitions.some((t) => t.category === "done" || t.category === "lost")
+      ) {
+        await settleParentAutomationRunFromChild({
+          playbookRunId: h.subjectId,
+        });
+      }
+      return rows.length > 0;
+    }
+    // A proposal or a slot never pauses: nothing of theirs is held.
+    case "proposal":
+    case "slot":
+      return false;
   }
 }
 
@@ -647,6 +832,36 @@ export const holdResumeReactor: Reactor = {
       until && typeof until === "object" && "moves" in until
         ? parseHoldWaitRef(String((until as { moves: unknown }).moves))
         : null;
+    // A session ENDED: the holds that wait on one of its slots
+    // (`answer:<id>/…`) are checked now — an end without the answer is over.
+    if (
+      payload.subjectType === "focus_session" &&
+      (d.category === "done" || d.category === "lost")
+    ) {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits: { sessionId: payload.subjectId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:ended:${payload.eventId}` }
+          : {}
+      );
+    }
+    // A proposal moved: the holds that wait on it as a WAIT (`proposal:<id>`)
+    // are checked now, through the owner-floored wait read, whatever moved it
+    // (an expiry, a withdrawal, an approval).
+    if (payload.subjectType === "proposal") {
+      await boss.send(
+        HOLD_RESUME_QUEUE,
+        {
+          waits: { proposalId: payload.subjectId },
+        } satisfies HoldResumeJobData,
+        payload.eventId
+          ? { singletonKey: `hold-resume:proposal:${payload.eventId}` }
+          : {}
+      );
+    }
     if (d.category === "paused" && waitsOn) {
       await boss.send(
         HOLD_RESUME_QUEUE,

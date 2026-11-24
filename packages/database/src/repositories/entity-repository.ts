@@ -6,7 +6,7 @@
  */
 
 import { eq, and, or, isNull, inArray, desc, type SQL } from "drizzle-orm";
-import { entities } from "../schema/index.js";
+import { documents, entities } from "../schema/index.js";
 import type * as schema from "../schema/index.js";
 import { BaseRepository } from "./base-repository.js";
 import type { EventRepository } from "./event-repository.js";
@@ -25,7 +25,10 @@ import {
   PropertyValidationService,
   PropertyIndexService,
 } from "../services/index.js";
-import type { UnmodeledProperty } from "../services/property-validation-service.js";
+import type {
+  ModeledField,
+  UnmodeledProperty,
+} from "../services/property-validation-service.js";
 import {
   ProfileNotFoundError,
   PropertyValidationError,
@@ -213,6 +216,8 @@ export interface ValidatedEntityCreate {
   roleFacetProperties: Record<string, unknown>;
   /** Advisory: keys the profile does not model, across both passes. */
   unmodeled: UnmodeledProperty[];
+  /** What the kind models (the schema pass's list; empty when it was skipped). */
+  modeled: ModeledField[];
 }
 
 /**
@@ -239,6 +244,7 @@ export async function validateEntityCreateProperties(
   let profile = resolvedProfile;
   let data = input;
   const unmodeled: UnmodeledProperty[] = [];
+  let modeled: ModeledField[] = [];
   // 1a. Role profiles are hats, never things (Kind + Facets). A create
   // aimed at a role profile is transparently adapted to the same shape
   // ConvertToFacetOp produces: the entity is created on an underlying KIND,
@@ -403,6 +409,7 @@ export async function validateEntityCreateProperties(
 
     validatedProperties = validationResult.normalized;
     unmodeled.push(...validationResult.unmodeled);
+    modeled = validationResult.modeled;
   } else if (!profileId && data.properties) {
     // No profile - just store properties as-is (flexible)
     validatedProperties = data.properties;
@@ -415,6 +422,7 @@ export async function validateEntityCreateProperties(
     roleFacetProfile,
     roleFacetProperties,
     unmodeled,
+    modeled,
   };
 }
 
@@ -678,6 +686,9 @@ export class EntityRepository extends BaseRepository<
       entity = row;
     }
 
+    // 3b. A pod-wide document given as this entity's body is filed with it.
+    await this.fileBodyWithEntity(entity);
+
     // 4. Index properties (async, non-blocking) — index through the
     //    requesting workspace's lens so overlay props get indexed too.
     if (profileId && Object.keys(validatedProperties).length > 0) {
@@ -738,6 +749,32 @@ export class EntityRepository extends BaseRepository<
     // Additive: the row exactly as before, plus the advisory `unmodeled` list
     // when (and only when) there is something to tell the caller.
     return unmodeled.length ? { ...entity, unmodeled } : entity;
+  }
+
+  /**
+   * A PART FOLLOWS ITS WHOLE (founder decision 22226da5, 2026-11-09): a
+   * POD-WIDE document that becomes the body of an entity STORED in a space is
+   * filed in that space. Every attach that writes `documentId` through this
+   * repository (create with a body id, `entities.update({ documentId })`, the
+   * create doors' attach step) lands here. Left alone: a document already in a
+   * space (the attach door, `assertDocumentAttachable`, decides whether it may
+   * be attached at all), and the body of a pod-wide entity, even one filed for
+   * a space (`home_workspace_id`): the home read rule already shows it to that
+   * space, and filing it there would also hand the space's editors a
+   * document the person may have written privately. Idempotent; it changes
+   * nothing but the document's `workspace_id`.
+   */
+  private async fileBodyWithEntity(entity: {
+    documentId?: string | null;
+    workspaceId?: string | null;
+  }): Promise<void> {
+    if (!entity.documentId || !entity.workspaceId) return;
+    await this.db
+      .update(documents)
+      .set({ workspaceId: entity.workspaceId })
+      .where(
+        and(eq(documents.id, entity.documentId), isNull(documents.workspaceId))
+      );
   }
 
   /**
@@ -954,6 +991,9 @@ export class EntityRepository extends BaseRepository<
     if (!entity) {
       throw new Error("Entity not found");
     }
+
+    // 3b. A pod-wide document attached as the body is filed with the entity.
+    if (data.documentId) await this.fileBodyWithEntity(entity);
 
     // 4. Reindex properties if changed — use the same lens as validation
     const reindexProfileId = newProfileId || existing.profileId;

@@ -16,7 +16,6 @@ import {
   desc,
   automations,
   entities,
-  users,
   channels,
   focusSessions,
   playbookEnrollments,
@@ -28,6 +27,7 @@ import {
   eventRepository,
   insertChannelMessage,
   ChannelRepository,
+  canonicalLifecycleOptionKey,
 } from "@synap/database";
 import type { SQL } from "@synap/database";
 import { MessageRole, MessageAuthorType } from "@synap/database/schema";
@@ -45,6 +45,7 @@ import { sessionOutcomeDoor } from "../../utils/session-outcome-door.js";
 import {
   lifecycleSlugOf,
   moveStatusFromAutomation,
+  resolveAutomationRoleTarget,
 } from "../../utils/lifecycle-move.js";
 import { observationDoor } from "../../utils/observation-door.js";
 import { deterministicUuidV5 } from "../../utils/deterministic-uuid.js";
@@ -242,6 +243,7 @@ export async function executeOutputStep(
       // auto-approve, or a PENDING proposal attributed to the owning agent.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "entity",
         action: "create",
@@ -308,33 +310,24 @@ export async function executeOutputStep(
         };
       }
 
-      // Attribution: this write is authored by the automation's owning
-      // principal (`ownerId`). For AI-created automations that principal IS an
-      // agent user; for manual automations it is a human. Resolve which, so the
-      // materialized row's provenance is honest (previously it defaulted to
-      // "human", mis-attributing agent-authored automation writes). We only
-      // reach this direct-write branch after the governance gate GRANTED.
-      const [ownerUser] = await db
-        .select({ userType: users.userType })
-        .from(users)
-        .where(eq(users.id, ownerId))
-        .limit(1);
+      // Attribution: the owner's row, with the authoring agent (if any) as
+      // its actor. Reached only after the governance gate GRANTED.
       // `correlationId` is carried on the SAME provenance object the document
       // path already uses, so the entity and its body land with identical run
       // attribution — "which run produced this?" is answerable for both.
-      const provenance =
-        ownerUser?.userType === "agent"
-          ? {
-              createdByKind: "ai_agent" as const,
-              agentUserId: ownerId,
-              createdByUserId: ownerId,
-              correlationId: automationContext.rootRunId,
-            }
-          : {
-              createdByKind: "system" as const,
-              createdByUserId: ownerId,
-              correlationId: automationContext.rootRunId,
-            };
+      const actorAgentUserId = automationContext.actorAgentUserId;
+      const provenance = actorAgentUserId
+        ? {
+            createdByKind: "ai_agent" as const,
+            agentUserId: actorAgentUserId,
+            createdByUserId: ownerId,
+            correlationId: automationContext.rootRunId,
+          }
+        : {
+            createdByKind: "system" as const,
+            createdByUserId: ownerId,
+            correlationId: automationContext.rootRunId,
+          };
 
       // BODY (optional) — materialized through the canonical door BEFORE the
       // entity row is inserted, with the row id pre-minted, exactly like the
@@ -533,6 +526,7 @@ export async function executeOutputStep(
       // Governed — same gate as entity_create above.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "entity",
         action: "update",
@@ -1166,6 +1160,7 @@ export async function executeOutputStep(
       // Governed — same gate as entity_create / entity_update above.
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "focus_session",
         action: "update",
@@ -1381,6 +1376,7 @@ export async function executeOutputStep(
 
       const gate = await checkAutomationWriteOrPropose({
         ownerId,
+        actorAgentUserId: automationContext.actorAgentUserId,
         workspaceId,
         subjectType: "focus_session",
         action: "update",
@@ -1545,6 +1541,7 @@ export async function executeOutputStep(
           chainDepth: automationContext.chainDepth,
           rootRunId: automationContext.rootRunId,
           chainAutomationIds: automationContext.chainAutomationIds,
+          actorAgentUserId: automationContext.actorAgentUserId ?? null,
         },
       });
       return { status: "recorded", eventId: recorded.id, type: type.trim() };
@@ -1572,15 +1569,166 @@ export async function executeOutputStep(
         producerAgentUserId
       );
 
-    case "facet_update":
-      // config: { facetId | (entityId + facetSlug), status?, properties?, workspaceId? }
+    case "facet_update": {
+      // config: { facetId | (entityId + facetSlug), status?, properties?,
+      //   workspaceId?, expectedStatus?, viaRelation? }
+      //
+      // LIFECYCLE SPLIT (work model L2), as `entity_update` does for a kind:
+      // the role's status (`status`, or its lifecycle property) MOVES through
+      // the status door (`moveStatusFromAutomation`: governed as
+      // `entity.transition`, compare-and-set, one transition event); the
+      // other properties go through the facet verb (the repository refuses a
+      // status there). `expectedStatus` makes the whole step CONDITIONAL: a
+      // role that is not there, or not at that status, is skipped (a reply
+      // never pulls a qualified lead back). `viaRelation` reaches the role on
+      // the thing the entity points to (a person `works_at` their company).
+      const { expectedStatus, viaRelation, ...verbConfig } = config;
+      const str = (v: unknown): string | undefined =>
+        typeof v === "string" && v !== "" ? v : undefined;
+      const conditional = str(expectedStatus);
+      const facetIdIn = str(verbConfig.facetId);
+      const entityIdIn = resolveSingleReferenceParam(
+        verbConfig.entityId,
+        "facet_update.entityId"
+      );
+      const resolved = await resolveAutomationRoleTarget({
+        facetId: facetIdIn,
+        entityId: entityIdIn,
+        role: str(verbConfig.facetSlug),
+        viaRelation: str(viaRelation),
+        workspaceId,
+      });
+      if (!resolved.ok) {
+        if (conditional !== undefined) {
+          return {
+            status: "skipped",
+            reason:
+              resolved.code === "NO_LIFECYCLE" ? "no_lifecycle" : "no_role",
+            detail: resolved.reason,
+          };
+        }
+        // No role to move (or a role with no lifecycle): the facet verb
+        // answers exactly as before.
+        return dispatchOutputVerb(
+          "entity_facet.update",
+          verbConfig,
+          workspaceId,
+          actingUserId,
+          producerAgentUserId
+        );
+      }
+      const { target } = resolved;
+      const slug = target.lifecycle.propertySlug;
+      const properties = {
+        ...((verbConfig.properties ?? {}) as Record<string, unknown>),
+      };
+      const fromProperty = Object.prototype.hasOwnProperty.call(
+        properties,
+        slug
+      )
+        ? properties[slug]
+        : undefined;
+      delete properties[slug];
+      const fromStatus = verbConfig.status;
+      if (
+        fromStatus !== undefined &&
+        fromProperty !== undefined &&
+        fromStatus !== fromProperty
+      ) {
+        throw new Error(
+          `facet_update: status "${String(fromStatus)}" and ${slug} "${String(fromProperty)}" disagree`
+        );
+      }
+      const to = str(fromStatus ?? fromProperty);
+
+      let statusMove: Awaited<
+        ReturnType<typeof moveStatusFromAutomation>
+      > | null = null;
+      if (to !== undefined) {
+        statusMove = await moveStatusFromAutomation({
+          ownerId,
+          workspaceId,
+          entityId: target.entityId,
+          facetId: target.facetId,
+          to,
+          ...(conditional !== undefined ? { expectedFrom: conditional } : {}),
+          automationContext,
+          stepRunId: attribution?.stepRunId,
+          nodeId: attribution?.nodeId,
+          producerAgentUserId,
+        });
+        if (statusMove.status === "denied") {
+          throw new PolicyBlockedError(
+            "deny",
+            `status move denied by governance: ${statusMove.reason}`
+          );
+        }
+        if (statusMove.status === "conflict" && conditional !== undefined) {
+          return {
+            status: "skipped",
+            reason: "not_at_expected_status",
+            facetId: target.facetId,
+            expectedStatus: statusMove.expectedFrom,
+            actual: statusMove.actual,
+          };
+        }
+        if (
+          statusMove.status === "conflict" ||
+          statusMove.status === "refused"
+        ) {
+          throw new Error(
+            `facet_update: status move not applied (${statusMove.status === "conflict" ? `moved meanwhile, now "${statusMove.actual ?? "none"}"` : statusMove.reason})`
+          );
+        }
+      } else if (conditional !== undefined) {
+        // A condition with no move: checked on the column, like the move's.
+        const expected = canonicalLifecycleOptionKey(
+          target.lifecycle,
+          conditional
+        );
+        if (expected !== target.current) {
+          return {
+            status: "skipped",
+            reason: "not_at_expected_status",
+            facetId: target.facetId,
+            expectedStatus: expected,
+            actual: target.current,
+          };
+        }
+      }
+
+      if (Object.keys(properties).length === 0) {
+        if (statusMove === null) {
+          return { status: "unchanged", facetId: target.facetId };
+        }
+        return statusMove.status === "proposed"
+          ? {
+              status: "proposed",
+              proposalId: statusMove.proposalId,
+              facetId: target.facetId,
+            }
+          : statusMove.status === "moved"
+            ? {
+                status: "moved",
+                facetId: target.facetId,
+                from: statusMove.transition.from,
+                to: statusMove.transition.to,
+              }
+            : { status: "unchanged", facetId: target.facetId };
+      }
+      // The rest of the write: the facet verb, on the resolved facet.
+      const rest: Record<string, unknown> = { ...verbConfig };
+      delete rest.status;
+      delete rest.entityId;
+      delete rest.facetSlug;
       return dispatchOutputVerb(
         "entity_facet.update",
-        config,
+        { ...rest, facetId: target.facetId, properties },
         workspaceId,
         actingUserId,
         producerAgentUserId
       );
+    }
 
     case "facet_detach":
       // config: { facetId | (entityId + facetSlug) }

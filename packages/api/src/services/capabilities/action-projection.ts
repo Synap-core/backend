@@ -12,6 +12,7 @@ import { verbType } from "./capability-catalog.js";
 import { runPosture } from "./run-posture.js";
 import { declaredReadOnly } from "./capability-drift.js";
 import { isVerbLaunchable } from "./verb-launchable.js";
+import type { CapabilityNextAction } from "./capability-enable-link.js";
 
 export interface RunnableActionConnection {
   required: boolean;
@@ -91,31 +92,12 @@ export function projectWithSource(
     source: Capability;
   }> = [];
 
-  // A skill whose NAME is a tool verb id is that verb's BACKING skill (registry
-  // contract: a verb's catalog id mirrors its requiring skill's name). The tool
-  // verb row governs it — including the connection gate — so it must never also
-  // surface as a standalone skill row. Live (2026-09-14) it did: 15 duplicate
-  // rows, 5 of them Gmail/Calendar/Drive advertised runnable with the Google
-  // connection missing. Same rule `sectionCapabilities` applies.
-  const toolVerbIds = new Set<string>();
-  for (const capability of capabilities) {
-    if (capability.kind === "skill") continue;
-    for (const verb of capability.verbs ?? []) toolVerbIds.add(verb.id);
-  }
+  const toolVerbIds = toolVerbIdsOf(capabilities);
 
   for (const capability of capabilities) {
-    // `enabled` is the approval gate; `governance` is the run posture and says
-    // nothing about whether the gate would refuse the row outright.
-    if (
-      capability.catalogOnly ||
-      capability.enabled !== true ||
-      (capability as Capability & { runnable?: boolean }).runnable === false
-    ) {
-      continue;
-    }
+    if (rowWithheld(capability).length > 0) continue;
 
     const connection = capability.connection;
-    if (connection?.required && !connection.connected) continue;
     const projectedConnection = connection?.required
       ? {
           required: true,
@@ -245,6 +227,117 @@ export function projectWithSource(
   }
 
   return actions;
+}
+
+/**
+ * The verb ids a TOOL row's catalog claims. A skill whose NAME is one is that
+ * verb's BACKING skill (registry contract: a verb's catalog id mirrors its
+ * requiring skill's name). The tool verb row governs it — including the
+ * connection gate — so it must never also surface as a standalone skill row.
+ * Live (2026-09-14) it did: 15 duplicate rows, 5 of them Gmail/Calendar/Drive
+ * advertised runnable with the Google connection missing. Same rule
+ * `sectionCapabilities` applies.
+ */
+function toolVerbIdsOf(capabilities: ProjectableCapability[]): Set<string> {
+  const toolVerbIds = new Set<string>();
+  for (const capability of capabilities) {
+    if (capability.kind === "skill") continue;
+    for (const verb of capability.verbs ?? []) toolVerbIds.add(verb.id);
+  }
+  return toolVerbIds;
+}
+
+/**
+ * Every reason the projection leaves a whole registry row out; empty when it
+ * does not. The ONE predicate `projectWithSource` skips by and
+ * `withheldWithSource` names, so the two can never disagree. `enabled` is the
+ * approval gate; `governance` is the run posture and says nothing about
+ * whether the gate would refuse the row outright.
+ */
+function rowWithheld(capability: ProjectableCapability): WithheldReason[] {
+  const reasons: WithheldReason[] = [];
+  if (capability.catalogOnly) reasons.push("catalog_only");
+  if (capability.enabled !== true) reasons.push("not_enabled");
+  if ((capability as Capability & { runnable?: boolean }).runnable === false)
+    reasons.push("not_runnable");
+  const connection = capability.connection;
+  if (connection?.required && !connection.connected)
+    reasons.push("not_connected");
+  return reasons;
+}
+
+/**
+ * Why a verb the registry knows is not an action:
+ *  - `catalog_only`: an IS-native catalog entry, never launched by this door;
+ *  - `not_enabled`: its row is not approved, or its backing skill is installed
+ *    but not turned on (the verb's `blocked: "not_enabled"`, with its `enable`);
+ *  - `not_runnable`: its skill is inactive or errored;
+ *  - `not_connected`: its row needs a connection it does not have;
+ *  - `not_launchable`: no active, approved backing skill can run it.
+ */
+export type WithheldReason =
+  | "catalog_only"
+  | "not_enabled"
+  | "not_runnable"
+  | "not_connected"
+  | "not_launchable";
+
+/** A verb the projection omits, with the row it lives on and every reason. */
+export interface WithheldVerb {
+  verbId: string;
+  source: Capability;
+  /** Never empty; each reason once. */
+  reasons: WithheldReason[];
+  /** The verb's enable door, when the registry stamped one (`withEnableBlocks`). */
+  enable?: CapabilityNextAction;
+}
+
+/**
+ * What `projectWithSource` OMITS, each verb with ALL its reasons, by the same
+ * rules and over the same rows: a verb it projects is never here, and a verb
+ * here is never projected. A backing skill governed by its tool verb is
+ * neither (its tool row speaks for it). The intent actions door reads this to
+ * say why an intent's verb is not offered (`unavailable`), instead of
+ * dropping it.
+ */
+export function withheldWithSource(
+  capabilities: ProjectableCapability[]
+): WithheldVerb[] {
+  const withheld: WithheldVerb[] = [];
+  const toolVerbIds = toolVerbIdsOf(capabilities);
+  for (const capability of capabilities) {
+    const rowReasons = rowWithheld(capability);
+    if (capability.kind !== "skill") {
+      for (const verb of capability.verbs ?? []) {
+        const v = verb as typeof verb & {
+          backingSkillExecutable?: boolean;
+          blocked?: "not_enabled";
+          enable?: CapabilityNextAction;
+        };
+        const reasons = [...rowReasons];
+        if (!isVerbLaunchable(v)) {
+          const verbReason =
+            v.blocked === "not_enabled" ? "not_enabled" : "not_launchable";
+          if (!reasons.includes(verbReason)) reasons.push(verbReason);
+        }
+        if (reasons.length === 0) continue;
+        withheld.push({
+          verbId: verb.id,
+          source: capability,
+          reasons,
+          ...(v.enable ? { enable: v.enable } : {}),
+        });
+      }
+      continue;
+    }
+    if (rowReasons.length > 0 && !toolVerbIds.has(capability.name))
+      withheld.push({
+        verbId: capability.name,
+        source: capability,
+        reasons: rowReasons,
+      });
+  }
+  return withheld;
 }
 
 /**

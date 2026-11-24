@@ -139,11 +139,23 @@ export function buildProposalScopeConditions(
   // items, so it lists for the person it was filed for only, whatever lens.
   // Folded into the lens condition (one condition per filter stays true).
   const ownLibrary = ownLibraryProposalWhere(userId);
+  // A lens REPLACES the floor (the door's editor+ gate stands in for it), so
+  // it keeps the calling key's grant clause itself (`proposal` subject),
+  // narrow-only, as the floor does: naming a space a key's grant does not
+  // read proposals in must not hand it that space's queue (a pod app's
+  // needs-you read, backend `GET /needs-you`). No grant: undefined, ignored.
+  const grant = grantReadPredicate(proposals);
   if (input.workspaceId === null) {
-    conditions.push(and(isNull(proposals.workspaceId), ownLibrary) as SQL);
+    conditions.push(
+      and(isNull(proposals.workspaceId), ownLibrary, grant) as SQL
+    );
   } else if (typeof input.workspaceId === "string") {
     conditions.push(
-      and(eq(proposals.workspaceId, input.workspaceId), ownLibrary) as SQL
+      and(
+        eq(proposals.workspaceId, input.workspaceId),
+        ownLibrary,
+        grant
+      ) as SQL
     );
   } else {
     // The user floor already carries it.

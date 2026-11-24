@@ -31,6 +31,11 @@ vi.mock("@synap/database", async (importOriginal) => ({
   // The executor's idempotency read (`db.select({...}).from(proposals)`, awaited
   // directly — no `.where()` chain terminator).
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({
       from: () => ({ where: async () => [{ status: h.proposalStatus }] }),
     }),
@@ -54,7 +59,8 @@ vi.mock("../../../services/cells/define-cell.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("../execution-registry.js", () => ({
+vi.mock("../execution-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../execution-registry.js")>()),
   registerProposalExecutor: (e: {
     key: string;
     execute: (a: unknown) => Promise<unknown>;

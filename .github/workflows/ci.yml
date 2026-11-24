@@ -42,7 +42,7 @@ permissions:
 #   full-suite   — the test suites, the floor, the tripwires, the audit.
 # Since 2026-10-29 ("One trunk, three CI tiers") a release needs BOTH, and API
 # e2e and Reference docs too: docker-publish.yml's ci-gate takes only a commit
-# whose post-merge run (event push) had all 4 required checks `success`
+# whose post-merge run (event push) had all 5 required checks `success`
 # (scripts/ci/release-gate-wait.mjs). Until then it read "Release gate" alone
 # and a red Full suite was a backlog, not a release blocker.
 # They run in parallel and set up through ONE composite action
@@ -62,13 +62,17 @@ permissions:
 # API surface changed (scripts/ci/affected.mjs). Push to main and release
 # branches always run everything; a pod updates only to a main commit whose
 # post-merge run was all green (docker-publish.yml, ci-gate). A merge queue
-# entry runs the Release gate and takes the Full suite + API e2e from its PR's
-# own run when both concluded `success` there (founder 2026-10-28, "light
-# queue run", #428); otherwise it runs the tier of what it changes on top of
+# entry runs the Release gate and EVERY TRIPWIRE on the combined tree, and
+# takes the rest of the Full suite + API e2e from its PR's own run when both
+# concluded `success` there (founder 2026-10-28, "light queue run", #428;
+# every tripwire since 2026-11-12, plan b5820982 §1: two PRs green alone broke
+# main together on a tripwire four times). A tripwire also red on main's
+# latest finished push run does not fail the entry (scripts/ci-changes.mjs
+# "RED AT BASE"). Otherwise it runs the tier of what it changes on top of
 # the main it lands on, on the combined tree. Every required check RUNS on a PR or
 # a queue entry: one whose work is not needed passes through a "Not affected"
 # step that names why, never through a skip. An entry whose TREE is the tree
-# its PR's run tested, with all 4 required checks `success` on that run,
+# its PR's run tested, with all 5 required checks `success` on that run,
 # re-runs nothing (`reuse`, scripts/ci-changes.mjs "SAME TREE"). FAIL-SAFE:
 # every job also runs when `changes` itself fails (`needs.changes.result !=
 # 'success'`), and a job skipped by its `if:` reports success to the required
@@ -146,23 +150,10 @@ jobs:
           REPO: ${{ github.repository }}
           GITHUB_TOKEN: ${{ github.token }}
           SELECTION_OUT: ${{ runner.temp }}/selection/selection.json
-          OVERLAP_OUT: ${{ runner.temp }}/overlap/semantic-overlap.json
         run: node scripts/ci-changes.mjs
 
-      # A merge-queue entry's semantic overlap, LOG-ONLY (scripts/ci-changes.mjs
-      # "SEMANTIC OVERLAP", plan d679e92c C1(a)): the test files both its PR and
-      # what main gained since the PR's run can reach. Kept so 2-3 days of
-      # queue runs can be counted; it decides nothing.
-      - name: Upload the semantic overlap
-        if: ${{ github.event_name == 'merge_group' }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: semantic-overlap
-          path: ${{ runner.temp }}/overlap/semantic-overlap.json
-          if-no-files-found: ignore
-          retention-days: 14
-
-      # A PR's selected or full tier: the plan the shards and the judge read
+      # A PR's selected or full tier, or a light queue entry's tripwires (with
+      # the files red on main, `redAtBase`): the plan the shards and the judge read
       # (which test files, in which shard, under which report id). One file
       # for all of them, so they cannot disagree; a missing one fails them.
       - name: Upload the test selection
@@ -196,7 +187,7 @@ jobs:
           node-version-file: ".node-version"
 
       # `pnpm audit` (security-audit) needs pnpm, not an install.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       # control-plane-api (door-tool-names) and app-bases (api-types
       # freshness) are private: the Reader App's read token, as monorepo-setup.
@@ -597,9 +588,10 @@ jobs:
 
   # The Full suite: shard jobs run the tests, one judge job ("Full suite", the
   # required check) reads their reports and applies the ratchet once. A PR's
-  # selection (scope=selected, lane L8) runs in 1 to 8 shards sized from its
-  # measured cost (`shards`, scripts/test-ratchet-shards.mjs planSelection);
-  # everything else (main, a full PR, `changes` failed) runs the 4-shard
+  # selection (scope=selected, lane L8) and a light queue entry's tripwires
+  # run in 1 to 8 shards sized from their measured cost (`shards`,
+  # scripts/test-ratchet-shards.mjs planSelection); everything else (main, a
+  # queue entry's full fall-through, `changes` failed) runs the 4-shard
   # plan. Measured
   # 2026-10-27: one job took 65 min, of which packages/api (1,950 files) was
   # ~38 min of critical path; split 4 ways it is ~10 min per shard. Since
@@ -855,7 +847,7 @@ jobs:
           node-version-file: ".node-version"
 
       # No `version:`: the repo pins pnpm through `packageManager`.
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
         if: ${{ env.RUN_WORK == 'true' }}
 
       # `--ignore-scripts`: the generator only imports TypeScript and builds
@@ -1053,13 +1045,18 @@ jobs:
 
       # An explicit, logged pass: only a successful `changes` that decided
       # e2e=false with no hold reaches it.
-      - name: Not affected (no API surface path changed)
+      - name: Not affected (the API e2e suite did not need to run)
         if: ${{ needs.changes.result == 'success' && needs.changes.outputs.e2e == 'false' && needs.changes.outputs.hold == '' && needs.preflight.outputs.hold != 'true' }}
         env:
+          EVENT: ${{ github.event_name }}
           REASON: ${{ needs.changes.outputs.reason }}
         run: |
-          echo "API e2e not run: $REASON"
-          printf '### API e2e: not affected\n\n%s.\n\nDecided by "What changed" (scripts/ci-changes.mjs, API_SURFACE in scripts/ci/affected.mjs); main runs the e2e suite after the merge.\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+          case "$EVENT" in
+            merge_group) WHY="a merge queue entry: its pull request's own API e2e passed (scripts/ci-changes.mjs)" ;;
+            *) WHY="no API surface path changed (scripts/ci-changes.mjs, API_SURFACE in scripts/ci/affected.mjs)" ;;
+          esac
+          echo "API e2e not run: $WHY ($REASON)"
+          printf '### API e2e: not affected\n\n%s.\n\n%s.\n\nMain runs the e2e suite after the merge.\n' "$WHY" "$REASON" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Checkout Repository
         if: ${{ env.RUN_WORK == 'true' }}
@@ -1138,39 +1135,77 @@ jobs:
           path: coverage/test-ratchet/
           retention-days: 7
 
-  # ADVISORY (not a required check): backend CI never saw the repos that link this
-  # one's shared packages by source, so a types change could break an app repo with
-  # every backend check green (#372). When packages/types, api-types or markdown-core
-  # change, check out app-bases, browser and relay-app with the Synap Reader App
-  # token (read-only; SECURITY-RELEASE-RUNBOOK.md §5.1) and typecheck them against
-  # this head. The access step lists which repos the App could read, so a repo it
-  # is not installed on shows by name. The three repos are red at main on their own
-  # (devbox baseline), so the typechecks report and annotate; they do not fail the
-  # job. Only an unreadable repo or a failed install does. NEEDS a baseline compare
-  # (errors at the PR's base types vs head) before it can become a required check.
+  # REQUIRED (founder, 2026-11-09: "yes, it seem a good thing to have, apply
+  # it"; decision b74c6d31 names 5 required checks). app-bases, browser and
+  # relay-app link @synap-core/types, api-types and markdown-core from this repo
+  # by source, so a types change can break them with every other check green:
+  # #372, then backend#967 (a new FailureErrorClass) and #969 (a new filter
+  # field) on 9 Nov, which turned app-bases red against backend main. When a
+  # path they link changes (scripts/ci-changes.mjs SHARED_FOR_DEPENDENTS), this
+  # job lays the three repos out beside this head as the devbox does (the
+  # Reader App token, read-only; SECURITY-RELEASE-RUNBOOK.md §5.1), builds the
+  # app packages they import (the devbox's APP_DIST_FILTER: without those dists
+  # one run read 10,725 errors at a main the devbox read as 0), typechecks
+  # them, and FAILS ON THE ERRORS THIS CHANGE INTRODUCES: a red head is
+  # typechecked again at the base's shared packages and only errors that are
+  # not there count (scripts/ci/dependents-typecheck.mjs). A dependent red on
+  # its own never blocks a backend PR.
+  # COMPANION: a change the dependent must follow (a new union member its
+  # exhaustive floor must list) names the dependent's branch in the PR body,
+  # `Companion: app-bases@<branch>` (or `<repo>#<n>`, browser, relay): this job
+  # typechecks that repo at the companion instead of main. The backend PR lands
+  # first, the companion right after (it cannot land first: it references what
+  # this PR adds). `Depends-On:` is the other order (it must land first).
+  # NEVER SKIPPED: a PR that changes no linked path, a merge-queue entry (the
+  # PR's own run of this check had to be green to enter the queue, and an entry
+  # has no PR body to name a companion) and a push (the devbox baseline
+  # measures the dependents against main) pass through "Not affected".
+  # OPEN RACE (named, not closed): two PRs that each pass here but break a
+  # dependent TOGETHER land through the queue unchecked, as an entry does not
+  # re-run this check. The catch is the devbox baseline (app-tsc, browser-tsc,
+  # relay-tsc at every new main head): its red is fixed by one owner, as a red
+  # main is (.claude/rules/github-ci.md), in the dependent or in backend.
   dependent-repos:
     name: Dependent repos typecheck
-    needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.dependents == 'true' }}
+    needs: [changes, preflight]
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
+    env:
+      RUN_WORK: ${{ needs.changes.result != 'success' || needs.changes.outputs.dependents != 'false' }}
     steps:
+      # A red preflight: this required check FAILS without doing the work (a
+      # job skipped by its `if:` would report success). See the header.
+      - name: Preflight red (${{ needs.preflight.outputs.reds }})
+        if: ${{ needs.preflight.outputs.hold == 'true' }}
+        run: |
+          echo "::error::Preflight is red (${{ needs.preflight.outputs.reds }}): this check did not run its work. Open the Preflight job for each red and its fix, or run 'pnpm preflight'."
+          exit 1
+
+      # An explicit, logged pass: only a successful `changes` that decided
+      # dependents=false reaches it.
+      - name: Not affected (no path the dependent repos link changed)
+        if: ${{ needs.changes.result == 'success' && needs.changes.outputs.dependents == 'false' && needs.preflight.outputs.hold != 'true' }}
+        env:
+          EVENT: ${{ github.event_name }}
+          REASON: ${{ needs.changes.outputs.reason }}
+        run: |
+          case "$EVENT" in
+            merge_group) WHY="a merge queue entry: its pull request's own run of this check had to pass to enter the queue, and an entry has no PR body to name a Companion" ;;
+            push) WHY="a push: the devbox baseline typechecks app-bases, browser and relay-app against main" ;;
+            *) WHY="no path app-bases, browser or relay-app link changed (scripts/ci-changes.mjs SHARED_FOR_DEPENDENTS)" ;;
+          esac
+          echo "Dependent repos typecheck not run: $WHY ($REASON)"
+          printf '### Dependent repos typecheck: not affected\n\n%s.\n\n%s.\n' "$WHY" "$REASON" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout Repository
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Lays out ../synap-app (app-bases), ../synap-control-plane-api and
-      # ../synap-backend, installs and builds this repo.
-      - name: Monorepo layout + dependencies
-        id: setup
-        uses: ./.github/actions/monorepo-setup
-        with:
-          app-id: ${{ vars.SYNAP_READER_APP_ID }}
-          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
-          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
-
-      - name: Mint browser + relay-app read token (GitHub App)
+      # app-bases, browser, relay-app: the Reader App's read token.
+      - name: Mint app-bases + browser + relay-app read token (GitHub App)
         id: app-token
-        if: ${{ vars.SYNAP_READER_APP_ID != '' }}
+        if: ${{ env.RUN_WORK == 'true' && vars.SYNAP_READER_APP_ID != '' }}
         continue-on-error: true
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
@@ -1183,43 +1218,78 @@ jobs:
             relay-app
           permission-contents: read
 
+      # The PR body's `Companion:` lines (scripts/layout/layout.mjs
+      # companionRefs). A line that does not parse fails here: a malformed
+      # companion is never read as "none" (then main would be checked).
+      - name: Companion refs
+        id: companions
+        if: ${{ env.RUN_WORK == 'true' }}
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          refs=$(node scripts/layout/layout.mjs companions --body-env PR_BODY --self backend)
+          echo "companions: ${refs:-none (each dependent at main, or at its Depends-On test ref)}"
+          layout=""
+          for kv in $refs; do
+            d=${kv%%=*}; r=${kv#*=}
+            case "$d" in
+              browser) echo "browser=$r" >> "$GITHUB_OUTPUT" ;;
+              relay-app) echo "relay=$r" >> "$GITHUB_OUTPUT" ;;
+              *) layout="$layout $kv" ;;
+            esac
+          done
+          echo "layout=${layout# }" >> "$GITHUB_OUTPUT"
+
+      # Lays out ../synap-app (app-bases, at its companion when named),
+      # ../synap-control-plane-api and ../synap-backend. No backend build:
+      # the slice builds the three linked packages itself.
+      - name: Monorepo layout + dependencies
+        if: ${{ env.RUN_WORK == 'true' }}
+        uses: ./.github/actions/monorepo-setup
+        with:
+          app-id: ${{ vars.SYNAP_READER_APP_ID }}
+          app-key: ${{ secrets.SYNAP_READER_APP_KEY }}
+          cross-repo-token: ${{ secrets.CROSS_REPO_TOKEN }}
+          build: "false"
+          refs: ${{ steps.companions.outputs.layout }}
+
       - name: Checkout browser
-        id: co-browser
-        continue-on-error: true
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Synap-core/browser
+          ref: ${{ steps.companions.outputs.browser }}
           token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
           path: .browser-checkout
+          persist-credentials: false
 
       - name: Checkout relay-app
-        id: co-relay
-        continue-on-error: true
+        if: ${{ env.RUN_WORK == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: Synap-core/relay-app
+          ref: ${{ steps.companions.outputs.relay }}
           token: ${{ steps.app-token.outputs.token || secrets.CROSS_REPO_TOKEN }}
           path: .relay-checkout
+          persist-credentials: false
 
-      - name: Reader App access to the dependent repos
-        env:
-          BROWSER: ${{ steps.co-browser.outcome }}
-          RELAY: ${{ steps.co-relay.outcome }}
-          TOKEN: ${{ steps.app-token.outcome }}
-        run: |
-          echo "token mint (app-bases, browser, relay-app): $TOKEN"
-          echo "app-bases : cloned at $(cd ../synap-app && git rev-parse --short HEAD) (monorepo-setup)"
-          if [ -d .browser-checkout/.git ]; then echo "browser   : cloned at $(cd .browser-checkout && git rev-parse --short HEAD)"; else echo "browser   : $BROWSER"; fi
-          if [ -d .relay-checkout/.git ]; then echo "relay-app : cloned at $(cd .relay-checkout && git rev-parse --short HEAD)"; else echo "relay-app : $RELAY"; fi
-          fail=0
-          [ "$BROWSER" = success ] || { echo "::error::The Reader App token cannot read Synap-core/browser. Install the App on it (org settings, GitHub Apps), or set CROSS_REPO_TOKEN."; fail=1; }
-          [ "$RELAY" = success ] || { echo "::error::The Reader App token cannot read Synap-core/relay-app. Install the App on it, or set CROSS_REPO_TOKEN."; fail=1; }
-          exit $fail
-
+      # The backend's OWN install (monorepo-setup) goes first: its
+      # node_modules hoists @trpc/* (.npmrc) at the backend's lockfile version,
+      # so api-types resolved @trpc/server 11.17 while the app packages resolved
+      # the slice's 11.25 ("Property 'pathSeparator' is missing", the sdk's dts
+      # build failed and ~9,600 errors followed, run 42692128986). On the
+      # devbox the backend is a member of the ONE root install; here the three
+      # linked packages resolve from the slice's node_modules, as there.
       - name: Lay out the root workspace slice
+        if: ${{ env.RUN_WORK == 'true' }}
         run: |
           set -euo pipefail
           P="${GITHUB_WORKSPACE}/.."
+          rm -rf node_modules packages/*/node_modules apps/*/node_modules
+          echo "app-bases : $(cd "$P/synap-app" && git rev-parse --short HEAD)"
+          echo "browser   : $(cd .browser-checkout && git rev-parse --short HEAD)"
+          echo "relay-app : $(cd .relay-checkout && git rev-parse --short HEAD)"
           mv .browser-checkout "$P/browser"
           mv .relay-checkout "$P/relay-app"
           cp scripts/ci/dependent-root/package.json scripts/ci/dependent-root/pnpm-workspace.yaml "$P/"
@@ -1227,37 +1297,102 @@ jobs:
           ls "$P"
 
       - name: Install the slice
+        if: ${{ env.RUN_WORK == 'true' }}
         working-directory: ..
         run: pnpm install --no-frozen-lockfile --reporter=append-only
 
       - name: Build the linked backend packages
+        if: ${{ env.RUN_WORK == 'true' }}
         working-directory: ..
         run: pnpm --filter @synap-core/types --filter @synap-core/api-types --filter @synap-core/markdown-core run build
 
-      - name: Typecheck app-bases headless
-        continue-on-error: true
+      # The app packages the three repos import through their dist (sdk,
+      # workspace-templates, token-pricing, …): the devbox's APP_DIST_FILTER
+      # (~/wt/gate.sh setup_tree). A package whose build fails is left out
+      # (--no-bail); its importers' errors then show at head AND base.
+      - name: Build the app packages the dependents import
+        if: ${{ env.RUN_WORK == 'true' }}
         working-directory: ..
-        run: pnpm --filter @synap-core/headless run type-check
+        run: |
+          pnpm --filter "@synap-core/web^..." --filter "./browser^..." --filter "./relay-app^..." \
+            --filter '!./synap-backend/**' --filter '!./browser' --filter '!./relay-app' \
+            --no-bail --workspace-concurrency=2 run --if-present build \
+            || echo "::warning::an app package did not build; its importers' errors read at head and at base"
 
-      - name: Typecheck app-bases hooks
-        continue-on-error: true
-        working-directory: ..
-        run: pnpm --filter @synap-core/hooks run type-check
+      - name: Typecheck the dependents at this head
+        id: head
+        if: ${{ env.RUN_WORK == 'true' }}
+        run: node scripts/ci/dependents-typecheck.mjs run --root .. --out "$RUNNER_TEMP/dependents/head"
 
-      - name: Typecheck app-bases web
-        continue-on-error: true
-        working-directory: ..
-        run: pnpm --filter @synap-core/web run type-check
+      # Only on a red head: the same dependent trees against the BASE's shared
+      # packages (the first parent of the tested commit: the base of a PR's
+      # test merge). The packages' tracked files are replaced, not overlaid,
+      # so a file the change added does not survive into the base build.
+      - name: Typecheck the red ones again at the base's shared packages
+        if: ${{ env.RUN_WORK == 'true' && steps.head.outputs.red == 'true' }}
+        env:
+          RED: ${{ steps.head.outputs.red_targets }}
+        run: |
+          set -euo pipefail
+          BASE=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          [ -n "$BASE" ] || { echo "::error::the tested commit has no parent to compare with"; exit 1; }
+          echo "base: $BASE"
+          git fetch -q --depth=1 origin "$BASE"
+          SHARED="packages/types packages/api-types packages/markdown-core"
+          git ls-files -z -- $SHARED | xargs -0 rm -f
+          git checkout "$BASE" -- $SHARED
+          (cd .. && pnpm --filter @synap-core/types --filter @synap-core/api-types --filter @synap-core/markdown-core run build)
+          node scripts/ci/dependents-typecheck.mjs run --root .. --out "$RUNNER_TEMP/dependents/base" --only "$RED"
 
-      - name: Typecheck browser
-        continue-on-error: true
-        working-directory: ..
-        run: pnpm --filter @synap-core/browser run typecheck
+      - name: Verdict (new errors fail; errors also at the base do not)
+        if: ${{ env.RUN_WORK == 'true' }}
+        env:
+          RED: ${{ steps.head.outputs.red }}
+        run: |
+          if [ "$RED" = true ]; then
+            node scripts/ci/dependents-typecheck.mjs verdict --head "$RUNNER_TEMP/dependents/head" --base "$RUNNER_TEMP/dependents/base"
+          else
+            node scripts/ci/dependents-typecheck.mjs verdict --head "$RUNNER_TEMP/dependents/head"
+          fi
 
-      - name: Typecheck relay-app
-        continue-on-error: true
-        working-directory: ..
-        run: pnpm --filter relay-app run typecheck
+      # PERSON DOORS (P2, founder-validated 2026-11-13): a backend door no
+      # person can reach is the "built but severed" defect (shares.publishSite
+      # had no surface until browser 8e8d1219). On the three repos this job
+      # laid out (at main, or at a `Companion:` branch) plus pod-admin, every
+      # coreRouter mutation THIS CHANGE ADDS must be called by a surface or
+      # written down in packages/api/src/routers/person-doors.json (agentOnly
+      # with a reason, or noPersonDoorYet: the founder's list of doors owed a
+      # UI); a row removed while the door is still missing fails too. Gaps the
+      # change did not make only warn (scripts/ci/person-doors.mjs). Both sides
+      # are read with `git show`: the step above may have put the base's
+      # api-types in the tree. `!cancelled()`: a red typecheck does not hide
+      # this verdict.
+      - name: Person doors (a new mutation has a surface, or a row saying why not)
+        if: ${{ !cancelled() && env.RUN_WORK == 'true' && needs.preflight.outputs.hold != 'true' }}
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/person-doors"
+          mkdir -p "$T"
+          BASE=$(git cat-file -p HEAD | awk '/^parent /{print $2; exit}')
+          [ -n "$BASE" ] || { echo "::error::the tested commit has no parent to compare with"; exit 1; }
+          git cat-file -e "$BASE^{commit}" 2>/dev/null || git fetch -q --depth=1 origin "$BASE"
+          for side in "HEAD head" "$BASE base"; do
+            set -- $side
+            git show "$1:packages/api-types/src/generated.d.ts" > "$T/$2.d.ts"
+            git show "$1:packages/api/src/routers/person-doors.json" > "$T/$2.json" 2>/dev/null || echo '{}' > "$T/$2.json"
+          done
+          node scripts/ci/person-doors.mjs check --root .. \
+            --head-dts "$T/head.d.ts" --base-dts "$T/base.d.ts" \
+            --head-list "$T/head.json" --base-list "$T/base.json"
+
+      - name: Upload the typecheck logs
+        if: ${{ always() && env.RUN_WORK == 'true' && needs.preflight.outputs.hold != 'true' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependents-typecheck
+          path: ${{ runner.temp }}/dependents
+          if-no-files-found: ignore
+          retention-days: 7
 
   # RED MAIN (2026-10-29, three CI tiers): a PR runs only what it can break,
   # so main's post-merge run is the first to see the whole suite. When a

@@ -155,7 +155,7 @@ describe("permissionLabel", () => {
     ["proposal.reject", "Reject changes waiting for your review"],
     // Everything an agent key may hold (apps = agents, 2026-10-26), nouns
     // and verbs from the vocabulary door.
-    ["playbook.run", "Run templates"],
+    ["playbook.run", "Run processes"],
     ["capability.run", "Run tools"],
     ["tool.create", "Create tools"],
     ["entity.deal.transition", "Move deals"],

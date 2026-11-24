@@ -27,12 +27,8 @@ import { PROFILE_CONTENT_KINDS } from "@synap-core/types/renderables";
 import { TRPCError } from "@trpc/server";
 import type { RendererRef } from "@synap/database";
 import {
-  and,
   db,
   eq,
-  isNull,
-  or,
-  widgetDefinitions,
   propertyDefs,
   PropertyValueType,
   slugifyPropertyKey,
@@ -48,6 +44,12 @@ import { assertMayActAs } from "./guard.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { setProfileRenderer } from "../../services/profiles/set-profile-renderer.js";
 import {
+  assertCellBindable,
+  assertRendererBindingTarget,
+  buildCellRendererRef,
+  cellRendererRefFor,
+} from "../../services/renderers/renderer-target-checks.js";
+import {
   RENDERER_SCOPES,
   RENDERER_SLOTS,
 } from "../../services/profiles/renderer-slots.js";
@@ -60,32 +62,8 @@ import { updatePropertyDef as updatePropertyDefApply } from "../../services/prof
 /** The `property_defs.value_type` PG enum values, as strings. */
 const PROPERTY_VALUE_TYPE_VALUES: string[] = Object.values(PropertyValueType);
 
-/**
- * Frame definitions are registered directly. Iframe widgets resolve through the
- * generic (sandboxed) iframe host.
- *
- * `"native"` is kept in the branch below deliberately, and NOT because native is
- * sandboxed — it never was. The renderer has been removed, but legacy rows still
- * carry `renderer_type = 'native'`. Mapping them to the sandboxed iframe host is
- * the fail-SAFE degradation: such a row has no `rendererSource`, so it renders an
- * init error instead of executing anything. Do not "fix" this by routing native
- * anywhere that runs code. See NATIVE_RENDERER_REJECTED in
- * `routers/widget-definitions.ts`.
- */
-export function buildCellRendererRef(
-  cellKey: string,
-  props?: Record<string, unknown>,
-  rendererType?: string | null
-): RendererRef {
-  if (rendererType === "iframe" || rendererType === "native") {
-    return {
-      kind: "cell",
-      cellKey: "iframe-widget",
-      props: { typeKey: cellKey, ...(props ?? {}) },
-    };
-  }
-  return { kind: "cell", cellKey, props: props ?? {} };
-}
+/** Moved to the shared renderer-target module; re-exported for its callers. */
+export { buildCellRendererRef };
 
 const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
 
@@ -95,7 +73,7 @@ const ProfileRendererContentKindSchema = z.enum(PROFILE_CONTENT_KINDS);
  * of `createPropertyDefs` when its one gate granted the batch.
  */
 async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
-  const { propertyDef, link, existing, ignored } =
+  const { propertyDef, link, existing, ignored, globalField } =
     await createAndLinkPropertyDef(input);
 
   // HONESTY FLOOR: `property-defs.create` is slug-idempotent and NOT
@@ -109,6 +87,29 @@ async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
   // NOT implemented: the founder's rule is no silent convergence, but the
   // thing must stay editable through a door — so the receipt NAMES that
   // door (`updatePropertyDef` below) and the def's id.
+  if (existing && globalField?.outcome === "reused") {
+    // The slug matched a pod-wide field and the declaration agreed with it:
+    // the kind now uses that shared field. Said, never implied.
+    return {
+      status: "unchanged" as const,
+      proposalId: null,
+      propertyDef,
+      link,
+      ignored,
+      globalField,
+      message: `Reused global field '${input.slug}' (id ${propertyDef.id}): a pod-wide field with this slug matched your declaration, so this kind now uses it. It is shared with every kind that uses it, so never change it for this kind alone. To give this kind its own field instead, declare a different slug.${
+        ignored.length > 0
+          ? ` NOT applied: ${ignored
+              .map(
+                (i) =>
+                  `${i.field}: you declared ${JSON.stringify(i.declared)}, the shared field holds ${JSON.stringify(i.stored)}`
+              )
+              .join("; ")}.`
+          : ""
+      }`,
+    };
+  }
+
   if (existing) {
     return {
       status: "unchanged" as const,
@@ -135,6 +136,23 @@ async function applyGrantedPropertyDef(input: CreateAndLinkPropertyDefInput) {
     proposalId: null,
     propertyDef,
     link,
+    // The slug matched a pod-wide field whose type or allowed values differ:
+    // this kind got its OWN field, and the shared one was left alone.
+    ...(globalField?.outcome === "shadowed"
+      ? {
+          globalField,
+          message: `Created this kind's own field '${input.slug}'. A pod-wide field with this slug exists (id ${globalField.id}) but differs: ${(
+            globalField.conflicts ?? []
+          )
+            .map(
+              (i) =>
+                `${i.field}: you declared ${JSON.stringify(i.declared)}, the shared field holds ${JSON.stringify(i.stored)}`
+            )
+            .join(
+              "; "
+            )}. The shared field and the kinds that use it were not changed.`,
+        }
+      : {}),
   };
 }
 
@@ -389,7 +407,10 @@ export const hubProfilesRouter = router({
         workspaceId: z.string().uuid().optional(),
         profileSlug: z.string().min(1),
         slot: z.enum(RENDERER_SLOTS),
-        cellKey: z.string().min(1),
+        /** The cell to bind. Omit it with `clear: true` to unbind the slot. */
+        cellKey: z.string().min(1).optional(),
+        /** Unbind whatever this slot holds at this scope (no `cellKey`). */
+        clear: z.boolean().optional(),
         props: z.record(z.string(), z.unknown()).optional(),
         scope: z.enum(RENDERER_SCOPES).optional(),
         /**
@@ -412,23 +433,34 @@ export const hubProfilesRouter = router({
       assertMayActAs(ctx, input.userId);
       const scope = input.scope ?? "workspace";
       const workspaceId = input.workspaceId ?? null;
-      const definition = await db.query.widgetDefinitions.findFirst({
-        where: and(
-          eq(widgetDefinitions.typeKey, input.cellKey),
-          workspaceId
-            ? or(
-                eq(widgetDefinitions.workspaceId, workspaceId),
-                isNull(widgetDefinitions.workspaceId)
-              )
-            : isNull(widgetDefinitions.workspaceId)
-        ),
-        columns: { rendererType: true },
+      if (input.clear ? input.cellKey !== undefined : !input.cellKey) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Pass a cellKey to bind, or clear: true (and no cellKey) to unbind.",
+        });
+      }
+
+      // The target checks every renderer door runs BEFORE the gate, so a
+      // person never approves a binding that cannot serve: a per-object
+      // target (a playbook, a view) names one object the caller can open,
+      // any other kind is whole-kind only. The write door runs the same rule.
+      await assertRendererBindingTarget({
+        profileSlug: input.profileSlug,
+        slot: input.slot,
+        scope,
+        subjectId: input.subjectId,
+        userId: input.userId,
       });
-      const ref: RendererRef = buildCellRendererRef(
-        input.cellKey,
-        input.props,
-        definition?.rendererType
-      );
+      let ref: RendererRef | null = null;
+      if (input.cellKey) {
+        await assertCellBindable({
+          cellKey: input.cellKey,
+          workspaceId,
+          userId: input.userId,
+        });
+        ref = await cellRendererRefFor(input.cellKey, input.props, workspaceId);
+      }
 
       const perm = await checkPermissionOrPropose({
         userId: input.userId,
@@ -670,6 +702,8 @@ export const hubProfilesRouter = router({
         return {
           status: "proposed" as const,
           proposalId: perm.proposalId,
+          proposalType: perm.proposalType,
+          ...(perm.deferred ? { deferred: true as const } : {}),
           fields: slugs,
         };
       }

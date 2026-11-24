@@ -20,9 +20,10 @@
  *             anything else opens where it lives.
  *
  * Review later: a durable proposal untouched for 7 days, or an ask nobody
- * answered for 7 days, leaves the headline and the counts for its own fold —
- * the SHARED fold (`needsYouRows`), so the console folds exactly what the
- * badge leaves out and what the desktop and phone apps fold.
+ * answered for 7 days, is marked by the SHARED fold (`needsYouRows`), the one
+ * the badge and the desktop and phone apps read. The console does not fold
+ * it away (founder, 23 Nov 2026): it stays in the one list, counted and
+ * selectable like any row, so a pile is approved in one batch.
  *
  * Words come from the vocabulary door; nothing here names a kind by hand.
  */
@@ -36,10 +37,10 @@ import {
   lensRowOfNeedsYou,
   type LensDoor,
   type LensNeedsYouSignal,
+  type LensRow,
 } from "@synap-core/types/lens";
 import { isObjectNavView } from "@synap-core/types/navigation";
 import { needsYouRows } from "@synap-core/types/needs-you";
-import { proposalNeedsItsPage } from "@synap-core/types/proposals";
 import { askTextRestates, type Ask } from "@synap-core/types/ask";
 import {
   REVIEW_PACKAGE_ORDER,
@@ -55,9 +56,10 @@ import {
 import { isUuid } from "../../../../lib/format";
 import { askSlotOf, askView, type AskSlot } from "./ask-detail";
 import {
+  proposalNeedsItsPage,
   proposalRequester,
   type ProposalPrincipalView,
-} from "../../../proposal/[id]/proposal-requester";
+} from "@synap-core/types/proposals";
 
 export type ReviewGroup = "access" | "changes" | "asks";
 
@@ -170,6 +172,12 @@ export function exitOf(detail: Extract<ReviewDetail, { kind: "open" }>): Exit {
 export interface ReviewRow {
   /** Stable key: the signal id. */
   key: string;
+  /**
+   * THE shared lens row of its signal (`lensRowOfNeedsYou`): what the row's
+   * three lines (`requestRow`) and the request's story (`requestStory`) are
+   * drawn from, the same derivation the desktop and phone apps draw.
+   */
+  lens: LensRow;
   group: ReviewGroup;
   /** The decision it asks — what Review groups by (founder B-1). */
   package: ReviewPackage;
@@ -206,7 +214,7 @@ export interface ReviewRow {
   batchIds: string[] | null;
   /** Every id a `?focus=` may name this row by. */
   ids: string[];
-  /** In the Review later fold: out of the headline and the counts. */
+  /** Waited past the Review later age (the shared fold's mark); still listed. */
   reviewLater: boolean;
 }
 
@@ -284,6 +292,7 @@ function wholeCluster(s: ReviewSignal): string[] | null {
 type RowShape = Omit<
   ReviewRow,
   | "key"
+  | "lens"
   | "group"
   | "package"
   | "sessionId"
@@ -354,13 +363,9 @@ function accessRow(s: ReviewSignal): RowShape {
   };
 }
 
-function askRow(s: ReviewSignal): RowShape {
+function askRow(s: ReviewSignal, lens: LensRow): RowShape {
   // The shared lens row decides an ask's noun, chip, door and title (the
   // card's question, `askCardView`) — the same words browser and relay draw.
-  const lens = lensRowOfNeedsYou(
-    { kind: "item", key: s.id, signal: s, session: null },
-    "blocking"
-  );
   const slot = askSlotOf(s);
   // Who asked: the agent by name, else the cause — the card's own mark.
   const asker = slot ? askView(slot).asker : null;
@@ -397,28 +402,43 @@ export function reviewRows(
   const later = reviewLaterIds(signals);
   return signals.map((s) => {
     const group = reviewGroupOf(s);
+    const sessionId = sessionOf(s);
+    const sessionTitle = sessionId
+      ? s.sessionTitle ||
+        (s.source?.kind === "session" ? s.source.label : null) ||
+        null
+      : null;
+    // The session is the row's provenance door (its "where"), and the ask's
+    // asker opens it: the same session ref the browser and relay rows carry.
+    const lens = lensRowOfNeedsYou(
+      {
+        kind: "item",
+        key: s.id,
+        signal: s,
+        session: sessionId
+          ? { id: sessionId, title: sessionTitle, projectId: null }
+          : null,
+      },
+      "blocking"
+    );
     const shape =
       s.kind === "access-request"
         ? accessRow(s)
         : s.kind === "proposal-cluster"
           ? proposalRow(s, group, facts)
-          : askRow(s);
+          : askRow(s, lens);
     const occurredAt = iso(s.occurredAt);
     const expiresAt = proposalExpiresAt(occurredAt, s.lifetimeHours);
     const expired = proposalLapsed(expiresAt, now);
-    const sessionId = sessionOf(s);
     return {
       ...shape,
       ...(expired ? { inlineApprove: false, batchIds: null } : {}),
       key: s.id,
+      lens,
       group,
       package: packageOf(s, facts),
       sessionId,
-      sessionTitle: sessionId
-        ? s.sessionTitle ||
-          (s.source?.kind === "session" ? s.source.label : null) ||
-          null
-        : null,
+      sessionTitle,
       agent: s.by?.id && s.by.label ? { id: s.by.id, label: s.by.label } : null,
       title: shape.title ?? s.title,
       occurredAt,
@@ -609,13 +629,12 @@ export function liveAskSlot(
   return null;
 }
 
-/** Rows per chip: All and each group — the headline, as the badge counts it. */
+/** Rows per chip: All and each group — every listed row, Review later too. */
 export function reviewCounts(
   rows: readonly ReviewRow[]
 ): Record<"all" | ReviewGroup, number> {
   const out = { all: 0, access: 0, changes: 0, asks: 0 };
   for (const r of rows) {
-    if (r.reviewLater) continue;
     out.all += 1;
     out[r.group] += 1;
   }
@@ -624,14 +643,14 @@ export function reviewCounts(
 
 /**
  * What each chip SAYS — one number, one source (ui-composition §11). All is
- * the pod's count (`signals.count`, the nav badge's) when Review is not
- * narrowed; a group is counted from the page read, which stops at
+ * the pod's count (`signals.count`: the badge's `needsYou` plus its
+ * `reviewLater`, since the list holds both) when Review is not narrowed; a group is counted from the page read, which stops at
  * `NEEDS_YOU_PAGE_LIMIT`: on a full page a group's count is a floor ("N+"),
  * and a group with none on it is unknown (no count), never "0".
  */
 export function reviewChipCounts(
   rows: readonly ReviewRow[],
-  total: { needsYou: number; truncated: boolean } | null
+  total: { needsYou: number; reviewLater: number; truncated: boolean } | null
 ): Record<"all" | ReviewGroup, string | undefined> {
   const counts = reviewCounts(rows);
   const full = rows.length >= NEEDS_YOU_PAGE_LIMIT;
@@ -640,8 +659,8 @@ export function reviewChipCounts(
   return {
     all: total
       ? total.truncated
-        ? `${total.needsYou}+`
-        : String(total.needsYou)
+        ? `${total.needsYou + total.reviewLater}+`
+        : String(total.needsYou + total.reviewLater)
       : floor(counts.all),
     access: floor(counts.access),
     changes: floor(counts.changes),
@@ -650,19 +669,14 @@ export function reviewChipCounts(
 }
 
 /**
- * What a needs-you view shows ("history" is not one): its headline rows, and
- * the rows of its Review later fold.
+ * What a needs-you view shows ("history" is not one): ONE list, Review later
+ * rows in it, in the read's order.
  */
 export function rowsInView(
   rows: readonly ReviewRow[],
   filter: Exclude<ReviewFilter, "history">
-): { headline: ReviewRow[]; reviewLater: ReviewRow[] } {
-  const inView =
-    filter === "all" ? rows : rows.filter((r) => r.group === filter);
-  return {
-    headline: inView.filter((r) => !r.reviewLater),
-    reviewLater: inView.filter((r) => r.reviewLater),
-  };
+): ReviewRow[] {
+  return filter === "all" ? [...rows] : rows.filter((r) => r.group === filter);
 }
 
 /** The row a `?focus=<id>` names — by signal, target or member proposal id. */

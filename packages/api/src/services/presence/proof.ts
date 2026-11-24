@@ -49,6 +49,7 @@ import {
   type PresenceProof,
   type PresenceProofKind,
   type PresenceRefusalCode,
+  type DeviceLinkRefusalCode,
   type PasskeyAssertionJSON,
 } from "@synap-core/types/presence";
 import { normalizeRecoveryCode } from "@synap-core/types/account-recovery";
@@ -81,7 +82,9 @@ import { acceptTotpCode } from "./totp-code.js";
 
 export class PresenceError extends Error {
   constructor(
-    readonly code: PresenceRefusalCode,
+    // A device-link refusal ("Add this device", 9 Nov 2026) rides the same
+    // typed error; the router maps it by code.
+    readonly code: PresenceRefusalCode | DeviceLinkRefusalCode,
     message: string
   ) {
     super(message);
@@ -519,6 +522,12 @@ export interface PresenceVerdict {
   deviceKeyId: string | null;
   deviceLabel: string | null;
   challengeId: string;
+  /**
+   * Set when no proof was sent and the session's grace window covered the
+   * act (`grace.ts`): `method`, `deviceKeyId` and `challengeId` are the proof
+   * that opened the window, not one made for this act.
+   */
+  viaGrace?: true;
 }
 
 /**

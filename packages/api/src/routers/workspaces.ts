@@ -59,6 +59,7 @@ import { grantWriteDenial } from "../utils/grant-write-check.js";
 import { TRPCError } from "@trpc/server";
 import {
   checkPermissionOrPropose,
+  previewPermissionDecision,
   proposedMessageFor,
 } from "../utils/permission-check.js";
 import { materializePodAdminsIntoWorkspace } from "../utils/workspace-role.js";
@@ -69,6 +70,7 @@ import { invalidCatalogDefinition } from "../services/package-updates/refusals.j
 import { emitSideEffects, getBoss } from "@synap/events";
 import { storage } from "@synap/storage";
 import { workspaceRuntimePrimarySurfaceSchema } from "../schemas/workspace-primary-surface.js";
+import { assertPrimarySurfaceOpens } from "../services/workspace-primary-surface-check.js";
 import { logger, isPodReadableWorkspace } from "./workspaces/helpers.js";
 import {
   SERVER_OWNED_WORKSPACE_SETTINGS_KEYS,
@@ -643,20 +645,41 @@ const coreProcedures = {
       z.object({
         workspaceId: z.string().uuid(),
         primarySurface: workspaceRuntimePrimarySurfaceSchema.nullable(),
+        /** Why, in the person's words — shown to the reviewer. */
+        reasoning: z.string().max(2000).optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
-      const perm = await checkPermissionOrPropose({
+      const gateOpts = {
         userId: ctx.userId,
         workspaceId: input.workspaceId,
-        subjectType: "workspace",
-        action: "update",
+        subjectType: "workspace" as const,
+        action: "update" as const,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
         data: {
           id: input.workspaceId,
           operation: "set_primary_surface",
           primarySurface: input.primarySurface,
         },
-      });
+      };
+
+      // Checked BEFORE the gate: a start page that cannot open in this space
+      // is refused in the caller's own reply, never filed as a proposal that
+      // would approve into a blank first screen. The check reads the space's
+      // cells, so a caller the gate would deny is refused first and never
+      // learns which cells the space holds (the views.create order).
+      if (input.primarySurface?.kind === "cell") {
+        const preview = await previewPermissionDecision(gateOpts);
+        if (preview.decision === "deny") {
+          throw new TRPCError({ code: "FORBIDDEN", message: preview.reason });
+        }
+        await assertPrimarySurfaceOpens(
+          input.workspaceId,
+          input.primarySurface
+        );
+      }
+
+      const perm = await checkPermissionOrPropose(gateOpts);
 
       if ("denied" in perm && perm.denied) {
         throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });

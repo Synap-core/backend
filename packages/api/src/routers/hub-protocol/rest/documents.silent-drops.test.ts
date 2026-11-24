@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   proposalInputs: [] as Array<Record<string, unknown>>,
   entityUpdates: [] as Array<Record<string, unknown>>,
   preflights: [] as Array<Record<string, unknown>>,
+  entitySpace: null as string | null,
 }));
 
 const PG_UUID_RE_FOR_TEST =
@@ -71,7 +72,8 @@ vi.mock("./_shared.js", () => ({
   }),
 }));
 
-vi.mock("../confine-workspace.js", () => ({
+vi.mock("../confine-workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getConfinedWorkspace: (_c: unknown, ws: string | null) => ws,
 }));
 
@@ -91,10 +93,16 @@ vi.mock("../../entities.js", () => ({
 }));
 
 // The body-replace preflight reads the entity from the database; here the
-// entity has no body yet, so it passes. Recorded so the call is asserted.
+// entity has no body yet, so it passes. Recorded so the call is asserted; it
+// answers the entity's placement (`h.entitySpace`), where the body is filed.
 vi.mock("../../../services/entity-body/body-replace-guard.js", () => ({
   preflightAttachToEntity: async (input: Record<string, unknown>) => {
     h.preflights.push(input);
+    return {
+      id: input.entityId,
+      workspaceId: h.entitySpace,
+      homeWorkspaceId: null,
+    };
   },
 }));
 
@@ -130,6 +138,7 @@ beforeEach(() => {
   h.proposalInputs.length = 0;
   h.entityUpdates.length = 0;
   h.preflights.length = 0;
+  h.entitySpace = WS;
   h.createResult = {
     id: DOC,
     documentId: DOC,
@@ -182,6 +191,25 @@ describe("POST /documents — forwards what it accepts", () => {
       documentId: DOC,
       status: "updated",
     });
+  });
+
+  it("files the body in its entity's space, not the requested one, and says so (a part follows its whole)", async () => {
+    const OTHER = "77777777-7777-4777-8777-777777777777";
+    h.entitySpace = OTHER;
+    const res = await buildApp().request(
+      "/documents",
+      json("POST", {
+        userId: USER,
+        workspaceId: WS,
+        title: "Notes",
+        content: "# Notes",
+        entityId: ENTITY,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(h.createInputs[0]).toMatchObject({ workspaceId: OTHER });
+    const body = (await res.json()) as { warnings?: string[] };
+    expect(body.warnings?.some((w) => w.includes(OTHER))).toBe(true);
   });
 
   it("does not attach a proposed document, and says so", async () => {

@@ -94,7 +94,7 @@ export async function completeOutcome(input: {
         sessionId: input.sessionId,
         userId: input.userId,
       });
-      report = withEvidenceVerdict(claimed, verdict.satisfied);
+      report = withEvidenceVerdict(claimed, verdict.satisfied, verdict.held);
     } catch (err) {
       logger.warn(
         { err, sessionId: input.sessionId, outcomeKey: input.outcomeKey },

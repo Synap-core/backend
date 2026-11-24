@@ -1,6 +1,7 @@
 {
   "name": "@synap/storage",
   "version": "1.0.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -10,6 +11,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js",
       "default": "./dist/index.js"
+    },
+    "./interface": {
+      "types": "./dist/interface.d.ts",
+      "import": "./dist/interface.js",
+      "default": "./dist/interface.js"
     },
     "./checksum": {
       "types": "./dist/checksum.d.ts",

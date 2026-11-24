@@ -5,6 +5,10 @@ export default defineConfig({
     "scripts/create-admin-cli": "src/scripts/create-admin-cli.ts",
     "scripts/user-admin-cli": "src/scripts/user-admin-cli.ts",
     "scripts/field-crypto": "src/scripts/field-crypto-cli.ts",
+    "scripts/run-conversions": "src/scripts/run-conversions-cli.ts",
+    "scripts/backfill-session-spaces":
+      "src/scripts/backfill-session-spaces-cli.ts",
+    "scripts/backfill-app-access": "src/scripts/backfill-app-access-cli.ts",
   },
   format: ["esm"],
   sourcemap: true,

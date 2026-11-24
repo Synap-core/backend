@@ -59,6 +59,8 @@ const h = vi.hoisted(() => ({
   accounts: [] as Array<Record<string, unknown>>,
   /** What the LinkedIn profile lookup answers right now. */
   found: null as unknown,
+  /** A tool's pod connections, per tool id, when a test sets them. */
+  credentials: {} as Record<string, () => Promise<unknown[]>>,
   /** Every provider call (method, params) — a post must never be among them. */
   calls: [] as Array<{ method: string; params: Record<string, unknown> }>,
   noopEvents: () =>
@@ -144,6 +146,9 @@ vi.mock(
     ) => {
       h.calls.push({ method: spec.method, params });
       if (spec.pathTemplate === "/linkedin/find-profile") return h.found;
+      if (spec.pathTemplate === "/boom")
+        throw new Error("the provider did not answer");
+      if (spec.pathTemplate === "/empty") return { items: [] };
       if (spec.method === "GET")
         return spec.pathTemplate === "/accounts"
           ? { items: h.accounts }
@@ -151,6 +156,22 @@ vi.mock(
       return [{ postId: "p-1", integration: params.integrationId }];
     },
   })
+);
+vi.mock(
+  "../../../services/capabilities/capability-connections.js",
+  async (importOriginal) => {
+    const actual =
+      await importOriginal<
+        typeof import("../../../services/capabilities/capability-connections.js")
+      >();
+    return {
+      ...actual,
+      listCredentials: async (toolId: string, userId: string) =>
+        h.credentials[toolId]
+          ? h.credentials[toolId]!()
+          : actual.listCredentials(toolId, userId),
+    };
+  }
 );
 // PGlite runs ONE connection and the proposal writer nests transactions on
 // it: a PROPOSE verdict (the real gate's) files its row here, with the data
@@ -201,6 +222,7 @@ import { intentActionId } from "../../../services/capabilities/intent-actions.js
 import { registerCapabilitiesActionsRoutes } from "./capabilities-actions.js";
 import { registerCapabilitiesExecuteRoutes } from "./capabilities-execute.js";
 import { registerProposalsRoutes } from "./proposals.js";
+import { officialCatalogUrl } from "@synap/jobs/workers/cp-catalog-sync.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 
 const BASIC =
@@ -334,6 +356,10 @@ const KEYS = {
     "entity.*.read",
     "proposal.read",
   ]),
+  /** An app that shares updates (the unavailable fixture's intent). */
+  sharer: app(["capability.share_update.run"]),
+  /** An app granted an intent this pod has no input shape for. */
+  lister: app(["capability.list_records.run"]),
   /** An agent's own key (no app): unbounded, acting for the person. */
   agent: app(["*"], { workspaceIds: null, clientId: null }),
   /** The person's own unbounded key: not limited to spaces, no app. */
@@ -1815,5 +1841,415 @@ describe("an app looks a person up with the person's tool (enrich_entity)", () =
     const res = await list("crm", `workspaceId=${CRM}&intent=enrich_entity`);
     expect(res.status).toBe(403);
     expect((await json(res)).code).toBe("GRANT_DENIED");
+  });
+});
+
+// ─── unavailable: every verb declaring the intent that is not offered ──────
+
+describe("the door says why an action is not offered (unavailable)", () => {
+  // Plan 498b6be3 S1, founder D5 (all reasons), D-C (`update`), D-D (one
+  // entry per tool and account), D-E (the permission named). One tool per
+  // cause, all declaring `share_update`.
+  const SHARE_INPUT = {
+    type: "object",
+    properties: { text: { type: "string", minLength: 1 } },
+    required: ["text"],
+    additionalProperties: false,
+  };
+  const C_DRAFT = randomUUID(); // drafty's container
+  const C_OLD = randomUUID(); // oldpack's container: its template moved on
+  const C_MIS = randomUUID(); // mismatch's container: no update known
+  const T_NOSOURCE = randomUUID();
+  const T_EMPTY = randomUUID();
+  const T_FLAKY = randomUUID();
+  const T_SLACKISH = randomUUID();
+  const ENABLE = {
+    kind: "enable",
+    hint: "Its actions are off. Turn them on to use it.",
+    url: "https://pod.test/open/capability/c-locked",
+    opensIn: "web",
+  };
+  const ACCOUNTS_OF = (tool: string) => ({
+    verb: `${tool}_accounts`,
+    id: "id",
+    label: "name",
+    provider: "type",
+  });
+
+  interface Unavailable {
+    why: string;
+    label: string;
+    tool: string | null;
+    connection: { provider: string | null; account: string | null } | null;
+    retryable: boolean;
+    fix: {
+      kind: string;
+      hint: string;
+      url?: string;
+      opensIn?: string;
+    } | null;
+  }
+  const listing = async (key: KeyName = "sharer", intent = "share_update") => {
+    const res = await list(key, `workspaceId=${CRM}&intent=${intent}`);
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    return body as { actions: ActionView[]; unavailable: Unavailable[] };
+  };
+  const entriesOf = async (tool: string) =>
+    (await listing()).unavailable.filter((u) => u.tool === tool);
+
+  beforeAll(async () => {
+    await q(
+      `insert into capability_intents (slug, effect, statement, synonyms, input_schema) values ('share_update','write','Share an update','{}',$1::jsonb)`,
+      [JSON.stringify(SHARE_INPUT)]
+    );
+    const skill = async (
+      name: string,
+      intent: string | null,
+      inputMap: unknown,
+      providerSpec: unknown = {
+        tool: name,
+        method: "POST",
+        pathTemplate: "/x",
+      },
+      metadata: unknown = { verbType: "write" },
+      toolId: string | null = null
+    ) => {
+      const id = randomUUID();
+      await q(
+        `insert into skills (id, user_id, name, kind, scope, status, approved, intent, input_map, parameters, provider_spec, metadata)
+         values ($1,$2,$3,'declarative','pod','active',true,$4,$5::jsonb,$6::jsonb,$7::jsonb,$8::jsonb)`,
+        [
+          id,
+          OWNER,
+          name,
+          intent,
+          inputMap === null ? null : JSON.stringify(inputMap),
+          JSON.stringify({ text: "string" }),
+          JSON.stringify(providerSpec),
+          JSON.stringify(metadata),
+        ]
+      );
+      if (toolId)
+        await q(
+          `insert into links (id, from_type, from_id, to_type, to_id, link_type) values ($1,'skill',$2,'tool',$3,'requires')`,
+          [randomUUID(), id, toolId]
+        );
+    };
+    // The installed versions that fall short, and the tools whose accounts
+    // the door reads.
+    await skill("oldpack_share", null, { params: { text: "$.text" } });
+    await skill("mismatch_share", "publish_post", {
+      params: { text: "$.text" },
+    });
+    await skill("nomap_share", "share_update", null);
+    await skill("slackish_share", "share_update", {
+      params: { text: "$.text" },
+    });
+    await skill("flaky_share", "share_update", { params: { text: "$.text" } });
+    for (const [toolId, name, path] of [
+      [T_NOSOURCE, "nosource", "/boom"],
+      [T_EMPTY, "emptytool", "/empty"],
+    ] as const) {
+      await q(
+        `insert into tools (id, name, kind, approved, created_by, workspace_id) values ($1,$2,'api',true,$3,null)`,
+        [toolId, name, OWNER]
+      );
+      await skill(
+        `${name}_accounts`,
+        "list_records",
+        null,
+        {
+          tool: name,
+          method: "GET",
+          pathTemplate: path,
+          responseShape: {
+            collectionPath: "items",
+            item: { id: "id", name: "name", type: "type" },
+          },
+        },
+        { readOnly: true },
+        toolId
+      );
+      await skill(
+        `${name}_share`,
+        "share_update",
+        {
+          params: { accountId: "$account.id", text: "$.text" },
+          accounts: ACCOUNTS_OF(name),
+        },
+        { tool: name, method: "POST", pathTemplate: "/share" },
+        { verbType: "write" },
+        toolId
+      );
+    }
+    // oldpack holds an older version of its template than the catalog's.
+    await q(
+      `insert into capabilities (id, created_by, name, metadata) values ($1,$2,'oldpack',$3::jsonb)`,
+      [
+        C_OLD,
+        OWNER,
+        JSON.stringify({ templateKey: "oldpack", contentHash: "v1" }),
+      ]
+    );
+    await q(
+      `insert into cp_catalog_cache (id, source, kind, slug, name, content_hash) values ($1,$2,'capability','oldpack','Oldpack','v2')`,
+      [randomUUID(), officialCatalogUrl()]
+    );
+
+    const share = (tool: string, extra: Record<string, unknown> = {}) => ({
+      ...verb(`${tool}_share`, "Share an update", "share_update", "write"),
+      ...extra,
+    });
+    const tool = (
+      id: string,
+      name: string,
+      verbs: unknown[],
+      extra: Record<string, unknown> = {}
+    ) => ({
+      kind: "tool",
+      id,
+      name,
+      description: name,
+      enabled: true,
+      governance: "auto",
+      catalogOnly: false,
+      verbs,
+      ...extra,
+    });
+    h.registry = [
+      ...h.registry,
+      // Two of its verbs are off: it says so once (one entry per tool).
+      tool(
+        randomUUID(),
+        "drafty",
+        [
+          share("drafty"),
+          verb("drafty_share_later", "Share later", "share_update", "write"),
+        ],
+        { enabled: false, containerId: C_DRAFT }
+      ),
+      tool(randomUUID(), "offline", [share("offline")], {
+        connection: { required: true, connected: false, provider: "slack" },
+      }),
+      tool(randomUUID(), "twice", [share("twice")], {
+        enabled: false,
+        connection: { required: true, connected: false, provider: "slack" },
+      }),
+      tool(randomUUID(), "retired", [share("retired")], { runnable: false }),
+      tool(randomUUID(), "locked", [
+        share("locked", {
+          backingSkillExecutable: false,
+          blocked: "not_enabled",
+          enable: ENABLE,
+        }),
+      ]),
+      tool(randomUUID(), "oldpack", [share("oldpack")], {
+        containerId: C_OLD,
+      }),
+      tool(randomUUID(), "mismatch", [share("mismatch")], {
+        containerId: C_MIS,
+      }),
+      tool(randomUUID(), "nomap", [share("nomap")]),
+      tool(T_NOSOURCE, "nosource", [
+        verb("nosource_accounts", "List accounts", "list_records", "read"),
+        share("nosource"),
+      ]),
+      tool(T_EMPTY, "emptytool", [
+        verb("emptytool_accounts", "List accounts", "list_records", "read"),
+        share("emptytool"),
+      ]),
+      tool(T_FLAKY, "flaky", [share("flaky")], {
+        connection: { required: true, connected: true, provider: "slack" },
+      }),
+      tool(T_SLACKISH, "slackish", [share("slackish")], {
+        connection: { required: true, connected: true, provider: "slack" },
+      }),
+    ];
+    const cred = (id: string, account: string, health: string) => ({
+      id,
+      label: account,
+      accountHint: account,
+      provider: "slack",
+      persisted: true,
+      health,
+    });
+    h.credentials[T_FLAKY] = async () => {
+      throw new Error("the vault did not answer");
+    };
+    h.credentials[T_SLACKISH] = async () => [
+      cred("cred-ok", "team@acme.test", "connected"),
+      cred("cred-old", "old@acme.test", "needs_reauth"),
+    ];
+  }, 120_000);
+
+  it("a tool that is turned off: not_enabled, with the enable door, said once", async () => {
+    const entries = await entriesOf("Drafty");
+    expect(entries).toEqual([
+      {
+        why: "not_enabled",
+        label: "Drafty is installed, but this action of it is turned off.",
+        tool: "Drafty",
+        connection: null,
+        retryable: false,
+        fix: expect.objectContaining({
+          kind: "enable",
+          url: expect.stringContaining(`/open/capability/${C_DRAFT}`),
+        }),
+      },
+    ]);
+  });
+
+  it("a tool with no connection: not_connected, with the connect door", async () => {
+    expect(await entriesOf("Offline")).toEqual([
+      expect.objectContaining({
+        why: "not_connected",
+        connection: { provider: "slack", account: null },
+        retryable: false,
+        fix: expect.objectContaining({ kind: "connect" }),
+      }),
+    ]);
+  });
+
+  it("every reason, not the first one (D5)", async () => {
+    expect((await entriesOf("Twice")).map((u) => [u.why, u.fix?.kind])).toEqual(
+      [
+        ["not_enabled", "enable"],
+        ["not_connected", "connect"],
+      ]
+    );
+  });
+
+  it("an inactive tool: not_launchable, nothing in the pod fixes it", async () => {
+    expect(await entriesOf("Retired")).toEqual([
+      expect.objectContaining({ why: "not_launchable", fix: null }),
+    ]);
+  });
+
+  it("an action whose skill is installed but off carries the registry's own enable door", async () => {
+    expect(await entriesOf("Locked")).toEqual([
+      expect.objectContaining({ why: "not_enabled", fix: ENABLE }),
+    ]);
+  });
+
+  it("an installed version that lacks the intent, with its update held: update_waiting (D-C)", async () => {
+    expect(await entriesOf("Oldpack")).toEqual([
+      {
+        why: "update_waiting",
+        label: "Oldpack has an update waiting for you that adds this.",
+        tool: "Oldpack",
+        connection: null,
+        retryable: false,
+        fix: {
+          kind: "update",
+          hint: "An update is waiting for you. Apply it to use this.",
+          url: expect.stringContaining(`/open/capability/${C_OLD}`),
+          opensIn: "web",
+        },
+      },
+    ]);
+  });
+
+  it("an installed version that lacks the intent, no update known: intent_not_declared", async () => {
+    expect(await entriesOf("Mismatch")).toEqual([
+      expect.objectContaining({
+        why: "intent_not_declared",
+        retryable: false,
+        fix: null,
+      }),
+    ]);
+  });
+
+  it("a verb with no input map: no_input_map", async () => {
+    expect(await entriesOf("Nomap")).toEqual([
+      expect.objectContaining({ why: "no_input_map", fix: null }),
+    ]);
+  });
+
+  it("an account source that fails: accounts_unreadable, retryable, never an empty list", async () => {
+    expect(await entriesOf("Nosource")).toEqual([
+      expect.objectContaining({ why: "accounts_unreadable", retryable: true }),
+    ]);
+  });
+
+  it("an account source that lists none: no_account", async () => {
+    expect(await entriesOf("Emptytool")).toEqual([
+      expect.objectContaining({ why: "no_account", retryable: false }),
+    ]);
+  });
+
+  it("connections that cannot be read: accounts_unreadable, and no action offered on a guess", async () => {
+    const { actions, unavailable } = await listing();
+    expect(actions.filter((a) => a.tool === "Flaky")).toEqual([]);
+    expect(unavailable.filter((u) => u.tool === "Flaky")).toEqual([
+      expect.objectContaining({
+        why: "accounts_unreadable",
+        connection: { provider: "slack", account: null },
+        retryable: true,
+        fix: null,
+      }),
+    ]);
+  });
+
+  it("an account to reconnect is its own entry; the live one stays an action (D-D)", async () => {
+    const { actions, unavailable } = await listing();
+    expect(actions.filter((a) => a.tool === "Slackish")).toHaveLength(1);
+    expect(unavailable.filter((u) => u.tool === "Slackish")).toEqual([
+      expect.objectContaining({
+        why: "connection_expired",
+        label: "The account old@acme.test in Slackish must be reconnected.",
+        connection: { provider: "slack", account: "old@acme.test" },
+        fix: expect.objectContaining({ kind: "connect" }),
+      }),
+    ]);
+  });
+
+  it("an offered verb is never also listed as unavailable, and actions keep their shape", async () => {
+    const { actions, unavailable } = await listing();
+    const offered = new Set(actions.map((a) => a.tool));
+    for (const u of unavailable)
+      if (u.why !== "connection_expired")
+        expect(offered.has(u.tool!)).toBe(false);
+    for (const a of actions)
+      expect(Object.keys(a).sort()).toEqual([
+        "connection",
+        "governance",
+        "id",
+        "input",
+        "intent",
+        "label",
+        "tool",
+      ]);
+    expect(JSON.stringify(unavailable)).not.toContain("_share");
+  });
+
+  it("an intent this pod has no input shape for: no_input_schema", async () => {
+    const { actions, unavailable } = await listing("lister", "list_records");
+    expect(actions).toEqual([]);
+    expect(unavailable).toEqual([
+      {
+        why: "no_input_schema",
+        label: 'Apps cannot ask for "List records" on this pod yet.',
+        tool: null,
+        connection: null,
+        retryable: false,
+        fix: null,
+      },
+    ]);
+  });
+
+  it("an app without the intent's permission is told which permission (D-E)", async () => {
+    const res = await list(
+      "messenger",
+      `workspaceId=${CRM}&intent=publish_post`
+    );
+    const body = await json(res);
+    expect(res.status).toBe(403);
+    expect(body).toMatchObject({
+      code: "GRANT_DENIED",
+      why: "permission_missing",
+      permission: "capability.publish_post.run",
+    });
+    expect(body.label).toContain("capability.publish_post.run");
   });
 });

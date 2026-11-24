@@ -25,7 +25,6 @@ const {
   mockGetDb,
   mockCheckPermission,
   mockPreviewDecision,
-  mockMaterializeCron,
   mockCreateLinks,
   insertReturning,
   selectLimit,
@@ -41,9 +40,15 @@ const {
   const insertChain = {
     values: vi.fn().mockReturnThis(),
     returning: insertReturning,
+    // The kept version (0416) rides in the create's transaction.
+    onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
   };
   const profilesFindMany = vi.fn();
   const mockDb = {
+    // The create's row and its kept version (0416) share one transaction.
+    transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+      fn(mockDb)
+    ),
     insert: vi.fn(() => insertChain),
     select: vi.fn(() => selectChain),
     query: {
@@ -62,7 +67,6 @@ const {
     profilesFindMany,
     insertReturning,
     selectLimit,
-    mockMaterializeCron: vi.fn().mockResolvedValue(undefined),
     mockCreateLinks: vi.fn().mockResolvedValue([]),
     mockCheckPermission: vi.fn().mockResolvedValue({ granted: true }),
     mockPreviewDecision: vi.fn().mockResolvedValue({ decision: "propose" }),
@@ -134,14 +138,6 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../services/playbooks/cron-automation.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../services/playbooks/cron-automation.js")
-    >();
-  return { ...actual, materializePlaybookCronAutomation: mockMaterializeCron };
-});
-
 vi.mock("../services/links/links-service.js", () => ({
   getLinksFor: vi.fn().mockResolvedValue([]),
   createLinks: mockCreateLinks,
@@ -168,23 +164,6 @@ vi.mock("../utils/workspace-role.js", () => ({
 vi.mock("../utils/audit-log.js", () => ({
   auditLog: vi.fn(),
 }));
-
-// The ONE kind-or-role reader: what lifecycle the subject kind declares.
-const subjectRead = vi.hoisted(() => ({
-  read: vi.fn(async (_slug: string, _ws: string | null) => ({
-    profileKind: "kind" as const,
-    lifecycleProperty: "status" as string | null,
-    lifecycleOptions: ["open", "fixing", "fixed", "wont_fix"] as
-      string[] | undefined,
-  })),
-}));
-vi.mock(
-  "../services/playbooks/playbook-activators.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<Record<string, unknown>>()),
-    readSubjectProfile: subjectRead.read,
-  })
-);
 
 import { playbooksRouter } from "./playbooks.js";
 
@@ -274,76 +253,36 @@ describe("playbooks.create refuses a dangling subjectProfile", () => {
 });
 
 /**
- * `subjectProfile.onEnd` names statuses of the subject's lifecycle: a value
- * that is not one of its options is refused at the write door, before the
- * gate — a value no move could reach would only fail at every close.
+ * `subjectProfile.onEnd` is RETIRED (decision 5e377b06, plan 73fa04b5 D1): a
+ * session end moves nothing. A write that still sends it is refused at the
+ * write door, before the gate, in the catalog's own words, never stored.
  */
-describe("playbooks.create checks subjectProfile.onEnd against the lifecycle", () => {
-  const withOnEnd = (sp: Record<string, unknown>) =>
+describe("playbooks.create refuses subjectProfile.onEnd (retired)", () => {
+  const create = (sp: Record<string, unknown>) =>
     playbooksRouter
       .createCaller(callerCtx())
       .create({ ...base, subjectProfile: sp } as never);
 
-  beforeEach(() => {
-    subjectRead.read.mockClear();
-    subjectRead.read.mockResolvedValue({
-      profileKind: "kind",
-      lifecycleProperty: "status",
-      lifecycleOptions: ["open", "fixing", "fixed", "wont_fix"],
-    });
-  });
-
-  it("NON-VACUITY: options of the lifecycle are accepted (case/separator as the status door reads them)", async () => {
+  it("NON-VACUITY: the same subject without onEnd is created", async () => {
     slugResolves();
-    const res = await withOnEnd({
-      profileSlug: "finding",
-      onEnd: { cancelled: "open", failed: "Open", closed: "wont-fix" },
-    });
+    const res = await create({ profileSlug: "finding" });
     expect(res.status).toBe("created");
-    expect(subjectRead.read).toHaveBeenCalledWith("finding", WS);
   });
 
-  it("a value that is not an option is REFUSED, naming the options, before the gate", async () => {
+  it("an onEnd that names a move is REFUSED before the gate", async () => {
     slugResolves();
     await expect(
-      withOnEnd({ profileSlug: "finding", onEnd: { cancelled: "reopened" } })
-    ).rejects.toThrow(
-      /onEnd\.cancelled: "reopened" is not a status of finding \(open, fixing, fixed, wont_fix\)/
-    );
+      create({ profileSlug: "finding", onEnd: { cancelled: "open" } })
+    ).rejects.toThrow(/onEnd — retired: .*a session end moves nothing/);
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(insertReturning).not.toHaveBeenCalled();
   });
 
-  it("an onEnd with no subject kind is refused", async () => {
-    await expect(withOnEnd({ onEnd: { failed: "open" } })).rejects.toThrow(
-      /onEnd needs subjectProfile\.profileSlug/
+  it("an empty onEnd is refused too (the catalog's rule: present = refused)", async () => {
+    slugResolves();
+    await expect(create({ profileSlug: "finding", onEnd: {} })).rejects.toThrow(
+      /onEnd — retired/
     );
-    expect(insertReturning).not.toHaveBeenCalled();
-  });
-
-  it("a kind with no lifecycle and no statusProperty is refused; with a statusProperty it is the legacy path", async () => {
-    slugResolves();
-    subjectRead.read.mockResolvedValue({
-      profileKind: "kind",
-      lifecycleProperty: null,
-      lifecycleOptions: undefined,
-    });
-    await expect(
-      withOnEnd({ profileSlug: "finding", onEnd: { failed: "open" } })
-    ).rejects.toThrow(/declares no lifecycle/);
-    const res = await withOnEnd({
-      profileSlug: "finding",
-      statusProperty: "state",
-      onEnd: { failed: "open" },
-    });
-    expect(res.status).toBe("created");
-  });
-
-  it("an unknown terminal status key is refused by the schema", async () => {
-    slugResolves();
-    await expect(
-      withOnEnd({ profileSlug: "finding", onEnd: { stale: "open" } })
-    ).rejects.toThrow();
     expect(insertReturning).not.toHaveBeenCalled();
   });
 });

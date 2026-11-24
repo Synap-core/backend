@@ -53,7 +53,9 @@ import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
+import { scopedDb } from "../../access/scoped-db.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
+import { grantReadPredicate } from "../../access/grant-read.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   userVisibleWhere,
@@ -62,7 +64,7 @@ import {
 import { visibleWorkspaceWhere } from "./workspace.js";
 import { authoredByUser } from "../agent-identity-service.js";
 import { agentReadableBy } from "./agent-scorecard.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "../../connectors/external-dispatch-constants.js";
 import { AI_DECISION } from "../../lib/ai-events.js";
 import type { ObjectKind } from "./types.js";
@@ -286,7 +288,12 @@ export async function resolveObjectKind(
             updatedAt: skills.updatedAt,
           })
           .from(skills)
-          .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
+          .where(
+            and(
+              eq(skills.id, id),
+              visibleSkillsWhere(userId, undefined, { allSpaces: true })
+            )
+          )
           .limit(1);
         if (skillRow)
           return {
@@ -411,10 +418,13 @@ export async function resolveObjectKind(
           // `workspace` with NULL = pod-wide config — exactly
           // `userVisibleWhere` with no lens, the floor the sibling
           // `automation_run` probe uses.
+          // `userVisibleWhere` carries no key grant: AND it here, as
+          // `scopedDb` would (the `automation` subject).
           .where(
             and(
               eq(automations.id, id),
-              userVisibleWhere(automations.workspaceId, userId)
+              userVisibleWhere(automations.workspaceId, userId),
+              grantReadPredicate(automations)
             )
           )
           .limit(1);
@@ -442,7 +452,7 @@ export async function resolveObjectKind(
           .where(
             and(
               eq(playbooks.id, id),
-              userVisibleWhere(playbooks.workspaceId, userId)
+              scopedDb(AccessContext.from({ userId })).predicate(playbooks)
             )
           )
           .limit(1);
@@ -470,10 +480,12 @@ export async function resolveObjectKind(
           // membership, a pod-personal (NULL-workspace) project keeps an owner
           // floor, plus the project-member branch. No lens: this prober is
           // user-wide, like every other probe here.
+          // `projectVisibleWhere` carries no key grant: AND it here.
           .where(
             and(
               eq(projects.id, id),
-              projectVisibleWhere(AccessContext.operator({ userId }))
+              projectVisibleWhere(AccessContext.operator({ userId })),
+              grantReadPredicate(projects)
             )
           )
           .limit(1);
@@ -501,10 +513,14 @@ export async function resolveObjectKind(
           // `project_tracks` VisibilityRule (access/registry.ts) is this same
           // `projectVisibleWhere`, so the prober never names a goal
           // `tracks.get` would refuse.
+          // ...and the calling key's grant on the goal and its project
+          // (`projectVisibleWhere` carries none).
           .where(
             and(
               eq(projectTracks.id, id),
-              projectVisibleWhere(AccessContext.operator({ userId }))
+              projectVisibleWhere(AccessContext.operator({ userId })),
+              grantReadPredicate(projectTracks),
+              grantReadPredicate(projects)
             )
           )
           .limit(1);

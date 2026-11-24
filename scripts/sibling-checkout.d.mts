@@ -22,6 +22,16 @@ export const SIBLINGS: Record<SiblingRepo, { env: string; names: string[] }>;
 /** Absolute root of `repo`'s checkout, or null when none is present. */
 export function siblingCheckout(repo: SiblingRepo): string | null;
 
+/**
+ * Warn (once per repo, never throw) when the checkout at `dir` is not at the
+ * commit sibling-pins.json pins `repo` to (`pinsFile`: that file by default).
+ */
+export function warnIfOffPin(
+  repo: SiblingRepo,
+  dir: string,
+  pinsFile?: string
+): void;
+
 /** Whether an absent sibling is a failure here (CI, unless acknowledged). */
 export function siblingRequired(): boolean;
 

@@ -308,6 +308,13 @@ export async function fileAgentConnectProposal(args: {
   return { proposalId: proposal.id };
 }
 
+/**
+ * A pending key's CONNECT request, never an agent's ask for one more thing
+ * (`mode: "add"`, services/agent-access-ask.ts): an ask names a live key and
+ * must not read as that key's connection.
+ */
+const notAnAddAsk = drizzleSql`COALESCE(${proposals.data}->'data'->>'mode', ${proposals.data}->>'mode') IS DISTINCT FROM 'add'`;
+
 /** The open `agent/connect` proposal for a key, if any. */
 export async function openAgentConnectProposal(
   keyId: string
@@ -323,7 +330,8 @@ export async function openAgentConnectProposal(
       and(
         eq(proposals.targetType, AGENT_CONNECT_TARGET_TYPE),
         eq(proposals.proposalType, AGENT_CONNECT_PROPOSAL_TYPE),
-        drizzleSql`${proposals.data}->>'keyId' = ${keyId}`
+        drizzleSql`${proposals.data}->>'keyId' = ${keyId}`,
+        notAnAddAsk
       )
     )
     .orderBy(desc(proposals.createdAt))
@@ -884,7 +892,7 @@ export async function settleRejectedAgentConnect(
   return true;
 }
 
-/** Each agent's newest OPEN `agent/connect` proposal (agent user id → id). */
+/** Each agent's newest OPEN `agent/connect` connect request (agent user id → id). */
 export async function pendingAgentConnectProposals(
   agentUserIds: readonly string[]
 ): Promise<Map<string, string>> {
@@ -897,7 +905,8 @@ export async function pendingAgentConnectProposals(
         eq(proposals.targetType, AGENT_CONNECT_TARGET_TYPE),
         eq(proposals.proposalType, AGENT_CONNECT_PROPOSAL_TYPE),
         eq(proposals.status, ProposalStatus.PENDING),
-        inArray(proposals.targetId, [...agentUserIds])
+        inArray(proposals.targetId, [...agentUserIds]),
+        notAnAddAsk
       )
     )
     .orderBy(desc(proposals.createdAt));

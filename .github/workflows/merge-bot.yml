@@ -20,9 +20,10 @@ name: Merge bot
 # branch's workflow). Without them the bot judges and logs, writes nothing,
 # and the run stays green (fail-safe).
 #
-# workflow_run and schedule run the DEFAULT BRANCH's copy of this file and of
-# the scripts; the job never checks out or runs a PR's code. A change here
-# takes effect once it is on main (try it first with "Run workflow", dry run).
+# workflow_run, schedule and issue_comment run the DEFAULT BRANCH's copy of
+# this file and of the scripts; the job never checks out or runs a PR's code.
+# A change here takes effect once it is on main (try it first with "Run
+# workflow", dry run).
 
 on:
   workflow_run:
@@ -43,6 +44,13 @@ on:
     branches: [main]
   schedule:
     - cron: "4,19,34,49 * * * *"
+  # A maintainer's `/hold` takes a QUEUED PR out of the merge queue within a
+  # minute (#1080, 16 Nov: held 2 min after the bot enqueued it, merged 10
+  # min later). This pass only dequeues (scripts/ci/merge-bot.mjs, E); an
+  # `/unhold` is answered by the next enqueue pass. issue_comment runs the
+  # DEFAULT BRANCH's copy of this file, like workflow_run and schedule.
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -56,18 +64,31 @@ concurrency:
   # ONE group: two passes never run at once, so a PR is never enqueued twice
   # and a victim never run twice. A newer pending pass replaces an older one;
   # a PR's own pass lost that way is judged by the next sweep (<= 15 min).
-  group: merge-bot
+  # A comment's pass (only dequeues, never enqueues) has its own group per
+  # PR: every PR comment starts a run, most skipped by the job's `if`, and a
+  # skipped run would otherwise take the one pending slot of the enqueue
+  # passes. Every pass dequeues, so a hold pass lost here is answered by the
+  # next pass of either group.
+  group: ${{ github.event_name == 'issue_comment' && format('merge-bot-hold-{0}', github.event.issue.number) || 'merge-bot' }}
   cancel-in-progress: false
 
 jobs:
   bot:
     name: Enqueue green PRs, run main's victims again
-    # A merge-queue run's completion makes no PR eligible: skip it.
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push' }}
+    # A merge-queue run's completion makes no PR eligible: skip it. A comment
+    # runs a pass only when a person with write access (holdOf's
+    # HOLD_ASSOCIATIONS) writes `/hold` on a PR; the script reads the exact
+    # line again.
+    if: >-
+      ${{
+      (github.event_name == 'workflow_run' && (github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && github.event.comment.user.type != 'Bot' && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && contains(github.event.comment.body, '/hold')) ||
+      (github.event_name != 'workflow_run' && github.event_name != 'issue_comment')
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The bot app's secrets are in this environment only (branch policy: main).
-    # workflow_run and schedule run on main, so they get them; the tripwire
+    # workflow_run, schedule and issue_comment run on main, so they get them; the tripwire
     # fails if this line goes.
     environment: ci-bots
     permissions:

@@ -50,10 +50,10 @@ export type CapabilityExecutorInput = {
   } | null;
   suppressProposal?: boolean;
   /**
-   * The automation run this step belongs to: its session and the agent the
-   * run records for its writes (`openRunSession`'s `startedByAgentId`, null for
-   * a person's automation). Handed to builtin verbs only (`document.update`
-   * writes as that agent in that session, decision D4); never the gate.
+   * The automation run this step belongs to: its session and the agent that
+   * authored the automation (null for a person's own). Builtin verbs write as
+   * that agent in that session (decision D4); skill resolution also sees the
+   * agent's own user-scope skills. Never the gate.
    */
   automationRun?: { sessionId: string; agentUserId: string | null } | null;
 };
@@ -66,6 +66,38 @@ let capabilityExecutor: CapabilityExecutor | null = null;
 
 export function registerCapabilityExecutor(fn: CapabilityExecutor): void {
   capabilityExecutor = fn;
+}
+
+/**
+ * IoC slot for the ONE need resolver (0426, `services/needs/space-needs.ts`
+ * in @synap/api): the verb an automation `capability` node that names a NEED
+ * (`data.need`, `need:<need>[/<intent>]`) runs in its space. Filled at boot by
+ * apps/api via `registerNeedVerbResolver()`, like `registerCapabilityExecutor`.
+ * Answers the verb, or the reason there is none (an unfilled need, a provider
+ * with no tool or several tools for it).
+ */
+export type NeedVerbResolver = (input: {
+  need: string;
+  workspaceId: string;
+  userId: string;
+}) => Promise<{ verbId: string } | { reason: string }>;
+
+let needVerbResolver: NeedVerbResolver | null = null;
+
+export function registerNeedVerbResolver(fn: NeedVerbResolver): void {
+  needVerbResolver = fn;
+}
+
+/** The verb a need ref runs in a space, through the pod's one resolver. */
+export async function resolveNeedVerbViaPod(
+  input: Parameters<NeedVerbResolver>[0]
+): Promise<{ verbId: string } | { reason: string }> {
+  if (!needVerbResolver) {
+    throw new Error(
+      "Need resolver not registered — apps/api must call registerNeedVerbResolver() at boot"
+    );
+  }
+  return needVerbResolver(input);
 }
 
 /**
@@ -143,6 +175,12 @@ export interface PlaybookRunnerInput {
    */
   handToAgentId?: string | null;
   /**
+   * Lineage: the session this run is a child of (a session's worker). The
+   * spine writes `spawned_from` (owner floor on the parent) — see
+   * `RunPlaybookInput.parentSessionId`.
+   */
+  parentSessionId?: string;
+  /**
    * Unattended run: refuse (throw) when the playbook depends on not-enabled
    * skills, filing the enable request on behalf of the owner. See run-playbook.
    */
@@ -162,6 +200,17 @@ export interface PlaybookRunnerResult {
   reused?: boolean;
   /** `cooling_down`: the subject's latest run of this playbook failed recently. */
   skipped?: "no-subject" | "cooling_down" | WorkerSkipReason;
+  /**
+   * A ONE-SHOT run (`executor: "generate"`): no session (`session` is null),
+   * its draft filed as a proposal on the subject. Mirrors api's
+   * `GeneratedRunAnswer` structurally (not imported — circular dep).
+   */
+  generated?: {
+    runId: string;
+    proposalId: string;
+    reviewUrl: string;
+    reused?: true;
+  };
 }
 
 type PlaybookRunner = (

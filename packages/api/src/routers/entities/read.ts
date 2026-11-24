@@ -31,6 +31,8 @@ import {
   profileSlugScopeConditionFromRows,
   drizzleSql,
   listableEntityWhere,
+  type SQL,
+  type StatusFilterSubject,
 } from "@synap/database";
 import { entities } from "@synap/database/schema";
 import { EntitySchema } from "@synap-core/types";
@@ -495,6 +497,9 @@ export const readProcs = {
         conditions.push(eq(entities.sourceProposalId, input.sourceProposalId));
       }
 
+      // Whose status a `status` / `statusCategory` filter reads: set below
+      // when `profileSlug` names a role (its facet holds the status).
+      let statusSubject: StatusFilterSubject | undefined;
       if (input.profileSlug) {
         const database = await getDb();
 
@@ -524,6 +529,7 @@ export const readProcs = {
         const hasKindRow = slugProfiles!.some((p) => p.profileKind !== "role");
 
         const slugBranches: any[] = [];
+        let kindBranch: SQL | undefined;
         if (roleProfileIds.length > 0) {
           // Role rows: match entities carrying a live facet, via the same
           // one-door EXISTS the `facetSlug` filter uses.
@@ -545,15 +551,24 @@ export const readProcs = {
           }
 
           // Use inArray for multiple slugs, eq for single (simpler query plan)
-          if (profileSlugs.length === 1) {
-            slugBranches.push(eq(entities.type, profileSlugs[0]));
-          } else {
-            slugBranches.push(inArray(entities.type, profileSlugs));
-          }
+          kindBranch =
+            profileSlugs.length === 1
+              ? eq(entities.type, profileSlugs[0])
+              : inArray(entities.type, profileSlugs);
+          slugBranches.push(kindBranch);
         }
         conditions.push(
           slugBranches.length === 1 ? slugBranches[0] : or(...slugBranches)
         );
+        // A role's status is its facet's, read under the same lens as the
+        // facet EXISTS above; a kind twin's rows keep the entity column.
+        if (roleProfileIds.length > 0) {
+          statusSubject = {
+            roleProfileIds,
+            facetScope: facetVisibilityScope,
+            ...(kindBranch ? { kindScope: kindBranch } : {}),
+          };
+        }
 
         // Pod-default and workspace-scoped profiles share the same read filter
         // (workspaceScopeCondition, computed above): workspace-only by default,
@@ -648,6 +663,7 @@ export const readProcs = {
             ?.filter((p) => p.profileKind !== "role")
             .map((p) => p.id),
           workspaceId: lensWorkspaceId,
+          statusSubject,
         });
         if (filtersWhere) conditions.push(filtersWhere);
       }

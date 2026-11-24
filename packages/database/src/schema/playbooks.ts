@@ -23,13 +23,21 @@ import {
   timestamp,
   integer,
   index,
+  primaryKey,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import { PLAYBOOK_STATUSES } from "@synap-core/types/units";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
-/** Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookExecutorRef = "is-agent" | "external-agent" | "hybrid";
+/**
+ * Which "hands" run this playbook. Mirrors @synap/playbooks ExecutorRef.
+ * `generate` = a ONE-SHOT playbook (plan 08e4fba7 slice 1): the pod reads the
+ * subject, makes ONE `ai.generate` call and files the result as a proposal on
+ * the subject, with no session, room or agent turn (`generate-run.ts`).
+ */
+export type PlaybookExecutorRef =
+  "is-agent" | "external-agent" | "hybrid" | "generate";
 
 /** Sentinel used when workspace_id IS NULL so pod-wide names participate in uniqueness. */
 export const PLAYBOOK_POD_WIDE_WORKSPACE_SENTINEL =
@@ -41,8 +49,10 @@ export const playbooks = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     /** Nullable = pod-wide. */
     workspaceId: uuid("workspace_id"),
-    /** Owning principal — human user id or agent-user id. */
+    /** Owner: the person it belongs to (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
+    agentUserId: text("agent_user_id"),
     name: text("name").notNull(),
     description: text("description"),
     /** Goal template (reuses the intelligence_commands @{arg:…} grammar). */
@@ -64,19 +74,16 @@ export const playbooks = pgTable(
      */
     criteria: jsonb("criteria").notNull().default([]),
     /**
-     * PlaybookRequiredIntent[] — the ABSTRACT intents this playbook needs the
-     * pod to be able to do (`@synap/playbooks`), slugs of the pod's
-     * `capability_intents` vocabulary. Added by 0291.
+     * The ONE list of what a run of this playbook may use beyond its class
+     * floor (0419; plan 08e4fba7 decisions 3 and 4): run tools, intent slugs,
+     * capabilities, by name (`@synap/playbooks` `run-tools.ts`). "Only these":
+     * nothing else is offered. Each stage may narrow it (`PlaybookStage.tools`).
      *
-     * WHAT A PLAYBOOK NEEDS, NOT WHAT THE POD HAS: a playbook may — SHOULD —
-     * declare an intent nothing installed currently serves; that gap is what a
-     * later install is checked against, so it is reported, never rejected. Same
-     * split as a workspace template's `taskIntents` (what the SPACE needs) and
-     * a capability template's `provides` (what the PACK serves); validated
-     * against that same closed vocabulary at the write door
-     * (`schemas/playbook-definition.ts`).
+     * 0419 folded into it the four declarations it replaces: `required_intents`
+     * (the column stays one release for a rollback, unread and unwritten), the
+     * `grants` links' targets, `stages[].grants` and the space's `taskIntents`.
      */
-    requiredIntents: jsonb("required_intents").notNull().default([]),
+    tools: jsonb("tools").notNull().default([]),
     /**
      * The rules this playbook follows (0411): an ordered list of
      * `{ ref: "kind:<slug>" | "skill:<slug>", label?, when?, where? }`, refs
@@ -85,6 +92,19 @@ export const playbooks = pgTable(
      * follows" (`services/playbooks/playbook-guidance.ts`).
      */
     guidance: jsonb("guidance").notNull().default([]),
+    /**
+     * WHO runs this playbook by default (0416) — a `PlaybookRunner`
+     * (`@synap/playbooks`): one choice or an ordered list of fallbacks (an
+     * agent, a role, an engine, Synap AI). NULL = nobody named. A choice made
+     * at Run beats it; it beats the person's remembered choice.
+     */
+    runner: jsonb("runner"),
+    /**
+     * The tools every step needs, by capability key (0416), checked against
+     * the runner's computer before a step is handed over. Each stage adds its
+     * own (`PlaybookStage.requires`).
+     */
+    requires: jsonb("requires").notNull().default([]),
     /**
      * Monotonic definition version (D3c). Bumped on a governed update that
      * changes a definition-affecting field (goalTemplate/stages/params/
@@ -96,14 +116,12 @@ export const playbooks = pgTable(
     /** PlaybookSchedule | null — { cron, enabled }. */
     schedule: jsonb("schedule"),
     executor: text("executor", {
-      enum: ["is-agent", "external-agent", "hybrid"],
+      enum: ["is-agent", "external-agent", "hybrid", "generate"],
     })
       .$type<PlaybookExecutorRef>()
       .notNull()
       .default("is-agent"),
-    status: text("status", {
-      enum: ["draft", "active", "paused", "archived"],
-    })
+    status: text("status", { enum: PLAYBOOK_STATUSES })
       .notNull()
       .default("draft"),
     /**
@@ -126,10 +144,12 @@ export const playbooks = pgTable(
      */
     scope: text("scope").$type<"session" | "project">(),
     /**
-     * The automation that drives this playbook's flow.
-     * Process North Star Wave 0: links a playbook to a specific automation
-     * so it can be triggered or governed by that automation.
-     * No hard FK constraint — enforced at the application layer.
+     * DEPRECATED (0425, Process wave W2): the automation that drives this
+     * playbook (its schedule or canvas flow). The ONE store is now its
+     * `playbook_automations` row (role `schedule` / `flow`,
+     * `services/playbooks/playbook-automation-links.ts`); NO backend code reads
+     * this column. It is still WRITTEN beside the join row for one release
+     * because the browser before 0425 reads it; its drop is owed to W5.
      * Added by 0139_process_subject_spine.sql.
      */
     flowAutomationId: uuid("flow_automation_id"),
@@ -172,3 +192,35 @@ export type Playbook = typeof playbooks.$inferSelect;
 export type NewPlaybook = typeof playbooks.$inferInsert;
 export const insertPlaybookSchema = createInsertSchema(playbooks);
 export const selectPlaybookSchema = createSelectSchema(playbooks);
+
+/**
+ * EVERY KEPT VERSION of a playbook's definition (0416) — what a step that IS a
+ * playbook (`PlaybookStage.uses`) runs when it is pinned at a version that is
+ * no longer the live one. Before it, a playbook kept only its current
+ * definition and an integer `version`; a pin could not be honoured.
+ *
+ * One row per (playbook, version), written in the same transaction as the
+ * write that sets `playbooks.version` (`recordPlaybookVersion`,
+ * @synap/api `services/playbooks/playbook-versions.ts`); a tripwire scans every
+ * writer of `playbooks`. Append-only: a version, once kept, never changes.
+ * `definition` holds the definition fields (`PLAYBOOK_VERSION_FIELDS`).
+ * Pods that booted before 0416 keep each playbook's version of that day.
+ */
+export const playbookVersions = pgTable(
+  "playbook_versions",
+  {
+    playbookId: uuid("playbook_id").notNull(),
+    version: integer("version").notNull(),
+    definition: jsonb("definition").$type<Record<string, unknown>>().notNull(),
+    /** Who wrote this version (the playbook's writer at the time). */
+    createdBy: text("created_by"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.playbookId, table.version] }),
+  })
+);
+
+export type PlaybookVersionRow = typeof playbookVersions.$inferSelect;

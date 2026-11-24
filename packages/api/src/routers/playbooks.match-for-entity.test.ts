@@ -85,6 +85,7 @@ vi.mock("../access/index.js", () => ({
 
 import { playbooksRouter } from "./playbooks.js";
 import { compactPlaybookMatches } from "./mcp/handlers/match-playbooks-compact.js";
+import { PLAYBOOK_DESCRIPTION_CAP } from "../services/playbooks/playbook-search-text.js";
 
 const WORKSPACE = "00000000-0000-4000-8000-000000000010";
 
@@ -150,8 +151,11 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-1",
         name: "Produce content from this idea",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
+        // No description on the row: the key is there, null (never absent).
+        description: null,
         goalTemplate: "Produce content for {{platform}} from {{subject}}",
+        triggers: [],
         subjectProfileSlug: "post",
         activators: [],
         runsWithoutSubject: false,
@@ -229,8 +233,10 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-lead",
         name: "Enrich this lead",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
+        description: null,
         goalTemplate: "Enrich {{subject}}",
+        triggers: [],
         subjectProfileSlug: "lead",
         activators: [],
         runsWithoutSubject: false,
@@ -301,8 +307,9 @@ describe("playbooks.matchForEntity", () => {
 
     expect(result.map((r) => r.id)).toEqual(["pb-review", "pb-archive"]);
     // Each word is in 1 of the 2 candidates: rarity ln(1 + 2/1) per word
-    // (suggest-routes.ts, RARITY), × 3 per word, + 2 for the kind.
-    expect(result[0]!.score).toBeCloseTo(3 * 2 * Math.log(3) + 2, 10);
+    // (suggest-routes.ts, RARITY), × 3 per word and × 3 again for a word in
+    // the NAME (both are), + 2 for the kind.
+    expect(result[0]!.score).toBeCloseTo((3 + 3) * 2 * Math.log(3) + 2, 10);
     expect(result[0]).toMatchObject({
       reason: "You mentioned “review”, “weekly” · Made for post items",
       signals: [
@@ -314,6 +321,50 @@ describe("playbooks.matchForEntity", () => {
       score: 2,
       reason: "Made for post items",
     });
+  });
+
+  it("ranks on a playbook's description and returns it; the agent door cuts it (finding 9463e6b3)", async () => {
+    // The ask's words are ONLY in the description: before, the match door
+    // ranked the goal template alone and never saw them.
+    const long = `Turn a recorded take into a vertical reel: ${"cut, caption and export the best pieces. ".repeat(12)}`;
+    const chain = selectChain([
+      {
+        id: "pb-letter",
+        name: "Newsletter issue",
+        description: "Write this week's letter",
+        goalTemplate: "Write the issue",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+      {
+        id: "pb-take",
+        name: "Enhance a recording",
+        description: long,
+        goalTemplate: "Run the passes on {take}",
+        params: [],
+        executor: "is-agent",
+        subjectProfile: null,
+      },
+    ]);
+    mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
+
+    const caller = playbooksRouter.createCaller(callerCtx());
+    const ranked = await caller.matchForEntity({
+      workspaceId: WORKSPACE,
+      intentText: "make a reel from my take",
+    });
+
+    expect(ranked.map((r) => r.id)).toEqual(["pb-take"]);
+    // The full text on the ranked row (a UI strip may show it whole)...
+    expect(ranked[0]!.description).toBe(long);
+    // ...and the agent door's row: cut at a word, under the cap, with "…".
+    const [row] = compactPlaybookMatches(ranked, undefined);
+    expect(row!.description!.endsWith("…")).toBe(true);
+    expect(row!.description!.length).toBeLessThanOrEqual(
+      PLAYBOOK_DESCRIPTION_CAP + 1
+    );
+    expect(long.startsWith(row!.description!.slice(0, -1))).toBe(true);
   });
 
   it("returns [] when no playbook matches the profile", async () => {
@@ -336,7 +387,10 @@ describe("playbooks.matchForEntity", () => {
         id: "pb-2",
         name: "Legacy playbook",
         scope: "session",
-        templateKind: "Work template",
+        templateKind: "Process",
+        // The words must reach the name or the description (the relevance
+        // floor, suggest-routes.ts): a goal-template-only match is not offered.
+        description: "Do the thing",
         goalTemplate: "Do the thing",
         params: [],
         executor: "is-agent",
@@ -434,6 +488,9 @@ describe("playbooks.matchForEntity", () => {
       {
         id: "pb-plan",
         name: "Plan Next Content",
+        // The relevance floor reads the name or the description, never the
+        // goal template alone (suggest-routes.ts).
+        description: "Decide what to publish next",
         goalTemplate: "Decide what to publish next",
         params: [],
         executor: "is-agent",
@@ -509,8 +566,8 @@ describe("playbooks.matchForEntity", () => {
       projectId: "00000000-0000-4000-8000-0000000000aa",
     });
     expect(lensed.map((r) => [r.id, r.scope, r.templateKind])).toEqual([
-      ["pb-track", "project", "Goal template"],
-      ["pb-twin", "session", "Work template"],
+      ["pb-track", "project", "Goal process"],
+      ["pb-twin", "session", "Process"],
     ]);
   });
 
@@ -534,6 +591,8 @@ describe("playbooks.matchForEntity", () => {
       row("here"),
       row("pod-wide", { workspaceId: null }),
       row("other-space", { workspaceId: OTHER_WS }),
+      // Homed in another space and shared with this one (a `space_access` row).
+      row("shared-here", { workspaceId: OTHER_WS }),
       row("track-method", { scope: "project" }),
       row("pinned", { inputStrategy: { kind: "pinned" } }),
       row("no-subject", { subjectProfile: null }),
@@ -563,9 +622,15 @@ describe("playbooks.matchForEntity", () => {
         where: () => entChain,
         limit: async () => [{ properties: entityProps }],
       };
+      const grantChain = {
+        from: () => grantChain,
+        where: async () => [
+          { objectId: "shared-here", workspaceId: WORKSPACE },
+        ],
+      };
       let n = 0;
       mockGetDb.mockResolvedValue({
-        select: vi.fn(() => (n++ === 0 ? pbChain : entChain)),
+        select: vi.fn(() => [pbChain, entChain][n++] ?? grantChain),
       });
     }
     const ids = (r: Array<{ id: string }>) => r.map((x) => x.id).sort();
@@ -581,7 +646,13 @@ describe("playbooks.matchForEntity", () => {
           purpose: "entity-actions",
         });
       expect(ids(res)).toEqual(
-        ["filter-pass", "here", "pod-wide", "propose-only"].sort()
+        [
+          "filter-pass",
+          "here",
+          "pod-wide",
+          "propose-only",
+          "shared-here",
+        ].sort()
       );
       const po = res.find((r) => r.id === "propose-only")!;
       expect(po).toMatchObject({

@@ -417,7 +417,15 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
 
   it("approving it adds the capability with its computer blocks and queues the Mac's install job", async () => {
     const filed = h.gate.at(-1)!;
-    const data = filed.data as Record<string, unknown>;
+    // Stored as the gate stores it: the ask nested under the request
+    // envelope (install-approval.real-path.pglite.test.ts files it through
+    // the real gate; a flat row here once hid that the executor misread it).
+    const data = {
+      source: "intelligence",
+      targetType: "installation",
+      changeType: "request",
+      data: filed.data,
+    } as Record<string, unknown>;
     const proposalId = randomUUID();
     await q(
       `INSERT INTO proposals (id, target_type, target_id, proposal_type, data, status, revision_history, created_at, updated_at)
@@ -539,6 +547,89 @@ describe("ask, approve, observe: one card adds media-ffmpeg and installs it on t
         desiredState: "installed",
       }),
     ]);
+  });
+});
+
+describe("detail: one installation's approved snapshot and its drift (c5e95df3)", () => {
+  const installationOnMac = async () =>
+    (
+      await q<{ id: string }>(
+        `SELECT id FROM installations WHERE machine_user_id = $1 AND capability_key = 'media-ffmpeg'`,
+        [MAC]
+      )
+    ).rows[0]!.id;
+  const podComputerBlock = async () =>
+    (
+      await q<{ metadata: Record<string, unknown> }>(
+        `SELECT metadata FROM capabilities WHERE template_key = 'media-ffmpeg'`
+      )
+    ).rows[0]!.metadata;
+
+  it("names the snapshot, the digests and the pod's current block: same ⇒ an update is a repair", async () => {
+    const id = await installationOnMac();
+    const out = await asAgent("synap_list_installations", {
+      installationId: id,
+    });
+    const inst = out.installation as Record<string, unknown>;
+    expect(inst, JSON.stringify(out)).toMatchObject({
+      id,
+      computerId: MAC,
+      capabilityKey: "media-ffmpeg",
+      manifest: pickComputerSpec(DEF),
+      digests: {},
+      drift: { verdict: "same", recipesAdded: [], recipesRemoved: [] },
+    });
+    expect((inst.current as { manifest: unknown }).manifest).toEqual(
+      pickComputerSpec(DEF)
+    );
+  });
+
+  it("a newer pod definition ⇒ changed, naming the recipe it adds", async () => {
+    const id = await installationOnMac();
+    const before = await podComputerBlock();
+    const computer = structuredClone(before.computer) as Record<
+      string,
+      unknown
+    >;
+    const holder = (
+      computer.spec && typeof computer.spec === "object"
+        ? computer.spec
+        : computer
+    ) as { recipes: Array<Record<string, unknown>> };
+    holder.recipes = [
+      ...holder.recipes,
+      { ...holder.recipes[0]!, name: "w26-probe" },
+    ];
+    await q(
+      `UPDATE capabilities SET metadata = $1::jsonb WHERE template_key = 'media-ffmpeg'`,
+      [JSON.stringify({ ...before, computer })]
+    );
+    try {
+      const out = await asAgent("synap_list_installations", {
+        installationId: id,
+      });
+      expect(
+        (out.installation as Record<string, unknown>).drift,
+        JSON.stringify(out)
+      ).toEqual({
+        verdict: "changed",
+        recipesAdded: ["w26-probe"],
+        recipesRemoved: [],
+      });
+    } finally {
+      await q(
+        `UPDATE capabilities SET metadata = $1::jsonb WHERE template_key = 'media-ffmpeg'`,
+        [JSON.stringify(before)]
+      );
+    }
+  });
+
+  it("an id the person has no live installation under ⇒ said, nothing else read", async () => {
+    const out = await asAgent("synap_list_installations", {
+      installationId: randomUUID(),
+    });
+    expect(out.installation).toBeUndefined();
+    expect(String(out.error)).toMatch(/No live installation/);
   });
 });
 

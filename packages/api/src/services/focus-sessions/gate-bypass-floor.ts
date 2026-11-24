@@ -29,12 +29,26 @@
  * agent enters the stage and files the named proposal there, and the approval
  * executor moves the run on (`stageAfterDevGate`). So for an agent, LEAVING
  * such a stage forward is the bypass, as is jumping over it; and the legacy
- * stamps that executor writes when no stage names the gate
- * (`DEV_GATE_LEGACY_STAGES`, read by the polling CLI as "you may proceed") are
- * never an agent's to set.
+ * stamps that executor once wrote when no stage named the gate
+ * (`DEV_GATE_LEGACY_STAGES`; since W6 it records the approval and leaves the
+ * stage) are never an agent's to set.
+ *
+ * A CHECK gate the move would certainly hold on is refused here too, before
+ * anything is written (db6a5e17): a required criterion of the stage being
+ * left that has no grade and that the gate cannot grade itself (an evidence
+ * check with no evidence posted, a person's grade). Before, the stage was
+ * written, the check paused the run and its `onFail` sent it back. The rule
+ * "unmeasured is never passed" stays: the move waits for the grade, and a
+ * criterion graded FAIL still holds through the gate as before.
  */
 
-import { resolveStageGate, type PlaybookStage } from "@synap/playbooks";
+import {
+  readCriteria,
+  resolveStageGate,
+  type PlaybookStage,
+} from "@synap/playbooks";
+import { db, focusSessions, eq } from "@synap/database";
+import { CHECK_GATE_METADATA_KEY } from "@synap-core/types/focus-sessions";
 import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { DEV_GATE_LEGACY_STAGES } from "../proposals/dev-approval.js";
 import { pendingStageGate } from "./follow-playbook.js";
@@ -76,8 +90,15 @@ export async function refuseAgentGateBypass(
         toStatus !== "paused" &&
         !isTerminalSessionStatus(toStatus);
       if (resumes || movesStage) {
-        return held === "human"
-          ? "A stage gate on this session is waiting for a person's approval — an agent cannot resume or advance it. Nothing was changed. The run resumes when the gate proposal is approved."
+        if (held === "human") {
+          return "A stage gate on this session is waiting for a person's approval — an agent cannot resume or advance it. Nothing was changed. The run resumes when the gate proposal is approved.";
+        }
+        // The gate's own words for its hold (`metadata.checkGate.reason`):
+        // when the AI judge could not run, they say so and how the owner
+        // moves it on, instead of reading as a check the work failed.
+        const reason = checkGateReason(session.metadata);
+        return reason
+          ? `A stage check on this session holds — an agent cannot resume or advance it. Nothing was changed. ${reason}`
           : "A stage check on this session has not passed yet — an agent cannot resume or advance it. Nothing was changed. The run resumes when the left stage's required criteria pass.";
       }
     }
@@ -85,7 +106,7 @@ export async function refuseAgentGateBypass(
 
   if (!movesStage) return null;
   if ((Object.values(DEV_GATE_LEGACY_STAGES) as string[]).includes(toStage!)) {
-    return `"${toStage}" is the stamp a person's dev approval writes — an agent cannot set it. Nothing was changed. File the approval and wait for the person to approve it.`;
+    return `"${toStage}" is the stamp a person's dev approval once wrote — an agent cannot set it. Nothing was changed. File the approval and wait for the person to approve it.`;
   }
   const { leaving, skipped } = await gatedStagesPassed(session, toStage!);
   if (leaving) {
@@ -93,9 +114,73 @@ export async function refuseAgentGateBypass(
     const type = gate?.kind === "awaits" ? gate.proposalType : "its approval";
     return `Stage "${leaving.name ?? leaving.key}" waits for ${type} — its approval moves the run on, an agent cannot. Nothing was changed.`;
   }
-  if (skipped.length === 0) return null;
-  const names = skipped.map((s) => `"${s.name ?? s.key}"`).join(", ");
-  return `Moving to "${toStage}" would skip the gated stage ${names}. Nothing was changed. Advance into it first — its gate decides whether the run goes on.`;
+  if (skipped.length > 0) {
+    const names = skipped.map((s) => `"${s.name ?? s.key}"`).join(", ");
+    return `Moving to "${toStage}" would skip the gated stage ${names}. Nothing was changed. Advance into it first — its gate decides whether the run goes on.`;
+  }
+  return ungradedEntryCheck(session, toStage);
+}
+
+/** The reason a check gate recorded for its hold, when it recorded one. */
+function checkGateReason(metadata: unknown): string | null {
+  const record = (metadata as Record<string, unknown> | null)?.[
+    CHECK_GATE_METADATA_KEY
+  ];
+  const reason = (record as { reason?: unknown } | null)?.reason;
+  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+}
+
+/**
+ * The refusal when `toStage`'s CHECK gate would hold only for want of a
+ * grade the gate cannot give (header), naming what to grade; else null.
+ */
+async function ungradedEntryCheck(
+  session: GateBypassFloorInput["session"],
+  toStage: string
+): Promise<string | null> {
+  const fromStage = session.currentStage ?? null;
+  if (!fromStage) return null;
+  const proc = await loadSessionProcess({
+    sessionId: session.id,
+    playbookId: session.playbookId,
+  });
+  const entered = proc?.stages.find((s) => s?.key === toStage);
+  if (resolveStageGate(entered)?.kind !== "check") return null;
+  const [row] = await db
+    .select({ userId: focusSessions.userId, criteria: focusSessions.criteria })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, session.id))
+    .limit(1);
+  if (!row) return null;
+  const left = readCriteria(row.criteria).filter(
+    (c) =>
+      c.stageKey === fromStage &&
+      c.required !== false &&
+      (c.check.kind === "evidence" || c.check.kind === "human")
+  );
+  if (left.length === 0) return null;
+  const { listSessionEvaluations, summarizeEvaluations } =
+    await import("./evaluations/record.js");
+  const graded = new Set(
+    summarizeEvaluations(
+      row.criteria,
+      await listSessionEvaluations({
+        sessionId: session.id,
+        userId: row.userId,
+      })
+    ).evaluations.map((e) => e.criterionKey)
+  );
+  const ungraded = left.filter((c) => !graded.has(c.key));
+  if (ungraded.length === 0) return null;
+  const what = ungraded
+    .map((c) =>
+      c.check.kind === "evidence"
+        ? `"${c.key}" (post evidence \`${c.check.evidenceKey ?? c.key}\` with synap_evaluate_session)`
+        : `"${c.key}" (the person grades it)`
+    )
+    .join(", ");
+  const name = entered?.name ?? toStage;
+  return `Stage "${name}" checks "${fromStage}" on entry, and ${ungraded.length === 1 ? "this criterion has" : "these criteria have"} no grade yet: ${what}. Nothing was changed. Grade ${ungraded.length === 1 ? "it" : "them"}, then move again.`;
 }
 
 /**

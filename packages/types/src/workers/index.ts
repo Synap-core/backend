@@ -18,9 +18,12 @@
  *     A target with no `result` is still being worked; every other state is a
  *     mark ({@link WORKER_TARGET_RESULTS}), never an absence.
  *
- * Leaf module: imports nothing, so the browser, relay, CLI and every backend
- * package can read it.
+ * Leaf module: its one import is the session status leaf (itself
+ * dependency-free), so the browser, relay, CLI and every backend package can
+ * read it.
  */
+
+import { SESSION_CLOSE_OUTCOMES } from "../focus-sessions/statuses.js";
 
 // ── Activator ───────────────────────────────────────────────────────────────
 
@@ -29,13 +32,18 @@
  *
  *   created        — a thing of the subject kind is created (a role: attached).
  *   enters_status  — the subject enters `status`.
- *   schedule       — on `cron` (UTC), over the things currently in `status`
- *                    (or every thing of the subject, without one); always
- *                    `per_moment`.
+ *   schedule       — on `cron` in `timezone`, over the things currently in
+ *                    `status` (or every thing of the subject, without one):
+ *                    one session for the set (`per_moment`, the default) or
+ *                    one per thing (`per_thing`). A playbook with no subject
+ *                    runs once per tick.
  *   count          — when at least `min` things sit in `status`; always
  *                    `per_moment` (the count IS the moment).
  *   manual         — never by itself: a button that runs the worker over its
  *                    enablement's filter. Compiles no rule.
+ *   run_ended      — a LINK: a run of another playbook (`playbook`) ended,
+ *                    done or not (`outcome`, absent = either). The new run
+ *                    works on the ended run's subject. Space-wide only.
  */
 export const WORKER_ACTIVATOR_TRIGGERS = [
   "created",
@@ -43,8 +51,18 @@ export const WORKER_ACTIVATOR_TRIGGERS = [
   "schedule",
   "count",
   "manual",
+  "run_ended",
 ] as const;
 export type WorkerActivatorTrigger = (typeof WORKER_ACTIVATOR_TRIGGERS)[number];
+
+/**
+ * How a run ended, for a `run_ended` link: its session's `closedAs`
+ * (`sessionClosedAs`, focus-sessions/statuses.ts) — `done` = closed with
+ * nothing required left open (no `closedNotDone` record); `not_done` = closed
+ * anyway with required work open, or cancelled or failed.
+ */
+export const WORKER_RUN_OUTCOMES = SESSION_CLOSE_OUTCOMES;
+export type WorkerRunOutcome = (typeof WORKER_RUN_OUTCOMES)[number];
 
 /**
  * How much one run covers.
@@ -59,6 +77,16 @@ export type WorkerSize = (typeof WORKER_SIZES)[number];
 /** `run` starts the session; `propose` files it for a person to approve. */
 export const WORKER_MODES = ["run", "propose"] as const;
 export type WorkerMode = (typeof WORKER_MODES)[number];
+
+/**
+ * What an activator may declare: a worker mode, or `appointment` (schedule
+ * only) — each tick opens a `scheduled` session that waits for the person.
+ */
+export const WORKER_ACTIVATOR_MODES = [...WORKER_MODES, "appointment"] as const;
+export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
+
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
 
 export const DEFAULT_WORKER_SIZE: WorkerSize = "per_thing";
 export const DEFAULT_WORKER_MODE: WorkerMode = "propose";
@@ -82,17 +110,27 @@ export const WORKER_COUNT_MIN_FLOOR = 2;
 
 export interface WorkerActivator {
   on: WorkerActivatorTrigger;
+  /** `run_ended` only (required): the linked playbook, by name or id. */
+  playbook?: string;
+  /** `run_ended` only: which end starts it; absent = any. */
+  outcome?: WorkerRunOutcome;
   /** The lifecycle option: required for `enters_status` and `count`,
-   *  optional for `schedule` (narrows the set). */
-  status?: string;
-  /** Cron expression (UTC). Required for `schedule`. */
+   *  optional for `schedule` (narrows the set; a list there). */
+  status?: WorkerStatusSpec;
+  /** Cron expression. Required for `schedule`. */
   cron?: string;
+  /** `schedule` only: the IANA zone `cron` is read in; absent = the owner's. */
+  timezone?: string;
+  /** `schedule` only: installed paused — the person turns it on. */
+  startsPaused?: true;
+  /** `schedule` in `run` mode only: the agent each run is handed to. */
+  handToAgentId?: string;
   /** Threshold for `count` (≥ {@link WORKER_COUNT_MIN_FLOOR}). */
   min?: number;
-  /** Default {@link DEFAULT_WORKER_SIZE}; `count` / `schedule` force `per_moment`. */
+  /** Default {@link DEFAULT_WORKER_SIZE}; `count` is `per_moment`, `schedule` defaults to it. */
   size?: WorkerSize;
   /** Default {@link DEFAULT_WORKER_MODE}. */
-  mode?: WorkerMode;
+  mode?: WorkerActivatorMode;
   /** Default {@link DEFAULT_WORKER_MAX_PENDING_APPROVALS}. */
   maxPendingApprovals?: number;
   /**
@@ -162,16 +200,24 @@ export function skippedByOnly(
 }
 
 /**
- * The size a declared activator runs at. `count` and `schedule` are always
- * `per_moment`: the moment (a threshold, a tick) has no single thing, and one
- * session per thing on a tick would need a fan-out engine the worker does not
- * have — the set rides as targets instead.
+ * The size a declared activator runs at. `count` is always `per_moment` (the
+ * threshold has no single thing); a `schedule` is `per_moment` unless it
+ * declares `per_thing` (one run per thing in its set at each tick).
  */
 export function effectiveWorkerSize(
   a: Pick<WorkerActivator, "on" | "size">
 ): WorkerSize {
-  if (a.on === "count" || a.on === "schedule") return "per_moment";
+  if (a.on === "count") return "per_moment";
+  if (a.on === "schedule") return a.size ?? "per_moment";
   return a.size ?? DEFAULT_WORKER_SIZE;
+}
+
+/** A declared `status` as a list: [] when absent. */
+export function workerStatuses(
+  status: string | readonly string[] | null | undefined
+): string[] {
+  if (status === null || status === undefined) return [];
+  return typeof status === "string" ? [status] : [...status];
 }
 
 /**
@@ -181,15 +227,39 @@ export function effectiveWorkerSize(
  * hash, and the convergence UPDATES the same rule in place. The pod's
  * `activatorKey` (`schemas/playbook-process.ts`) is this function.
  */
+/** Is this activator key a `schedule`'s (`workerActivatorKey`)? */
+export function isScheduleActivatorKey(
+  key: string | null | undefined
+): boolean {
+  return typeof key === "string" && key.startsWith("schedule:");
+}
+
+/** Is this activator key a `run_ended` link's (`workerActivatorKey`)? */
+export function isLinkActivatorKey(key: string | null | undefined): boolean {
+  return typeof key === "string" && key.startsWith("run_ended:");
+}
+
+/**
+ * How many link-started runs back a link looks for the playbook it would
+ * start (the run-time loop guard, `@synap/jobs` `utils/link-lineage.ts`). A
+ * chain this long is refused too: no real chain of playbooks is.
+ */
+export const LINK_CHAIN_MAX = 32;
+
 export function workerActivatorKey(a: {
   on: string;
-  status?: string | null;
+  status?: string | readonly string[] | null;
   cron?: string | null;
+  playbook?: string | null;
+  outcome?: string | null;
 }): string {
-  if (a.on === "enters_status") return `enters_status:${a.status ?? ""}`;
-  if (a.on === "count") return `count:${a.status ?? ""}`;
+  if (a.on === "enters_status")
+    return `enters_status:${workerStatuses(a.status).join(",")}`;
+  if (a.on === "count") return `count:${workerStatuses(a.status).join(",")}`;
   if (a.on === "schedule")
     return `schedule:${(a.cron ?? "").trim().split(/\s+/).join(" ")}`;
+  if (a.on === "run_ended")
+    return `run_ended:${(a.playbook ?? "").trim()}${a.outcome ? `:${a.outcome}` : ""}`;
   return a.on;
 }
 
@@ -199,9 +269,13 @@ export function workerActivatorKey(a: {
  * Where an enabled worker runs. `space` = every thing of the subject in the
  * playbook's space (what installing a playbook with activators turns on);
  * `project` = only the things filed in that project (a track enables for its
- * project and files its sessions in the track).
+ * project and files its sessions in the track); `session` = a SESSION started
+ * it: it works over the things of the session's project (the space when the
+ * session is unfiled), files its runs where the session is filed, and every
+ * run is a CHILD of the session (`spawned_from`). It stops once the session
+ * is no longer open (its runs are skipped `session_closed`; nothing moves).
  */
-export const WORKER_SCOPES = ["space", "project"] as const;
+export const WORKER_SCOPES = ["space", "project", "session"] as const;
 export type WorkerScopeKind = (typeof WORKER_SCOPES)[number];
 
 // ── Targets ─────────────────────────────────────────────────────────────────
@@ -305,6 +379,12 @@ export const WORKER_SKIP_REASONS = {
   unlessProperty: "unless_property",
   /** The thing's property holds none of the activator's `only` values (see {@link skippedByOnly}). */
   onlyValues: "only_values",
+  /**
+   * A `run_ended` link would start a playbook already in the chain of
+   * link-started runs that led here (a loop), or the chain is longer than
+   * {@link LINK_CHAIN_MAX}.
+   */
+  linkLoop: "link_loop",
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];

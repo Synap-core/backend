@@ -86,6 +86,12 @@ import {
   registerHoldResumeReactor,
   type HoldResumeJobData,
 } from "./hold-resume.js";
+import {
+  handleReactions,
+  REACTIONS_QUEUE,
+  registerReactionsReactor,
+  type ReactionsJobData,
+} from "./reactions.js";
 import { handleRelationBackfill } from "./relation-backfill.js";
 import {
   handleNotificationCleanup,
@@ -174,6 +180,10 @@ import {
   CAL_BACKFILL_CRON_QUEUE,
 } from "./cal-backfill-cron.js";
 import {
+  handleDegradedCaptureSweep,
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
+} from "./degraded-capture-sweep.js";
+import {
   handleFirefliesIngest,
   handleFirefliesBackfillCron,
   FIREFLIES_INGEST_QUEUE,
@@ -220,6 +230,10 @@ import {
   handleExternalAgentPoll,
   EXTERNAL_AGENT_POLL_QUEUE,
 } from "./external-agent-poll.js";
+import {
+  handleComputeLeaseSweep,
+  COMPUTE_LEASE_SWEEPER_QUEUE,
+} from "./compute-lease-sweeper.js";
 import { handleSessionRecap, SESSION_RECAP_QUEUE } from "./session-recap.js";
 import {
   handleConnectionSyncApproval,
@@ -264,6 +278,7 @@ import {
 import {
   handleCpEntitlementSync,
   CP_ENTITLEMENT_SYNC_QUEUE,
+  type CpEntitlementSyncJobData,
 } from "./cp-entitlement-sync.js";
 import {
   handleOnboardingMilestones,
@@ -379,6 +394,7 @@ const ALL_QUEUES = [
   LIFECYCLE_TRANSITION_SWEEPER_QUEUE,
   INBOUND_DELIVERY_SWEEPER_QUEUE,
   HOLD_RESUME_QUEUE,
+  REACTIONS_QUEUE,
   FOCUS_SESSION_REAPER_QUEUE,
   SESSION_TITLER_QUEUE,
   // Session recall: on-demand per session + the 2-min sweep floor that
@@ -430,6 +446,8 @@ const ALL_QUEUES = [
   BROKEN_AUTOMATION_CRON_QUEUE,
   EVENT_END_CRON_QUEUE,
   EXTERNAL_AGENT_POLL_QUEUE,
+  // Compute leases: release each machine at its time to live (every 5 min).
+  COMPUTE_LEASE_SWEEPER_QUEUE,
   SESSION_RECAP_QUEUE,
   CONNECTION_SYNC_APPROVAL_QUEUE,
   // When we last spoke to someone: on demand (reactor) + the daily sweep.
@@ -449,6 +467,8 @@ const ALL_QUEUES = [
   // violated → registerCronSchedules aborted → every cron after cal-backfill
   // in cron.ts silently never scheduled (found live 2026-07-12).
   CAL_BACKFILL_CRON_QUEUE,
+  // Captures saved without AI, structured once it answers (every 30min).
+  DEGRADED_CAPTURE_SWEEP_QUEUE,
   FIREFLIES_INGEST_QUEUE,
   FIREFLIES_BACKFILL_CRON_QUEUE,
   INBOUND_ATTACHMENT_QUEUE,
@@ -902,6 +922,14 @@ export async function registerAllWorkers(): Promise<void> {
   registerHoldResumeReactor();
   logger.info("Registered worker + reactor: hold-resume");
 
+  // Reactions: every move some rule listens to queues one job; the job applies
+  // the matching rules through their targets' doors.
+  await boss.work(REACTIONS_QUEUE, async ([job]: any[]) =>
+    handleReactions((job?.data ?? {}) as ReactionsJobData)
+  );
+  registerReactionsReactor();
+  logger.info("Registered worker + reactor: reactions");
+
   // Relation backfill (one-time: creates relation rows for existing entity_id property values)
   await boss.work("relation-backfill", async ([job]: any[]) =>
     handleRelationBackfill(job)
@@ -1069,6 +1097,14 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: cal-backfill-cron");
 
+  // Degraded-capture sweep (cron: every 30min) — invokes the api-side sweep
+  // (IoC slot): text captures saved raw while the AI was unavailable or over
+  // quota are structured again, a few per run, once it answers.
+  await boss.work(DEGRADED_CAPTURE_SWEEP_QUEUE, async ([job]: any[]) =>
+    handleDegradedCaptureSweep(job)
+  );
+  logger.info("Registered worker: degraded-capture-sweep");
+
   // Fireflies transcript ingest (on-demand) — the inbound webhook enqueues one
   // job per completed meeting; the api-side runner (IoC slot) fetches the
   // transcript and lands it as a channel message via recordInboundMessage.
@@ -1177,6 +1213,14 @@ export async function registerAllWorkers(): Promise<void> {
   );
   logger.info("Registered worker: external-agent-poll");
 
+  // Compute lease sweeper (cron: every 5min) — invokes the api-side sweeper
+  // in-process (IoC slot): each compute machine past its time to live is
+  // destroyed through its declared release verb (pre-approved by the start).
+  await boss.work(COMPUTE_LEASE_SWEEPER_QUEUE, async ([job]: any[]) =>
+    handleComputeLeaseSweep(job)
+  );
+  logger.info("Registered worker: compute-lease-sweeper");
+
   // Session recap (on-demand) — enqueued by the session-recap reactor when a
   // focus session advances to the `post` stage. Delegates to the api-side runner
   // (IoC slot) which summarizes the session's captures + posts a governed recap.
@@ -1254,10 +1298,11 @@ export async function registerAllWorkers(): Promise<void> {
   // the Control Plane `pod_projects` mirror (P4-lite W1). The IoC slot below is
   // how @synap/database (which cannot import @synap/events) enqueues the
   // one-offs — ProjectRepository.create/update/delete is the ONE trigger door.
-  // CP plan sync (cron: every 15min + on startup): pulls this pod's tier and
-  // trial into pod_settings for tier-check and the trial guard.
-  await boss.work(CP_ENTITLEMENT_SYNC_QUEUE, async () =>
-    handleCpEntitlementSync()
+  // CP sync (a tick every 3 min + on startup): pulls this pod's tier and
+  // trial (tier-check, the trial guard) and its AI availability (every 15
+  // min, every tick while a hold waits on AI) into pod_settings.
+  await boss.work(CP_ENTITLEMENT_SYNC_QUEUE, async ([job]: any[]) =>
+    handleCpEntitlementSync((job?.data ?? {}) as CpEntitlementSyncJobData)
   );
   logger.info("Registered worker: cp-entitlement-sync");
 

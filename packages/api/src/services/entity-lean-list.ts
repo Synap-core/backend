@@ -25,6 +25,12 @@
  *   - `omitted`: the property keys and the columns ({@link LEAN_NAMED_COLUMNS})
  *     that were left out, so nothing is unreachable — name them in `fields`
  *     (returned whole, never truncated), or read the one object;
+ *   - listed under a ROLE (`listedUnder` names a role-profile): a row that
+ *     is not itself of that kind takes `status` / `statusCategory` /
+ *     `statusLabel` from its facet of that role (the rich `facets` rows,
+ *     `includeFacets: true`), never from the entity — a lead's stage is on
+ *     its `lead` facet, the company's own status is not it. No such facet on
+ *     the row = no status, never the entity's;
  *   - `truncated`: field → its full length, for a string cut to its first
  *     {@link ENTITY_STRING_CAP} chars (the title, the description, a
  *     property) or a list cut to its first {@link LEAN_LIST_ARRAY_CAP} items.
@@ -33,7 +39,12 @@
  *     that updates from what it read.
  */
 
-import { db as defaultDb, ProfileResolutionService } from "@synap/database";
+import {
+  db as defaultDb,
+  ProfileResolutionService,
+  profileSlugRows,
+  resolveSlugKind,
+} from "@synap/database";
 import { lifecycleOptionLabel } from "@synap-core/types/lifecycle";
 
 /**
@@ -198,6 +209,33 @@ export interface LeanListOptions {
 }
 
 /**
+ * The role a list was asked for, and its lifecycle's words: a row listed
+ * under it reads its status from its facet of that role.
+ */
+export interface LeanRoleStatus {
+  /** The role-profile slug (`lead`). */
+  slug: string;
+  /** lifecycle option key → its words. */
+  statusLabels?: ReadonlyMap<string, string>;
+  /** lifecycle option key → its category (the rule that writes the column). */
+  statusCategories?: ReadonlyMap<string, string>;
+}
+
+/** A row's facet of `slug` from its rich `facets` rows, if it carries one. */
+function facetOf(
+  row: Record<string, unknown>,
+  slug: string
+): { status?: unknown } | undefined {
+  if (!Array.isArray(row.facets)) return undefined;
+  return (row.facets as unknown[]).find(
+    (f): f is { slug: string; status?: unknown } =>
+      typeof f === "object" &&
+      f !== null &&
+      (f as { slug?: unknown }).slug === slug
+  );
+}
+
+/**
  * One entity row → its lean list row. Pure. `shape` undefined = the kind's
  * defs are unknown (the row's profile is gone): properties are then ranked by
  * their stored values alone — the status columns are kept either way.
@@ -205,7 +243,7 @@ export interface LeanListOptions {
 export function toLeanListRow(
   row: Record<string, unknown>,
   shape: LeanKindShape | undefined,
-  options: LeanListOptions = {}
+  options: LeanListOptions & { role?: LeanRoleStatus } = {}
 ): Record<string, unknown> {
   const fields = new Set(options.fields ?? []);
   const out: Record<string, unknown> = {};
@@ -228,7 +266,21 @@ export function toLeanListRow(
   }
   const kind = row.profileSlug ?? row.type;
   if (typeof kind === "string") out.kind = kind;
-  if (typeof row.status === "string" && shape?.statusLabels) {
+  const role = options.role;
+  if (role && kind !== role.slug) {
+    // Listed under a role: the status is the role's (its facet), not the
+    // entity's. No facet of that role on the row = no status.
+    delete out.status;
+    delete out.statusCategory;
+    const facetStatus = facetOf(row, role.slug)?.status;
+    if (typeof facetStatus === "string" && facetStatus !== "") {
+      out.status = facetStatus;
+      const category = role.statusCategories?.get(facetStatus);
+      if (category) out.statusCategory = category;
+      const label = role.statusLabels?.get(facetStatus);
+      if (label && label !== facetStatus) out.statusLabel = label;
+    }
+  } else if (typeof row.status === "string" && shape?.statusLabels) {
     const label = shape.statusLabels.get(row.status);
     if (label && label !== row.status) out.statusLabel = label;
   }
@@ -324,10 +376,44 @@ export interface LeanShapeSource {
     Map<
       string,
       {
-        options: ReadonlyArray<{ key: string; label?: string | null }>;
+        options: ReadonlyArray<{
+          key: string;
+          label?: string | null;
+          category?: string | null;
+        }>;
       }
     >
   >;
+  /** The profile rows a slug names (default: `profileSlugRows`). */
+  profileRowsForSlug?(
+    slug: string
+  ): Promise<ReadonlyArray<{ id: string; profileKind: string }>>;
+}
+
+function optionLabels(
+  options: ReadonlyArray<{ key: string; label?: string | null }>
+): Map<string, string> {
+  return new Map(
+    options.map((o) => [
+      o.key,
+      lifecycleOptionLabel({ key: o.key, label: o.label ?? undefined }),
+    ])
+  );
+}
+
+/**
+ * The slug a lean list is "listed under" when it names a ROLE, else
+ * `undefined`. A caller asks this BEFORE listing: a role's lean rows read
+ * their status from the role's facet, so the list must load the facet rows
+ * (`includeFacets: true`) and pass the slug as `listedUnder`. One cached
+ * vocabulary lookup (`resolveSlugKind`).
+ */
+export async function leanListedUnderRole(
+  profileSlug: string | undefined
+): Promise<string | undefined> {
+  if (!profileSlug) return undefined;
+  const { hasRoleRow } = await resolveSlugKind(defaultDb, profileSlug);
+  return hasRoleRow ? profileSlug : undefined;
 }
 
 /**
@@ -337,16 +423,34 @@ export interface LeanShapeSource {
  */
 export async function projectLeanEntityList(
   rows: ReadonlyArray<Record<string, unknown>>,
-  options: LeanListOptions & { source?: LeanShapeSource } = {}
+  options: LeanListOptions & {
+    source?: LeanShapeSource;
+    /**
+     * The `profileSlug` the list was asked for. When it names a ROLE, rows
+     * take their status from their facet of it — so the caller must list
+     * with `includeFacets: true` (the rich `facets` rows).
+     */
+    listedUnder?: string;
+  } = {}
 ): Promise<Array<Record<string, unknown>>> {
   const source: LeanShapeSource =
     options.source ?? new ProfileResolutionService(defaultDb);
+  const roleProfileIds = options.listedUnder
+    ? (
+        await (source.profileRowsForSlug
+          ? source.profileRowsForSlug(options.listedUnder)
+          : profileSlugRows(defaultDb, options.listedUnder))
+      )
+        .filter((p) => p.profileKind === "role")
+        .map((p) => p.id)
+    : [];
   const profileIds = [
-    ...new Set(
-      rows
+    ...new Set([
+      ...rows
         .map((r) => r.profileId)
-        .filter((id): id is string => typeof id === "string")
-    ),
+        .filter((id): id is string => typeof id === "string"),
+      ...roleProfileIds,
+    ]),
   ];
   const lifecycles: Awaited<
     ReturnType<LeanShapeSource["getEffectiveLifecycles"]>
@@ -354,6 +458,27 @@ export async function projectLeanEntityList(
     profileIds.length > 0
       ? await source.getEffectiveLifecycles(profileIds)
       : new Map();
+  let role: LeanRoleStatus | undefined;
+  if (options.listedUnder && roleProfileIds.length > 0) {
+    // Twin role rows of one slug share its lifecycle: the first that
+    // declares one gives the words.
+    const lc = roleProfileIds
+      .map((id) => lifecycles.get(id))
+      .find((l) => l !== undefined);
+    role = {
+      slug: options.listedUnder,
+      ...(lc
+        ? {
+            statusLabels: optionLabels(lc.options),
+            statusCategories: new Map(
+              lc.options
+                .filter((o) => typeof o.category === "string")
+                .map((o) => [o.key, o.category as string])
+            ),
+          }
+        : {}),
+    };
+  }
   const shapes = new Map<string, Promise<LeanKindShape>>();
   const shapeOf = (row: Record<string, unknown>) => {
     const profileId = row.profileId;
@@ -369,26 +494,20 @@ export async function projectLeanEntityList(
           const lc = lifecycles.get(profileId);
           return {
             defs,
-            ...(lc
-              ? {
-                  statusLabels: new Map(
-                    lc.options.map((o) => [
-                      o.key,
-                      lifecycleOptionLabel({
-                        key: o.key,
-                        label: o.label ?? undefined,
-                      }),
-                    ])
-                  ),
-                }
-              : {}),
+            ...(lc ? { statusLabels: optionLabels(lc.options) } : {}),
           };
         });
       shapes.set(key, shape);
     }
     return shape;
   };
+  const { fields } = options;
   return Promise.all(
-    rows.map(async (row) => toLeanListRow(row, await shapeOf(row), options))
+    rows.map(async (row) =>
+      toLeanListRow(row, await shapeOf(row), {
+        ...(fields ? { fields } : {}),
+        ...(role ? { role } : {}),
+      })
+    )
   );
 }

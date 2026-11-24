@@ -22,7 +22,7 @@
 import type { UnitStateInput } from "../units/state.js";
 import type {
   WorkerActivator,
-  WorkerMode,
+  WorkerActivatorMode,
   WorkerScopeKind,
   WorkerSize,
 } from "./index.js";
@@ -300,17 +300,28 @@ export interface GoalWorkerView {
   playbookName: string;
   activatorKey: string;
   /** The declared activator; null when the playbook no longer declares it. */
-  activator: (WorkerActivator & { mode: WorkerMode }) | null;
+  activator: (WorkerActivator & { mode: WorkerActivatorMode }) | null;
   profileSlug: string | null;
   size: WorkerSize;
-  /** Approval mode: `propose` asks a person before each run, `run` acts. */
-  mode: WorkerMode;
+  /**
+   * `propose` asks a person before each run, `run` acts, `appointment` opens
+   * a session that waits for the person.
+   */
+  mode: WorkerActivatorMode;
   scope: WorkerScopeKind;
   projectId: string | null;
   /** The goal it serves (`project_tracks.id`); null for a project or space one. */
   trackId: string | null;
-  /** `paused` = a person paused it. */
-  state: "running" | "paused";
+  /**
+   * The session that started it (`scope: "session"`; its runs are that
+   * session's children); null / absent for any other scope.
+   */
+  sessionId?: string | null;
+  /**
+   * `paused` = a person paused it. `stopped` = a session's worker whose
+   * session ended: it starts nothing more (derived, never stored).
+   */
+  state: "running" | "paused" | "stopped";
   /** The automation that fires it (null while paused or turned off). */
   automationId: string | null;
   pendingApprovals: number;

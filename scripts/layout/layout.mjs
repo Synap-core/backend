@@ -18,7 +18,24 @@
  *                        (Zuul's cross-project model: test together, land in
  *                        order);
  *   - materialize        clone a layout's siblings beside a checkout, each at
- *                        main or at its dependency's test ref.
+ *                        its pin, main or its dependency's test ref;
+ *   - siblingPins        a checkout's sibling-pins.json: the commit its CI
+ *                        lays each pinned sibling out at (plan b5820982 §2).
+ *
+ * WHICH COMMIT A SIBLING IS LAID OUT AT (siblingRef), first match wins:
+ *   1. `--ref dir=ref`       ci.yml's "Dependent repos typecheck" (a
+ *                            `Companion:` line);
+ *   2. a `Depends-On:` line  that has not landed: its test ref, so the change
+ *                            is tested WITH what it depends on;
+ *   3. the pin               in the caller's `sibling-pins.json` (the root of
+ *                            `--self-path`, or `--pins F`): a full sha, moved
+ *                            only by a pull request that bumps it and
+ *                            regenerates what mirrors that sibling;
+ *   4. the default branch    main (synap-bridge: master).
+ * Without step 3 a sibling's moving main turned unrelated backend PRs and
+ * main red: control-plane-api against door-tool-names, 5 main reds and 4 of 7
+ * queue ejections in 12 days (plan b5820982 §2). The same tree was green one
+ * hour and red the next.
  *
  * `Depends-On:` grammar, one dependency per line, at the start of a line:
  *   Depends-On: backend#311                 a pull request (any repo name below)
@@ -33,6 +50,16 @@
  * does not parse, names an unknown repo, or a dependency that can never land
  * (closed unmerged, missing) HOLDS: it never reads as landed.
  *
+ * `Companion:` lines (same grammar, a backend pull request body) name the
+ * OTHER order: the dependent repo's change that lands AFTER this one, because
+ * it uses what this change adds (a new type member app-bases cannot reference
+ * before backend main has it). Only ci.yml's "Dependent repos typecheck" reads
+ * them (companionRefs): it typechecks that repo at the companion's ref instead
+ * of main. A companion never holds a merge and never moves the other jobs'
+ * siblings; after this PR lands, the companion lands next.
+ *   Companion: app-bases@fix/new-filter-field   a branch (or a commit)
+ *   Companion: app-bases#412                    a pull request (its head)
+ *
  * Self-contained on purpose (node: imports and global fetch only, Node >= 18):
  * it runs before any install, in CI, on the devbox and on EAS.
  *
@@ -40,6 +67,9 @@
  *   dir <name>                  the directory of a repo, from any of its names
  *   slug <name>                 its owner/slug on GitHub
  *   siblings <layout>           the sibling directories a layout lays out
+ *   companions [--body-env VAR | --body-file F] [--self <repo>]
+ *       prints `<dir>=<ref>` for each `Companion:` line (exit 2 on a line
+ *       that does not parse: a malformed companion is never read as "none")
  *   depends-on [sources] [--self <repo>] [--format text|json|lane-refs]
  *       sources, any of: --body-file F | --body-env VAR | --git-range R
  *       [--git-dir D] | --compare <repo>@<ref> (the trailers of the commits
@@ -49,15 +79,23 @@
  *       lane-refs prints `<dir>=<ref>` for each dependency that has not landed:
  *       the devbox gate's LANE_REFS, so a change is tested with it.
  *   materialize <layout> --root R [--self-path P] [--ref dir=ref]...
- *       [--body-env VAR | --body-file F]
- *       clones each sibling of the layout into R/<dir> (shallow), at --ref,
- *       else at its dependency's test ref, else at main. An existing R/<dir>
- *       is left as it is. --self-path links R/<self> to the caller's checkout.
+ *       [--body-env VAR | --body-file F] [--pins F]
+ *       clones each sibling of the layout into R/<dir> (shallow), at the ref
+ *       siblingRef picks (above). An existing R/<dir> is left as it is.
+ *       --self-path links R/<self> to the caller's checkout, and its
+ *       sibling-pins.json (when it has one) gives the pins; --pins F reads
+ *       them from F instead (F must exist). A malformed pins file fails.
  * Token: LAYOUT_TOKEN, else GITHUB_TOKEN, else GH_TOKEN (private repos need
  * one; public ones are read without).
  */
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, readFileSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  symlinkSync,
+} from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -114,7 +152,8 @@ export function layoutNamed(name, layout = loadLayout()) {
   return def;
 }
 
-const LINE = /^[ \t]*Depends-On:[ \t]*(.*?)[ \t]*$/i;
+const lineOf = (keyword) =>
+  new RegExp(`^[ \\t]*${keyword}:[ \\t]*(.*?)[ \\t]*$`, "i");
 const PR_URL = /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)\/?$/i;
 const PR_REF = /^([\w./-]*)#(\d+)$/;
 const GIT_REF = /^([\w./-]+)@([\w./-]+)$/;
@@ -127,8 +166,9 @@ const GIT_REF = /^([\w./-]+)@([\w./-]+)$/;
  */
 export function parseDependsOn(
   text,
-  { self = null, layout = loadLayout() } = {}
+  { self = null, layout = loadLayout(), keyword = "Depends-On" } = {}
 ) {
+  const LINE = lineOf(keyword);
   const deps = [];
   const errors = [];
   let fenced = false;
@@ -146,8 +186,7 @@ export function parseDependsOn(
     if (!value || /\s/.test(value)) {
       errors.push({
         line,
-        reason:
-          "one dependency per line: `Depends-On: <repo>#<n>` or `Depends-On: <repo>@<sha>`",
+        reason: `one dependency per line: \`${keyword}: <repo>#<n>\` or \`${keyword}: <repo>@<sha>\``,
       });
       continue;
     }
@@ -201,6 +240,37 @@ export function parseDependsOn(
     deps.push(full);
   }
   return { deps, errors };
+}
+
+/** The `Companion:` lines of a PR body: parseDependsOn's grammar and result shape. */
+export function parseCompanions(text, opts = {}) {
+  return parseDependsOn(text, { ...opts, keyword: "Companion" });
+}
+
+/**
+ * `dir -> ref` for each companion: a branch or commit as written, a pull
+ * request as its head (`refs/pull/<n>/head`). Throws on a line that did not
+ * parse, a ref that starts with `-` (it would reach git as an option), and two
+ * companions in one repo: a malformed companion must fail the check, never
+ * read as "none" and test the repo's main instead. `exclude` drops the
+ * caller's own directory.
+ */
+export function companionRefs({ deps, errors }, { exclude = [] } = {}) {
+  if (errors.length)
+    throw new Error(errors.map((e) => `${e.line}: ${e.reason}`).join("; "));
+  const out = new Map();
+  for (const d of deps) {
+    if (exclude.includes(d.dir)) continue;
+    const ref = d.kind === "pr" ? `refs/pull/${d.number}/head` : d.ref;
+    if (ref.startsWith("-"))
+      throw new Error(`${d.line}: a ref cannot start with "-"`);
+    if (out.has(d.dir))
+      throw new Error(
+        `two companions in ${d.dir} (${out.get(d.dir)}, ${ref}): one per repo`
+      );
+    out.set(d.dir, ref);
+  }
+  return out;
 }
 
 /**
@@ -417,6 +487,11 @@ const TRANSIENT_GIT = [
   /Could not resolve host/i,
   /Connection reset/i,
   /timed out/i,
+  // A just-minted installation token is not yet honoured for every repo it
+  // names: GitHub answers a private repo with "not found" (main run 42666869771,
+  // #959/#886/#657: the token was minted 1 s before the fetch).
+  /Repository not found/i,
+  /repository '[^']*' not found/i,
 ];
 
 export function isTransientGitError(message) {
@@ -450,7 +525,7 @@ export function gitNetwork(
       if (!isTransientGitError(e.message)) throw e;
       if (attempt >= attempts) {
         throw new Error(
-          `${e.message} (transient, gave up after ${attempt} attempts)`
+          `INFRA: ${e.message} (transient, gave up after ${attempt} attempts; not a test failure, re-run the job)`
         );
       }
       const wait = delays[attempt - 1];
@@ -463,15 +538,45 @@ export function gitNetwork(
 }
 
 /**
+ * The ref a sibling is laid out at, and why (header, "WHICH COMMIT"): an
+ * explicit `refs` entry, else a pending dependency's test ref (`dependsOn`),
+ * else its pin, else its default branch. Pure: materialize's one rule.
+ */
+export function siblingRef(
+  dir,
+  {
+    refs = new Map(),
+    dependsOn = new Map(),
+    pins = new Map(),
+    layout = loadLayout(),
+  } = {}
+) {
+  if (refs.has(dir)) return { ref: refs.get(dir), from: "--ref" };
+  if (dependsOn.has(dir))
+    return { ref: dependsOn.get(dir), from: "Depends-On" };
+  if (pins.has(dir)) return { ref: pins.get(dir), from: "pin" };
+  const repo = layout.repos[dir];
+  if (!repo) throw new Error(`unknown repo ${dir}`);
+  return {
+    ref: repo.defaultBranch ?? layout.defaultBranch ?? "main",
+    from: "default branch",
+  };
+}
+
+/**
  * Lay a layout's siblings out under `root`: R/<dir> for each sibling, a shallow
- * checkout at refs.get(dir) ?? default branch. An existing R/<dir> is kept as it
- * is (a developer root, a cache, an earlier step). `selfPath` links R/<self> to
+ * checkout at the ref siblingRef picks. A pinned sha is fetched by itself
+ * (`git fetch --depth 1 origin <sha>`: GitHub serves any commit it has) and
+ * the checkout must land on exactly it. An existing R/<dir> is kept as it is
+ * (a developer root, a cache, an earlier step). `selfPath` links R/<self> to
  * the caller's own checkout when that name is free. Returns one line per repo.
  */
 export function materialize({
   layoutName,
   root,
   refs = new Map(),
+  dependsOn = new Map(),
+  pins = new Map(),
   selfPath = null,
   token = defaultToken(),
   layout = loadLayout(),
@@ -499,8 +604,7 @@ export function materialize({
       lines.push(`${dir}: kept (already at ${dest})`);
       continue;
     }
-    const ref =
-      refs.get(dir) ?? repo.defaultBranch ?? layout.defaultBranch ?? "main";
+    const { ref, from } = siblingRef(dir, { refs, dependsOn, pins, layout });
     mkdirSync(dest, { recursive: true });
     git(["init", "-q", dest]);
     git([
@@ -524,8 +628,10 @@ export function materialize({
     ]);
     git(["-C", dest, "checkout", "-q", "FETCH_HEAD"]);
     const sha = git(["-C", dest, "rev-parse", "HEAD"]);
+    if (from === "pin" && sha !== ref)
+      throw new Error(`${dir}: pinned at ${ref}, checked out ${sha}`);
     lines.push(
-      `${dir}: ${layout.owner}/${repo.slug} @ ${sha.slice(0, 10)} (${ref})`
+      `${dir}: ${layout.owner}/${repo.slug} @ ${sha.slice(0, 10)} (${ref}, ${from})`
     );
   }
   return lines;
@@ -569,9 +675,64 @@ export async function pinsText(gh, repo, ref, file = "monorepo.json") {
   const manifest = JSON.parse(
     Buffer.from(got.content ?? "", "base64").toString("utf8")
   );
-  return (manifest.repos ?? [])
+  return pinLines(manifest);
+}
+
+/** A pins manifest (repos[].{repo, ref}) as `Depends-On:` lines. */
+export function pinLines(manifest) {
+  return (manifest?.repos ?? [])
     .map((r) => `Depends-On: ${r.repo}@${r.ref}`)
     .join("\n");
+}
+
+/** The pins file a checkout keeps at its root (this repo: sibling-pins.json). */
+export const PINS_FILE_NAME = "sibling-pins.json";
+const FULL_SHA = /^[0-9a-f]{40}$/;
+
+/**
+ * `dir -> sha` from a pins manifest (monorepo.json's shape: repos[].{dir,
+ * repo, ref}), read as Depends-On lines (parseDependsOn: one grammar). Throws
+ * on anything else: no `repos` array, an unknown repo, a `dir` that is not
+ * that repo's directory, a ref that is not a full 40-character sha (a branch
+ * or a short sha moves or is ambiguous), a repo pinned twice. A malformed pin
+ * must fail the run, never read as "no pin" and test main.
+ */
+export function siblingPins(
+  manifest,
+  { layout = loadLayout(), file = PINS_FILE_NAME } = {}
+) {
+  if (!manifest || !Array.isArray(manifest.repos))
+    throw new Error(`${file}: "repos" must be an array of {dir, repo, ref}`);
+  const { deps, errors } = parseDependsOn(pinLines(manifest), { layout });
+  if (errors.length)
+    throw new Error(
+      `${file}: ${errors.map((e) => `${e.line}: ${e.reason}`).join("; ")}`
+    );
+  if (deps.length !== manifest.repos.length)
+    throw new Error(`${file}: a repo is pinned twice`);
+  const pins = new Map();
+  manifest.repos.forEach((row, i) => {
+    const d = deps[i];
+    if (row.dir !== d.dir)
+      throw new Error(
+        `${file}: ${d.repo} is checked out as ${d.dir}, not ${row.dir}`
+      );
+    if (!FULL_SHA.test(row.ref))
+      throw new Error(
+        `${file}: ${d.dir} is pinned at "${row.ref}": a pin is a full 40-character commit sha`
+      );
+    if (pins.has(d.dir)) throw new Error(`${file}: ${d.dir} is pinned twice`);
+    pins.set(d.dir, row.ref);
+  });
+  return pins;
+}
+
+/** siblingPins of a file on disk (throws when it is missing or malformed). */
+export function loadSiblingPins(file, opts = {}) {
+  return siblingPins(JSON.parse(readFileSync(file, "utf8")), {
+    file,
+    ...opts,
+  });
 }
 
 function splitRepoRef(value, need) {
@@ -640,6 +801,17 @@ async function main(argv) {
     case "siblings":
       console.log(layoutNamed(pos[0], layout).siblings.join("\n"));
       return 0;
+    case "companions": {
+      const self = opts.self ? need(opts.self).dir : null;
+      const text = readSource(opts);
+      if (text === null)
+        throw new Error("companions needs --body-file or --body-env");
+      const refs = companionRefs(parseCompanions(text, { self, layout }), {
+        exclude: self ? [self] : [],
+      });
+      for (const [d, r] of refs) console.log(`${d}=${r}`);
+      return 0;
+    }
     case "depends-on": {
       const gh = githubClient();
       const self = opts.self ? need(opts.self).dir : null;
@@ -725,6 +897,7 @@ async function main(argv) {
         throw new Error("materialize <layout> --root <dir> is required");
       const def = layoutNamed(layoutName, layout);
       const refs = new Map();
+      const dependsOn = new Map();
       const text = readSource(opts);
       if (text) {
         const parsed = parseDependsOn(text, { self: def.self, layout });
@@ -734,7 +907,7 @@ async function main(argv) {
         if (results.length)
           console.log(`Depends-On:\n${formatResults(results)}`);
         for (const [d, r] of laneRefs(results, { exclude: [def.self] })) {
-          if (def.siblings.includes(d)) refs.set(d, r);
+          if (def.siblings.includes(d)) dependsOn.set(d, r);
         }
       }
       for (const kv of multi.ref) {
@@ -742,10 +915,20 @@ async function main(argv) {
         if (at < 1) throw new Error(`--ref ${kv}: expected <repo>=<ref>`);
         refs.set(need(kv.slice(0, at)).dir, kv.slice(at + 1));
       }
+      // The caller's pins: --pins F, else its checkout's sibling-pins.json.
+      const pinsFile =
+        opts.pins ??
+        (opts["self-path"] ? join(opts["self-path"], PINS_FILE_NAME) : null);
+      const pins =
+        pinsFile && (opts.pins || existsSync(pinsFile))
+          ? loadSiblingPins(pinsFile, { layout })
+          : new Map();
       const lines = materialize({
         layoutName,
         root: opts.root,
         refs,
+        dependsOn,
+        pins,
         selfPath: opts["self-path"] ?? null,
         layout,
       });
@@ -754,7 +937,7 @@ async function main(argv) {
     }
     default:
       console.error(
-        "usage: layout.mjs dir|slug <name> · siblings <layout> · depends-on … · materialize <layout> --root R …"
+        "usage: layout.mjs dir|slug <name> · siblings <layout> · companions … · depends-on … · materialize <layout> --root R …"
       );
       return 2;
   }

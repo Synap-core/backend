@@ -42,6 +42,8 @@ import { profiles } from "@synap/database/schema";
 import {
   HOLD_ON,
   LIFECYCLE_CATEGORIES,
+  LIFECYCLE_REQUIREMENT_DIRECTIONS,
+  LIFECYCLE_REQUIREMENT_OWNERS,
   isTerminalLifecycleCategory,
   type LifecycleOption,
 } from "@synap-core/types/lifecycle";
@@ -54,6 +56,7 @@ import {
 } from "../services/lifecycle/board-lens.js";
 import { readHome, readMoving } from "../services/lifecycle/homes.js";
 import { countNeedsYouByScope } from "./signals.js";
+import { rosterReadFor } from "../access/session-visibility.js";
 import {
   boardInput,
   boardLensInput,
@@ -72,6 +75,35 @@ import {
 } from "../services/lifecycle/status-groups.js";
 
 const categorySchema = z.enum(LIFECYCLE_CATEGORIES);
+
+const requirementClearedByWire = z.union([
+  z.object({ answer: z.literal(true) }),
+  z.object({ intent: z.string() }),
+  z.object({ playbookId: z.string() }),
+  z.object({ capability: z.string() }),
+]);
+const requirementBaseWire = {
+  blockerKey: z.string(),
+  label: z.string().optional(),
+  clearedBy: requirementClearedByWire.optional(),
+  owner: z.enum(LIFECYCLE_REQUIREMENT_OWNERS).optional(),
+  forKinds: z.array(z.string()).optional(),
+};
+const lifecycleRequirementWire = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("link"),
+    relation: z.string(),
+    direction: z.enum(LIFECYCLE_REQUIREMENT_DIRECTIONS),
+    min: z.number().optional(),
+    ...requirementBaseWire,
+  }),
+  z.object({
+    kind: z.literal("property"),
+    property: z.string(),
+    in: z.array(z.string()).optional(),
+    ...requirementBaseWire,
+  }),
+]);
 
 const lifecycleOptionWire = z.object({
   key: z.string(),
@@ -96,6 +128,8 @@ const lifecycleOptionWire = z.object({
       dateBinding: z.string().optional(),
     })
     .optional(),
+  /** What the step requires of a thing (`LifecycleOptionRequirement`); absent = none. */
+  requires: z.array(lifecycleRequirementWire).optional(),
 });
 
 const lifecycleWire = z.object({
@@ -255,6 +289,8 @@ const producedKindWire = z.object({
       reason: z.enum(["needs_you", "being_worked", "stuck", "recent"]),
     })
     .nullable(),
+  /** `helper`: worked here to serve an output, not one; absent = an output. */
+  as: z.literal("helper").optional(),
 });
 
 const spaceIntentWire = z.object({
@@ -453,13 +489,22 @@ export const lifecycleRouter = router({
         ids: statusOfInput.unwrap().min(1),
         /**
          * Parts beyond the status, on request (`STATUS_OF_INCLUDES`): `moves`,
-         * `history`, `links`, `rollup`, `signals`. An unknown part is refused.
+         * `history`, `links`, `rollup`, `signals`, `work`. An unknown part is
+         * refused.
          */
         include: statusOfIncludeInput,
       })
     )
     .query(({ input, ctx }) =>
-      readStatusOf(ctx.userId, input.ids, { include: input.include })
+      readStatusOf(ctx.userId, input.ids, {
+        include: input.include,
+        // What the reader may do on its work (Continue, a gate's Approve):
+        // the doors' own checks, on the facts this door knows.
+        viewer: {
+          agentUserId: ctx.agentUserId ?? null,
+          roster: rosterReadFor(ctx),
+        },
+      })
     ),
 
   get: podProcedure

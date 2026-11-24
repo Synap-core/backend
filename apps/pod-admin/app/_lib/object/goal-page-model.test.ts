@@ -12,7 +12,9 @@ const mark = (tone: GoalMarkView["tone"]): GoalMarkView => ({
 describe("goalPill — a goal mark as a console pill", () => {
   it("maps the shared tones onto the four pill kinds", () => {
     expect(goalPill(mark("success")).kind).toBe("healthy");
-    expect(goalPill(mark("primary")).kind).toBe("healthy");
+    // `primary` is the your-turn tone ("In review", a claimed criterion):
+    // awaiting a look, never the healthy pill.
+    expect(goalPill(mark("primary")).kind).toBe("stale");
     expect(goalPill(mark("warning")).kind).toBe("stale");
     expect(goalPill(mark("error")).kind).toBe("down");
   });

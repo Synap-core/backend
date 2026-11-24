@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { CardLike, CompositionLike } from "./installed-model";
 import {
+  addOnParentHref,
+  addOnRows,
   filterTools,
   initialToolsView,
   isRuleSkill,
@@ -61,7 +63,8 @@ function skill(over: Partial<SkillLike> = {}): SkillLike {
   return {
     id: "s-instr",
     name: "Dogfood journal",
-    slug: "rules/dogfood-journal",
+    // Not a `rules/` slug: a rule is never a Tool (`lib/rule-skill.ts`).
+    slug: "house/dogfood-journal",
     kind: "instruction",
     description: "File what you hit",
     approved: true,
@@ -199,7 +202,7 @@ describe("search, filter and counts", () => {
     expect(matchesToolSearch(gmail, "mail read")).toBe(true); // description words
     expect(matchesToolSearch(gmail, "csv")).toBe(false);
     const journal = items.find((i) => i.type === "instruction")!;
-    expect(matchesToolSearch(journal, "rules/dogfood")).toBe(true); // slug
+    expect(matchesToolSearch(journal, "house/dogfood")).toBe(true); // slug
   });
 
   it("filters by type and search together", () => {
@@ -309,5 +312,68 @@ describe("legacyToolsHref — old ?tab= links", () => {
       "/tools?view=gallery&type=capabilities"
     );
     expect(href("tab=skills")).toBe("/tools");
+  });
+});
+
+describe("add-ons (founder decision D6)", () => {
+  const BASE = "55555555-5555-4555-8555-555555555555";
+  const addOn = comp({
+    id: CAP_OFF,
+    name: "LinkedIn profiles",
+    description: "Read a public profile",
+    extends: { id: BASE, name: "Apify" },
+  });
+
+  it("an add-on is its own row, marked with its base on the second line", () => {
+    const items = toolItems({
+      compositions: [comp(), addOn],
+      cards: [card(), card({ id: CAP_OFF, name: "LinkedIn profiles" })],
+      skills: [],
+    });
+    const row = items.find((i) => i.id === CAP_OFF)!;
+    expect(row.type).toBe("capability");
+    expect(row.addOnOf).toEqual({ id: BASE, name: "Apify" });
+    expect(toolSecondary(row, "Whole pod")).toMatch(
+      /^Add-on of Apify · Whole pod/
+    );
+    const plain = items.find((i) => i.id === CAP)!;
+    expect(plain.addOnOf).toBeNull();
+    expect(toolSecondary(plain, "Whole pod")).not.toContain("Add-on");
+  });
+
+  it("an older pod that sends no `extends` reads as no add-on", () => {
+    const [row] = toolItems({
+      compositions: [comp()],
+      cards: null,
+      skills: [],
+    });
+    expect(row!.addOnOf).toBeNull();
+  });
+
+  it("searching the base's name finds its add-ons", () => {
+    const items = toolItems({
+      compositions: [comp(), addOn],
+      cards: null,
+      skills: [],
+    });
+    expect(filterTools(items, "all", "apify").map((i) => i.id)).toEqual([
+      CAP_OFF,
+    ]);
+  });
+
+  it("the base page's rows: own page, own mark; an unread catalog is never On", () => {
+    const listed = [
+      { id: CAP_OFF, name: "LinkedIn profiles", description: " Read " },
+    ];
+    const [row] = addOnRows(listed, [card({ id: CAP_OFF })], [addOn]);
+    expect(row).toMatchObject({
+      id: CAP_OFF,
+      name: "LinkedIn profiles",
+      description: "Read",
+      href: addOnParentHref(CAP_OFF),
+    });
+    expect(row!.status.label).toBe("On");
+    const [unread] = addOnRows(listed, null, null);
+    expect(unread!.status.label).not.toBe("On");
   });
 });

@@ -373,12 +373,23 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       // `focus_session.closed`, this reactor derives whether the last open
       // blocker just went away and files ONE `session.unblocked` notification.
       api.registerSessionUnblockReactor();
+      // Same close event: a child run working a step of another run (a stage
+      // that `uses` a playbook) hands its outputs to that step and moves the
+      // run on (`stage-child.ts`).
+      api.registerStageChildReactor();
+      // Same close event: a lane closed done hands its delivered outputs to
+      // its parent's slots of the same key, as refs; the parent never closes
+      // by it (`lane-rollup.ts`).
+      api.registerLaneRollupReactor();
       // Same seam, entity writes: a `proposed` decision opens ONE owed ask
       // slot for the person; a decision resolved elsewhere retires it.
       api.registerDecisionAskReactor();
       // "Choose an agent" answered ⇒ the run that owed it is re-dispatched
       // through the same executor path, idempotently.
       api.registerAgentChoiceRedispatchReactor();
+      // A run nobody claimed was blocked by the run reaper ⇒ its person is
+      // asked; their answer starts it again, keeps waiting, or stops it.
+      api.registerRunBlockedReactors();
       // The self-healing card's answer links each agent to its program (D10).
       api.registerAgentTemplateAnswerReactor();
       // Same close event again: a session that ENDED with required criteria
@@ -653,6 +664,7 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
       {
         const {
           registerCapabilityExecutor,
+          registerNeedVerbResolver,
           registerPlaybookRunner,
           registerPlaybookReadinessGate,
           registerSessionScheduler,
@@ -663,6 +675,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/mail-feed-cron.js");
         const { registerCalBackfillRunner } =
           await import("@synap/jobs/workers/cal-backfill-cron.js");
+        const { registerDegradedCaptureSweepRunner } =
+          await import("@synap/jobs/workers/degraded-capture-sweep.js");
         const {
           registerFirefliesIngestRunner,
           registerFirefliesBackfillRunner,
@@ -702,6 +716,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/workers/webhook-worker.js");
         const { registerExternalAgentPoller } =
           await import("@synap/jobs/workers/external-agent-poll.js");
+        const { registerComputeLeaseSweeper } =
+          await import("@synap/jobs/workers/compute-lease-sweeper.js");
         const { registerTightenRecommender } =
           await import("@synap/jobs/workers/governance-tighten-cron.js");
         const { registerPromptVersionRegressionScanner } =
@@ -712,18 +728,27 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
           await import("@synap/jobs/utils/proactive-post.js");
         const { registerSessionCloser, registerStoppedSessionStaler } =
           await import("@synap/jobs/utils/session-close.js");
-        const { registerHoldResumeFollowUp } =
+        const { registerHoldResumeFollowUp, registerAiHeldGateRegrader } =
           await import("@synap/jobs/workers/hold-resume.js");
+        const { registerReactionEffect } =
+          await import("@synap/jobs/utils/reaction-effects.js");
+        const { registerReactionSource, registerReactionStateSource } =
+          await import("@synap/jobs/utils/reactions.js");
         const { registerStatusWatcherRunner } =
           await import("@synap/jobs/workers/status-watcher-cron.js");
         const { registerStageAdvancer } =
           await import("@synap/jobs/utils/stage-advance.js");
+        const { registerRunTurnPersisted } =
+          await import("@synap/jobs/utils/run-turn-persisted.js");
         const { registerSessionOutcomeDoor } =
           await import("@synap/jobs/utils/session-outcome-door.js");
         const { registerServiceHealthNotifier } =
           await import("@synap/jobs/workers/intelligence-health-check.js");
         const api = await import("@synap/api");
         registerCapabilityExecutor((input) => api.executeCapability(input));
+        // ONE need resolver (0426): an automation `capability` node that names
+        // a need runs the verb of the provider its space bound to it.
+        registerNeedVerbResolver((input) => api.resolveNeedVerb(input));
         // ONE playbook-run spine: the scheduled path (@synap/jobs) delegates
         // to api's runPlaybook via this slot, so is-agent | external-agent |
         // hybrid all dispatch through the executor spine + triggerAutoRespond.
@@ -763,6 +788,31 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerHoldResumeFollowUp((resumed) =>
           api.holdResumeFollowUp(resumed)
         );
+        // A check gate held because AI was not available grades again when
+        // the pod sees AI come back: a pass moves on (never a bare resume).
+        registerAiHeldGateRegrader((held) => api.regradeAiHeldGate(held));
+        // The payers' notice when the pulled AI availability changes.
+        const { registerAiAvailabilityNotifier } =
+          await import("@synap/jobs/workers/cp-entitlement-sync.js");
+        registerAiAvailabilityNotifier(async (change) => {
+          await api.notifyAiAvailabilityChange(change);
+        });
+        // The reactions reactor: the effect whose door is api-side — an outcome
+        // met wherever it was filed (pod default 3) goes through THE done door.
+        // Unfilled, its writes are skipped and logged `effect_unavailable`.
+        registerReactionEffect(api.meetOutcomesReactionEffect);
+        // Pod default D2 (approval signal 1): a stage's approved work moves its
+        // subject to the stage's `onApproved`, through the status door.
+        registerReactionEffect(api.reachStageStatusReactionEffect);
+        // W6: a step whose work is all met moves on, through THE advance door.
+        registerReactionEffect(api.advanceStageReactionEffect);
+        // A parent rolls up along a relation that declares it (pod
+        // default 1) through THE thing's door; the relations' declarations
+        // join the one list; and each rule's pause is its row in the rule
+        // list (draft = paused), read back here.
+        registerReactionEffect(api.rollUpReactionEffect);
+        registerReactionSource(api.relationReactionSource);
+        registerReactionStateSource(() => api.reactionEnabledStates());
         // The status watcher (W6): late, approaching, stuck and
         // hold-review signals, raised once per episode, owner told.
         registerStatusWatcherRunner(() => api.runStatusWatcher());
@@ -773,6 +823,9 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // unregistered it throws rather than advancing ungated — so this
         // registration is what makes the automation stage-advance work at all.
         registerStageAdvancer((input) => api.advanceSessionStage(input));
+        // A run turn's reply is saved: the pod judges what the turn did now,
+        // when the turn's end was reported before its reply landed.
+        registerRunTurnPersisted((input) => api.settleRunTurnPersisted(input));
         // ONE set of session outcome doors (plan v5 T2): an automation's
         // GRANTED complete_outcome / post_evidence / reevaluate_criterion
         // reaches the same api functions the approval executor applies.
@@ -788,6 +841,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         registerAgentWaker((req) => api.triggerAutoRespond(req));
         registerMailFeedRunner(() => api.runMailFeed());
         registerCalBackfillRunner(() => api.runCalBackfill());
+        // Captures saved without AI, structured once it answers again.
+        registerDegradedCaptureSweepRunner(() => api.sweepDegradedCaptures());
         // Fireflies: webhook-triggered ingest + the backfill safety net both
         // delegate to api-side runners (executeCapability + recordInboundMessage).
         registerFirefliesIngestRunner((input) => api.runFirefliesIngest(input));
@@ -857,6 +912,8 @@ export const BACKGROUND_STARTERS: readonly BackgroundStarter[] = [
         // Unfilled, the fan-out sends key-bound subscriptions nothing.
         registerKeyGrantAudience((s) => api.keyGrantReadsSubject(s));
         registerExternalAgentPoller(() => api.pollExternalAgentRuns());
+        // Compute leases: destroy each machine at its time to live.
+        registerComputeLeaseSweeper(() => api.releaseExpiredComputeLeases());
         // Learning loop: the tighten recommender (was verb-only) and the
         // prompt-version regression scan run on daily crons. Both slots
         // are fail-closed — unregistered, the job throws.

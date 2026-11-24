@@ -28,7 +28,10 @@ import {
   type EnsureIntakeSessionResult,
 } from "./ensure-intake-session.js";
 import { computeCaptureGraphIdempotencyKey } from "../../utils/pending-capture-dedup.js";
-import { stageIntakeSource } from "./stage-intake-source.js";
+import {
+  stageIntakeSource,
+  type IntakeDegradedMarker,
+} from "./stage-intake-source.js";
 import type { StagedSourceBlob } from "../../utils/store-entity-source-blob.js";
 import {
   recordSessionRunManifest,
@@ -95,7 +98,7 @@ export interface RecordStructureIntakeInput {
   extractedText?: string;
   extractedTextTruncated?: boolean;
   /** Set when the outcome is a degraded fallback (IS or pod reason). */
-  degraded?: { reason: string };
+  degraded?: IntakeDegradedMarker;
   /**
    * The FILE was not read (IS `extraction.degraded`, e.g. a photo with no
    * vision model) while the outcome itself is NOT degraded — its caption
@@ -245,7 +248,7 @@ export interface StageCaptureSourcesInput {
   source: RecordStructureIntakeInput["source"];
   extractedText?: string;
   extractedTextTruncated?: boolean;
-  degraded?: { reason: string };
+  degraded?: IntakeDegradedMarker;
   fileNotRead?: { reason: string };
   keepRaw?: boolean;
   extraction?: RecordStructureIntakeInput["extraction"];
@@ -296,7 +299,7 @@ export async function stageCaptureSources(
       Parameters<typeof stageIntakeSource>[0],
       "database" | "userId" | "workspaceId" | "sessionId" | "door" | "degraded"
     >,
-    degraded: { reason: string } | undefined = input.degraded
+    degraded: IntakeDegradedMarker | undefined = input.degraded
   ) => {
     attempted++;
     try {

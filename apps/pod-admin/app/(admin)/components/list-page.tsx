@@ -13,6 +13,7 @@
 import { Button } from "@heroui/react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { ReactNode } from "react";
+import { shellT } from "./copy";
 import { FilterRow } from "./filter-chip";
 import { listCardState, pageWindow } from "./list-card-model";
 import {
@@ -79,6 +80,7 @@ export function ListCard({
   /** The rows, drawn only when there are some. */
   children: ReactNode;
 }) {
+  const t = shellT();
   const state = listCardState({ loading, isError, rowCount });
   const window =
     pagination?.kind === "offset"
@@ -88,7 +90,7 @@ export function ListCard({
     pagination?.kind === "offset" && window && window.pageCount > 1 ? (
       <div className="flex items-center gap-1.5">
         <span className="text-[11px] text-foreground/65">
-          Page {window.page} / {window.pageCount}
+          {t("list.page", { page: window.page, count: window.pageCount })}
         </span>
         <Button
           isIconOnly
@@ -97,7 +99,7 @@ export function ListCard({
           radius="full"
           isDisabled={!window.hasPrev}
           onPress={() => pagination.onOffsetChange(window.prevOffset)}
-          aria-label="Previous page"
+          aria-label={t("list.prev")}
         >
           <ChevronLeft className="h-3.5 w-3.5" />
         </Button>
@@ -108,7 +110,7 @@ export function ListCard({
           radius="full"
           isDisabled={!window.hasNext}
           onPress={() => pagination.onOffsetChange(window.nextOffset)}
-          aria-label="Next page"
+          aria-label={t("list.next")}
         >
           <ChevronRight className="h-3.5 w-3.5" />
         </Button>
@@ -151,7 +153,7 @@ export function ListCard({
               isLoading={pagination.isFetchingNext}
               onPress={pagination.onLoadMore}
             >
-              Load more
+              {t("list.loadMore")}
             </Button>
           </div>
         )}

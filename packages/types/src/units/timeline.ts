@@ -8,8 +8,10 @@
  *                 step moves, checks, its sessions, decisions, status moves;
  *   session       its start, its status moves with their holds (the
  *                 transition log, `lifecycle_transition_outbox`), the dev
- *                 facts of its PRs and devbox jobs (`dev.pr_*`, `ci.finished`)
- *                 and the decisions filed in it;
+ *                 facts of its PRs and devbox jobs (`dev.pr_*`, `ci.finished`),
+ *                 the decisions filed in it, and what happened to its slots'
+ *                 asks (asked, answered, attested, a relay corrected, a
+ *                 question withdrawn: the `focus_session.slot_*` history rows);
  *   pull_request  the dev facts about it (`dev.pr_*`, the CI runs on its
  *                 heads);
  *   entity        a thing's status moves and its visible roles' (the
@@ -29,6 +31,7 @@ import type { CiFinishedStatus } from "../events/dev-loop.js";
 import type { PullRequestChecks } from "../events/pr-state.js";
 import type { LifecycleCategory } from "../lifecycle/option.js";
 import type { RecordedHold } from "../lifecycle/hold.js";
+import type { TransitionCause } from "../lifecycle/index.js";
 import type { TrackHistoryEvent } from "./track-history.js";
 
 export const TIMELINE_SUBJECT_KINDS = [
@@ -37,6 +40,19 @@ export const TIMELINE_SUBJECT_KINDS = [
   "pull_request",
 ] as const;
 export type TimelineSubjectKind = (typeof TIMELINE_SUBJECT_KINDS)[number];
+
+/**
+ * The session's CHAIN kinds (founder decision D3, plan b38bc224): what the
+ * Operations session lens shows beyond the dev facts and asks. Only a session
+ * timeline carries them; the request story leaves them out.
+ */
+export const SESSION_CHAIN_EVENT_KINDS = [
+  "stage_moved",
+  "child_started",
+  "runner_seen",
+  "room_post",
+] as const;
+export type SessionChainEventKind = (typeof SESSION_CHAIN_EVENT_KINDS)[number];
 
 export const DEV_TIMELINE_EVENT_KINDS = [
   "session_started",
@@ -47,6 +63,13 @@ export const DEV_TIMELINE_EVENT_KINDS = [
   "checks_finished",
   "decision_asked",
   "decision_answered",
+  "slot_asked",
+  "slot_answered",
+  "slot_attested",
+  "relay_corrected",
+  "question_withdrawn",
+  "slot_handed_back",
+  ...SESSION_CHAIN_EVENT_KINDS,
 ] as const;
 export type DevTimelineEventKind = (typeof DEV_TIMELINE_EVENT_KINDS)[number];
 
@@ -56,6 +79,44 @@ export interface DevTimelineRefs {
   proposalId?: string;
   /** A pull request or a CI run's page. */
   url?: string;
+  /** The session slot an ask event is about (its label): a door to the ask. */
+  slotLabel?: string;
+  /** A room post: the message (open the room at it). */
+  messageId?: string;
+  /** A room post: the room it sits in. */
+  channelId?: string;
+  /** A runner: `<harness>:<conversation id>`, the conversation it is. */
+  runnerId?: string;
+}
+
+/** Characters of a room post's one line; longer text ends in "…". */
+export const TIMELINE_POST_LINE_MAX = 120;
+
+/**
+ * A room post as ONE line: its first non-empty line, whitespace collapsed, at
+ * most {@link TIMELINE_POST_LINE_MAX} characters (cut ending in "…"). The
+ * timeline never carries a post's body: the room is the door to it. Pure.
+ */
+export function timelinePostLine(text: string): {
+  line: string;
+  truncated: boolean;
+} {
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.replace(/\s+/g, " ").trim())
+    .filter((l) => l.length > 0);
+  const first = lines[0] ?? "";
+  const chars = [...first];
+  if (chars.length > TIMELINE_POST_LINE_MAX) {
+    return {
+      line: `${chars
+        .slice(0, TIMELINE_POST_LINE_MAX - 1)
+        .join("")
+        .trimEnd()}…`,
+      truncated: true,
+    };
+  }
+  return { line: first, truncated: lines.length > 1 };
 }
 
 /** Below this, a record time is the occurrence time (no "recorded at"). */
@@ -86,6 +147,12 @@ export type DevTimelineEvent = DevTimelineEventBase &
         hold: RecordedHold | null;
         /** A thing's ROLE moved (its slug); absent for its own status. */
         role?: string;
+        /**
+         * Another move caused this one (a rule fired on it): the rule, the move
+         * that fired it, its chain and depth. Absent on a move nobody's move
+         * caused. "Moved because X moved."
+         */
+        cause?: TransitionCause;
       }
     | {
         kind: "pr_opened" | "pr_merged" | "pr_closed";
@@ -115,7 +182,119 @@ export type DevTimelineEvent = DevTimelineEventBase &
         decision: string;
         note: string | null;
       }
+    | {
+        /** An agent (or the pod) posed an ask to the person on a slot. */
+        kind: "slot_asked";
+        /** The slot's label, as the agent wrote it. */
+        slot: string;
+        /** The ask's mode (`confirm`, `choose`, `form`, `act`, `provide`); null = a bare hand-over. */
+        askMode: string | null;
+        /** The class of what unblocks it (`credential`, `decision`…); null = not said. */
+        blockedReason: string | null;
+      }
+    | {
+        /** The person answered the ask on a slot. An answer is input, never a delivery. */
+        kind: "slot_answered";
+        slot: string;
+        /** The typed answer's `type` (`confirm`, `chip`, `form`, `provide`, `text`…); null = free text. A string: a newer pod may answer a type this build does not know. */
+        answerType: string | null;
+        /** The slot went back to the agent with the answer. */
+        handedBack: boolean;
+        /** An agent relayed the person's words from a chat. */
+        relayed: boolean;
+      }
+    | {
+        /** The person said "I did this" about a slot they owed: it is delivered. */
+        kind: "slot_attested";
+        slot: string;
+      }
+    | {
+        /** The person said "Not what I said" about a relayed answer: the ask is theirs again. */
+        kind: "relay_corrected";
+        /** null when the relay named no slot. */
+        slot: string | null;
+      }
+    | {
+        /** The agent took back a question it asked the person. */
+        kind: "question_withdrawn";
+        slot: string | null;
+        /** The agent's reason, as written; null = none given. */
+        note: string | null;
+      }
+    | {
+        /** The person said "Not mine" about a slot an agent handed them: it is the agent's again, unanswered. */
+        kind: "slot_handed_back";
+        slot: string;
+      }
+    | {
+        /** The session entered a stage (`focus_sessions.stage_history`). */
+        kind: "stage_moved";
+        /** The stage key it left; null = it had none. */
+        from: string | null;
+        to: string;
+        /** The stage door (`advance`) or a re-applied approval. */
+        via: string;
+      }
+    | {
+        /** The session spawned a child (its `spawned_from` link). */
+        kind: "child_started";
+        child: { id: string; title: string; status: string };
+      }
+    | {
+        /**
+         * A runner (one process of a client conversation) first held this
+         * session (`session_runners.first_seen_at`). Its state now, not a
+         * history of states.
+         */
+        kind: "runner_seen";
+        runner: {
+          /** `claude-code`, `codex`… */
+          harness: string;
+          conversationId: string;
+          /** The computer: its pod name, else the host the process named; null = unknown. */
+          computer: string | null;
+          /** As its client names it; null = unknown. */
+          model: string | null;
+          provider: string | null;
+          /** What it last said it is doing (`busy`, `idle`…); null = it names none. */
+          state: string | null;
+          lastSeenAt: string;
+        };
+      }
+    | {
+        /**
+         * A post in the session's room, or one it sent to another session's
+         * room: ONE line, never the body (decision D3). `refs.messageId` and
+         * `refs.channelId` open the room at it.
+         */
+        kind: "room_post";
+        post: {
+          /**
+           * `person`: a person typed it. `question` / `update`: an agent's
+           * post (a question notifies the person). `session_message`: a
+           * coordination post between sessions (`direction`, `intent`).
+           */
+          form: "person" | "question" | "update" | "session_message";
+          /** A session_message: received (`in`) or sent (`out`); else null. */
+          direction: "in" | "out" | null;
+          /** A session_message's intent (`handoff`, `fyi`…); else null. */
+          intent: string | null;
+          /** {@link timelinePostLine}: at most 120 characters. */
+          line: string;
+          /** The post holds more than its line. */
+          truncated: boolean;
+        };
+      }
   );
+
+/** A session timeline source a narrowed key does not read (`TimelineWire.withheld`). */
+export const TIMELINE_WITHHELD_SOURCES = [
+  "dev_facts",
+  "decisions",
+  "runners",
+  "room_posts",
+] as const;
+export type TimelineWithheldSource = (typeof TIMELINE_WITHHELD_SOURCES)[number];
 
 /** The `GET /timeline` read. Newest first. */
 export type TimelineWire =
@@ -129,6 +308,15 @@ export type TimelineWire =
       subject: { kind: "session"; id: string; title: string };
       events: DevTimelineEvent[];
       truncated: boolean;
+      /**
+       * The sources this reader's key may not read (a pod app narrowed by its
+       * grant), so their events are absent, never "nothing happened":
+       * `dev_facts` (PR and CI facts, devbox jobs), `decisions` (proposals
+       * filed in the session), `runners` (who worked it, on which computer),
+       * `room_posts` (its room's posts and the ones it sent). Absent when
+       * every source was read.
+       */
+      withheld?: TimelineWithheldSource[];
     }
   | {
       subject: { kind: "entity"; id: string; title: string | null };

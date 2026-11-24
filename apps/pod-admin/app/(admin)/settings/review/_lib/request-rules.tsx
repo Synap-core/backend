@@ -1,15 +1,19 @@
 "use client";
 
 /**
- * Settings' home for the rules a person set from a request ("always" and
- * "never", `request-rules-model.ts`): every receipt of those menus says "take
- * it back in Settings", so this is where that is true. Rules are a pod
+ * Settings' home for the approvals a person set from a request ("always"
+ * and "never", `request-rules-model.ts`): every receipt of those menus says
+ * "take it back in Settings", so this is where that is true. Every approval,
+ * whatever its origin, is on Approvals (pod admin's page, D5): an admin gets
+ * the door to it. Rules are a pod
  * admin's to take back (`assertCanManageRule`); anyone else reads the list.
  */
 import { useEffect, useState } from "react";
 import { Button, addToast } from "@heroui/react";
+import Link from "next/link";
 import { TRPCClientError } from "@trpc/client";
 import { trpc } from "../../../../../lib/trpc";
+import { navHref } from "../../../../../lib/console-nav";
 import { redirectToLoginIfUnauthorized } from "../../../../../lib/auth-redirect";
 import { SectionCard } from "../../../components/section-card";
 import {
@@ -65,7 +69,25 @@ export function RequestRules() {
 
   const rows = requestRules(rules.data?.rules ?? []);
   return (
-    <SectionCard title={t("requestRules.title")} hint={t("requestRules.hint")}>
+    <SectionCard
+      title={t("requestRules.title")}
+      hint={t("requestRules.hint")}
+      actions={
+        // Approvals is where every approval is read and taken back (D5);
+        // it is a pod admin's page, so only an admin gets the door.
+        mayTakeBack ? (
+          <Button
+            as={Link}
+            href={navHref("approvals")}
+            size="sm"
+            variant="light"
+            radius="md"
+          >
+            {t("requestRules.all")}
+          </Button>
+        ) : undefined
+      }
+    >
       {rules.isLoading ? (
         <ResourceRowSkeleton count={2} />
       ) : rules.isError ? (

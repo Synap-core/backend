@@ -23,6 +23,7 @@ import {
   isNull,
   drizzleSql,
   notAnAppAgent,
+  pauseAutomationsOfAgents,
 } from "@synap/database";
 import { revokeApiKeys } from "@synap/database/api-key-revocation";
 import { isPodAdmin } from "../utils/workspace-role.js";
@@ -107,12 +108,14 @@ import {
 /**
  * Floor-first agent-user fetch backing `list`.
  *
- * Floor = (every agent that is a member of a workspace the caller can see —
- * `userVisibleWhere` is the security boundary) UNION (pod-wide agents — agent
- * users with NO membership row anywhere, which belong to the whole pod and so
- * surface in every lens state). The workspace lens only NARROWS the
- * membership-tied half; pod-wide agents are ALWAYS included, except when the
- * lens is `null` (= pod-wide only). The lens can never widen past the floor.
+ * An agent is never a space member: it is where its person is
+ * (`users.created_by_user_id`, `membershipHolderIds`). Floor = (every agent
+ * whose person is a member of a workspace the caller can see —
+ * `userVisibleWhere` is the security boundary) UNION (pod-wide agents — those
+ * whose person holds no membership anywhere, or that nobody owns, which
+ * surface in every lens state). The workspace lens only NARROWS the tied
+ * half; pod-wide agents are ALWAYS included, except when the lens is `null`
+ * (= pod-wide only). The lens can never widen past the floor.
  */
 /**
  * The caller's agent roster — the ONE visibility floor for "which agents can
@@ -132,7 +135,7 @@ export async function queryAgentUsers(
     opts.includeComputers === false
       ? [drizzleSql`${users.agentType} IS DISTINCT FROM ${MACHINE_AGENT_TYPE}`]
       : [];
-  // Membership-tied agents — the caller's accessible agents. `userVisibleWhere`
+  // Agents tied by their person's memberships. `userVisibleWhere`
   // is the structural floor (only workspaces the caller can see); the lens
   // narrows within it. `null` lens = no tied rows (pod-wide only).
   const tiedConditions = [
@@ -175,13 +178,16 @@ export async function queryAgentUsers(
           joinedAt: workspaceMembers.joinedAt,
         })
         .from(users)
-        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
+        .innerJoin(
+          workspaceMembers,
+          eq(workspaceMembers.userId, users.createdByUserId)
+        )
         .where(and(...tiedConditions))
     : [];
 
-  // Pod-wide agents — agent users with NO workspace membership anywhere. These
-  // shared helpers (e.g. a pod-level Twin) belong to the whole pod and appear
-  // in every workspace; their role/joinedAt are null (no membership row).
+  // Pod-wide agents — their person holds no workspace membership anywhere (or
+  // nobody owns them). They appear in every workspace; their role/joinedAt
+  // are null (no membership row).
   const podWideRows = await db
     .select({
       id: users.id,
@@ -202,7 +208,7 @@ export async function queryAgentUsers(
       and(
         eq(users.userType, "agent"),
         notAnAppAgent(users.id),
-        drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.id})`,
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${workspaceMembers} WHERE ${workspaceMembers.userId} = ${users.createdByUserId})`,
         ...notAComputer
       )
     );
@@ -213,8 +219,8 @@ export async function queryAgentUsers(
     joinedAt: null as Date | null,
   }));
 
-  // An agent that is a member of several visible workspaces joins once per
-  // membership; the roster is one row per AGENT (the first membership wins).
+  // An agent whose person is a member of several visible workspaces joins once
+  // per membership; the roster is one row per AGENT (the first one wins).
   const seen = new Set<string>();
   const unique = tied.filter((r) => !seen.has(r.id) && !!seen.add(r.id));
   return [...unique, ...podWide];
@@ -393,17 +399,18 @@ function assertAgentCapabilities(capabilities: readonly string[]): void {
 
 export const agentUsersRouter = router({
   /**
-   * Create an AI agent user and add it to a workspace
+   * Create an AI agent user. It holds no space seat: it works through its
+   * creator's membership.
    */
   create: credentialProcedure
     .input(presenceInput)
     .input(
       z.object({
-        // Required for a workspace agent; omit for a pod-wide agent (no
-        // membership row — visible in every workspace). Guarded in the handler.
+        // Required for a workspace agent (the space its creator manages it
+        // from); omit for a pod-wide agent. Guarded in the handler.
         workspaceId: z.string().uuid().optional(),
-        // Opt-in: mint a pod-wide agent-user (no workspace membership, governed
-        // as its own principal). Pod-admin only. Mutually exclusive with a twin.
+        // Opt-in: mint a pod-wide agent-user. Pod-admin only. Mutually
+        // exclusive with a twin.
         podWide: z.boolean().optional(),
         agentType: z.string().min(1).max(50).optional(),
         name: z.string().min(1).max(100),
@@ -567,17 +574,6 @@ export const agentUsersRouter = router({
         locale: "en",
       });
 
-      // Add to workspace with resolved role — pod-wide agents get NO membership
-      // row (that absence is exactly what marks them pod-wide in `list`).
-      if (!podWide) {
-        await db.insert(workspaceMembers).values({
-          workspaceId: input.workspaceId!,
-          userId: agentId,
-          role: resolvedRole,
-          invitedBy: ctx.userId,
-        });
-      }
-
       auditLog({
         subjectType: "agent_user",
         action: "create",
@@ -609,10 +605,10 @@ export const agentUsersRouter = router({
   /**
    * THE one door for agent users (collapses the old list/listAll split).
    *
-   * Floor = the caller's accessible agents (members of any workspace the caller
-   * can see, via `userVisibleWhere`) UNION pod-wide agents (no membership row —
-   * pod-level helpers that appear everywhere). The workspace lens then NARROWS
-   * the membership-tied half; pod-wide agents are always included:
+   * Floor = the caller's accessible agents (whose person is a member of any
+   * workspace the caller can see, via `userVisibleWhere`) UNION pod-wide agents
+   * (whose person holds no membership). The workspace lens then NARROWS the
+   * tied half; pod-wide agents are always included:
    *   - no `workspaceId` (and no active-ws header) → ALL my agents + pod-wide
    *   - active-ws header / a `workspaceId` → that workspace's agents + pod-wide
    *   - `workspaceId: null` → pod-wide agents only
@@ -830,7 +826,6 @@ export const agentUsersRouter = router({
         workspaceId: z.string().uuid(),
         agentUserId: z.string().uuid(),
         name: z.string().min(1).max(100).optional(),
-        role: z.enum(["admin", "editor", "viewer"]).optional(),
         description: z.string().optional(),
         capabilities: z.array(z.string()).optional(),
         writesRequireProposal: z.boolean().optional(),
@@ -996,19 +991,6 @@ export const agentUsersRouter = router({
         });
       }
 
-      // Update role if changed
-      if (input.role) {
-        await db
-          .update(workspaceMembers)
-          .set({ role: input.role })
-          .where(
-            and(
-              eq(workspaceMembers.userId, input.agentUserId),
-              eq(workspaceMembers.workspaceId, input.workspaceId)
-            )
-          );
-      }
-
       auditLog({
         subjectType: "agent_user",
         action: "update",
@@ -1018,7 +1000,6 @@ export const agentUsersRouter = router({
         workspaceId: input.workspaceId,
         data: {
           name: input.name,
-          role: input.role,
           writesRequireProposal: input.writesRequireProposal,
           ...(input.askFirst !== undefined ? { askFirst: input.askFirst } : {}),
         },
@@ -1453,7 +1434,7 @@ export const agentUsersRouter = router({
     }),
 
   /**
-   * Remove an AI agent user from a workspace (and delete the user record)
+   * Delete an AI agent user (a workspace manager may; the space is the scope of the check)
    */
   remove: protectedProcedure
     .input(
@@ -1496,18 +1477,11 @@ export const agentUsersRouter = router({
         });
       }
 
-      // Remove workspace membership
-      await db
-        .delete(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.userId, input.agentUserId),
-            eq(workspaceMembers.workspaceId, input.workspaceId)
-          )
-        );
-
-      // Delete the agent user record (agents are workspace-scoped)
-      await db.delete(users).where(eq(users.id, input.agentUserId));
+      await db.transaction(async (tx) => {
+        // Before the delete nulls their actor (`pauseAutomationsOfAgents`).
+        await pauseAutomationsOfAgents(tx, [input.agentUserId]);
+        await tx.delete(users).where(eq(users.id, input.agentUserId));
+      });
 
       auditLog({
         subjectType: "agent_user",
@@ -1570,7 +1544,8 @@ export const agentUsersRouter = router({
       const revokeReason =
         input.reason ?? "Cascade revoke: agent user removed by pod admin";
 
-      // Cascade: revoke every active API key owned by these agents in one shot.
+      // Cascade: revoke every active API key owned by these agents in one shot
+      // (outside the transaction: the revocation cache must not re-cache).
       const revokedKeys = await revokeApiKeys(db, {
         where: and(
           inArray(apiKeys.userId, ownedIds),
@@ -1580,13 +1555,11 @@ export const agentUsersRouter = router({
         reason: revokeReason,
       });
 
-      // Remove workspace memberships for every owned agent.
-      await db
-        .delete(workspaceMembers)
-        .where(inArray(workspaceMembers.userId, ownedIds));
-
-      // Delete the agent user rows.
-      await db.delete(users).where(inArray(users.id, ownedIds));
+      await db.transaction(async (tx) => {
+        // Before the delete nulls their actor (`pauseAutomationsOfAgents`).
+        await pauseAutomationsOfAgents(tx, ownedIds);
+        await tx.delete(users).where(inArray(users.id, ownedIds));
+      });
 
       auditLog({
         subjectType: "agent_user",

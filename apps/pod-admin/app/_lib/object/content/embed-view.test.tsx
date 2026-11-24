@@ -1,14 +1,50 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { CELL_FRAME_SANDBOX } from "@synap-core/types/cell-bridge";
+import {
+  CELL_FRAME_SANDBOX,
+  CELL_MODULE_FRAME_SANDBOX,
+} from "@synap-core/types/cell-bridge";
 
-// The frame reads the console's client only inside an effect (never on a
-// static render); the hook just has to exist.
+// The frames read the console's client only inside an effect (never on a
+// static render); the hook just has to exist. A module cell reads the pod's
+// renderer bundle (`renderers.hostModules`): none installed unless a test
+// says so.
+const { bundle, answered } = vi.hoisted(() => ({
+  bundle: {
+    answer: { error: { data: { code: "NOT_FOUND" } } } as {
+      data?: unknown;
+      error?: unknown;
+    },
+    // The entity-card slot's reads: no frame cell unless a test installs one.
+    status: { bundle: null, defaults: {}, installed: [] } as unknown,
+    cell: undefined as unknown,
+  },
+  answered: (pick: () => { data?: unknown; error?: unknown }) => ({
+    useQuery: () => ({
+      isLoading: false,
+      error: null,
+      data: undefined,
+      refetch: () => {},
+      ...pick(),
+    }),
+  }),
+}));
 vi.mock("../../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
+    renderers: {
+      hostModules: answered(() => bundle.answer),
+      status: answered(() => ({ data: bundle.status })),
+    },
+    profiles: { getEffectiveRenderers: answered(() => ({})) },
+    widgetDefinitions: { get: answered(() => ({ data: bundle.cell })) },
+  },
 }));
 
 import MarkdownView from "./markdown-view";
+import { MAX_FRAMED_ENTITY_CARDS } from "./embed-view";
 import { EmbedHostContext } from "./embed-context";
 import {
   cellEmbedRead,
@@ -110,14 +146,58 @@ describe("a `frame` row that opens with <title> runs as a page", () => {
   });
 });
 
-describe("a cell the console does not run is a door", () => {
-  it("a React cell is a link to its cell card, not a bare chip", () => {
+describe("a React cell runs in the module frame on the pod's bundle", () => {
+  it("with the bundle installed, it runs in the module frame, never the page frame", () => {
+    bundle.answer = {
+      data: {
+        notModified: false,
+        setSha256: "s1",
+        modules: {
+          react: "r",
+          reactDom: "rd",
+          reactDomClient: "rdc",
+          jsxRuntime: "jsx",
+          tokensCss: ":root{}",
+        },
+        kitExports: [],
+      },
+    };
+    try {
+      const out = draw(
+        block("cell:crm:deal-board"),
+        readOf({ rendererType: "frame", rendererSource: REACT })
+      );
+      const frames = iframes(out);
+      expect(frames).toHaveLength(1);
+      expect(attr(frames[0]!, "sandbox")).toBe(CELL_MODULE_FRAME_SANDBOX);
+      expect(attr(frames[0]!, "src")).toBeNull();
+    } finally {
+      bundle.answer = { error: { data: { code: "NOT_FOUND" } } };
+    }
+  });
+
+  it("without the bundle, it says so beside the link to its cell page", () => {
     const out = draw(
       block("cell:crm:deal-board"),
       readOf({ rendererType: "frame", rendererSource: REACT })
     );
     expect(iframes(out)).toHaveLength(0);
+    expect(out).toContain("Synap’s renderers aren’t on this pod.");
     // The chip itself is the link: its name sits inside the <a>.
+    expect(out).toMatch(
+      /<a [^>]*href="\/open\/cell\/cell%3Acrm%3Adeal-board"[^>]*>(?:(?!<\/a>).)*Deal board(?:(?!<\/a>).)*<\/a>/
+    );
+  });
+});
+
+describe("a cell the console does not run is a door", () => {
+  it("a built-in cell is a link to its cell page, not a bare chip", () => {
+    const out = draw(
+      block("cell:crm:deal-board"),
+      readOf({ rendererType: "builtin", rendererSource: REACT })
+    );
+    expect(iframes(out)).toHaveLength(0);
+    expect(out).not.toContain("renderers aren’t on this pod");
     expect(out).toMatch(
       /<a [^>]*href="\/open\/cell\/cell%3Acrm%3Adeal-board"[^>]*>(?:(?!<\/a>).)*Deal board(?:(?!<\/a>).)*<\/a>/
     );
@@ -423,5 +503,98 @@ describe("cellIsHtmlPage — the stored mechanism decides", () => {
     expect(
       cellIsHtmlPage({ rendererType: "iframe", rendererSource: null })
     ).toBe(false);
+  });
+});
+
+// ─── Frames per body ────────────────────────────────────────────────────────
+
+describe("a body runs at most MAX_FRAMED_ENTITY_CARDS entity cards in a frame", () => {
+  const CARD_CELL = "cell:synap-renderers:entity-card";
+  const IDS = [
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+    "33333333-3333-4333-8333-333333333333",
+  ];
+  const entityBlock = (id: string) =>
+    [`:::synap-entity{id="${id}"}`, "About this record.", ":::"].join("\n");
+
+  function drawEntities() {
+    return renderToStaticMarkup(
+      <EmbedHostContext.Provider
+        value={{
+          useEntity: (id) => ({
+            state: "ready",
+            title: `Record ${id.slice(0, 1)}`,
+            card: { entityId: id, profileSlug: "deal", workspaceId: "ws-1" },
+          }),
+        }}
+      >
+        <MarkdownView source={IDS.map(entityBlock).join("\n\n")} />
+      </EmbedHostContext.Provider>
+    );
+  }
+
+  it("the first entity card runs in the frame; the others are their identity card", () => {
+    bundle.answer = {
+      data: {
+        notModified: false,
+        setSha256: "s1",
+        modules: {
+          react: "r",
+          reactDom: "rd",
+          reactDomClient: "rdc",
+          jsxRuntime: "jsx",
+          tokensCss: ":root{}",
+        },
+        kitExports: [],
+      },
+    };
+    bundle.status = {
+      bundle: {
+        slug: "synap-renderers",
+        version: "1",
+        setSha256: "s1",
+        reactVersion: "19.2.3",
+      },
+      defaults: { "entity-card": "entity-card" },
+      installed: [
+        {
+          key: CARD_CELL,
+          runtime: "frame",
+          contentKind: "entity-card",
+          viewTypes: [],
+        },
+      ],
+    };
+    bundle.cell = {
+      typeKey: CARD_CELL,
+      rendererType: "frame",
+      rendererSource: REACT,
+      workspaceId: "ws-1",
+    };
+    try {
+      const out = drawEntities();
+      expect(MAX_FRAMED_ENTITY_CARDS).toBe(1);
+      const frames = iframes(out);
+      expect(frames).toHaveLength(MAX_FRAMED_ENTITY_CARDS);
+      expect(attr(frames[0]!, "sandbox")).toBe(CELL_MODULE_FRAME_SANDBOX);
+      // Every record is still a door to its own page.
+      for (const id of IDS) expect(out).toContain(`href="/open/entity/${id}"`);
+      // The drawn card keeps its door under it (beside its cover while it starts).
+      expect(out.split(`href="/open/entity/${IDS[0]}"`).length - 1).toBe(2);
+      // The body has ONE status region, the skeletons none of their own.
+      expect(out.match(/role="status"/g) ?? []).toHaveLength(1);
+    } finally {
+      bundle.answer = { error: { data: { code: "NOT_FOUND" } } };
+      bundle.status = { bundle: null, defaults: {}, installed: [] };
+      bundle.cell = undefined;
+    }
+  });
+
+  it("with no renderer on the pod, every card is its identity card and nothing waits", () => {
+    const out = drawEntities();
+    expect(iframes(out)).toHaveLength(0);
+    for (const id of IDS) expect(out).toContain(`href="/open/entity/${id}"`);
+    expect(out).not.toContain('aria-busy="true"');
   });
 });

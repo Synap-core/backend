@@ -481,6 +481,173 @@ describe("reconcileCapabilitiesToTemplates — earned contentHash stamp", () => 
 });
 
 /**
+ * The container's COMPUTER BLOCKS (`metadata.computer`) are template-declared
+ * config the reconcile must converge. Live, 2026-11-10: media-ffmpeg gained the
+ * `range-cut` recipe; the reconcile diffed skills/tools/verbs (no drift),
+ * stamped the NEW contentHash over the OLD blocks, and the fast path then
+ * skipped the container for good: the pod said "up to date", an installation
+ * update found nothing to ask for, and a range-cut run was refused.
+ */
+describe("reconcileCapabilitiesToTemplates — computer blocks", () => {
+  const recipe = (name: string) => ({ name, params: {}, steps: [] });
+  const oldBlocks = {
+    placement: { runsOn: ["computer"] },
+    install: { darwin: [{ run: ["brew", "install", "ffmpeg-full"] }] },
+    recipes: [recipe("audio-extract")],
+  };
+  const newBlocks = {
+    ...oldBlocks,
+    recipes: [recipe("audio-extract"), recipe("range-cut")],
+  };
+  const ffmpegDef = (blocks: Record<string, unknown>, contentHash: string) => ({
+    key: "media-ffmpeg",
+    name: "ffmpeg on your computer",
+    updatePolicy: "auto" as const,
+    contentHash,
+    tools: [],
+    skills: [],
+    ...blocks,
+  });
+  const container = (metadata: Record<string, unknown>): Row => ({
+    id: "container-ffmpeg",
+    name: "ffmpeg on your computer",
+    createdBy: "user-1",
+    workspaceId: null,
+    metadata: { templateKey: "media-ffmpeg", ...metadata },
+  });
+  const stampedMetadata = () =>
+    (state.updateCalls.at(-1)!.set as { metadata: Record<string, unknown> })
+      .metadata;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    state.memberSkillLinkRows = [];
+    state.installedSkillRows = [];
+    state.memberToolRows = [];
+    state.updateCalls.length = 0;
+    createCapabilityFromDefinition.mockResolvedValue(undefined);
+  });
+
+  it("the live shape: the new hash already stamped by v14 over the old blocks → the new blocks land", async () => {
+    loadCapabilityTemplate.mockResolvedValue(ffmpegDef(newBlocks, "h-new"));
+    state.containersRows = [
+      container({
+        contentHash: "h-new",
+        comparatorVersion: 14,
+        computer: oldBlocks,
+        mode: "kept",
+      }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.applied.map((a) => a.reason)).toEqual([
+      "reconciled: computerBlocks",
+    ]);
+    const m = stampedMetadata();
+    expect(
+      (m.computer as { recipes: Array<{ name: string }> }).recipes.map(
+        (r) => r.name
+      )
+    ).toEqual(["audio-extract", "range-cut"]);
+    expect(m.contentHash).toBe("h-new");
+    expect(m.comparatorVersion).toBe(DRIFT_COMPARATOR_VERSION);
+    expect(m.mode).toBe("kept");
+    // Only the pod's definition moved: nothing was re-applied.
+    expect(createCapabilityFromDefinition).not.toHaveBeenCalled();
+  });
+
+  it("a catalog edit that only changes the blocks (new hash) stamps the new blocks, never the old", async () => {
+    loadCapabilityTemplate.mockResolvedValue(ffmpegDef(newBlocks, "h-new"));
+    state.containersRows = [
+      container({
+        contentHash: "h-old",
+        comparatorVersion: DRIFT_COMPARATOR_VERSION,
+        computer: oldBlocks,
+      }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    await reconcileCapabilitiesToTemplates({});
+
+    expect(stampedMetadata().computer).toEqual(newBlocks);
+  });
+
+  it("a dry run reports the blocks and writes nothing", async () => {
+    loadCapabilityTemplate.mockResolvedValue(ffmpegDef(newBlocks, "h-new"));
+    state.containersRows = [
+      container({ contentHash: "h-new", computer: oldBlocks }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({ dryRun: true });
+
+    expect(report.applied.map((a) => a.reason)).toEqual([
+      "would reconcile: computerBlocks",
+    ]);
+    expect(state.updateCalls).toHaveLength(0);
+  });
+
+  it("the stamp after a re-apply keeps the new blocks (never the pre-apply ones)", async () => {
+    // A skill drift sends it through the applier; the stamp that follows
+    // spreads the metadata read BEFORE the apply, which still holds the old
+    // blocks.
+    loadCapabilityTemplate.mockResolvedValue({
+      ...ffmpegDef(newBlocks, "h-new"),
+      skills: [{ name: "ffmpeg_probe", kind: "declarative", parameters: {} }],
+    });
+    state.containersRows = [
+      container({ contentHash: "h-old", computer: oldBlocks }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(createCapabilityFromDefinition).toHaveBeenCalledTimes(1);
+    expect(report.applied[0]!.reason).toContain("missing=[ffmpeg_probe]");
+    expect(stampedMetadata().computer).toEqual(newBlocks);
+  });
+
+  it("CONTROL: blocks equal to the stored ones (key order aside) are no drift", async () => {
+    loadCapabilityTemplate.mockResolvedValue(ffmpegDef(newBlocks, "h-new"));
+    const reordered = {
+      recipes: newBlocks.recipes,
+      install: newBlocks.install,
+      placement: newBlocks.placement,
+    };
+    state.containersRows = [
+      container({ contentHash: "h-new", computer: reordered }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped[0]!.reason).toBe("no drift");
+    expect(report.applied).toHaveLength(0);
+  });
+
+  it("CONTROL: a definition with no computer blocks leaves a stored block alone", async () => {
+    loadCapabilityTemplate.mockResolvedValue(ffmpegDef({}, "h-new"));
+    state.containersRows = [
+      container({ contentHash: "h-old", computer: oldBlocks }),
+    ];
+
+    const { reconcileCapabilitiesToTemplates } =
+      await import("./reconcile-capabilities-to-templates.js");
+    const report = await reconcileCapabilitiesToTemplates({});
+
+    expect(report.skipped[0]!.reason).toBe("no drift");
+    expect(stampedMetadata().computer).toEqual(oldBlocks);
+  });
+});
+
+/**
  * A paramless reconcile must never re-apply a template that bakes an
  * install-time `{{param}}` on ANY field the applier writes — not only in skill
  * NAMES. unipile-linkedin's names are plain while its code bakes the account

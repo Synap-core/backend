@@ -8,6 +8,8 @@
  * 3. Resource-level checks (optional: specific resource access)
  */
 
+import { membershipHolderIds } from "./owner-person.js";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -32,6 +34,8 @@ export interface PermissionCheckParams {
     ids?: string[]; // Resource can be in multiple projects
   };
   requiredPermission: PermissionType;
+  /** An agent acts through `userId` (its person): roles capped at editor. */
+  asAgent?: boolean;
 }
 
 export interface PermissionResult {
@@ -68,36 +72,53 @@ export function hasRolePermission(
 // ============================================================================
 
 /**
- * Generic membership check - works for both workspaces and projects
+ * The highest role an agent acts with through its person's membership: it may
+ * write, never manage, invite or delete as an owner or admin would.
+ */
+export function agentRoleCap(role: UserRole): UserRole {
+  return role === "owner" || role === "admin" ? "editor" : role;
+}
+
+/** A row found through another user's membership is an agent's: capped. */
+function roleOfRow(
+  member: { role: string; userId: string },
+  userId: string
+): UserRole {
+  const role = member.role as UserRole;
+  return member.userId === userId ? role : agentRoleCap(role);
+}
+
+/**
+ * Generic membership check - works for both workspaces and projects. An agent
+ * holds no membership: it is checked through its person's
+ * (`membershipHolderIds`), at most as an editor.
  */
 export async function getMembership(
   db: any,
   context: MembershipContext
 ): Promise<{ role: UserRole } | null> {
   if (context.type === "workspace") {
-    // Check workspace_members table
     const member = await db.query.workspaceMembers.findFirst({
-      where: (members: any, { eq, and }: any) =>
+      where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.workspaceId, context.id),
-          eq(members.userId, context.userId)
+          inArray(members.userId, membershipHolderIds(context.userId))
         ),
     });
 
-    return member ? { role: member.role as UserRole } : null;
+    return member ? { role: roleOfRow(member, context.userId) } : null;
   }
 
   if (context.type === "project") {
-    // Check project_members table
     const member = await db.query.projectMembers.findFirst({
-      where: (members: any, { eq, and }: any) =>
+      where: (members: any, { eq, and, inArray }: any) =>
         and(
           eq(members.projectId, context.id),
-          eq(members.userId, context.userId)
+          inArray(members.userId, membershipHolderIds(context.userId))
         ),
     });
 
-    return member ? { role: member.role as UserRole } : null;
+    return member ? { role: roleOfRow(member, context.userId) } : null;
   }
 
   return null;
@@ -132,12 +153,15 @@ export async function getProjectMembership(
 
   // Check if user is member of ANY of the projects
   const member = await db.query.projectMembers.findFirst({
-    where: (members: any, { eq, and, inArray }: any) =>
-      and(inArray(members.projectId, projectIds), eq(members.userId, userId)),
+    where: (members: any, { and, inArray }: any) =>
+      and(
+        inArray(members.projectId, projectIds),
+        inArray(members.userId, membershipHolderIds(userId))
+      ),
   });
 
   return member
-    ? { role: member.role as UserRole, projectId: member.projectId }
+    ? { role: roleOfRow(member, userId), projectId: member.projectId }
     : null;
 }
 
@@ -160,7 +184,8 @@ export async function getProjectMembership(
 export async function verifyPermission(
   params: PermissionCheckParams
 ): Promise<PermissionResult> {
-  const { db, userId, workspace, project, requiredPermission } = params;
+  const { db, userId, workspace, project, requiredPermission, asAgent } =
+    params;
 
   // ========================================================================
   // Level 1: Workspace Membership Check (ALWAYS REQUIRED)
@@ -173,11 +198,9 @@ export async function verifyPermission(
     };
   }
 
-  const workspaceMember = await getWorkspaceMembership(
-    db,
-    workspace.id,
-    userId
-  );
+  const found = await getWorkspaceMembership(db, workspace.id, userId);
+  const workspaceMember =
+    found && asAgent ? { role: agentRoleCap(found.role) } : found;
 
   if (!workspaceMember) {
     return {
@@ -192,7 +215,11 @@ export async function verifyPermission(
   // ========================================================================
 
   if (project?.ids && project.ids.length > 0) {
-    const projectMember = await getProjectMembership(db, project.ids, userId);
+    const projectFound = await getProjectMembership(db, project.ids, userId);
+    const projectMember =
+      projectFound && asAgent
+        ? { ...projectFound, role: agentRoleCap(projectFound.role) }
+        : projectFound;
 
     // User is a member of the project - use project role (takes precedence)
     if (projectMember) {

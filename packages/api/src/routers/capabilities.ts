@@ -10,7 +10,10 @@
  *   - `serviceUsageStats` aggregates message counts by serviceId from messages JSONB
  */
 
-import { presenceProofSchema } from "@synap-core/types/presence";
+import {
+  PRESENCE_BATCH_MAX,
+  presenceProofSchema,
+} from "@synap-core/types/presence";
 import { z } from "zod";
 import { RendererRefSchema } from "../services/profiles/renderer-ref-schema.js";
 import { TRPCError } from "@trpc/server";
@@ -51,6 +54,7 @@ import {
   inArray,
   drizzleSql,
   listableEntityWhere,
+  usableInSpaceWhere,
 } from "@synap/database";
 import type { CapabilityRendererPage } from "@synap/database";
 import { MessageAuthorType } from "@synap/database/schema";
@@ -63,6 +67,7 @@ import { completeFocusSession } from "../services/focus-sessions/complete-sessio
 import { listCapabilityCompositions } from "../services/diagnose/capability-composition.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { setSkillApproved } from "../services/capabilities/set-skill-approved.js";
+import { enableMany } from "../services/capabilities/enable-many.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { ownerPrivateVisibleWhere } from "../utils/user-visible-where.js";
 import { visibleSkillsWhere } from "../services/skills/visibility.js";
@@ -70,12 +75,14 @@ import { entitiesRouter } from "./entities.js";
 import { skillsRouter } from "./skills.js";
 import {
   CreateVerbInput,
+  createdVerbMetadata,
   validateCreateVerbInput,
 } from "./mcp/validate-create-verb.js";
 import {
   listCapabilities,
   sectionCapabilities,
   DEFAULT_QUERY_LIMIT,
+  approvalVerdictForGrants,
 } from "../services/capabilities/capability-registry.js";
 import {
   buildProviderVerbSpec,
@@ -99,9 +106,8 @@ import {
 } from "../services/capabilities/marketplace-install.js";
 import { executeCapability } from "../services/capabilities/execute-capability.js";
 import { CapabilityExecuteInput } from "../contracts/capability-execute.js";
-import { setCapabilityRenderer } from "../services/capabilities/set-capability-renderer.js";
+import { bindCapabilityRenderer } from "../services/capabilities/bind-capability-renderer.js";
 import { rendererRefScopeViolation } from "../services/profiles/renderer-ref-scope.js";
-import { checkPermissionOrPropose } from "../utils/permission-check.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
 import {
   findCapabilityShadows,
@@ -417,6 +423,7 @@ const capabilityRegistryRouter = router({
           validated.data
         ) as unknown as Record<string, unknown>,
         parameters: input.parameters,
+        metadata: createdVerbMetadata(input),
         executionMode: "sync",
         timeoutSeconds: 30,
       });
@@ -543,7 +550,8 @@ async function findDependentProcesses(
         status: playbooks.status,
       })
       .from(playbooks)
-      .leftJoin(
+      // The ONE playbook → automation link (0425): the join table only.
+      .innerJoin(
         playbookAutomations,
         eq(playbookAutomations.playbookId, playbooks.id)
       )
@@ -551,15 +559,12 @@ async function findDependentProcesses(
         and(
           playbookVisibility,
           workspaceId
-            ? or(
-                isNull(playbooks.workspaceId),
-                eq(playbooks.workspaceId, workspaceId)
-              )
+            ? usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+                type: "playbook",
+                id: playbooks.id,
+              })
             : undefined,
-          or(
-            inArray(playbooks.flowAutomationId, matchedAutomationIds),
-            inArray(playbookAutomations.automationId, matchedAutomationIds)
-          )
+          inArray(playbookAutomations.automationId, matchedAutomationIds)
         )
       )
       .orderBy(playbooks.name);
@@ -659,7 +664,9 @@ export const capabilitiesRouter = router({
    * DELIBERATELY absent from DEFAULT_AUTO_APPROVE like every meta-model write):
    * an operator applies immediately; an agent caller gets `status:"proposed"`,
    * which the `capability/renderer.set` proposal executor materializes on
-   * approval via the SAME `setCapabilityRenderer` service used here.
+   * approval via the SAME `setCapabilityRenderer` service. The gate and the
+   * apply live in `bindCapabilityRenderer`, the door MCP
+   * `synap_promote_cell_to_renderer` (capability target) also calls.
    *
    * scope 'workspace' (default) writes the per-workspace overlay
    * (workspaces.settings.capabilityRenderers[capabilityId]); scope 'capability'
@@ -679,80 +686,20 @@ export const capabilitiesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = requireUserId(ctx.userId);
-      const scope = input.scope ?? "workspace";
-      const workspaceId = input.workspaceId ?? null;
-
-      // Load the capability by id ALONE, then gate on the LOADED row's workspace
-      // (never a request-supplied workspaceId — the cross-workspace write-leak
-      // class). assertWorkspaceWrite is the AUTHZ floor; the governance gate
-      // below decides auto-apply vs propose, not access.
-      const [cap] = await db
-        .select({
-          id: capabilitiesTable.id,
-          workspaceId: capabilitiesTable.workspaceId,
-          createdBy: capabilitiesTable.createdBy,
-        })
-        .from(capabilitiesTable)
-        .where(eq(capabilitiesTable.id, input.capabilityId))
-        .limit(1);
-      if (!cap) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Capability not found",
-        });
-      }
-
-      if (scope === "capability") {
-        // Editing the capability's own default → must be able to write ITS
-        // workspace (or own it, if pod-wide).
-        await assertWorkspaceWrite(db, userId, {
-          workspaceId: cap.workspaceId,
-          ownerId: cap.createdBy,
-        });
-      } else {
-        if (!workspaceId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message: "workspaceId is required for a workspace-scoped renderer",
-          });
-        }
-        // Writing a per-workspace overlay → must be able to write THAT workspace.
-        await assertWorkspaceWrite(db, userId, { workspaceId });
-      }
-
-      const pages = input.pages as CapabilityRendererPage[];
-
-      const perm = await checkPermissionOrPropose({
+      // The ONE governed door, shared with MCP `synap_promote_cell_to_renderer`
+      // (capability target): authorize on the loaded capability, gate, apply.
+      const result = await bindCapabilityRenderer({
         userId,
-        // Governance lens: the capability's own workspace for a default write,
-        // the overlay target for a workspace-scoped write.
-        workspaceId: scope === "capability" ? cap.workspaceId : workspaceId,
-        subjectType: "capability",
-        action: "renderer.set",
         source: "operator",
-        reasoning: input.reasoning,
-        // STORE EVERYTHING approval needs — the executor reads capabilityId +
-        // scope + the full pages payload, so approving actually applies the
-        // binding (not a {id}-only gate that no-ops).
-        data: { capabilityId: input.capabilityId, scope, pages },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return { status: "proposed" as const, proposalId: perm.proposalId };
-      }
-
-      // Granted (operator) → apply immediately via the shared write path.
-      await setCapabilityRenderer({
-        userId,
-        workspaceId,
         capabilityId: input.capabilityId,
-        pages,
-        scope,
+        workspaceId: input.workspaceId ?? null,
+        scope: input.scope ?? "workspace",
+        pages: input.pages as CapabilityRendererPage[],
+        reasoning: input.reasoning,
       });
-      return { status: "applied" as const, proposalId: null };
+      return result.status === "proposed"
+        ? { status: "proposed" as const, proposalId: result.proposalId }
+        : { status: "applied" as const, proposalId: null };
     }),
 
   /**
@@ -972,6 +919,35 @@ export const capabilitiesRouter = router({
     }),
 
   /**
+   * Turn several verbs and tools ON with ONE proof of presence (founder,
+   * 18 Nov 2026). The proof names the whole set (`capability_batch:<digest of
+   * the sorted ids>`); each item then takes the same owner checks as its single
+   * door, and comes back with its own result (a failed item never hides the
+   * others). At most `PRESENCE_BATCH_MAX` in all.
+   */
+  enableMany: protectedProcedure
+    .input(
+      z.object({
+        skillIds: z
+          .array(z.string().uuid())
+          .max(PRESENCE_BATCH_MAX)
+          .default([]),
+        toolIds: z.array(z.string().uuid()).max(PRESENCE_BATCH_MAX).default([]),
+        presence: presenceProofSchema.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) =>
+      enableMany({
+        userId: requireUserId(ctx.userId),
+        skillIds: input.skillIds,
+        toolIds: input.toolIds,
+        agentUserId: ctx.agentUserId,
+        presence: input.presence ?? null,
+        door: "trpc.capabilities.enableMany",
+      })
+    ),
+
+  /**
    * Apply a capability template — instantiate {vault · tools · skills · playbooks}
    * from an inline `definition` or a seed `templateKey`.
    *
@@ -1189,6 +1165,7 @@ export const capabilitiesRouter = router({
         userId: ctx.userId,
         connectionSelector: input.connectionSelector,
         idempotencyKey: input.idempotencyKey,
+        reasoning: input.reasoning,
         channelId: input.channelId ?? null,
         sourceMessageId: input.sourceMessageId ?? null,
         sessionId: input.sessionId ?? null,
@@ -1631,11 +1608,11 @@ export const capabilitiesRouter = router({
    * ALSO surfaces playbooks that use the verb — TRANSITIVELY, via the
    * automation(s) they're composed with. A playbook has no `flowDefinition`
    * of its own (see `packages/database/src/schema/playbooks.ts`): its only
-   * link to a capability-verb node is through the automation it drives
-   * (`flowAutomationId`, the legacy single-automation link) or the automations
-   * it composes (`playbook_automations`, the first-class join table). So "a
-   * playbook uses this capability" means "a matching automation from above is
-   * that playbook's `flowAutomationId` OR is joined via `playbook_automations`" —
+   * link to a capability-verb node is through its automations, read from
+   * `playbook_automations` ONLY (0425: the one playbook → automation link; its
+   * schedule and canvas flow are rows there too). So "a playbook uses this
+   * capability" means "a matching automation from above is joined to it via
+   * `playbook_automations`" —
    * never a direct verbId on the playbook row (there isn't one; a false direct
    * backlink would be worse than this correct transitive one).
    *
@@ -1654,9 +1631,8 @@ export const capabilitiesRouter = router({
       })
     )
     .query(async ({ ctx, input }) => {
-      // Two soft links can carry a playbook match: the legacy single
-      // `flowAutomationId` and the first-class `playbook_automations` join table.
-      // Both, plus the access floor, live in `findDependentProcesses` — the ONE
+      // The playbook match is the `playbook_automations` join (0425: the one
+      // link), plus the access floor, in `findDependentProcesses` — the ONE
       // implementation this door and `blastRadius` share.
       const { automationRows, playbookRows } = await findDependentProcesses(
         ctx,
@@ -1750,7 +1726,7 @@ export const capabilitiesRouter = router({
       // `data.capabilityId` (the tool row id) or `data.verbId` alone —
       // `CapabilityNodeDef.capabilityId` is OPTIONAL (schema/automations.ts)
       // and the shipped first-party report automation emits four verb-only
-      // nodes (`ensure-report-automation.ts`). A capabilityId-only containment
+      // nodes (base.yaml's report automation). A capabilityId-only containment
       // reports ZERO dependents for the built-in `synap_core` tool — the exact
       // "nothing depends on this" lie this door exists to prevent. So the
       // tool's own verb catalog is ORed in alongside the id match.
@@ -1775,19 +1751,19 @@ export const capabilitiesRouter = router({
       // Grants on the tool itself. Indexed by
       // (grantable_type, grantable_id, revoked_at) — the hot-path index.
       //
-      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`), a
-      // scope and an exec-mode, so it is not public metadata. Unless the caller
+      // FLOOR, not just a lens: a grant row names a principal (`grantedTo`)
+      // and a scope, so it is not public metadata. Unless the caller
       // OWNS the tool, only grants the caller is a party to (issued them, or is
       // the grantee) are returned. A supplied workspace then NARROWS on top —
       // the same `or(isNull, eq)` shape the automation query uses, so pod-wide
       // grants are never dropped by the narrowing alone.
       const callerOwnsTool = tool.createdBy === userId;
-      const grantRows = await database
+      const grantRowsRead = await database
         .select({
           grantId: vaultGrants.id,
           grantedTo: vaultGrants.grantedTo,
+          workspaceId: vaultGrants.workspaceId,
           scope: vaultGrants.scope,
-          execMode: vaultGrants.execMode,
           expiresAt: vaultGrants.expiresAt,
         })
         .from(vaultGrants)
@@ -1811,6 +1787,24 @@ export const capabilitiesRouter = router({
           )
         )
         .orderBy(vaultGrants.createdAt);
+      // How each grant's agent runs this tool: the approval row (decision D2),
+      // never a column of the grant. Same wire shape as before (`execMode`).
+      const verdictByGrant = await approvalVerdictForGrants(
+        grantRowsRead.map((g) => ({
+          id: g.grantId,
+          grantableType: "tool",
+          grantableId: input.toolId,
+          grantedTo: g.grantedTo,
+          workspaceId: g.workspaceId,
+        }))
+      );
+      const grantRows = grantRowsRead.map((g) => ({
+        grantId: g.grantId,
+        grantedTo: g.grantedTo,
+        scope: g.scope,
+        execMode: verdictByGrant.get(g.grantId) ?? "propose",
+        expiresAt: g.expiresAt,
+      }));
 
       // The ONE honest per-connection number: literally the rows the detach
       // path flips to "disconnected" (capability-nango-sync.ts). `null` (not 0)

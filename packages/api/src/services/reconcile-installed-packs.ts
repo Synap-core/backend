@@ -66,6 +66,12 @@ export interface InstalledPackReconcileOutcome {
     /** Changes queued for review, not applied — withhold the stamp. */
     proposed: number;
     ownerOwned: string[];
+    /**
+     * Who-runs-it changes the template made that a person keeps or drops
+     * (`<playbook>.runner`, `<playbook>.stages.<key>.runner`): never applied
+     * by this pass, the pod owns its runners.
+     */
+    held: string[];
   };
 }
 
@@ -130,6 +136,7 @@ export async function reconcileInstalledPacks(opts: {
         ownerOwned: pb.results.flatMap((r) =>
           r.ownerOwned.map((f) => `${r.name}.${f}`)
         ),
+        held: pb.results.flatMap((r) => r.held.map((f) => `${r.name}.${f}`)),
       };
       if (!playbookReportConverged(pb)) {
         out.push({ slug, status: "partial", playbooks });

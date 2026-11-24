@@ -32,6 +32,7 @@ import {
   GRANT_DOOR_UNSUPPORTED,
   isFencedGrant,
   mcpToolAllowed,
+  mcpToolRefusal,
 } from "../../access/grant-door-fence.js";
 
 /** Who is calling, as the HTTP door resolved the key (`resolveKeyIdentity`). */
@@ -96,7 +97,11 @@ export function toolCallRefusal(
     isFencedGrant(principal.grant) &&
     !mcpToolAllowed(tool.name, tool.annotations?.readOnlyHint, principal.grant!)
   ) {
-    return GRANT_DOOR_UNSUPPORTED;
+    return mcpToolRefusal(
+      tool.name,
+      tool.annotations?.readOnlyHint,
+      principal.grant!
+    );
   }
   return null;
 }

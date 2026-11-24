@@ -51,14 +51,20 @@
 import {
   accessModel,
   describeAccess,
+  documentScopes,
   grantsOfRequests,
+  isReadPermission,
+  normalizeAppAccess,
+  pairsOfAccess,
+  parseAppAccess,
   parseRequestPlace,
   PlaceError,
   placeKey,
   summarizeGrant,
+  type AppAccess,
   type Place,
 } from "../grants/index.js";
-import { resolvePlaceLabel } from "../vocabulary/index.js";
+import { nounInSentence, resolvePlaceLabel } from "../vocabulary/index.js";
 import type { UnitTone } from "../units/state.js";
 import { isNonWidenableGovernanceReason } from "./governance-grant-options.js";
 
@@ -619,6 +625,33 @@ export interface AppConnectSummary {
   requests: AppConnectRequestLike[];
   /** Who asks: an app (`app/connect`) or an AI (`agent/connect`). */
   holderKind: "app" | "agent";
+  /**
+   * "add" when the app (or the AI's key) asks for one MORE thing (`data.mode`,
+   * plan 647ebfd4 option C): approving adds these pairs to what it already holds. Absent
+   * for a request whose approval replaces the whole set.
+   */
+  mode?: "add";
+}
+
+/**
+ * The card's title for an app (or an AI) asking for one more thing, "Content
+ * Studio asks to read notes in Content OS": each space's line in grant words
+ * (`summarizeGrant`, the vocabulary door) said mid-sentence. null when a line
+ * is not in one space (an ask is always per space; anything else keeps the
+ * generic title).
+ */
+function addAskTitle(
+  appName: string,
+  lines: readonly AppConnectLine[]
+): string | null {
+  if (lines.length === 0 || lines.some((l) => l.place.kind !== "spaces"))
+    return null;
+  const parts = lines.map((l) => `${nounInSentence(l.what)} in ${l.where}`);
+  const said =
+    parts.length === 1
+      ? parts[0]
+      : `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
+  return `${appName} asks to ${said}`;
 }
 
 /** Is this an app's request for access? */
@@ -657,6 +690,8 @@ export function summarizeAppConnectRequest(input: {
   requests: ReadonlyArray<AppConnectRequestLike>;
   workspaceNames?: Readonly<Record<string, string>>;
   holderKind?: "app" | "agent";
+  /** "add": the app asks for one more thing (see `AppConnectSummary.mode`). */
+  mode?: "add";
 }): AppConnectSummary {
   const holderKind = input.holderKind ?? "app";
   const names: Record<string, string> = { ...input.workspaceNames };
@@ -691,7 +726,11 @@ export function summarizeAppConnectRequest(input: {
       return { workspaceId, place, what, where, text: `${what} · ${where}` };
     }
   );
-  const title = `${input.appName} asks for access`;
+  // An app's ask or an AI's (`agent/connect` of mode "add") reads the same:
+  // "<holder> asks to <verb> in <space>".
+  const title =
+    (input.mode === "add" ? addAskTitle(input.appName, lines) : null) ??
+    `${input.appName} asks for access`;
   const access = describeAccess(
     accessModel(grantsOfRequests(input.requests), holderKind),
     { names }
@@ -704,6 +743,7 @@ export function summarizeAppConnectRequest(input: {
     sentence: lines.length ? `${title}. ${access}` : title,
     requests: [...input.requests],
     holderKind,
+    ...(input.mode === "add" ? { mode: "add" as const } : {}),
   };
 }
 
@@ -713,6 +753,89 @@ export function summarizeAppConnectRequest(input: {
  * data is unreadable (a caller then falls back to its generic title — never a
  * half-read sentence).
  */
+/**
+ * The card of a v2 approval (app permissions W3d, review of #1197): what the
+ * `app/connect` executor APPLIES is `data.access`, so the card reads it, not
+ * the derived pairs (which leave out its projects). One line per tier and
+ * place: each read place, each write place, every project ("All projects"
+ * when it is the live pin). `names` carries the space and project names the
+ * filing door wrote (`data.accessNames`).
+ */
+export function summarizeAppAccessProposal(input: {
+  appName: string;
+  access: AppAccess;
+  names?: Readonly<Record<string, string>>;
+  mode?: "add";
+}): AppConnectSummary {
+  const access = normalizeAppAccess(input.access);
+  const names: Record<string, string> = { ...input.names };
+  const lines: AppConnectLine[] = [];
+  const line = (
+    permissions: readonly string[],
+    place: Place,
+    workspaceId: string | null
+  ) => {
+    if (permissions.length === 0) return;
+    const what = summarizeGrant({
+      permissions,
+      workspaceIds: place.kind === "spaces" ? [...place.ids] : null,
+      projectIds: place.kind === "projects" ? [...place.ids] : null,
+      entityIds: null,
+    }).what;
+    const where = resolvePlaceLabel(place, names);
+    lines.push({ workspaceId, place, what, where, text: `${what} · ${where}` });
+  };
+  const reads = access.permissions.filter(isReadPermission);
+  const writes = access.permissions.filter((x) => !isReadPermission(x));
+  if (access.read.spaces === "all") line(reads, { kind: "pod" }, null);
+  else {
+    for (const id of access.read.spaces)
+      line(reads, { kind: "spaces", ids: [id] }, id);
+    if (access.read.projects === "all") {
+      if (reads.length > 0) {
+        const what = summarizeGrant({
+          permissions: reads,
+          workspaceIds: null,
+          projectIds: null,
+          entityIds: null,
+        }).what;
+        lines.push({
+          workspaceId: null,
+          place: { kind: "pod" },
+          what,
+          where: "Every project, including ones made later",
+          text: `${what} · Every project, including ones made later`,
+        });
+      }
+    } else
+      for (const id of access.read.projects)
+        line(reads, { kind: "projects", ids: [id] }, null);
+  }
+  for (const id of access.write.spaces)
+    line(writes, { kind: "spaces", ids: [id] }, id);
+  for (const id of access.write.projects)
+    line(writes, { kind: "projects", ids: [id] }, null);
+  const title = `${input.appName} asks for access`;
+  const sentence = describeAccess(accessModel(documentScopes(access), "app"), {
+    names,
+  }).sentence;
+  return {
+    appName: input.appName,
+    title,
+    lines,
+    access: sentence,
+    sentence: lines.length ? `${title}. ${sentence}` : title,
+    requests: pairsOfAccess(access).pairs.map((r) => ({
+      permission: r.permission,
+      workspaceId: r.workspaceId,
+      workspaceName: r.workspaceId ? (names[r.workspaceId] ?? null) : null,
+      scope: (r.workspaceId ? "space" : "pod") as "space" | "pod",
+    })),
+    holderKind: "app",
+    ...(input.mode === "add" ? { mode: "add" as const } : {}),
+  };
+}
+
 export function describeAppConnectProposal(
   p: AppConnectProposalLike,
   workspaceNames?: Readonly<Record<string, string>>
@@ -720,6 +843,27 @@ export function describeAppConnectProposal(
   if (!isConnectProposal(p)) return null;
   const data = rec(p.data);
   const appName = typeof data?.name === "string" ? data.name : null;
+  // A v2 approval: the card shows what is APPLIED (`data.access`).
+  if (appName && p.targetType !== "agent" && data?.access !== undefined) {
+    const access = parseAppAccess(data.access);
+    if (!access) return null;
+    const accessNames = rec(data.accessNames);
+    const names: Record<string, string> = { ...workspaceNames };
+    if (accessNames)
+      for (const [k, v] of Object.entries(accessNames))
+        if (typeof v === "string") names[k] = v;
+    try {
+      return summarizeAppAccessProposal({
+        appName,
+        access,
+        names,
+        ...(data.mode === "add" ? { mode: "add" as const } : {}),
+      });
+    } catch (err) {
+      if (err instanceof PlaceError) return null;
+      throw err;
+    }
+  }
   const raw = Array.isArray(data?.requests) ? data.requests : null;
   if (!appName || !raw) return null;
   const requests: AppConnectRequestLike[] = [];
@@ -749,6 +893,7 @@ export function describeAppConnectProposal(
       requests,
       workspaceNames,
       holderKind: p.targetType === "agent" ? "agent" : "app",
+      ...(data?.mode === "add" ? { mode: "add" as const } : {}),
     });
   } catch (err) {
     if (err instanceof PlaceError) return null;

@@ -8,8 +8,10 @@
  * captured locals → `ctx` fields) changed.
  */
 
+import { withProposalTargetPlace } from "../../../access/proposal-target-place.js";
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
 import { toolError } from "../tool-errors.js";
@@ -21,10 +23,14 @@ import {
   toViewDigest,
   VIEWS_DIGEST_NOTE,
 } from "./read-lean.js";
-import { isUuid, resolveProposalId } from "../../hub-protocol/rest/_shared.js";
+import {
+  isUuid,
+  logger,
+  resolveProposalId,
+} from "../../hub-protocol/rest/_shared.js";
 import { revisionReplyFields } from "../../hub-protocol/rest/_codecs/proposal.js";
 import { type ProposalRejectionReasonCode } from "@synap-core/types/proposals";
-import { CONTENT_KINDS } from "@synap/database/schema";
+import { CONTENT_KINDS, proposals } from "@synap/database/schema";
 import {
   CellPlacementSchema,
   checkCellPlacement,
@@ -33,7 +39,26 @@ import type {
   RendererSlot,
   RendererScope,
 } from "../../../services/profiles/renderer-slots.js";
-import { getDb } from "@synap/database";
+import type { RendererRef } from "@synap/database";
+import {
+  RENDERER_TARGETS,
+  readRendererTarget,
+  rendererTargetProblem,
+} from "../../../services/renderers/renderer-targets.js";
+import {
+  assertCellBindable,
+  assertRendererTargetVisible,
+  cellRendererRefFor,
+  readBoundRenderer,
+} from "../../../services/renderers/renderer-target-checks.js";
+import {
+  bindCapabilityRenderer,
+  withCapabilityPage,
+} from "../../../services/capabilities/bind-capability-renderer.js";
+import { getDb, getRequestGrant, eq } from "@synap/database";
+import { processReadableByGrant } from "../../../access/grant-door-fence.js";
+import { AccessContext, scopedDb } from "../../../access/index.js";
+import { assertKeyMayWrite } from "../../../utils/assert-key-may-write.js";
 import { skillsRouter as regularSkillsRouter } from "../../skills.js";
 import { skillAuthoringProblem } from "../../../services/skills/skill-authoring.js";
 import {
@@ -55,13 +80,26 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageSlice,
+  LIST_PAGE_MAX,
+  VIEWS_PAGE_DEFAULT,
+  WIDGETS_PAGE_DEFAULT,
+  PLAYBOOKS_PAGE_DEFAULT,
+  PLAYBOOK_STAGES_PAGE_DEFAULT,
+  PLAYBOOK_STAGES_PAGE_MAX,
 } from "./shared.js";
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
+import { ON_END_RETIRED_MESSAGE } from "../../../schemas/playbook-process.js";
+import {
+  applyStageEdits,
+  stagesRevision,
+} from "../../../services/playbooks/stage-edits.js";
 import { compactPlaybookMatches } from "./match-playbooks-compact.js";
 import type { ProposalRevisionPatch } from "../../../services/proposals/proposals-service.js";
 import {
   createPlaybookDoor,
   getPlaybookDoor,
+  getProcessDoor,
   listPlaybooksDoor,
   runPlaybookDoor,
   updatePlaybookDoor,
@@ -190,7 +228,7 @@ export const buildHandlers: McpHandlerMap = {
     // Define-time check BEFORE the gate: a source that cannot mount in the
     // frame is refused now, with its line and its fix, instead of becoming a
     // proposal a person approves and then watches fail on every open.
-    const { assertCellSourceMounts } =
+    const { assertCellSourceMounts, resolveCellTypeKey } =
       await import("../../../services/cells/define-cell.js");
     const advice = await assertCellSourceMounts({
       name: parsed.data.name,
@@ -261,6 +299,12 @@ export const buildHandlers: McpHandlerMap = {
         summary: perm.summary,
         reviewPath: perm.reviewPath,
         reviewUrl: perm.reviewUrl,
+        // The key approval will write: bind it with synap_promote_cell_to_renderer.
+        typeKey: await resolveCellTypeKey(
+          { name: parsed.data.name },
+          cellWorkspaceId,
+          await getDb()
+        ),
         ...(perm.deduped ? { deduped: true } : {}),
         // Words, colour, accessibility: what the author can still fix.
         ...(advice.length > 0 ? { advice } : {}),
@@ -286,23 +330,131 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId, caller } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    // Governed: for an AI agent this returns `status: 'proposed'` (binding an
-    // AI-generated cell as a durable renderer is consequential); an operator
-    // auto-applies.
-    const result = await caller.profiles.setRenderer({
+    // ONE door for every renderer target (`renderer-targets.ts`): a kind's
+    // records (profileSlug, or target {kind:'profile', slug}), or one
+    // capability, playbook or view (target {kind, id}).
+    const target = readRendererTarget(args);
+    if (typeof target === "string") return toolError(target);
+    const slot = args.slot as RendererSlot;
+    const scope = (args.scope as RendererScope | undefined) ?? "workspace";
+    const workspaceId = (args.workspaceId as string | undefined) ?? null;
+    const clear = args.clear === true;
+    const cellKey = typeof args.cellKey === "string" ? args.cellKey : undefined;
+    if (clear ? cellKey !== undefined : !cellKey) {
+      return toolError(
+        `Tool '${toolName}': pass cellKey to bind a cell, or clear: true (and no cellKey) to unbind the slot.`
+      );
+    }
+    const problem = rendererTargetProblem(target.kind, slot, scope);
+    if (problem) return toolError(`Tool '${toolName}': ${problem}`);
+    const reasoning = readReasoning(args);
+    const props = args.props as Record<string, unknown> | undefined;
+
+    // Governed: for an AI agent each door returns `status: 'proposed'`
+    // (binding an AI-generated cell as a durable renderer is consequential);
+    // an operator auto-applies.
+    let result: { status: string; proposalId: string | null };
+    if (RENDERER_TARGETS[target.kind].store === "capability_pages") {
+      // The capability page-set's ONE door, shared with the desktop's
+      // `capabilities.setRenderer`. Same checks as the Hub door runs.
+      await assertRendererTargetVisible(target, userId);
+      let ref: RendererRef | null = null;
+      if (cellKey) {
+        await assertCellBindable({ cellKey, workspaceId, userId });
+        ref = await cellRendererRefFor(cellKey, props, workspaceId);
+      }
+      result = await bindCapabilityRenderer({
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        source: "intelligence",
+        capabilityId: (target as { id: string }).id,
+        workspaceId,
+        // A capability's `pod` renderer is its own default, seen everywhere.
+        scope: scope === "pod" ? "capability" : "workspace",
+        pages: (stored) => withCapabilityPage(stored, slot, ref),
+        ...(reasoning ? { reasoning } : {}),
+      });
+    } else {
+      result = await caller.profiles.setRenderer({
+        userId,
+        workspaceId: workspaceId ?? undefined,
+        profileSlug: target.kind === "profile" ? target.slug : target.kind,
+        ...(target.kind === "profile" ? {} : { subjectId: target.id }),
+        slot,
+        ...(clear ? { clear: true } : { cellKey }),
+        props,
+        scope,
+        ...(agentUserId ? { agentUserId } : {}),
+        // `profiles.setRenderer` has declared `reasoning` since it was written
+        // and forwards it into the gate; this door never sent one.
+        ...(reasoning ? { reasoning } : {}),
+      });
+    }
+    if (result.status !== "applied") return ok({ ...result, target, slot });
+    // Read back through the store's reader — what the target's page shows
+    // now — so "applied" is a fact the agent can see, not a claim.
+    const nowBound = await readBoundRenderer({
+      target,
+      slot,
       userId,
-      workspaceId: args.workspaceId as string | undefined,
-      profileSlug: args.profileSlug as string,
-      slot: args.slot as RendererSlot,
-      cellKey: args.cellKey as string,
-      props: args.props as Record<string, unknown> | undefined,
-      scope: args.scope as RendererScope | undefined,
-      ...(agentUserId ? { agentUserId } : {}),
-      // `profiles.setRenderer` has declared `reasoning` since it was written
-      // and forwards it into the gate; this door never sent one.
-      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+      workspaceId: scope === "workspace" ? workspaceId : null,
     });
-    return ok(result);
+    return ok({ ...result, target, slot, nowBound });
+  },
+  synap_propose_app_from_playbook: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const playbookId =
+      typeof args.playbookId === "string" ? args.playbookId.trim() : "";
+    if (!isUuid(playbookId)) {
+      return toolError(
+        `Tool '${toolName}': playbookId must be a playbook's UUID (synap_list_playbooks).`
+      );
+    }
+    // The playbook through its get door: the caller's own floor. A playbook
+    // another person keeps in a space this caller is not in is "not found".
+    let playbook: Awaited<ReturnType<typeof getPlaybookDoor>>;
+    try {
+      playbook = await getPlaybookDoor(playbookDoorIdentity(ctx), playbookId);
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        return ok({
+          status: "refused",
+          reasonCode: "PLAYBOOK_NOT_FOUND",
+          message: `No playbook ${playbookId} that you can see.`,
+          nextStep:
+            "Find the playbook with synap_list_playbooks (or synap_match_playbooks), then call this with its id.",
+        });
+      }
+      throw err;
+    }
+    if (playbook.kind !== "result") {
+      return ok({ error: "error" in playbook ? playbook.error : "not found" });
+    }
+    const { readPlaybookAppFacts, proposePlaybookApp } =
+      await import("../../../services/playbook-app/propose-app-from-playbook.js");
+    const asked =
+      ctx.confinedWorkspaceId ??
+      (typeof args.workspaceId === "string" && args.workspaceId.trim()
+        ? args.workspaceId.trim()
+        : null);
+    const facts = await readPlaybookAppFacts({
+      playbook: playbook.result,
+      workspaceId: asked,
+      userId,
+    });
+    if ("status" in facts) return ok(facts);
+    return ok(
+      await proposePlaybookApp({
+        facts,
+        userId,
+        agentUserId: agentUserId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        reasoning: readReasoning(args) ?? null,
+      })
+    );
   },
   synap_promote_session_to_playbook: async (
     ctx: McpToolContext
@@ -325,7 +477,10 @@ export const buildHandlers: McpHandlerMap = {
     const { toolName, args, apiKeyScopes, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // ONE playbook, in full: the get door (`playbooks.get`, the same one Hub
-    // GET /playbooks/:id reaches), on the same user floor as the list.
+    // GET /playbooks/:id reaches), on the same user floor as the list — plus
+    // the playbook seen whole as a Process (`process`, the ONE process read,
+    // Process wave W2; no new tool): what starts it, steps, checks, what it
+    // moves, its needs with coverage, skills, runs and health.
     const playbookId =
       typeof args.playbookId === "string" && args.playbookId.trim()
         ? args.playbookId.trim()
@@ -340,7 +495,58 @@ export const buildHandlers: McpHandlerMap = {
               : `Playbook ${playbookId} not found among your visible playbooks.`,
         });
       }
-      return ok(one.result);
+      const stages = Array.isArray(one.result.stages) ? one.result.stages : [];
+      // `stagesRevision` vouches that THIS reply holds the stored stages
+      // whole: a whole-list `synap_update_playbook` needs it back. The reply
+      // cap drops it from a reply it has to cut (`WHOLE_READ_MARKS`).
+      const revision = { stagesRevision: stagesRevision(stages) };
+      // ITS STAGES IN PAGES (ticket 8493079e): `limit` / `offset` page the
+      // stages alone, so a playbook too large for one reply reads whole.
+      if (args.limit !== undefined || args.offset !== undefined) {
+        const { page, paging } = pageSlice(
+          stages,
+          args,
+          PLAYBOOK_STAGES_PAGE_DEFAULT,
+          PLAYBOOK_STAGES_PAGE_MAX
+        );
+        return ok({
+          id: one.result.id,
+          name: one.result.name,
+          stages: page,
+          paging,
+          ...(page.length === stages.length ? revision : {}),
+        });
+      }
+      // A key whose grant does not read every part a process composes
+      // (automations, sessions, skills, tools) gets the playbook alone, and
+      // is told why: withheld, never an empty process.
+      if (!processReadableByGrant(getRequestGrant())) {
+        return ok({
+          ...one.result,
+          ...revision,
+          process: null,
+          processWithheld:
+            "Your key's grant does not read every part of a process (its automations, sessions, skills and tools).",
+        });
+      }
+      try {
+        return ok({
+          ...one.result,
+          ...revision,
+          process: await getProcessDoor(playbookDoorIdentity(ctx), playbookId),
+        });
+      } catch (err) {
+        logger.warn(
+          { err, playbookId },
+          "synap_list_playbooks: the process read failed"
+        );
+        return ok({
+          ...one.result,
+          ...revision,
+          process: null,
+          processError: "The process could not be read.",
+        });
+      }
     }
     // User-floor catalog (member workspaces + pod-wide) through the shared list
     // door. Narrow only on an explicit/confined workspaceId — not advisory
@@ -349,7 +555,8 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: confinedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      limit:
+        typeof args.limit === "number" ? args.limit : PLAYBOOKS_PAGE_DEFAULT,
       cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     });
     // How each of these has actually gone for this person — two queries for
@@ -481,12 +688,14 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     // WRITE: confined/explicit lens or advisory focus only — never membership[0].
     const outcome = await createPlaybookDoor(playbookDoorIdentity(ctx), {
       workspaceId: requestedWorkspaceId,
       name: args.name,
       goalTemplate: args.goalTemplate,
       description: args.description as string | undefined,
+      reasoning: readReasoning(args),
       stages: args.stages as PlaybookStageInput[] | undefined,
       status: args.status as
         "draft" | "active" | "paused" | "archived" | undefined,
@@ -506,9 +715,6 @@ export const buildHandlers: McpHandlerMap = {
         if (args.statusProperty !== undefined) {
           subjectProfile.statusProperty = args.statusProperty;
         }
-        // What a session end moves the subject to: validated with the ONE
-        // schema and the definition check's option test by `playbooks.create`.
-        if (args.onEnd !== undefined) subjectProfile.onEnd = args.onEnd;
         return Object.keys(subjectProfile).length > 0 ? { subjectProfile } : {};
       })(),
       // `project` = a METHOD a project runs as a track. Any other value is
@@ -536,7 +742,7 @@ export const buildHandlers: McpHandlerMap = {
       // params/criteria: `playbooks.create` parses them with the ONE schema
       // set (`schemas/playbook-process.ts`) and folds them into
       // `subjectProfile`, so a malformed declaration is refused, never dropped.
-      // Stage-level `subjectStatus` / `gate` / `onFail` / `expectedOutputs`
+      // Stage-level `subjectStatus` / `onApproved` / `gate` / `onFail` / `expectedOutputs`
       // ride inside `stages`, validated by `playbookStageSchema`.
       ...(args.activators !== undefined
         ? {
@@ -564,6 +770,26 @@ export const buildHandlers: McpHandlerMap = {
             >[1]["guidance"],
           }
         : {}),
+      // Who runs it and the tools it needs: validated by `playbooks.create`
+      // (`playbookRunnerSchema`, `requiresSchema`), refused, never dropped.
+      ...(args.runner !== undefined
+        ? {
+            runner: args.runner as Parameters<
+              typeof createPlaybookDoor
+            >[1]["runner"],
+          }
+        : {}),
+      ...(args.requires !== undefined
+        ? { requires: args.requires as string[] }
+        : {}),
+      // What a run may use, "only these": validated by `playbooks.create`
+      // (`playbookToolsSchema`, a stage list a subset), refused, never dropped.
+      ...(args.tools !== undefined ? { tools: args.tools as string[] } : {}),
+      // The phrases that offer it (`metadata.triggers`): validated by
+      // `playbooks.create` (`playbookTriggersSchema`), refused, never dropped.
+      ...(args.triggers !== undefined
+        ? { triggers: args.triggers as string[] }
+        : {}),
     });
     return renderPlaybookDoorOutcome(outcome, userId);
   },
@@ -578,6 +804,7 @@ export const buildHandlers: McpHandlerMap = {
   ): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
+    if (args.onEnd !== undefined) return ok({ error: ON_END_RETIRED_MESSAGE });
     type Patch = Parameters<typeof updatePlaybookDoor>[1]["patch"];
     // `subjectProfile` is ONE stored record the patch REPLACES (process keys
     // are carried over by `playbooks.update`), so a `statusProperty` alone
@@ -587,12 +814,9 @@ export const buildHandlers: McpHandlerMap = {
       args.subjectProfileSlug.trim()
         ? args.subjectProfileSlug.trim()
         : undefined;
-    if (
-      (args.statusProperty !== undefined || args.onEnd !== undefined) &&
-      !slug
-    ) {
+    if (args.statusProperty !== undefined && !slug) {
       return ok({
-        error: `${args.statusProperty !== undefined ? "statusProperty" : "onEnd"} needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
+        error: `statusProperty needs subjectProfileSlug beside it — the subject is replaced as one record. Pass both.`,
       });
     }
     const patch: Record<string, unknown> = {};
@@ -609,6 +833,9 @@ export const buildHandlers: McpHandlerMap = {
       "guidance",
       "status",
       "scope",
+      "runner",
+      "requires",
+      "tools",
     ] as const satisfies ReadonlyArray<keyof Patch>) {
       if (args[key] !== undefined) patch[key] = args[key];
     }
@@ -618,8 +845,54 @@ export const buildHandlers: McpHandlerMap = {
         ...(args.statusProperty !== undefined
           ? { statusProperty: args.statusProperty }
           : {}),
-        ...(args.onEnd !== undefined ? { onEnd: args.onEnd } : {}),
       };
+    }
+    // `metadata.triggers`: the metadata patch is shallow-merged, so this
+    // replaces the trigger list and keeps every other metadata key.
+    if (args.triggers !== undefined) {
+      patch.metadata = { triggers: args.triggers };
+    }
+    // STAGES against the stored list (tickets 8493079e, 2771d2bc): one stage
+    // by key (`stageEdits`), or the whole list (`stages`) only from a read
+    // that held it whole (`stagesRevision`): a list from a cut read would
+    // delete the stages it lacked. See `services/playbooks/stage-edits.ts`.
+    if (args.stages !== undefined || args.stageEdits !== undefined) {
+      if (args.stages !== undefined && args.stageEdits !== undefined) {
+        return ok({
+          error: "Pass `stages` (the whole list) or `stageEdits`, not both.",
+        });
+      }
+      const one = await getPlaybookDoor(
+        playbookDoorIdentity(ctx),
+        typeof args.playbookId === "string" ? args.playbookId : ""
+      );
+      if (one.kind !== "result") {
+        return ok({ error: "error" in one ? one.error : "Not found." });
+      }
+      const storedStages = Array.isArray(one.result.stages)
+        ? one.result.stages
+        : [];
+      const read = args.stagesRevision;
+      if (read !== undefined && read !== stagesRevision(storedStages)) {
+        return ok({
+          error:
+            "The stages changed since your read (`stagesRevision` no longer matches): read the playbook again.",
+        });
+      }
+      if (
+        args.stages !== undefined &&
+        storedStages.length > 0 &&
+        read === undefined
+      ) {
+        return ok({
+          error: `\`stages\` replaces all ${storedStages.length} stored stages, so it needs the \`stagesRevision\` of a read that held them whole (a read cut to fit carries none). To change some stages, use \`stageEdits\`.`,
+        });
+      }
+      if (args.stageEdits !== undefined) {
+        const edited = applyStageEdits(storedStages, args.stageEdits);
+        if (!edited.ok) return ok({ error: edited.error });
+        patch.stages = edited.stages;
+      }
     }
     const reasoning = readReasoning(args);
     if (reasoning) patch.reasoning = reasoning;
@@ -699,9 +972,17 @@ export const buildHandlers: McpHandlerMap = {
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,
     });
-    if (args.detail === "full" || !Array.isArray(result)) return ok(result);
+    if (!Array.isArray(result)) return ok(result);
+    const { page, paging } = pageSlice(
+      result as Array<Record<string, unknown>>,
+      args,
+      VIEWS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
+    if (args.detail === "full") return ok({ views: page, ...paging });
     return ok({
-      views: (result as Array<Record<string, unknown>>).map(toViewDigest),
+      views: page.map(toViewDigest),
+      ...paging,
       note: VIEWS_DIGEST_NOTE,
     });
   },
@@ -754,6 +1035,64 @@ export const buildHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * Edit an existing view's name and/or config through the Hub's governed
+   * `updateView` (the same door as `PATCH /api/hub/views/:id`): it checks the
+   * config against the view's type and, for a bento, the widget catalog,
+   * BEFORE the gate, then files `view.update` (a proposal for an agent).
+   */
+  synap_update_view: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const {
+      toolName,
+      args,
+      userId,
+      apiKeyScopes,
+      agentUserId,
+      caller,
+      confinedWorkspaceId,
+    } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const viewId =
+      typeof args.viewId === "string" && args.viewId.trim()
+        ? args.viewId.trim()
+        : undefined;
+    if (!viewId) {
+      return ok({
+        error: "viewId is required — the UUID of the view to edit.",
+      });
+    }
+    const name =
+      typeof args.name === "string" && args.name.trim()
+        ? args.name.trim()
+        : undefined;
+    const config =
+      args.config &&
+      typeof args.config === "object" &&
+      !Array.isArray(args.config)
+        ? (args.config as Record<string, unknown>)
+        : undefined;
+    if (args.config !== undefined && !config) {
+      return ok({
+        error:
+          "config must be an object: the view's whole new config, e.g. { blocks: [...] } for a bento.",
+      });
+    }
+    if (!name && !config) {
+      return ok({ error: "Provide name and/or config to change." });
+    }
+    const result = await caller.views.updateView({
+      userId,
+      viewId,
+      // A service key confined to one space edits only that space's views:
+      // the door refuses a view of another space (FORBIDDEN).
+      ...(confinedWorkspaceId ? { workspaceId: confinedWorkspaceId } : {}),
+      ...(name ? { name } : {}),
+      ...(config ? { config } : {}),
+      ...(agentUserId ? { agentUserId } : {}),
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
+    });
+    return ok(result);
+  },
   synap_list_widgets: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes, caller, confinedWorkspaceId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -766,9 +1105,16 @@ export const buildHandlers: McpHandlerMap = {
     // The hub door returns the ONE catalog: built-ins (in-process) ∪ this
     // pod's installed / AI-defined cells (services/cells/renderables.ts).
     const rows = await caller.widgetDefinitions.listWidgetDefs({ workspaceId });
+    const { page: widgetPage, paging: widgetPaging } = pageSlice(
+      discoverRenderables(rows, surface),
+      args,
+      WIDGETS_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
       surface,
-      widgets: discoverRenderables(rows, surface),
+      widgets: widgetPage,
+      ...widgetPaging,
       // Content languages (```mermaid, ```math, code) are fences, not
       // directives — the catalog's fence rows, a document-only answer.
       ...(surface === "document" ? { fences: discoverFences() } : {}),
@@ -1011,6 +1357,61 @@ export const buildHandlers: McpHandlerMap = {
     const rejectCaller = proposalsRouter.createCaller(
       rejectCtx as Parameters<typeof proposalsRouter.createCaller>[0]
     );
+    // YOUR OWN proposal is WITHDRAWN, not rejected (plan 8032a127 D2). An agent
+    // taking back a write it now knows is wrong is the proposer retracting,
+    // which `withdrawn` means and nothing scores; a reject is a reviewer's
+    // judgement on the agent's work and lowers its approve rate. Agents were
+    // told to "withdraw" with this tool, so each did the right thing and
+    // scored itself down. Anyone else's stays a reject, with its reviewer
+    // authority. This read only ROUTES, through the caller's own floor: the
+    // withdraw door re-checks the author, and an unreadable row is rejected.
+    const [filed] = agentUserId
+      ? await scopedDb(AccessContext.operator({ userId })).findMany<{
+          agentUserId: string | null;
+          workspaceId: string | null;
+          targetType: string | null;
+          targetId: string | null;
+        }>(proposals, {
+          where: eq(proposals.id, resolvedProposalId),
+          columns: {
+            agentUserId: true,
+            workspaceId: true,
+            targetType: true,
+            targetId: true,
+          },
+        })
+      : [];
+    if (agentUserId && filed?.agentUserId === agentUserId) {
+      // The key's grant still bounds this tool: a key that may not reject a
+      // proposal here may not take one back here either (the same right, on
+      // the proposal's own space, project and object, that the reject door
+      // asks), so routing to the withdraw never widens what the key can do.
+      // Its project is where its TARGET is filed now, never the proposal's
+      // `project_id`, a provenance tag (`access/proposal-target-place.ts`).
+      const { targetProjectIds } = await withProposalTargetPlace(filed);
+      await assertKeyMayWrite({
+        subjectType: "proposal",
+        action: "reject",
+        workspaceId: filed.workspaceId,
+        storedProjectIds: targetProjectIds,
+        data: { entityId: filed.targetId },
+      });
+      await rejectCaller.withdraw({
+        proposalId: resolvedProposalId,
+        reason: args.reason as string | undefined,
+      });
+      return ok({
+        success: true,
+        proposalId: resolvedProposalId,
+        status: "withdrawn",
+        message: "withdrawn: yours, not scored",
+        ...(args.reasonCode !== undefined
+          ? {
+              note: "reasonCode is not kept on a withdrawal (only `reason` is).",
+            }
+          : {}),
+      });
+    }
     await rejectCaller.reject({
       proposalId: resolvedProposalId,
       reason: args.reason as string | undefined,
@@ -1018,7 +1419,11 @@ export const buildHandlers: McpHandlerMap = {
       // by the reject procedure's zod enum; an unknown value is rejected there.
       reasonCode: args.reasonCode as ProposalRejectionReasonCode | undefined,
     });
-    return ok({ success: true, proposalId: resolvedProposalId });
+    return ok({
+      success: true,
+      proposalId: resolvedProposalId,
+      status: "rejected",
+    });
   },
   synap_run_playbook: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, requestedWorkspaceId } = ctx;
@@ -1062,8 +1467,14 @@ export const buildHandlers: McpHandlerMap = {
       projectId: trimmed(args.projectId),
       trackId: trimmed(args.trackId),
       handToAgentId: trimmed(args.handToAgentId),
+      // Validated by `playbooks.run` (`playbookRunnerSchema`), never dropped.
+      ...(args.runner !== undefined ? { runner: args.runner } : {}),
+      ...(args.stageRunners !== undefined
+        ? { stageRunners: args.stageRunners }
+        : {}),
       parentSessionId: trimmed(args.parentSessionId),
       suspendedIntent: trimmed(args.suspendedIntent),
+      ...(args.startAnother === true ? { startAnother: true } : {}),
       source: "mcp",
     });
     return renderPlaybookDoorOutcome(outcome, userId);
@@ -1182,6 +1593,7 @@ export const buildHandlers: McpHandlerMap = {
       workspaceId: skillWorkspaceId,
       scope: skillWorkspaceId ? "workspace" : "pod",
       slug: skillSlug,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       name: args.name,
       description: args.description as string | undefined,
       body: skillBody,
@@ -1234,6 +1646,33 @@ export const buildHandlers: McpHandlerMap = {
     for (const field of ["name", "description", "body", "code"] as const) {
       if (typeof args[field] === "string") patch[field] = args[field];
     }
+    if (args.category !== undefined) {
+      const category = str(args.category);
+      if (!category) {
+        return toolError(
+          `Tool '${toolName}': category must be a non-empty string (e.g. 'rule').`
+        );
+      }
+      patch.category = category;
+    }
+    // Which agent types the skill reaches: a list of non-empty names, or null
+    // for every agent (the column's meaning). The IS loader reads it.
+    if (args.agentTypes !== undefined) {
+      const types = args.agentTypes;
+      if (
+        types !== null &&
+        (!Array.isArray(types) ||
+          !types.every((t) => typeof t === "string" && t.trim() !== ""))
+      ) {
+        return toolError(
+          `Tool '${toolName}': agentTypes must be a list of agent type names (e.g. ['code']), or null for every agent.`
+        );
+      }
+      patch.agentTypes =
+        types === null
+          ? null
+          : [...new Set((types as string[]).map((t) => t.trim()))];
+    }
     if (args.parameters !== undefined) {
       if (
         !args.parameters ||
@@ -1265,9 +1704,12 @@ export const buildHandlers: McpHandlerMap = {
     }
     if (Object.keys(patch).length === 0) {
       return toolError(
-        `Tool '${toolName}': nothing to change — pass body, description, name, code, parameters, timeoutSeconds and/or requiredTools.`
+        `Tool '${toolName}': nothing to change — pass body, description, name, category, agentTypes, code, parameters, timeoutSeconds and/or requiredTools.`
       );
     }
+    // After the empty-patch check: a reason alone is not a change.
+    const skillReasoning = readReasoning(args);
+    if (skillReasoning) patch.reasoning = skillReasoning;
     const callerCtx = await createHubProtocolCallerContext(
       userId,
       apiKeyScopes,

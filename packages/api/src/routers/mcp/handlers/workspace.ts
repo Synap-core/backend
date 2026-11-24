@@ -10,7 +10,6 @@
 
 import {
   db,
-  getDb,
   workspaces,
   projects,
   inArray,
@@ -19,20 +18,14 @@ import {
   drizzleSql,
   entities,
 } from "@synap/database";
-import { checkPermissionOrPropose } from "../../../utils/permission-check.js";
-import {
-  linkProjectToWorkspace,
-  listProjectsUsingWorkspaces,
-  unlinkProjectFromWorkspace,
-  archivedUsesTargetRemovable,
-} from "../../../utils/project-workspace.js";
+import { TRPCError } from "@trpc/server";
+import { listProjectsUsingWorkspaces } from "../../../utils/project-workspace.js";
+import { setProjectWorkspaceMembershipGoverned } from "../../../services/projects/project-workspace-membership.js";
 import { projectToSuitePackageDefinition } from "../../../services/project-to-suite-package-definition.js";
 import { summarizePackageContents } from "../../../services/package-contents-summary.js";
 import { updateSpaceBriefGoverned } from "../../../services/space-brief-door.js";
-import { stampAutoApprovedCreate } from "../../../services/proposals/stamp-materialized.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { getUserMemberWorkspaceIds } from "../../hub-protocol/rest/_shared.js";
-import { checkLinkEndpointsVisible } from "../../hub-protocol/rest/link-endpoint-visibility.js";
 import {
   setAgentFocusWorkspace,
   setAgentFocusProject,
@@ -43,12 +36,17 @@ import { changeKindScope } from "../../../services/profiles/change-kind-scope.js
 import { matchFocusTarget, isClearFocusArg } from "./focus-target-match.js";
 import { projectsRouter } from "../../projects.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
+import { requestWorkspaceJoin } from "../../../utils/permission-check.js";
+import { fullUuidError } from "../tool-errors.js";
 import {
   archiveWorkspaceDoor,
   fileIntoProjectDoor,
   grantProfileAccessDoor,
+  movePlaybooksDoor,
+  shareWithSpaceDoor,
   moveEntitiesDoor,
   renameWorkspaceDoor,
+  setStartPageDoor,
   type WorkspaceOpsActor,
 } from "../../../services/workspace-ops-doors.js";
 import {
@@ -109,7 +107,18 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(statusOfInclude?.length ? { statusOfInclude } : {}),
       explain: args.explain === true,
     });
-    return ok(result);
+    // AI availability (W3): what the person must do about AI, so an agent
+    // points them at it instead of retrying, paying or filing a card. A read
+    // that failed says so, never "available".
+    const { readAiAvailabilityFor } =
+      await import("../../../services/ai-availability/read.js");
+    const { aiAvailabilityForAgents } =
+      await import("../../../services/ai-availability/for-agents.js");
+    const aiAvailability = await readAiAvailabilityFor(userId).then(
+      (view) => aiAvailabilityForAgents(view),
+      () => ({ status: "unavailable" as const })
+    );
+    return ok({ ...result, aiAvailability });
   },
   synap_set_workspace_focus: async (
     ctx: McpToolContext
@@ -550,6 +559,7 @@ export const workspaceHandlers: McpHandlerMap = {
     const result = await projectCaller.create({
       name: args.name as string,
       description: args.description as string | undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
       // Provenance: this create came through the MCP door.
       door: "mcp",
       // Gravity evidence — the tRPC create enforces ≥5 caller-visible ids for
@@ -583,7 +593,11 @@ export const workspaceHandlers: McpHandlerMap = {
     );
     const projectCaller = projectsRouter.createCaller(projectCtx);
     try {
-      const result = await projectCaller.get({ id: projectId });
+      // An agent asks where the project stands: always with its pillars.
+      const result = await projectCaller.get({
+        id: projectId,
+        include: ["pillars"],
+      });
       return ok(result);
     } catch (err) {
       return ok({
@@ -770,14 +784,31 @@ export const workspaceHandlers: McpHandlerMap = {
       ...(typeof args.homeWorkspaceId === "string"
         ? { homeWorkspaceId: args.homeWorkspaceId }
         : {}),
+      // The project's main goal (0423): a goal id, or null to clear.
+      ...(typeof args.mainGoalId === "string" || args.mainGoalId === null
+        ? { mainGoalId: args.mainGoalId as string | null }
+        : {}),
       ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
+  // An agent works where its person is a member: answers that membership.
+  synap_request_workspace_access: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, userId, agentUserId, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    // The confined value: a bound service key cannot name another space.
+    const workspaceId = ctx.confinedWorkspaceId ?? "";
+    const badId = fullUuidError(toolName, "workspaceId", workspaceId);
+    if (badId) return badId;
+    return ok(await requestWorkspaceJoin({ userId, agentUserId, workspaceId }));
+  },
   synap_project_use_workspace: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
-    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    const { toolName, args, userId, apiKeyScopes, agentUserId, sessionId } =
+      ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const projectId = args.projectId as string;
     const workspaceId = args.workspaceId as string;
@@ -788,105 +819,55 @@ export const workspaceHandlers: McpHandlerMap = {
     // DESTRUCTIVE verb: an agent's removal always proposes). Approval replays
     // it through `executors/link.ts` → `unlinkProjectFromWorkspace`.
     const remove = args.remove === true;
-    // The SAME pre-governance endpoint floor as REST POST /links: the project
-    // must be visible and the caller a member of the workspace — otherwise an
-    // unreachable edge becomes a proposal approval would write.
-    let endpointRefusal = await checkLinkEndpointsVisible(
-      {
-        fromType: "project",
-        fromId: projectId,
-        toType: "workspace",
-        toId: workspaceId,
-      },
-      userId,
-      workspaceId
-    );
-    // REMOVAL ONLY: an edge to an ARCHIVED workspace stays removable by the
-    // project's owner (the floor above refuses any archived workspace). Still
-    // governed below — gated at pod scope, because the workspace lens is
-    // archived and the caller need not be its member.
-    let gateWorkspaceId: string | null = workspaceId;
-    if (
-      endpointRefusal &&
-      remove &&
-      (await archivedUsesTargetRemovable(await getDb(), {
-        projectId,
-        workspaceId,
+    const purpose =
+      typeof args.purpose === "string" || args.purpose === null
+        ? (args.purpose as string | null)
+        : undefined;
+    // THE governed `uses` writer (`services/projects/
+    // project-workspace-membership.ts`), shared with tRPC
+    // `projects.setWorkspaceMembership` and `projects.create`: the project
+    // floor, the workspace endpoint floor (with the archived-space removal
+    // relaxation), the gate at pod scope, the one edge door, the undo stamp.
+    try {
+      const outcome = await setProjectWorkspaceMembershipGoverned({
         userId,
-      }))
-    ) {
-      endpointRefusal = null;
-      gateWorkspaceId = null;
-    }
-    if (endpointRefusal) return ok({ error: endpointRefusal.error });
-    const perm = await checkPermissionOrPropose({
-      userId,
-      agentUserId,
-      workspaceId: gateWorkspaceId,
-      subjectType: "link",
-      action: remove ? "delete" : "create",
-      reasoning:
-        readReasoning(args) ??
-        (remove
-          ? "Project no longer uses workspace via MCP synap_project_use_workspace"
-          : "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace"),
-      data: {
-        title: remove
-          ? "remove project --uses--> workspace"
-          : "project --uses--> workspace",
-        fromType: "project",
-        fromId: projectId,
-        toType: "workspace",
-        toId: workspaceId,
-        linkType: "uses",
-      },
-    });
-    if ("denied" in perm && perm.denied) {
-      return ok({ error: perm.reason });
-    }
-    if ("proposalId" in perm) {
-      return ok({
-        status: "proposed",
-        proposalId: perm.proposalId,
-        reviewUrl: perm.reviewUrl,
-      });
-    }
-    const database = await getDb();
-    if (remove) {
-      const removed = await unlinkProjectFromWorkspace(database, {
+        agentUserId,
+        sessionId: sessionId ?? null,
         projectId,
         workspaceId,
-        userId,
+        member: !remove,
+        ...(purpose !== undefined ? { purpose } : {}),
+        reasoning:
+          readReasoning(args) ??
+          (remove
+            ? "Project no longer uses workspace via MCP synap_project_use_workspace"
+            : "Project uses workspace (INDEX, not ACL) via MCP synap_project_use_workspace"),
+        door: "synap_project_use_workspace",
       });
-      if (!removed.unlinked) return ok({ error: "Project not found" });
-      return ok({
-        status: "unlinked",
-        projectId,
-        workspaceId,
-        removed: removed.rows,
-      });
+      if (outcome.status === "proposed") {
+        return ok({
+          status: "proposed",
+          proposalId: outcome.proposalId,
+          reviewUrl: outcome.reviewUrl,
+          ...(outcome.goalsStopAdvancing
+            ? { goalsStopAdvancing: outcome.goalsStopAdvancing }
+            : {}),
+        });
+      }
+      if (outcome.effect === "unlinked") {
+        return ok({
+          status: "unlinked",
+          projectId,
+          workspaceId,
+          removed: outcome.rows,
+          goalsStoppedAdvancing: outcome.goalsStoppedAdvancing,
+        });
+      }
+      return ok({ status: "linked", projectId, workspaceId });
+    } catch (err) {
+      if (err instanceof TRPCError) return ok({ error: err.message });
+      throw err;
     }
-    const uses = await linkProjectToWorkspace(database, {
-      projectId,
-      workspaceId,
-      userId,
-    });
-    if (!uses.linked) {
-      return ok({
-        error:
-          uses.reason === "workspace_not_found"
-            ? "Workspace not found"
-            : "Project not found",
-      });
-    }
-    // Undo record for an AUTO-APPROVED edge: the row inserted, or nothing
-    // when the edge already existed.
-    await stampAutoApprovedCreate({
-      receiptId: "granted" in perm ? perm.autoApprovedProposalId : undefined,
-      record: uses.linkId ? { linkIds: [uses.linkId] } : {},
-      door: "synap_project_use_workspace",
-    });
-    return ok({ status: "linked", projectId, workspaceId });
   },
   // ── Governed workspace operations (R8a) — thin: `workspace-ops-doors.ts`
   // forwards to the governed tRPC procedures; nothing is re-checked here.
@@ -958,6 +939,58 @@ export const workspaceHandlers: McpHandlerMap = {
       })
     );
   },
+  /**
+   * Set what a space opens on: a stored cell (`cellKey`), a website (`url`,
+   * optionally a pod app's `podAppClientId`), or `clear` for the space's own
+   * home. One door: `workspacesRouter.setPrimarySurface` (the browser's tRPC
+   * route), which checks the surface opens in the space before its gate.
+   */
+  synap_set_start_page: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, apiKeyScopes } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const workspaceId = args.workspaceId;
+    if (typeof workspaceId !== "string" || !workspaceId) {
+      return ok({ error: "workspaceId is required" });
+    }
+    const str = (v: unknown) =>
+      typeof v === "string" && v.trim() ? v.trim() : undefined;
+    const cellKey = str(args.cellKey);
+    const url = str(args.url);
+    const clear = args.clear === true;
+    const chosen = [cellKey, url, clear || undefined].filter(Boolean).length;
+    if (chosen !== 1) {
+      return ok({
+        error:
+          "Name exactly one start page: cellKey (a cell from synap_list_widgets), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
+      });
+    }
+    const title = str(args.title);
+    const podAppClientId = str(args.podAppClientId);
+    if (podAppClientId && !url) {
+      return ok({
+        error: "podAppClientId goes with url: the site it signs in to.",
+      });
+    }
+    const primarySurface = clear
+      ? null
+      : cellKey
+        ? { kind: "cell" as const, cellKey, ...(title ? { title } : {}) }
+        : {
+            kind: "url" as const,
+            url: url!,
+            ...(title ? { title } : {}),
+            ...(podAppClientId ? { podApp: { clientId: podAppClientId } } : {}),
+          };
+    return ok(
+      await setStartPageDoor(opsActor(ctx), {
+        workspaceId,
+        primarySurface,
+        reasoning: readReasoning(args),
+      })
+    );
+  },
   synap_update_space_brief: async (
     ctx: McpToolContext
   ): Promise<CallToolResult> => {
@@ -983,14 +1016,30 @@ export const workspaceHandlers: McpHandlerMap = {
   synap_move_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, apiKeyScopes } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
-    const entityIds = Array.isArray(args.entityIds)
-      ? args.entityIds.filter((v): v is string => typeof v === "string")
-      : [];
+    const ids = (v: unknown) =>
+      Array.isArray(v)
+        ? v.filter((x): x is string => typeof x === "string")
+        : [];
+    const entityIds = ids(args.entityIds);
+    const playbookIds = ids(args.playbookIds);
     const workspaceId = args.workspaceId;
-    if (entityIds.length === 0 || typeof workspaceId !== "string") {
+    if (
+      (entityIds.length === 0) === (playbookIds.length === 0) ||
+      typeof workspaceId !== "string"
+    ) {
       return ok({
-        error: "entityIds (non-empty) and workspaceId are required",
+        error:
+          "workspaceId and one of entityIds or playbookIds (non-empty) are required",
       });
+    }
+    if (playbookIds.length > 0) {
+      return ok(
+        await movePlaybooksDoor(opsActor(ctx), {
+          playbookIds,
+          workspaceId,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await moveEntitiesDoor(opsActor(ctx), {
@@ -1028,11 +1077,25 @@ export const workspaceHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.write", toolName);
     const profileId = args.profileId;
     const targetWorkspaceId = args.targetWorkspaceId;
-    if (
-      typeof profileId !== "string" ||
-      typeof targetWorkspaceId !== "string"
-    ) {
-      return ok({ error: "profileId and targetWorkspaceId are required" });
+    const named = (["profileId", "playbookId", "skillId"] as const).filter(
+      (k) => typeof args[k] === "string"
+    );
+    if (named.length !== 1 || typeof targetWorkspaceId !== "string") {
+      return ok({
+        error:
+          "targetWorkspaceId and exactly one of profileId, playbookId or skillId are required",
+      });
+    }
+    if (typeof profileId !== "string") {
+      return ok(
+        await shareWithSpaceDoor(opsActor(ctx), {
+          objectType: named[0] === "playbookId" ? "playbook" : "skill",
+          objectId: args[named[0]!] as string,
+          targetWorkspaceId,
+          revoke: args.revoke === true,
+          reasoning: readReasoning(args),
+        })
+      );
     }
     return ok(
       await grantProfileAccessDoor(opsActor(ctx), {

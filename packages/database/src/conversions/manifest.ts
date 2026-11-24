@@ -37,8 +37,11 @@ export type ConversionOp =
   | FoldRoleIntoStatusOp
   | RenameProfileOp
   | ProjectLifecycleColumnsOp
+  | FillFacetInitialStatusOp
+  | DropStaleLifecycleListsOp
   | FoldBookingDealIntoLeadOp
-  | RekindByStatusOp;
+  | RekindByStatusOp
+  | RetireProjectTwinsOp;
 
 interface BaseOp {
   /** Stable, globally-unique key. Recorded in `_conversions`; never reused. */
@@ -422,16 +425,23 @@ export interface CanonicalPrecondition {
  * `person` but scoped to the `client` relationship).
  *
  * Per live entity of `slug` that still carries `sourceKey` in its base
- * `properties` (empty-string values are ignored, same as "not set"):
+ * `properties` (empty means absent, JSON null or "", on both sides):
  *   (a) if the entity wears a LIVE facet whose profile slug is `facetSlug`, the
- *       value is copied onto that facet's `properties[targetKey]` — collision-
- *       skipped: an existing facet value for `targetKey` is never clobbered;
+ *       value is copied verbatim onto that facet's `properties[targetKey]`
+ *       where the facet's own value is empty — an existing facet value is
+ *       never clobbered. When it differs from the base value, the base value
+ *       is DROPPED, never silently: counted (`valuesDropped`), listed on the
+ *       op's result (`dropped`) and kept on the entity under
+ *       `system_data.droppedByConversion[<opKey>]`;
  *   (b) the base `properties[sourceKey]` is then stripped from the entity —
  *       but ONLY when the entity wears that facet. An entity WITHOUT the facet
  *       keeps its base value entirely untouched (never lost, left for a later
  *       decision);
  *   (c) entities left untouched by (b) are counted as `entitiesSkippedNoFacet`
  *       so the run surfaces how many still need a manual call.
+ * `requireTargetDef`: with values to move and no `facetSlug` profile declaring
+ * a `targetKey` field, the op WAITS: deferred (`target-def-missing`), nothing
+ * written, not ledgered, the run goes on, and the next run retries it.
  *
  * Idempotent: (a) skips once the facet already carries `targetKey`, (b) strips
  * `sourceKey` so a re-run's `properties ? sourceKey` guard selects nothing for
@@ -449,6 +459,8 @@ export interface MoveBasePropertyToFacetOp extends BaseOp {
   facetSlug: string;
   /** Facet-property key the value is written into. Defaults to `sourceKey`. */
   targetKey?: string;
+  /** Refuse to move values onto a field the facet's role does not declare. */
+  requireTargetDef?: boolean;
 }
 
 /**
@@ -459,10 +471,15 @@ export interface MoveBasePropertyToFacetOp extends BaseOp {
  * Scope mirrors `remapPropertyValues`: every entity whose profile row carries
  * `slug` (ALL rows of that slug pod-wide, any scope/workspace, active or not);
  * soft-deleted entities are skipped. Per matching entity that has `sourceKey`:
- *   - `targetKey` absent → the value moves to `targetKey`;
+ *   - `targetKey` empty (absent, JSON null or "") → the value moves to `targetKey`;
  *   - both present → `onConflict` decides: `keepTarget` keeps the existing
  *     target value, `keepSource` overwrites it with the source value; the
- *     losing value is discarded and counted (`entitiesKeyConflicts`);
+ *     losing value is discarded and counted (`entitiesKeyConflicts`); when it
+ *     differs from the kept one it is also counted (`valuesDropped`), listed on
+ *     the op's result (`dropped`) and kept on the entity under
+ *     `system_data.droppedByConversion[<opKey>]`;
+ *     `prependSource` (text values) discards neither: the target becomes
+ *     `<source>\n\n<target>`, unless it already opens with the source;
  *   - `sourceKey` is ALWAYS stripped.
  *
  * Idempotent: after a run no matching entity carries `sourceKey`, so a re-run
@@ -480,6 +497,12 @@ export interface RenamePropertyKeyOp extends BaseOp {
   targetKey: string;
   /** Which value survives when an entity already carries BOTH keys. */
   onConflict: RenamePropertyKeyConflict;
+  /**
+   * Never move values onto a `targetKey` no `slug` profile declares: the op
+   * waits instead (deferred `target-def-missing`, unledgered, retried on the
+   * next run). Nothing to move: a clean no-op.
+   */
+  requireTargetDef?: boolean;
   /** See {@link CanonicalPrecondition}. */
   requiresCanonical?: CanonicalPrecondition;
 }
@@ -651,6 +674,7 @@ export const FOLD_ROLE_NO_TARGET = ["attachFirst", "park"] as const;
 export const RENAME_PROPERTY_KEY_CONFLICTS = [
   "keepTarget",
   "keepSource",
+  "prependSource",
 ] as const;
 export type RenamePropertyKeyConflict =
   (typeof RENAME_PROPERTY_KEY_CONFLICTS)[number];
@@ -667,6 +691,54 @@ export type RenamePropertyKeyConflict =
  */
 export interface ProjectLifecycleColumnsOp extends BaseOp {
   op: "projectLifecycleColumns";
+}
+
+/**
+ * Status-first wave (doors audit 1bb7b083, bug 6): a role's facet born with NO
+ * status gets its lifecycle's initial status — column, category and the
+ * `properties[<slug>]` mirror together, as a facet birth now does. Only a
+ * non-terminal, non-person-only initial status is filled (the birth rule);
+ * a facet that holds a mirror value is `projectLifecycleColumns`' to fill.
+ * Idempotent. (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface FillFacetInitialStatusOp extends BaseOp {
+  op: "fillFacetInitialStatus";
+}
+
+/**
+ * Status-first wave (doors audit bug 5): ONE option list per lifecycle. The
+ * stale `uiHints.enumValues` key of every lifecycle def is DELETED (nobody
+ * writes it; `constraints.enumOptions` is the one list, never edited here) and
+ * its stale `constraints.defaultValue` is aligned with the declaring link's
+ * initial status. A def with no `enumOptions` is left alone. Idempotent.
+ * (`services/lifecycle/heal-lifecycle-declarations.ts`)
+ */
+export interface DropStaleLifecycleListsOp extends BaseOp {
+  op: "dropStaleLifecycleLists";
+}
+
+/**
+ * Retire the project TWINS (ticket 8e2c7018, founder-approved repair
+ * d95793d1). Projects live in the `projects` table since migration 0151,
+ * which left each project's entity row behind under the SAME id; a reserved
+ * `project` kind kept being written by templates the catalog now refuses.
+ * Recall answered from those rows. Per pod, once (ledgered):
+ *   (a) every live twin (`selectProjectTwins`: id is a `projects.id`, or its
+ *       profile is on a reserved slug) is SOFT-deleted, with a
+ *       `system_data.retiredByConversion` breadcrumb (op key + reasons) so a
+ *       person can bring one back (`deleted_at = NULL`). Its RELATIONS are
+ *       never touched: a `belongs_to_project` edge targets the project's id,
+ *       so it is the project's membership, not the twin's;
+ *   (b) their `entity_vectors` rows are dropped, and the pod's entities
+ *       search stamp is cleared so the jobs boot runs the full reindex, the
+ *       indexer's existing prune of rows that are no longer live (Typesense);
+ *   (c) the reserved profile rows still active are deactivated. After (a) no
+ *       live entity is on them (each was a `reserved_kind` twin).
+ * Idempotent: a retired twin is no longer live. No destructive tail: a soft
+ * delete is reversible and the founder asked for it at boot on every pod.
+ */
+export interface RetireProjectTwinsOp extends BaseOp {
+  op: "retireProjectTwins";
 }
 
 /** A versioned manifest — the ordered list the engine walks. */
@@ -1846,6 +1918,17 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       op: "projectLifecycleColumns",
       opKey: "w12.lifecycle.project-columns",
     },
+    // ─── Status-first wave: facets born without a status, one option list ────
+    // After the column fill, so a facet whose mirror holds a value is projected
+    // first and only a truly status-less facet gets the initial status.
+    {
+      op: "fillFacetInitialStatus",
+      opKey: "sf1.lifecycle.fill-facet-initial-status",
+    },
+    {
+      op: "dropStaleLifecycleLists",
+      opKey: "sf1.lifecycle.drop-stale-option-lists",
+    },
 
     {
       op: "renameProfile",
@@ -2162,6 +2245,182 @@ export const CONVERSION_MANIFEST: ConversionManifest = {
       toSlug: "research-finding",
       fromTemplate: "research-base",
     },
+
+    // ─── Snippet: `devplane_prompt_snippet` folds into the pod-wide `snippet` ───
+    //
+    // The DevPlane-only prompt snippet is retired from `ensureDevplaneProfiles`.
+    // Read on the one real pod (2026-11-09): ONE entity, `snippetCategory:
+    // workflow`, a `snippetDescription`, no body, no `isExecutable`/`linkedApp`.
+    //   - snippetBody -> body, then snippetDescription -> body as the FIRST
+    //     paragraph (`prependSource`: nothing discarded, never doubled).
+    //   - Known losses: `snippetCategory` has no field on `snippet` (every value
+    //     becomes `use: prompt`); `isExecutable` / `linkedApp` have no field and
+    //     stay only in the entity JSON. {{var}} / @{arg:x} bodies are not
+    //     rewritten (no `variables` can be derived).
+    //   - The merge repoints the entities; the scope reconcile makes the
+    //     workspace-stamped rows pod-wide like the kind.
+    // Operator-run (`deferAtBoot`), after the boot that seeds `snippet`; each
+    // step refuses until that canonical exists (`requiresCanonical`).
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetBody",
+      targetKey: "body",
+      onConflict: "keepTarget",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "snippet.devplane-prompt-snippet.description-into-body",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetDescription",
+      targetKey: "body",
+      onConflict: "prependSource",
+    },
+    {
+      op: "remapPropertyValues",
+      opKey: "snippet.devplane-prompt-snippet.category-into-use",
+      deferAtBoot: true,
+      requiresCanonical: { slug: "snippet", scope: "system" },
+      slug: "devplane_prompt_snippet",
+      sourceKey: "snippetCategory",
+      targetKey: "use",
+      valueMap: {
+        deploy: "prompt",
+        debug: "prompt",
+        test: "prompt",
+        audit: "prompt",
+        review: "prompt",
+        workflow: "prompt",
+        custom: "prompt",
+      },
+    },
+    {
+      op: "mergeInto",
+      opKey: "snippet.merge.devplane-prompt-snippet-into-snippet",
+      deferAtBoot: true,
+      fromSlugs: ["devplane_prompt_snippet"],
+      intoSlug: "snippet",
+      intoScope: "system",
+    },
+    {
+      op: "reconcileEntityScope",
+      opKey: "snippet.reconcile.entity-scope",
+      deferAtBoot: true,
+      slug: "snippet",
+    },
+
+    // ─── Status-first wave: "next step" lives on the WORK only ────────────────
+    //
+    // Founder, 2026-11-09 (proposal 24df5916): one pair `nextAction` +
+    // `nextActionAt` on the lead ROLE and on the deal; person and company lose
+    // `nextStep` / `nextFollowUpDate` (the catalog drops those fields). The
+    // stored values follow: a person's or company's base next step moves onto
+    // its `lead` facet where the facet's own field is empty. The facet's value
+    // wins; a different base value is dropped ONLY on the record (the op's
+    // `dropped`, the entity's `system_data.droppedByConversion`), never lost.
+    // Base `nextAction` / `nextActionAt` (written to the kind by older drafts)
+    // move first, so the newer vocabulary fills an empty facet before
+    // `nextStep`. A person or company without a lead facet keeps its values
+    // (`entitiesSkippedNoFacet`), for a person to decide. Order-safe: while the
+    // target field is not declared yet (this release reached the pod before
+    // the catalog that adds deal.nextAction), the op waits unledgered and the
+    // run goes on; the first boot after the reconcile adds the field applies
+    // it (`requireTargetDef`). Runs at boot: nothing is lost and nothing lands
+    // outside a declared field.
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.person.nextAction-to-lead",
+      requireTargetDef: true,
+      slug: "person",
+      sourceKey: "nextAction",
+      facetSlug: "lead",
+      targetKey: "nextAction",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.person.nextActionAt-to-lead",
+      requireTargetDef: true,
+      slug: "person",
+      sourceKey: "nextActionAt",
+      facetSlug: "lead",
+      targetKey: "nextActionAt",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.person.nextStep-to-lead",
+      requireTargetDef: true,
+      slug: "person",
+      sourceKey: "nextStep",
+      facetSlug: "lead",
+      targetKey: "nextAction",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.person.nextFollowUpDate-to-lead",
+      requireTargetDef: true,
+      slug: "person",
+      sourceKey: "nextFollowUpDate",
+      facetSlug: "lead",
+      targetKey: "nextActionAt",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.company.nextAction-to-lead",
+      requireTargetDef: true,
+      slug: "company",
+      sourceKey: "nextAction",
+      facetSlug: "lead",
+      targetKey: "nextAction",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.company.nextActionAt-to-lead",
+      requireTargetDef: true,
+      slug: "company",
+      sourceKey: "nextActionAt",
+      facetSlug: "lead",
+      targetKey: "nextActionAt",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.company.nextStep-to-lead",
+      requireTargetDef: true,
+      slug: "company",
+      sourceKey: "nextStep",
+      facetSlug: "lead",
+      targetKey: "nextAction",
+    },
+    {
+      op: "moveBasePropertyToFacet",
+      opKey: "sf1.crm.next-step.company.nextFollowUpDate-to-lead",
+      requireTargetDef: true,
+      slug: "company",
+      sourceKey: "nextFollowUpDate",
+      facetSlug: "lead",
+      targetKey: "nextActionAt",
+    },
+    {
+      op: "renamePropertyKey",
+      opKey: "sf1.crm.next-step.deal.nextStep-to-nextAction",
+      requireTargetDef: true,
+      slug: "deal",
+      sourceKey: "nextStep",
+      targetKey: "nextAction",
+      onConflict: "keepTarget",
+    },
+    // ─── Project twins (ticket 8e2c7018, founder approval d95793d1) ───────────
+    // The entity rows migration 0151 left behind under each project's id, and
+    // entities of the reserved `project` kind: retired once per pod, their
+    // relations kept (see RetireProjectTwinsOp).
+    {
+      op: "retireProjectTwins",
+      opKey: "pt1.projects.retire-project-twins",
+    },
   ],
 };
 
@@ -2187,8 +2446,11 @@ export const CONVERSION_OP_TYPES = [
   "foldRoleIntoStatus",
   "renameProfile",
   "projectLifecycleColumns",
+  "fillFacetInitialStatus",
+  "dropStaleLifecycleLists",
   "foldBookingDealIntoLead",
   "rekindByStatus",
+  "retireProjectTwins",
 ] as const satisfies ReadonlyArray<ConversionOp["op"]>;
 
 export type ConversionOpType = (typeof CONVERSION_OP_TYPES)[number];
@@ -2478,7 +2740,11 @@ export function validateManifest(manifest: ConversionManifest): void {
         }
         break;
       case "projectLifecycleColumns":
+      case "fillFacetInitialStatus":
+      case "dropStaleLifecycleLists":
         break; // no parameters: every declared lifecycle
+      case "retireProjectTwins":
+        break; // no parameters: the one twin predicate
       case "renameProfile":
         requireSlug(op.opKey, op.slug);
         requireSlug(op.opKey, op.toSlug, "toSlug");

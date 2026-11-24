@@ -22,12 +22,20 @@ import {
 import { getDb, and, eq } from "@synap/database";
 import { views } from "@synap/database/schema";
 import {
+  bentoBlockArrangeErrors,
   listRenderables,
   placeableInstalledKeys,
   renderableArrangeError,
 } from "../../services/cells/renderables.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
-import { ViewContentSchema, getViewCategory } from "../views.js";
+import {
+  ViewContentSchema,
+  assertPipelineHasLifecycle,
+  assertValidRendererRef,
+  describeViewConfigErrors,
+  getViewCategory,
+} from "../views.js";
+import { validateViewConfig } from "@synap-core/types";
 
 // Re-export for external use
 export { ViewContentSchema, getViewCategory };
@@ -49,6 +57,44 @@ const BentoWidgetInputSchema = z.object({
   /** Height in grid rows (row height = 60px) */
   h: z.number().int().min(1),
 });
+
+/**
+ * A view config an update may write: valid for the view's type (the same
+ * schema and renderer-ref check `views.update` runs) and, for a bento, every
+ * widget block it adds or changes placeable from this workspace's catalog
+ * (the arrange gate; a block kept unchanged from `stored` is not re-judged),
+ * and for a pipeline a kind that declares a lifecycle (the create rule).
+ * Throws BAD_REQUEST naming every failing field or block, PRECONDITION_FAILED
+ * with the next step for a pipeline of a kind with no lifecycle.
+ */
+async function assertViewConfigPlaceable(
+  viewType: string,
+  config: Record<string, unknown>,
+  workspaceId: string,
+  stored: Record<string, unknown> | null
+): Promise<void> {
+  const validation = validateViewConfig(viewType, config);
+  if (!validation.valid) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: describeViewConfigErrors(validation.errors),
+      cause: validation.errors,
+    });
+  }
+  assertValidRendererRef(config);
+  if (viewType === "pipeline") {
+    await assertPipelineHasLifecycle(config, workspaceId);
+  }
+  if (viewType === "bento") {
+    const errors = await bentoBlockArrangeErrors(config, workspaceId, stored);
+    if (errors.length > 0) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Bento update rejected unknown or under-specified widgets (keys come from synap_list_widgets):\n- ${errors.join("\n- ")}`,
+      });
+    }
+  }
+}
 
 export const hubViewsRouter = router({
   /**
@@ -223,7 +269,7 @@ export const hubViewsRouter = router({
       const db = await getDb();
       const view = await db.query.views.findFirst({
         where: and(eq(views.id, input.viewId), eq(views.userId, userId)),
-        columns: { workspaceId: true },
+        columns: { workspaceId: true, type: true, config: true },
       });
       if (!view) {
         throw new TRPCError({ code: "NOT_FOUND", message: "View not found" });
@@ -240,6 +286,20 @@ export const hubViewsRouter = router({
           code: "BAD_REQUEST",
           message: "workspaceId is required for view updates",
         });
+      }
+
+      // VALIDATE BEFORE THE GATE (the views.create rule): an agent's update
+      // is a proposal, and an approved `view/update` is applied by the
+      // materializer, which validates nothing. A config checked only at apply
+      // time is the "unapprovable proposal" class; checked here, the author
+      // gets every error in its own reply and no proposal is filed.
+      if (input.config) {
+        await assertViewConfigPlaceable(
+          view.type,
+          input.config,
+          workspaceId,
+          view.config as Record<string, unknown> | null
+        );
       }
 
       // Governance check — view.update is NOT in auto-approve whitelist

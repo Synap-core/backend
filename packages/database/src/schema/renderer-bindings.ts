@@ -49,6 +49,12 @@
  * table replaces already cannot express one. The column and the read rungs
  * stay in place — a future revisit only has to lift the write-door refusal,
  * not re-add a column or a resolver rung.
+ *
+ * ONE EXCEPTION (2026-11-09): a target whose renderer IS one object's page —
+ * a playbook or a view (`packages/api/src/services/renderers/
+ * renderer-targets.ts`) — may be bound per object. A playbook or a view is a
+ * definition, not an entity instance; its page is what a person asks a custom
+ * UI for, the shape a capability's page-set always had.
  */
 
 import {

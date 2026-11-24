@@ -14,14 +14,15 @@
  *   Providers — AI provider registry, provider health, IS instances
  *   Models    — pod-wide default models, proactive AI defaults
  *
- * Failed AI turns moved to Runs (`/runs?filter=chat`), the one place a run
- * that went wrong is read; the line under the header points there.
+ * Failed AI turns are read in the desktop app's Work › Activity, Failed
+ * (Runs left the console, `WORK_MOVED_TO_APP`); the line under the header
+ * points there.
  */
 
 import { Sparkles } from "lucide-react";
-import Link from "next/link";
 import { Suspense } from "react";
-import { navHref } from "../../../lib/console-nav";
+import { ExitLink } from "../../../lib/exit-link";
+import { WORK_EXIT } from "../../../lib/open-in";
 import { UrlTabs, type UrlTab } from "../components/url-tabs";
 import { DefaultModelsSection } from "./_lib/default-models-section";
 import { ProactiveDefaultsSection } from "./_lib/proactive-section";
@@ -77,12 +78,10 @@ export default function IntelligencePage() {
             the app.
           </p>
           <p className="text-[12.5px] text-foreground/65">
-            <Link
-              href={navHref("runs", { filter: "chat" })}
-              className="rounded-sm underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-            >
-              Failed AI turns → Runs
-            </Link>
+            <ExitLink
+              exit={WORK_EXIT.failed}
+              label="Failed AI turns → Work, in the desktop app"
+            />
           </p>
         </div>
       </header>

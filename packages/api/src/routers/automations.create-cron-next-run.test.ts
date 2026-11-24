@@ -31,8 +31,9 @@ vi.mock("../utils/split-brain-service.js", () => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 /** insert(...).values(capturedValues).onConflictDoNothing().returning() → [{ id }] */
 function insertChain(
@@ -71,7 +72,10 @@ describe("automations.create — cron nextRunAt", () => {
 
   it("stamps a non-null nextRunAt on an active cron automation", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     const result = await caller.create({
@@ -91,9 +95,85 @@ describe("automations.create — cron nextRunAt", () => {
     expect((nextRunAt as Date).getTime()).toBeGreaterThan(Date.now());
   });
 
+  it("an agent's cron automation a person approved is born active with its next slot", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      agentUserId: "agent-1",
+      personApproved: true,
+      database: database as never,
+      definition: {
+        name: "Approved daily recap",
+        triggerType: "cron",
+        triggerConfig: { expression: "0 9 * * *" },
+        flowDefinition: CRON_FLOW,
+        source: "user",
+      },
+    });
+    expect(captured.values?.status).toBe("active");
+    expect(captured.values?.nextRunAt).toBeInstanceOf(Date);
+  });
+
+  it("reads the expression in the trigger's own zone (ticket 592930c8)", async () => {
+    // 06:50 Asia/Kolkata is 01:20 UTC; the zone used to be stored and never
+    // read, so the rule fired at 06:50 on the worker's clock. (A zone no dev
+    // box or CI runner sits in: the process clock cannot pass by luck.)
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-15T00:00:00Z"));
+    try {
+      const captured: { values?: Record<string, unknown> } = {};
+      mockGetDb.mockResolvedValue({
+        ...NO_USERS,
+        insert: vi.fn(() => insertChain(captured)),
+      });
+
+      const caller = automationsRouter.createCaller(callerCtx());
+      await caller.create({
+        name: "Morning brief, Kolkata",
+        triggerType: "cron",
+        triggerConfig: { expression: "50 6 * * *", timezone: "Asia/Kolkata" },
+        flowDefinition: CRON_FLOW,
+        status: "active",
+      });
+
+      expect((captured.values?.nextRunAt as Date).toISOString()).toBe(
+        "2026-01-15T01:20:00.000Z"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("refuses a time zone the cron clock does not know, and writes nothing", async () => {
+    const insert = vi.fn(() => insertChain({}));
+    mockGetDb.mockResolvedValue({ ...NO_USERS, insert });
+
+    const caller = automationsRouter.createCaller(callerCtx());
+    await expect(
+      caller.create({
+        name: "Morning brief, nowhere",
+        triggerType: "cron",
+        triggerConfig: { expression: "50 6 * * *", timezone: "Mars/Olympus" },
+        flowDefinition: CRON_FLOW,
+        status: "active",
+      })
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      message: expect.stringContaining('Unknown time zone "Mars/Olympus"'),
+    });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
   it("leaves nextRunAt unset for a non-cron (event) active automation", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     await caller.create({
@@ -110,7 +190,10 @@ describe("automations.create — cron nextRunAt", () => {
 
   it("leaves nextRunAt unset for a cron automation created as draft", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     await caller.create({
@@ -128,11 +211,14 @@ describe("automations.create — cron nextRunAt", () => {
   it("converges a replayed proposal create on its pre-minted automation id", async () => {
     const captured: { values?: Record<string, unknown> } = {};
     const database = {
+      ...NO_USERS,
       insert: vi.fn(() => insertChain(captured, [])),
     };
     const proposedAutomationId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 
-    const result = await materializeApprovedAutomation({
+    const result = await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: database as never,
       agentUserId: "agent-1",
       stableId: proposedAutomationId,
@@ -171,7 +257,9 @@ describe("automations.create — cron nextRunAt", () => {
     });
 
     expect(captured.values?.id).toBe(proposedAutomationId);
-    expect(captured.values?.createdBy).toBe("agent-1");
+    // The person the proposal was filed for owns it; the agent is its actor.
+    expect(captured.values?.createdBy).toBe("person-1");
+    expect(captured.values?.agentUserId).toBe("agent-1");
     expect(result).toBe(proposedAutomationId);
   });
 });

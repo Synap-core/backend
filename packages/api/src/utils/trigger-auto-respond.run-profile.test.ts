@@ -7,6 +7,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
  * transport) stay green.
  */
 const sent: Array<Record<string, unknown>> = [];
+/** pg-boss answers `null` when a job with the same singleton key is queued. */
+const boss = { dedupe: false };
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
@@ -48,6 +50,7 @@ vi.mock("@synap/jobs", () => ({
   A2AI_TRIGGER_JOB_OPTIONS: {},
   getBoss: () => ({
     send: async (_q: string, data: Record<string, unknown>) => {
+      if (boss.dedupe) return null;
       sent.push(data);
       return "job-1";
     },
@@ -68,11 +71,13 @@ const base = {
 describe("triggerAutoRespond carries a run's tool profile", () => {
   beforeEach(() => {
     sent.length = 0;
+    boss.dedupe = false;
   });
 
   it("a run turn ⇒ the job carries `run` verbatim", async () => {
     const run = {
       playbookId: "pb-1",
+      tools: ["get_entity", "update_document"],
       intents: ["publish_post"],
       verbs: ["postiz_schedule_post"],
       capabilitiesRead: "ok" as const,
@@ -85,5 +90,11 @@ describe("triggerAutoRespond carries a run's tool profile", () => {
   it("any other turn ⇒ no `run` key (the IS gives the normal agent)", async () => {
     expect(await triggerAutoRespond(base)).toBe(true);
     expect(sent[0]).not.toHaveProperty("run");
+  });
+
+  it("a send pg-boss deduplicated is still a queued turn (the earlier send's): never read as a failure", async () => {
+    boss.dedupe = true;
+    expect(await triggerAutoRespond(base)).toBe(true);
+    expect(sent).toHaveLength(0);
   });
 });

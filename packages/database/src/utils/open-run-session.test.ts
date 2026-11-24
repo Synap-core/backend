@@ -53,6 +53,18 @@ vi.mock("../schema/relations.js", () => ({ relations: {} }));
 vi.mock("./session-spawn.js", () => ({
   recordSessionSpawn: recordSessionSpawnMock,
 }));
+// The space ladder echoes the caller's space: placement is not what this file
+// tests (`create-session.space-ladder.pglite.test.ts` drives the real ladder
+// through this door on PGlite).
+vi.mock("./resolve-session-workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  resolveSessionWorkspacePlacement: vi.fn(
+    async (_db: unknown, ctx: { explicitWorkspaceId?: string | null }) => ({
+      workspaceId: ctx.explicitWorkspaceId ?? null,
+      rung: ctx.explicitWorkspaceId ? "explicit" : null,
+    })
+  ),
+}));
 // PARTIAL mock, deliberately. A total `() => ({...})` replacement is the
 // documented trap in this repo: the moment the module under test reaches a NEW
 // drizzle export, every test in the file dies with "No <x> export is defined on

@@ -60,6 +60,15 @@ vi.mock("@synap/database", async (importOriginal) => {
       _db: unknown,
       input: { explicitProjectId?: string | null }
     ) => ({ projectId: input.explicitProjectId ?? null }),
+    // The space ladder echoes the caller's space too: placement is not what
+    // this file tests (`create-session.space-ladder.pglite.test.ts` is).
+    resolveSessionWorkspacePlacement: async (
+      _db: unknown,
+      input: { explicitWorkspaceId?: string | null }
+    ) => ({
+      workspaceId: input.explicitWorkspaceId ?? null,
+      rung: input.explicitWorkspaceId ? "explicit" : null,
+    }),
   };
 });
 
@@ -88,6 +97,7 @@ import {
   links,
   playbooks,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { createFocusSession } from "../create-session.js";
 import { registerFocusSessionExecutors } from "../../../routers/proposals/executors/focus-session.js";
@@ -190,7 +200,13 @@ async function approve(opts: {
 
 describe("session dedup — one open session per goal + scope", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, proposals, links, playbooks]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      focusSessions,
+      proposals,
+      links,
+      playbooks,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
     await h.client!.exec(

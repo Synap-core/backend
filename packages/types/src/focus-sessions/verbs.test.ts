@@ -87,6 +87,18 @@ describe("sessionVerbsFor — what a session offers now", () => {
     }
   });
 
+  it("Continue is offered only on the read's word", () => {
+    for (const status of ["active", "closed", "failed"]) {
+      expect(sessionVerbsFor({ status })).not.toContain("continue");
+      expect(sessionVerbsFor({ status, continueAvailable: true })).toContain(
+        "continue"
+      );
+    }
+    expect(
+      sessionVerbsFor({ status: "cancelled", continueAvailable: true })
+    ).toEqual([]);
+  });
+
   it("an unknown or missing status offers nothing", () => {
     expect(sessionVerbsFor({ status: null })).toEqual([]);
     expect(sessionVerbsFor({ status: "archived" })).toEqual([]);

@@ -31,8 +31,9 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {
@@ -94,7 +95,10 @@ describe("installedByPackage is never the caller's to write", () => {
 
   it("a person's create drops it and keeps the rest", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
     await caller().create({
       name: "Digest",
       triggerType: "manual",
@@ -109,7 +113,7 @@ describe("installedByPackage is never the caller's to write", () => {
   });
 
   it("an agent's create never carries it into the proposal", async () => {
-    mockGetDb.mockResolvedValue({});
+    mockGetDb.mockResolvedValue({ ...NO_USERS });
     mockCheckPermission.mockResolvedValue({
       proposalId: "p1",
       proposalType: "automation.create",
@@ -133,8 +137,13 @@ describe("installedByPackage is never the caller's to write", () => {
 
   it("an approved proposal carrying it (filed or revised before) materializes without it", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    const database = { insert: vi.fn(() => insertChain(captured)) };
-    await materializeApprovedAutomation({
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: database as never,
       agentUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       stableId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",

@@ -52,6 +52,8 @@ export const ruleEditFieldsSchema = z.object({
   sentence: ruleSentenceSchema.nullish(),
   /** `true` keeps/returns the rule to draft; `false` ACTIVATES it. */
   draft: z.boolean().default(false),
+  /** WHY this edit — shown to the reviewer when an agent's edit is proposed. */
+  reasoning: z.string().max(2000).optional(),
 });
 
 export type RuleEditFields = z.infer<typeof ruleEditFieldsSchema>;
@@ -71,6 +73,7 @@ export function ruleEditToGovernedInput(
   | "automationIds"
   | "sentence"
   | "draft"
+  | "reasoning"
 > {
   return {
     intent: input.intent,
@@ -84,5 +87,6 @@ export function ruleEditToGovernedInput(
     // — a truthiness check here would collapse them into one.
     ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
     ...(input.draft ? { draft: true } : {}),
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
   };
 }

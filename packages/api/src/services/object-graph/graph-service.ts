@@ -86,6 +86,11 @@ import {
 } from "../../routers/proposals/display.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isMachineToken,
+  resolveObjectNoun,
+  resolvePrivateObjectLabel,
+} from "@synap-core/types/vocabulary";
 
 /**
  * Kinds the graph envelope can focus on. Superset of `LinkEndpointType` so
@@ -181,7 +186,7 @@ export interface GraphNeighbor extends GraphNode {
     // vault_grants (capability grants) — NOT mirrored into `links`, folded in
     // read-time for capability/tool/skill/command↔agent bindings.
     | "grant"
-    // automations.createdBy ownership — an agent → the automations it authored.
+    // automations.agent_user_id — an agent → the automations it authored.
     | "automation"
     // ── The TEMPORAL half (why-spine) ────────────────────────────────────────
     // Neither of these is a stored EDGE: both are derived at read time from the
@@ -517,8 +522,76 @@ export function hydrationScopeWhere(
 }
 
 /**
+ * PROVENANCE IS NOT A PLACE (finding 80cc8e12; founder, 23 Nov 2026). The
+ * session an object was MADE in (a stored `produced` link from it, or the
+ * `produced_in` row the temporal, receipt and structure folds derive) is a fact
+ * about the object, not a row of the space being looked through. A workspace
+ * lens is a filter, not an access rule, so it must not turn the reader's own
+ * session into a hidden neighbour: a pod-wide entity made in a session of space
+ * A, read under the lens of space B, names that session.
+ *
+ * Only the LENS is dropped. The session read floor (`sessionReadableWhere`,
+ * decision D1, in `hydrationScopeWhere`) still applies, so a session the reader
+ * cannot read stays hidden and unnamed. Every other neighbour, a session reached
+ * by any other edge included, keeps the lens.
+ */
+const PROVENANCE_EDGE_TYPES: ReadonlySet<string> = new Set([
+  "produced",
+  "produced_in",
+]);
+
+export interface NeighbourRef {
+  kind: string;
+  id: string;
+  edgeType: string;
+  direction: "outgoing" | "incoming";
+}
+
+export function isProvenanceSessionRef(ref: Omit<NeighbourRef, "id">): boolean {
+  return (
+    ref.kind === "session" &&
+    ref.direction === "incoming" &&
+    PROVENANCE_EDGE_TYPES.has(ref.edgeType)
+  );
+}
+
+/**
+ * Hydrate neighbour refs, each under ITS lens: a provenance session under none
+ * (its read floor still applies), everything else under the caller's. Two maps,
+ * never merged, so a session that is ALSO a neighbour by another edge does not
+ * carry the unlensed read into that other row.
+ */
+async function hydrateNeighbourRefs(
+  userId: string,
+  refs: readonly NeighbourRef[],
+  facetVisibilityScope: FacetVisibilityScope,
+  workspaceId?: string | null
+): Promise<(ref: NeighbourRef) => GraphNode | undefined> {
+  const provenance = refs.filter(isProvenanceSessionRef);
+  const lensed = refs.filter((r) => !isProvenanceSessionRef(r));
+  const [lensedNodes, provenanceNodes] = await Promise.all([
+    hydrateNodes(userId, lensed, facetVisibilityScope, workspaceId),
+    hydrateNodes(userId, provenance, facetVisibilityScope, undefined),
+  ]);
+  return (ref) =>
+    (isProvenanceSessionRef(ref) ? provenanceNodes : lensedNodes).get(
+      `${ref.kind}:${ref.id}`
+    );
+}
+
+/**
+ * The display name of a node with nothing to read a name from (a stub kind with
+ * no table): a readable handle stays, a machine id becomes the kind's noun. The
+ * same words the shared connections model uses (`isMachineToken` →
+ * `resolveObjectNoun`), so no reader is ever shown a raw id as a name.
+ */
+function stubNodeName(kind: string, handle: string): string {
+  return isMachineToken(handle) ? resolveObjectNoun(kind) : handle;
+}
+
+/**
  * Batch-hydrate a set of (kind, id) refs into named nodes — ONE query per kind,
- * never N+1. Unknown/stub kinds resolve to a raw-id node (name = short id) so
+ * never N+1. Unknown/stub kinds resolve to a node named by `stubNodeName` so
  * the neighbour is still listed.
  */
 /**
@@ -568,7 +641,7 @@ export async function hydrateNodes(
           out.set(`${kind}:${id}`, {
             kind,
             id,
-            name: id.length > 12 ? `${id.slice(0, 8)}…` : id,
+            name: stubNodeName(kind, id),
             subtype: null,
             subtypes: [],
             workspaceId: null,
@@ -745,13 +818,10 @@ export async function getLinkNeighbors(
 
   const otherRefs = refs.filter((r) => r.kind !== "document");
   const documentRefs = refs.filter((r) => r.kind === "document");
-  const [nodes, documentNodes] = await Promise.all([
-    hydrateNodes(
-      userId,
-      otherRefs.map((r) => ({ kind: r.kind, id: r.id })),
-      facetVisibilityScope,
-      workspaceId
-    ),
+  const [nodeOf, documentNodes] = await Promise.all([
+    // A provenance session (`produced`) hydrates without the lens, see
+    // `isProvenanceSessionRef`; every other far end keeps it.
+    hydrateNeighbourRefs(userId, otherRefs, facetVisibilityScope, workspaceId),
     // A raw capture usually lives pod-personal (NULL workspace), so the lens
     // would hide it from the entity it made. The edge was already lens-filtered
     // by `getLinksFor`; the document keeps its OWNER floor.
@@ -762,9 +832,11 @@ export async function getLinkNeighbors(
       undefined
     ),
   ]);
-  for (const [key, node] of documentNodes) nodes.set(key, node);
   return refs.flatMap((r) => {
-    const node = nodes.get(`${r.kind}:${r.id}`);
+    const node =
+      r.kind === "document"
+        ? documentNodes.get(`${r.kind}:${r.id}`)
+        : nodeOf(r);
     // A document is owner-private: one the caller cannot see is another
     // person's raw capture — dropped, never surfaced as a bare id.
     if (!node && r.kind === "document") return [];
@@ -777,7 +849,13 @@ export async function getLinkNeighbors(
       // The hydrated kind: an intake-source document is emitted as `capture`.
       kind: node?.kind ?? r.kind,
       id: r.id,
-      name: node?.name ?? r.id,
+      // A hidden far end is named by the private placeholder, never by its
+      // id: every reader (browser, relay, an agent's get_graph) shows `name`.
+      name:
+        node?.name ??
+        (hidden
+          ? resolvePrivateObjectLabel(r.kind)
+          : resolveObjectNoun(r.kind)),
       subtype: node?.subtype ?? null,
       subtypes: node?.subtypes ?? [],
       workspaceId: node?.workspaceId ?? null,
@@ -820,11 +898,15 @@ export function connectionsToNeighbors(
       return {
         kind: isEntity ? "entity" : isSession ? "session" : "channel",
         id,
+        // Never the id: with no title the kind's noun names it (the entity's
+        // own kind when known), as the shared connections model does.
         name: isEntity
-          ? (c.entity?.title ?? c.label ?? id)
+          ? (c.entity?.title ??
+            c.label ??
+            resolveObjectNoun(c.entity?.type ?? "entity"))
           : isSession
-            ? (c.focusSessionGoal ?? c.label ?? id)
-            : (c.channelTitle ?? c.label ?? id),
+            ? (c.focusSessionGoal ?? c.label ?? resolveObjectNoun("session"))
+            : (c.channelTitle ?? c.label ?? resolveObjectNoun("channel")),
         subtype: isEntity ? (c.entity?.type ?? null) : null,
         subtypes: isEntity
           ? [
@@ -886,7 +968,7 @@ function agentFloor(userId: string) {
  *  - focus agent → the tools/skills/commands/secrets granted TO it
  *    (`vault_grants WHERE granted_to = <agent's agent-user id>`), PLUS the
  *    channels it is assigned to / an ai_agent member of, and the automations it
- *    created (`automations.createdBy = <agent-user id>`).
+ *    authored (`automations.agent_user_id = <agent-user id>`).
  *
  * Every far endpoint is hydrated through `hydrateNodes`, so it inherits the SAME
  * visibility floor as every other neighbour — an endpoint in a workspace the
@@ -1078,14 +1160,14 @@ export async function getGovernanceNeighbors(
       }
     }
 
-    // B3. Automations the agent CREATED (automations.createdBy = agent-user id).
-    // This is the owner-approved definition of agent→automations; the
-    // "runs/governs" dimension has no stored link (see report).
+    // B3. Automations the agent AUTHORED (their actor, automations.agent_user_id;
+    // the owner is the person). The "runs/governs" dimension has no stored
+    // link (see report).
     if (agentUserId) {
       const autoRows = await db
         .select({ id: automations.id })
         .from(automations)
-        .where(eq(automations.createdBy, agentUserId));
+        .where(eq(automations.agentUserId, agentUserId));
       const autoIds = autoRows.map((r) => r.id);
       if (autoIds.length > 0) {
         const autoNodes = await hydrateNodes(
@@ -1147,7 +1229,8 @@ const TEMPORAL_NEIGHBOR_CAP = 25;
  * of that:
  *   - proposals are re-floored with `userVisibleWhere` (their registered rule),
  *   - sessions hydrate through `hydrateNodes`, whose `session` branch is the
- *     owner-aware `ownerPrivateVisibleWhere` floor + the workspace lens.
+ *     session read rule (`sessionReadableWhere`). They are PROVENANCE, so the
+ *     workspace lens is not applied to them (`isProvenanceSessionRef`).
  * A row that fails either floor is DROPPED, never surfaced as a bare id.
  *
  * FORWARD effects of a session (produced / targets / used) are NOT re-fetched
@@ -1242,18 +1325,25 @@ export async function getTemporalNeighbors(
   // ── Sessions: the goal-bound work the change happened inside ──────────────
   const sessionIdList = [...sessionIds].slice(0, TEMPORAL_NEIGHBOR_CAP);
   if (sessionIdList.length > 0) {
-    const nodes = await hydrateNodes(
+    const sessionRefs = sessionIdList.map((sid) => ({
+      kind: "session",
+      id: sid,
+      edgeType: "produced_in",
+      direction: "incoming" as const,
+    }));
+    const nodeOf = await hydrateNeighbourRefs(
       userId,
-      sessionIdList.map((sid) => ({ kind: "session", id: sid })),
+      sessionRefs,
       facetVisibilityScope,
       workspaceId
     );
-    for (const sid of sessionIdList) {
+    for (const ref of sessionRefs) {
+      const sid = ref.id;
       // The focused object IS this session — a session is not its own neighbour.
       if (kind === "session" && sid === id) continue;
-      const node = nodes.get(`session:${sid}`);
-      // Not visible to this caller (another user's session, or outside the
-      // lens) → dropped. Never surface a bare id.
+      const node = nodeOf(ref);
+      // Not readable by this caller (another user's session) → dropped.
+      // Never surface a bare id.
       if (!node) continue;
       out.push({
         ...node,
@@ -1423,13 +1513,20 @@ export async function getReceiptNeighbors(
   ];
 
   if (receipt.sessionId) {
-    const nodes = await hydrateNodes(
-      userId,
-      [{ kind: "session", id: receipt.sessionId }],
-      facetVisibilityScope,
-      workspaceId
-    );
-    const session = nodes.get(`session:${receipt.sessionId}`);
+    const ref = {
+      kind: "session",
+      id: receipt.sessionId,
+      edgeType: "produced_in",
+      direction: "incoming" as const,
+    };
+    const session = (
+      await hydrateNeighbourRefs(
+        userId,
+        [ref],
+        facetVisibilityScope,
+        workspaceId
+      )
+    )(ref);
     if (session) {
       out.push({
         ...session,
@@ -1769,14 +1866,14 @@ export async function getStructureNeighbors(
     }
   }
 
-  const nodes = await hydrateNodes(
+  const nodeOf = await hydrateNeighbourRefs(
     userId,
-    refs.map((r) => ({ kind: r.kind, id: r.id })),
+    refs,
     facetVisibilityScope,
     workspaceId
   );
   return refs.flatMap((r) => {
-    const node = nodes.get(`${r.kind}:${r.id}`);
+    const node = nodeOf(r);
     if (!node) return [];
     return [
       {
@@ -1988,7 +2085,9 @@ export async function getObjectGraph(
   const object: GraphNode = hydrated ?? {
     kind,
     id,
-    name: found ? id : "(not found)",
+    // A table-backed id that did not hydrate is one this reader may not see:
+    // named by the private placeholder, never by its own id.
+    name: found ? resolvePrivateObjectLabel(kind) : "(not found)",
     subtype: null,
     subtypes: [],
     workspaceId: null,

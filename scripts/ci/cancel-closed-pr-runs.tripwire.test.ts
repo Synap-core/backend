@@ -13,7 +13,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 // @ts-expect-error — plain ESM script, no declarations
-import { selectRunsToCancel } from "./cancel-closed-pr-runs.mjs";
+import {
+  negctlRefToDelete,
+  selectRunsToCancel,
+} from "./cancel-closed-pr-runs.mjs";
 
 const REPO = join(fileURLToPath(new URL(".", import.meta.url)), "..", "..");
 const pr = {
@@ -126,5 +129,47 @@ describe("cancel-closed-pr-runs: the workflow", () => {
     expect(wf).toContain(
       "sparse-checkout: scripts/ci/cancel-closed-pr-runs.mjs"
     );
+  });
+
+  it("deletes the negctl branch in its own job: contents: write, never a fork", () => {
+    const job = wf.slice(wf.indexOf("\n  negctl:"));
+    expect(job).toMatch(/^ {4}permissions:\n {6}contents: write\n/m);
+    expect(job).not.toMatch(/actions: write/);
+    expect(job).toContain(
+      "if: github.event.pull_request.head.repo.full_name == github.repository"
+    );
+    expect(job).toContain(
+      "run: node scripts/ci/cancel-closed-pr-runs.mjs --delete-negctl"
+    );
+    // The cancel job keeps its least privilege.
+    expect(wf.slice(0, wf.indexOf("\n  # Its own job"))).not.toMatch(
+      /contents: write/
+    );
+  });
+});
+
+describe("cancel-closed-pr-runs: which negctl branch a closed PR deletes", () => {
+  const R = "Synap-core/backend";
+  it("exactly negctl/<head_ref> of a same-repo PR", () => {
+    expect(negctlRefToDelete(pr, R)).toBe("negctl/ci/parallel-release-gate");
+    expect(negctlRefToDelete({ headRef: "x", headRepo: R }, R)).toBe(
+      "negctl/x"
+    );
+  });
+  it.each([
+    ["a fork's PR", { headRef: "x", headRepo: "someone/backend" }],
+    ["a missing head repo (deleted fork)", { headRef: "x" }],
+    ["a PR whose head is main", { headRef: "main", headRepo: R }],
+    [
+      "a PR whose head is a release branch",
+      { headRef: "release/1", headRepo: R },
+    ],
+    [
+      "a PR whose head is itself a negctl branch",
+      { headRef: "negctl/x", headRepo: R },
+    ],
+    ["no head ref", { headRepo: R }],
+  ])("never %s", (_l, p) => {
+    expect(negctlRefToDelete(p, R)).toBeNull();
   });
 });

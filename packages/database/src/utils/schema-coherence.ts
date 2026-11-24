@@ -44,6 +44,7 @@ import { documentPassages } from "../schema/document-passages.js";
 import { statusWaitEpisode } from "../schema/status-wait-episode.js";
 import { agentConfigs } from "../schema/agent-configs.js";
 import { agentTemplates } from "../schema/agent-templates.js";
+import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
  * A single column the runtime requires to exist.
@@ -67,6 +68,21 @@ interface RequiredColumn {
  * Keep this list in sync with 0099_schema_reconciliation.sql.
  */
 export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
+  {
+    table: "space_access",
+    column: "object_type",
+    addedBy: "0448_space_access.sql",
+  },
+  {
+    table: "space_access",
+    column: "object_id",
+    addedBy: "0448_space_access.sql",
+  },
+  {
+    table: "space_access",
+    column: "granted_by",
+    addedBy: "0448_space_access.sql",
+  },
   // Wave B3 provenance — tripwire on the KG core (0107). Checking 2 of the 5
   // per table is enough to confirm the migration ran (it adds all 5 together).
   //
@@ -771,10 +787,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     addedBy: "0267_session_criteria_and_evaluations.sql",
   },
 
+  // The ONE tools list of a playbook (0419): every playbook read selects it
+  // and every run turn resolves its tools from it. `required_intents` (0291)
+  // is no longer read: 0419 folded it in.
   {
     table: "playbooks",
-    column: "required_intents",
-    addedBy: "0291_playbook_required_intents.sql",
+    column: "tools",
+    addedBy: "0419_playbook_tools.sql",
   },
   // The rules a playbook follows (0411): without it every playbook read and
   // write that selects the column fails.
@@ -782,6 +801,57 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "playbooks",
     column: "guidance",
     addedBy: "0411_playbook_guidance.sql",
+  },
+  // Who runs a playbook, the tools it needs, and its kept versions (0416):
+  // every playbook read selects `runner` / `requires` (absence 500s every
+  // playbook list), and every definition write records a version.
+  {
+    table: "playbooks",
+    column: "runner",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbooks",
+    column: "requires",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  {
+    table: "playbook_versions",
+    column: "definition",
+    addedBy: "0416_playbook_runner_and_versions.sql",
+  },
+  // Who works each step of a run (0422): the stage runner writes a row on
+  // every step entry, so its absence fails every stage advance.
+  {
+    table: "session_stage_runs",
+    column: "runner_via",
+    addedBy: "0422_session_stage_runs.sql",
+  },
+  // A `forEach` step's batches and child runs (0424): every step entry
+  // selects the row, so its absence fails every stage advance.
+  {
+    table: "session_stage_runs",
+    column: "fan_out",
+    addedBy: "0424_session_stage_runs_fan_out.sql",
+  },
+  // Who holds a run, and its actor (0446): every run insert names them, so
+  // their absence fails every run birth.
+  {
+    table: "playbook_runs",
+    column: "holder",
+    addedBy: "0446_run_holder_and_actor.sql",
+  },
+  {
+    table: "playbook_runs",
+    column: "agent_user_id",
+    addedBy: "0446_run_holder_and_actor.sql",
+  },
+  // One live run per object (0427): every session insert names it, so its
+  // absence fails every session birth.
+  {
+    table: "focus_sessions",
+    column: "one_live_per_subject",
+    addedBy: "0427_one_live_run_per_subject.sql",
   },
 
   // Backup run ledger (0295). The backup container writes it with psql and
@@ -1171,6 +1241,39 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "approved_requests",
     addedBy: "0309_apps.sql",
   },
+  // The actor column (0442, 0445): every read of these tables names it.
+  {
+    table: "automations",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "playbooks",
+    column: "agent_user_id",
+    addedBy: "0442_owner_actor_columns.sql",
+  },
+  {
+    table: "tools",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "capabilities",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  {
+    table: "skills",
+    column: "agent_user_id",
+    addedBy: "0445_owner_actor_more_tables.sql",
+  },
+  // apps.approved_access — the approval in its v2 form (0434, app permissions
+  // W2). Missing means every app read and approval write would 42703.
+  {
+    table: "apps",
+    column: "approved_access",
+    addedBy: "0434_apps_approved_access.sql",
+  },
   // apps.removed_at — "Remove for good" (0312). Missing means every app read
   // (`listForOwner` filters on it) would 42703.
   {
@@ -1216,6 +1319,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "oauth_clients",
     column: "requested_pod_wide",
     addedBy: "0379_oauth_client_requested_pod_wide.sql",
+  },
+  // The kinds grouping of a pod app's requests (0437, F4): every client read
+  // selects it, as above.
+  {
+    table: "oauth_clients",
+    column: "requested_kind_groups",
+    addedBy: "0437_oauth_client_requested_kind_groups.sql",
   },
   // Pod app refresh tokens (0339). /token's refresh grant and /revoke read
   // and write them, and revoking an app revokes them: without the table the
@@ -1359,6 +1469,18 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "revoked_reason",
     addedBy: "0380_governance_rules_revoked_reason.sql",
   },
+  // A rule that names one object at one version (0420): every rule read
+  // selects it, so without it the resolver fails on every agent write.
+  {
+    table: "governance_rules",
+    column: "target_subject_id",
+    addedBy: "0420_governance_rule_subject.sql",
+  },
+  {
+    table: "governance_rules",
+    column: "principal_owner_id",
+    addedBy: "0420_governance_rule_subject.sql",
+  },
   {
     table: "governance_ceilings",
     column: "principal_class",
@@ -1426,6 +1548,20 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "presence_disowned_passkeys",
     column: "credential_id",
     addedBy: "0405_presence_recovery.sql",
+  },
+  // "Add this device" (0412, founder decision of 9 Nov 2026): every
+  // device-link request reads the table, and Kratos' settings guard reads
+  // `grant_session` on every passkey change; absence means each would 42P01 /
+  // 42703.
+  {
+    table: "presence_device_links",
+    column: "choices",
+    addedBy: "0412_presence_device_links.sql",
+  },
+  {
+    table: "presence_challenges",
+    column: "grant_session",
+    addedBy: "0412_presence_device_links.sql",
   },
   // key_requests — the CLI's door to a key (0363). Absence means
   // `synap keys create` and the pod-admin review page would 42P01.
@@ -1821,14 +1957,11 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
   // vault_grants → capability grants generalization (0142). The polymorphic
   // subject columns are what the resolver/issuance now key on; their absence
   // means a pod is on a pre-0142 schema and grant redemption would break.
+  // (`exec_mode`, also added by 0142, is no longer read since 0435: an approval row
+  // is the only verdict, a grant means "may use".)
   {
     table: "vault_grants",
     column: "grantable_type",
-    addedBy: "0142_capability_grants.sql",
-  },
-  {
-    table: "vault_grants",
-    column: "exec_mode",
     addedBy: "0142_capability_grants.sql",
   },
 
@@ -2156,10 +2289,74 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "lease_id",
     addedBy: "0409_installations.sql",
   },
+
+  // Needs (0426) — the need vocabulary. Absence means every run whose tools
+  // name a need, the space binding door and the needs read would throw
+  // (42P01).
   {
-    table: "intent_defaults",
-    column: "constraints_hash",
-    addedBy: "0409_installations.sql",
+    table: "needs",
+    column: "intents",
+    addedBy: "0426_needs.sql",
+  },
+  {
+    table: "needs",
+    column: "aliases",
+    addedBy: "0426_needs.sql",
+  },
+  {
+    table: "installation_bindings",
+    column: "origin",
+    addedBy: "0426_needs.sql",
+  },
+
+  // Compute leases (0431): every compute start writes one before the provider
+  // is called, and the TTL sweeper reads them; absence means every start
+  // would be refused and nothing would be released (42P01).
+  {
+    table: "compute_leases",
+    column: "expires_at",
+    addedBy: "0431_compute_need_and_leases.sql",
+  },
+  {
+    table: "compute_leases",
+    column: "release_verb",
+    addedBy: "0431_compute_need_and_leases.sql",
+  },
+  {
+    table: "compute_leases",
+    column: "registration_code_hash",
+    addedBy: "0432_compute_lease_kept.sql",
+  },
+
+  // Realtime room tickets (0438): every pod app's room ticket is written and
+  // claimed here; absence means no app could open a live room (42P01).
+  {
+    table: "realtime_room_tickets",
+    column: "consumed_at",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+  {
+    table: "realtime_room_tickets",
+    column: "api_key_id",
+    addedBy: "0438_realtime_room_tickets.sql",
+  },
+  // Renderer bundles (0436): the install writes both tables and pod admin
+  // reads them on every page that draws pod content; absence means every
+  // install and every host-module read would fail (42P01).
+  {
+    table: "renderer_bundles",
+    column: "set_sha256",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_bundles",
+    column: "defaults",
+    addedBy: "0436_renderer_bundles.sql",
+  },
+  {
+    table: "renderer_host_modules",
+    column: "sha256",
+    addedBy: "0436_renderer_bundles.sql",
   },
 
   // Document passages (0358b) — a document body as recall-sized units, and
@@ -2363,6 +2560,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "run_on",
     addedBy: "0403_playbook_runs_run_on.sql",
   },
+  // A one-shot (generate) run's record (0417): every playbook_runs select
+  // reads it, so its absence would 500 every run list.
+  {
+    table: "playbook_runs",
+    column: "generation",
+    addedBy: "0417_playbook_runs_generation.sql",
+  },
   {
     table: "users",
     column: "agent_template_slug",
@@ -2482,6 +2686,14 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     table: "projects",
     column: "sample",
     addedBy: "0347_projects_sample.sql",
+  },
+  // The project's main goal (0423) — same baseline exemption. Selected by
+  // every `projects` row read (`db.query.projects`), so a missing column 500s
+  // every project door.
+  {
+    table: "projects",
+    column: "main_goal_id",
+    addedBy: "0423_projects_main_goal.sql",
   },
   // Invite links are found by their token's digest (0353, decision B2): a
   // missing column fails every invite preview, accept and create.
@@ -2940,6 +3152,13 @@ const REQUIRED_INDEX_TABLES = [
   // Agent templates (0404): the install conflicts on `agent_templates_slug_unique`
   // (ON CONFLICT DO NOTHING), which IS "one installed template per slug".
   agentTemplates,
+  // One live run per object (0427): `uniq_focus_sessions_one_live_run` IS
+  // "one live run of a playbook per object and person"; without it two
+  // clicks that both read "nothing live" start two runs. Every other index
+  // declared on focus_sessions is checked too: each is created by the
+  // baseline or a numbered migration (`migrations-0427.pglite.test.ts` checks
+  // every declared name has a CREATE statement).
+  focusSessions,
 ] as const;
 
 /** Every index declared in the drizzle schema but absent from the live DB. */

@@ -65,8 +65,11 @@ import {
   hasTrackGoalInput,
   pickTrackGoalInput,
 } from "../../../services/tracks/goal-content.js";
+import {
+  hasGoalPlacementInput,
+  pickGoalPlacementInput,
+} from "../../../services/tracks/goal-placement.js";
 import { trackRepository } from "../../../services/tracks/track-repo.js";
-import { readListedStepSpaces } from "../../../services/tracks/track-space-grant.js";
 import { readTrackFromEntity } from "../../../services/tracks/goal-source-entity.js";
 import { loadVisibleProject } from "../../../services/projects/load-visible-project.js";
 import { assertWorkspaceWrite } from "../../../utils/workspace-write-access.js";
@@ -163,12 +166,13 @@ export function registerTrackExecutors(): void {
         // and, for an entity that had ended, closed or dropped — as the
         // approver.
         fromEntity: readTrackFromEntity(data.fromEntity),
-        // Decision 2a: this approval IS the consent to the spaces the
-        // proposal listed, for the agent the proposal's COLUMN names.
-        approvedSpaceGrant: {
+        // Its parent goal and pillars: written after the birth through THE
+        // dependency door, which re-checks every floor now.
+        ...pickGoalPlacementInput(data),
+        // The agent the proposal's COLUMN names, for the attribution.
+        approval: {
           proposalId: input.proposalId,
           agentUserId: proposal.agentUserId ?? null,
-          listedWorkspaceIds: readListedStepSpaces(data),
         },
         actor: { userId },
       });
@@ -267,7 +271,8 @@ export function registerTrackExecutors(): void {
       } else if (
         "direction" in data ||
         "kpi" in data ||
-        hasTrackGoalInput(data)
+        hasTrackGoalInput(data) ||
+        hasGoalPlacementInput(data)
       ) {
         // Direction / KPI (0302): the PATCH, merged onto the KPI as it stands
         // at approval and re-validated; `current` is stamped as stated by the
@@ -293,11 +298,18 @@ export function registerTrackExecutors(): void {
                 }
               : {}),
             ...pickTrackGoalInput(data),
+            // Where it sits — written after the patch, through THE
+            // dependency door, which re-checks every floor now.
+            ...pickGoalPlacementInput(data),
           },
           {
             userId,
             statedBy: proposal.agentUserId ?? userId,
             confirmedBy: userId,
+            attribution: {
+              agentUserId: proposal.agentUserId ?? null,
+              proposalId: input.proposalId,
+            },
           }
         );
       } else if (

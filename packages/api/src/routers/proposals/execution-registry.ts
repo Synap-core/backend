@@ -19,6 +19,7 @@
  * behaviour — returns, events, ordering, idempotency — is identical.
  */
 
+import type { ProposalLandedKind } from "@synap-core/types/proposals/landed";
 import type { ApprovalRunView } from "../../services/proposals/approval-runs.js";
 import { TRPCError } from "@trpc/server";
 import type { ProposalExecutorKey } from "@synap/governance-policy";
@@ -220,6 +221,12 @@ export interface ProposalExecutorResult {
   success: boolean;
   alreadyApproved?: boolean;
   primaryId?: string;
+  /**
+   * The object kind `primaryId` names when it is not the proposal's target
+   * kind (a run's session); null when it names no object a person opens (a
+   * key, a run). Absent: the target's kind. Read by the landed stamp.
+   */
+  primaryKind?: ProposalLandedKind | null;
   created?: number;
   linked?: number;
   /**
@@ -410,7 +417,10 @@ export async function dispatchProposalApproval(
     errorMessage: string,
     // P1: structured failure scalars (when the terminal failure carried them) so
     // the caller can persist a next action alongside the human `errorMessage`.
-    failure?: ProposalFailureMeta
+    failure?: ProposalFailureMeta,
+    // The error itself, for the owner-only record of its exact cause
+    // (`recordProposalFault`); never stored on the proposal.
+    err?: unknown
   ) => Promise<void>
 ): Promise<ProposalExecutorResult> {
   const executor = proposalExecRegistry.resolve(
@@ -456,7 +466,7 @@ export async function dispatchProposalApproval(
     // An executor that recorded its own outcome (a held send stays pending)
     // is not overwritten with a failure either.
     if (!leavesRowToOtherAttempt(err) && !keepsRowAsRecorded(err)) {
-      await onApprovalFailed(args.input.proposalId, safe, failure);
+      await onApprovalFailed(args.input.proposalId, safe, failure, err);
     }
     // NEVER `throw err`. The original message is raw upstream text and
     // `init-trpc.ts` puts `shape.message` on the wire verbatim (and

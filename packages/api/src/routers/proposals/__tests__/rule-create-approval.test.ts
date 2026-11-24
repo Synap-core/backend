@@ -18,11 +18,27 @@ let updates: { values: Record<string, unknown> }[] = [];
 const whereResult = (rows: unknown[]) =>
   Object.assign(Promise.resolve(rows), { limit: async () => rows });
 
+// Who approved is read from the review ladder (users table); a person here.
+vi.mock(
+  "../../../services/capabilities/skill-born-approved.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/capabilities/skill-born-approved.js")
+    >()),
+    personIsApproving: async () => true,
+  })
+);
+
 vi.mock("@synap/database", async (importOriginal) => ({
   // The real status door: it writes through the mocked `db` below.
   transitionProposal: (await importOriginal<typeof import("@synap/database")>())
     .transitionProposal,
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({
       from: () => ({ where: () => whereResult(proposalRows) }),
     }),

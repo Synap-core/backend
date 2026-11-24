@@ -6,6 +6,7 @@ import {
   and,
   skills,
   knowledgeRepository,
+  ownerOfProposal,
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
@@ -16,7 +17,10 @@ import {
   runResolvedSkill,
   assertApprovalTargetResolves,
 } from "../../../services/capabilities/execute-capability.js";
-import { applyMarketInstall } from "../../../services/capabilities/marketplace-install.js";
+import {
+  applyMarketInstall,
+  type MarketInstallKind,
+} from "../../../services/capabilities/marketplace-install.js";
 import { setCapabilityRenderer } from "../../../services/capabilities/set-capability-renderer.js";
 import type { CapabilityRendererPage } from "@synap/database";
 import { resolveOrCreateContainer } from "../../../services/capabilities/container-address.js";
@@ -24,7 +28,6 @@ import {
   triggerProviderAction,
   type ConnectionSelector,
 } from "../../../connectors/external-dispatch.js";
-import type { CatalogKind } from "@synap/jobs";
 import type { Context } from "../../../context.js";
 import {
   registerProposalExecutor,
@@ -39,6 +42,11 @@ import type { ProposalExecutorArgs } from "../execution-registry.js";
 import { recordApprovedAgentStart } from "../../../services/agent-dispatch/approved-start.js";
 import { answeringSkillsWhere } from "../../../services/capabilities/verb-skill.js";
 import { approvalRefusesRun } from "@synap/capability-gate";
+import { keepRowAsRecorded } from "../failure-classification.js";
+import {
+  holdPendingSend,
+  type HeldSend,
+} from "../../../services/channels/held-sends.js";
 
 const logger = createLogger({
   module: "proposal-approve-executors-capability",
@@ -69,6 +77,10 @@ async function loadApprovedRunnableSkill(
       // runner mints them after this approval (`file-parameters.ts`).
       parameters: skills.parameters,
       executionMode: skills.executionMode,
+      // A send intent's recipient is checked for do not contact at the run
+      // (`send-recipient-consent.ts`), read through the verb's input map.
+      intent: skills.intent,
+      inputMap: skills.inputMap,
       approved: skills.approved,
     })
     .from(skills)
@@ -89,6 +101,41 @@ async function loadApprovedRunnableSkill(
     });
   }
   return skillRow;
+}
+
+/**
+ * The at-most-once dispatch of an approved verb run (`dispatchExternalOnce`),
+ * plus one case: a run that did NOT go out because the LinkedIn account it
+ * acts as may not act today (its day's limit, or LinkedIn paused it) stays
+ * PENDING and HELD until then, never APPROVAL_FAILED
+ * (`linkedin-account-limits.ts`, `held-sends.ts`). It holds only on the
+ * hold its own provider call answered (`held`, from `triggerProviderAction`
+ * through the run): any other refusal, e.g. LinkedIn's 422 cannot_resend_yet
+ * on the day's 20th request, fails with LinkedIn's own sentence. An
+ * ambiguous throw keeps its claim as before.
+ */
+async function dispatchHoldingLinkedin(
+  proposalId: string,
+  send: () => Promise<
+    Awaited<ReturnType<Parameters<typeof dispatchExternalOnce>[1]>> & {
+      held?: HeldSend;
+    }
+  >
+): Promise<void> {
+  const state: { held: HeldSend | null } = { held: null };
+  try {
+    await dispatchExternalOnce(proposalId, async () => {
+      const result = await send();
+      if (!result.delivered && result.held) state.held = result.held;
+      return result;
+    });
+  } catch (err) {
+    if (!state.held) throw err;
+    await holdPendingSend(proposalId, state.held);
+    throw keepRowAsRecorded(
+      err instanceof Error ? err : new Error(String(err))
+    );
+  }
 }
 
 /** Register the capability.run / capability.install / capability.enable / capability/run approve executors. */
@@ -222,7 +269,7 @@ export function registerCapabilityExecutors(): void {
       );
 
       // At-most-once external dispatch (hybrid policy — see dispatchExternalOnce).
-      await dispatchExternalOnce(input.proposalId, async () => {
+      await dispatchHoldingLinkedin(input.proposalId, async () => {
         const runOutcome = await runResolvedSkill(
           skillRow,
           (data.input as Record<string, unknown> | undefined) ?? {},
@@ -260,6 +307,7 @@ export function registerCapabilityExecutors(): void {
               runOutcome.kind === "error" ? runOutcome.errorClass : undefined,
             providerRef:
               runOutcome.kind === "error" ? runOutcome.providerRef : undefined,
+            held: runOutcome.kind === "error" ? runOutcome.held : undefined,
           };
         }
         skillRunResult = runOutcome.result;
@@ -374,7 +422,7 @@ export function registerCapabilityExecutors(): void {
       // claim so Retry re-runs; a throw from runResolvedSkill is ambiguous → the
       // claim is kept (no resend).
       let runResult: unknown;
-      await dispatchExternalOnce(input.proposalId, async () => {
+      await dispatchHoldingLinkedin(input.proposalId, async () => {
         const runOutcome = await runResolvedSkill(skillRow, parameters, {
           userId,
           workspaceId: proposal.workspaceId ?? null,
@@ -427,6 +475,7 @@ export function registerCapabilityExecutors(): void {
             reason: runOutcome.message,
             errorClass: runOutcome.errorClass,
             providerRef: runOutcome.providerRef,
+            held: runOutcome.held,
           };
         }
         runResult = runOutcome.result;
@@ -541,7 +590,7 @@ export function registerCapabilityExecutors(): void {
     async execute({ proposal, payload, userId, input, deps }) {
       const data = (proposal.data ?? {}) as Record<string, unknown>;
       const slug = data.slug as string | undefined;
-      const kind = data.kind as CatalogKind | undefined;
+      const kind = data.kind as MarketInstallKind | undefined;
       if (!slug || !kind) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -939,9 +988,6 @@ export function registerCapabilityExecutors(): void {
   // to the insert. It is a CREATE, so no id is read at all — the row mints its
   // own, exactly as the direct path does.
   //
-  // AUTHOR: `createdBy: proposal.agentUserId ?? userId` mirrors the direct
-  // path's `input.agentUserId ?? userId` — the agent wrote it, the human only
-  // approved it.
   registerProposalExecutor({
     key: "capability/create",
     async execute({ proposal, userId, input, deps }) {
@@ -995,9 +1041,11 @@ export function registerCapabilityExecutors(): void {
           ? (inner.metadata as Record<string, unknown>)
           : undefined;
 
+      const owner = await ownerOfProposal(db, proposal, userId);
       await resolveOrCreateContainer(db, {
         workspaceId: wsLens,
-        createdBy: proposal.agentUserId ?? userId,
+        createdBy: owner.ownerId,
+        agentUserId: owner.agentUserId,
         name,
         description: (inner.description as string | null) ?? undefined,
         templateKey,

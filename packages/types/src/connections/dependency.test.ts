@@ -7,14 +7,21 @@ import {
   LINK_EDGE_ROLES,
   NODE_ZONES,
   deriveNodeNeighbourhood,
+  armOptionOf,
+  classifyArmBlocker,
   classifyDependencyBlocker,
   deriveOpenBlockers,
+  parseArmRef,
+  planDecisionArms,
   isBlocked,
   isDependencyEnded,
   isDependencyLinkType,
+  isAdvancesPair,
+  isPrimaryLinkMetadata,
   isServesPair,
   isWorkLinkType,
   normaliseDependencyRelation,
+  ADVANCES_LINK_TYPE,
   DEPENDENCY_LINK_TYPES,
   SERVES_LINK_TYPE,
   WORK_LINK_TYPES,
@@ -228,6 +235,43 @@ describe("deriveOpenBlockers — dropped vs delivered (founder decision 2026-10-
     expect(
       deriveOpenBlockers(work, edges, states({ [`${kind}:b`]: state }))
     ).toEqual([]);
+  });
+  // "Delivered" means the work was done, not that the session closed (founder,
+  // 2026-11-20). Rules out "closed clears" (SESSION_DELIVERED_STATUSES =
+  // ["closed"], the rule this replaced): the two rules DISAGREE exactly on a
+  // closed session whose `closedAs` is not_done.
+  it("a session CLOSED with required work open (closedAs not_done) holds, marked dropped", () => {
+    const edges = [dep("session", "work", "session", "b")];
+    const state = { status: "closed", closedAs: "not_done" as const };
+    expect(
+      classifyDependencyBlocker("session", "closed", null, "not_done")
+    ).toBe("dropped");
+    expect(
+      deriveOpenBlockers(work, edges, states({ "session:b": state }))
+    ).toEqual([
+      {
+        kind: "session",
+        id: "b",
+        hidden: false,
+        dropped: true,
+        status: "closed",
+      },
+    ]);
+  });
+  // Rules out the over-correction "only an explicit done clears": a closed
+  // row with no close-anyway record (a person's close, every close before
+  // the record existed) delivered, so no historical chain re-blocks.
+  it("a closed session with closedAs done, or none recorded, clears", () => {
+    expect(classifyDependencyBlocker("session", "closed", null, "done")).toBe(
+      "delivered"
+    );
+    expect(classifyDependencyBlocker("session", "closed", null, null)).toBe(
+      "delivered"
+    );
+    // closedAs never makes a not-ended session delivered.
+    expect(classifyDependencyBlocker("session", "active", null, "done")).toBe(
+      "open"
+    );
   });
   // Rules out "stale settles" (it did: stale ∉ OPEN_SESSION_STATUSES).
   it("a stale session blocker holds as OPEN, not dropped", () => {
@@ -484,6 +528,35 @@ describe("neighbourhood labels for the dependency + replaces edges", () => {
   });
 });
 
+describe("advances — a goal's pillar, a work link, never a dependency", () => {
+  // Rules out "advances joined the dependency list": a pillar would start
+  // reading as something the goal waits on.
+  it("is a work link the door writes, and not a dependency link", () => {
+    expect(isWorkLinkType(ADVANCES_LINK_TYPE)).toBe(true);
+    expect(isDependencyLinkType(ADVANCES_LINK_TYPE)).toBe(false);
+  });
+  // Rules out "any unit may advance any space": only a goal advances, and
+  // only a space is advanced.
+  it("joins track → workspace only", () => {
+    expect(isAdvancesPair("track", "workspace")).toBe(true);
+    expect(isAdvancesPair("session", "workspace")).toBe(false);
+    expect(isAdvancesPair("track", "track")).toBe(false);
+    expect(isAdvancesPair("track", "project")).toBe(false);
+  });
+  // Rules out "a truthy primary counts": only the boolean true marks it.
+  it("reads the primary mark as the boolean true only", () => {
+    expect(isPrimaryLinkMetadata({ primary: true })).toBe(true);
+    expect(isPrimaryLinkMetadata({ primary: "true" })).toBe(false);
+    expect(isPrimaryLinkMetadata({ primary: false })).toBe(false);
+    expect(isPrimaryLinkMetadata({})).toBe(false);
+    expect(isPrimaryLinkMetadata(null)).toBe(false);
+  });
+  it("reads as Advances / Advanced by", () => {
+    expect(resolveLineageEdgeLabel("advances", "outgoing")).toBe("Advances");
+    expect(resolveLineageEdgeLabel("advances", "incoming")).toBe("Advanced by");
+  });
+});
+
 describe("serves — a work link, never a dependency", () => {
   // Rules out "serves joined the dependency list": every blocker reader reads
   // DEPENDENCY_LINK_TYPES, so it would start treating a goal as a blocker.
@@ -491,7 +564,12 @@ describe("serves — a work link, never a dependency", () => {
     expect(isWorkLinkType(SERVES_LINK_TYPE)).toBe(true);
     expect(isDependencyLinkType(SERVES_LINK_TYPE)).toBe(false);
     expect(DEPENDENCY_LINK_TYPES).not.toContain("serves");
-    expect(WORK_LINK_TYPES).toEqual(["blocked_by", "replaces", "serves"]);
+    expect(WORK_LINK_TYPES).toEqual([
+      "blocked_by",
+      "replaces",
+      "serves",
+      "advances",
+    ]);
     for (const t of DEPENDENCY_LINK_TYPES) expect(isWorkLinkType(t)).toBe(true);
     expect(isWorkLinkType("targets")).toBe(false);
     expect(isWorkLinkType(null)).toBe(false);
@@ -562,5 +640,180 @@ describe("dependencyLinkAsRelation (inverse of normaliseDependencyRelation)", ()
       sourceId: "x",
       targetId: "y",
     });
+  });
+});
+
+describe("decision arms (P5) — every branch is a decision", () => {
+  const arm = (option: string | null, to = "D"): DependencyEdge => ({
+    ...dep("session", "S", "entity", to),
+    option,
+  });
+  const decided = (chosenOption: string | null, status = "accepted") =>
+    states({
+      "entity:D": {
+        status,
+        category:
+          status === "accepted"
+            ? "done"
+            : status === "rejected"
+              ? "lost"
+              : "open",
+        chosenOption,
+      },
+    });
+  const S = { kind: "session", id: "S" };
+
+  it("the arm CHOSEN clears; another arm holds as NOT TAKEN (rules out 'accepted clears every arm')", () => {
+    expect(deriveOpenBlockers(S, [arm("raise")], decided("raise"))).toEqual([]);
+    expect(deriveOpenBlockers(S, [arm("bootstrap")], decided("raise"))).toEqual(
+      [
+        expect.objectContaining({
+          kind: "entity",
+          id: "D",
+          dropped: true,
+          notTaken: true,
+        }),
+      ]
+    );
+  });
+
+  it("accepted with NOTHING chosen takes no arm (rules out 'no choice reads as yours')", () => {
+    expect(deriveOpenBlockers(S, [arm("raise")], decided(null))).toEqual([
+      expect.objectContaining({ dropped: true, notTaken: true }),
+    ]);
+  });
+
+  it("a REJECTED decision holds every arm as dropped, never not-taken (never silently skipped)", () => {
+    const [b] = deriveOpenBlockers(
+      S,
+      [arm("raise")],
+      decided("raise", "rejected")
+    );
+    expect(b).toMatchObject({ dropped: true });
+    expect(b!.notTaken).toBeUndefined();
+  });
+
+  it("an OPEN decision holds every arm as open", () => {
+    expect(
+      deriveOpenBlockers(S, [arm("raise")], decided(null, "proposed"))
+    ).toEqual([expect.objectContaining({ dropped: false })]);
+  });
+
+  it("CONTROL: an edge with no option behaves as before (accepted clears whatever was chosen)", () => {
+    expect(deriveOpenBlockers(S, [arm(null)], decided("raise"))).toEqual([]);
+    expect(deriveOpenBlockers(S, [arm(null)], decided(null))).toEqual([]);
+  });
+
+  it("classifyArmBlocker: only a delivered blocker is split by its option", () => {
+    expect(classifyArmBlocker("delivered", "a", "a")).toBe("delivered");
+    expect(classifyArmBlocker("delivered", "a", "b")).toBe("not_taken");
+    expect(classifyArmBlocker("dropped", "a", "a")).toBe("dropped");
+    expect(classifyArmBlocker("open", "a", null)).toBe("open");
+    expect(classifyArmBlocker("delivered", null, "b")).toBe("delivered");
+  });
+
+  it("armOptionOf reads `links.metadata.option`, nothing else", () => {
+    expect(armOptionOf({ option: "raise" })).toBe("raise");
+    expect(armOptionOf({ option: " " })).toBeNull();
+    expect(armOptionOf({ option: 3 })).toBeNull();
+    expect(armOptionOf({ criterionKey: "x" })).toBeNull();
+    expect(armOptionOf(null)).toBeNull();
+    expect(armOptionOf(["option"])).toBeNull();
+  });
+});
+
+describe("a SKIPPED step holds nobody (P5: skipped = delivered for ordering)", () => {
+  const J = { kind: "session", id: "J" };
+  const edges = [dep("session", "J", "session", "A")];
+
+  it("a step skipped as an arm not taken does not hold its dependent", () => {
+    expect(
+      deriveOpenBlockers(
+        J,
+        edges,
+        states({ "session:A": { status: "cancelled", skipped: true } })
+      )
+    ).toEqual([]);
+  });
+
+  it("the same step cancelled WITHOUT the skip holds it as dropped (rules out 'cancelled clears')", () => {
+    expect(
+      deriveOpenBlockers(
+        J,
+        edges,
+        states({ "session:A": { status: "cancelled" } })
+      )
+    ).toEqual([expect.objectContaining({ dropped: true })]);
+  });
+
+  it("a skip record on a session that is NOT ended (reopened) frees nobody", () => {
+    expect(
+      classifyDependencyBlocker("session", "active", null, null, true)
+    ).toBe("open");
+    expect(
+      classifyDependencyBlocker("session", "cancelled", null, "not_done", true)
+    ).toBe("delivered");
+  });
+
+  it("a join of two exclusive arms waits only on the arm taken", () => {
+    const join = [
+      dep("session", "J", "session", "A"),
+      dep("session", "J", "session", "B"),
+    ];
+    const st = states({
+      "session:A": { status: "closed" },
+      "session:B": { status: "cancelled", skipped: true },
+    });
+    expect(isBlocked(J, join, st)).toBe(false);
+    const stillRunning = states({
+      "session:A": { status: "active" },
+      "session:B": { status: "cancelled", skipped: true },
+    });
+    expect(deriveOpenBlockers(J, join, stillRunning)).toEqual([
+      expect.objectContaining({ id: "A", dropped: false }),
+    ]);
+  });
+});
+
+describe("planDecisionArms — what an accepted decision does to its arms", () => {
+  const arms = [
+    { stepId: "s-raise", option: "raise" },
+    { stepId: "s-boot", option: "bootstrap" },
+    { stepId: "s-boot-2", option: "bootstrap" },
+  ];
+
+  it("skips every step on an arm not chosen", () => {
+    expect(planDecisionArms("raise", arms)).toEqual({
+      skip: ["s-boot", "s-boot-2"],
+      unmatched: false,
+    });
+  });
+
+  it("NO arm for the choice: nothing is skipped, the person is told (the n8n trap)", () => {
+    expect(planDecisionArms("sell", arms)).toEqual({
+      skip: [],
+      unmatched: true,
+    });
+    expect(planDecisionArms(null, arms)).toEqual({ skip: [], unmatched: true });
+  });
+
+  it("no arms at all: nothing to do", () => {
+    expect(planDecisionArms("raise", [])).toEqual({
+      skip: [],
+      unmatched: false,
+    });
+  });
+});
+
+describe("parseArmRef — the door's `<decision id>:<option>` form", () => {
+  const ID = "33333333-3333-4333-8333-333333333333";
+  it("splits after the 36-character id; the option may hold more ':'", () => {
+    expect(parseArmRef(`${ID}:raise`)).toEqual({ id: ID, option: "raise" });
+    expect(parseArmRef(`${ID}:a:b`)).toEqual({ id: ID, option: "a:b" });
+  });
+  it("a bare id is a plain wait; an empty option is refused", () => {
+    expect(parseArmRef(ID)).toEqual({ id: ID, option: null });
+    expect(parseArmRef(`${ID}:`)).toBeNull();
+    expect(parseArmRef(`${ID}: `)).toBeNull();
   });
 });

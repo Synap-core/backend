@@ -72,7 +72,15 @@ jobs:
           repositories: |
             control-plane-api
             app-bases
+            browser
+            relay-app
+            control-plane
+            control-plane-dashboard
+            intelligence-hub
+            synap-bridge
+            site-content-studio
           permission-contents: read
+          permission-pull-requests: read
 
       - name: Judge the dependencies
         env:

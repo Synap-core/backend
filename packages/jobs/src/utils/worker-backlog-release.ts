@@ -22,9 +22,11 @@
  * marks its own run skipped, the matcher's own shape.
  *
  * A per_moment fire covers its whole set, so only the newest held one is
- * released. LIMIT: a proposal decided outside a workspace emits no
- * `proposal.*.completed` side-effect, so it releases nothing; neither does a
- * withdrawal or an expiry. The next decided proposal releases them.
+ * released. The trigger is any move out of `pending` (process-sync reads the
+ * proposal's transition), so an expiry or a withdrawal makes room too. LIMIT:
+ * process-sync runs in the automation matcher, which only sees a proposal
+ * with a workspace, so a pod-wide one releases nothing. The next move of a
+ * proposal in a space releases them.
  */
 
 import { createLogger } from "@synap-core/core";

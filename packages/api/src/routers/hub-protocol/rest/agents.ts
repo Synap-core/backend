@@ -1,5 +1,14 @@
 /**
- * Hub Protocol REST — agents (sync from intelligence service)
+ * Hub Protocol REST — agents.
+ *
+ *   POST /agents/sync                 an intelligence service's agent registry
+ *
+ * An agent asks its person for ONE MORE thing, with its OWN key
+ * (`services/agent-access-ask.ts`):
+ *   POST /agents/access-requests      { requests: [{ permission, workspaceId }],
+ *                                     reason? } → the ask (or what each pair
+ *                                     already is: given, open, quiet)
+ *   GET  /agents/access-requests/:id  pending / allowed / declined / expired
  */
 
 import { z } from "zod";
@@ -14,13 +23,29 @@ import {
   notInArray,
 } from "@synap/database";
 
+import type { Context } from "hono";
 import {
   hasScope,
   logger,
+  requireUuidParam,
   type HubHono,
+  type HubVariables,
   httpStatusForTrpcError,
   refuseStaleDeviceSession,
 } from "./_shared.js";
+import { refusalBody } from "./_presence.js";
+import { ErrorSchema } from "./_codecs/_openapi.js";
+import { registerOpenApi } from "./_codecs/_register.js";
+import {
+  AccessAskParamsSchema,
+  AccessAskReceiptSchema,
+  AccessAskViewSchema,
+} from "./_codecs/app-access-ask.js";
+import { AgentAccessAskBodySchema } from "./_codecs/agent-access-ask.js";
+import {
+  fileAgentAccessAsk,
+  readAgentAccessAsk,
+} from "../../../services/agent-access-ask.js";
 import {
   findOrCreateServiceAgentUser,
   linkAgentToUser,
@@ -45,7 +70,120 @@ const SyncAgentsPayload = z.object({
   ),
 });
 
+type Ctx = Context<{ Variables: HubVariables }>;
+
+/**
+ * An agent's key asks with either Hub scope: a read-only key must be able to
+ * ask for its first write. The ask grants nothing until its person allows it.
+ */
+function canAsk(c: Ctx): boolean {
+  const scopes = c.get("scopes");
+  return (
+    hasScope(scopes, "hub-protocol.read") ||
+    hasScope(scopes, "hub-protocol.write")
+  );
+}
+
+function askFailed(c: Ctx, err: unknown, what: string) {
+  const status = httpStatusForTrpcError(err);
+  if (status === 500) logger.error({ err }, `${what} failed`);
+  return c.json(refusalBody(err, `${what} failed`), status);
+}
+
 export function registerAgentsRoutes(app: HubHono): void {
+  // ── An agent's ask for one more thing (static paths) ─────────────────────
+  registerOpenApi(app, {
+    method: "post",
+    path: "/agents/access-requests",
+    tags: ["Agents"],
+    summary: "An agent asks its person for one more thing",
+    description:
+      "With the agent's own key. Each pair is a permission inside the agent's limits, in one space the person can give it. " +
+      "Files ONE ask the person answers from a card; allowing it ADDS the pairs to the key that asked (no other key of the agent), within what its computer holds. " +
+      "A pair the key already holds, already asked for, or that the person declined less than 30 days ago is not asked again. An ask waits 7 days.",
+    request: { body: AgentAccessAskBodySchema },
+    responses: {
+      201: { description: "The ask, filed", schema: AccessAskReceiptSchema },
+      200: {
+        description: "Nothing new to ask: each pair's state",
+        schema: AccessAskReceiptSchema,
+      },
+      400: {
+        description:
+          "Invalid body, or a pair that names no space (ASK_NEEDS_SPACE)",
+        schema: ErrorSchema,
+      },
+      403: {
+        description:
+          "Not an agent's own key acting for its person (NOT_AN_AGENT_KEY), a permission outside the agent's limits (ASK_BEYOND_AGENT_LIMIT), or a pair the person cannot give (ASK_NOT_ON_OFFER)",
+        schema: ErrorSchema,
+      },
+    },
+  });
+  app.post("/agents/access-requests", async (c) => {
+    if (!canAsk(c)) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const body = AgentAccessAskBodySchema.safeParse(
+      await c.req.json().catch(() => null)
+    );
+    if (!body.success) {
+      return c.json(
+        { error: "Validation failed", details: body.error.issues },
+        400
+      );
+    }
+    try {
+      const receipt = await fileAgentAccessAsk({
+        apiKeyId: c.get("apiKeyId"),
+        callerUserId: userId,
+        pairs: body.data.requests,
+        reason: body.data.reason ?? null,
+      });
+      return c.json(receipt, receipt.id ? 201 : 200);
+    } catch (err) {
+      return askFailed(c, err, "POST /agents/access-requests");
+    }
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/agents/access-requests/{id}",
+    tags: ["Agents"],
+    summary: "What became of an agent's ask",
+    description:
+      "With the agent's own key: pending, allowed, declined (Not now) or expired. An agent reads only its own asks.",
+    request: { params: AccessAskParamsSchema },
+    responses: {
+      200: { description: "The ask", schema: AccessAskViewSchema },
+      400: { description: "Invalid id", schema: ErrorSchema },
+      403: { description: "Not an agent's own key", schema: ErrorSchema },
+      404: { description: "No such ask of this agent", schema: ErrorSchema },
+    },
+  });
+  app.get("/agents/access-requests/:id", async (c) => {
+    if (!canAsk(c)) {
+      return c.json({ error: "Missing scope: hub-protocol.read" }, 403);
+    }
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const askId = requireUuidParam(c, "id");
+    if (askId instanceof Response) return askId;
+    try {
+      return c.json(
+        await readAgentAccessAsk({
+          apiKeyId: c.get("apiKeyId"),
+          callerUserId: userId,
+          askId,
+        })
+      );
+    } catch (err) {
+      return askFailed(c, err, "GET /agents/access-requests/:id");
+    }
+  });
+
   /**
    * POST /agents/sync — synchronise an intelligence service's agent registry.
    *

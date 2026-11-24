@@ -7,18 +7,38 @@
  *                  the ladder's ONE table (`GOVERNANCE_REASON_RULE_REACH`).
  *                  "Asks by default" / "Always asks a person" are gone: a
  *                  pending proposal already waits on the person.
- *   `undoMark`   — what approving cannot take back. Undo is the default, so
- *                  an undoable change draws NOTHING (founder, 2026-10-23: "Can
- *                  be undone … we will not need to showcase that"); only the
- *                  pod's own `revertable: false` earns a mark.
+ *   `undoMark`   — what approving cannot take back, read through the ONE
+ *                  shared risk rule (`needsYouRisk`): an undoable change
+ *                  draws NOTHING (founder, 2026-10-23: "Can be undone … we
+ *                  will not need to showcase that"); `revertable: false` AND
+ *                  an unmeasured one are marked (founder default D6, 16 Nov
+ *                  2026: nobody checked, so nobody can promise an undo).
+ *   `aboutObject` / `madeRows` — the objects the request names: what it is
+ *                  about until it applies (`proposalObjectsOf`), then each
+ *                  object the pod's landed read names, with its next step.
  *
  * The change itself is `proposal-record-model.ts`.
  */
 
-import { isUuid } from "../../../lib/format";
+import {
+  LANDED_ROLE_VERB,
+  isProposalApplied,
+  proposalObjectsOf,
+  type ProposalLandedRole,
+  type ProposalLandedRow,
+  type ProposalObject,
+} from "@synap-core/types/proposals/landed";
+import type { ObjectNext, UnitTone } from "@synap-core/types/units";
+import {
+  resolveActionLabel,
+  resolveObjectNoun,
+} from "@synap-core/types/vocabulary";
+import { nextStepOf, type NextStep } from "../../_lib/object/next-step-model";
 import { objectReadsWide } from "../../_lib/object/object-width";
 import { governanceReasonMark } from "@synap-core/types/proposals";
 import { GOVERNANCE_REASON_RULE_REACH } from "@synap-core/types/trust-ladder";
+import { needsYouRisk } from "@synap-core/types/needs-you";
+import { proposalPageT } from "./copy";
 
 /** One field of the pod's diff, read structurally. */
 export interface ProposalChangeInput {
@@ -30,7 +50,8 @@ export interface ProposalChangeInput {
   drift?: "unchanged" | "changed_since" | "unknown";
 }
 
-export type ReviewTone = "warning" | "primary" | "default" | "success";
+/** A mark's tone: the shared token (`UnitTone`), drawn by `app/_lib/tone.ts`. */
+export type ReviewTone = UnitTone;
 
 /** A state, said as a short label; its sentence is disclosed on press. */
 export interface ReviewMark {
@@ -59,23 +80,27 @@ export function reasonMark(code: string | null | undefined): ReviewMark | null {
       ]
     : undefined;
   const tone: ReviewTone =
-    reach === "rule" || reach === "below" ? "default" : "warning";
+    reach === "rule" || reach === "below" ? "textSecondary" : "warning";
   return { tone, label: named.label, sentence: named.sentence };
 }
 
 /**
  * The one consequence worth a mark: approving cannot be undone. `revertable`
- * is the pod's answer for this proposal (`revertableForRow`); `true` and
- * unknown draw nothing — undo is the default, and an unknown is not promised.
+ * is the pod's answer for this proposal (`revertableForRow`); the rule is the
+ * shared `needsYouRisk` (D6): `true` draws nothing, `false` AND unknown are
+ * marked, because an unmeasured undo is not one anybody can promise.
  */
 export function undoMark(
   revertable: boolean | null | undefined
 ): ReviewMark | null {
-  if (revertable !== false) return null;
+  const risk = needsYouRisk({ kind: "proposal", revertable });
+  if (!risk) return null;
+  const t = proposalPageT();
   return {
-    tone: "warning",
-    label: "Can't be undone",
-    sentence: "Approving applies it now, and it cannot be undone from here.",
+    tone: risk.tone,
+    label: risk.label,
+    // Unmeasured is said as unmeasured: nobody checked (S12).
+    sentence: revertable === false ? t("undo.cannot") : t("undo.unknown"),
   };
 }
 
@@ -109,38 +134,51 @@ export function reviewReadsWide(drawn: {
   );
 }
 
-/** The object an approved create made, named so the page can open it. */
-export interface CreatedObject {
-  /** The object kind `openIn` opens (`document`, `entity`). */
-  kind: string;
-  id: string;
-  title: string | null;
+/**
+ * What the request is ABOUT until it applies (a pending update's object, a
+ * merge's survivor, a facet's entity): one door, at every status. Once
+ * applied, what it names comes only from the pod's landed read (`madeRows`),
+ * never from its target.
+ */
+export function aboutObject(row: ProposalLandedRow): ProposalObject | null {
+  if (isProposalApplied(row)) return null;
+  return proposalObjectsOf(row).find((o) => o.role === null) ?? null;
 }
 
-/** Target types the review can open after a create: id known, page hosted. */
-const OPENABLE_CREATED: ReadonlySet<string> = new Set(["document", "entity"]);
+/** One object a proposal landed, as the read row carries it (`landed`). */
+export interface LandedInput {
+  id: string;
+  kind: string;
+  name: string | null;
+  role: ProposalLandedRole;
+  profileSlug?: string;
+  next?: ObjectNext | null;
+}
 
-/**
- * What an approved create made, when the page can open it: the proposal's own
- * `targetId` + `targetType` (the id the document was written under), so it
- * reads the same when the page is reopened later. A capture graph's target id
- * is not one object's, so it names nothing. `null` for anything else.
- */
-export function createdObject(input: {
-  status: string;
-  action: string;
-  targetType: string | null | undefined;
-  targetId: string | null | undefined;
-  title: string | null | undefined;
-  graph: boolean;
-}): CreatedObject | null {
-  if (input.status !== "approved" && input.status !== "auto_approved") {
-    return null;
-  }
-  if (input.action !== "create" || input.graph) return null;
-  const kind = input.targetType ?? "";
-  if (!OPENABLE_CREATED.has(kind)) return null;
-  const id = input.targetId ?? "";
-  if (!isUuid(id)) return null;
-  return { kind, id, title: input.title?.trim() || null };
+export interface MadeRow {
+  /** What it is: an entity's profile slug, else its object kind. */
+  kind: string;
+  /** The route kind it opens under. */
+  openKind: string;
+  id: string;
+  title: string;
+  /** What approving did to it, in the past mood ("Created"). */
+  done: string;
+  step: NextStep | null;
+}
+
+/** The "Made" rows: each landed object, the ones that need the person first. */
+export function madeRows(
+  landed: readonly LandedInput[] | undefined
+): MadeRow[] {
+  const rows = (landed ?? []).map((o) => ({
+    kind: o.profileSlug || o.kind,
+    openKind: o.kind,
+    id: o.id,
+    title: o.name?.trim() || resolveObjectNoun(o.profileSlug || o.kind),
+    done: resolveActionLabel(LANDED_ROLE_VERB[o.role], "past"),
+    step: nextStepOf(o, o.next, "row"),
+  }));
+  const first = (r: MadeRow) => (r.step?.measured ? 0 : 1);
+  return [...rows].sort((a, b) => first(a) - first(b));
 }

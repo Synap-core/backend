@@ -19,9 +19,25 @@ const h = vi.hoisted(() => ({
   updated: 0,
 }));
 
+// Who approved is read from the review ladder (users table); a person here.
+vi.mock(
+  "../../../services/capabilities/skill-born-approved.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/capabilities/skill-born-approved.js")
+    >()),
+    personIsApproving: async () => true,
+  })
+);
+
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     select: () => ({ from: () => ({ where: async () => [] }) }),
     update: () => ({ set: () => ({ where: async () => undefined }) }),
   },

@@ -19,6 +19,7 @@ export {
   VIEW_BY_KEY,
   IMPLEMENTED_VIEW_TYPES,
   CREATABLE_VIEW_DEFINITIONS,
+  AGENT_CREATABLE_VIEW_DEFINITIONS,
   STRUCTURED_VIEW_TYPES,
 } from "./views.js";
 export * from "./catalog.js";
@@ -30,3 +31,4 @@ export * from "./cell-key.js";
 export * from "./chart-geometry.js";
 export * from "./html-page-source.js";
 export * from "./cell-source-checks.js";
+export * from "./renderer-bundle.js";

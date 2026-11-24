@@ -5,6 +5,11 @@
  *
  *   resolve the target (kind → entity row, role → facet row) + its lifecycle
  *   → classify the target option (category, humanOnly)
+ *   → STAGE GATE (an agent's move on the subject of an open session that
+ *     follows a playbook, `focus-sessions/subject-move-gate.ts`): a move that
+ *     would skip a gated stage is refused; one into a human- or check-gated
+ *     stage is routed as that stage's advance, so the gate decides BEFORE the
+ *     status is written (a human gate's approval writes it)
  *   → GOVERN: `checkPermissionOrPropose(entity.transition, lifecycleMove)` —
  *     RBAC for a person; for an agent the engine's floor: a human-only option
  *     always proposes, into done/lost proposes by default, other moves execute
@@ -47,14 +52,19 @@ import {
   isTerminalLifecycleCategory,
   resolveOccurredAt,
   type Hold,
+  type TransitionCause,
 } from "@synap-core/types/lifecycle";
 import { createLogger } from "@synap-core/core";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import {
+  checkPermissionOrPropose,
+  previewPermissionDecision,
+} from "../../utils/permission-check.js";
 import { roleWriteGrantSpace } from "../../utils/role-write-grant.js";
 import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { appSignInPublicId } from "../app-sign-in-policy.js";
+import type { GatedStageEntry } from "../focus-sessions/subject-move-gate.js";
 
 const logger = createLogger({ module: "move-status" });
 
@@ -83,6 +93,12 @@ export interface MoveStatusInput {
   /** An approved proposal replaying this move — governance already decided. */
   approvedProposalId?: string | null;
   /**
+   * The person who approved `approvedProposalId`. What the move sets off
+   * (its automations, its fan-out) acts as them; the agent stays the
+   * proposer (`actor.agentUserId`). Ignored without `approvedProposalId`.
+   */
+  approvedBy?: string | null;
+  /**
    * What a move into a paused status waits on (W4). An agent's pause without
    * one is refused (`HOLD_REQUIRED`) before anything is filed; a person's or
    * the system's is recorded `unspecified`.
@@ -102,14 +118,6 @@ export interface MoveStatusInput {
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
   /**
-   * A session END move (`subjectProfile.onEnd`): governed like any write of
-   * the closer, without the done/lost default floor — the session's end is
-   * the guardrail (governance-policy `lifecycleMove.atSessionEnd`). Set ONLY
-   * by the close door's writer (session-end-moves.ts); no request input
-   * reaches it.
-   */
-  atSessionEnd?: boolean;
-  /**
    * A session BIRTH move (a session started into a playbook's first stage,
    * `writeBirthStageSubjectStatus`): one that would take the thing OUT of a
    * done or lost option always proposes (governance-policy
@@ -117,6 +125,20 @@ export interface MoveStatusInput {
    * reopen. Set ONLY by the birth writer; no request input reaches it.
    */
   atSessionBirth?: boolean;
+  /**
+   * The move that caused this one: a reaction's move, or the approval replay of
+   * a move a reaction proposed. Stamped on the transition so its history says
+   * "moved because X moved".
+   */
+  cause?: TransitionCause | null;
+  /**
+   * The POD files this move as a PROPOSAL instead of making it (reactions
+   * D3: a reaction's move into done or lost is proposed by default). Only a
+   * `system` move takes it; the proposal is the pod's (`createdBy` this
+   * `system:<producer>` marker), filed for `actor.userId` to decide, and its
+   * approval replays the move as the approver's, with `cause`.
+   */
+  proposeAs?: `system:${string}`;
 }
 
 const AI_SOURCES = new Set(["ai", "intelligence", "agent"]);
@@ -193,6 +215,12 @@ export type MoveStatusResult =
       proposalId: string;
       reviewUrl?: string;
       proposalType: string;
+      /**
+       * The move entered a HUMAN-gated stage of a session about this thing:
+       * the proposal is that stage's gate, and approving it writes the status
+       * (`subject-move-gate.ts`).
+       */
+      stageGate?: { sessionId: string; stageKey: string };
     }
   | { status: "denied"; reason: string }
   | {
@@ -206,8 +234,11 @@ export type MoveStatusResult =
         | "HOLD_REQUIRED"
         | "HOLD_INVALID"
         | "HOLD_NOT_A_PAUSE"
-        | "OCCURRED_AT_INVALID";
+        | "OCCURRED_AT_INVALID"
+        | "STAGE_GATE";
       reason: string;
+      /** STAGE_GATE: the session whose stage gate refused or held the move. */
+      sessionId?: string;
     };
 
 export async function moveStatus(
@@ -341,9 +372,44 @@ export async function moveStatus(
     };
   }
 
+  // THE STAGE GATE the move would walk (finding 8f2dee79,
+  // `focus-sessions/subject-move-gate.ts`): an agent's move on the subject of
+  // an open session following a playbook is refused when it would skip a
+  // gated stage (the advance's own refusal), and routed as the stage advance
+  // when it enters a human- or check-gated stage, BEFORE anything is written.
+  // A person's move is the person deciding (the gate floor and the follow
+  // treat it so); server code, a replay and a session's birth move already
+  // run the session's own lifecycle.
+  let gateEntries: GatedStageEntry[] | null = null;
+  if (agent && !input.approvedProposalId && !input.atSessionBirth) {
+    // Dynamic: the advance door reaches this door back (its subject write).
+    const { planSubjectMoveGates } =
+      await import("../focus-sessions/subject-move-gate.js");
+    const plan = await planSubjectMoveGates({
+      entityId: target.entityId,
+      role: target.role ?? null,
+      property: target.lifecycle.propertySlug,
+      to,
+    });
+    if (plan.kind === "refused") {
+      return {
+        status: "refused",
+        code: "STAGE_GATE",
+        reason: plan.reason,
+        sessionId: plan.sessionId,
+      };
+    }
+    if (plan.kind === "enter") gateEntries = plan.entries;
+  }
+
   const governanceWorkspaceId = target.workspaceId ?? input.workspaceId ?? null;
+  // A system move the pod files for the person to decide (reactions D3).
+  const podProposes = input.actor.kind === "system" && Boolean(input.proposeAs);
   let receiptId: string | undefined;
-  if (input.actor.kind !== "system" && !input.approvedProposalId) {
+  if (
+    (input.actor.kind !== "system" || podProposes) &&
+    !input.approvedProposalId
+  ) {
     // FB1020 B3: an agent closing its OWN FRESH task (same key, last 24 h,
     // untouched by a person) may be applied by the pod's own-organise class
     // row; every other terminal move proposes by default (2.85), as before.
@@ -369,6 +435,8 @@ export async function moveStatus(
       // Replayed with the move (the approval keeps them).
       ...(hold ? { hold } : {}),
       ...(occurredAt ? { occurredAt: occurredAt.toISOString() } : {}),
+      // Why a reaction moved it (the replay restamps it, entity-transition.ts).
+      ...(input.cause ? { cause: input.cause } : {}),
     };
     // The key's grant is checked on the row's own workspace — a pod-wide
     // entity is pod-scope, never the caller's lens (S7). A ROLE's move is a
@@ -393,7 +461,7 @@ export async function moveStatus(
       }
       grantWorkspaceId = roleGrant.space;
     }
-    const perm = await checkPermissionOrPropose({
+    const permissionOpts: Parameters<typeof checkPermissionOrPropose>[0] = {
       userId: input.actor.userId,
       agentUserId: input.actor.agentUserId ?? undefined,
       workspaceId: governanceWorkspaceId,
@@ -405,30 +473,68 @@ export async function moveStatus(
       subjectType: "entity",
       action: "transition",
       // An unattributed agent reaches the anonymous AI ladder; never "user".
+      // The pod's own proposal takes the same ladder, where a forced
+      // proposal is honoured (as the goal loop files its next run).
       source: agent
         ? input.actor.agentUserId
           ? "agent"
           : "intelligence"
-        : "user",
+        : podProposes
+          ? "intelligence"
+          : "user",
       lifecycleMove: {
         ...lifecycleMove,
         // A reopen: from a done/lost option to an open one, read from the
-        // lifecycle's own categories (the same derivation the end move's
-        // `already_settled` reads).
+        // lifecycle's own categories.
         outOfTerminal:
           isTerminalLifecycleCategory(fromCategory) &&
           !isTerminalLifecycleCategory(toCategory),
-        ...(input.atSessionEnd ? { atSessionEnd: true } : {}),
         ...(input.atSessionBirth ? { atSessionBirth: true } : {}),
       },
-      forcePropose: input.forcePropose,
+      forcePropose: podProposes ? true : input.forcePropose,
+      ...(podProposes ? { machineAuthor: input.proposeAs } : {}),
       ...(ownWorkOrganise ? { ownWorkOrganise: true } : {}),
       reasoning:
         input.reason ??
         `Move ${target.lifecycle.propertySlug} from "${target.current ?? "none"}" to "${to}".`,
       sessionId: input.sessionId ?? undefined,
       data,
-    });
+    };
+    if (gateEntries) {
+      // A mover the ladder would DENY files no gate either; otherwise the
+      // gate is the decision: entering the stage is what the person approves,
+      // and the approval writes the status (as the approver).
+      const preview = await previewPermissionDecision(permissionOpts);
+      if (preview.decision === "deny") {
+        return { status: "denied", reason: preview.reason };
+      }
+      const { enterGatedStages } =
+        await import("../focus-sessions/subject-move-gate.js");
+      const gated = await enterGatedStages({
+        entries: gateEntries,
+        property: target.lifecycle.propertySlug,
+        to,
+        agentUserId: input.actor.agentUserId ?? null,
+      });
+      if (gated.kind === "gate_filed") {
+        return {
+          status: "proposed",
+          proposalId: gated.proposalId,
+          proposalType: gated.proposalType,
+          stageGate: { sessionId: gated.sessionId, stageKey: gated.stageKey },
+        };
+      }
+      if (gated.kind === "held") {
+        return {
+          status: "refused",
+          code: "STAGE_GATE",
+          reason: gated.reason,
+          sessionId: gated.sessionId,
+        };
+      }
+      // Every check passed: the stage stands, the move goes on as asked.
+    }
+    const perm = await checkPermissionOrPropose(permissionOpts);
     if ("denied" in perm && perm.denied) {
       return { status: "denied", reason: perm.reason };
     }
@@ -438,6 +544,14 @@ export async function moveStatus(
         proposalId: perm.proposalId,
         reviewUrl: perm.reviewUrl,
         proposalType: perm.proposalType,
+      };
+    }
+    if (podProposes) {
+      // Asked to propose, the gate granted instead: the move is NOT made
+      // (fail closed — D3 says the person decides it).
+      return {
+        status: "denied",
+        reason: "The move could not be filed for review, so it was not made.",
       };
     }
     receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
@@ -452,10 +566,12 @@ export async function moveStatus(
     sessionId: input.sessionId,
     reason: input.reason,
     proposalId: input.approvedProposalId ?? receiptId ?? null,
+    approvedBy: input.approvedProposalId ? (input.approvedBy ?? null) : null,
     lensWorkspaceId: input.workspaceId,
     hold,
     occurredAt,
     appId: input.appId,
+    cause: input.cause,
   });
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).

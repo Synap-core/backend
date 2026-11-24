@@ -48,6 +48,7 @@ import {
   convertToGoalInputSchema,
 } from "../services/tracks/convert-to-goal.js";
 import { trackGoalInputSchema } from "../services/tracks/goal-content.js";
+import { goalPlacementInputSchema } from "../services/tracks/goal-placement.js";
 import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 import {
   changeTrackParticipants,
@@ -206,6 +207,8 @@ export const tracksRouter = router({
         // What the goal holds (0345): end state, criteria (none or 2–5),
         // drop conditions, kind of work, uncertainty. Refined by the service.
         .extend(trackGoalInputSchema.shape)
+        // Where it sits: the goal it serves, the pillars it advances.
+        .extend(goalPlacementInputSchema.shape)
     )
     .mutation(async ({ ctx, input }) => {
       const { reasoning: why, ...rest } = input;
@@ -392,6 +395,8 @@ export const tracksRouter = router({
         // What the goal holds (0345) — each field whole, `null` clears;
         // `confirmKind` = the person confirms the AI's kind of work.
         .extend(trackGoalInputSchema.shape)
+        // Where it sits: a parent goal, pillars (added; never removed here).
+        .extend(goalPlacementInputSchema.shape)
     )
     .mutation(async ({ ctx, input }) => {
       const { id, reasoning: why, direction, kpi, ...goal } = input;

@@ -52,8 +52,9 @@ vi.mock("../services/webhooks/inbound-source.js", async (importOriginal) => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 const WS = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
 const SOURCE_ID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
@@ -136,7 +137,10 @@ const caller = () =>
 describe("automations — a declared inbound webhook source", () => {
   it("an operator create stores the BOUND config and answers with the address, never a secret", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const result = await caller().create({
       workspaceId: WS,
@@ -179,7 +183,10 @@ describe("automations — a declared inbound webhook source", () => {
     );
     find.mockResolvedValue(null);
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const result = await caller().create({
       workspaceId: WS,
@@ -203,8 +210,13 @@ describe("automations — a declared inbound webhook source", () => {
 
   it("an approved agent proposal binds when it materializes", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    await materializeApprovedAutomation({
-      database: { insert: vi.fn(() => insertChain(captured)) } as never,
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
+      database: {
+        ...NO_USERS,
+        insert: vi.fn(() => insertChain(captured)),
+      } as never,
       agentUserId: "agent-1",
       stableId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
       definition: {
@@ -236,7 +248,7 @@ describe("automations — a declared inbound webhook source", () => {
       proposalType: "create",
     });
     const insert = vi.fn();
-    mockGetDb.mockResolvedValue({ insert });
+    mockGetDb.mockResolvedValue({ ...NO_USERS, insert });
 
     const result = await caller().create({
       agentUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -260,7 +272,7 @@ describe("automations — a declared inbound webhook source", () => {
     "refuses %s before governance and before insert",
     async (_label, triggerConfig, triggerType) => {
       const insert = vi.fn();
-      mockGetDb.mockResolvedValue({ insert });
+      mockGetDb.mockResolvedValue({ ...NO_USERS, insert });
       await expect(
         caller().create({
           agentUserId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

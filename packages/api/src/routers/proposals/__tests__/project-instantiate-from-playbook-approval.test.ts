@@ -37,6 +37,13 @@ const bindCalls: Array<{
 let bindResult: { status?: string } = { status: "started" };
 
 const dbStub = {
+  // The proposal door's one statement (`WITH … UPDATE`).
+
+  $with: () => ({ as: () => ({}) }),
+
+  with() {
+    return this;
+  },
   query: { projects: { findFirst: async () => projectRow } },
   select: () => ({ from: () => ({ where: async () => selectRows }) }),
   update: () => ({

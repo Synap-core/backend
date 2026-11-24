@@ -35,7 +35,7 @@ import {
 } from "../utils/facet-attached-hook.js";
 import {
   assertNoLifecycleMove,
-  columnsForValue,
+  bornLifecycleFor,
   LifecycleWriteOutsideDoorError,
 } from "../services/lifecycle/lifecycle-columns.js";
 import { isUniqueViolation } from "../utils/pg-errors.js";
@@ -224,11 +224,22 @@ export class FacetRepository extends BaseRepository<
       ) {
         throw new LifecycleWriteOutsideDoorError(slug);
       }
-      const cols = columnsForValue(roleLifecycle, bornStatus ?? fromProps);
-      bornStatus = cols.status ?? undefined;
-      bornCategory = cols.statusCategory;
-      if (cols.status !== null) {
-        validatedProperties = { ...validatedProperties, [slug]: cols.status };
+      // A facet named no status starts in the lifecycle's initial status,
+      // exactly like an entity birth (`bornLifecycleFor`): column and mirror
+      // together.
+      const named = bornStatus ?? fromProps;
+      const born = await bornLifecycleFor(
+        this.profileResolution,
+        profile.id,
+        lensWorkspaceId,
+        named !== undefined
+          ? { ...validatedProperties, [slug]: named }
+          : validatedProperties
+      );
+      if (born) {
+        bornStatus = born.columns.status ?? undefined;
+        bornCategory = born.columns.statusCategory;
+        validatedProperties = born.properties;
       }
     }
 
@@ -290,7 +301,8 @@ export class FacetRepository extends BaseRepository<
               existing,
               validatedProperties,
               userId,
-              data.skipEvent === true
+              data.skipEvent === true,
+              roleLifecycle?.propertySlug
             );
           }
           return existing;
@@ -310,11 +322,17 @@ export class FacetRepository extends BaseRepository<
     existing: EntityFacet,
     incoming: Record<string, unknown>,
     userId: string,
-    skipEvent: boolean
+    skipEvent: boolean,
+    lifecycleSlug?: string
   ): Promise<EntityFacet> {
     const current = (existing.properties ?? {}) as Record<string, unknown>;
+    // The lifecycle slug is the mirror of the status COLUMN: a fill must never
+    // write it (the column is written only with the mirror, at birth or by
+    // the status door).
     const missing = Object.fromEntries(
-      Object.entries(incoming).filter(([key]) => !(key in current))
+      Object.entries(incoming).filter(
+        ([key]) => !(key in current) && key !== lifecycleSlug
+      )
     );
     if (Object.keys(missing).length === 0) return existing;
     const [facet] = await this.db

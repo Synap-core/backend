@@ -726,6 +726,9 @@ openaiCompatApp.post(
     // ── Resolve IS endpoint ──────────────────────────────────────────────────
     let isUrl: string;
     let isApiKey: string;
+    // The person's ONE personal AI (decision 6b45c6c3): named in the IS body
+    // and signed as the turn's `act.sub`.
+    let actingAgentUserId: string | undefined;
     try {
       const resolved = await resolveIntelligenceService({
         userId,
@@ -733,6 +736,7 @@ openaiCompatApp.post(
       });
       isUrl = resolved.endpoint;
       isApiKey = resolved.serviceApiKey;
+      actingAgentUserId = resolved.agentUserId;
     } catch (err) {
       logger.error(
         { err: err instanceof Error ? err.message : String(err) },
@@ -783,6 +787,7 @@ openaiCompatApp.post(
       query,
       threadId: resolvedChannelId,
       userId,
+      ...(actingAgentUserId ? { agentUserId: actingAgentUserId } : {}),
       workspaceId: resolvedWorkspaceId,
       agentType: "meta",
       ...getPodCallback(),
@@ -817,6 +822,7 @@ openaiCompatApp.post(
             ...isDelegationHeaders({
               isUrl,
               operatorUserId: userId,
+              agentUserId: actingAgentUserId,
               channelId: resolvedChannelId,
               runId: durableTurn.id,
             }),
@@ -936,6 +942,7 @@ openaiCompatApp.post(
           ...isDelegationHeaders({
             isUrl,
             operatorUserId: userId,
+            agentUserId: actingAgentUserId,
             channelId: resolvedChannelId,
             runId: durableTurn.id,
           }),

@@ -29,6 +29,19 @@ describe("cronWords ⇄ the shared recurrences", () => {
   it("refuses a step it would misread instead of a confident wrong sentence", () => {
     expect(cronWords("*/15 * * * *")).toBeNull();
   });
+
+  it("a stored rule says the zone it runs in, read off its trigger (ticket 592930c8)", () => {
+    expect(
+      ruleWhenWords("cron", {
+        expression: "50 6 * * *",
+        timezone: "Europe/Paris",
+      }).text
+    ).toBe("Every day at 06:50 Europe/Paris");
+    // No zone stored: the pod reads it in UTC, and says so.
+    expect(ruleWhenWords("cron", { expression: "50 6 * * *" }).text).toBe(
+      "Every day at 06:50 UTC"
+    );
+  });
 });
 
 describe("the ONE WHEN / THEN phrasing", () => {

@@ -10,6 +10,7 @@
  */
 
 import { z } from "zod";
+import { looksLikeNeedRef, needRefProblem } from "@synap-core/types/needs";
 import {
   CRITERION_ABOUT,
   CRITERION_CHECK_KINDS,
@@ -20,6 +21,14 @@ import {
   type CriterionCheckMeaning,
 } from "@synap/playbooks";
 import { checkCriterionMeaning } from "@synap-core/types/units";
+import { DECLARED_SLOT_KEY_RE } from "../services/focus-sessions/slot-keys.js";
+import {
+  MEASURE_CHECK_VERB,
+  measureSpecSchema,
+} from "../services/capabilities/measure-check.js";
+
+/** The longest a criterion's `check.params` may be, as JSON. */
+const CHECK_PARAMS_MAX_CHARS = 2000;
 
 export const sessionCriterionSchema = z
   .strictObject({
@@ -42,6 +51,19 @@ export const sessionCriterionSchema = z
       capability: z.string().min(1).max(200).optional(),
       evidenceKey: z.string().min(1).max(80).optional(),
       hint: z.string().max(1000).optional(),
+      /**
+       * kind=capability: the verb's arguments (P8). For `measure.check`:
+       * `{ op, params, threshold, comparator }`, checked below.
+       */
+      params: z
+        .record(z.string().max(80), z.unknown())
+        .refine((p) => Object.keys(p).length <= 20, {
+          message: "check.params holds at most 20 keys",
+        })
+        .refine((p) => JSON.stringify(p).length <= CHECK_PARAMS_MAX_CHARS, {
+          message: `check.params is at most ${CHECK_PARAMS_MAX_CHARS} characters of JSON`,
+        })
+        .optional(),
     }),
     stageKey: z.string().min(1).max(120).optional(),
     /** R5 — what kind of check this is, in people's words. */
@@ -57,6 +79,18 @@ export const sessionCriterionSchema = z
     about: z
       .enum(CRITERION_ABOUT as readonly [CriterionAbout, ...CriterionAbout[]])
       .optional(),
+    /**
+     * The key of the session output this criterion checks: THE pairing of a
+     * criterion with an output (`criteriaByOutput`, `@synap-core/types/units`;
+     * work-model W1, W4). The same alphabet as a declared slot key.
+     */
+    outputKey: z
+      .string()
+      .regex(DECLARED_SLOT_KEY_RE, {
+        message:
+          "outputKey must be an output key (a lowercase slug: a-z, 0-9, -)",
+      })
+      .optional(),
   })
   .superRefine((c, ctx) => {
     // R5: the declared meaning must fit the check that carries it.
@@ -68,6 +102,15 @@ export const sessionCriterionSchema = z
         path: ["checkKind"],
       });
     }
+    // A criterion about HOW the work is done checks no output (W4).
+    if (c.about === "method" && c.outputKey) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'A criterion about the method names no output: drop outputKey or set about to "result"',
+        path: ["outputKey"],
+      });
+    }
     if (c.check.kind === "capability" && !c.check.capability) {
       ctx.addIssue({
         code: "custom",
@@ -75,15 +118,48 @@ export const sessionCriterionSchema = z
         path: ["check", "capability"],
       });
     }
-    if (c.check.kind === "evidence" && !c.check.evidenceKey) {
+    // Arguments belong to a verb: only a capability check runs one.
+    if (c.check.params && c.check.kind !== "capability") {
       ctx.addIssue({
         code: "custom",
-        message:
-          "An evidence check names the evidenceKey the agent posts under",
-        path: ["check", "evidenceKey"],
+        message: "check.params goes with a capability check only",
+        path: ["check", "params"],
       });
     }
-  });
+    // A measure is checked here, at the write: a misspelled op or param would
+    // be a criterion that measures something else, or nothing.
+    if (c.check.capability === MEASURE_CHECK_VERB) {
+      const measure = measureSpecSchema.safeParse(c.check.params ?? {});
+      if (!measure.success) {
+        for (const issue of measure.error.issues) {
+          ctx.addIssue({
+            code: "custom",
+            message: `measure.check: ${issue.message}`,
+            path: ["check", "params", ...issue.path.map(String)],
+          });
+        }
+      }
+    }
+    // A need ref (0426) instead of a verb: it must name a need of the
+    // vocabulary (and, with a suffix, one of its intents).
+    if (c.check.capability && looksLikeNeedRef(c.check.capability)) {
+      const problem = needRefProblem(c.check.capability);
+      if (problem) {
+        ctx.addIssue({
+          code: "custom",
+          message: problem,
+          path: ["check", "capability"],
+        });
+      }
+    }
+  })
+  // An evidence check with no evidenceKey is posted under the criterion's own
+  // key: stored filled, so every reader reads one key.
+  .transform((c) =>
+    c.check.kind === "evidence" && !c.check.evidenceKey
+      ? { ...c, check: { ...c.check, evidenceKey: c.key } }
+      : c
+  );
 
 /** A criteria list: at most `MAX_SESSION_CRITERIA`, keys unique. */
 export const sessionCriteriaSchema = z

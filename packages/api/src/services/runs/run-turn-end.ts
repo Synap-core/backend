@@ -10,7 +10,10 @@
  * 45-minute idle flag (`diagnose/stall.ts`) and the 24-hour reaper
  * (`playbook-run-reaper.ts`) never saw it, because both only look at LIVE runs.
  *
- * NOW the IS says how the turn ended (`outcome`). `completed` is unchanged. A
+ * NOW the IS says how the turn ended (`outcome`). `completed` completes the
+ * run; a run with NO stages is then done, and its session is closed at once
+ * through the one close door unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). A
  * `stopped` turn — its token budget (`turn_budget`) or its step limit
  * (`max_steps`: the agent still had tool calls to make when the SDK's
  * `maxSteps` ended the turn) — leaves the run LIVE and:
@@ -25,9 +28,27 @@
  *      the answer wakes the asking agent (`session-answer.ts`). The counter
  *      resets once the ask has LANDED, so after an answer the run again gets
  *      N continuations.
- * If neither lands, the run is simply left `running`: the stall flag and the
- * reaper see it — never a false `completed` — and the count is NOT reset, so
- * the next stop asks again instead of continuing on its own.
+ * If neither lands, nothing will move the run again: it ends `failed`
+ * (`could_not_continue`) and its session closes `failed`, instead of waiting
+ * a day for the reaper.
+ *
+ * A turn that FAILED (`outcome: failed`: every pod read failed, the turn
+ * threw, or its first call did not fit its budget) ends the run the same way,
+ * with the IS's reason (`endFailedRun`).
+ *
+ * STAGES LEFT (plan 7d71ddcc wave 0, founder decision D4, 16 Nov 2026). A
+ * `completed` turn of a STAGED run that has not reached its last stage
+ * (`stages-left.ts`) does not complete the run: it is a STOP
+ * (`stages_left`), settled by the same stop path — continued on its own up
+ * to N times, then the person is asked "Continue at <stage>?", or, with no
+ * person in the loop, the run ends `failed` with a notice (`stop_reason =
+ * 'stages_left'`, which the breakers count: only `budget` is exempt). Before
+ * it, ONE completed turn completed the whole run however many stages were
+ * left (session 12dbd086: one turn, still on `brief`, run completed, session
+ * swept closed). Not a stop, and why: a session that is not active (a gate or
+ * a hold waits; the run stays live), a run with no tool to advance its stage
+ * (`update_run`: it could never get there), and a run whose person answered
+ * NO to keeping it going (they stopped it).
  *
  * NO PERSON IN THE LOOP (founder decision E3, 2026-10-27). A run an automation
  * started (its schedule included) has nobody watching it, so step 2 never
@@ -57,14 +78,29 @@ import {
   eq,
   focusSessions,
   liveRunStatusWhere,
+  owedSlotWhere,
   playbookRuns,
 } from "@synap/database";
 import type { PlaybookRun } from "@synap/database/schema";
-import type { ExpectedOutput, SlotAsk } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  SlotAnswerValue,
+  SlotAsk,
+} from "@synap/playbooks";
+import {
+  activeToolsList,
+  readToolsList,
+  runClassOf,
+  runTurnToolNames,
+} from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
+import { isDeclinedValue } from "@synap-core/types/ask";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import type { RunToolProfile } from "@synap/intelligence-client";
 import { applyRunCapture } from "./apply-run-capture.js";
+import { judgeTurnEffect, type TurnEffect } from "./turn-effect.js";
+import { addTurnToCost, ledgerCost, type RunCost } from "./run-cost.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import {
@@ -72,10 +108,19 @@ import {
   RUN_TURNS_META_KEY,
 } from "../focus-sessions/session-metadata.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
-import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
-import { blockExpectedOutput } from "../focus-sessions/block-output.js";
+import { raiseRunAsk } from "./run-ask.js";
+import { settleStageEndAsk, stageAskTurnEntries } from "./stage-end-ask.js";
+import {
+  stagesLeft,
+  stagesLeftWords,
+  stoppedWhere,
+  type StagesLeft,
+} from "./stages-left.js";
 import { startedByAutomation } from "../focus-sessions/session-kind.js";
+import { closeStagelessRunSessionAtTurnEnd } from "../focus-sessions/session-lifecycle-sweep.js";
+import { completeFocusSession } from "../focus-sessions/complete-session.js";
 import { resolveRunToolProfile } from "../playbooks/run-tool-profile.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   TURN_CONTEXT_MAX_ARRAY_ITEMS,
   TURN_CONTEXT_MAX_STRING_LENGTH,
@@ -99,6 +144,34 @@ export const RUN_CONTINUE_SLOT_LABEL = "Keep the run going";
 
 const count = z.number().int().nonnegative();
 
+/** Why a `stopped` turn stopped: the run stays live. */
+const RUN_STOP_REASONS = ["turn_budget", "max_steps"] as const;
+
+/**
+ * Why a `failed` turn failed, as the IS reports it: every pod call of the
+ * turn failed (`read_failed`), the turn threw after its provider fallbacks
+ * (`turn_error`), or its first call did not fit its token budget
+ * (`budget_exceeded`, a continuation would hit the same wall).
+ */
+export const RUN_TURN_FAILURE_REASONS = [
+  "read_failed",
+  "turn_error",
+  "budget_exceeded",
+] as const;
+export type RunTurnFailureReason = (typeof RUN_TURN_FAILURE_REASONS)[number];
+
+/**
+ * Why a run ended `failed` at a turn's end: the IS's reasons, or the pod's own
+ * `could_not_continue` (a stopped run it could neither continue nor ask about).
+ */
+export type RunFailureReason =
+  RunTurnFailureReason | "could_not_continue" | "no_effect";
+
+/** Bounds of the first call's inventory (`firstCall.sections|tools|guidance`). */
+export const FIRST_CALL_SECTIONS_MAX = 24;
+export const FIRST_CALL_TOOLS_MAX = 200;
+export const FIRST_CALL_GUIDANCE_MAX = 12;
+
 /** Bounds of a run checkpoint, the IS's own (`run-profile.ts`). */
 export const CHECKPOINT_MAX_RECORDS = 60;
 export const CHECKPOINT_MAX_LEFT_CHARS = 4_000;
@@ -121,13 +194,16 @@ const checkpointRecordSchema = z.object({
  */
 export const completeRunBodySchema = z
   .object({
-    outcome: z.enum(["completed", "stopped"]).default("completed"),
+    outcome: z.enum(["completed", "stopped", "failed"]).default("completed"),
     /**
      * Why a `stopped` turn stopped: its token budget, or its step limit (the
      * founder default 2026-10-21: a step-limit stop is wired exactly like the
-     * budget stop, never marked completed).
+     * budget stop, never marked completed). Why a `failed` turn failed: one of
+     * {@link RUN_TURN_FAILURE_REASONS}.
      */
-    reason: z.enum(["turn_budget", "max_steps"]).optional(),
+    reason: z
+      .enum([...RUN_STOP_REASONS, ...RUN_TURN_FAILURE_REASONS])
+      .optional(),
     /**
      * The agent type that ran the turn — the continuation wakes the same one.
      * A FREE string (root CLAUDE.md "agentType = free string"), so no pattern;
@@ -160,6 +236,32 @@ export const completeRunBodySchema = z
               history: count,
               message: count,
             }),
+            /**
+             * The inventory of what the agent was given (optional, added after
+             * the counts): the system prompt's sections by name and size, the
+             * tool names, and the guidance refs. Each one lenient: a bad value
+             * reads as absent, never a 400 that would drop the turn's outcome.
+             */
+            sections: z
+              .array(
+                z.object({
+                  name: z.string().trim().min(1).max(64),
+                  chars: count,
+                })
+              )
+              .max(FIRST_CALL_SECTIONS_MAX)
+              .optional()
+              .catch(undefined),
+            tools: z
+              .array(z.string().trim().min(1).max(128))
+              .max(FIRST_CALL_TOOLS_MAX)
+              .optional()
+              .catch(undefined),
+            guidance: z
+              .array(z.string().trim().min(1).max(160))
+              .max(FIRST_CALL_GUIDANCE_MAX)
+              .optional()
+              .catch(undefined),
           })
           .optional(),
         /**
@@ -176,6 +278,14 @@ export const completeRunBodySchema = z
          */
         cacheReadInputTokens: count.optional().catch(undefined),
         cacheWriteInputTokens: count.optional().catch(undefined),
+        /**
+         * What the turn's input COUNTED against `ceiling`: its FRESH input,
+         * `spentInputTokens` minus the cache reads the provider reported
+         * (founder, 10 Nov 2026: cache reads count zero), so it can be lower
+         * than `spentInputTokens`. Absent from an IS that counts every token
+         * in full. Lenient like `model`.
+         */
+        chargedInputTokens: count.optional().catch(undefined),
       })
       .optional(),
     /**
@@ -206,15 +316,45 @@ export const completeRunBodySchema = z
       .optional()
       .catch(undefined),
   })
-  .refine((b) => b.outcome !== "stopped" || b.reason !== undefined, {
+  .refine((b) => b.outcome !== "stopped" || isRunStopReason(b.reason), {
     message: "outcome 'stopped' needs a reason ('turn_budget' | 'max_steps')",
+    path: ["reason"],
+  })
+  .refine((b) => b.outcome !== "failed" || isRunTurnFailureReason(b.reason), {
+    message: `outcome 'failed' needs a reason (${RUN_TURN_FAILURE_REASONS.map((r) => `'${r}'`).join(" | ")})`,
     path: ["reason"],
   });
 
 export type CompleteRunBody = z.infer<typeof completeRunBodySchema>;
 
 /** Why a turn stopped before the run was finished. */
-export type RunStopReason = NonNullable<CompleteRunBody["reason"]>;
+export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
+
+/**
+ * Why the POD made a `completed` turn a stop: the run has stages left. Never
+ * reported by the IS (not in the body's enum): the pod reads it off the run.
+ */
+export const STAGES_LEFT_STOP_REASON = "stages_left";
+
+/** What a stop stopped on: a limit the IS reported, or stages left. */
+type StopCause =
+  | { kind: "limit"; reason: RunStopReason | undefined }
+  | { kind: "stages_left"; stages: StagesLeft }
+  | { kind: "no_effect" };
+
+/** A completed turn that did nothing (`turn-effect.ts`), in the room's words. */
+const NO_EFFECT_FACTS =
+  "This run's turn ended without doing anything: no write, no output and no message in its room.";
+
+function isRunStopReason(r: string | undefined): r is RunStopReason {
+  return (RUN_STOP_REASONS as readonly string[]).includes(r ?? "");
+}
+
+function isRunTurnFailureReason(
+  r: string | undefined
+): r is RunTurnFailureReason {
+  return (RUN_TURN_FAILURE_REASONS as readonly string[]).includes(r ?? "");
+}
 
 /** The limit a stopped turn hit, in the words the room reads. */
 function stopLimitWords(reason: RunStopReason | undefined): string {
@@ -230,14 +370,17 @@ export type CompleteRunStatus =
   | "left_running"
   /** No person in the loop: the run ended at its limit, with a notice. */
   | "stopped"
+  /** The run could not read, its turn broke, or it could not continue. */
+  | "failed"
   /** A retried report of a turn already settled: nothing done again. */
   | "duplicate";
 
 /** One turn's end, as stored. */
 export interface RunTurnRecord {
   at: string;
-  outcome: "completed" | "stopped";
-  reason?: RunStopReason;
+  outcome: CompleteRunBody["outcome"];
+  reason?:
+    RunStopReason | RunTurnFailureReason | typeof STAGES_LEFT_STOP_REASON;
   agentType?: string;
   /** The IS's id for the turn (`CompleteRunBody.turnKey`). */
   turnKey?: string;
@@ -250,6 +393,8 @@ export interface RunTurnRecord {
   /** Prompt-cache tokens the provider reported over the turn. */
   cacheReadInputTokens?: number;
   cacheWriteInputTokens?: number;
+  /** What counted against the ceiling: the fresh input (cache reads at 0). */
+  chargedInputTokens?: number;
   /** What the pod decided for a stopped turn. */
   next?: "continue" | "ask";
   /** How many records the turn's checkpoint named (the ids ride in the room). */
@@ -271,6 +416,18 @@ export interface RunTurnsState {
    * hands the next turn, as the automatic continuation's notice does.
    */
   lastCheckpoint?: NonNullable<CompleteRunBody["checkpoint"]>;
+  /**
+   * The stages whose stage-end ask the pod already raised in THIS run
+   * (`stage-end-ask.ts`), by stage key: each is asked once per run.
+   */
+  stageAsks?: string[];
+  /** What the run spent over ALL its turns (`run-cost.ts`). */
+  cost?: RunCost;
+  /**
+   * A completed turn whose reply counts and was not saved yet: judged once
+   * it is (`settleRunTurnPersisted`).
+   */
+  effectPending?: { turnKey: string; askingAgentUserId: string | null };
 }
 
 /**
@@ -293,6 +450,7 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
   if (s.runId !== runId) return fresh;
   const n = (v: unknown) =>
     typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : 0;
+  const cost = ledgerCost(s);
   return {
     runId,
     stops: n(s.stops),
@@ -303,6 +461,27 @@ export function readRunTurns(metadata: unknown, runId: string): RunTurnsState {
     turns: Array.isArray(s.turns) ? s.turns.slice(-TURN_HISTORY_MAX) : [],
     ...(s.lastCheckpoint && typeof s.lastCheckpoint === "object"
       ? { lastCheckpoint: s.lastCheckpoint }
+      : {}),
+    ...(Array.isArray(s.stageAsks)
+      ? {
+          stageAsks: s.stageAsks.filter(
+            (k): k is string => typeof k === "string"
+          ),
+        }
+      : {}),
+    ...(cost ? { cost } : {}),
+    ...(s.effectPending &&
+    typeof s.effectPending === "object" &&
+    typeof s.effectPending.turnKey === "string"
+      ? {
+          effectPending: {
+            turnKey: s.effectPending.turnKey,
+            askingAgentUserId:
+              typeof s.effectPending.askingAgentUserId === "string"
+                ? s.effectPending.askingAgentUserId
+                : null,
+          },
+        }
       : {}),
   };
 }
@@ -382,6 +561,9 @@ async function recordTurnEnd(
       ...(body.turn?.cacheWriteInputTokens !== undefined
         ? { cacheWriteInputTokens: body.turn.cacheWriteInputTokens }
         : {}),
+      ...(body.turn?.chargedInputTokens !== undefined
+        ? { chargedInputTokens: body.turn.chargedInputTokens }
+        : {}),
       ...(decision ? { next: decision.next } : {}),
       ...(body.checkpoint
         ? { checkpointRecords: body.checkpoint.records.length }
@@ -404,6 +586,14 @@ async function recordTurnEnd(
       firstTurn: state.firstTurn ?? record,
       turns: [...state.turns, record].slice(-TURN_HISTORY_MAX),
       ...(lastCheckpoint ? { lastCheckpoint } : {}),
+      ...(state.stageAsks ? { stageAsks: state.stageAsks } : {}),
+      // A report with no turnKey (an older IS) cannot be told from its retry:
+      // its tokens stay out of the total, counted as an unmeasured turn,
+      // rather than risk adding them twice.
+      cost: addTurnToCost(
+        state.cost,
+        body.turnKey ? record : { model: record.model }
+      ),
     };
     await tx
       .update(focusSessions)
@@ -443,6 +633,88 @@ async function resetAfterAsk(sessionId: string, runId: string): Promise<void> {
   });
 }
 
+/**
+ * A `completed` turn of a run with stages left becomes a STOP, under the
+ * session row lock: its record (already written by {@link recordTurnEnd})
+ * now reads `stopped` / `stages_left`, and the ledger takes the decision a
+ * stopped turn takes ({@link nextAfterStop}), in the same write. A second
+ * write rather than a decision inside `recordTurnEnd`: what makes it a stop
+ * is read AFTER the record (a step held elsewhere and a stage-end ask come
+ * first, and the ask's door writes this ledger under the same lock).
+ *
+ * `duplicate` ⇒ this turn was already made a stop (a retried report): nothing
+ * written. `null` ⇒ the row is gone, or its ledger is another run's.
+ */
+async function recordStagesLeftStop(
+  sessionId: string,
+  runId: string,
+  turnKey: string | undefined
+): Promise<{
+  decision: ReturnType<typeof nextAfterStop>;
+  state: RunTurnsState;
+  duplicate: boolean;
+  unattended: boolean;
+} | null> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({
+        metadata: focusSessions.metadata,
+        origin: focusSessions.origin,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return null;
+    const raw =
+      locked.metadata && typeof locked.metadata === "object"
+        ? (locked.metadata as Record<string, unknown>)[RUN_TURNS_META_KEY]
+        : undefined;
+    if ((raw as Partial<RunTurnsState> | undefined)?.runId !== runId) {
+      return null;
+    }
+    const unattended = hasNoPersonInTheLoop(locked);
+    const state = readRunTurns(locked.metadata, runId);
+    // This turn's record: by its key, else (an older IS) the newest one.
+    const record = turnKey
+      ? ([...state.turns].reverse().find((t) => t.turnKey === turnKey) ??
+        (state.firstTurn?.turnKey === turnKey ? state.firstTurn : undefined))
+      : state.turns.at(-1);
+    const decision = nextAfterStop(state);
+    if (record?.reason === STAGES_LEFT_STOP_REASON) {
+      return { decision, state, duplicate: true, unattended };
+    }
+    const asStop = (t: RunTurnRecord): RunTurnRecord => ({
+      ...t,
+      outcome: "stopped",
+      reason: STAGES_LEFT_STOP_REASON,
+      next: decision.next,
+    });
+    const sameTurn = (t: RunTurnRecord | undefined): boolean =>
+      !!t && !!record && t.at === record.at && t.turnKey === record.turnKey;
+    const next: RunTurnsState = {
+      ...state,
+      stops: state.stops + 1,
+      autoContinues:
+        decision.next === "continue"
+          ? decision.continuation
+          : state.autoContinues,
+      turns: state.turns.map((t) => (sameTurn(t) ? asStop(t) : t)),
+      ...(state.firstTurn
+        ? {
+            firstTurn: sameTurn(state.firstTurn)
+              ? asStop(state.firstTurn)
+              : state.firstTurn,
+          }
+        : {}),
+    };
+    await tx
+      .update(focusSessions)
+      .set({ metadata: mergeSessionMetadata({ [RUN_TURNS_META_KEY]: next }) })
+      .where(eq(focusSessions.id, sessionId));
+    return { decision, state: next, duplicate: false, unattended };
+  });
+}
+
 type RunRow = Pick<
   PlaybookRun,
   | "id"
@@ -452,6 +724,8 @@ type RunRow = Pick<
   | "completedAt"
   | "sessionId"
   | "workspaceId"
+  | "startedAt"
+  | "definitionSnapshot"
 > & {
   /** The run's playbook: the continuation resolves its declared tools. */
   playbookId?: string;
@@ -491,20 +765,26 @@ async function endUnattendedRun(p: {
   session: SessionRoom;
   stops: number;
   turnRef: string;
-  reason: RunStopReason | undefined;
+  cause: StopCause;
 }): Promise<CompleteRunStatus> {
-  const limit = stopLimitWords(p.reason);
   const why =
-    `Stopped at its ${limit}: the run stopped before it was finished ${p.stops} times ` +
-    `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
-    "An automation started it, so nobody was asked to keep it going.";
+    p.cause.kind === "stages_left"
+      ? `Stopped ${stoppedWhere(p.cause.stages)} with ${stagesLeftWords(p.cause.stages)}: ` +
+        `its turns ended ${p.stops} times before it reached its last stage, ` +
+        `and it continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
+        "An automation started it, so nobody was asked to keep it going."
+      : `Stopped at its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}: the run stopped before it was finished ${p.stops} times ` +
+        `and continued on its own ${MAX_AUTO_CONTINUATIONS} times. ` +
+        "An automation started it, so nobody was asked to keep it going.";
   const ended = await applyRunCapture({
     run: p.run,
     status: "failed",
     error: why,
-    // Not a fault: the parent automation run and its breakers read this
-    // (`automation-parent-settle.ts`), so a budget stop never turns a rule off.
-    stopReason: "budget",
+    // The parent automation run and its breakers read this
+    // (`automation-parent-settle.ts`): a budget stop is not a fault and never
+    // turns a rule off; a run that keeps ending with stages left IS one, and
+    // the breakers count it (only `budget` is exempt).
+    stopReason: p.cause.kind === "stages_left" ? "stages_left" : "budget",
   });
   if (!ended) return "no-running-run";
   if (p.session.channelId) {
@@ -526,6 +806,95 @@ async function endUnattendedRun(p: {
   return "stopped";
 }
 
+/** Why the run failed, in the words the room reads. */
+function failureWords(reason: RunFailureReason): string {
+  switch (reason) {
+    case "read_failed":
+      return "This run could not reach the pod: every read of its turn failed.";
+    case "turn_error":
+      return "This run's turn broke before it finished (the AI provider failed, or the turn itself did).";
+    case "budget_exceeded":
+      return "This run's turn could not start within its token budget.";
+    case "could_not_continue":
+      return "This run stopped before it was finished, and it could neither go on by itself nor ask you to keep it going.";
+    case "no_effect":
+      return NO_EFFECT_FACTS;
+  }
+}
+
+/**
+ * The end of a run that cannot go on (findings db27cac2, a00f5eb6, 15835191):
+ * the run ends `failed` with the reason, one pod notice in the room says what
+ * failed and how to retry, and the session closes `failed` through the ONE
+ * close door.
+ *
+ * The close is automatic, so like every automatic close it never closes a
+ * session that still owes the person a slot (W2 calm, `closeSessionViaDoor`):
+ * the ask stays live where they will answer it. A close the door refuses or
+ * proposes is logged; the hourly ended-run sweep closes the session then.
+ */
+async function endFailedRun(p: {
+  run: RunRow;
+  session: SessionRoom;
+  reason: RunFailureReason;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  const why = failureWords(p.reason);
+  const ended = await applyRunCapture({
+    run: p.run,
+    status: "failed",
+    error: why,
+    // A budget wall is not a fault: the automation's breakers skip it (F3).
+    // A turn that did nothing IS one: they count it.
+    stopReason: (
+      { budget_exceeded: "budget", no_effect: "no_effect" } as const
+    )[p.reason as "budget_exceeded" | "no_effect"],
+  });
+  if (!ended) return "no-running-run";
+  logger.info(
+    { runId: p.run.id, sessionId: p.session.id, reason: p.reason },
+    "run-turn-end: the run ended failed"
+  );
+  if (p.session.channelId) {
+    try {
+      await postChannelMessage({
+        channelId: p.session.channelId,
+        content: `${why} The run ends here as failed; what it did so far stays in this session. You can run it again from here.`,
+        userId: p.session.userId,
+        role: "system",
+        idempotencyKey: `run-failed:${p.run.id}:${p.turnRef}`,
+      });
+    } catch (err) {
+      logger.error(
+        { err, runId: p.run.id, sessionId: p.session.id },
+        "run-turn-end: the run failed, but its notice could not be posted"
+      );
+    }
+  }
+  try {
+    const [owes] = await db
+      .select({ id: focusSessions.id })
+      .from(focusSessions)
+      .where(and(eq(focusSessions.id, p.session.id), owedSlotWhere()))
+      .limit(1);
+    if (!owes) {
+      await completeFocusSession({
+        sessionId: p.session.id,
+        userId: p.session.userId,
+        terminalStatus: "failed",
+        summary: why,
+        actor: { kind: "system", userId: p.session.userId },
+      });
+    }
+  } catch (err) {
+    logger.warn(
+      { err, runId: p.run.id, sessionId: p.session.id },
+      "run-turn-end: closing the failed run's session failed (the hourly sweep closes it)"
+    );
+  }
+  return "failed";
+}
+
 /**
  * The words of the continuation notice: why the run goes on, and the stopped
  * turn's checkpoint as a fenced `run-checkpoint` JSON block — the records it
@@ -536,11 +905,18 @@ export function continuationNotice(p: {
   continuation: number;
   reason: RunStopReason | undefined;
   checkpoint: CompleteRunBody["checkpoint"];
+  /** Set when the turn ended with stages left: the notice names them. */
+  stages?: StagesLeft;
 }): string {
-  const head =
-    `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
-    `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
-    "Pick up from where it stopped; do not start over.";
+  const head = p.stages
+    ? `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
+      `the last turn ended ${stoppedWhere(p.stages)}, but this run has ${stagesLeftWords(p.stages)} ` +
+      `(${p.stages.left.map((s) => s.name).join(", ")}). ` +
+      "Pick up from where it stopped; do not start over. " +
+      "Finish the current stage, then move the run to its next stage (update_run), until its last stage is done."
+    : `Automatic continuation ${p.continuation} of ${MAX_AUTO_CONTINUATIONS}: ` +
+      `the last turn stopped at its ${stopLimitWords(p.reason)} before this run was finished. ` +
+      "Pick up from where it stopped; do not start over.";
   if (!p.checkpoint) return head;
   return (
     `${head} Its checkpoint follows: the records it already touched, by full ` +
@@ -617,6 +993,8 @@ export async function runTurnForAnswer(p: {
   slotLabel?: string | null;
   /** The answer was a confirmed YES (a `confirm` value with `confirmed: true`). */
   approved: boolean;
+  /** The answer's typed value: a stage-end ask's chosen option rides on. */
+  value?: SlotAnswerValue;
 }): Promise<RunTurnForAnswer> {
   let live: { id: string; playbookId: string; workspaceId: string | null };
   try {
@@ -654,7 +1032,40 @@ export async function runTurnForAnswer(p: {
     p.approved &&
     normalizeExpectedLabel(p.slotLabel) ===
       normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  if (!continues) return { liveRun: "found", run };
+  if (!continues) {
+    // An answer to a stage-end ask the pod raised: the run goes on from the
+    // next stage (`stage-end-ask.ts`). Best effort: a failed read wakes the
+    // run turn without it, and says so.
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, p.sessionId),
+        columns: { metadata: true, stages: true },
+      });
+      const entries = await stageAskTurnEntries({
+        runId: live.id,
+        sessionStages: session?.stages,
+        raised: readRunTurns(session?.metadata, live.id).stageAsks ?? [],
+        slotLabel: p.slotLabel,
+        ...(p.value ? { value: p.value } : {}),
+      });
+      if (entries.length > 0) {
+        return { liveRun: "found", run, turnContext: { entries } };
+      }
+    } catch (err) {
+      logger.error(
+        { err, sessionId: p.sessionId, runId: live.id },
+        "run-turn-end: the stage-end ask's next stage could not be read — the run turn goes on without it"
+      );
+      return {
+        liveRun: "found",
+        run,
+        turnContext: {
+          entries: [{ key: "run.stageAsk.read", value: "failed" }],
+        },
+      };
+    }
+    return { liveRun: "found", run };
+  }
   try {
     const session = await db.query.focusSessions.findFirst({
       where: eq(focusSessions.id, p.sessionId),
@@ -691,11 +1102,16 @@ async function continueRun(p: {
   continuation: number;
   /** The turn's id for idempotency (see `settleRunTurnEnd`). */
   turnRef: string;
-  reason: RunStopReason | undefined;
+  cause: StopCause;
   checkpoint: CompleteRunBody["checkpoint"];
 }): Promise<boolean> {
   if (!p.session.channelId) return false;
-  const content = continuationNotice(p);
+  const content = continuationNotice({
+    continuation: p.continuation,
+    reason: p.cause.kind === "limit" ? p.cause.reason : undefined,
+    checkpoint: p.checkpoint,
+    ...(p.cause.kind === "stages_left" ? { stages: p.cause.stages } : {}),
+  });
   // The continuation is a run turn too: the same declared tools as the
   // kickoff (founder, 2026-11-05). Never throws (a failed read says so).
   const run = p.run.playbookId
@@ -748,15 +1164,22 @@ async function askToKeepGoing(p: {
   askingAgentUserId: string | null;
   stops: number;
   turnRef: string;
-  reason: RunStopReason | undefined;
+  cause: StopCause;
 }): Promise<boolean> {
   // Said once: the facts are the slot's `why`, the question is the prompt.
   // The room post carries both, as a message reads.
-  const facts =
-    `This run stopped before it was finished ${p.stops} times ` +
-    `(the last turn hit its ${stopLimitWords(p.reason)}; ` +
-    `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
-  const prompt = "Keep it going?";
+  const staged = p.cause.kind === "stages_left" ? p.cause.stages : null;
+  const facts = staged
+    ? `The run stopped ${stoppedWhere(staged)}, with ${stagesLeftWords(staged)} ` +
+      `(it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`
+    : p.cause.kind === "no_effect"
+      ? NO_EFFECT_FACTS
+      : `This run stopped before it was finished ${p.stops} times ` +
+        `(the last turn hit its ${stopLimitWords(p.cause.kind === "limit" ? p.cause.reason : undefined)}; ` +
+        `it continued on its own ${MAX_AUTO_CONTINUATIONS} times).`;
+  const prompt = staged
+    ? `Continue ${staged.at ? `at ${staged.at.name}` : `from ${staged.left[0]!.name}`}?`
+    : "Keep it going?";
   const question = `${facts} ${prompt}`;
   const ask: SlotAsk = {
     mode: "confirm",
@@ -766,85 +1189,195 @@ async function askToKeepGoing(p: {
     yes: { description: "The agent picks up where it stopped" },
     no: { description: "The agent is told to stop" },
   };
-  const wanted = normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL);
-  try {
-    const declared = await updateExpectedOutputsLocked(
-      p.session.id,
-      (current) => [
-        ...current.filter((o) => normalizeExpectedLabel(o?.label) !== wanted),
-        {
-          kind: "decision",
-          label: RUN_CONTINUE_SLOT_LABEL,
-          status: "pending",
-          // What the answer unblocks (decision E): the room question below is
-          // refused for a slot that does not say it.
-          unblocks: "The run goes on",
-        } satisfies ExpectedOutput,
-      ]
-    );
-    if (!declared) return false;
+  return raiseRunAsk({
+    runId: p.run.id,
+    session: p.session,
+    askingAgentUserId: p.askingAgentUserId,
+    slot: {
+      kind: "decision",
+      label: RUN_CONTINUE_SLOT_LABEL,
+      status: "pending",
+      // What the answer unblocks (decision E): the room question is refused
+      // for a slot that does not say it.
+      unblocks: staged
+        ? `The run goes on ${staged.at ? `at ${staged.at.name}` : `from ${staged.left[0]!.name}`}`
+        : "The run goes on",
+    } satisfies ExpectedOutput,
+    blockedReason: "decision",
+    why: facts,
+    question,
+    ask,
+    idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
+  });
+}
 
-    if (p.askingAgentUserId && p.session.channelId) {
-      const posted = await postChannelMessage({
-        channelId: p.session.channelId,
-        content: question,
-        userId: p.session.userId,
-        role: "assistant",
-        agentUserId: p.askingAgentUserId,
-        kind: "question",
-        slotLabel: RUN_CONTINUE_SLOT_LABEL,
-        ask,
-        idempotencyKey: `run-ask:${p.run.id}:${p.turnRef}`,
-      });
-      if (posted.slot?.status === "blocked") return true;
-      logger.warn(
-        { runId: p.run.id, slot: posted.slot?.status ?? null },
-        "run-turn-end: the question did not file on the slot; handing it over directly"
-      );
-    }
-    const blocked = await blockExpectedOutput({
-      sessionId: p.session.id,
-      userId: p.session.userId,
-      expectedLabel: RUN_CONTINUE_SLOT_LABEL,
-      blockedReason: "decision",
-      why: facts,
-      ask,
-      agentUserId: p.askingAgentUserId,
-      askCause: { kind: "run", ref: { kind: "run", id: p.run.id } },
-    });
-    return blocked.status === "blocked";
+/**
+ * The turn's `firstCall.guidance`, filled by the POD from what the run
+ * stamped on its definition snapshot (`recordRunGuidance`): the refs of the
+ * rules it used. The IS never has to report them, and the pod's stamp wins
+ * over anything it sent. Best effort: an unreadable or absent stamp leaves
+ * the body as it came, never failing the turn's report.
+ */
+async function withStampedGuidance(
+  runId: string,
+  body: CompleteRunBody
+): Promise<CompleteRunBody> {
+  const firstCall = body.turn?.firstCall;
+  if (!body.turn || !firstCall) return body;
+  try {
+    const [row] = await db
+      .select({ snapshot: playbookRuns.definitionSnapshot })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, runId))
+      .limit(1);
+    const stamp = stampedGuidanceOf(row?.snapshot);
+    if (stamp?.status !== "ok" || stamp.used.length === 0) return body;
+    const refs = stamp.used
+      .map((u) => (typeof u.ref === "string" ? u.ref.slice(0, 160) : ""))
+      .filter(Boolean)
+      .slice(0, FIRST_CALL_GUIDANCE_MAX);
+    if (refs.length === 0) return body;
+    return {
+      ...body,
+      turn: { ...body.turn, firstCall: { ...firstCall, guidance: refs } },
+    };
   } catch (err) {
-    logger.error(
-      { err, runId: p.run.id, sessionId: p.session.id },
-      "run-turn-end: could not ask the person whether to keep the run going"
+    logger.warn(
+      { err, runId },
+      "run-turn-end: reading the run's guidance stamp failed (non-fatal)"
     );
-    return false;
+    return body;
   }
 }
 
-/** Settle one IS turn's end on the session's live run. */
-export async function settleRunTurnEnd(p: {
+/**
+ * A run with no stages whose turn completed is done: close its session now,
+ * through the ONE close door, unless something in it waits on the person
+ * (`closeStagelessRunSessionAtTurnEnd`, founder 9 Nov 2026). Best effort: the
+ * run is already completed and the hourly sweep closes the session anyway, so
+ * a failed close is logged, never a failed turn report.
+ */
+async function closeOneTurnRun(sessionId: string): Promise<void> {
+  try {
+    await closeStagelessRunSessionAtTurnEnd(sessionId);
+  } catch (err) {
+    logger.warn(
+      { err, sessionId },
+      "run-turn-end: closing the one-turn run's session failed (the hourly sweep retries)"
+    );
+  }
+}
+
+/**
+ * Where a staged run stands when its turn reports `completed` (wave 0, plan
+ * 7d71ddcc — see the file header):
+ *   - `none`: nothing keeps the run from completing, as before — no declared
+ *     stages, its last stage reached (`stages-left.ts`), a session that
+ *     already ended, a run with no tool to advance its stage (`update_run`,
+ *     read off its frozen definition as `resolveRunToolProfile` reads the
+ *     live one: a short run cannot move its stage, so asking it to would
+ *     loop), or the person answered NO (or refused) "Keep the run going";
+ *   - `waits`: the session is not active (paused at a gate or on a hold,
+ *     forming, scheduled, stale). Something other than this turn moves it
+ *     next, so the run stays LIVE; the reaper parks it `waiting_on_you` while
+ *     the session waits on the person. A read that failed lands here too:
+ *     never a false `completed`;
+ *   - `stages_left`: an active session whose run has not reached its last
+ *     stage. Never throws.
+ */
+async function stagesAtTurnEnd(
+  run: RunRow,
+  sessionId: string
+): Promise<
+  | { kind: "none" }
+  | { kind: "waits" }
+  | { kind: "stages_left"; stages: StagesLeft }
+> {
+  try {
+    const [session] = await db
+      .select({
+        status: focusSessions.status,
+        currentStage: focusSessions.currentStage,
+        stages: focusSessions.stages,
+        expectedOutputs: focusSessions.expectedOutputs,
+      })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .limit(1);
+    const [row] = await db
+      .select({
+        executor: playbookRuns.executor,
+        snapshot: playbookRuns.definitionSnapshot,
+      })
+      .from(playbookRuns)
+      .where(eq(playbookRuns.id, run.id))
+      .limit(1);
+    if (!session || !row) return { kind: "none" };
+    if (isTerminalSessionStatus(session.status)) return { kind: "none" };
+    // The stages this run follows: its frozen definition, else the session's
+    // (as `stage-end-ask.ts` reads them).
+    const snap = (row.snapshot ?? {}) as { stages?: unknown; tools?: unknown };
+    const stages =
+      Array.isArray(snap.stages) && snap.stages.length > 0
+        ? snap.stages
+        : session.stages;
+    const left = stagesLeft(stages, session.currentStage);
+    if (!left) return { kind: "none" };
+    const runClass = runClassOf({ executor: row.executor, stages });
+    const canAdvance =
+      runClass !== "one-shot" &&
+      runTurnToolNames(
+        runClass,
+        activeToolsList(
+          readToolsList(snap.tools),
+          stages,
+          session.currentStage ?? null
+        )
+      ).includes("update_run");
+    if (!canAdvance) return { kind: "none" };
+    const keepGoing = (
+      (session.expectedOutputs as ExpectedOutput[] | null) ?? []
+    ).find(
+      (o) =>
+        normalizeExpectedLabel(o?.label) ===
+        normalizeExpectedLabel(RUN_CONTINUE_SLOT_LABEL)
+    );
+    const said = keepGoing?.answer?.value;
+    if (
+      said &&
+      ((said.type === "confirm" && !said.confirmed) || isDeclinedValue(said))
+    ) {
+      return { kind: "none" };
+    }
+    if (session.status !== "active") return { kind: "waits" };
+    return { kind: "stages_left", stages: left };
+  } catch (err) {
+    logger.error(
+      { err, runId: run.id, sessionId },
+      "run-turn-end: where the staged run stands could not be read; the run stays live"
+    );
+    return { kind: "waits" };
+  }
+}
+
+/**
+ * A stop, settled: the run stays LIVE while it continues on its own (up to
+ * {@link MAX_AUTO_CONTINUATIONS} times), then the person is asked; with no
+ * person in the loop it ends with a notice instead. A stop the IS reported
+ * (its token budget, its step limit) and a completed turn with stages left
+ * take this ONE path; only the words differ (`cause`).
+ */
+async function settleStop(p: {
   run: RunRow;
   session: SessionRoom;
   body: CompleteRunBody;
-  /** The agent from the request's VERIFIED auth context, if any. */
   askingAgentUserId: string | null;
+  decision: ReturnType<typeof nextAfterStop>;
+  state: RunTurnsState;
+  unattended: boolean;
+  cause: StopCause;
 }): Promise<CompleteRunStatus> {
-  const { run, session, body } = p;
-  const recorded = await recordTurnEnd(session.id, run.id, body);
-
-  // Completing is idempotent (only a LIVE run completes), so a retried
-  // `completed` report still settles a run its first attempt failed to.
-  if (body.outcome === "completed") {
-    const updated = await applyRunCapture({ run, status: "completed" });
-    return updated ? "completed" : "no-running-run";
-  }
-
-  // Stopped (budget or step limit): the run stays LIVE whatever happens
-  // below — even when the turn could not be recorded (row gone mid-call).
-  if (recorded?.duplicate) return "duplicate";
-  if (!recorded?.decision) return "left_running";
-  const { decision, state, unattended } = recorded;
+  const { run, session, body, decision, state, unattended, cause } = p;
   // Idempotency for the room posts: the IS's turn id, else (an older IS) the
   // stop count — which a retried report re-increments, so only `turnKey`
   // makes a retry recognisable.
@@ -859,13 +1392,20 @@ export async function settleRunTurnEnd(p: {
       agentType: body.agentType ?? "meta",
       continuation: decision.continuation,
       turnRef,
-      reason: body.reason,
+      cause,
       checkpoint: body.checkpoint,
     });
     if (continued) return "continued";
-    // No person to ask: a continuation that could not be dispatched leaves
-    // the run live for the stall flag and the reaper.
-    if (unattended) return "left_running";
+    // No person to ask: a continuation that could not be dispatched ends the
+    // run now, instead of leaving it live for the reaper.
+    if (unattended) {
+      return endFailedRun({
+        run,
+        session,
+        reason: "could_not_continue",
+        turnRef,
+      });
+    }
   }
   if (unattended) {
     return endUnattendedRun({
@@ -873,7 +1413,7 @@ export async function settleRunTurnEnd(p: {
       session,
       stops: state.stops,
       turnRef,
-      reason: body.reason,
+      cause,
     });
   }
 
@@ -883,15 +1423,306 @@ export async function settleRunTurnEnd(p: {
     askingAgentUserId: p.askingAgentUserId,
     stops: state.stops,
     turnRef,
-    reason: body.reason,
+    cause,
   });
   if (asked) {
     await resetAfterAsk(session.id, run.id);
     const parked = await applyRunCapture({ run, status: "waiting_on_you" });
     if (parked) return "waiting_on_you";
   }
-  if (run.status !== "running") {
-    await applyRunCapture({ run, status: "running" });
+  // Neither continued nor asked: nothing will move this run again, so it
+  // ends now instead of waiting for the reaper.
+  return endFailedRun({ run, session, reason: "could_not_continue", turnRef });
+}
+
+/** Where the turn before this one ended, else the run's start. */
+function previousTurnEnd(
+  run: RunRow,
+  turns: RunTurnRecord[] | undefined
+): Date | null {
+  const previous = turns && turns.length > 1 ? turns[turns.length - 2] : null;
+  return previous ? new Date(previous.at) : (run.startedAt ?? null);
+}
+
+/**
+ * Write or clear the ledger's pending judgment under the session row lock.
+ * Clearing answers whether THIS caller took it (`expect`): one settles it.
+ */
+async function writeEffectPending(
+  sessionId: string,
+  runId: string,
+  next: RunTurnsState["effectPending"] | null,
+  expect?: string
+): Promise<boolean> {
+  return db.transaction(async (tx) => {
+    const [locked] = await tx
+      .select({ metadata: focusSessions.metadata })
+      .from(focusSessions)
+      .where(eq(focusSessions.id, sessionId))
+      .for("update");
+    if (!locked) return false;
+    const state = readRunTurns(locked.metadata, runId);
+    if (expect !== undefined && state.effectPending?.turnKey !== expect) {
+      return false;
+    }
+    const { effectPending: _was, ...rest } = state;
+    await tx
+      .update(focusSessions)
+      .set({
+        metadata: mergeSessionMetadata({
+          [RUN_TURNS_META_KEY]: next ? { ...rest, effectPending: next } : rest,
+        }),
+      })
+      .where(eq(focusSessions.id, sessionId));
+    return true;
+  });
+}
+
+/** A completed turn's run, settled on the pod's judgment of what it did. */
+async function settleOnEffect(p: {
+  effect: Exclude<TurnEffect, "pending">;
+  run: RunRow;
+  session: SessionRoom;
+  askingAgentUserId: string | null;
+  unattended: boolean;
+  stops: number;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  if (p.effect === "no_effect") return settleNoEffect(p);
+  const updated = await applyRunCapture({ run: p.run, status: "completed" });
+  if (!updated) return "no-running-run";
+  await closeOneTurnRun(p.session.id);
+  return "completed";
+}
+
+/**
+ * A run turn's reply was saved (`run-turn-persisted.ts`, @synap/jobs): the
+ * turn whose judgment waited on it is judged now, once.
+ */
+export async function settleRunTurnPersisted(p: {
+  sessionId: string;
+  userMessageId: string;
+}): Promise<CompleteRunStatus | "nothing"> {
+  const session = await db.query.focusSessions.findFirst({
+    columns: {
+      id: true,
+      userId: true,
+      channelId: true,
+      metadata: true,
+      origin: true,
+    },
+    where: eq(focusSessions.id, p.sessionId),
+  });
+  if (!session) return "nothing";
+  const [run] = await db
+    .select()
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, p.sessionId),
+        liveRunStatusWhere(playbookRuns.status)
+      )
+    )
+    .orderBy(desc(playbookRuns.startedAt))
+    .limit(1);
+  if (!run) return "nothing";
+  const state = readRunTurns(session.metadata, run.id);
+  const pending = state.effectPending;
+  if (pending?.turnKey !== p.userMessageId) return "nothing";
+  if (!(await writeEffectPending(session.id, run.id, null, pending.turnKey))) {
+    return "nothing";
   }
-  return "left_running";
+  const effect = await judgeTurnEffect({
+    runId: run.id,
+    sessionId: session.id,
+    definitionSnapshot: run.definitionSnapshot,
+    turnKey: pending.turnKey,
+    since: previousTurnEnd(run, state.turns),
+  });
+  return settleOnEffect({
+    effect: effect === "pending" ? "no_effect" : effect,
+    run,
+    session,
+    askingAgentUserId: pending.askingAgentUserId,
+    unattended: hasNoPersonInTheLoop(session),
+    stops: state.stops,
+    turnRef: pending.turnKey,
+  });
+}
+
+/**
+ * A completed turn that did nothing never completes the run. With nobody in
+ * the loop it ends `failed` (`no_effect`, counted by its automation's
+ * breakers); a person in the loop is asked whether it keeps going, and the
+ * run waits on them.
+ */
+async function settleNoEffect(p: {
+  run: RunRow;
+  session: SessionRoom;
+  askingAgentUserId: string | null;
+  unattended: boolean;
+  stops: number;
+  turnRef: string;
+}): Promise<CompleteRunStatus> {
+  if (!p.unattended) {
+    const asked = await askToKeepGoing({
+      run: p.run,
+      session: p.session,
+      askingAgentUserId: p.askingAgentUserId,
+      stops: p.stops,
+      turnRef: p.turnRef,
+      cause: { kind: "no_effect" },
+    });
+    if (asked) {
+      await resetAfterAsk(p.session.id, p.run.id);
+      const parked = await applyRunCapture({
+        run: p.run,
+        status: "waiting_on_you",
+      });
+      if (parked) return "waiting_on_you";
+    }
+  }
+  return endFailedRun({
+    run: p.run,
+    session: p.session,
+    reason: "no_effect",
+    turnRef: p.turnRef,
+  });
+}
+
+/** Settle one IS turn's end on the session's live run. */
+export async function settleRunTurnEnd(p: {
+  run: RunRow;
+  session: SessionRoom;
+  body: CompleteRunBody;
+  /** The agent from the request's VERIFIED auth context, if any. */
+  askingAgentUserId: string | null;
+}): Promise<CompleteRunStatus> {
+  const { run, session } = p;
+  const body = await withStampedGuidance(run.id, p.body);
+  const recorded = await recordTurnEnd(session.id, run.id, body);
+
+  // Completing is idempotent (only a LIVE run completes), so a retried
+  // `completed` report still settles a run its first attempt failed to.
+  if (body.outcome === "completed") {
+    // A retried report of a turn whose end already parked the run on the
+    // person (a stage-end ask) never completes it under them.
+    if (recorded?.duplicate && run.status === "waiting_on_you") {
+      return "duplicate";
+    }
+    // A step held by another agent, or waiting on a child run or on tools,
+    // is not Synap AI's to finish: its turn simply ends and the run stays
+    // live (runner engine spec 7111934d §3.4). Without this, the first
+    // hand-off of a Synap AI run would end the whole run. Checked before the
+    // stage-end ask: a step someone else holds has not ended.
+    const { stageIsAway } = await import("../playbooks/stage-runner.js");
+    if (await stageIsAway(session.id)) {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
+    // A staged run whose stage declares an ask: the POD raises it and the
+    // run waits for the answer instead of completing (`stage-end-ask.ts`).
+    const staged = await settleStageEndAsk({
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      raised: recorded?.state.stageAsks ?? [],
+    });
+    if (staged === "waiting_on_you") return "waiting_on_you";
+    if (staged === "left_running") {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
+    // A staged run with stages left is not done: its turn's end is a STOP
+    // (`stagesAtTurnEnd`), never the run's completion.
+    const stand = await stagesAtTurnEnd(run, session.id);
+    if (stand.kind === "waits") {
+      if (run.status !== "running") {
+        await applyRunCapture({ run, status: "running" });
+      }
+      return "left_running";
+    }
+    if (stand.kind === "stages_left") {
+      const stop = await recordStagesLeftStop(session.id, run.id, body.turnKey);
+      if (!stop) return "left_running";
+      if (stop.duplicate) return "duplicate";
+      return settleStop({
+        run,
+        session,
+        body,
+        askingAgentUserId: p.askingAgentUserId,
+        decision: stop.decision,
+        state: stop.state,
+        unattended: stop.unattended,
+        cause: { kind: "stages_left", stages: stand.stages },
+      });
+    }
+    const judge = () =>
+      judgeTurnEffect({
+        runId: run.id,
+        sessionId: session.id,
+        definitionSnapshot: run.definitionSnapshot,
+        turnKey: body.turnKey,
+        since: previousTurnEnd(run, recorded?.state.turns),
+      });
+    let effect = await judge();
+    if (effect === "pending" && body.turnKey) {
+      // Its reply lands after this report: judged when it does. Judged again
+      // here once marked, in case it landed meanwhile; one of the two takes it.
+      await writeEffectPending(session.id, run.id, {
+        turnKey: body.turnKey,
+        askingAgentUserId: p.askingAgentUserId,
+      });
+      effect = await judge();
+      if (
+        effect === "pending" ||
+        !(await writeEffectPending(session.id, run.id, null, body.turnKey))
+      ) {
+        return "left_running";
+      }
+    }
+    return settleOnEffect({
+      effect: effect === "pending" ? "no_effect" : effect,
+      run,
+      session,
+      askingAgentUserId: p.askingAgentUserId,
+      unattended: recorded?.unattended ?? false,
+      stops: recorded?.state.stops ?? 0,
+      turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    });
+  }
+
+  // Failing is idempotent like completing (only a LIVE run fails, and the
+  // notice is keyed by the turn), so a retried report settles what its first
+  // attempt could not.
+  if (body.outcome === "failed") {
+    return endFailedRun({
+      run,
+      session,
+      reason: isRunTurnFailureReason(body.reason) ? body.reason : "turn_error",
+      turnRef: body.turnKey ?? String(recorded?.state.turns.length ?? 0),
+    });
+  }
+
+  // Stopped (budget or step limit): the run stays LIVE whatever happens
+  // below — even when the turn could not be recorded (row gone mid-call).
+  if (recorded?.duplicate) return "duplicate";
+  if (!recorded?.decision) return "left_running";
+  return settleStop({
+    run,
+    session,
+    body,
+    askingAgentUserId: p.askingAgentUserId,
+    decision: recorded.decision,
+    state: recorded.state,
+    unattended: recorded.unattended,
+    cause: {
+      kind: "limit",
+      reason: isRunStopReason(body.reason) ? body.reason : undefined,
+    },
+  });
 }

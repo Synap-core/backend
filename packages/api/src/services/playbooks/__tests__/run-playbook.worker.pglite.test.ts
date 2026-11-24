@@ -33,7 +33,22 @@ const h = vi.hoisted(() => ({
   sends: 0,
   inFlight: [] as string[],
   subjectProfile: { profileSlug: "deal" } as Record<string, unknown>,
+  /** The playbook's executor; `external-agent` = it runs only on an agent. */
+  executor: "is-agent",
+  /** The route finds no agent to take a run. */
+  nobodyCanTake: false,
 }));
+
+vi.mock("../../agent-dispatch/route.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    route: (...args: unknown[]) =>
+      h.nobodyCanTake
+        ? Promise.resolve({ kind: "choose", candidates: [] })
+        : (actual.route as (...a: unknown[]) => unknown)(...args),
+  };
+});
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -74,6 +89,7 @@ vi.mock("../playbook-lifecycle.js", async (importOriginal) => {
       inputStrategy: null,
       goalTemplate: "Review them",
       subjectProfile: h.subjectProfile,
+      executor: h.executor,
     })),
     instantiateSession: vi.fn(
       async (i: { subjectId?: string | null; metadata?: unknown }) => {
@@ -110,12 +126,13 @@ import {
   links,
   workspaces,
   workspaceMembers,
+  apiKeys,
   projectMembers,
   podMembers,
   governanceCeilings,
   users,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   focusSessions,
   profileProperties,
   propertyDefs,
@@ -163,11 +180,12 @@ beforeAll(async () => {
     links,
     workspaces,
     workspaceMembers,
+    apiKeys,
     projectMembers,
     podMembers,
     users,
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
     focusSessions,
     profileProperties,
     propertyDefs,
@@ -207,6 +225,8 @@ beforeEach(async () => {
   h.sends = 0;
   h.inFlight = [];
   h.subjectProfile = { profileSlug: "deal" };
+  h.executor = "is-agent";
+  h.nobodyCanTake = false;
   await h.client!.exec(
     "delete from profile_properties; delete from property_defs;"
   );
@@ -481,5 +501,93 @@ describe("per_thing stale check on a kind with no declared lifecycle", () => {
     const thing = await deal(null, {});
     const r = await fire(perThing, { subjectId: thing });
     expect(r).not.toEqual({ skipped: "stale_transition" });
+  });
+});
+
+/**
+ * A per_thing SCHEDULE tick (no subject on the fire): one run per thing of
+ * its set, each with that thing as its subject — counted as session rows.
+ */
+describe("per_thing schedule — one run per thing of the set", () => {
+  const tick = (o: Record<string, unknown> = {}) =>
+    fire(worker({ size: "per_thing", key: "schedule:0 9 * * 1", ...o }));
+  const subjects = async () =>
+    (await sessions()).map((s) => s.subject_entity_id).sort();
+
+  it("a status list on the lifecycle: each thing in any of them gets its own run", async () => {
+    await declareLifecycle("stage");
+    const a = await deal("review");
+    const b = await deal("draft");
+    await deal("won");
+    await tick({ status: ["review", "draft"] });
+    expect(await subjects()).toEqual([a, b].sort());
+  });
+
+  it("no lifecycle: the playbook's statusProperty and `only` are read off each thing", async () => {
+    h.subjectProfile = { profileSlug: "deal", statusProperty: "stage" };
+    const kept = await deal(null, { stage: "active", billing: "monthly" });
+    await deal(null, { stage: "active", billing: "annual" });
+    await deal(null, { stage: "paused", billing: "monthly" });
+    await tick({
+      status: "active",
+      only: { property: "billing", in: ["monthly"] },
+    });
+    expect(await subjects()).toEqual([kept]);
+  });
+
+  it("the playbook's stored filter selects which things run", async () => {
+    await declareLifecycle("stage");
+    h.subjectProfile = {
+      profileSlug: "deal",
+      filter: '{"properties.billing":"monthly"}',
+    };
+    const kept = await deal("review", { billing: "monthly" });
+    await deal("review", { billing: "annual" });
+    await tick({ status: "review" });
+    expect(await subjects()).toEqual([kept]);
+  });
+
+  it("a tick runs up to 100 things, not a batch's 50", async () => {
+    await declareLifecycle("stage");
+    for (let i = 0; i < 60; i++) await deal("review");
+    await tick({ status: "review" });
+    expect(await subjects()).toHaveLength(60);
+  });
+
+  it("an agent-only playbook no agent can take: refused once for the tick, no run per thing", async () => {
+    await declareLifecycle("stage");
+    await deal("review");
+    await deal("review");
+    h.executor = "external-agent";
+    h.nobodyCanTake = true;
+    const out = await tick({ status: "review" });
+    expect(out).toEqual({ error: expect.stringContaining("Nothing filed") });
+    expect(await sessions()).toHaveLength(0);
+  });
+
+  it("nothing in the set → no-subject, no session", async () => {
+    await declareLifecycle("stage");
+    await deal("won");
+    expect(await tick({ status: "review" })).toEqual({ skipped: "no-subject" });
+    expect(await sessions()).toHaveLength(0);
+  });
+});
+
+/**
+ * ONE set for both sizes: a per_moment batch reads the playbook's
+ * statusProperty and stored filter exactly as a per_thing tick does.
+ */
+describe("per_moment — the same set as a per_thing tick", () => {
+  it("statusProperty and the stored filter narrow the batch's targets", async () => {
+    h.subjectProfile = {
+      profileSlug: "deal",
+      statusProperty: "stage",
+      filter: '{"properties.billing":"monthly"}',
+    };
+    const kept = await deal(null, { stage: "review", billing: "monthly" });
+    await deal(null, { stage: "review", billing: "annual" });
+    await deal(null, { stage: "draft", billing: "monthly" });
+    expect(await fire(worker())).toEqual({ error: BORN });
+    expect((await targetEdges()).map((e) => e.to_id)).toEqual([kept]);
   });
 });

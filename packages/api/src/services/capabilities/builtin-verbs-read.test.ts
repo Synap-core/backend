@@ -117,6 +117,28 @@ vi.mock("../../utils/resolve-or-create-channel.js", () => ({
 const patch = vi.hoisted(() => ({
   apply: vi.fn(async (input: unknown) => ({ status: "applied", input })),
 }));
+// The session side of a document question: an in-memory session, so the REAL
+// materializer rules run behind the verb (see the `document.update` questions).
+const askSession = vi.hoisted(() => ({
+  filed: [] as Array<{ sessionId: string; slots: unknown[] }>,
+  stored: [] as unknown[],
+}));
+vi.mock("../document-patch/ask-slots.js", () => ({
+  readAskSession: async () => ({
+    status: "active",
+    expectedOutputs: askSession.stored as never[],
+  }),
+  buildAskSlot: async (spec: Record<string, unknown>) => ({
+    kind: "ask",
+    owner: "human",
+    ...spec,
+  }),
+  fileAskSlots: async (a: { sessionId: string; slots: unknown[] }) => {
+    askSession.filed.push({ sessionId: a.sessionId, slots: a.slots });
+    askSession.stored.push(...a.slots);
+    return { status: "updated" };
+  },
+}));
 vi.mock("../document-patch/apply-document-patch.js", () => ({
   applyDocumentPatch: patch.apply,
   loadPatchDocument: async () => ({ contentRevision: 7 }),
@@ -170,6 +192,11 @@ describe("W6 read/resolve verbs — registry", () => {
       // connector.health_check mutates NO graph data — it only emits deduped
       // operator reconnect notices — so it auto-runs unattended in a cron feed.
       "connector.health_check",
+      // design.catalog / design.read (the design door, plan 0fc746f4 §2.6):
+      // the installed catalog snapshot, and one design through the caller's
+      // entity read floor. Write nothing; design.apply stays gated.
+      "design.catalog",
+      "design.read",
       // Four verbs joined while this file failed to COLLECT (a stale total
       // mock, 2026-09-25 → 2026-10-21), so this pin never saw them. Each
       // carries its written rationale beside READ_ONLY_BUILTIN_VERBS in
@@ -203,11 +230,19 @@ describe("W6 read/resolve verbs — registry", () => {
       "governance.recommend_tighten",
       "governance.recommend_tighten_posture",
       "graph.relations",
+      // http.get_json (W3-6) GETs a public JSON API on a host the pod allows
+      // and returns the parsed JSON; it writes nothing. Adding a host
+      // (http.allow_host) is a write and stays gated.
+      "http.get_json",
       // lens.page — the lens page read (signals.list under the caller's floor),
       // a refresher's grounding read; writes nothing, so it must auto-run in
       // the refresher flow.
       "lens.page",
       "market.search",
+      // measure.check — one cell-bridge read op under the caller's floor,
+      // compared with a criterion's bar; writes nothing. The evaluator runs
+      // it with suppressProposal, so it must auto-run.
+      "measure.check",
       // message.interpret files a human-governed PENDING proposal and never a
       // direct graph write (no agentUserId is threaded, so submitCaptureGraph
       // always proposes). Governance lives on the proposal it emits, not on
@@ -217,6 +252,13 @@ describe("W6 read/resolve verbs — registry", () => {
       // accounts (labels and ids), the account source of send_message's input
       // map. Reads only; the send itself (messaging.send) stays gated.
       "messaging.accounts",
+      // pdf.info (PDF tools W1) reads one PDF the caller may read and returns
+      // the pod's own engine's report; it creates nothing. The other pdf.*
+      // verbs make a new file and stay gated.
+      "pdf.info",
+      // snippet.render reads a snippet (and a subject's fields) through the
+      // caller's floor and returns text; it writes nothing.
+      "snippet.render",
       // web.read reads a public page (or a read-only reader verb through its
       // own gate); it mutates nothing in the pod.
       "web.read",
@@ -337,6 +379,8 @@ describe("document.update — through the patch door, never the editor save", ()
       ],
       allowRemovingEmbeds: undefined,
       provenanceSessionId: "run-1",
+      // `sessionId` here may be body-named: provenance, never a verified session.
+      ambientSessionId: null,
     });
   });
 
@@ -376,6 +420,65 @@ describe("document.update — through the patch door, never the editor save", ()
       provenanceSessionId: "run-1",
     });
     expect(input).not.toHaveProperty("systemAuthor");
+  });
+
+  describe("a question written through the verb", () => {
+    const RUN = "6f1c2b0e-0a52-4c4e-9d33-2d6c0f6d9a11";
+    const DEFINITION = [
+      ":::synap-ask",
+      "```json",
+      JSON.stringify({
+        key: "ship-it",
+        label: "Ship it?",
+        ask: { mode: "confirm" },
+      }),
+      "```",
+      "",
+      "Ship it?",
+      ":::",
+    ].join("\n");
+    /** The patch door's materialization, with the rules the real door applies. */
+    beforeEach(() => {
+      askSession.filed = [];
+      askSession.stored = [];
+      patch.apply.mockImplementationOnce((async (input: {
+        ops: never;
+        userId: string;
+        agentUserId: string;
+        ambientSessionId?: string | null;
+        provenanceSessionId?: string | null;
+      }) => {
+        const { materializeAskDefinitionsInOps } =
+          await import("../document-patch/materialize-asks.js");
+        return materializeAskDefinitionsInOps(input.ops, {
+          userId: input.userId,
+          agentUserId: input.agentUserId,
+          sessionId: input.ambientSessionId ?? null,
+          namedSessionId: input.provenanceSessionId ?? null,
+        });
+      }) as never);
+    });
+    const run = (ctx: Record<string, unknown>) =>
+      BUILTIN_VERBS["document.update"]!(
+        { documentId: DOC, ops: [{ op: "append", body: DEFINITION }] },
+        { userId: "u1", workspaceId: null, ...ctx } as never
+      );
+
+    it("an agent run's definition is filed on the run's OWN session", async () => {
+      await run({
+        agentUserId: "agent-1",
+        automationRun: { sessionId: RUN, agentUserId: "agent-1" },
+      });
+      expect(askSession.filed).toHaveLength(1);
+      expect(askSession.filed[0]!.sessionId).toBe(RUN);
+    });
+
+    it("with no run session (a REST call naming a sessionId) it is refused, nothing filed", async () => {
+      await expect(
+        run({ agentUserId: "agent-1", sessionId: RUN })
+      ).rejects.toThrow(/synap_start_session/);
+      expect(askSession.filed).toEqual([]);
+    });
   });
 
   it("a calling agent's own identity and session win over the run's", async () => {

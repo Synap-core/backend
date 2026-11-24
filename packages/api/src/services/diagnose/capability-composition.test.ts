@@ -72,6 +72,9 @@ vi.mock("@synap/database", async (importOriginal) => {
             tbl = t;
             return chain;
           },
+          // The add-on parents read joins `links` to `capabilities`; the rows
+          // stay the FROM table's (`links`, none registered here).
+          innerJoin: () => chain,
           // `where()` is terminal for the builder's reads AND chains into
           // `.orderBy()` for the list door — make it a thenable that also
           // carries orderBy (returning the same thenable), so both await paths

@@ -142,6 +142,20 @@ describe("projectTriage — the derivation", () => {
     expect(accepted.acceptedBy).toBe("user-1");
   });
 
+  it("says why a pending draft is held although its person allowed the playbook, and only then", () => {
+    const held = (heldBecause: unknown, acceptedAt?: string) =>
+      projectTriage({
+        ...AGENT_SESSION,
+        metadata: {
+          triage: { heldBecause, ...(acceptedAt ? { acceptedAt } : {}) },
+        },
+      }).heldBecause;
+    expect(held("version_changed")).toBe("version_changed");
+    expect(held("declares_tools", "2026-11-10T10:00:00Z")).toBeNull();
+    expect(held("not_a_reason")).toBeNull();
+    expect(projectTriage(AGENT_SESSION).heldBecause).toBeNull();
+  });
+
   it("is NOT pending for a closed or cancelled session", () => {
     expect(projectTriage({ ...AGENT_SESSION, status: "closed" }).pending).toBe(
       false

@@ -52,7 +52,7 @@ const withCheck = (name: string, conclusion: string | null) =>
   green().map((c: Check) => (c.name === name ? check(name, conclusion) : c));
 
 describe("release-gate-wait: the rule", () => {
-  it("the required checks are the ruleset's, all four", () => {
+  it("the required checks are the ruleset's, all five", () => {
     const sh = readFileSync(
       join(REPO, "scripts/apply-main-protection.sh"),
       "utf8"
@@ -62,7 +62,7 @@ describe("release-gate-wait: the rule", () => {
         /"([^"]+)"/g
       ),
     ].map((m) => m[1]);
-    expect(required.length).toBe(4);
+    expect(required.length).toBe(5);
     expect([...REQUIRED_CHECKS].sort()).toEqual([...required].sort());
   });
 });
@@ -74,20 +74,22 @@ describe("release-gate-wait: the verdict for one read", () => {
     expect(d.reason).toContain("No post-merge CI run");
   });
 
-  it("all four required checks success on one push run: passes", () => {
+  it("all five required checks success on one push run: passes", () => {
     expect(decide({ pushRuns: [run(green())] }).verdict).toBe("pass");
   });
 
   // Until 2026-10-29 a green Release gate alone passed. Each row rules that
-  // rule out: the gate is green and one of the other three is not.
-  it.each(["Full suite", "API e2e", "Reference docs are current"])(
-    "a green Release gate with a red %s is never a pass",
-    (name) => {
-      const d = decide({ pushRuns: [run(withCheck(name, "failure"))] });
-      expect(d.verdict).toBe("fail");
-      expect(d.reason).toContain(`${name}: failure`);
-    }
-  );
+  // rule out: the gate is green and one of the others is not.
+  it.each([
+    "Full suite",
+    "API e2e",
+    "Reference docs are current",
+    "Dependent repos typecheck",
+  ])("a green Release gate with a red %s is never a pass", (name) => {
+    const d = decide({ pushRuns: [run(withCheck(name, "failure"))] });
+    expect(d.verdict).toBe("fail");
+    expect(d.reason).toContain(`${name}: failure`);
+  });
 
   it("any ending but success is not a pass (skipped, neutral, cancelled...)", () => {
     for (const c of [
@@ -144,6 +146,7 @@ describe("release-gate-wait: the verdict for one read", () => {
       "Full suite: failure",
       "API e2e: success",
       "Reference docs are current: success",
+      "Dependent repos typecheck: success",
     ]);
   });
 });

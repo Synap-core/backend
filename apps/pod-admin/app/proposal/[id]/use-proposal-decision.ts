@@ -27,6 +27,11 @@ export interface ApproveChoice {
   identityResolutionByRef?: Record<string, DuplicateResolution>;
   /** A graph's ONE answer for every twin not chosen one by one. */
   identityResolutionForTwins?: "keep_existing" | "separate";
+  /**
+   * The person's tick on an AI-made verb's own request: the verb then runs
+   * without review (`proposals.approve` `allowWithoutReview`).
+   */
+  allowWithoutReview?: boolean;
 }
 
 /**
@@ -62,6 +67,7 @@ export function approveInput(
     ...(choice.identityResolutionForTwins
       ? { identityResolutionForTwins: choice.identityResolutionForTwins }
       : {}),
+    ...(choice.allowWithoutReview ? { allowWithoutReview: true } : {}),
   };
 }
 
@@ -118,7 +124,34 @@ export function useProposalDecision(
       showDecisionReceipt(decisionReceipt(decisionFailure("reject", e))),
   });
 
+  // "Approve with your changes": ONE press, two calls in order. The change
+  // goes onto the revision chain (`proposals.revise`, against the revision
+  // this page rendered, so an edit made on top of an unseen one is refused),
+  // then the approve names the revision that edit made (+1): approve runs
+  // exactly what the person saw. A refused change stops here: nothing is
+  // approved, the error is said.
+  const reviseMutation = trpc.proposals.revise.useMutation({
+    onError: (e) =>
+      showDecisionReceipt(decisionReceipt(decisionFailure("approve", e))),
+  });
+  const approveWithChanges = (
+    parameterEdits: Record<string, string>,
+    choice: ApproveChoice = {}
+  ) => {
+    if (expectedRevision === undefined) return;
+    reviseMutation.mutate(
+      { proposalId, data: { parameterEdits }, expectedRevision },
+      {
+        onSuccess: () =>
+          approveMutation.mutate(
+            approveInput(proposalId, choice, expectedRevision + 1)
+          ),
+      }
+    );
+  };
+
   return {
+    approveWithChanges,
     approve: (choice?: ApproveChoice) =>
       approveMutation.mutate(
         approveInput(proposalId, choice, expectedRevision)
@@ -128,8 +161,11 @@ export function useProposalDecision(
         proposalId,
         reason: reason?.trim() || undefined,
       }),
-    approving: approveMutation.isPending,
+    approving: approveMutation.isPending || reviseMutation.isPending,
     rejecting: rejectMutation.isPending,
-    busy: approveMutation.isPending || rejectMutation.isPending,
+    busy:
+      approveMutation.isPending ||
+      rejectMutation.isPending ||
+      reviseMutation.isPending,
   };
 }

@@ -75,6 +75,8 @@ export class WorkspaceMemberRepository {
   }
 
   async remove(input: RemoveMemberInput, actingUserId: string): Promise<void> {
+    // Agents hold no seat: an agent acting for this person loses the space
+    // with the person's membership, because it acts through it.
     await this.db
       .delete(workspaceMembers)
       .where(
@@ -97,10 +99,7 @@ export class WorkspaceMemberRepository {
       userId: actingUserId,
       source: "api",
       timestamp: new Date(),
-      data: {
-        workspaceId: input.workspaceId,
-        userId: input.userId,
-      },
+      data: { workspaceId: input.workspaceId, userId: input.userId },
       metadata: {},
     });
   }

@@ -1,76 +1,55 @@
 "use client";
 
 /**
- * Rules — what runs on its own, and whether it worked.
+ * Rules — the guidelines (always / never) pushed into every piece of work in
+ * their scope; the agent cannot skip one (founder, 19 Nov 2026, document
+ * b387ca45 §9). A skill is know-how pulled when needed and stays under Tools;
+ * what runs by itself is an Automation (`/automations`, where this route's
+ * old page now lives); who may act without asking is Approvals.
  *
- * Rows are `automations.listPage` (user-floored, D1a) followed to its end so
- * the filter counts are true over every rule, joined on `flowId` with the
- * `runs.groups` automation rows for health (latest run, failures this week).
- * The first page draws at once; the counts say "…" until both reads are
- * drained, and a pill waits for its health rather than guessing. Each row is
- * identity + one line + one act (`rule-rows.ts` decides which), drawn by the
- * shared `ResponsiveTable`; the row opens `/rules/[id]`.
- * Authoring stays in the desktop app.
- *
- * Receivers: `?filter=` (active · failing · never-ran · paused · drafts) and
- * `?focus=<automationId>` — Home's "rule never ran" links send both.
+ * Rows: every skill the reader can see (`useAllSkills`, the read Tools uses)
+ * that `isRuleSkill` calls a rule, with where it is pushed. A rule that came
+ * with an automation (the rule loop, `skills.listRules`' `activates` edge)
+ * links to it as its own object. Each row opens the rule's own page
+ * (`/open/skill/<id>`, which names it a Rule). Receivers: `?where=` and
+ * `?focus=<skill id>`.
  */
 
-import { addToast, Button } from "@heroui/react";
-import type { ReactNode } from "react";
-import { Zap } from "lucide-react";
+import { Button } from "@heroui/react";
+import { ListChecks } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
-import { ruleWhenWords } from "@synap-core/types/automations";
-import { resolveActionLabel } from "@synap-core/types/vocabulary";
-import { navHref } from "../../../lib/console-nav";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo } from "react";
+import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../lib/trpc";
-import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
-import { formatRelative } from "../../../lib/format";
-import { filterBySearch } from "../components/list-search";
-import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
-import { useT } from "../../../lib/i18n/locale-provider";
-import { en, fr } from "../components/copy";
+import { navHref } from "../../../lib/console-nav";
 import { openIn } from "../../../lib/open-in";
-import { ExitLink } from "../../../lib/exit-link";
-import { ConfirmModal } from "../components/confirm-modal";
-import { StatusPill, type StatusKind } from "../components/status-pill";
-import { PageFallback, PageHeader, PageShell } from "../components/page-header";
+import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
+import { useT } from "../../../lib/i18n/locale-provider";
 import {
-  ResourceRowEmpty,
-  ResourceRowError,
-  ResourceRowSkeleton,
-} from "../components/resource-row";
-import { ResponsiveTable } from "../components/responsive-table";
-import { SectionCard } from "../components/section-card";
+  FilterChip,
+  ListCard,
+  ListToolbar,
+  PageHeader,
+} from "../components/list-page";
+import { PageFallback, PageShell } from "../components/page-header";
+import { ListSearch, useDebouncedQuery } from "../components/list-search-box";
+import { ResourceRow } from "../components/resource-row";
 import { useFocusRow } from "../components/use-focus-row";
-import { FilterChip, FilterRow } from "../components/filter-chip";
-import { statusOption } from "../components/filter-options";
+import { approvedStatus } from "../tools/_lib/tool-status";
+import { useAllSkills } from "../tools/_lib/use-all-skills";
+import { en, fr } from "./_lib/copy";
 import {
-  neverRanCallout,
-  RULE_FILTERS,
-  ruleCounts,
-  ruleFilterOf,
-  ruleMatches,
-  rulePill,
-  ruleRowAction,
-  runResultMessage,
-  runsPhrase,
-  type RuleFacts,
-  type RuleHealth,
-  type RuleRowAction,
-} from "./_lib/rule-rows";
-import { useDrainPages } from "../../../lib/use-drain-pages";
+  automationsByRule,
+  ruleMatchesSearch,
+  ruleScopeKey,
+  rulesOf,
+  type RuleRow,
+  type RuleSourceLike,
+} from "./_lib/rules-model";
 
 const CATALOGS = { en, fr };
-
-const TITLE = "Automations";
-const DESCRIPTION = "What runs on its own, and whether it worked.";
-/** 20 pages × 100 rows: past this the counts say they are partial. */
-const MAX_PAGES = 20;
-/** Rows drawn before "Show N more". */
-const FIRST_ROWS = 25;
+const TITLE = resolveObjectNounPlural("rule");
 
 export default function RulesPage() {
   return (
@@ -80,466 +59,196 @@ export default function RulesPage() {
   );
 }
 
-type PendingAct = {
-  kind: NonNullable<RuleRowAction>;
-  id: string;
-  name: string;
-};
-
 function RulesInner() {
-  const searchParams = useSearchParams();
-  const filter = ruleFilterOf(searchParams.get("filter"));
   const t = useT(CATALOGS);
+  const router = useRouter();
+  const params = useSearchParams();
+  const where = params.get("where");
   const search = useDebouncedQuery();
-  const utils = trpc.useUtils();
 
-  const rules = trpc.automations.listPage.useInfiniteQuery(
+  const skills = useAllSkills();
+  // Which rules came with an automation: the `activates` edge, read by the pod.
+  const lineage = trpc.skills.listRules.useQuery(
     { limit: 100 },
-    {
-      getNextPageParam: (last) => last.nextCursor ?? undefined,
-      staleTime: 30_000,
-    }
+    { staleTime: 30_000, retry: false }
   );
-  const groups = trpc.runs.groups.useInfiniteQuery(
-    { flowType: "automation", limit: 100 },
-    {
-      getNextPageParam: (last) => last.nextCursor ?? undefined,
-      staleTime: 30_000,
-    }
-  );
-  // Names for space ids; a failed read leaves the column saying "A space".
-  const spaces = trpc.workspaces.adminListAll.useQuery(undefined, {
+  const spaces = trpc.workspaces.list.useQuery(undefined, {
     staleTime: 60_000,
+    retry: false,
   });
-  const ruleDrain = useDrainPages(rules, MAX_PAGES);
-  const groupDrain = useDrainPages(groups, MAX_PAGES);
 
   useEffect(() => {
-    if (rules.isError) redirectToLoginIfUnauthorized(rules.error);
-  }, [rules.isError, rules.error]);
-  const isAuthRedirecting = rules.error?.data?.code === "UNAUTHORIZED";
+    if (skills.error) redirectToLoginIfUnauthorized(skills.error);
+  }, [skills.error]);
 
-  const all = useMemo(
-    () =>
-      (rules.data?.pages ?? [])
-        .flatMap((p) => p.automations)
-        .filter((r) => r.status !== "archived"),
-    [rules.data]
+  const rows = useMemo(
+    () => rulesOf((skills.skills ?? []) as readonly RuleSourceLike[]),
+    [skills.skills]
   );
-  const healthById = useMemo(() => {
-    const map = new Map<string, RuleHealth>();
-    for (const g of (groups.data?.pages ?? []).flatMap((p) => p.groups)) {
-      map.set(g.flowId, g);
-    }
-    return map;
-  }, [groups.data]);
-  const healthOf = (id: string) => healthById.get(id);
+  const automations = useMemo(
+    () => automationsByRule(lineage.data?.rules ?? []),
+    [lineage.data]
+  );
   const spaceName = useMemo(() => {
     const byId = new Map((spaces.data ?? []).map((s) => [s.id, s.name]));
-    return (id: string | null) =>
-      id ? (byId.get(id) ?? "A space") : "All spaces";
+    return (id: string) => byId.get(id);
   }, [spaces.data]);
+  const whereLabel = (key: string) =>
+    key === "pod"
+      ? t("where.pod")
+      : key === "user"
+        ? t("where.user")
+        : (spaceName(key) ?? t("where.space"));
 
-  const loading = rules.isLoading || isAuthRedirecting;
-  // Counts and pills wait for health too: "Failing" read before the groups
-  // land would undercount and then jump.
-  const healthReady = !groups.isLoading && !groupDrain.draining;
-  const counting = ruleDrain.draining || !healthReady;
-  const counts = ruleCounts(all, healthOf);
-  const visible = filterBySearch(
-    all.filter((r) => ruleMatches(filter, r, healthOf(r.id))),
-    search.query,
-    (r) => [r.name, spaceName(r.workspaceId)]
+  // The chip's values are the scopes the rules are in, never a fixed list.
+  const whereCounts = new Map<string, number>();
+  for (const r of rows) {
+    const key = ruleScopeKey(r);
+    whereCounts.set(key, (whereCounts.get(key) ?? 0) + 1);
+  }
+  const whereOptions = [...whereCounts].map(([id, count]) => ({
+    id,
+    label: whereLabel(id),
+    count,
+  }));
+
+  const shown = rows.filter(
+    (r) =>
+      (!where || ruleScopeKey(r) === where) &&
+      ruleMatchesSearch(r, search.query)
   );
-  const focusId = useFocusRow({ ready: !loading });
-  const [expanded, setExpanded] = useState(false);
-  // A focused row past the fold must still be drawn for the highlight to land.
-  const focusIndex = focusId ? visible.findIndex((r) => r.id === focusId) : -1;
-  const shown =
-    expanded || focusIndex >= FIRST_ROWS
-      ? visible
-      : visible.slice(0, FIRST_ROWS);
-  const callout = filter === "never-ran" ? null : neverRanCallout(all);
-
-  const [pending, setPending] = useState<PendingAct | null>(null);
-  const [actError, setActError] = useState<string | null>(null);
-  const refresh = async () => {
-    await Promise.all([
-      utils.automations.invalidate(),
-      utils.runs.groups.invalidate(),
-    ]);
-  };
-  const pause = trpc.automations.pause.useMutation();
-  const trigger = trpc.automations.trigger.useMutation();
-  const activate = trpc.automations.activate.useMutation();
-
-  async function confirmPending() {
-    if (!pending) return;
-    setActError(null);
-    try {
-      if (pending.kind === "pause") {
-        await pause.mutateAsync({ id: pending.id });
-        addToast({ title: `Paused “${pending.name}”`, color: "default" });
-      } else if (pending.kind === "turn_on") {
-        const result = await activate.mutateAsync({ id: pending.id });
-        addToast({
-          // An agent's key proposes instead of switching it on: said so.
-          title:
-            result.status === "proposed"
-              ? `Sent “${pending.name}” for review`
-              : `${resolveActionLabel("turn_on", "past")} “${pending.name}”`,
-          color: "default",
-        });
-      } else {
-        const result = await trigger.mutateAsync({ id: pending.id });
-        addToast({
-          title: runResultMessage(pending.name, result),
-          color: "default",
-        });
-      }
-      setPending(null);
-      await refresh();
-    } catch (err) {
-      // The pod's refusal, as it said it — writes to a rule pass only for its
-      // creator or a space admin, and guessing that client-side would hide a
-      // button the owner may in fact be allowed to press.
-      setActError(err instanceof Error ? err.message : "That didn’t work.");
-    }
-  }
-
-  const appExit = openIn({ kind: "app", appId: "rules" });
-
-  /** One rule's cells, shared by the table and the stacked row. */
-  function rowOf(rule: RuleRow): RuleRowView {
-    const health = healthOf(rule.id);
-    const act = ruleRowAction(rule, health);
-    return {
-      when: ruleWhenWords(
-        rule.triggerType,
-        rule.triggerConfig as Record<string, unknown> | null
-      ).text,
-      space: spaceName(rule.workspaceId),
-      lastRun: formatRelative(rule.lastRunAt, { empty: "never" }),
-      pill: healthReady ? rulePill(rule, health) : undefined,
-      action: act ? (
-        <RuleActButton
-          act={act}
-          onPress={() => {
-            setActError(null);
-            setPending({ kind: act, id: rule.id, name: rule.name });
-          }}
-        />
-      ) : undefined,
-    };
-  }
-
-  const views = new Map(shown.map((rule) => [rule.id, rowOf(rule)]));
-  const view = (rule: RuleRow) => views.get(rule.id)!;
+  useFocusRow({ ready: !skills.isLoading });
 
   return (
     <PageShell>
-      <PageHeader
-        title={TITLE}
-        description={DESCRIPTION}
-        actions={<ExitLink exit={appExit} label="Create in app" />}
-      />
+      <PageHeader title={TITLE} description={t("description")} />
 
-      <FilterRow
-        filters={
-          <FilterChip
-            label="Show"
-            allLabel={null}
-            param="filter"
-            defaultValue="active"
-            value={filter}
-            options={RULE_FILTERS.map((f) =>
-              statusOption(f.key, {
-                label: f.label,
-                count:
-                  loading || rules.isError
-                    ? null
-                    : counting
-                      ? "…"
-                      : counts[f.key],
-              })
-            )}
-          />
-        }
+      <ListToolbar
         search={
           <ListSearch
             value={search.input}
             onChange={search.setInput}
-            label={t("listSearch.rules")}
+            label={t("search")}
             className=""
+          />
+        }
+        filters={
+          <FilterChip
+            label={t("filter.where")}
+            allLabel={t("filter.anywhere")}
+            param="where"
+            value={where}
+            options={whereOptions}
           />
         }
       />
 
-      {callout && !loading && !ruleDrain.draining && (
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg bg-foreground/[0.04] px-3 py-2.5 ring-1 ring-inset ring-foreground/10">
-          <p className="min-w-0 flex-1 text-[12.5px] leading-relaxed text-foreground/80">
-            {callout}
-          </p>
-          <Button
-            as={Link}
-            href={navHref("rules", { filter: "never-ran" })}
-            size="sm"
-            variant="flat"
-            radius="md"
-          >
-            Review never-ran rules
-          </Button>
-        </div>
-      )}
-
-      <SectionCard
-        title={RULE_FILTERS.find((f) => f.key === filter)!.label}
-        hint={
-          loading || rules.isError
-            ? undefined
-            : counting
-              ? "Counting…"
-              : `${counts.active} active · ${counts.failing} failing${
-                  ruleDrain.capped
-                    ? " · counts cover the first 2,000 rules"
-                    : ""
-                }`
+      <ListCard
+        title={t("list.title")}
+        count={skills.isLoading || skills.isError ? null : shown.length}
+        loading={skills.isLoading}
+        isError={skills.isError}
+        onRetry={skills.refetch}
+        errorMessage={t("list.failed")}
+        rowCount={shown.length}
+        emptyMessage={
+          rows.length === 0
+            ? t("list.empty")
+            : search.query
+              ? t("list.none", { query: search.query })
+              : t("list.noneHere")
         }
-      >
-        {loading || (visible.length === 0 && counting) ? (
-          <ResourceRowSkeleton count={4} />
-        ) : rules.isError ? (
-          <ResourceRowError
-            message="Couldn't load rules."
-            onRetry={() => void rules.refetch()}
-          />
-        ) : visible.length === 0 ? (
+        skeletonRows={4}
+        footer={
           <>
-            <ResourceRowEmpty
-              message={
-                search.query
-                  ? t("listSearch.none", { query: search.query })
-                  : emptyMessage(filter, all.length)
-              }
-            />
-          </>
-        ) : (
-          <>
-            {search.query && (ruleDrain.draining || ruleDrain.capped) && (
-              <p className="mb-2 text-[12px] text-foreground/65">
-                {t("listSearch.partial.rules", { n: all.length })}
+            {skills.capped && (
+              <p className="px-1 pt-3 text-[12px] text-foreground/65">
+                {t("list.partial", { count: skills.shown })}
               </p>
             )}
-            <ResponsiveTable
-              ariaLabel="Automations"
-              rows={shown}
-              rowKey={(rule) => rule.id}
-              rowId={(rule) => rule.id}
-              href={ruleHref}
-              name={{
-                header: "Name",
-                width: "minmax(0,2fr)",
-                label: (rule) => rule.name,
-              }}
-              columns={[
-                {
-                  header: "Trigger",
-                  width: "minmax(0,2fr)",
-                  cell: (rule) => view(rule).when,
-                },
-                {
-                  header: "Space",
-                  width: "minmax(0,1fr)",
-                  cell: (rule) => view(rule).space,
-                },
-                {
-                  header: "Last run",
-                  width: "minmax(0,0.9fr)",
-                  cell: (rule) => view(rule).lastRun,
-                },
-                {
-                  header: "Runs / fails",
-                  width: "minmax(0,0.9fr)",
-                  cell: (rule) => (
-                    <span className="tabular">
-                      {rule.runCount.toLocaleString("en-US")} /{" "}
-                      {rule.failureCount.toLocaleString("en-US")}
-                    </span>
-                  ),
-                },
-                {
-                  header: "Status",
-                  width: "minmax(0,1.2fr)",
-                  className: "min-w-0",
-                  cell: (rule) => <RulePill pill={view(rule).pill} />,
-                },
-              ]}
-              action={{
-                width: "6.5rem",
-                cell: (rule) => view(rule).action,
-              }}
-              phone={(rule) => {
-                const row = view(rule);
-                return {
-                  Icon: Zap,
-                  secondary: [
-                    row.when,
-                    row.space,
-                    `Last run ${row.lastRun}`,
-                    runsPhrase(rule),
-                  ].join(" · "),
-                  status: row.pill,
-                };
-              }}
-            />
-            {shown.length < visible.length && (
-              <div className="px-1 pt-3">
+            {lineage.isError && !skills.isLoading && (
+              <div className="flex flex-wrap items-center gap-2 px-1 pt-3">
+                <p className="text-[12px] text-foreground/65">
+                  {t("automation.failed")}
+                </p>
                 <Button
                   size="sm"
                   variant="light"
                   radius="md"
-                  onPress={() => setExpanded(true)}
+                  onPress={() => void lineage.refetch()}
                 >
-                  Show {visible.length - shown.length} more
+                  {t("retry")}
                 </Button>
               </div>
             )}
           </>
-        )}
-        {groups.isError && !loading && (
-          <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health couldn’t be loaded, so “Failing” may be missing rules.
-          </p>
-        )}
-        {groupDrain.capped && (
-          <p className="px-1 pt-3 text-[12px] text-foreground/65">
-            Run health covers the 2,000 most recently run rules.
-          </p>
-        )}
-      </SectionCard>
-
-      <ConfirmModal
-        isOpen={pending !== null}
-        onClose={() => {
-          setPending(null);
-          setActError(null);
-        }}
-        onConfirm={() => void confirmPending()}
-        title={
-          pending?.kind === "run"
-            ? `Run “${pending.name}” now?`
-            : pending?.kind === "turn_on"
-              ? `${resolveActionLabel("turn_on")} “${pending.name}”?`
-              : `Pause “${pending?.name ?? ""}”?`
         }
-        consequence={
-          pending?.kind === "run" ? (
-            <>
-              It runs its whole flow once, as if its trigger had happened —
-              including anything it sends or changes. If the pod needs someone
-              to approve it, it is proposed instead and waits in Review.
-            </>
-          ) : pending?.kind === "turn_on" ? (
-            <>
-              From now on it runs on its own each time its trigger happens,
-              including anything it sends or changes. You can pause it here at
-              any time.
-            </>
-          ) : (
-            <>
-              It won’t start new runs until someone turns it back on. Nothing it
-              already did is undone.
-            </>
-          )
-        }
-        confirmLabel={
-          pending?.kind === "run"
-            ? "Run now"
-            : pending?.kind === "turn_on"
-              ? resolveActionLabel("turn_on")
-              : "Pause rule"
-        }
-        confirmColor="warning"
-        isPending={pause.isPending || trigger.isPending || activate.isPending}
       >
-        {actError && (
-          <p className="text-[12.5px] text-status-down">{actError}</p>
-        )}
-      </ConfirmModal>
+        <div className="-mx-2 divide-y divide-foreground/[0.05]">
+          {shown.map((rule) => (
+            <RuleLine
+              key={rule.id}
+              rule={rule}
+              where={whereLabel(ruleScopeKey(rule))}
+              automationIds={automations.get(rule.id) ?? []}
+              onOpen={() =>
+                router.push(
+                  openIn({ kind: "object", objectKind: "skill", id: rule.id })
+                    .href
+                )
+              }
+            />
+          ))}
+        </div>
+      </ListCard>
     </PageShell>
   );
 }
 
-type RuleRow = RuleFacts & {
-  workspaceId: string | null;
-  triggerConfig: unknown;
-};
-
-interface RuleRowView {
-  when: string;
-  space: string;
-  lastRun: string;
-  /** Absent until the rule's run health is read. */
-  pill: { kind: StatusKind; label: string } | undefined;
-  action: ReactNode;
-}
-
-function RuleActButton({
-  act,
-  onPress,
+function RuleLine({
+  rule,
+  where,
+  automationIds,
+  onOpen,
 }: {
-  act: NonNullable<RuleRowAction>;
-  onPress: () => void;
+  rule: RuleRow;
+  where: string;
+  automationIds: readonly string[];
+  onOpen: () => void;
 }) {
+  const t = useT(CATALOGS);
+  const first = automationIds[0];
   return (
-    <Button
-      size="sm"
-      variant="flat"
-      radius="md"
-      className="min-h-9"
-      onPress={onPress}
-    >
-      {act === "pause"
-        ? "Pause"
-        : act === "turn_on"
-          ? resolveActionLabel("turn_on")
-          : "Run now"}
-    </Button>
+    <div data-row-id={rule.id} className="rounded-md transition-shadow">
+      <ResourceRow
+        Icon={ListChecks}
+        primary={rule.name}
+        secondary={[where, rule.slug].filter(Boolean).join(" · ")}
+        status={approvedStatus(rule)}
+        onSelect={onOpen}
+        wrap
+        actions={
+          first ? (
+            // The automation it came with: its own object, its own page.
+            <Button
+              as={Link}
+              href={
+                automationIds.length === 1
+                  ? `${navHref("automations")}/${encodeURIComponent(first)}`
+                  : navHref("automations", { focus: first })
+              }
+              size="sm"
+              variant="light"
+              radius="md"
+              className="min-h-9"
+            >
+              {automationIds.length === 1
+                ? t("automation.one")
+                : t("automation.many", { count: automationIds.length })}
+            </Button>
+          ) : undefined
+        }
+      />
+    </div>
   );
-}
-
-/** A rule's pill, or a placeholder while its run health is read. */
-function RulePill({ pill }: { pill: RuleRowView["pill"] }) {
-  return pill ? (
-    <StatusPill kind={pill.kind} label={pill.label} />
-  ) : (
-    <span
-      aria-label="Reading run health"
-      className="inline-block h-4 w-16 rounded bg-foreground/[0.07] shimmer-pulse"
-    />
-  );
-}
-
-const ruleHref = (rule: { id: string }) =>
-  `/rules/${encodeURIComponent(rule.id)}`;
-
-function emptyMessage(
-  filter: ReturnType<typeof ruleFilterOf>,
-  total: number
-): string {
-  if (total === 0) {
-    return "No rules yet. Rules are made in the Synap app — “when this happens, do that”.";
-  }
-  switch (filter) {
-    case "active":
-      return "No rule is switched on.";
-    case "failing":
-      return "Nothing is failing. Every live rule’s runs this week went through.";
-    case "never-ran":
-      return "Every rule has run at least once.";
-    case "paused":
-      return "No paused rules.";
-    case "drafts":
-      return "No drafts.";
-  }
 }

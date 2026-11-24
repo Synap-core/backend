@@ -82,7 +82,8 @@ describe("tripwire: relay provenance has one door", () => {
     );
     for (const [procedure, call] of [
       ["answerOutput", "answerSessionSlot("],
-      ["unblockOutput", "unblockExpectedOutput("],
+      // "Not mine": the hand-back with its history row and room line.
+      ["unblockOutput", "notMineSessionSlot("],
     ] as const) {
       const start = router.indexOf(`  ${procedure}: protectedProcedure`);
       expect(start, `${procedure} not found`).toBeGreaterThan(-1);

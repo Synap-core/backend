@@ -114,7 +114,9 @@ describe("synap_list_automations — default digest fits the budget", () => {
   });
 
   it("default output is under budget and still names every automation", async () => {
-    const text = await call(handler, "synap_list_automations", {});
+    // `limit` covers the whole fixture: the default page (25) is pinned in
+    // `list-paging.lists.test.ts`; this test is about the row, not the page.
+    const text = await call(handler, "synap_list_automations", { limit: 50 });
     expect(text.length).toBeLessThan(BUDGET_CHARS);
     const out = JSON.parse(text);
     expect(out.automations).toHaveLength(automations.length);
@@ -141,7 +143,7 @@ describe("synap_list_views — default digest fits the budget", () => {
   });
 
   it("default output is under budget and still names every view", async () => {
-    const text = await call(handler, "synap_list_views", {});
+    const text = await call(handler, "synap_list_views", { limit: 100 });
     expect(text.length).toBeLessThan(BUDGET_CHARS);
     const out = JSON.parse(text);
     expect(out.views).toHaveLength(views.length);

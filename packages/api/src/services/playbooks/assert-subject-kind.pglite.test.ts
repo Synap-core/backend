@@ -5,6 +5,7 @@
  * cases pass through.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { randomUUID } from "node:crypto";
 
 const holder = vi.hoisted(() => ({ db: undefined as unknown }));
@@ -21,8 +22,10 @@ import {
   entities,
   profiles,
   entityFacets,
-  profileWorkspaceAccess,
+  spaceAccess,
   workspaceMembers,
+  apiKeys,
+  users,
   workspaces,
   podMembers,
 } from "@synap/database";
@@ -72,8 +75,10 @@ beforeAll(async () => {
     entities,
     profiles,
     entityFacets,
-    profileWorkspaceAccess,
+    spaceAccess,
     workspaceMembers,
+    apiKeys,
+    users,
     workspaces,
     podMembers,
   ]) {
@@ -134,8 +139,9 @@ describe("assertRunSubjectMatchesPlaybook", () => {
     expect(e.expected).toBe("post");
     expect(e.actual).toEqual(["person"]);
     // In the person's words: the vocabulary nouns, no quoted slugs.
+    const process = resolveObjectNoun("playbook").toLowerCase();
     expect(e.message).toBe(
-      "This template runs on a post, but the subject you chose is a person. Pick a post, or run a template made for this kind."
+      `This ${process} runs on a post, but the subject you chose is a person. Pick a post, or run a ${process} made for this kind.`
     );
     // A plain person is NOT a lead (the facet is per entity).
     await expect(check(PERSON, "lead")).rejects.toBeInstanceOf(
@@ -147,5 +153,24 @@ describe("assertRunSubjectMatchesPlaybook", () => {
     await expect(check(null, "post")).resolves.toBeUndefined();
     await expect(check(PERSON)).resolves.toBeUndefined();
     await expect(check(randomUUID(), "post")).resolves.toBeUndefined();
+  });
+});
+
+describe("a playbook dedicated to one record", () => {
+  const dedicated = (subjectId: string | null) =>
+    assertRunSubjectMatchesPlaybook({
+      subjectId,
+      subjectProfile: { profileSlug: "post", entityId: POST },
+      userId: USER,
+      workspaceId: WS,
+    });
+
+  it("runs on its record", async () => {
+    await expect(dedicated(POST)).resolves.toBeUndefined();
+  });
+
+  it("NEGATIVE: refuses another record of the kind, and a run with no subject", async () => {
+    await expect(dedicated(WEBINAR)).rejects.toThrow(/dedicated to one record/);
+    await expect(dedicated(null)).rejects.toThrow(/dedicated to one record/);
   });
 });

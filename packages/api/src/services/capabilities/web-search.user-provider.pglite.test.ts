@@ -116,6 +116,7 @@ beforeAll(async () => {
       s.intelligenceCommands!,
       s.workspaces!,
       s.workspaceMembers!,
+      s.apiKeys!,
       s.podMembers!,
       s.users!,
       s.projectMembers!,

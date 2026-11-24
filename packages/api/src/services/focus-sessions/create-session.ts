@@ -12,7 +12,6 @@ import {
   db,
   focusSessions,
   playbooks,
-  playbookRuns,
   eq,
   and,
   drizzleSql,
@@ -21,22 +20,33 @@ import {
   conversationCwdPatch,
   recordSessionSpawn,
   resolveSessionProjectPlacement,
+  resolveSessionWorkspacePlacement,
+  workspacePlacementPatch,
+  type SessionWorkspaceRung,
   startedByAgentPatch,
   insertFocusSessionRow,
   sessionDefinitionColumns,
   derivedSessionTitle,
+  insertPlaybookRun,
+  runHolder,
+  starterHolder,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
+  gateAdmitsWorkspace,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { applySessionWorkspaceMove } from "./move-session-workspace.js";
 import { canUserSeeChannel } from "../../utils/channel-visibility.js";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { TRPCError } from "@trpc/server";
 import { randomUUID } from "node:crypto";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { createLogger } from "@synap-core/core";
-import { getAgentFocusProjectId } from "../agent-identity-service.js";
+import {
+  getAgentFocusProjectId,
+  getAgentFocusWorkspaceId,
+} from "../agent-identity-service.js";
 import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
 import {
   collectPlaybookCriteria,
@@ -54,6 +64,7 @@ import {
 } from "./match-session-template.js";
 import {
   droppedAskWarnings,
+  outputKeyWarnings,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
 import { stampAskProvenance } from "./slot-asked-event.js";
@@ -91,6 +102,11 @@ import {
   addCreateTimeBlockers,
   type CreateTimeBlockerReport,
 } from "./session-blocked-by.js";
+import { resolveSpawnTarget, type SpawnTargetCheck } from "./lane-rollup.js";
+import {
+  applyUnitBlockerEdits,
+  type UnitBlockerReport,
+} from "../links/unit-blockers.js";
 import {
   findOpenSessionTwin,
   sessionTwinLockKey,
@@ -106,6 +122,7 @@ import {
 } from "./agent-hand-off.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
 import { readStartOffers, type StartOffersRead } from "./start-offers.js";
+import { PLAYBOOK_OFFERED_AT_KEY } from "./session-nudges.js";
 // Types only: the writer is loaded lazily by `session-birth.ts`.
 import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
@@ -114,6 +131,11 @@ import {
   titleSourcePatch,
   canAutoRetitle,
 } from "@synap-core/types/focus-sessions";
+import {
+  stepBirthStatus,
+  stepDateRefusal,
+  stepTimePatch,
+} from "@synap-core/types/units";
 import { isUuid } from "@synap-core/types/property-render";
 
 const logger = createLogger({ module: "focus-sessions/create-session" });
@@ -172,6 +194,20 @@ function readConversationCwd(metadata: unknown): string | null {
   return typeof cwd === "string" && cwd !== "" ? cwd : null;
 }
 
+/**
+ * `templateId: null` is the caller's explicit "no playbook": recorded as the
+ * offer already made (`PLAYBOOK_OFFERED_AT_KEY`), so a later update's nudge
+ * does not offer the pod's playbooks again (ticket dddeb66c). Absent = the
+ * caller said nothing, and the offer stays open.
+ */
+function playbookOptOutPatch(
+  templateId: string | null | undefined
+): Record<string, string> {
+  return templateId === null
+    ? { [PLAYBOOK_OFFERED_AT_KEY]: new Date().toISOString() }
+    : {};
+}
+
 /** `reasonCode` of an agent's start that declares no criterion. */
 export const NO_CRITERIA = "NO_CRITERIA" as const;
 
@@ -185,11 +221,18 @@ export const NO_CRITERIA_MESSAGE =
 export interface CreateFocusSessionParams {
   userId: string;
   /**
-   * Workspace the session belongs to. Optional — a session may instead be
-   * anchored to a project or live on the user floor. When null/undefined the governance membrane
-   * treats it as a personal resource and auto-grants (no membership needed).
+   * The space the caller pins the session to (rung 1 of the space ladder,
+   * `resolveSessionWorkspacePlacement`). Absent, the ladder places it from
+   * its chain (playbook, subject, parent, project home, agent focus); when no
+   * rung answers it stays null, a personal resource the membrane auto-grants.
    */
   workspaceId?: string | null;
+  /**
+   * With a `workspaceId` copied from another session: the rung that placed
+   * that session (`readWorkspacePlacementRung`), so the new one keeps its
+   * reach. Absent ⇒ the space is the caller's own pin (`explicit`).
+   */
+  workspaceRung?: SessionWorkspaceRung | null;
   projectId?: string | null;
   /**
    * The TRACK (`project_tracks`, 0272) this session is born inside — the
@@ -292,6 +335,16 @@ export interface CreateFocusSessionParams {
    */
   suspendedIntent?: string | null;
   /**
+   * The key of the PARENT's output this child is spawned to deliver (work
+   * model W7). Only with `parentSessionId`. Recorded on the `spawned_from`
+   * edge only when the spawner may write the parent (its owner, or an agent
+   * on its roster) and the parent declares that output (`checkSpawnTarget`);
+   * otherwise the link still lands and `parentLink.forOutput` says why the
+   * target was refused. When this child closes done with its own output of
+   * that key delivered, the parent's output is met (`lane-rollup.ts`).
+   */
+  forOutput?: string | null;
+  /**
    * Sessions this one is BLOCKED BY, declared at birth. Each becomes a
    * `session --blocked_by--> session` edge through `addCreateTimeBlockers` (the
    * same validate + write door as `POST /links`), after the row exists; each
@@ -299,6 +352,34 @@ export interface CreateFocusSessionParams {
    * the proposal and are written at approval.
    */
   blockedBySessionIds?: string[];
+  /**
+   * Entities (a decision) and goals this one is BLOCKED BY, declared at birth:
+   * the cross-kind `session --blocked_by--> entity | track` edge, written
+   * through THE governed dependency door (`unit-blockers.ts`) after the row
+   * exists and reported on `blockerLinks` beside the sessions. On the PROPOSED
+   * path they ride the proposal, like `blockedBySessionIds`.
+   */
+  blockedByEntityIds?: string[];
+  blockedByTrackIds?: string[];
+  /**
+   * BIRTH STATUS (founder decision P4, 21 Nov 2026): a step that waits at
+   * birth — a `blockedBy*Ids` given here, `awaitsBlockers`, or a
+   * `plannedFor` still to come — is born PLANNED (`forming`: owes nothing,
+   * woken by `planned-wake.ts` when its blockers deliver and its date comes)
+   * unless `startNow`. THE rule is `stepBirthStatus` (`@synap-core/types`).
+   * A planned start never adopts the conversation's auto-opened receipt:
+   * that row holds present work.
+   */
+  startNow?: boolean;
+  /** The plan door writes its blockers AFTER the row exists: say so here. */
+  awaitsBlockers?: boolean;
+  /**
+   * The step's time (B5), on `metadata` (no column): `plannedFor` (a month
+   * `2027-03`, a day, or an ISO date-time) opens its window, `dueBy` is its
+   * deadline. A malformed date is refused (BAD_REQUEST).
+   */
+  plannedFor?: string | null;
+  dueBy?: string | null;
   /**
    * Open a NEW session even when an OPEN session of the same user, normalized
    * goal and scope exists. Without it that session is returned as `deduped`.
@@ -314,6 +395,13 @@ export interface CreateFocusSessionParams {
    * person's starts and every automatic start leave it unset.
    */
   requireCriteria?: boolean;
+  /**
+   * The caller declared an outcome with an explicit `verify`
+   * (`declaresVerify`): that says what done means even when the outcome is a
+   * deliverable checked by its own evidence, which makes no criterion. Read
+   * only with `requireCriteria`.
+   */
+  declaredVerify?: boolean;
   /**
    * ONE open session per (user, track, stage): inside the insert transaction,
    * take an advisory lock on `stage-session|user|track|stage`, re-read the
@@ -421,6 +509,8 @@ export type CreateTimeParentLink =
        * child. `null` when the write produced no report.
        */
       blocksParent?: CreateTimeBlockerReport | null;
+      /** Present when `forOutput` was asked: recorded, or refused and why. */
+      forOutput?: SpawnTargetCheck;
     }
   | {
       status: "failed";
@@ -437,8 +527,8 @@ export type CreateFocusSessionResult =
       blockGuidelines?: BlockGuidance;
       /** Present iff a `parentSessionId` was given. */
       parentLink?: CreateTimeParentLink;
-      /** Present iff `blockedBySessionIds` was non-empty — one entry per id. */
-      blockerLinks?: CreateTimeBlockerReport[];
+      /** Present iff a `blockedBy*Ids` list was non-empty — one entry per id. */
+      blockerLinks?: Array<CreateTimeBlockerReport | UnitBlockerReport>;
       /** Near-goal OPEN sessions in the same scope — suggested, never blocking. */
       candidates?: SessionTwinCandidate[];
       /**
@@ -529,7 +619,7 @@ export async function createFocusSession(
 ): Promise<CreateFocusSessionResult> {
   const {
     userId,
-    workspaceId = null,
+    workspaceId: explicitWorkspaceId = null,
     projectId: explicitProjectId = null,
     trackId: requestedTrackId = null,
     subjectEntityId: explicitSubjectEntityId = null,
@@ -545,10 +635,42 @@ export async function createFocusSession(
     expectedOutputs = [],
     parentSessionId = null,
     suspendedIntent = null,
+    forOutput = null,
     blockedBySessionIds = [],
+    blockedByEntityIds = [],
+    blockedByTrackIds = [],
     clientKey = null,
   } = params;
   const templateId = requestedTemplateId;
+
+  // The step's time and birth status (B5, P4): refused in words before
+  // anything is read or written.
+  const stepTime = stepTimePatch({
+    ...(params.plannedFor !== undefined
+      ? { plannedFor: params.plannedFor }
+      : {}),
+    ...(params.dueBy !== undefined ? { dueBy: params.dueBy } : {}),
+  });
+  if (!stepTime.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: stepDateRefusal(stepTime.invalid),
+    });
+  }
+  // Only the dates given, never a stored `null` at birth.
+  const stepTimeMeta = Object.fromEntries(
+    Object.entries(stepTime.patch).filter(([, v]) => v !== null)
+  );
+  const bornStatus = stepBirthStatus({
+    startNow: params.startNow,
+    hasBlockers:
+      params.awaitsBlockers === true ||
+      blockedBySessionIds.length +
+        blockedByEntityIds.length +
+        blockedByTrackIds.length >
+        0,
+    plannedFor: params.plannedFor ?? null,
+  });
 
   // A caller-named id (`proposedSessionId`, a held start's replay) that already
   // names a row: the caller's own session ⇒ this start already landed (a
@@ -582,6 +704,27 @@ export async function createFocusSession(
   const directAgentIds = agentIds.filter(
     (id) => !handedOff.includes(id.trim())
   );
+
+  // A target output (W7) names one of the PARENT's outputs: with no parent,
+  // or blank, it names nothing. Refused in words, never dropped (a lane that
+  // believes it was spawned for an output would wait for a rollup that never
+  // comes). Every start door reaches this one check.
+  if (forOutput !== null && forOutput !== undefined) {
+    if (typeof forOutput !== "string" || !forOutput.trim()) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput must name the key of one of the parent's outcomes; it is blank.",
+      });
+    }
+    if (!parentSessionId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "forOutput needs parentSessionId: it names one of the PARENT's outcomes, which this session delivers.",
+      });
+    }
+  }
 
   // TRACK FILING — first, so a bad handle refuses before any read or write.
   // A track names its project; the project ladder below then treats it as the
@@ -704,7 +847,9 @@ export async function createFocusSession(
       where: and(
         eq(focusSessions.correlationId, correlationId),
         eq(focusSessions.userId, userId),
-        ...(workspaceId ? [eq(focusSessions.workspaceId, workspaceId)] : [])
+        ...(explicitWorkspaceId
+          ? [eq(focusSessions.workspaceId, explicitWorkspaceId)]
+          : [])
       ),
     });
     if (existing) return { status: "created", session: existing };
@@ -739,6 +884,21 @@ export async function createFocusSession(
       { code: "BAD_REQUEST" }
     );
   }
+  // A PERSON's start that names an agent hands the run to it through the one
+  // launch path (`resolveRunChoice` → `dispatchRunOnSession`), refused by name
+  // before anything is written when the agent cannot take it. The starter's
+  // own run, and an agent's hand-off (its own governed gate), are born below.
+  const namedRunner =
+    playbook && !agentUserId ? requestedAgentIds[0]?.trim() || null : null;
+  const runChoice = namedRunner
+    ? await (
+        await import("../playbooks/run-playbook.js")
+      ).resolveRunChoice({
+        userId,
+        handToAgentId: namedRunner,
+        playbook: playbook!,
+      })
+    : null;
 
   // PROJECT LENS — derived from the context this door already holds, rather
   // than waited for. Before this, `projectId` was whatever the caller passed and
@@ -770,6 +930,34 @@ export async function createFocusSession(
           : null,
     })
   ).projectId;
+
+  // SPACE — the session sits in a space read from its chain (W3, D1 a):
+  // explicit → the playbook's → the subject's → the parent's → the project's
+  // home → the agent's focus, a derived rung counting only where the actor
+  // may write (`resolve-session-workspace.ts`). Before the dedup and the
+  // membrane: the space is the session's governance home, and the twin check
+  // compares it.
+  const workspacePlacement = await resolveSessionWorkspacePlacement(db, {
+    userId,
+    explicitWorkspaceId,
+    explicitRung: params.workspaceRung ?? null,
+    playbookId: playbook?.id ?? null,
+    subjectEntityId,
+    parentSessionId,
+    projectId,
+    focusWorkspaceId: agentUserId
+      ? () => getAgentFocusWorkspaceId(agentUserId)
+      : undefined,
+    // The membrane's own membership check: a space it would not admit this
+    // start in is skipped, never turned into a join proposal or a denial.
+    mayPlaceIn: (candidate) =>
+      gateAdmitsWorkspace({
+        userId,
+        workspaceId: candidate,
+        action: "create",
+      }),
+  });
+  const workspaceId = workspacePlacement.workspaceId;
 
   // GOAL INHERITANCE (structural plan S5, founder Q6): a sub-session is in its
   // parent's goal, written at creation on the same parent rung that gives it
@@ -815,6 +1003,7 @@ export async function createFocusSession(
   if (
     params.requireCriteria &&
     criteria.length === 0 &&
+    !params.declaredVerify &&
     (!playbook || collectPlaybookCriteria(playbook).length === 0)
   ) {
     throw Object.assign(new Error(NO_CRITERIA_MESSAGE), {
@@ -867,6 +1056,8 @@ export async function createFocusSession(
   const adoptId =
     clientKey &&
     params.adoptAutoOpened !== false &&
+    // A planned step is not present work: it never takes over the receipt.
+    bornStatus === "active" &&
     clientKeyScope(clientKey) === "conversation"
       ? ((
           await findClientSession(userId, clientKey, {
@@ -988,6 +1179,11 @@ export async function createFocusSession(
         : {}),
       ...(subjectEntityId ? { subjectEntityId } : {}),
       ...(channelId ? { channelId } : {}),
+      // Which rung placed it: the approval stamps it on the row as the direct
+      // insert does (`proposal.workspaceId` carries the space itself).
+      ...(workspacePlacement.workspaceId && workspacePlacement.rung
+        ? { workspacePlacement: workspacePlacement.rung }
+        : {}),
       // Sanitized BEFORE it is proposed, so the payload a human reviews is the
       // one that will be written — a proposal showing `attestedBy: "Antoine"`
       // is asking someone to approve a claim about themselves. The executor
@@ -1003,10 +1199,18 @@ export async function createFocusSession(
       // `proposals/executors/focus-session.ts` after the row is inserted.
       ...(parentSessionId ? { parentSessionId } : {}),
       ...(suspendedIntent ? { suspendedIntent } : {}),
+      ...(forOutput ? { forOutput } : {}),
       // Same reason: written at approval through `addCreateTimeBlockers`.
       ...(blockedBySessionIds.length > 0 ? { blockedBySessionIds } : {}),
+      ...(blockedByEntityIds.length > 0 ? { blockedByEntityIds } : {}),
+      ...(blockedByTrackIds.length > 0 ? { blockedByTrackIds } : {}),
       // Same reason: written at approval through `writeSessionTargets`.
       ...(targets.length > 0 ? { targets } : {}),
+      // The birth status and the step's time ride too (P4, B5): the
+      // approved row is born planned exactly as a direct start would be.
+      ...(params.startNow === true ? { startNow: true } : {}),
+      ...(params.awaitsBlockers === true ? { awaitsBlockers: true } : {}),
+      ...stepTimeMeta,
       ...(criteria.length > 0 ? { criteria } : {}),
       // The track rides the proposal so the approved row is born inside it
       // too; `proposal.projectId` already carries the track's project.
@@ -1029,8 +1233,7 @@ export async function createFocusSession(
       proposalType: perm.proposalType,
       message: proposedMessageFor(
         perm.proposalType,
-        "Focus session creation proposed for review",
-        perm.deferred
+        "Focus session creation proposed for review"
       ),
       summary: perm.summary,
       reasoning: perm.reasoning,
@@ -1169,8 +1372,7 @@ export async function createFocusSession(
       // exists to strip exactly the `owner`/`owedSince` a caller must not
       // forge. The first stage's own outputs are owed from birth too
       // (`withBirthStageSlots`), the rule every later advance applies.
-      ...sessionDefinitionColumns(playbook, birthSlots),
-      criteria: sessionCriteria,
+      ...sessionDefinitionColumns(playbook, birthSlots, sessionCriteria),
     };
 
     let session: typeof focusSessions.$inferSelect | undefined;
@@ -1181,6 +1383,7 @@ export async function createFocusSession(
         .select({
           title: focusSessions.title,
           metadata: focusSessions.metadata,
+          workspaceId: focusSessions.workspaceId,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, adoptId))
@@ -1207,7 +1410,8 @@ export async function createFocusSession(
           // from the NEW goal (still `derived`, so the titler may improve it).
           // A title a person or agent chose is never touched.
           title: title ?? (adoptKeepsTitle ? undefined : derivedTitle),
-          workspaceId: workspaceId ?? undefined,
+          // Its space moves through THE move below (room and outputs with it).
+          workspaceId: undefined,
           projectId: projectId ?? undefined,
           subjectEntityId: subjectEntityId ?? undefined,
           ...(playbook ? { origin: "playbook" as const } : {}),
@@ -1218,7 +1422,10 @@ export async function createFocusSession(
             {
               clientKey,
               adoptedAt: new Date().toISOString(),
+              ...stepTimeMeta,
               ...(params.governance ? { governance: params.governance } : {}),
+              ...playbookOptOutPatch(params.templateId),
+              ...workspacePlacementPatch(workspacePlacement),
               // What this run was actually given — same key, same meaning as
               // the run funnel's (`RUN_PARAMS_METADATA_KEY`). Only when a
               // playbook resolved; an ad-hoc session has no params to store.
@@ -1239,6 +1446,21 @@ export async function createFocusSession(
         )
         .returning();
       session = adopted;
+      // The start placed it elsewhere than the receipt's first write did:
+      // re-home the session, its room and its outputs together.
+      if (adopted && workspaceId && adoptee?.workspaceId !== workspaceId) {
+        await applySessionWorkspaceMove(tx, {
+          sessionId: adopted.id,
+          channelId: adopted.channelId,
+          workspaceId,
+          rung: workspacePlacement.rung ?? "explicit",
+        });
+        [session] = await tx
+          .select()
+          .from(focusSessions)
+          .where(eq(focusSessions.id, adopted.id))
+          .limit(1);
+      }
     }
     // Not adopting — or the auto-opened row went away since the lookup.
     const adopted = !!session;
@@ -1248,6 +1470,8 @@ export async function createFocusSession(
         id: sessionId,
         userId,
         goal,
+        // P4: a step that waits at birth is born planned (see the param).
+        status: bornStatus,
         // No title ⇒ the writer derives one (the same `derivedSessionTitle`).
         title,
         correlationId: correlationId ?? null,
@@ -1270,7 +1494,11 @@ export async function createFocusSession(
           // The agent that starts it (orient's `handedToYou` leaves it out).
           ...startedByAgentPatch(agentUserId),
           ...(params.governance ? { governance: params.governance } : {}),
+          ...playbookOptOutPatch(params.templateId),
+          ...workspacePlacementPatch(workspacePlacement),
           ...(title ? titleSourcePatch(agentUserId ? "agent" : "human") : {}),
+          // The step's window and deadline (B5).
+          ...stepTimeMeta,
           // @see the adopt branch above.
           ...(paramResolution
             ? { [RUN_PARAMS_METADATA_KEY]: paramResolution.declaredValues }
@@ -1291,21 +1519,26 @@ export async function createFocusSession(
       });
     }
 
-    // The playbook_runs ledger row (status "running") so the runs feed sees the
-    // session. Mirrors run-playbook.ts's executeSingleRun insert (executor +
-    // definition snapshot), minus the executor dispatch — starting a session is
-    // "I'm working on this playbook", not a full executor run. The snapshot is
-    // THE shared one (`buildDefinitionSnapshot`): a hand-written copy here
-    // froze no `subjectProfile` (so no lifecycle, no end moves), criteria or
-    // requiredIntents, and a later edit of the playbook then decided this run.
-    if (playbook) {
-      await tx.insert(playbookRuns).values({
+    // The playbook_runs ledger row so the runs feed sees the session, with
+    // THE shared snapshot (`buildDefinitionSnapshot`), minus the executor
+    // dispatch: starting a session is "I'm working on this playbook". Its
+    // starter holds it, working from birth (`running`); an agent's hand-off
+    // leaves it `queued` until that agent claims it. A run a person handed
+    // to an agent is born by the dispatch below, once the room exists.
+    if (playbook && !runChoice) {
+      const handedTo = handedOff[0];
+      await insertPlaybookRun(tx, {
         workspaceId,
         playbookId: playbook.id,
         sessionId: session.id,
         executor: playbook.executor,
-        status: "running",
-        createdBy: agentUserId ?? userId,
+        // A planned step's run waits with it and starts when it wakes (P4).
+        sessionStatus: bornStatus,
+        holder: handedTo
+          ? runHolder("agent", handedTo)
+          : starterHolder(userId, agentUserId),
+        writerUserId: userId,
+        agentUserId,
         definitionSnapshot: buildDefinitionSnapshot(playbook),
       });
     }
@@ -1345,6 +1578,58 @@ export async function createFocusSession(
     agentUserId: agentUserId ?? null,
   });
 
+  // The run a person handed to an agent: dispatched to it on the session's
+  // room (a dispatch agent's provider task starts it; a pull agent finds it
+  // handed to it). The dispatch enters the first stage itself.
+  if (playbook && runChoice) {
+    if (!sessionOut.channelId) {
+      throw new Error(
+        `Session ${sessionOut.id} has no room, so its run could not be handed to the agent.`
+      );
+    }
+    const { dispatchRunOnSession } =
+      await import("../playbooks/run-playbook.js");
+    await dispatchRunOnSession({
+      playbook,
+      sessionId: sessionOut.id,
+      channelId: sessionOut.channelId,
+      actorId: userId,
+      workspaceId: sessionOut.workspaceId ?? null,
+      params: paramResolution?.declaredValues ?? {},
+      subjectId: sessionOut.subjectEntityId ?? null,
+      agentType: null,
+      handOff: runChoice.handOff,
+      runOn: runChoice.runOn,
+    });
+  }
+
+  // BIRTH: a session born on a playbook starts its first stage now — the
+  // stage runner records who works it (`enterStage`, spec 7111934d §3.1).
+  // After the commit; never throws.
+  if (playbook && !runChoice && sessionOut.currentStage) {
+    const { enterStage } = await import("../playbooks/stage-runner.js");
+    await enterStage({
+      sessionId: sessionOut.id,
+      stageKey: sessionOut.currentStage,
+      cause: { kind: "birth" },
+    });
+  }
+
+  let gradeSlotsFailed = false;
+  // GRADES DECLARED UP FRONT (W5): a criterion the person grades that names
+  // its output gets its grade slot now, owed once that output is delivered.
+  // After the commit, through the slot door's own lock; it never throws (a
+  // failure is logged), and the reply shows the slots it filed.
+  if (sessionCriteria.some((c) => c.check.kind === "human" && c.outputKey)) {
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+    const grades = await fileDeclaredGradeSlots(sessionOut.id);
+    if (grades.outputs) {
+      sessionOut = { ...sessionOut, expectedOutputs: grades.outputs };
+    }
+    // Logged by the door with the session id; the reply says it too.
+    if (grades.error) gradeSlotsFailed = true;
+  }
+
   // Parent lineage: `child --spawned_from--> parent` (+ the suspend note on the
   // parent). AFTER the session exists, and never inside the transaction — a bad
   // parent handle must not roll back a legitimate session. The producer owns the
@@ -1357,18 +1642,30 @@ export async function createFocusSession(
   let parentLink: CreateTimeParentLink | undefined;
   if (parentSessionId) {
     try {
+      // The output this child is spawned FOR: recorded only when the spawner
+      // may write the parent and the parent declares it (W7).
+      const target = forOutput?.trim()
+        ? await resolveSpawnTarget({
+            parentSessionId,
+            userId,
+            agentUserId,
+            forOutput,
+          })
+        : undefined;
       const spawn = await recordSessionSpawn({
         childSessionId: sessionOut.id,
         parentSessionId,
         userId,
         workspaceId: sessionOut.workspaceId,
         suspendedIntent,
+        forOutput: target?.status === "recorded" ? target.key : null,
       });
       parentLink = spawn.linked
         ? {
             status: "linked",
             parentSessionId,
             suspendedIntentRecorded: spawn.suspendedIntentRecorded,
+            ...(target ? { forOutput: target } : {}),
           }
         : { status: "failed", parentSessionId, reason: spawn.reason };
       // A detour (suspendedIntent) blocks the parent on this child. Same
@@ -1420,7 +1717,7 @@ export async function createFocusSession(
 
   // Create-time blockers, after the row exists, each reported per id. The
   // governance judgement for an agent caller is the helper's (same as POST /links).
-  const blockerLinks =
+  const sessionBlockerLinks =
     blockedBySessionIds.length > 0
       ? await addCreateTimeBlockers({
           sessionId: sessionOut.id,
@@ -1428,7 +1725,22 @@ export async function createFocusSession(
           userId,
           agentUserId,
         })
-      : undefined;
+      : [];
+  // A decision or a goal it waits on: the same governed dependency door.
+  const unitBlockers =
+    blockedByEntityIds.length > 0 || blockedByTrackIds.length > 0
+      ? await applyUnitBlockerEdits({
+          from: { type: "session", id: sessionOut.id },
+          add: { entity: blockedByEntityIds, track: blockedByTrackIds },
+          remove: { entity: [], track: [] },
+          userId,
+          agentUserId,
+          sessionId: sessionOut.id,
+          door: "createFocusSession",
+        })
+      : { links: [] };
+  const allBlockerLinks = [...sessionBlockerLinks, ...unitBlockers.links];
+  const blockerLinks = allBlockerLinks.length > 0 ? allBlockerLinks : undefined;
 
   // The TARGETS, after the row exists, through THE writer a worker's batch
   // uses: the start already passed the gate, as `spawned_from` above.
@@ -1466,6 +1778,14 @@ export async function createFocusSession(
       typeof droppedAskWarnings
     >[1]
   );
+  // A criterion whose outputKey names no output of the session as born: it
+  // checks nothing yet — said back, never refused (the update door's rule).
+  warnings.push(...outputKeyWarnings(criteria, sessionOut.expectedOutputs));
+  if (gradeSlotsFailed) {
+    warnings.push(
+      "The grade cards this session's criteria declare could not be filed yet; they are filed on the next criteria change."
+    );
+  }
 
   // Recall: look for raw captures/notes that could help this session, in the
   // background (`session-recall.ts`; an automation's session is skipped

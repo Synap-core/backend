@@ -217,3 +217,44 @@ describe("profiles.setProfileRendererOverride governance", () => {
     expect(h.setProfileRenderer).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * A view's (or playbook's) renderer is ONE object's page (`renderer-targets.ts`).
+ * The override door used to file or apply it with no `subjectId` (a whole-kind
+ * binding every view's detail page fell back to) and with any string as the
+ * id, skipping the target check the Hub and MCP doors run. Now the shared rule
+ * (`assertRendererBindingTarget`) runs here BEFORE the gate.
+ */
+describe("profiles.setProfileRendererOverride — a per-object target names one object", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.checkPermissionOrPropose.mockResolvedValue({ granted: true });
+    h.setProfileRenderer.mockResolvedValue(undefined);
+  });
+
+  it("refuses a view renderer with no subjectId, before the gate", async () => {
+    const caller = profilesRouter.createCaller(callerContext());
+    const run = caller.setProfileRendererOverride({
+      profileSlug: "view",
+      contentKind: "entity-detail",
+      ref: rendererRef,
+    });
+    await expect(run).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(run).rejects.toThrow(/pass its id as subjectId/);
+    expect(h.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(h.setProfileRenderer).not.toHaveBeenCalled();
+  });
+
+  it("refuses a subjectId that names no view the caller can open, before the gate", async () => {
+    const caller = profilesRouter.createCaller(callerContext());
+    const run = caller.setProfileRendererOverride({
+      profileSlug: "view",
+      contentKind: "entity-detail",
+      ref: rendererRef,
+      subjectId: "any-string-at-all",
+    });
+    await expect(run).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(h.checkPermissionOrPropose).not.toHaveBeenCalled();
+    expect(h.setProfileRenderer).not.toHaveBeenCalled();
+  });
+});

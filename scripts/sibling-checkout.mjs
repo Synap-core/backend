@@ -19,13 +19,22 @@
  * CI provides the sibling for asserts it (`siblingRequired()`), a local-only
  * guard skips with the reason this module formats (`siblingSkipReason`).
  *
+ * A sibling this checkout pins (sibling-pins.json) is read by CI at the pin. A
+ * local checkout at another commit only WARNS (once per repo, never fails): a
+ * guard may then disagree with CI.
+ *
  * Self-contained on purpose (node: imports and the layout resolver only), like
  * strip-comments.mjs.
  */
+import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadLayout } from "./layout/layout.mjs";
+import {
+  PINS_FILE_NAME,
+  loadLayout,
+  loadSiblingPins,
+} from "./layout/layout.mjs";
 
 /** The root of THIS checkout (the directory holding `scripts/`). */
 export const BACKEND_ROOT = resolve(
@@ -79,11 +88,40 @@ export function siblingCheckout(repo) {
         join(parent, name),
         join(parent, "synap-workspace-root", name),
       ]) {
-        if (existsSync(candidate)) return candidate;
+        if (existsSync(candidate)) {
+          warnIfOffPin(repo, candidate);
+          return candidate;
+        }
       }
     }
   }
   return null;
+}
+
+const warnedOffPin = new Set();
+/** Warn (once per repo, never throw) when `dir`'s HEAD is not its pin. */
+export function warnIfOffPin(
+  repo,
+  dir,
+  pinsFile = join(BACKEND_ROOT, PINS_FILE_NAME)
+) {
+  if (warnedOffPin.has(repo)) return;
+  warnedOffPin.add(repo);
+  try {
+    const pin = existsSync(pinsFile)
+      ? loadSiblingPins(pinsFile).get(repo)
+      : null;
+    if (!pin) return;
+    const head = spawnSync("git", ["-C", dir, "rev-parse", "HEAD"], {
+      encoding: "utf8",
+    }).stdout?.trim();
+    if (head && head !== pin)
+      console.warn(
+        `[sibling-checkout] ${repo} at ${dir} is at ${head.slice(0, 10)}, not its pin ${pin.slice(0, 10)} (${PINS_FILE_NAME}): CI reads the pin, so a guard reading it may disagree with CI.`
+      );
+  } catch {
+    // A warning only: an unreadable pins file is the layout tripwire's to catch.
+  }
 }
 
 /**

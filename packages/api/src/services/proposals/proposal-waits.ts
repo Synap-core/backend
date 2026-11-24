@@ -30,12 +30,12 @@ import {
   inArray,
   focusSessions,
   playbookRuns,
-  OPEN_SESSION_STATUSES,
 } from "@synap/database";
 import { AWAITED_GATE_PROPOSAL_TYPES } from "@synap/playbooks";
 import type { ProposalWaits } from "@synap-core/types/proposals/fate";
 import { needsYouContextFromProposal } from "@synap-core/types/needs-you";
 import { projectSessionOutcomes } from "@synap-core/types/units";
+import { UNDERWAY_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import {
   sessionReadableWhere,
   type SessionReader,
@@ -95,7 +95,7 @@ export async function resolveProposalWaits(
   const openOutcomes = new Map(
     sessions
       .filter((s) =>
-        (OPEN_SESSION_STATUSES as readonly string[]).includes(s.status)
+        (UNDERWAY_SESSION_STATUSES as readonly string[]).includes(s.status)
       )
       .map((s) => [
         s.id,

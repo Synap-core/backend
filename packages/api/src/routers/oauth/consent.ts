@@ -28,22 +28,56 @@ import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   db,
+  and,
   eq,
+  isNull,
   getActingAgentUserId,
   getRequestGrant,
   users,
 } from "@synap/database";
-import type { AppApprovedRequest } from "@synap/database/schema";
+import { apps, type AppApprovedRequest } from "@synap/database/schema";
+import {
+  AppAccessAskSyntaxError,
+  formatAppAccessAskPair,
+  hasReadPlace,
+  hasWritePlace,
+  isReadPermission,
+  withoutDormantPermissions,
+  pairsOfAccess,
+  parseSynapAsk,
+  type AppAccess,
+  type NamedAppAccess,
+  type ReconsentView,
+} from "@synap-core/types/grants";
+import {
+  assertPermissions,
+  InvalidPermissionError,
+} from "@synap/governance-policy/grants";
+import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 
 import {
+  appAccessOffer,
   connectOAuthApp,
+  connectOAuthAppAccess,
+  currentOAuthAppApproval,
   currentOAuthApproval,
+  nameAppAccess,
+  reconsentViewOf,
+  type AccessAsked,
+  type AccessAskedItem,
+  type AccessPlacesOffer,
+  kindGroupIndex,
   oauthAppOffer,
   oauthAppPodWideKinds,
   oauthAppPodWideOffer,
+  type OAuthAppKindGroup,
   type OAuthAppOfferItem,
 } from "../../services/app-connect.js";
 import { podAppMayConnect } from "../../services/pod-app-policy.js";
+import {
+  resolveAskPairs,
+  type ResolvedAskPair,
+} from "../../services/app-access-ask-pairs.js";
 import type { Context } from "../../types/context.js";
 import {
   isDeviceSession,
@@ -66,6 +100,8 @@ import {
   isFirstPartyClientId,
   personDeviceClient,
   OAUTH_DEFAULT_SCOPES,
+  OAUTH_SUPPORTED_SCOPES,
+  PERSON_SCOPE,
   isSynapApp,
   normalizeRequestedScopes,
   resolveFirstPartyClient,
@@ -90,6 +126,7 @@ import {
   appSignInReach,
   describeAppSignIn,
   describePodAppActsAs,
+  grantsDecision,
   isAppClientId,
   loadLiveApp,
   resolveAppClient,
@@ -153,6 +190,12 @@ export interface AuthorizeParams {
    * what `prompt=login` / `max_age=0` is measured against.
    */
   authRequest?: string | null;
+  /**
+   * A pod app's `synap_ask` (`<permission>@<space id or template> …`, plan
+   * 647ebfd4 option C): it asks for ONE MORE thing. The screen shows only
+   * those pairs, and the approval ADDS them to what the app holds.
+   */
+  synapAsk?: string | null;
 }
 
 /**
@@ -327,6 +370,84 @@ function requireIssuer(): string {
   return issuer;
 }
 
+/** Where the client is being resolved, for when its document is read again. */
+export interface ResolveClientOptions {
+  /**
+   * The consent screen: a person is about to read what the app asks for and
+   * decide on it, so the offer is built from the app's CURRENT document, not
+   * a copy still fresh by its Cache-Control (`consentRereadIf`).
+   */
+  consentScreen?: boolean;
+}
+
+/** Is this a grant-grammar permission (what a pod app declares and asks)? */
+function isGrantPermission(value: string): boolean {
+  try {
+    assertPermissions([value]);
+    return true;
+  } catch (err) {
+    if (err instanceof InvalidPermissionError) return false;
+    throw err;
+  }
+}
+
+/**
+ * Does this request ask a pod app for a permission its cached document does
+ * not declare: a grant permission in `scope` (an `mcp.*` scope or `person`
+ * is not one) or a `synap_ask` pair's? Then the copy may simply be older than
+ * the document that declares it, and the request is read against the current
+ * one: otherwise `/authorize` narrows the new permission out of the scope it
+ * forwards, and the consent screen can never offer it. A `synap_ask` that does
+ * not parse asks for nothing here (its own check refuses it).
+ */
+export function asksBeyondCachedDocument(
+  cached: Pick<StoredClient, "requestedPermissions">,
+  params: Pick<AuthorizeParams, "scope" | "synapAsk">
+): boolean {
+  const declared = new Set(cached.requestedPermissions);
+  const notGrant = new Set<string>([...OAUTH_SUPPORTED_SCOPES, PERSON_SCOPE]);
+  const asked = normalizeRequestedScopes(parseScopeParam(params.scope)).filter(
+    (s) => !notGrant.has(s) && isGrantPermission(s)
+  );
+  if (params.synapAsk) {
+    try {
+      asked.push(...parseSynapAsk(params.synapAsk).map((p) => p.permission));
+    } catch (err) {
+      if (!(err instanceof AppAccessAskSyntaxError)) throw err;
+    }
+  }
+  return asked.some((p) => !declared.has(p));
+}
+
+/**
+ * When a pod app's cached document is read again before it expires
+ * (`resolveCimdClient` `rereadIf`, never sooner than `CIMD_REREAD_FLOOR_MS`
+ * after the last read): on the consent screen (a person decides on the
+ * offer), on `prompt=consent` (the app asks for the consent again: "Ask
+ * again"), and when the request asks for a permission the copy does not
+ * declare (`asksBeyondCachedDocument`, which covers the short consent's
+ * `synap_ask`). Founder dogfood 18 Nov 2026: an app that newly declared
+ * pod-wide reads was offered them per space, from a copy cached before.
+ *
+ * SECURITY: a re-read only ever replaces the cache with the document the app
+ * serves NOW, through the same SSRF-safe fetch, budget and validation; it
+ * never widens what a person gives. The consent click still checks the ticks
+ * against the offer (`connectOAuthApp`): a pair is given pod-wide only when
+ * the person ticked it pod-wide, which only the screen's offer shows, and
+ * only a read can be pod-wide (`isPodWideReadPermission`); writes stay per
+ * space. The decision itself does not re-read early (`consentScreen`
+ * unset), so it judges the ticks against the copy the screen just read.
+ */
+export function consentRereadIf(
+  params: Pick<AuthorizeParams, "scope" | "synapAsk" | "prompt">,
+  options: ResolveClientOptions = {}
+): (cached: StoredClient) => boolean {
+  return (cached) =>
+    options.consentScreen === true ||
+    params.prompt === "consent" ||
+    asksBeyondCachedDocument(cached, params);
+}
+
 /**
  * PHASE 1 — resolve the client and its redirect_uri. Failures here throw
  * `AuthorizeUserError` because there is no verified URI to redirect to yet.
@@ -337,7 +458,8 @@ function requireIssuer(): string {
  * for.
  */
 export async function resolveClientAndRedirect(
-  params: AuthorizeParams
+  params: AuthorizeParams,
+  options: ResolveClientOptions = {}
 ): Promise<{ client: StoredClient; redirectUri: string }> {
   const clientId = params.clientId?.trim();
   if (!clientId) {
@@ -368,7 +490,13 @@ export async function resolveClientAndRedirect(
       );
     }
     try {
-      client = await resolveCimdClient(clientId, resolveIssuer());
+      client = await resolveCimdClient(
+        clientId,
+        resolveIssuer(),
+        undefined,
+        undefined,
+        { rereadIf: consentRereadIf(params, options) }
+      );
       // A document declaring `person`: a native app signing the person in
       // on a device, the same door as the built-in Synap apps (config.ts).
       client = personDeviceClient(client) ?? client;
@@ -532,9 +660,13 @@ export function isMcpClient(
 
 /** Both phases, in order. Used by the consent surface (which needs both). */
 export async function resolveAuthorizeRequest(
-  params: AuthorizeParams
+  params: AuthorizeParams,
+  options: ResolveClientOptions = {}
 ): Promise<ValidatedAuthorizeRequest> {
-  const { client, redirectUri } = await resolveClientAndRedirect(params);
+  const { client, redirectUri } = await resolveClientAndRedirect(
+    params,
+    options
+  );
   return validateAuthorizeRequest(client, redirectUri, params);
 }
 
@@ -559,7 +691,9 @@ export interface OAuthAppConsent {
   homepage: string | null;
   /**
    * Each permission the app asked for AND declared, with the spaces this
-   * person may give it in (`oauthAppOffer`). An empty list means the person
+   * person may give it in (`oauthAppOffer`), with its kinds group (F4) and
+   * the projects it may be given in (W3c: offered only, nothing mints a
+   * project grant yet). An empty list means the person
    * has no space to give that permission in. `reason`: the document's own
    * `synap_requests[].reason` (display text, `displayReason`), or null —
    * the developer's words, shown as text, never a reason to trust the app.
@@ -570,8 +704,15 @@ export interface OAuthAppConsent {
    * = "pod"`, decision e1b59d38 "B"): each a read of one named kind, one tick
    * each, shown in their own section. Ticked, each is sent as
    * `{ permission, workspaceId: null }`. Never also in `permissions`.
+   * `kindGroup`: the entry it was declared in when that entry listed its
+   * kinds (F4), else null; items that share one draw as ONE row ("Records:
+   * N kinds"), as in `permissions`.
    */
-  podWide: Array<{ permission: string; reason: string | null }>;
+  podWide: Array<{
+    permission: string;
+    reason: string | null;
+    kindGroup?: OAuthAppKindGroup | null;
+  }>;
   /** What this person approved for this app before (re-consent pre-ticks it). */
   approved: AppApprovedRequest[];
   /**
@@ -587,6 +728,61 @@ export interface OAuthAppConsent {
   podWideKinds: string[];
   /** Scopes it asked for that a pod app is never given (`mcp.*`), shown as dropped. */
   ignoredScopes: string[];
+  /**
+   * The short consent (`synap_ask`): the pairs it asks for that the person
+   * may give it, each in one space; null for the full screen. Allow ADDS
+   * them to what it holds; nothing it holds is shown or changed here.
+   */
+  ask: OAuthAppAsk | null;
+  /**
+   * The consent in v2 terms (W3d): what the new screen reads. Always set by
+   * the server; optional so a screen or fixture written before W3d still
+   * types (additive).
+   */
+  access?: OAuthAppAccessConsent;
+}
+
+/** What the short consent shows (`OAuthAppConsent.ask`). */
+export interface OAuthAppAsk {
+  /** "Content Studio asks to read notes in Content OS" (the card's words). */
+  title: string;
+  /** The pairs the person may give it, each in one space. */
+  pairs: ResolvedAskPair[];
+  /** Pairs it asked for that the person cannot give it (`perm@place`). */
+  unavailable: string[];
+  /** The app's page in pod admin ("See everything it has"), once connected. */
+  connectionPublicId: string | null;
+}
+
+/**
+ * The consent in v2 terms (app permissions W3d, decision fc37f740 design A):
+ * what the app asked, the places the person may give per tier, what it holds
+ * now, why it asks again, and the short ask. Contract: pod document be6caecc
+ * ("W3d consent contract"). Allow sends an `AppAccess` (`access`) or, for the
+ * short ask, nothing but Q4's `askWritePlace`.
+ */
+export interface OAuthAppAccessConsent {
+  asked: { permissions: AccessAskedItem[]; templates: string[] };
+  places: AccessPlacesOffer;
+  /** Already connected: what it holds now (stored v2, or the exact lift of its pairs). */
+  current: NamedAppAccess | null;
+  /** Its old pairs cannot become v2 as they are (Q3): never auto-allow. */
+  reconsent: ReconsentView | null;
+  /** The short consent, v2: null for the full screen. */
+  ask: OAuthAppAccessAsk | null;
+}
+
+/** The short consent in v2 terms: it only adds permissions (Q4 aside). */
+export interface OAuthAppAccessAsk {
+  /** "Content Studio asks to also read notes". */
+  title: string;
+  /** The permissions it adds, as the asked items. */
+  adds: AccessAskedItem[];
+  /** Q4: it has no write place and asks its first write: show the write picker. */
+  needsWritePlace: boolean;
+  /** What it asked that the person cannot give (`perm@place`, or a permission). */
+  unavailable: string[];
+  connectionPublicId: string | null;
 }
 
 export interface OAuthConsentContext {
@@ -642,9 +838,17 @@ function appPermissions(req: ValidatedAuthorizeRequest): {
   ignoredScopes: string[];
 } {
   const declared = new Set(req.client.requestedPermissions);
+  // A pod app that is not a Synap app is never offered the review verbs: it
+  // acts as the person, but never decides their proposals (`appSignInReach`
+  // rule 3 holds it on every request; this keeps the screen honest).
+  const offerable = (s: string) =>
+    declared.has(s) &&
+    (req.client.clientKind !== "cimd" ||
+      isSynapApp(req.client.clientId) ||
+      !grantsDecision(s));
   return {
-    permissions: req.grantedScopes.filter((s) => declared.has(s)),
-    ignoredScopes: req.grantedScopes.filter((s) => !declared.has(s)),
+    permissions: req.grantedScopes.filter(offerable),
+    ignoredScopes: req.grantedScopes.filter((s) => !offerable(s)),
   };
 }
 
@@ -655,6 +859,64 @@ function reasonFor(client: StoredClient, permission: string): string | null {
     ? reasons[permission]
     : undefined;
   return typeof reason === "string" && reason ? reason : null;
+}
+
+/**
+ * The app's `synap_ask`, resolved within what this screen may offer (`offer`,
+ * the per-space permissions it declared): null when it sent none. A value
+ * that is not the grammar, or names a permission the app did not declare,
+ * is the app's mistake (`invalid_request`); an ask the person can give
+ * nothing of is `nothing_to_give`.
+ */
+function resolveConsentAsk(
+  raw: string | null | undefined,
+  offer: readonly OAuthAppOfferItem[]
+): { pairs: ResolvedAskPair[]; unavailable: string[] } | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  let asked;
+  try {
+    asked = parseSynapAsk(raw);
+  } catch (err) {
+    if (err instanceof AppAccessAskSyntaxError)
+      throw new OAuthError("invalid_request", `synap_ask: ${err.message}`);
+    throw err;
+  }
+  const resolved = resolveAskPairs(offer, asked);
+  if (resolved.undeclared.length > 0) {
+    throw new OAuthError(
+      "invalid_request",
+      `synap_ask names what this app does not declare: ${resolved.undeclared.join(", ")}`
+    );
+  }
+  if (resolved.pairs.length === 0) {
+    throw new AuthorizeUserError(
+      "This app asks for something you cannot give it: none of your spaces can hold it.",
+      "nothing_to_give"
+    );
+  }
+  return {
+    pairs: resolved.pairs,
+    unavailable: resolved.notOnOffer.map(formatAppAccessAskPair),
+  };
+}
+
+/** The person's live connection of this pod app (its public id), or null. */
+async function connectionPublicId(
+  ownerUserId: string,
+  oauthClientId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ publicId: apps.publicId })
+    .from(apps)
+    .where(
+      and(
+        eq(apps.ownerUserId, ownerUserId),
+        eq(apps.oauthClientId, oauthClientId),
+        isNull(apps.revokedAt)
+      )
+    )
+    .limit(1);
+  return row?.publicId ?? null;
 }
 
 /**
@@ -696,6 +958,183 @@ async function appSignInFor(
 }
 
 /**
+ * Does a connection's v2 access take a short ask as an ADD of permissions
+ * (W3d)? Only when its access says what no pair can (it names a project):
+ * every other connection keeps the pairs merge, each pair at the place it
+ * was asked (W2/W3c), which design A's "the place does not change" would
+ * otherwise move (`entity.note.read@content-os` landing in Brand).
+ */
+function addsThroughAccess(access: AppAccess | null | undefined): boolean {
+  return !!access && !pairsOfAccess(access).exact;
+}
+
+/**
+ * The asked pairs whose place the connection does not hold (W3d): a short
+ * ask adds permissions where its tier already holds, so an ask for another
+ * place is the full consent's. A first write's place is the person's pick
+ * (Q4), never refused here.
+ */
+function askPlacesNotHeld(
+  access: AppAccess,
+  pairs: ReadonlyArray<{ permission: string; workspaceId: string | null }>
+): string[] {
+  return pairs
+    .filter((p) => {
+      if (isReadPermission(p.permission))
+        return !(
+          access.read.spaces === "all" ||
+          (p.workspaceId !== null && access.read.spaces.includes(p.workspaceId))
+        );
+      if (!hasWritePlace(access)) return false;
+      return !(
+        p.workspaceId !== null && access.write.spaces.includes(p.workspaceId)
+      );
+    })
+    .map((p) => `${p.permission}@${p.workspaceId ?? "pod"}`);
+}
+
+/**
+ * The short ask's title (review of #1197): it names EVERY place the added
+ * permissions land in, since a short ask adds them where their tier already
+ * holds, never only the place the app's pair named. Places the person can
+ * no longer see are not named.
+ */
+function askTitle(
+  appName: string,
+  current: AppAccess,
+  adds: readonly AccessAskedItem[],
+  needsWritePlace: boolean,
+  offer: { places: AccessPlacesOffer }
+): string {
+  const spaceName = new Map(
+    [...offer.places.read.spaces, ...offer.places.write.spaces].map((x) => [
+      x.id,
+      x.name,
+    ])
+  );
+  const projectName = new Map(
+    [...offer.places.read.projects, ...offer.places.write.projects].map((x) => [
+      x.id,
+      x.name,
+    ])
+  );
+  const placesOf = (tier: AppAccess["read"] | AppAccess["write"]): string => {
+    const spaces: readonly string[] | "all" = tier.spaces;
+    const projectIds: readonly string[] | "all" = tier.projects;
+    if (spaces === "all") return "everywhere in your pod";
+    const named = [
+      ...spaces.map((id) => spaceName.get(id) ?? "a space you no longer see"),
+      ...(projectIds === "all"
+        ? ["every project"]
+        : projectIds.map(
+            (id) => `project ${projectName.get(id) ?? "you no longer see"}`
+          )),
+    ];
+    return `in ${named.join(", ")}`;
+  };
+  const parts: string[] = [];
+  const reads = adds.filter((i) => i.tier === "read");
+  const writes = adds.filter((i) => i.tier === "write");
+  if (reads.length > 0)
+    parts.push(
+      `to also read ${reads.map((i) => i.permission).join(", ")} ${placesOf(current.read)}`
+    );
+  if (writes.length > 0)
+    parts.push(
+      needsWritePlace
+        ? `to also make changes (${writes.map((i) => i.permission).join(", ")}) in a place you choose`
+        : `to also make changes (${writes.map((i) => i.permission).join(", ")}) ${placesOf(current.write)}`
+    );
+  return parts.length > 0
+    ? `${appName} asks ${parts.join(", and ")}`
+    : `${appName} asks for access`;
+}
+
+/** What the app asked, in v2 terms, read from the request and its document. */
+function accessAskedOf(
+  client: StoredClient,
+  permissions: readonly string[]
+): AccessAsked {
+  return {
+    permissions,
+    podWide: client.requestedPodWide ?? [],
+    reasons: client.requestedReasons ?? {},
+    kindGroups: client.requestedKindGroups ?? [],
+    templates: client.requestedTemplates ?? [],
+  };
+}
+
+/**
+ * The consent's v2 block (W3d): the asked access, the places the person may
+ * give, what the connection holds now and why it must ask again (names
+ * everywhere), and the short ask in v2 terms when the connection holds a v2
+ * access (it then only adds permissions; Q4: a first write needs a place).
+ */
+async function consentAccessBlock(
+  callerUserId: string,
+  client: StoredClient,
+  permissions: readonly string[],
+  ask: { pairs: ResolvedAskPair[]; unavailable: string[] } | null
+): Promise<OAuthAppAccessConsent> {
+  const offer = await appAccessOffer(
+    callerUserId,
+    accessAskedOf(client, permissions)
+  );
+  const approval = await currentOAuthAppApproval(callerUserId, client.clientId);
+  // Nothing dormant: a stored permission with no place in its tier never
+  // counts as held, and a first write place switches on only what is added.
+  const current = approval?.access
+    ? withoutDormantPermissions(approval.access)
+    : null;
+  let accessAsk: OAuthAppAccessAsk | null = null;
+  if (ask && current && addsThroughAccess(current)) {
+    const asked = [...new Set(ask.pairs.map((p) => p.permission))].filter(
+      (p) => !current.permissions.includes(p)
+    );
+    const adds = offer.asked.permissions.filter((i) =>
+      asked.includes(i.permission)
+    );
+    const readsNowhere =
+      !hasReadPlace(current) && adds.some((i) => i.tier === "read");
+    // Under All spaces a read lands everywhere: one that may not ride All
+    // spaces cannot be added here (review of #1197), never an Allow the
+    // server then refuses.
+    const notAllSpaces =
+      current.read.spaces === "all"
+        ? adds.filter((i) => i.tier === "read" && !i.allSpaces)
+        : [];
+    const needsWritePlace =
+      adds.some((i) => i.tier === "write") && !hasWritePlace(current);
+    accessAsk = {
+      title: askTitle(client.clientName, current, adds, needsWritePlace, offer),
+      adds,
+      needsWritePlace,
+      unavailable: [
+        ...ask.unavailable,
+        ...askPlacesNotHeld(current, ask.pairs),
+        ...notAllSpaces.map((i) => `${i.permission}@all`),
+        ...(readsNowhere
+          ? adds.filter((i) => i.tier === "read").map((i) => i.permission)
+          : []),
+      ],
+      connectionPublicId: await connectionPublicId(
+        callerUserId,
+        client.clientId
+      ),
+    };
+  }
+  return {
+    asked: offer.asked,
+    places: offer.places,
+    current: current ? await nameAppAccess(current, callerUserId) : null,
+    reconsent: approval
+      ? await reconsentViewOf(approval, callerUserId, offer.ceiling)
+      : null,
+    ask: accessAsk,
+  };
+}
+
+/**
  * What the consent screen renders. Re-derives everything from the stored client
  * so the screen can never show a name or scope set the pod would not honor.
  * For a pod app it also derives, for THIS person, the spaces each permission
@@ -712,7 +1151,8 @@ export async function getOAuthConsentContext(
   callerSession?:
     (KratosAuthenticationFacts & { authenticated_at?: string | null }) | null
 ): Promise<OAuthConsentContext> {
-  const req = await resolveAuthorizeRequest(params);
+  // The person reads the offer now: built from the app's current document.
+  const req = await resolveAuthorizeRequest(params, { consentScreen: true });
   const reauthenticate = reauthenticationRequired(
     params,
     sessionAuthenticatedAt(callerSession)
@@ -765,9 +1205,26 @@ export async function getOAuthConsentContext(
     req.client.requestedPodWide ?? []
   );
   const perSpace = permissions.filter((p) => !podWide.includes(p));
+  // The screen's offer also carries each item's kinds group (F4: one row
+  // "Records: N kinds") and the projects it may be given in (W3c). A copy
+  // cached before 0437 has no grouping: its kinds show one per row.
+  const kindGroups = req.client.requestedKindGroups ?? [];
+  const groupOf = kindGroupIndex(kindGroups);
+  const offer = await oauthAppOffer(callerUserId, perSpace, {
+    kindGroups,
+    projects: true,
+  });
+  const ask = resolveConsentAsk(params.synapAsk, offer);
+  const access = await consentAccessBlock(
+    callerUserId,
+    req.client,
+    permissions,
+    ask
+  );
   return {
     ...base,
     app: {
+      access,
       domain: new URL(req.client.clientId).host,
       verified: isSynapApp(req.client.clientId),
       actsAs: describePodAppActsAs(
@@ -776,18 +1233,35 @@ export async function getOAuthConsentContext(
         permissions
       ),
       homepage: req.client.clientUri ?? null,
-      permissions: (await oauthAppOffer(callerUserId, perSpace)).map(
-        (item) => ({ ...item, reason: reasonFor(req.client, item.permission) })
-      ),
+      permissions: offer.map((item) => ({
+        ...item,
+        reason: reasonFor(req.client, item.permission),
+      })),
       podWide: podWide.map((permission) => ({
         permission,
         reason: reasonFor(req.client, permission),
+        kindGroup: groupOf.get(permission) ?? null,
       })),
       approved: await currentOAuthApproval(callerUserId, req.client.clientId),
       templates: req.client.requestedTemplates ?? [],
       // A kind asked pod-wide reaches the app everywhere: no role note.
       podWideKinds: await oauthAppPodWideKinds(perSpace),
       ignoredScopes,
+      ask: ask
+        ? {
+            title: summarizeAppConnectRequest({
+              appName: req.client.clientName,
+              requests: ask.pairs,
+              mode: "add",
+            }).title,
+            pairs: ask.pairs,
+            unavailable: ask.unavailable,
+            connectionPublicId: await connectionPublicId(
+              callerUserId,
+              req.client.clientId
+            ),
+          }
+        : null,
     },
   };
 }
@@ -797,8 +1271,20 @@ export interface OAuthDecisionInput extends AuthorizeParams {
   /**
    * A pod app only: the (permission, space) pairs the person left ticked.
    * Untrusted — `connectOAuthApp` refuses anything beyond the pod's offer.
+   * Ignored when `access` is sent.
    */
   approved?: AppApprovedRequest[];
+  /**
+   * A pod app, the full consent and the re-consent (W3d): the person's v2
+   * access. Untrusted — `connectOAuthAppAccess` refuses anything beyond what
+   * the app asked ∩ what the person may give.
+   */
+  access?: AppAccess;
+  /**
+   * The short consent only (W3d, Q4): where a first write lands, when
+   * `access.ask.needsWritePlace`. Refused otherwise.
+   */
+  askWritePlace?: { spaces: string[]; projects: string[] };
   /** App sign-in only: `appSignIn.fingerprint` of the screen the person saw. */
   appSignInFingerprint?: string | null;
   /** Proof of presence (W3) for this authorization (`presence.challenge` `oauthConsent`). */
@@ -933,19 +1419,93 @@ export async function decideOAuthAuthorization(
         "nothing_to_give"
       );
     }
-    const connected = await connectOAuthApp({
-      ownerUserId: caller.id,
-      oauthClientId: req.client.clientId,
-      name: `${req.client.clientName} (${new URL(req.client.clientId).host})`,
+    // The short consent: the asked pairs, re-resolved here (never the
+    // screen's copy), and an approval that ADDS.
+    const podWide = oauthAppPodWideOffer(
       permissions,
-      podWide: req.client.requestedPodWide ?? [],
-      approved: input.approved ?? [],
-      ctx,
-      // Checked above, for this authorization (a pod app is never `app`).
-      presenceChecked: "oauth.consent",
-    });
+      req.client.requestedPodWide ?? []
+    );
+    const ask = resolveConsentAsk(
+      input.synapAsk,
+      await oauthAppOffer(
+        caller.id,
+        permissions.filter((p) => !podWide.includes(p))
+      )
+    );
+    const name = `${req.client.clientName} (${new URL(req.client.clientId).host})`;
+    // v2 (W3d): the full consent sends `access`; a short ask on a connection
+    // that holds a v2 access only adds permissions (and Q4's write place).
+    const held = await currentOAuthAppApproval(caller.id, req.client.clientId);
+    const v2Ask = ask !== null && addsThroughAccess(held?.access);
+    if (v2Ask) {
+      const notHeld = askPlacesNotHeld(held!.access!, ask!.pairs);
+      if (notHeld.length > 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `This app asks for a place it does not have yet (${notHeld.join(", ")}): connect it again to choose its places.`,
+        });
+      }
+    }
+    if (!v2Ask && input.askWritePlace) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "A place for its first change is chosen only when it asks for one.",
+      });
+    }
+    let connected: { appId: string };
+    if (v2Ask || (!ask && input.access)) {
+      connected = await connectOAuthAppAccess({
+        ownerUserId: caller.id,
+        oauthClientId: req.client.clientId,
+        name,
+        asked: accessAskedOf(req.client, permissions),
+        ...(v2Ask
+          ? {
+              add: {
+                permissions: [...new Set(ask!.pairs.map((p) => p.permission))],
+                writePlace: input.askWritePlace ?? null,
+              },
+            }
+          : { access: input.access! }),
+        ctx,
+        presenceChecked: "oauth.consent",
+      });
+    } else {
+      connected = await connectOAuthApp({
+        ownerUserId: caller.id,
+        oauthClientId: req.client.clientId,
+        name,
+        permissions,
+        podWide: req.client.requestedPodWide ?? [],
+        approved: input.approved ?? [],
+        ctx,
+        // Checked above, for this authorization (a pod app is never `app`).
+        presenceChecked: "oauth.consent",
+        ...(ask
+          ? {
+              ask: ask.pairs.map(({ permission, workspaceId }) => ({
+                permission,
+                workspaceId,
+              })),
+            }
+          : {}),
+      });
+    }
     appId = connected.appId;
-    scopes = [...new Set((input.approved ?? []).map((r) => r.permission))];
+    // What the connection now holds: after an additive consent, more than
+    // what was ticked on this screen.
+    const now = await currentOAuthAppApproval(caller.id, req.client.clientId);
+    scopes = now?.access
+      ? [...now.access.permissions]
+      : [
+          ...new Set(
+            (ask
+              ? await currentOAuthApproval(caller.id, req.client.clientId)
+              : (input.approved ?? [])
+            ).map((r) => r.permission)
+          ),
+        ];
   }
 
   // An app sign-in records EXACTLY what this person was shown (the same

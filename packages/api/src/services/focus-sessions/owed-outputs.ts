@@ -62,7 +62,7 @@ import {
   inArray,
   drizzleSql,
   OWED_SLOT_CLAUSES,
-  owedSlotPredicateSql,
+  owedSlotPredicateIn,
   owedSlotWhere,
   sessionLastAgentActivitySql,
   sessionLastAgentWorkSql,
@@ -73,10 +73,14 @@ import {
   classifyOwedAsk,
   type NeedsYouSlotClass,
 } from "@synap-core/types/needs-you/rule";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isPlannedSessionStatus,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   deliverableOwedBy,
   isDeliverableOutstanding,
+  isOwedByYouIn,
 } from "@synap-core/types/units";
 import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
 import { normalizeExpectedLabel } from "./expected-label.js";
@@ -167,18 +171,23 @@ export function owedSlotOrder(): SQL {
            THEN ${focusSessions.expectedOutputs}
            ELSE '[]'::jsonb END
     ) AS slot
-    WHERE ${owedSlotPredicateSql}
+    WHERE ${owedSlotPredicateIn(focusSessions.expectedOutputs)}
   ) ASC NULLS FIRST`;
 }
 
 /**
  * THE derivation in TypeScript — the shared deliverable rule itself
- * (`deliverableOwedBy`, `@synap-core/types/units`), never a local body. The
+ * (`isOwedByYouIn`, `@synap-core/types/units`), never a local body. The
  * SQL {@link owedSlotWhere} mirrors it and is held to it by a PGlite parity
- * test in `@synap/database`.
+ * test in `@synap/database`. `outputs` is the slot's session's whole
+ * `expected_outputs` list: a criterion's grade is owed only once the output
+ * it checks is delivered.
  */
-export function isOwedSlot(slot: ExpectedOutput): boolean {
-  return deliverableOwedBy(slot) === "you";
+export function isOwedSlot(
+  slot: ExpectedOutput,
+  outputs: readonly unknown[]
+): boolean {
+  return isOwedByYouIn(slot, outputs);
 }
 
 /**
@@ -443,7 +452,7 @@ function draftAskPrefilter(): SQL {
            THEN ${focusSessions.expectedOutputs}
            ELSE '[]'::jsonb END
     ) AS slot
-    WHERE ${owedSlotPredicateSql}
+    WHERE ${owedSlotPredicateIn(focusSessions.expectedOutputs)}
       AND (jsonb_typeof(slot->'ask') = 'object'
            OR slot->>'blockedReason' = 'decision')
   )`;
@@ -457,6 +466,12 @@ export function projectOwedSlots(
   row: OwedRow,
   now: Date = new Date()
 ): OwedSlot[] {
+  // A planned step owes nothing until it starts (P2): the TypeScript twin of
+  // `sessionOwesWhere` in the read's WHERE (`owedSlotWhere`).
+  if (isPlannedSessionStatus(row.status)) return [];
+  const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
+    ? (row.expectedOutputs as ExpectedOutput[])
+    : [];
   // The rule's session facts, when the read measured them (`needsYouLens`).
   const facts =
     row.lastAgentActivityAt !== undefined
@@ -467,15 +482,13 @@ export function projectOwedSlots(
           lastAgentWorkAt: row.lastAgentWorkAt ?? null,
           startedAt: row.startedAt ?? null,
           blocksOpenPr: row.blocksOpenPr === true,
+          expectedOutputs: outputs,
         }
       : null;
-  const outputs: ExpectedOutput[] = Array.isArray(row.expectedOutputs)
-    ? (row.expectedOutputs as ExpectedOutput[])
-    : [];
   const owed: OwedSlot[] = [];
   for (const slot of outputs) {
     if (!slot || typeof slot !== "object") continue;
-    if (!isOwedSlot(slot)) continue;
+    if (!isOwedSlot(slot, outputs)) continue;
     // The invariant (`owedSince` present IFF `owner === 'human'`) is enforced on
     // every write path, but this read must not INVENT a timestamp for a row that
     // predates it or was written around the doors: a slot with no stamp cannot
@@ -849,7 +862,8 @@ export async function listBlockingSlots(params: {
     for (const slot of outputs) {
       if (!isPlainObject(slot)) continue;
       const human =
-        isOwedSlot(slot) && (!isDraft || effectiveSlotAsk(slot) != null);
+        isOwedSlot(slot, outputs) &&
+        (!isDraft || effectiveSlotAsk(slot) != null);
       const agent =
         !human && isAgentBlockingSlot(slot, { status: row.status, isDraft });
       if (!human && !agent) continue;
@@ -888,8 +902,10 @@ export function stampRetired(
   which: (slot: ExpectedOutput) => boolean = () => true
 ): ExpectedOutput[] {
   const at = now.toISOString();
+  // The person's whole obligation, a grade still waiting on its output
+  // included (`deliverableOwedBy`, the slot alone): a cancel ends it too.
   return outputs.map((o) =>
-    o && typeof o === "object" && isOwedSlot(o) && which(o)
+    o && typeof o === "object" && deliverableOwedBy(o) === "you" && which(o)
       ? { ...o, retiredAt: at, retiredReason: reason }
       : o
   );
@@ -936,8 +952,10 @@ export function retirementForClose(
   const keptLabels = new Set(
     [...keep].map((l) => normalizeExpectedLabel(l) ?? l)
   );
+  // The slot alone, as `stampRetired` reads it: a grade waiting on its
+  // output is still the person's obligation for a cancel.
   const owed = (o: ExpectedOutput): boolean =>
-    !!o && typeof o === "object" && isOwedSlot(o);
+    !!o && typeof o === "object" && deliverableOwedBy(o) === "you";
   const kept = (o: ExpectedOutput): boolean =>
     keptLabels.has(normalizeExpectedLabel(o.label) ?? o.label);
   const which = (o: ExpectedOutput): boolean =>

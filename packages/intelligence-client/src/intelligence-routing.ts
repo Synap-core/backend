@@ -15,13 +15,9 @@ import {
   userPreferences,
   workspaces,
   intelligenceServices,
-  users,
-  workspaceMembers,
-  links,
-  apiKeys,
 } from "@synap/database/schema";
 import { IntelligenceHubClient } from "./intelligence-hub-client.js";
-import { resolveServiceKey } from "@synap/database";
+import { resolveServiceKey, ensurePersonalAgentUser } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 
 const logger = createLogger({ module: "intelligence-routing" });
@@ -159,7 +155,8 @@ export async function resolveIntelligenceService(
   ctx: ServiceResolutionContext = {}
 ): Promise<ResolvedService> {
   // Look up the dedicated AI agent user for this human+workspace (non-blocking)
-  const agentUserId = await lookupAgentUser(ctx.userId, ctx.workspaceId);
+  // The operator's personal AI, whatever the space (decision 6b45c6c3).
+  const agentUserId = await lookupAgentUser(ctx.userId);
 
   const { service } = await selectIntelligenceService(ctx);
   if (service) {
@@ -432,86 +429,38 @@ export async function selectPodDefaultService(): Promise<IntelligenceServiceRow 
 }
 
 /**
- * Find the dedicated AI agent user acting for a human — optionally narrowed to
- * one workspace.
+ * WHO an intelligence-service turn acts as: the operator's ONE personal AI
+ * (`ensurePersonalAgentUser`, decision 6b45c6c3 — "My one personal AI").
  *
- * The OWNER signal is `users.createdByUserId` (the same one `ownAdjunctFilter`
- * in `agent-identity-service.ts` calls canonical). The workspace-membership
- * join is only a DISAMBIGUATOR for a human who owns several agent-users.
+ * Every IS turn is the pod's AI working for the person, so it writes as that
+ * agent, on their behalf, under its own governance ladder and the person's
+ * Synap AI ceiling. The pod signs it as the turn's `act.sub`, which is what
+ * `resolveActorId` accepts.
  *
- * This used to bail on `!workspaceId`, which made every pod-wide turn
- * actor-less: `agentUserId` came back undefined, so agent-run telemetry (and
- * therefore LLM cost) was dropped for every Companion turn taken outside a
- * workspace lens. The lens is not the actor — absence of a lens must not erase
- * who is acting.
+ * This used to GUESS a "house" agent from space membership (the one agent the
+ * person created that was a member of the space, else none): in a space with
+ * one such member the turn acted as it, in a space with none or several it
+ * acted as NOBODY and every write ran as the person, unreviewed (live
+ * 2026-11-09: "Plan Next Content" in Content OS). Membership is not identity:
+ * the space is never consulted here, and the AI is never enrolled in it — a
+ * write in a space it is not a member of goes to the governance gate.
  *
- * Without a workspace we resolve on ownership alone, but we REFUSE TO GUESS:
- * if the human owns more than one agent-user we return undefined rather than
- * pick one, because mis-attributing a run (and its cost) to the wrong actor is
- * worse than not attributing it. That case is resolvable by passing a
- * workspaceId; a single-adjunct user — the common case — now resolves.
- *
- * Only a HOUSE agent (reach 'pod') is ever a candidate, in both branches: an
- * external agent (Claude Code, Cursor, a devbox agent…) is also an agent user
- * the human created, and is often a workspace member, but it must NEVER be
- * credited with — or governed as — an IS turn. `houseAgentFilter` is the
- * query form of `resolveAgentReach` (`@synap/api` agent-binding.ts), which
- * this package cannot import; keep the two in step. The workspace branch
- * refuses to guess exactly like the pod-wide one.
+ * Never throws: a failed read/create returns undefined (the turn then names no
+ * agent and the pod refuses nothing it would not refuse anyway — logged).
  */
 async function lookupAgentUser(
-  userId: string | undefined,
-  workspaceId?: string
+  userId: string | undefined
 ): Promise<string | undefined> {
   if (!userId) return undefined;
   try {
-    if (workspaceId) {
-      const rows = await db
-        .select({ id: users.id })
-        .from(users)
-        .innerJoin(workspaceMembers, eq(workspaceMembers.userId, users.id))
-        .where(
-          and(
-            eq(users.userType, "agent"),
-            eq(workspaceMembers.workspaceId, workspaceId),
-            eq(users.createdByUserId, userId),
-            houseAgentFilter()
-          )
-        )
-        .limit(2);
-      return rows.length === 1 ? rows[0]!.id : undefined;
-    }
-
-    // Pod-wide: ownership only. Take 2 so "exactly one" is decidable — a
-    // `.limit(1)` could not tell a unique match from an arbitrary pick.
-    const rows = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(
-        and(
-          eq(users.userType, "agent"),
-          eq(users.createdByUserId, userId),
-          houseAgentFilter()
-        )
-      )
-      .limit(2);
-    return rows.length === 1 ? rows[0]!.id : undefined;
-  } catch {
-    // Agent user lookup is non-critical; degrade gracefully
+    return await ensurePersonalAgentUser(userId, db);
+  } catch (err) {
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      "personal agent lookup failed — the turn names no agent"
+    );
     return undefined;
   }
-}
-
-/**
- * `resolveAgentReach(id) === 'pod'`, as SQL on `users`: an agentType, no
- * `dispatched_via` binding, and no non-internal key it owns (live or revoked).
- */
-function houseAgentFilter() {
-  return and(
-    drizzleSql`NULLIF(TRIM(${users.agentType}), '') IS NOT NULL`,
-    drizzleSql`NOT EXISTS (SELECT 1 FROM ${links} WHERE ${links.fromType} = 'participant' AND ${links.fromId} = ${users.id}::text AND ${links.toType} = 'tool' AND ${links.linkType} = 'dispatched_via')`,
-    drizzleSql`NOT EXISTS (SELECT 1 FROM ${apiKeys} WHERE ${apiKeys.userId} = ${users.id} AND ${apiKeys.keyType} IS DISTINCT FROM 'is_internal')`
-  );
 }
 
 /** Timeout for service resolution DB queries — prevents hangs during chat triggers */

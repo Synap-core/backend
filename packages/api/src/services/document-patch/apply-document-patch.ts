@@ -57,6 +57,7 @@ import { createLogger } from "@synap-core/core";
 import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import { bodyWithoutTitleHeading } from "@synap-core/markdown-core/sections";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import { assertQuestionMayBeFiled } from "./ask-governance.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
 import {
   assertDocumentBaseRevision,
@@ -88,6 +89,11 @@ import {
   type PatchWriter,
   type SectionPreview,
 } from "./patch-ops.js";
+import {
+  materializeAskDefinitionsInOps,
+  opsHoldAskDefinition,
+} from "./materialize-asks.js";
+import { askNudgeFor, patchOpTexts } from "./ask-nudge.js";
 import {
   buildDocumentEditRecord,
   documentPatchPayload,
@@ -502,7 +508,10 @@ export function refresherRewritesOnlyItsSections(
   );
   return (
     ops.length > 0 &&
-    ops.every((op) => op.op === "upsert_section" && own.has(op.id))
+    ops.every(
+      (op) =>
+        op.op === "upsert_section" && op.form !== "heading" && own.has(op.id)
+    )
   );
 }
 
@@ -634,6 +643,27 @@ export interface ApplyDocumentPatchInput {
   sourceMessageId?: string;
   /** The request's session (provenance on the proposal); not the session door's. */
   provenanceSessionId?: string | null;
+  /**
+   * The session this request VERIFIABLY runs in (ownership-checked), the only
+   * one a question written in the document may be filed on. Absent ⇒ none
+   * (the section door carries its own in `session.ambientSessionId`).
+   */
+  ambientSessionId?: string | null;
+  /**
+   * The pod files a MODEL's draft for the person's review (a one-shot
+   * `generate` run, `services/playbooks/generate-run.ts`): always a pending
+   * proposal, authored by this machine marker, whatever a rule would
+   * auto-approve. Requires `systemAuthor` (the section it writes is AI-owned).
+   * The same three options the goal loop's proposed run uses
+   * (`source: "intelligence"`, `forcePropose`, `machineAuthor`).
+   */
+  forReview?: { machineAuthor: `system:${string}` };
+  /**
+   * The playbook run that drafted this patch (a one-shot run), copied onto
+   * the proposal's data as `run`: from a proposal, `GET /runs/:id` reopens
+   * how the draft was made. Provenance only; nothing reads it to decide.
+   */
+  run?: { id: string; playbookId: string };
 }
 
 interface PatchResultCommon {
@@ -688,6 +718,8 @@ export interface DocumentPatchProposalData {
   author: string;
   sessionState?: string;
   systemAuthor?: string;
+  /** The playbook run that drafted it (`ApplyDocumentPatchInput.run`). */
+  run?: { id: string; playbookId: string };
 }
 
 function parseOps(ops: unknown): DocumentPatchOp[] {
@@ -761,7 +793,7 @@ export async function applyDocumentPatch(
   // The name the document will carry, so the one-title rule strips a heading
   // equal to the NEW name when a patch renames and rewrites together.
   const rename = resolvePatchTitle(doc.title, parsedOps);
-  const ops = withoutTitleHeading(parsedOps, rename?.after ?? doc.title);
+  let ops = withoutTitleHeading(parsedOps, rename?.after ?? doc.title);
   // Scope / refresher: read and floored (as the principal) before the gate.
   const fields = await resolveDocumentScopeFields(
     resolvePatchFields(ops),
@@ -814,13 +846,14 @@ export async function applyDocumentPatch(
     refresher: refresherRun ? doc.refreshAutomationId : null,
   });
   const baseContent = await readPatchDocumentContent(doc);
-  const rendered = renderDocumentPatch(baseContent, ops, {
+  const renderOptions = {
     writer,
     allowRemovingEmbeds: input.allowRemovingEmbeds === true,
-  });
+  };
+  let rendered = renderDocumentPatch(baseContent, ops, renderOptions);
 
   // 4. Advisory diagnostics of the result.
-  const diagnostics = await diagnoseForDocument(
+  let diagnostics = await diagnoseForDocument(
     rendered.markdown,
     doc,
     input.userId
@@ -848,44 +881,105 @@ export async function applyDocumentPatch(
         ? REFRESHER_SECTION_ACTION
         : SECTION_UPDATE_ACTION
     : DOCUMENT_UPDATE_ACTION;
-  const data: DocumentPatchProposalData = {
-    documentId: doc.id,
-    ...(input.session ? { sessionId: input.session.sessionId } : {}),
-    ops,
-    baseRevision: base.revision ?? doc.contentRevision,
-    baseVersion: doc.currentVersion,
-    preview: rendered.previews,
-    ...diagnosticsFields(diagnostics),
-    allowRemovingEmbeds: input.allowRemovingEmbeds === true,
-    ...(rename ? { rename } : {}),
-    author: writer.author,
-    ...(writer.sessionState ? { sessionState: writer.sessionState } : {}),
-    ...(systemAuthor ? { systemAuthor } : {}),
-  };
-  // A proposal filed against a legacy checkpoint base keeps comparing on it.
-  const proposalData: Record<string, unknown> =
-    base.version !== undefined
-      ? { ...data, baseRevision: undefined, baseVersion: base.version }
-      : { ...data };
   const workspaceId = input.session
     ? input.session.workspaceId
     : doc.workspaceId;
   const provenanceSessionId =
     input.session?.sessionId ?? input.provenanceSessionId ?? undefined;
-  const perm = await checkPermissionOrPropose({
+  // The proposal's payload: read at the call, so the ops a materialized
+  // question rewrote are the ones a proposal stores.
+  const proposalData = (): Record<string, unknown> => {
+    const data: DocumentPatchProposalData = {
+      documentId: doc.id,
+      ...(input.session ? { sessionId: input.session.sessionId } : {}),
+      ops,
+      baseRevision: base.revision ?? doc.contentRevision,
+      baseVersion: doc.currentVersion,
+      preview: rendered.previews,
+      ...diagnosticsFields(diagnostics),
+      allowRemovingEmbeds: input.allowRemovingEmbeds === true,
+      ...(rename ? { rename } : {}),
+      author: writer.author,
+      ...(writer.sessionState ? { sessionState: writer.sessionState } : {}),
+      ...(systemAuthor ? { systemAuthor } : {}),
+      ...(input.run
+        ? { run: { id: input.run.id, playbookId: input.run.playbookId } }
+        : {}),
+    };
+    // A proposal filed against a legacy checkpoint base keeps comparing on it.
+    return base.version !== undefined
+      ? { ...data, baseRevision: undefined, baseVersion: base.version }
+      : { ...data };
+  };
+  // Everything the gate reads except the subject, the action and the data:
+  // shared by the dry-run check below and the real gate call.
+  const gateBase = () => ({
     userId: input.userId,
     ...(agentUserId ? { agentUserId, source: "intelligence" as const } : {}),
     workspaceId: workspaceId ?? undefined,
-    subjectType: "document",
-    action,
     // An agent rewriting the whole body is always reviewed, whatever a rule says.
     ...(agentUserId && hasReplaceAll ? { forcePropose: true } : {}),
+    // A model's draft the pod files for the person: always reviewed.
+    ...(!agentUserId && systemAuthor && input.forReview
+      ? {
+          source: "intelligence" as const,
+          forcePropose: true,
+          machineAuthor: input.forReview.machineAuthor,
+        }
+      : {}),
     ...(provenanceSessionId ? { sessionId: provenanceSessionId } : {}),
     ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     ...(input.sourceMessageId
       ? { sourceMessageId: input.sourceMessageId }
       : {}),
-    data: { ...proposalData, id: doc.id, title: doc.title },
+  });
+
+  // 5b. A question DEFINITION an agent wrote (`:::synap-ask` + an `ask`) becomes
+  // a real question on the author's verified session, and the ops the write
+  // stores, or the proposal carries (an approval applies stored ops and never
+  // materializes), hold the reference form. Filed only once every floor above
+  // has passed and a dry run of governance (and the agent's proposal cap) does
+  // not refuse the write (`ask-governance.ts`; no proposal is filed by it).
+  // Only an agent's write: the pod's own (closing report) and a person's never are.
+  if (agentUserId && !systemAuthor && opsHoldAskDefinition(ops)) {
+    await assertQuestionMayBeFiled(
+      {
+        ...gateBase(),
+        subjectType: "document",
+        action,
+        data: { ...proposalData(), id: doc.id, title: doc.title },
+      },
+      agentUserId
+    );
+    const materialized = await materializeAskDefinitionsInOps(ops, {
+      userId: input.userId,
+      agentUserId,
+      sessionId: input.session
+        ? (input.session.ambientSessionId ?? null)
+        : (input.ambientSessionId ?? null),
+      namedSessionId: provenanceSessionId ?? null,
+    });
+    if (materialized.changed) {
+      ops = materialized.ops;
+      rendered = renderDocumentPatch(baseContent, ops, renderOptions);
+      diagnostics = await diagnoseForDocument(
+        rendered.markdown,
+        doc,
+        input.userId
+      );
+    }
+  }
+  // A prose question for the person, with no ask block anywhere in the
+  // result: one advisory line on the receipt (`ask-nudge.ts`), agents only.
+  const nudge = agentUserId
+    ? askNudgeFor(patchOpTexts(ops), rendered.markdown)
+    : null;
+  const nudgeField = nudge ? { nudge } : {};
+  const perm = await checkPermissionOrPropose({
+    ...gateBase(),
+    subjectType: "document",
+    action,
+    data: { ...proposalData(), id: doc.id, title: doc.title },
   });
 
   if ("denied" in perm && perm.denied) {
@@ -904,6 +998,7 @@ export async function applyDocumentPatch(
       ...(rename ? { rename } : {}),
       preview: rendered.previews,
       ...diagnosticsFields(diagnostics),
+      ...nudgeField,
     };
   }
 
@@ -953,6 +1048,7 @@ export async function applyDocumentPatch(
     ...(rename ? { rename } : {}),
     preview: rendered.previews,
     ...diagnosticsFields(diagnostics),
+    ...nudgeField,
     ...("autoApprovedProposalId" in perm && perm.autoApprovedProposalId
       ? { autoApprovedProposalId: perm.autoApprovedProposalId }
       : {}),

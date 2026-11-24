@@ -15,12 +15,12 @@
 import { registerOpenApi } from "./_codecs/_register.js";
 import type { HubHono } from "./_shared.js";
 import {
-  CREATABLE_VIEW_DEFINITIONS,
+  AGENT_CREATABLE_VIEW_DEFINITIONS,
   VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
 
 const CREATABLE_VIEW_KEYS = new Set<string>(
-  CREATABLE_VIEW_DEFINITIONS.map((view) => view.key)
+  AGENT_CREATABLE_VIEW_DEFINITIONS.map((view) => view.key)
 );
 
 const MANIFEST = {

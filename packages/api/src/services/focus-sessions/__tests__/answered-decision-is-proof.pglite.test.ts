@@ -227,7 +227,7 @@ describe("an answered decision IS the proof", () => {
       blockedReason: "decision",
       ask: { mode: "choose" },
     });
-    expect(isOwedSlot(slot!)).toBe(true);
+    expect(isOwedSlot(slot!, [])).toBe(true);
     const [outcome] = projectSessionOutcomes({
       expectedOutputs: [slot],
       sessionTerminal: false,
@@ -256,7 +256,7 @@ describe("an answered decision IS the proof", () => {
     expect(slot!.decisionId).toBe(DECISION);
     expect(slot!.claimedDone).toBeUndefined();
     expect(slot!.status).toBeUndefined();
-    expect(isOwedSlot(slot!)).toBe(false);
+    expect(isOwedSlot(slot!, [])).toBe(false);
 
     // The decision, produced in this session, is the outcome's evidence.
     const { outputs, pendingExpected } = joinSessionOutputs({

@@ -118,7 +118,7 @@ function normalizationNotice(
  * valid ones ride the kind's proposal as `deferredFields`). An invalid spec
  * becomes its ledger entry, never a write.
  */
-function checkFieldSpec(
+export function checkFieldSpec(
   spec: Record<string, unknown>
 ):
   | { field: ProposedKindField; normalized: { normalizedFrom?: string } }
@@ -327,23 +327,20 @@ export async function defineProfile(
     createdProfile?.profileKind === "role" &&
     (createdProfile?.scope === "shared" || createdProfile?.scope === "system");
 
-  // The kind's fields as the caller's space sees them, for a re-declared
-  // field that GROWS its allowed values (option C, below).
-  // Read only when a re-declared field names a closed set: nothing else on
-  // this path needs the stored schema.
-  const declaresOptions = carried.some(
-    (field) =>
-      declaredOptionKeys(
-        field.constraints as Record<string, unknown> | undefined
-      ) !== undefined
-  );
+  // The kind's fields as the caller's space sees them: a re-declared field
+  // that GROWS its allowed values (option C, below), and a field already on
+  // the kind, which is never filed again (ticket fd146324).
   const storedFields: EffectiveProperty[] =
-    result?.existing === true && declaresOptions
+    result?.existing === true
       ? await new ProfileResolutionService(db).getEffectiveProperties(
           profileId,
           input.workspaceId
         )
       : [];
+  const storedOf = (field: ProposedKindField) =>
+    storedFields.find(
+      (p) => p.slug === field.slug || slugifyPropertyKey(p.slug) === field.slug
+    );
 
   const outcomeBySlug = new Map<string, Record<string, unknown>>();
   // A field that already exists and grows its allowed values goes through the
@@ -355,10 +352,7 @@ export async function defineProfile(
         input,
         // The define door normalises a slug (`uo_category` → `uo-category`);
         // a field seeded with the other spelling is still the same field.
-        storedFields.find(
-          (p) =>
-            p.slug === field.slug || slugifyPropertyKey(p.slug) === field.slug
-        ),
+        storedOf(field),
         field
       );
       if (grown) outcomeBySlug.set(field.slug, grown);
@@ -368,6 +362,18 @@ export async function defineProfile(
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+
+  // A field ALREADY on the kind that did not grow is reported `unchanged`
+  // BEFORE anything is filed (ticket fd146324): the create door never rewrites
+  // a stored definition, so a create proposal for it could only be approved
+  // into nothing. Only a re-declared LINK setting (required, default, order)
+  // still rides the create batch — re-linking is the one thing it applies.
+  for (const field of carried) {
+    if (outcomeBySlug.has(field.slug)) continue;
+    const stored = storedOf(field);
+    if (!stored || changesLink(stored, field)) continue;
+    outcomeBySlug.set(field.slug, alreadyOnKind(stored, field.slug));
   }
 
   // ONE call for every other valid field (ticket a375443d): on an existing
@@ -453,6 +459,35 @@ export async function defineProfile(
   };
 }
 
+/** Does the declaration change a setting the profile LINK holds? */
+function changesLink(stored: EffectiveProperty, field: ProposedKindField) {
+  return (
+    (field.required !== undefined && field.required !== stored.required) ||
+    (field.displayOrder !== undefined &&
+      field.displayOrder !== stored.displayOrder) ||
+    (field.defaultValue !== undefined &&
+      JSON.stringify(field.defaultValue) !==
+        JSON.stringify(stored.defaultValue ?? null))
+  );
+}
+
+/**
+ * The receipt for a field already on the kind: nothing filed, and the door
+ * that CAN change it named — the kind's status field has its own.
+ */
+function alreadyOnKind(
+  stored: EffectiveProperty,
+  slug: string
+): Record<string, unknown> {
+  return {
+    status: "unchanged",
+    propertyDefId: stored.id,
+    message: stored.isLifecycle
+      ? `'${slug}' is already this kind's status field (id ${stored.id}); this door never rewrites it, so nothing was filed. To add, relabel, reorder or retire its statuses, propose it with \`synap_change_lifecycle_options\` (the lifecycle door, tools:schema).`
+      : `A field '${slug}' (id ${stored.id}) is already on this kind; this door never rewrites a stored definition, so nothing was filed. To change it, use the edit door \`profiles.updatePropertyDef\` / \`PATCH /api/hub/property-defs/${stored.id}\` (governed). To add allowed values, re-declare its \`constraints.enum\` with every stored value plus the new ones.`,
+  };
+}
+
 /** The keys a declared field's closed set names, in either spelling. */
 function declaredOptionKeys(
   constraints: Record<string, unknown> | undefined
@@ -473,9 +508,10 @@ function declaredOptionKeys(
  * value points an agent to when no allowed value fits.
  *
  * Anything else about an existing field is left as it was (this door never
- * rewrites a stored definition): `null` hands it to the create door, which
- * reports `unchanged` and names the edit door. A declaration that also DROPS
- * a value is not a growth and is handed over the same way.
+ * rewrites a stored definition): `null` hands it back, and it is reported
+ * `unchanged` with the edit door named (`alreadyOnKind`), nothing filed. A
+ * declaration that also DROPS a value is not a growth and is handed back the
+ * same way.
  */
 async function growFieldOptions(
   caller: ProfilesCaller,

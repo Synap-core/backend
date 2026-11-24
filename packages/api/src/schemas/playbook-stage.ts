@@ -25,8 +25,11 @@ import {
   AWAITED_GATE_PROPOSAL_TYPES,
   type AwaitedGateProposalType,
   MAX_STAGE_LESSONS,
+  PLAYBOOK_FOR_EACH_MAX_BATCH,
   PLAYBOOK_FOR_EACH_MAX_ITEMS,
   PLAYBOOK_STAGE_TIERS,
+  PLAYBOOK_TOOL_MAX_CHARS,
+  PLAYBOOK_TOOLS_MAX,
   STAGE_LESSON_MAX_CHARS,
   type PlaybookStage,
   type PlaybookStageCategory,
@@ -36,6 +39,11 @@ import {
 import type { TrackStageDeclaration } from "@synap-core/types/units";
 import { sessionCriteriaSchema } from "./session-criteria.js";
 import { AskSchema } from "@synap-core/types/ask";
+import {
+  requiresSchema,
+  stageRunnerSchema,
+  stageUsesSchema,
+} from "./playbook-runner.js";
 
 /**
  * The six, as a zod enum. Derived from the contract package's list rather than
@@ -49,7 +57,7 @@ export const playbookStageCategorySchema = z.enum(
 );
 
 /**
- * The advisory model tiers, as a zod enum derived from the contract package's
+ * The model tiers, as a zod enum derived from the contract package's
  * list so the door cannot drift from the type.
  */
 export const playbookStageTierSchema = z.enum(
@@ -69,6 +77,22 @@ export const relationTypeSlugSchema = z
   .regex(/^[a-z][a-z0-9_-]*$/, {
     message:
       'relationToSubject must be a relation type slug (lowercase, e.g. "made_for")',
+  });
+
+/** See `PlaybookStageEndAsk`: label, facts, what moves, the ask, its options source. */
+export const stageEndAskSchema = z
+  .strictObject({
+    label: z.string().trim().min(1).max(200),
+    why: z.string().trim().min(1).max(500).optional(),
+    unblocks: z.string().trim().min(1).max(200).optional(),
+    ask: AskSchema,
+    optionsFrom: z
+      .strictObject({ relation: relationTypeSlugSchema })
+      .optional(),
+  })
+  .refine((e) => !e.optionsFrom || e.ask.mode === "choose", {
+    message: "endAsk.optionsFrom fills only a choose ask",
+    path: ["optionsFrom"],
   });
 
 const IDENTIFIER_PATH = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$/;
@@ -111,6 +135,16 @@ export const playbookStageSchema = z.looseObject({
   category: playbookStageCategorySchema,
   description: z.string().max(5000).optional(),
   goal: z.string().max(5000).optional(),
+  /**
+   * The tools of this stage, a SUBSET of its playbook's `tools` (refused
+   * otherwise, `foldPlaybookTools`): while it is active the run gets its class
+   * floor plus these only. See `PlaybookStage.tools`.
+   */
+  tools: z
+    .array(z.string().trim().min(1).max(PLAYBOOK_TOOL_MAX_CHARS))
+    .max(PLAYBOOK_TOOLS_MAX)
+    .optional(),
+  /** DEPRECATED input: folded into `tools` at the write door, never stored. */
   grants: z
     .array(
       z.looseObject({
@@ -215,6 +249,12 @@ export const playbookStageSchema = z.looseObject({
    */
   subjectStatus: z.string().trim().min(1).max(200).optional(),
   /**
+   * The subject status value this stage's APPROVED work reaches — see
+   * `PlaybookStage.onApproved` (decision D2). Same shape and same inertness
+   * as `subjectStatus`.
+   */
+  onApproved: z.string().trim().min(1).max(200).optional(),
+  /**
    * Where a failed gate returns the run — see `PlaybookStage.onFail`. STRICT
    * like `gate`: it is a control, and a misspelled key must not survive.
    */
@@ -222,7 +262,7 @@ export const playbookStageSchema = z.looseObject({
     .strictObject({ toStage: z.string().trim().min(1).max(200) })
     .optional(),
   /**
-   * Advisory model tier — see `PlaybookStage.tier`. Closed set: a typo
+   * Model tier — see `PlaybookStage.tier`. Closed set: a typo
    * ("fast", "Deep") is refused at the door rather than stored as a tier no
    * executor will ever map.
    */
@@ -251,6 +291,13 @@ export const playbookStageSchema = z.looseObject({
         .optional(),
       /** Declared ceiling on items per run; never above the pod-wide cap. */
       max: z.number().int().min(1).max(PLAYBOOK_FOR_EACH_MAX_ITEMS).optional(),
+      /** Items per child run (default 1). */
+      batch: z
+        .number()
+        .int()
+        .min(1)
+        .max(PLAYBOOK_FOR_EACH_MAX_BATCH)
+        .optional(),
     })
     .optional(),
   /**
@@ -277,6 +324,28 @@ export const playbookStageSchema = z.looseObject({
       message: "when needs `equals` or `exists`",
     })
     .optional(),
+  /**
+   * WHO does this step — see `PlaybookStage.runner` and `playbook-runner.ts`.
+   * Absent ⇒ the run's own agent.
+   */
+  runner: stageRunnerSchema.optional(),
+  /**
+   * The step IS another playbook, pinned at a version — see
+   * `PlaybookStage.uses`. The write door fills in `version` and checks the
+   * playbook exists, the chain has no cycle and is not too deep
+   * (`services/playbooks/stage-uses.ts`).
+   */
+  uses: stageUsesSchema.optional(),
+  /** The tools this step needs, by capability key — see `PlaybookStage.requires`. */
+  requires: requiresSchema.optional(),
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see `PlaybookStageEndAsk` (`services/runs/stage-end-ask.ts` raises it).
+   * STRICT like `gate`: it is a control, so a misspelled key must not survive
+   * as a stage that looks like it asks and never does. The ask is parsed by
+   * the ONE ask schema; `optionsFrom` fills only a `choose`.
+   */
+  endAsk: stageEndAskSchema.optional(),
 });
 
 // ── Compile-time coverage floor: every stage field is CLASSIFIED ─────────────
@@ -312,8 +381,10 @@ const _TRACK_READ_STAGE_FIELDS = [
 
 /** Stage fields a track never reads — each with its reason. */
 const _TRACK_WITHHELD_STAGE_FIELDS = [
-  // Capability grants apply to a session RUN of the playbook (session tools);
-  // a track stage session is started without a template binding.
+  // A stage's tools narrow a session RUN of the playbook (the run's tool
+  // profile); a track stage session is started without a template binding.
+  // `grants` is their deprecated input, folded into `tools` at the write door.
+  "tools",
   "grants",
   // Order within a category group — the snapshot's array order is the track's.
   "position",
@@ -324,20 +395,31 @@ const _TRACK_WITHHELD_STAGE_FIELDS = [
   // so a stage's tie to a subject's lifecycle value has nothing to write and
   // nothing to follow on a track; it governs session RUNS of the playbook.
   "subjectStatus",
+  // Same reason: the value an approved stage reaches is a subject's.
+  "onApproved",
   // The failed-gate return path is applied by the SESSION run's gate
   // (`stage-on-fail.ts`); a track's gate holds and resumes explicitly.
   "onFail",
-  // Advisory model choice for a session RUN's executor; a track stage session
-  // is started by the tracks service, which does not pick a model, and nothing
-  // consumes the tier yet.
+  // The model tier of a session RUN's turn; a track stage session is started
+  // by the tracks service, which does not pick a model.
   "tier",
   // A track stage session is started once by the tracks service; fanning a
-  // stage out over a collection is a session RUN's concern, and nothing
-  // consumes it yet.
+  // stage out over a collection into child runs is a session RUN's concern
+  // (the stage runner, `stage-for-each.ts`).
   "forEach",
   // A track stage session is started by the tracks service; skipping a stage
   // on a condition is a session RUN's concern, and nothing consumes it yet.
   "when",
+  // Who does a step, the step that IS a playbook, and the tools it needs are
+  // a session RUN's concern (the stage runner hands the step over); a track
+  // stage session is started by the tracks service and the `project` scope is
+  // legacy (spec 7111934d §6).
+  "runner",
+  "uses",
+  "requires",
+  // Raised by the pod when a session RUN's turn ends the stage
+  // (`services/runs/stage-end-ask.ts`); a track stage session has no run turn.
+  "endAsk",
 ] as const satisfies ReadonlyArray<keyof PlaybookStage>;
 
 type ClassifiedStageField =

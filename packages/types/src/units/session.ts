@@ -28,7 +28,7 @@
  * reaped session as "could not read" while the pod filed it as paused.
  *
  * **"Working" needs a LIVE fact (founder decision D1, 2026-10-04).** An open
- * lifecycle (`active` / `forming`) is not "an agent is working". When the
+ * lifecycle (`active`) is not "an agent is working". When the
  * caller passes the pod's liveness facts (`live`), the session reads
  * `working` only while `isSessionWorkingNow` holds — a turn in flight or
  * activity inside `SESSION_WORKING_WINDOW_MS` — and otherwise `idle`, which
@@ -43,8 +43,12 @@
  */
 
 import {
+  PLANNED_SESSION_STATUS,
+  isPlannedSessionStatus,
   isSuspendedSessionStatus,
   isTerminalSessionStatus,
+  sessionStatusCategory,
+  type SessionClosedAs,
 } from "../focus-sessions/statuses.js";
 import { classifyDependencyBlocker } from "../connections/dependency.js";
 import {
@@ -63,11 +67,12 @@ import {
   type NeedsYouFacts,
 } from "./needs-you.js";
 
-/** Lifecycle statuses meaning a person or agent is actively in the session. */
-const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set([
-  "active",
-  "forming",
-]);
+/**
+ * The lifecycle status meaning a person or agent is in the session. `forming`
+ * is NOT running: it is a planned step that has not started (P1); it reads
+ * `not_started`, or `blocked` while it waits on another.
+ */
+const RUNNING_SESSION_STATUSES: ReadonlySet<string> = new Set(["active"]);
 /** The two the pod expresses as a lifecycle state rather than as a cron. */
 const CADENCE_SESSION_STATUSES: ReadonlySet<string> = new Set([
   "scheduled",
@@ -149,6 +154,8 @@ export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
       (open && !working && !liveUnread),
     schedule: cadence,
     unreadable: open && liveUnread,
+    // A planned step has not started: no rail, no "working" (P1).
+    ...(isPlannedSessionStatus(facts.status) ? { everStarted: false } : {}),
     progress:
       typeof facts.progress === "number"
         ? { done: Math.max(0, Math.min(100, facts.progress)), total: 100 }
@@ -216,8 +223,8 @@ export interface ProjectAggregateSessionFact {
 
 /**
  * Does this session need you? `unitFacts` through the one rule, else the
- * legacy actor. Exported for the other per-session readers of a list page
- * (`deriveStuckChains`), so none of them re-states the draft exclusion.
+ * legacy actor. Exported for the other per-session readers of a list page,
+ * so none of them re-states the draft exclusion.
  */
 export function aggregateNeedsYou(
   session: ProjectAggregateSessionFact
@@ -360,32 +367,265 @@ export function sessionRowInput(session: SessionRowFact): UnitStateInput {
 
 /**
  * A row's blocked-by edges as the path wire carries them: the blockers with
- * their own status, or a section the pod could not read.
+ * their own status and how they ended (`closedAs`; absent from an older pod),
+ * or a section the pod could not read.
  */
 export type BlockerEdges =
   | {
       status: "ok";
-      items: ReadonlyArray<{ title: string; status: string }>;
+      items: ReadonlyArray<{
+        title: string;
+        status: string;
+        closedAs?: SessionClosedAs | null;
+        /** Ended as a decision's arm not taken (P5): holds nobody. */
+        skipped?: boolean;
+      }>;
     }
   | { status: "unavailable" }
   | null
   | undefined;
 
 /**
- * The title of the first session this row still waits on, or `null`. THE
- * dependency rule decides ({@link classifyDependencyBlocker}): only a
- * DELIVERED blocker (closed) clears; one that ended without delivering
- * (cancelled, failed) still holds until someone re-plans, and so does a stale
- * one. An unreadable section claims no blocker (the row's edge chip says
- * "couldn't load" — the MARK does not guess).
+ * The blockers this row still waits on, in edge order: every item THE
+ * dependency rule ({@link classifyDependencyBlocker}) does not call
+ * DELIVERED. `dropped` = it ended without delivering (cancelled, failed,
+ * closed with required work open) and holds until someone re-plans; a stale
+ * one holds as open. `null` when the section was not read (an unreadable
+ * section claims nothing either way).
+ */
+export function openBlockersOf(
+  edges: BlockerEdges
+): Array<{ title: string; dropped: boolean }> | null {
+  if (!edges || edges.status !== "ok") return null;
+  return edges.items.flatMap((item) => {
+    const outcome = classifyDependencyBlocker(
+      "session",
+      item.status,
+      null,
+      item.closedAs,
+      item.skipped
+    );
+    return outcome === "delivered"
+      ? []
+      : [{ title: item.title, dropped: outcome === "dropped" }];
+  });
+}
+
+/**
+ * The title of the first session this row still waits on, or `null`
+ * ({@link openBlockersOf}). An unreadable section claims no blocker (the
+ * row's edge chip says "couldn't load" — the MARK does not guess).
  */
 export function openBlockerTitle(edges: BlockerEdges): string | null {
-  if (!edges || edges.status !== "ok") return null;
+  return openBlockersOf(edges)?.[0]?.title ?? null;
+}
+
+// ─── A plan step's readiness — THE rule a pod and a canvas both call ───────
+
+/**
+ * Where a step of a plan stands (founder decisions P1, C5, 21 Nov 2026):
+ *
+ *   planned  not started (`forming` / `scheduled`), and it will move by
+ *            itself: a blocker is still open, or its planned date has not
+ *            come;
+ *   ready    not started, every blocker delivered, its date reached: it can
+ *            start now (a `forming` step is woken to active by the pod);
+ *   blocked  a blocker ended WITHOUT delivering (it never moves by itself:
+ *            its owner re-plans), or a started step still waits on one;
+ *   active   started (active, paused, stale) and nothing holds it;
+ *   done     ended delivered (`closedAs` done);
+ *   skipped  ended as a decision's arm not taken (decision arms, P5);
+ *   dropped  ended without delivering (cancelled, failed, closed with
+ *            required work open).
+ *
+ * Every word is DERIVED from facts the pod already stores: the status and its
+ * category (`SESSION_STATUS_DECLARATION`), the blockers through THE
+ * dependency rule (`deriveOpenBlockers` / {@link openBlockersOf}) and the
+ * step's `plannedFor`. Nothing here is stored.
+ */
+export const STEP_READINESS_STATES = [
+  "planned",
+  "ready",
+  "blocked",
+  "active",
+  "done",
+  "skipped",
+  "dropped",
+] as const;
+export type StepReadiness = (typeof STEP_READINESS_STATES)[number];
+
+/** The session metadata keys a step's time rides on (no column, no migration). */
+export const STEP_PLANNED_FOR_KEY = "plannedFor" as const;
+export const STEP_DUE_BY_KEY = "dueBy" as const;
+
+/**
+ * A step's date as written: a month (`2027-03`), a day (`2027-03-14`) or an
+ * ISO date-time with its offset. A month or a day is read in UTC.
+ */
+const MONTH = /^(\d{4})-(0[1-9]|1[0-2])$/;
+const DAY = /^(\d{4})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const DATE_TIME =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * When a step's window OPENS, in ms: the first instant of the month or day,
+ * or the date-time itself. `null` for anything else (a malformed value is
+ * never read as "already reached"). A day that does not exist (`2027-02-30`)
+ * is malformed.
+ */
+export function stepDateStart(value: string | null | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const month = MONTH.exec(value);
+  if (month) return Date.UTC(Number(month[1]), Number(month[2]) - 1, 1);
+  const day = DAY.exec(value);
+  if (day) {
+    const [y, m, d] = [Number(day[1]), Number(day[2]), Number(day[3])];
+    const t = Date.UTC(y, m - 1, d);
+    return new Date(t).getUTCDate() === d ? t : null;
+  }
+  if (DATE_TIME.test(value)) {
+    const t = Date.parse(value);
+    return Number.isFinite(t) ? t : null;
+  }
+  return null;
+}
+
+/** A value a door may store as `plannedFor` / `dueBy`. */
+export function isStepDate(value: unknown): value is string {
+  return typeof value === "string" && stepDateStart(value) !== null;
+}
+
+/** The step's `plannedFor` / `dueBy` off a session's metadata, when valid. */
+export function stepTimeOf(metadata: unknown): {
+  plannedFor: string | null;
+  dueBy: string | null;
+} {
+  const m =
+    metadata && typeof metadata === "object" && !Array.isArray(metadata)
+      ? (metadata as Record<string, unknown>)
+      : {};
+  const read = (v: unknown) => (isStepDate(v) ? v : null);
+  return {
+    plannedFor: read(m[STEP_PLANNED_FOR_KEY]),
+    dueBy: read(m[STEP_DUE_BY_KEY]),
+  };
+}
+
+/**
+ * Has the step's planned window opened? No `plannedFor` ⇒ yes. A value that
+ * does not parse ⇒ NO: an unreadable date never starts work early.
+ */
+export function stepWindowReached(
+  plannedFor: string | null | undefined,
+  now: number
+): boolean {
+  if (plannedFor == null || plannedFor === "") return true;
+  const start = stepDateStart(plannedFor);
+  return start !== null && now >= start;
+}
+
+export interface StepReadinessFacts {
+  /** The session's own `focus_sessions.status`. */
+  status: string;
+  /** How it ended (`sessionClosedAs`); absent on a closed step reads done. */
+  closedAs?: SessionClosedAs | null;
+  /**
+   * It ended as a decision's arm not taken (P5): the session's
+   * `verification_report.notTaken`, read as `skipped` by the dependency read.
+   */
+  skipped?: boolean;
+  /**
+   * The blockers that still hold it, after `replaces` — the output of THE
+   * dependency rule (`deriveOpenBlockers`, `openBlockerIds`, or
+   * {@link openBlockersOf} for a path row), plus any output it waits on
+   * (`dropped: false`). `null` = the read FAILED: never read as cleared.
+   */
+  openBlockers: ReadonlyArray<{ dropped: boolean }> | null;
+  /** `metadata.plannedFor` ({@link stepTimeOf}). */
+  plannedFor?: string | null;
+  /** The clock. Defaults to `Date.now()`. */
+  now?: number;
+}
+
+/** THE readiness rule. Pure; see {@link STEP_READINESS_STATES}. */
+export function deriveStepReadiness(facts: StepReadinessFacts): StepReadiness {
+  const category = sessionStatusCategory(facts.status);
+  if (category === "done" || category === "lost") {
+    if (facts.skipped) return "skipped";
+    return category === "done" && facts.closedAs !== "not_done"
+      ? "done"
+      : "dropped";
+  }
+  const blockers = facts.openBlockers;
+  if (blockers?.some((b) => b.dropped)) return "blocked";
+  // A started step claims no block it cannot see (`null` reads active).
+  if (category !== "open") {
+    return blockers && blockers.length > 0 ? "blocked" : "active";
+  }
+  // Not started: a failed blocker read holds like an open blocker, never
+  // "ready" on a guess.
+  if (blockers === null || blockers.length > 0) return "planned";
+  return stepWindowReached(facts.plannedFor, facts.now ?? Date.now())
+    ? "ready"
+    : "planned";
+}
+
+/**
+ * How a step is BORN (founder decision P4, 21 Nov 2026): PLANNED (`forming`)
+ * when it waits on something at birth — a blocker declared with it, or a
+ * `plannedFor` still to come — unless its author says `startNow`; else
+ * `active`, as every session was. A step born planned owes nothing until the
+ * pod wakes it ({@link isStepReadyToWake}).
+ */
+export function stepBirthStatus(facts: {
+  startNow?: boolean | null;
+  /** It declares at least one blocker (written after the row exists). */
+  hasBlockers: boolean;
+  plannedFor?: string | null;
+  now?: number;
+}): typeof PLANNED_SESSION_STATUS | "active" {
+  if (facts.startNow === true) return "active";
+  const waits =
+    facts.hasBlockers ||
+    !stepWindowReached(facts.plannedFor, facts.now ?? Date.now());
+  return waits ? PLANNED_SESSION_STATUS : "active";
+}
+
+/**
+ * The step's time as a door stores it on `metadata` (no column, no
+ * migration): only the keys given, and only valid dates; `null` clears.
+ * `invalid` names a key whose value is not a step date ({@link isStepDate}).
+ */
+export function stepTimePatch(input: {
+  plannedFor?: string | null;
+  dueBy?: string | null;
+}):
+  | { ok: true; patch: Partial<Record<"plannedFor" | "dueBy", string | null>> }
+  | { ok: false; invalid: "plannedFor" | "dueBy" } {
+  const patch: Partial<Record<"plannedFor" | "dueBy", string | null>> = {};
+  for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+    const v = input[key];
+    if (v === undefined) continue;
+    if (v !== null && !isStepDate(v)) return { ok: false, invalid: key };
+    patch[key] = v;
+  }
+  return { ok: true, patch };
+}
+
+/** The refusal a door says for a malformed step date (one sentence). */
+export function stepDateRefusal(key: "plannedFor" | "dueBy"): string {
+  return `${key} must be a month (2027-03), a day (2027-03-14) or an ISO date-time with its offset.`;
+}
+
+/**
+ * Is this a PLANNED step the pod should wake now (P3): `forming`, and
+ * {@link deriveStepReadiness} says `ready`. A `scheduled` appointment is
+ * never woken here: its own clock opens it.
+ */
+export function isStepReadyToWake(facts: StepReadinessFacts): boolean {
   return (
-    edges.items.find(
-      (item) =>
-        classifyDependencyBlocker("session", item.status) !== "delivered"
-    )?.title ?? null
+    isPlannedSessionStatus(facts.status) &&
+    deriveStepReadiness(facts) === "ready"
   );
 }
 

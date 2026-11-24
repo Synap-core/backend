@@ -29,7 +29,10 @@ import {
   playbookRuns,
   liveRunStatusWhere,
 } from "@synap/database";
-import type { PlaybookRunExternalAgent } from "@synap/database/schema";
+import {
+  sessionStageRuns,
+  type PlaybookRunExternalAgent,
+} from "@synap/database/schema";
 import {
   AgentBindingError,
   resolveAgentBinding,
@@ -86,10 +89,14 @@ export type WakeExternalAgentResult =
   | { status: "failed"; message: string };
 
 /**
- * The session's newest LIVE run handed to this agent, with the provider task
- * id it was started as. `null` ⇒ nothing to send to.
+ * The provider task this agent works in for the session, with the run it
+ * belongs to. `null` ⇒ nothing to send to. First the session's newest LIVE
+ * run handed to the agent (the run's own task); else the task a STEP of that
+ * live run was started as for it (`session_stage_runs.external_agent`, the
+ * stage runner, runner engine slice 3): an answer in the room, or the next
+ * step it works, goes into that task.
  */
-async function dispatchedRunFor(
+export async function dispatchedTaskFor(
   sessionId: string,
   agentUserId: string
 ): Promise<{ id: string; ext: PlaybookRunExternalAgent } | null> {
@@ -106,8 +113,29 @@ async function dispatchedRunFor(
     )
     .orderBy(desc(playbookRuns.startedAt))
     .limit(1);
-  return row?.ext
-    ? { id: row.id, ext: row.ext as PlaybookRunExternalAgent }
+  if (row?.ext) return { id: row.id, ext: row.ext as PlaybookRunExternalAgent };
+  const [step] = await db
+    .select({
+      id: playbookRuns.id,
+      ext: sessionStageRuns.externalAgent,
+    })
+    .from(sessionStageRuns)
+    .innerJoin(
+      playbookRuns,
+      eq(playbookRuns.id, sessionStageRuns.playbookRunId)
+    )
+    .where(
+      and(
+        eq(sessionStageRuns.sessionId, sessionId),
+        liveRunStatusWhere(playbookRuns.status),
+        drizzleSql`${sessionStageRuns.externalAgent}->>'agentUserId' = ${agentUserId}`,
+        drizzleSql`${sessionStageRuns.externalAgent}->>'externalId' IS NOT NULL`
+      )
+    )
+    .orderBy(desc(sessionStageRuns.startedAt))
+    .limit(1);
+  return step?.ext
+    ? { id: step.id, ext: step.ext as PlaybookRunExternalAgent }
     : null;
 }
 
@@ -153,7 +181,7 @@ export async function wakeExternalAgent(
   }
   if (!binding) return { status: "not_dispatch" };
 
-  const run = await dispatchedRunFor(p.sessionId, p.agentUserId);
+  const run = await dispatchedTaskFor(p.sessionId, p.agentUserId);
   if (!run) return { status: "not_dispatch" };
   const res = await callBindingVerb({
     binding,

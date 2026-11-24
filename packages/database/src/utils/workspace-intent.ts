@@ -10,10 +10,14 @@
  * malformed definition can never write a half-shaped intent.
  */
 import { z } from "zod";
+import { SPACE_KIND_AS } from "@synap-core/types/workspaces/settings";
 import type { WorkspaceIntentSettings } from "../schema/workspaces.js";
 
-/** One produced entry, as a definition declares it. */
-const producedEntrySchema = z.object({ profile: z.string() });
+/** One produced entry, as a definition declares it: the kind, and `as` (default `output`). */
+const producedEntrySchema = z.object({
+  profile: z.string(),
+  as: z.enum(SPACE_KIND_AS).optional(),
+});
 
 /**
  * The wire form on a compiled definition — declared by EVERY install door's
@@ -50,20 +54,71 @@ export function projectTemplateIntent(
 ): WorkspaceIntentSettings | null {
   const parsed = projectedIntentSchema.safeParse(intent);
   if (!parsed.success || !parsed.data.label.trim()) return null;
-  const slugs = (parsed.data.produces ?? []).flatMap((p) => {
+  const entries = (parsed.data.produces ?? []).flatMap((p) => {
     const entry = producedEntrySchema.safeParse(p);
     const slug = entry.success ? entry.data.profile.trim() : "";
-    return slug ? [slug] : [];
+    return entry.success && slug ? [{ ...entry.data, profile: slug }] : [];
   });
-  const produces = [...new Set(slugs)];
+  const produces = [...new Set(entries.map((e) => e.profile))];
   // Kept only when it names one of `produces`: a primary the space does not
   // produce is a malformed declaration, dropped alone.
   const primary =
     typeof parsed.data.primary === "string" ? parsed.data.primary.trim() : "";
+  // The primary output is never a helper, whatever an entry says.
+  const helpers = [
+    ...new Set(
+      entries
+        .filter((e) => e.as === "helper" && e.profile !== primary)
+        .map((e) => e.profile)
+    ),
+  ];
   return {
     label: parsed.data.label.trim(),
     produces,
     ...(primary && produces.includes(primary) ? { primary } : {}),
+    // Omitted when none: an intent with no helper stores what it stored before.
+    ...(helpers.length > 0 ? { helpers } : {}),
     source: "template",
+  };
+}
+
+/** A space's stored intent as its readers take it (`readStoredIntent`). */
+export interface StoredSpaceIntent {
+  label: string;
+  /** Produced profile slugs, in order; [] = a library. */
+  produces: string[];
+  primary: string | null;
+  /** The helper kinds of `produces`; [] = none. */
+  helpers: string[];
+}
+
+/**
+ * THE reader of `settings.intent` (homes, the flow read, the pillar read),
+ * lenient: what is well-formed is kept, the rest dropped alone. null when
+ * the space stores no intent with a label.
+ */
+export function readStoredIntent(settings: unknown): StoredSpaceIntent | null {
+  const intent = (settings as { intent?: unknown } | null)?.intent as
+    | {
+        label?: unknown;
+        produces?: unknown;
+        primary?: unknown;
+        helpers?: unknown;
+      }
+    | null
+    | undefined;
+  if (!intent || typeof intent.label !== "string" || !intent.label.trim())
+    return null;
+  const strings = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  const primary =
+    typeof intent.primary === "string" && intent.primary.trim()
+      ? intent.primary.trim()
+      : null;
+  return {
+    label: intent.label,
+    produces: strings(intent.produces),
+    primary,
+    helpers: strings(intent.helpers),
   };
 }

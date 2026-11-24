@@ -62,6 +62,18 @@ export function subjectProfileSlug(subjectProfile: unknown): string | null {
 }
 
 /**
+ * The ONE record a playbook is dedicated to (`subjectProfile.entityId`), or
+ * null. Unlike the pin LIST (consumed from the front), it never
+ * moves: the playbook runs on that record only. Pod-local: a package and the
+ * catalog refuse it, since an id means nothing on another pod.
+ */
+export function dedicatedSubjectId(subjectProfile: unknown): string | null {
+  if (!subjectProfile || typeof subjectProfile !== "object") return null;
+  const id = (subjectProfile as { entityId?: unknown }).entityId;
+  return isUuid(id) ? id.toLowerCase() : null;
+}
+
+/**
  * Runtime read. Drops blanks, non-ids, and duplicates, and stops at the cap.
  * A write that got here was already strict; this only keeps a bad stored bag
  * from crashing a run.

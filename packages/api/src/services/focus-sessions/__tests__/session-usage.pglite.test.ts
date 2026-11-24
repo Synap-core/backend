@@ -53,8 +53,10 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { resolveServiceName } from "@synap-core/types/service-marks";
 import { readSessionUsage } from "../session-usage.js";
@@ -187,6 +189,7 @@ beforeAll(async () => {
   for (const tbl of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     focusSessions,
     proposals,
     events,
@@ -199,6 +202,7 @@ beforeAll(async () => {
     users,
     podMembers,
     projectMembers,
+    spaceAccess,
   ]) {
     await h.client!.exec(ddlFor(tbl as unknown as PgTable));
   }
@@ -426,6 +430,49 @@ describe("readSessionUsage", () => {
     await expect(
       readSessionUsage({ userId: OTHER_USER, sessionId: FOREIGN_SESSION })
     ).resolves.not.toBeNull();
+  });
+
+  it("carries what the session's run spent; a session with no run turn has none", async () => {
+    const first = {
+      at: t(1),
+      outcome: "stopped",
+      spentInputTokens: 200_000,
+      cacheReadInputTokens: 190_000,
+      model: "claude-haiku-5-5",
+    };
+    await q(`update focus_sessions set metadata = $2::jsonb where id = $1`, [
+      SESSION,
+      JSON.stringify({
+        runTurns: {
+          runId: "run-1",
+          stops: 1,
+          autoContinues: 1,
+          firstTurn: first,
+          turns: [
+            first,
+            {
+              at: t(2),
+              outcome: "completed",
+              spentInputTokens: 50_000,
+              model: "claude-sonnet-5-5",
+            },
+          ],
+        },
+      }),
+    ]);
+    expect((await usage()).cost).toEqual({
+      runId: "run-1",
+      turns: 2,
+      freshInputTokens: 60_000,
+      rawInputTokens: 250_000,
+      cacheReadInputTokens: 190_000,
+      models: ["claude-haiku-5-5", "claude-sonnet-5-5"],
+    });
+    const other = await readSessionUsage({
+      userId: USER,
+      sessionId: OTHER_SESSION,
+    });
+    expect(other!.cost).toBeNull();
   });
 
   it("a FAILED read throws — it never folds into an empty block", async () => {

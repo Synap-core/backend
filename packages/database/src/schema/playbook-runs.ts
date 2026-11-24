@@ -3,8 +3,9 @@
  *
  * RUNTIME (not config, not entity DATA). A playbook_run is one execution of a
  * Playbook: created when `runPlaybook` dispatches a playbook to its executor
- * (`is-agent` | `external-agent` | `hybrid`). It links the config (`playbook_id`)
- * to the runtime (`session_id`) and records status/summary/error as the executor
+ * (`is-agent` | `external-agent` | `hybrid` | `generate`). It links the config
+ * (`playbook_id`) to the runtime (`session_id`, NULL for a one-shot `generate`
+ * run, which has no session) and records status/summary/error as the executor
  * reports back (capture-back via the Hub `POST /runs/:id/capture` route).
  *
  * Part of the Playbooks & Capability Substrate
@@ -21,9 +22,14 @@ import {
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 import type { RunOn } from "@synap-core/types/agents";
+import type {
+  PlaybookRunStatusValue,
+  RunHolder,
+} from "@synap-core/types/units";
 
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
-export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
+export type PlaybookRunExecutorRef =
+  "is-agent" | "external-agent" | "hybrid" | "generate";
 /**
  * Lifecycle of a run.
  *
@@ -33,27 +39,38 @@ export type PlaybookRunExecutorRef = "is-agent" | "external-agent" | "hybrid";
  * load-bearing, because the scorecard feeds governance widening and a `failed`
  * row would grade a playbook for a person's change of mind.
  */
-export type PlaybookRunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
-  // W2 calm: the reaper found the run quiet with its session still owing the
-  // person an open slot — waiting on the human, never force-failed.
-  | "waiting_on_you"
-  // The reaper found a run an EXTERNAL agent holds quiet past its window (D6,
-  // 2026-10-11). Not failed — nothing the pod launched died — and not
-  // terminal: the next write attributed to its session revives it to
-  // `running` (`reviveStaleSession`). Same word as the session status.
-  | "stale";
+// `waiting_on_you`: the reaper found the run quiet with its session
+// still owing the person an open slot — waiting on the human, never
+// force-failed. `stale`: the reaper found a run an EXTERNAL agent holds quiet
+// past its window (D6, 2026-10-11). Not failed — nothing the pod launched
+// died — and not terminal: the next write attributed to its session revives
+// it to `running` (`reviveStaleSession`). Same word as the session status.
+// The list and each status's category are declared ONCE, in
+// `@synap-core/types/units` (`PLAYBOOK_RUN_STATUSES`,
+// `RUN_STATUS_DECLARATION`); the column's enum below must name the same.
+export type PlaybookRunStatus = PlaybookRunStatusValue;
 
 /**
- * Why a `failed` run stopped when nothing broke (`playbook_runs.stop_reason`,
- * `automation_runs.stop_reason`). `budget`: its token budget or step limit,
- * with nobody in the loop to ask (`run-turn-end.ts`).
+ * Why a `failed` run stopped before it finished (`playbook_runs.stop_reason`),
+ * with nobody in the loop to ask (`run-turn-end.ts`). `budget`: its token
+ * budget or step limit — nothing broke, so its automation's breakers SKIP it
+ * (`automation-parent-settle.ts`). `stages_left`: its turns kept ending before
+ * it reached its last stage — a fault of the run, so the breakers COUNT it
+ * (only `budget` is exempt). `no_effect`: its turn ended with no write, no
+ * output and no room message (`turn-effect.ts`), with nobody to ask; the
+ * breakers count it. A text column with no CHECK (0361): a new value needs no
+ * migration.
  */
-export const RUN_STOP_REASONS = ["budget"] as const;
+export const RUN_STOP_REASONS = ["budget", "stages_left", "no_effect"] as const;
+
+/**
+ * `automation_runs.stop_reason`: the parent settle stamps `budget` only when
+ * EVERY failed child stopped at its budget, else NULL
+ * (`automation-parent-settle.ts`), so `stages_left` never reaches a parent
+ * row. Kept to `budget`, the published wire row (`@synap-core/types`
+ * `AutomationRun.stopReason`, wire-parity/automations.ts) is unchanged.
+ */
+export const AUTOMATION_RUN_STOP_REASONS = ["budget"] as const;
 
 /** The normalized state of an external agent's task (the `status` verb). */
 export type ExternalAgentState = "running" | "needs_input" | "done" | "failed";
@@ -109,6 +126,96 @@ export interface PlaybookRunExternalAgent {
   startedAt: string;
 }
 
+/**
+ * `playbook_runs.generation` (0417) — the record of a ONE-SHOT run
+ * (`executor: "generate"`, `services/playbooks/generate-run.ts`). Such a run
+ * has no focus session, so what a session's turn ledger would hold lives here:
+ * what the prompt was made of, the prompt itself (kept for one-shot runs only:
+ * it is small, founder 9 Nov 2026), what the one model call cost, and the
+ * proposal its result was filed as. A number the IS did not report stays
+ * NULL, never a fabricated 0. NULL on every other run.
+ */
+export interface PlaybookRunGeneration {
+  /** The entity the run worked on (no session carries it). */
+  subjectId: string | null;
+  /** Where the result lands, as the playbook declared it (`ExpectedOutput.lands`). */
+  lands: {
+    target: "subject_document_section";
+    section: string;
+    /** The person's own plain block, replaced on approval (`OutputLanding.owner`). */
+    owner?: "person";
+  } | null;
+  /** What the prompt was made of, in order, with each part's size. */
+  context: Array<{
+    kind: "method" | "subject" | "subject_document" | "examples";
+    /** The entity or document read, when the part is one. */
+    id?: string;
+    chars: number;
+    /** The part was cut to fit the call's input bound. */
+    truncated?: boolean;
+  }>;
+  /**
+   * The past outcomes read as examples, when the playbook's landing asks for
+   * them (`lands.examples`); absent when it does not. Either what was shown
+   * or why the read failed: a failed read is never recorded as "none".
+   */
+  examples?: PlaybookRunGenerationExamples;
+  /** The text sent: the system line and the prompt. */
+  prompt: { system: string; text: string; chars: number };
+  /** The model that answered, when the IS reported it. */
+  model: string | null;
+  inputTokens: number | null;
+  /** Input tokens served from the provider's cache, when reported. */
+  cachedInputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+  /** Real cost in USD, when the IS reported it. */
+  costUsd: number | null;
+  /** Why the model stopped (`stop`, `length`, `content-filter`, …), when reported. */
+  finishReason: string | null;
+  /** Size of the answer the model gave. */
+  outputChars: number | null;
+  /** The proposal the result was filed as (absent until it is filed). */
+  proposal?: {
+    id: string;
+    reviewUrl: string;
+    reviewPath: string;
+    documentId: string;
+    sectionId: string;
+  };
+}
+
+/** See {@link PlaybookRunGeneration.examples}. */
+export type PlaybookRunGenerationExamples =
+  | {
+      /** How many of each the landing asked for. */
+      asked: { approved: number; rejected: number };
+      /** The earlier drafts shown to the model, in prompt order. */
+      used: Array<{
+        outcome: "approved" | "rejected";
+        proposalId: string;
+        /** The run that filed it. */
+        runId: string;
+        chars: number;
+        /** A rejection whose reason was given (and shown). */
+        reason?: true;
+        /** The text was cut to its per-example bound. */
+        truncated?: true;
+      }>;
+      /** Read but not shown: no section text, or no room left in the input bound. */
+      leftOut?: Array<{
+        outcome: "approved" | "rejected";
+        proposalId: string;
+        runId: string;
+        why: "no_text" | "over_bound";
+      }>;
+    }
+  | {
+      asked: { approved: number; rejected: number };
+      /** The read failed: the run went on without examples. */
+      error: string;
+    };
+
 export const playbookRuns = pgTable(
   "playbook_runs",
   {
@@ -120,12 +227,13 @@ export const playbookRuns = pgTable(
     /** The runtime session this run drives (FK focus_sessions, set-null on delete). */
     sessionId: uuid("session_id"),
     executor: text("executor", {
-      enum: ["is-agent", "external-agent", "hybrid"],
+      enum: ["is-agent", "external-agent", "hybrid", "generate"],
     })
       .$type<PlaybookRunExecutorRef>()
       .notNull(),
     status: text("status", {
       enum: [
+        "queued",
         "running",
         "completed",
         "failed",
@@ -133,11 +241,11 @@ export const playbookRuns = pgTable(
         "cancelled",
         "waiting_on_you",
         "stale",
+        "blocked",
       ],
     })
       .$type<PlaybookRunStatus>()
-      .notNull()
-      .default("running"),
+      .notNull(),
     /** The resolved params/input this run was started with. */
     input: jsonb("input").notNull().default({}),
     /** Executor-reported summary on completion. */
@@ -170,12 +278,21 @@ export const playbookRuns = pgTable(
      * playbook's default (`resolveRunChoice`). NULL on runs before 0403.
      */
     runOn: jsonb("run_on").$type<RunOn>(),
+    /**
+     * A one-shot (generate) run's record (0417): prompt, context reads,
+     * model, tokens and the proposal it filed. NULL on every other run.
+     */
+    generation: jsonb("generation").$type<PlaybookRunGeneration>(),
+    /** Who holds the run and when it claimed it; NULL on older rows. */
+    holder: jsonb("holder").$type<RunHolder>(),
     startedAt: timestamp("started_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
     completedAt: timestamp("completed_at", { withTimezone: true }),
-    /** Owning principal — human user id or agent-user id. */
+    /** The person the run is for (`ownerAndActor`). */
     createdBy: text("created_by").notNull(),
+    /** The agent that started it, when one did; NULL for a person. */
+    agentUserId: text("agent_user_id"),
   },
   (table) => ({
     playbookIdIdx: index("idx_playbook_runs_playbook_id").on(table.playbookId),

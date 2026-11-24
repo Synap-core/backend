@@ -6,7 +6,8 @@
  *
  * The same procedures the desktop host reaches through Hub REST
  * (`/api/hub/entities`, `/lifecycle/*`, `/attention/*`, `/focus-sessions` —
- * each a thin caller of these): one read per op, never a second predicate.
+ * each a thin caller of these), or the same tRPC procedures: one read per op,
+ * never a second predicate.
  *
  * The LENS is the host's: `workspaceId` is the page's own space, stamped
  * here; the page's params never carry it (`pickBridgeParams` dropped it).
@@ -17,7 +18,9 @@
 
 import {
   cellBridgeReadRefusal,
+  cellBridgeViewPage,
   narrowHomeToSpace,
+  projectPillarsAnswer,
   type CellBridgeParamValue,
   type CellBridgeReadOp,
 } from "@synap-core/types/cell-bridge";
@@ -118,6 +121,22 @@ export async function readForPage(
         })
       );
     }
+    case "flow.of": {
+      // A kind's or role's flow: states in declared order, the stage that
+      // owns each, the things in each (`readFlowOf`, the same read as Hub
+      // `GET /flow`, the desktop host's door). Bounded like the board.
+      const days = int(p.windowDays, 1, 366);
+      return client.flow.of.query(
+        defined({
+          profileSlug: required(op, "a profileSlug", str(p.profileSlug)),
+          trackId: str(p.trackId),
+          window: days ? { days } : undefined,
+          firstN: int(p.firstN, 0, 50),
+          properties: bool(p.properties),
+          workspaceId: ws,
+        })
+      );
+    }
     case "lifecycle.throughput": {
       const bucket = str(p.bucket);
       const count = int(p.count, 1, 366);
@@ -203,5 +222,72 @@ export async function readForPage(
         documentId: required(op, "a documentId", str(p.documentId)),
         format: str(p.format) === "readable" ? "readable" : "raw",
       });
+    // One object by its id: the procedure its own page reads, unlensed (the
+    // pod floors it to the viewer; a page in a space may open a session or a
+    // project filed elsewhere, as `entities.get` may).
+    case "sessions.get":
+      return client.focusSessions.getLean.query({
+        id: required(op, "an id", str(p.id)),
+      });
+    case "playbook.process":
+      return client.playbooks.process.query({
+        playbookId: required(op, "a playbookId", str(p.playbookId)),
+      });
+    case "playbook.scorecard":
+      return client.playbooks.scorecard.query({
+        playbookId: required(op, "a playbookId", str(p.playbookId)),
+      });
+    case "project.pillars":
+      return projectPillarsAnswer(
+        await client.projects.get.query({
+          id: required(op, "an id", str(p.id)),
+          include: ["pillars"],
+        })
+      );
+    // What a view adapter reads to draw (renderer bundles): the view by id
+    // (unlensed, the pod floors it), its rows by its STORED query (no
+    // ephemeral filters; one page of it at a time), a kind and its fields and lifecycle IN the page's
+    // space. A refusal (a view this viewer may not read, no space for the
+    // fields) reaches the page as that error, never as an empty answer.
+    case "views.get":
+      return client.views.get.query({
+        id: required(op, "an id", str(p.id)),
+      });
+    case "views.execute":
+      // One page of the stored query (`cellBridgeViewPage`, the one parser
+      // every host uses); absent, the view's own stored pair.
+      return client.views.execute.query({
+        id: required(op, "an id", str(p.id)),
+        ...cellBridgeViewPage(p),
+      });
+    case "profiles.get":
+      return client.profiles.get.query(
+        defined({
+          identifier: required(op, "an identifier", str(p.identifier)),
+          fill: bool(p.fill),
+        }),
+        ws ? { context: { workspaceId: ws } } : undefined
+      );
+    case "propertyDefs.list": {
+      // Fields are read in a space (the procedure needs one): a page in no
+      // space gets the pod's refusal as its error. With a profileId, that
+      // kind's fields; without one, every field the space can see (the board
+      // adapter asks with no input).
+      const profileId = str(p.profileId);
+      return client.propertyDefs.list.query(
+        profileId ? { profileIds: [profileId] } : undefined,
+        ws ? { context: { workspaceId: ws } } : undefined
+      );
+    }
+    case "lifecycle.get":
+      return client.lifecycle.get.query({
+        profileSlug: required(op, "a profileSlug", str(p.profileSlug)),
+        workspaceId: lens.workspaceId,
+      });
+    default: {
+      // Every op of the one table has a case: a new op fails the build here.
+      const unanswered: never = op;
+      throw new Error(`"${String(unanswered)}" has no read on this page.`);
+    }
   }
 }

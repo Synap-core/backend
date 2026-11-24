@@ -5,10 +5,10 @@
  * of its own — see the router doc comment). Verifies:
  *
  *  (a) automation rows are unchanged in content, now tagged `kind: "automation"`.
- *  (b) a playbook composing a matched automation via `flowAutomationId` is
- *      included as `kind: "playbook"`.
- *  (c) a playbook composing a matched automation via the `playbook_automations`
- *      join table is included as `kind: "playbook"`.
+ *  (b) a playbook composing a matched automation is included as
+ *      `kind: "playbook"`, read through the `playbook_automations` join table
+ *      ONLY (0425: the one playbook → automation link; `flowAutomationId` is
+ *      no longer read).
  *  (d) when NO automation matches the verb, no playbook query runs at all
  *      (mutation-test surface: the playbook backlink is only ever transitive
  *      through a real automation match, never a direct/fabricated one).
@@ -75,18 +75,18 @@ function automationChain(rows: unknown[]) {
   return chain;
 }
 
-/** Playbook-side chain: selectDistinct().from().leftJoin().where().orderBy() → rows. */
+/** Playbook-side chain: selectDistinct().from().innerJoin().where().orderBy() → rows. */
 function playbookChain(rows: unknown[]) {
   const captured: { where?: unknown } = {};
   const chain = {
     from: vi.fn(),
-    leftJoin: vi.fn(),
+    innerJoin: vi.fn(),
     where: vi.fn(),
     orderBy: vi.fn().mockResolvedValue(rows),
     _captured: captured,
   };
   chain.from.mockReturnValue(chain);
-  chain.leftJoin.mockReturnValue(chain);
+  chain.innerJoin.mockReturnValue(chain);
   chain.where.mockImplementation((w: unknown) => {
     captured.where = w;
     return chain;
@@ -160,7 +160,7 @@ describe("capabilities.usedInProcesses", () => {
     expect(selectDistinct).not.toHaveBeenCalled();
   });
 
-  it("matches a playbook via EITHER flowAutomationId OR the playbook_automations join (OR, not AND)", async () => {
+  it("matches a playbook through the playbook_automations join ONLY (0425: one link per relation)", async () => {
     const automations = automationChain([
       { automationId: "auto-1", name: "A", status: "active" },
     ]);
@@ -173,15 +173,16 @@ describe("capabilities.usedInProcesses", () => {
     const caller = capabilitiesRouter.createCaller(callerCtx());
     await caller.usedInProcesses({ verbId: "gmail.send" });
 
+    expect(pb.innerJoin).toHaveBeenCalledTimes(1);
     const where = pb._captured.where as { and: unknown[] };
-    const orClause = where.and.find(
-      (c): c is { or: unknown[] } =>
-        !!c && typeof c === "object" && "or" in (c as object)
-    );
-    expect(orClause).toBeDefined();
-    expect(orClause!.or).toEqual([
-      { inArray: [expect.anything(), ["auto-1"]] },
-      { inArray: [expect.anything(), ["auto-1"]] },
-    ]);
+    // No OR over a second carrier: exactly one inArray on the join's automation.
+    expect(
+      where.and.some(
+        (c) => !!c && typeof c === "object" && "or" in (c as object)
+      )
+    ).toBe(false);
+    expect(where.and).toContainEqual({
+      inArray: [expect.anything(), ["auto-1"]],
+    });
   });
 });

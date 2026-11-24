@@ -27,6 +27,7 @@ import {
   PRESENCE_INVALID,
   PRESENCE_REQUIRED,
   PRESENCE_USED,
+  presenceGraceable,
   sensitiveApprovalReason,
   type PresenceProof,
   type PresenceRequestKind,
@@ -161,6 +162,23 @@ export function asksUpFront(
     return !choice.actionsOff.includes(subject.action.path);
   }
   return true;
+}
+
+/**
+ * Does this session's grace window (`presence.sensitivity`'s
+ * `graceSecondsLeft`) cover this subject? Only a request kind the pod lists
+ * as graceable (`presenceGraceable`), while seconds are left. The pod decides
+ * either way: a covered act is sent with no proof, and a refusal still asks.
+ */
+export function graceCovers(
+  subject: PresenceChallengeSubject,
+  secondsLeft: number | null | undefined
+): boolean {
+  if (!secondsLeft || secondsLeft <= 0) return false;
+  return (
+    "request" in subject &&
+    presenceGraceable({ kind: "request", key: subject.request.kind })
+  );
 }
 
 const PRESENCE_CODES: ReadonlySet<string> = new Set([

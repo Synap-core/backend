@@ -22,8 +22,8 @@ describe("activeNavId", () => {
     expect(activeNavId("/workspaces")).toBe("spaces");
     expect(activeNavId("/workspaces/ws-1")).toBe("spaces");
     expect(activeNavId("/marketplace/some-pack")).toBe("marketplace");
-    expect(activeNavId("/governance/agents")).toBe("governance");
-    expect(activeNavId("/governance")).toBe("governance");
+    expect(activeNavId("/approvals")).toBe("approvals");
+    expect(activeNavId("/rules")).toBe("rules");
   });
 
   it("matches on segment boundaries only", () => {
@@ -94,10 +94,77 @@ describe("navFor: the client scope of the one table", () => {
     ]);
     expect(groups[0]?.id).toBe(CLIENT_GROUP_ID);
     expect(ids(groups)[0]).toEqual([...CLIENT_NAV]);
-    // A scope, not a fork: every item of the table, each exactly once.
+    // A scope, not a fork: every item of the table, each exactly once,
+    // except a page folded into another item's (`within`).
     const all = ids(groups).flat();
     expect(new Set(all).size).toBe(all.length);
-    expect([...all].sort()).toEqual(NAV_ITEMS.map((i) => i.id).sort());
+    expect([...all].sort()).toEqual(
+      NAV_ITEMS.filter((i) => !i.within)
+        .map((i) => i.id)
+        .sort()
+    );
+  });
+
+  it("folds Automations into Processes: not listed, lit by Processes, still linked", () => {
+    const all = ids(navFor("admin", { allTools: true })).flat();
+    expect(all).toContain("processes");
+    expect(all).not.toContain("automations");
+    expect(activeNavId("/automations")).toBe("processes");
+    expect(activeNavId("/automations/a1")).toBe("processes");
+    expect(activeNavId("/processes/p1")).toBe("processes");
+    expect(navHref("automations", { filter: "never-ran" })).toBe(
+      "/automations?filter=never-ran"
+    );
+  });
+
+  it("folds Daily write limits and Calibration into Approvals: lit by it, never listed", () => {
+    const all = ids(navFor("admin", { allTools: true })).flat();
+    expect(all).toContain("approvals");
+    expect(all).not.toContain("writeLimits");
+    expect(all).not.toContain("calibration");
+    expect(activeNavId("/approvals/limits")).toBe("approvals");
+    expect(activeNavId("/approvals/calibration")).toBe("approvals");
+    expect(navHref("writeLimits")).toBe("/approvals/limits");
+    expect(navHref("calibration")).toBe("/approvals/calibration");
+  });
+
+  it("sends Automations' old /rules links to /automations, and keeps /rules for Rules", () => {
+    const redirects = consoleRedirects();
+    expect(redirects).toContainEqual({
+      source: "/rules/:id",
+      destination: "/automations/:id",
+      permanent: false,
+    });
+    for (const key of ["filter", "process"]) {
+      expect(
+        redirects.some(
+          (r) =>
+            r.source === "/rules" &&
+            r.destination === "/automations" &&
+            r.has?.[0]?.key === key
+        ),
+        key
+      ).toBe(true);
+    }
+    // The bare page is Rules now, never redirected away.
+    expect(redirects.filter((r) => r.source === "/rules" && !r.has)).toEqual(
+      []
+    );
+    expect(navHref("rules")).toBe("/rules");
+  });
+
+  it("folds Agents & work into Approvals: its old links land on the grid", () => {
+    const redirects = consoleRedirects();
+    expect(redirects).toContainEqual({
+      source: "/governance/agents",
+      destination: "/approvals?view=work",
+      permanent: false,
+    });
+    expect(redirects).toContainEqual({
+      source: "/governance",
+      destination: "/approvals",
+      permanent: false,
+    });
   });
 
   it("scopes only the navigation: every client item is an item of the table", () => {
@@ -121,16 +188,56 @@ describe("consoleRedirects", () => {
     ).toEqual([
       ["/audit", "section=queue", "/review", false],
       ["/audit", "section=proposals", "/review", false],
+      ["/rules", "filter=(?<filter>.+)", "/automations", false],
+      ["/rules", "process=(?<process>.+)", "/automations", false],
       ["/trust-keys", "section=api-keys", "/keys", false],
       ["/marketplace", "tab=installed", "/tools?type=capabilities", false],
       ["/marketplace", "tab=tools", "/tools?type=capabilities", false],
       ["/trust-keys", "section=secrets", "/security?section=secrets", false],
+      [
+        "/sessions",
+        "focus=(?<id>[A-Za-z0-9_-]{1,64})",
+        "/open/session/:id",
+        false,
+      ],
+      ["/runs", "focus=(?<id>[A-Za-z0-9_-]{1,64})", "/open/:id", false],
       ["/overview", null, "/home", false],
+      ["/templates", null, "/processes", false],
+      ["/templates/:id", null, "/processes/:id", false],
+      ["/rules/:id", null, "/automations/:id", false],
+      ["/governance/agents", null, "/approvals?view=work", false],
+      ["/governance", null, "/approvals", false],
       ["/origins", null, "/applications", false],
       ["/people", null, "/members", false],
       ["/connectors", null, "/sources", false],
       ["/trust-keys", null, "/security", false],
+      ["/sessions/:id", null, "/open/session/:id", false],
+      ["/sessions", null, "/home", false],
+      ["/runs", null, "/home", false],
     ]);
+  });
+
+  it("sends Jobs and Runs out of the console: one object to its /open page, a list to Home", () => {
+    // Founder, 16 Nov 2026: no work status in pod admin.
+    expect(NAV_ITEMS.map((i) => i.href)).not.toContain("/sessions");
+    expect(NAV_ITEMS.map((i) => i.href)).not.toContain("/runs");
+    const focus = rules.find(
+      (r) => r.source === "/sessions" && r.has?.[0]?.key === "focus"
+    );
+    // The capture is what fills `:id`: a value outside `/open`'s id charset
+    // falls through to the bare rule (Home), never into a broken `/open` URL.
+    const capture = new RegExp(`^${focus?.has?.[0]?.value}$`);
+    expect(capture.exec("4f1c-aa_9")?.groups?.id).toBe("4f1c-aa_9");
+    expect(capture.exec("a/b")).toBeNull();
+  });
+
+  it("sends a Runs focus, which named a FLOW, to the resolver, never to a run page", () => {
+    // `/runs?focus=` was a rule's or a template's id (runs/page.tsx at
+    // 16 Nov 2026): `/open/<id>` types it and opens that flow.
+    const runs = rules.find(
+      (r) => r.source === "/runs" && r.has?.[0]?.key === "focus"
+    );
+    expect(runs?.destination).toBe("/open/:id");
   });
 
   it("puts every query-narrowed rule before any bare-path rule", () => {

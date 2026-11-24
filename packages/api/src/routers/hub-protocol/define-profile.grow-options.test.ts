@@ -2,8 +2,10 @@
  * Option C of decision fa6c8833 at the kind door: re-declaring an EXISTING
  * field with its allowed values PLUS new ones adds them through the
  * property-def EDIT door (governed: an agent gets a proposal), each judged by
- * `addEnumOptionRefusal`. Anything else about an existing field still goes to
- * the create door, which never rewrites a stored definition.
+ * `addEnumOptionRefusal`. Anything else about an existing field is reported
+ * `unchanged` and files nothing (ticket fd146324): the create door never
+ * rewrites a stored definition, so only a changed LINK setting still goes
+ * there.
  *
  * Drives the REAL `defineProfile` with a recording caller; the stored schema
  * is stubbed at the `ProfileResolutionService` boundary.
@@ -33,7 +35,11 @@ function stored(overrides: Partial<EffectiveProperty> = {}): EffectiveProperty {
   } as unknown as EffectiveProperty;
 }
 
-async function declare(enumValues: string[], storedField: EffectiveProperty) {
+async function declare(
+  enumValues: string[],
+  storedField: EffectiveProperty,
+  extra: Record<string, unknown> = {}
+) {
   vi.spyOn(
     ProfileResolutionService.prototype,
     "getEffectiveProperties"
@@ -79,6 +85,7 @@ async function declare(enumValues: string[], storedField: EffectiveProperty) {
           slug: "uo_category",
           valueType: "string",
           constraints: { enum: enumValues },
+          ...extra,
         },
       ],
       agentUserId: "33333333-3333-4333-8333-333333333333",
@@ -136,9 +143,37 @@ describe("defineProfile — a re-declared field grows its allowed values", () =>
     });
   });
 
-  it("a declaration that drops a stored value is not a growth: the create door reports it", async () => {
-    const { calls } = await declare(["preferences", "rituals"], stored());
+  it("a declaration that drops a stored value is not a growth: reported unchanged, nothing filed (fd146324)", async () => {
+    const { calls, field } = await declare(
+      ["preferences", "rituals"],
+      stored()
+    );
     expect(calls.update).toEqual([]);
+    // Never a create proposal for a slug that already exists: approving it
+    // could only apply nothing.
+    expect(calls.create).toEqual([]);
+    expect(field).toMatchObject({
+      status: "unchanged",
+      propertyDefId: "def-1",
+    });
+    expect(String(field.message)).toContain("updatePropertyDef");
+  });
+
+  it("the kind's status field, re-declared with other values, points to the lifecycle door and files nothing (fd146324)", async () => {
+    const { calls, field } = await declare(
+      ["rituals"],
+      stored({ isLifecycle: true })
+    );
+    expect(calls.update).toEqual([]);
+    expect(calls.create).toEqual([]);
+    expect(field).toMatchObject({ status: "unchanged" });
+    expect(String(field.message)).toContain("synap_change_lifecycle_options");
+  });
+
+  it("CONTROL — a re-declared link setting (required) still rides the create batch, which re-links it", async () => {
+    const { calls } = await declare(["preferences", "rituals"], stored(), {
+      required: true,
+    });
     expect(calls.create).toHaveLength(1);
   });
 });

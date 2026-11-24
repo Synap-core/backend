@@ -91,6 +91,39 @@ vi.mock("@synap/auth", () => ({
   },
 }));
 
+// The batch door's per-item bodies are recorded here: what is read is the ONE
+// gate call and which items it let through (their own owner checks have their
+// own tests). `failOn` makes an item refuse, as an owner check would.
+const batch = vi.hoisted(() => ({
+  calls: [] as string[],
+  failOn: new Set<string>(),
+}));
+vi.mock("../capabilities/set-skill-approved.js", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    ...actual,
+    setSkillApproved: async (i: { skillId: string }) => {
+      if (batch.failOn.has(i.skillId)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "not the owner" });
+      }
+      batch.calls.push(`skill:${i.skillId}`);
+    },
+  };
+});
+vi.mock("../capabilities/set-tool-approved.js", async () => {
+  const { TRPCError } = await import("@trpc/server");
+  return {
+    refuseFormRow: () => undefined,
+    setToolApproved: async (i: { toolId: string }) => {
+      if (batch.failOn.has(i.toolId)) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "not the owner" });
+      }
+      batch.calls.push(`tool:${i.toolId}`);
+    },
+  };
+});
+
 /**
  * A rendezvous for `n` arrivals: each waits until all `n` have arrived, or
  * until `ms` passed (an arrival the others can never join, because they wait
@@ -116,8 +149,11 @@ const { invalidatePresenceMode, readPresenceMode, writePresenceMode } =
   await import("./mode.js");
 const { PRESENCE_NO_FACTOR_HINT } = await import("./gate.js");
 const { changePresenceMode } = await import("./mode-change.js");
-const { redeemPasskeyChangeGrant, assertMayRemovePasskey } =
-  await import("./passkey-change.js");
+const {
+  redeemPasskeyChangeGrant,
+  assertMayRemovePasskey,
+  stampPasskeyChangeGrant,
+} = await import("./passkey-change.js");
 const { writePresenceSensitivity, readPresenceSensitivity } =
   await import("./mode.js");
 const { changePresenceSensitivity } = await import("./sensitivity-change.js");
@@ -131,6 +167,8 @@ const { base32Decode, totpCode, totpStepAt } = await import("./totp-code.js");
 const { runAsBrowserPerson } = await import("../../utils/device-session.js");
 const { presenceMessage, enrollmentSubject } =
   await import("@synap-core/types/presence");
+const presenceTypes = await import("@synap-core/types/presence");
+const { enableMany } = await import("../capabilities/enable-many.js");
 
 const POD = "https://pod.example.test";
 const PERSON = crypto.randomUUID();
@@ -367,10 +405,12 @@ describe("proof of presence: the gate", () => {
     `);
     // The recovery ladder's tables, from the migrations as written (0294:
     // recovery codes; 0405: 2FA app, typed-code failures, recovery requests,
-    // disowned passkeys).
+    // disowned passkeys; 0412: device links, and the session a passkey-change
+    // grant is bound to).
     for (const file of [
       "0294_account_recovery_codes.sql",
       "0405_presence_recovery.sql",
+      "0412_presence_device_links.sql",
     ]) {
       await h.client!.exec(
         readFileSync(
@@ -428,6 +468,19 @@ describe("proof of presence: the gate", () => {
         })
       )
     ).toBe("PRESENCE_REQUIRED");
+  });
+
+  it("GUARDRAIL: approving an automation or playbook create with no proof is refused (it lands active)", async () => {
+    for (const [targetType, proposalType] of [
+      ["automation", "create"],
+      ["playbook", "create"],
+    ] as const) {
+      expect(
+        await refusal(
+          gate({ id: crypto.randomUUID(), targetType, proposalType })
+        )
+      ).toBe("PRESENCE_REQUIRED");
+    }
   });
 
   it("report mode lets a sensitive approval through and records it; a request made AS THE PERSON is refused in every mode", async () => {
@@ -985,32 +1038,82 @@ describe("proof of presence: actions, the mode, new factors (slice 3)", () => {
     expect(typeof mintPresencePass).toBe("function");
   });
 
-  it("GUARDRAIL: one passkey-change proof is redeemed once, and only within 5 minutes", async () => {
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+  it("GUARDRAIL: one passkey-change proof is redeemed once, by the session that proved it, and only within 5 minutes", async () => {
+    const A = "kratos:session-a";
+    const B = "kratos:session-b";
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
     const proof = await proofFor(`passkey_change:${PERSON}`);
-    await assertPresenceForRequest({
+    const verdict = await assertPresenceForRequest({
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
       proof,
       door: "test",
     });
-    expect(await redeemPasskeyChangeGrant(OTHER)).toBe(false);
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(true);
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    // Not yet bound to a session: nobody redeems it (founder, 9 Nov 2026).
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
+    expect(
+      await stampPasskeyChangeGrant({
+        userId: PERSON,
+        challengeId: verdict!.challengeId,
+        sessionKey: A,
+      })
+    ).toBe(true);
+    // Bound once: a second stamp cannot move it to another session.
+    expect(
+      await stampPasskeyChangeGrant({
+        userId: PERSON,
+        challengeId: verdict!.challengeId,
+        sessionKey: B,
+      })
+    ).toBe(false);
+    expect(await redeemPasskeyChangeGrant(OTHER, A)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, B)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, null)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(true);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
     // An old grant does not redeem.
     const old = await proofFor(`passkey_change:${PERSON}`);
-    await assertPresenceForRequest({
+    const oldVerdict = await assertPresenceForRequest({
       userId: PERSON,
       kind: "passkey_change",
       id: PERSON,
       proof: old,
       door: "test",
     });
+    await stampPasskeyChangeGrant({
+      userId: PERSON,
+      challengeId: oldVerdict!.challengeId,
+      sessionKey: A,
+    });
     await h.client!.exec(
       `update presence_challenges set consumed_at = now() - interval '6 minutes' where redeemed_at is null`
     );
-    expect(await redeemPasskeyChangeGrant(PERSON)).toBe(false);
+    expect(await redeemPasskeyChangeGrant(PERSON, A)).toBe(false);
+  });
+
+  it("GUARDRAIL: a grant proved before grants were bound to a session (no grant_session) is not redeemable", async () => {
+    const legacy = await proofFor(`passkey_change:${PERSON}`);
+    await assertPresenceForRequest({
+      userId: PERSON,
+      kind: "passkey_change",
+      id: PERSON,
+      proof: legacy,
+      door: "test",
+    });
+    const [row] = (
+      await (
+        h.client as unknown as {
+          query: (s: string, p: unknown[]) => Promise<{ rows: unknown[] }>;
+        }
+      ).query(`select grant_session from presence_challenges where id = $1`, [
+        legacy.challengeId,
+      ])
+    ).rows as Array<{ grant_session: string | null }>;
+    expect(row!.grant_session).toBeNull();
+    for (const key of ["kratos:any", "device:any", null]) {
+      expect(await redeemPasskeyChangeGrant(PERSON, key)).toBe(false);
+    }
   });
 
   it("the router enrols through enrollDeviceKey, which decides the factor under the lock BEFORE it spends the challenge", async () => {
@@ -1553,5 +1656,524 @@ describe("proof of presence: the recovery ladder (6 Nov 2026)", () => {
     // The way back in: a first factor needs no proof.
     expect(await refusal(enrol(LADDER))).toBe("accepted");
     h.passkeys = [];
+  });
+});
+
+describe("proof of presence: the grace window and the batch door (18 Nov 2026)", () => {
+  const {
+    PRESENCE_GRACE_SECONDS,
+    presenceBatchId,
+    presenceGraceable,
+    presenceNeverGrace,
+    SENSITIVE_APPROVALS,
+    SENSITIVE_PROPOSAL_TYPE_PREFIXES,
+  } = presenceTypes;
+  const S1 = "kratos:session-one";
+  const S2 = "kratos:session-two";
+
+  const q = (sql: string, params: unknown[] = []) =>
+    (
+      h.client as unknown as {
+        query: (
+          s: string,
+          p: unknown[]
+        ) => Promise<{ rows: Array<Record<string, unknown>> }>;
+      }
+    ).query(sql, params);
+
+  type Kind = "skill" | "tool" | "capability_batch" | "key_request";
+  const ask = (
+    kind: Kind,
+    id: string,
+    opts: {
+      proof?: PresenceProof;
+      key?: string | null;
+      browser?: boolean;
+      userId?: string;
+      keyCaller?: boolean;
+    } = {}
+  ) => {
+    const run = () =>
+      assertPresenceForRequest({
+        userId: opts.userId ?? PERSON,
+        kind,
+        id,
+        proof: opts.proof ?? null,
+        door: "test",
+        keyCaller: opts.keyCaller,
+      });
+    return opts.browser === false
+      ? run()
+      : runAsBrowserPerson(run, opts.key === undefined ? S1 : opts.key);
+  };
+
+  /** A device-key proof for `<kind>:<id>`, from the browser session `key`. */
+  const prove = async (kind: Kind, id: string, key: string | null = S1) => {
+    const c = await challengeFor(`${kind}:${id}`);
+    return ask(kind, id, {
+      key,
+      proof: {
+        kind: "device_key",
+        challengeId: c.challengeId,
+        keyId: deviceKeyId,
+        signature: deviceSign(c.message),
+      },
+    });
+  };
+
+  /** Move the latest proof's consumption `seconds` into the past. */
+  const age = (seconds: number) =>
+    q(
+      `update presence_challenges set consumed_at = consumed_at - ($1 || ' seconds')::interval where consumed_at is not null`,
+      [String(seconds)]
+    );
+
+  beforeEach(async () => {
+    process.env.PUBLIC_URL = POD;
+    process.env.SYNAP_PRESENCE_PROOF = "enforce";
+    h.events.length = 0;
+    batch.calls.length = 0;
+    batch.failOn.clear();
+    await h.client!.exec("delete from presence_challenges");
+    await noStoredMode();
+  });
+  afterEach(() => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+  });
+
+  it("a passkey or device-key proof opens a window: a graceable act goes with no proof, and is recorded", async () => {
+    await prove("skill", crypto.randomUUID());
+    h.events.length = 0;
+    const tool = crypto.randomUUID();
+    expect(await refusal(ask("tool", tool))).toBe("accepted");
+    expect(await refusal(ask("skill", crypto.randomUUID()))).toBe("accepted");
+    const used = h.events.filter((e) => e.type === "presence.grace_used");
+    expect(used).toHaveLength(2);
+    expect(used[0]!.data).toMatchObject({
+      proposalId: `tool:${tool}`,
+      proposalType: "tool",
+      reason: "setup",
+      method: "device_key",
+    });
+    const left = used[0]!.data.remainingSeconds as number;
+    expect(left).toBeGreaterThan(PRESENCE_GRACE_SECONDS - 10);
+    expect(left).toBeLessThanOrEqual(PRESENCE_GRACE_SECONDS);
+    // No proof was checked for them.
+    expect(h.events.some((e) => e.type === "presence.proved")).toBe(false);
+  });
+
+  it("a passkey assertion opens it too", async () => {
+    h.passkeys = [
+      {
+        id: credentialId.toString("base64"),
+        public_key: coseKey(passkey.publicKey).toString("base64"),
+        authenticator: { sign_count: 0 },
+      },
+    ];
+    const id = crypto.randomUUID();
+    const c = await challengeFor(`skill:${id}`);
+    expect(
+      await refusal(
+        ask("skill", id, {
+          proof: {
+            kind: "passkey",
+            challengeId: c.challengeId,
+            credential: assertion({
+              challenge: webauthnChallengeOf(c.message),
+            }),
+          },
+        })
+      )
+    ).toBe("accepted");
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe("accepted");
+  });
+
+  it("GUARDRAIL: it is 5 minutes from the proof, never sliding: 4:59 goes, 5:01 is refused", async () => {
+    await prove("skill", crypto.randomUUID());
+    await age(PRESENCE_GRACE_SECONDS - 60);
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe("accepted");
+    // Using it did not extend it: 60 s later than 4:00 is 5:01 from the proof.
+    await age(61);
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: a graceable act with no window is refused, as before", async () => {
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: refused for every never-grace row, derived from the tables, with a window open", async () => {
+    await prove("skill", crypto.randomUUID());
+    const never = presenceNeverGrace();
+    // Non-vacuity: every table is read, and the rows that matter are in it.
+    expect(never.length).toBeGreaterThan(60);
+    for (const key of [
+      "key_request",
+      "device_enroll",
+      "passkey_change",
+      "presence_mode",
+      "presence_sensitivity",
+      "recovery_codes",
+      "totp_enroll",
+      "trusted_issuer",
+      "mcp_server",
+    ]) {
+      expect(never).toContainEqual({ kind: "request", key });
+    }
+    for (const key of ["apiKey/create", "apiKey/update", "vault/grant"]) {
+      expect(never).toContainEqual({ kind: "approval", key });
+    }
+    expect(never).toContainEqual({
+      kind: "action",
+      key: "secretsVault.reveal",
+    });
+    const asked: string[] = [];
+    for (const t of never) {
+      if (t.kind === "request") {
+        asked.push(
+          `request ${t.key}: ${await refusal(
+            ask(t.key as never, crypto.randomUUID())
+          )}`
+        );
+      } else if (t.kind === "approval") {
+        const isPrefix = t.key in SENSITIVE_PROPOSAL_TYPE_PREFIXES;
+        const [targetType, proposalType] = isPrefix
+          ? ["governance_rule", `${t.key}x`]
+          : t.key.includes("/")
+            ? t.key.split("/")
+            : ["thing", t.key];
+        asked.push(
+          `approval ${t.key}: ${await refusal(
+            runAsBrowserPerson(
+              () =>
+                assertPresenceForApproval({
+                  userId: PERSON,
+                  proposal: {
+                    id: crypto.randomUUID(),
+                    targetType: targetType!,
+                    proposalType: proposalType!,
+                  },
+                  proof: null,
+                  door: "test",
+                }),
+              S1
+            )
+          )}`
+        );
+      } else {
+        asked.push(
+          `action ${t.key}: ${await refusal(
+            runAsBrowserPerson(
+              () =>
+                assertPresenceForAction({
+                  userId: PERSON,
+                  path: t.key,
+                  input: {},
+                  proof: null,
+                }),
+              S1
+            )
+          )}`
+        );
+      }
+    }
+    const accepted = asked.filter((a) => !a.endsWith("PRESENCE_REQUIRED"));
+    expect(accepted).toEqual([]);
+    expect(asked.length).toBe(never.length);
+  });
+
+  it("the allow-list is explicit and fail closed: only listed `setup` request rows, no approval, no action", () => {
+    const rows = [
+      ...Object.keys(presenceTypes.PRESENCE_REQUEST_KINDS).map((key) => ({
+        kind: "request" as const,
+        key,
+      })),
+      ...[
+        ...Object.keys(SENSITIVE_APPROVALS),
+        ...Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES),
+      ].map((key) => ({ kind: "approval" as const, key })),
+      ...Object.keys(presenceTypes.SENSITIVE_ACTIONS).map((key) => ({
+        kind: "action" as const,
+        key,
+      })),
+    ];
+    expect(
+      rows.filter((r) => presenceGraceable(r)).map((r) => `${r.kind}:${r.key}`)
+    ).toEqual(["request:skill", "request:tool", "request:capability_batch"]);
+    // An unknown row is never graceable.
+    expect(presenceGraceable({ kind: "request", key: "brand_new" })).toBe(
+      false
+    );
+  });
+
+  it("GUARDRAIL: a request filed AS the person is never covered", async () => {
+    await prove("skill", crypto.randomUUID());
+    expect(
+      await refusal(
+        runAsBrowserPerson(
+          () =>
+            assertPresenceForApproval({
+              userId: PERSON,
+              proposal: AS_PERSON,
+              proof: null,
+              door: "test",
+            }),
+          S1
+        )
+      )
+    ).toBe("PRESENCE_REQUIRED");
+  });
+
+  it("GUARDRAIL: refused for another person, another session, and a request that names no session", async () => {
+    await prove("skill", crypto.randomUUID());
+    // Another person, even from the same session key.
+    expect(
+      await refusal(ask("tool", crypto.randomUUID(), { userId: OTHER }))
+    ).toBe("PRESENCE_REQUIRED");
+    // Another session of the same person.
+    expect(await refusal(ask("tool", crypto.randomUUID(), { key: S2 }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    // A browser scope with no session key, and no browser scope at all
+    // (a Hub REST door, an executor, a device token).
+    expect(await refusal(ask("tool", crypto.randomUUID(), { key: null }))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+    expect(
+      await refusal(ask("tool", crypto.randomUUID(), { browser: false }))
+    ).toBe("PRESENCE_REQUIRED");
+    // A Synap app's device session, whatever key it carries.
+    const { runAsDeviceSession } =
+      await import("../../utils/device-session.js");
+    expect(
+      await refusal(
+        runAsDeviceSession({ id: "dev-1", authTime: new Date() }, () =>
+          ask("tool", crypto.randomUUID(), { browser: false })
+        )
+      )
+    ).toBe("PRESENCE_REQUIRED");
+    // The session that proved it still has it.
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe("accepted");
+  });
+
+  it("GUARDRAIL: a key caller and an acting agent never use a window", async () => {
+    await prove("skill", crypto.randomUUID());
+    expect(
+      await refusal(ask("tool", crypto.randomUUID(), { keyCaller: true }))
+    ).toBe("PRESENCE_REQUIRED");
+    const { runWithActingAgent } = await import("@synap/database");
+    expect(
+      await refusal(
+        runWithActingAgent(crypto.randomUUID(), () =>
+          ask("tool", crypto.randomUUID())
+        )
+      )
+    ).toBe("PRESENCE_REQUIRED");
+    // Nor does a proof made under a key caller open one.
+    await h.client!.exec("delete from presence_challenges");
+    const id = crypto.randomUUID();
+    const c = await challengeFor(`tool:${id}`);
+    await ask("tool", id, {
+      keyCaller: true,
+      proof: {
+        kind: "device_key",
+        challengeId: c.challengeId,
+        keyId: deviceKeyId,
+        signature: deviceSign(c.message),
+      },
+    });
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: a typed code (recovery code) proves presence but opens no window", async () => {
+    await seedRecoveryCodes(PERSON, ["TVWX-YZ01-2345-6789"]);
+    const id = crypto.randomUUID();
+    const c = await challengeFor(`skill:${id}`);
+    expect(
+      await refusal(
+        ask("skill", id, {
+          proof: {
+            kind: "recovery_code",
+            challengeId: c.challengeId,
+            code: "TVWX-YZ01-2345-6789",
+          },
+        })
+      )
+    ).toBe("accepted");
+    expect(h.events.some((e) => e.type === "presence.proved")).toBe(true);
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("a passkey-change proof does not open one, and keeps its own grant column", async () => {
+    const c = await challengeFor(`passkey_change:${PERSON}`);
+    await runAsBrowserPerson(
+      () =>
+        assertPresenceForRequest({
+          userId: PERSON,
+          kind: "passkey_change",
+          id: PERSON,
+          proof: {
+            kind: "device_key",
+            challengeId: c.challengeId,
+            keyId: deviceKeyId,
+            signature: deviceSign(c.message),
+          },
+          door: "test",
+        }),
+      S1
+    );
+    const { rows } = await q(
+      `select grant_session from presence_challenges where id = $1`,
+      [c.challengeId]
+    );
+    expect(rows[0]!.grant_session).toBeNull();
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+      "PRESENCE_REQUIRED"
+    );
+  });
+
+  it("GUARDRAIL: a failed read of the window is no window (fail closed), and it recovers", async () => {
+    await prove("skill", crypto.randomUUID());
+    await h.client!.exec(
+      "alter table presence_challenges rename column grant_session to grant_session_x"
+    );
+    try {
+      expect(await refusal(ask("tool", crypto.randomUUID()))).toBe(
+        "PRESENCE_REQUIRED"
+      );
+    } finally {
+      await h.client!.exec(
+        "alter table presence_challenges rename column grant_session_x to grant_session"
+      );
+    }
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe("accepted");
+  });
+
+  it("report mode is unchanged: no proof is recorded missing, and a window is still honoured", async () => {
+    delete process.env.SYNAP_PRESENCE_PROOF;
+    await reportByChoice();
+    expect(await refusal(ask("tool", crypto.randomUUID()))).toBe("accepted");
+    expect(h.events.map((e) => e.type)).toEqual(["presence.missing"]);
+  });
+
+  // ── The batch door ─────────────────────────────────────────────────────────
+
+  const ids = (n: number) =>
+    Array.from({ length: n }, () => crypto.randomUUID());
+
+  /** A device-key proof for the batch `set`, as the client builds it. */
+  const batchProof = async (set: {
+    skillIds?: string[];
+    toolIds?: string[];
+  }): Promise<PresenceProof> => {
+    const c = await challengeFor(
+      `capability_batch:${await presenceBatchId(set)}`
+    );
+    return {
+      kind: "device_key",
+      challengeId: c.challengeId,
+      keyId: deviceKeyId,
+      signature: deviceSign(c.message),
+    };
+  };
+  const run = (
+    set: { skillIds: string[]; toolIds: string[] },
+    presence?: PresenceProof,
+    extra: { agentUserId?: string } = {}
+  ) =>
+    runAsBrowserPerson(
+      () => enableMany({ userId: PERSON, ...set, presence, ...extra }),
+      S1
+    );
+
+  it("BATCH: one proof turns on the whole set, each item answered on its own", async () => {
+    const set = { skillIds: ids(3), toolIds: ids(2) };
+    const out = await run(set, await batchProof(set));
+    expect(out.results.every((r) => r.ok)).toBe(true);
+    expect(out.results).toHaveLength(5);
+    expect(batch.calls.sort()).toEqual(
+      [
+        ...set.skillIds.map((i) => `skill:${i}`),
+        ...set.toolIds.map((i) => `tool:${i}`),
+      ].sort()
+    );
+    // ONE confirmation: one proof recorded, for the set.
+    const proved = h.events.filter((e) => e.type === "presence.proved");
+    expect(proved).toHaveLength(1);
+    expect(proved[0]!.data.proposalType).toBe("capability_batch");
+  });
+
+  it("BATCH: the id ignores order and repeats, and a changed set invalidates the proof", async () => {
+    const [a, b, c2] = ids(3);
+    const proof = await batchProof({ skillIds: [a!, b!], toolIds: [] });
+    // One more id: the proof was made for another set; nothing is turned on.
+    expect(
+      await refusal(run({ skillIds: [a!, b!, c2!], toolIds: [] }, proof))
+    ).toBe("PRESENCE_INVALID");
+    expect(
+      await refusal(run({ skillIds: [a!, b!], toolIds: [c2!] }, proof))
+    ).toBe("PRESENCE_INVALID");
+    expect(batch.calls).toEqual([]);
+    // A fresh proof for the set: order and duplicates do not matter.
+    const again = await batchProof({ skillIds: [b!, a!, a!], toolIds: [] });
+    expect(await refusal(run({ skillIds: [a!, b!], toolIds: [] }, again))).toBe(
+      "accepted"
+    );
+    expect(batch.calls).toHaveLength(2);
+    // The proof is spent.
+    expect(await refusal(run({ skillIds: [a!, b!], toolIds: [] }, again))).toBe(
+      "PRESENCE_USED"
+    );
+  });
+
+  it("BATCH: a failed item is reported, never swallowed, and the others still apply", async () => {
+    const set = { skillIds: ids(2), toolIds: ids(2) };
+    batch.failOn.add(set.skillIds[0]!);
+    batch.failOn.add(set.toolIds[1]!);
+    const out = await run(set, await batchProof(set));
+    expect(out.results.filter((r) => !r.ok)).toEqual([
+      {
+        kind: "skill",
+        id: set.skillIds[0],
+        ok: false,
+        error: "not the owner",
+      },
+      { kind: "tool", id: set.toolIds[1], ok: false, error: "not the owner" },
+    ]);
+    expect(batch.calls).toHaveLength(2);
+  });
+
+  it("BATCH: no proof is refused, the size is capped, and an agent is refused first", async () => {
+    const set = { skillIds: ids(2), toolIds: [] };
+    expect(await refusal(run(set))).toBe("PRESENCE_REQUIRED");
+    expect(
+      await refusal(run({ skillIds: ids(30), toolIds: ids(21) }))
+    ).toContain("between 1 and 50");
+    expect(await refusal(run({ skillIds: [], toolIds: [] }))).toContain(
+      "between 1 and 50"
+    );
+    expect(
+      await refusal(
+        run(set, await batchProof(set), { agentUserId: crypto.randomUUID() })
+      )
+    ).toContain("agent credential cannot approve");
+    expect(batch.calls).toEqual([]);
+  });
+
+  it("BATCH: inside a window the set goes with no new proof, and is recorded", async () => {
+    await prove("skill", crypto.randomUUID());
+    h.events.length = 0;
+    const set = { skillIds: ids(4), toolIds: ids(4) };
+    const out = await run(set);
+    expect(out.results.every((r) => r.ok)).toBe(true);
+    expect(h.events.map((e) => e.type)).toEqual(["presence.grace_used"]);
+    expect(h.events[0]!.data.proposalType).toBe("capability_batch");
   });
 });

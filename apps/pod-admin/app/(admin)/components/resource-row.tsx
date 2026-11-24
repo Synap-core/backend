@@ -34,7 +34,8 @@ const CATALOGS = { en, fr };
 interface ResourceRowProps {
   Icon: LucideIcon;
   primary: string;
-  secondary?: string;
+  /** The line under it: words, or words holding a door (an origin link). */
+  secondary?: ReactNode;
   /** Optional right-aligned status. Absent = healthy / no-op. */
   status?: { kind: StatusKind; label: string };
   /** Optional click handler — called when the body (not actions) is clicked. */
@@ -44,9 +45,9 @@ interface ResourceRowProps {
   /**
    * Let a long primary line wrap to two lines instead of truncating, and the
    * row grow to fit. Off by default so every other list keeps its fixed 56px.
-   * The status pill then shows from `sm` up only: below it the headline needs
-   * the width more than the pill does, and the actions drop to their own line
-   * under the text so a phone row never squeezes the headline to a sliver.
+   * Below `sm` the status pill moves to its own line under the subline (a
+   * state mark shows at every width) and the actions drop to their own line
+   * under the text, so a phone row never squeezes the headline to a sliver.
    */
   wrap?: boolean;
 }
@@ -106,6 +107,13 @@ export function ResourceRow({
           <span className="truncate text-[11.5px] text-foreground/65">
             {secondary}
           </span>
+        )}
+        {/* A state mark shows at every width: below `sm` a wrapping row
+            puts it on its own line under the subline, not beside it. */}
+        {status && wrap && (
+          <div className="mt-1 sm:hidden">
+            <StatusPill kind={status.kind} label={status.label} />
+          </div>
         )}
       </div>
 

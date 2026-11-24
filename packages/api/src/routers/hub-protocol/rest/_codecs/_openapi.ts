@@ -88,6 +88,20 @@ export const uuidParam = z
   })
   .openapi({ format: "uuid" });
 
+/**
+ * `supersedes` on the filing doors that take it (plan 8032a127 D3,
+ * `SUPERSEDES_DOORS`): read and refused by the door's wrapper
+ * (`_middleware/supersedes.ts`) before the route runs, declared here so the
+ * contract says it. A plain string: a malformed id is the door's 409, said
+ * in the same words as MCP's.
+ */
+export const SupersedesBodyField = z
+  .string()
+  .optional()
+  .describe(
+    "The id of a FAILED proposal (status approval_failed) filed for the same person that this request replaces, corrected. The proposal this call files for review ends it (withdrawn, supersededBy = the new one); refused with 409 SUPERSEDES_REFUSED (nothing filed) when it names no such proposal. The answer carries supersedes: { proposalId, replacedBy, note? }. Its author repairs a failed proposal with a revision instead."
+  );
+
 /** Canonical error envelope returned by every hub handler. */
 export const ErrorSchema = z
   .object({

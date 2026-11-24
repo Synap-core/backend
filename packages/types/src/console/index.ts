@@ -36,17 +36,39 @@ interface ConsolePage {
 export const CONSOLE_PAGES = {
   home: { path: "/home", audience: "member", focus: false, verb: "see-all" },
   review: { path: "/review", audience: "member", focus: true, verb: "review" },
-  sessions: {
-    path: "/sessions",
+  // Jobs (`/sessions`) and Runs (`/runs`) left the console (founder, 16 Nov
+  // 2026): the work is done in the apps, so no client links to them.
+  // Rules: the guidelines pushed into every piece of work in their scope
+  // (founder, 19 Nov 2026, document b387ca45 §9). What runs by itself is
+  // `automations`; who may act without asking is `governance` (Approvals).
+  rules: { path: "/rules", audience: "admin", focus: true, verb: "see-all" },
+  automations: {
+    path: "/automations",
     audience: "admin",
     focus: true,
     verb: "see-all",
   },
-  rules: { path: "/rules", audience: "admin", focus: true, verb: "see-all" },
-  runs: { path: "/runs", audience: "admin", focus: true, verb: "see-all" },
   agents: { path: "/agents", audience: "admin", focus: true, verb: "see-all" },
+  // Approvals (D5): the one page where who × what × where → auto / ask /
+  // never is read, filtered and taken back. Kept under its old id so client
+  // links (`{ page: "governance" }`) keep landing on it.
   governance: {
-    path: "/governance/agents",
+    path: "/approvals",
+    audience: "admin",
+    focus: true,
+    verb: "manage",
+  },
+  // Approvals' two tuning pages (D5: they moved from the desktop's Settings ›
+  // Approvals): how many writes an agent may run on its own per day, and what
+  // agents did that an approval could change.
+  writeLimits: {
+    path: "/approvals/limits",
+    audience: "admin",
+    focus: false,
+    verb: "manage",
+  },
+  calibration: {
+    path: "/approvals/calibration",
     audience: "admin",
     focus: false,
     verb: "manage",
@@ -106,6 +128,16 @@ export const CONSOLE_PAGES = {
     focus: false,
     verb: "manage",
   },
+  /**
+   * How the signed-in person reviews, and the pod's defaults for how agents
+   * act (reversible writes, tidying their own work): Settings in the console.
+   */
+  reviewSettings: {
+    path: "/settings/review",
+    audience: "member",
+    focus: false,
+    verb: "manage",
+  },
   /** The signed-in person's own sign-in methods and recovery codes. */
   accountSecurity: {
     path: "/settings/security",
@@ -147,6 +179,41 @@ type FocusPageId = {
     ? K
     : never;
 }[ConsolePageId];
+
+/**
+ * The pod's feature mark (`GET /health` `features`) for a console page a
+ * released pod may not serve yet. A page listed here is served only by a pod
+ * whose `/health` lists its mark; a page not listed is served by every pod.
+ * A client shows its link only where {@link consolePageServed} says so, so an
+ * older pod is never sent to a page it would answer with a 404.
+ * The strings are a wire contract: never rename one, add a new mark instead.
+ */
+export const CONSOLE_PAGE_FEATURES = {
+  /** `/approvals` (backend#1191): earlier pods served `/governance`. */
+  governance: "approvals-page",
+  /** `/approvals/limits` and `/approvals/calibration`: one release, one mark. */
+  writeLimits: "approvals-limits-calibration",
+  calibration: "approvals-limits-calibration",
+} as const satisfies Partial<Record<ConsolePageId, string>>;
+
+/** Every console page mark, once each (`POD_FEATURES` serves them). */
+export const CONSOLE_FEATURE_MARKS: readonly string[] = Array.from(
+  new Set<string>(Object.values(CONSOLE_PAGE_FEATURES))
+);
+
+/**
+ * Does this pod serve the console page? `features` is the pod's `/health`
+ * `features` as read; absent or unreadable (an older pod) means only the
+ * unmarked pages.
+ */
+export function consolePageServed(
+  page: ConsolePageId,
+  features: readonly string[] | null | undefined
+): boolean {
+  const mark = (CONSOLE_PAGE_FEATURES as Partial<Record<string, string>>)[page];
+  if (!mark) return true;
+  return Array.isArray(features) && features.includes(mark);
+}
 
 /** Review's views (`/review?type=`). */
 export const CONSOLE_REVIEW_TYPES = [

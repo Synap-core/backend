@@ -19,18 +19,17 @@
  * owner-bypass and always run):
  *   1. a BUILTIN verb in `READ_ONLY_BUILTIN_VERBS` → `auto`: `execute-capability`
  *      marks it `readOnly`, and the gate returns `run` before any grant rung;
- *   2. anything else runs now only under an ACTIVE grant whose exec mode is
- *      `auto` (rung 2.7 executes an `auto` mode outright) — a write included,
- *      because the gate runs it. No grant → the no-grant rung proposes; a
- *      `propose` grant proposes; a `dry-run` grant never "runs now". An unknown
- *      grant (skill-only rows and commands carry no grant state) reads as none.
+ *   2. anything else runs now only under an `auto` APPROVAL ROW (decision D2,
+ *      document b387ca45: the only answer to "runs without asking"; rung 2.7
+ *      executes it) — a write included, because the gate runs it. An "ask
+ *      first" row or no row proposes. A grant means only "may use": `granted`
+ *      decides nothing here.
  *
  * Where a single gate run can still differ, measured against that source:
- *   - a stored capability rule can authorize a run with no grant (rung 2.8);
+ *   - the listing reads the row for EVERYONE (`resolveEveryoneCapabilityVerdicts`):
+ *     a row for one agent or one class ("this agent may") is not seen;
  *   - an untrusted-origin channel (rung 2.55) or a stricter channel grant
- *     (rung 7) force-proposes. Both are per-turn facts no listing can know;
- *   - the registry's `granted` is "an active grant exists on the tool", not
- *     "for THIS agent" — `buildVerbStates` resolves it without a redeemer.
+ *     (rung 7) force-proposes. Both are per-turn facts no listing can know.
  */
 import { READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import { declaredReadOnly } from "./capability-drift.js";
@@ -42,10 +41,10 @@ export function runPosture(input: {
   verbId: string;
   /** `skills.kind` of the backing skill (`builtin`, `code`, `declarative`, …). */
   skillKind?: string | null;
-  /** An ACTIVE grant exists for this verb (`CapabilityVerbState.granted`).
-   *  Absent = unknown, which reads as no grant. */
+  /** An ACTIVE grant exists for this verb (`CapabilityVerbState.granted`):
+   *  "may use". It does not decide the posture (decision D2). */
   granted?: boolean;
-  /** The verb's effective exec mode (grant mode, else `govDefault`). */
+  /** The verb's effective exec mode: `auto` only under an auto approval row. */
   execMode?: string | null;
   /**
    * The verb's AUTHORED read-only declaration (`skills.metadata.readOnly`).
@@ -73,9 +72,7 @@ export function runPosture(input: {
   ) {
     return "auto";
   }
-  return input.granted === true && input.execMode === "auto"
-    ? "auto"
-    : "propose";
+  return input.execMode === "auto" ? "auto" : "propose";
 }
 
 /**

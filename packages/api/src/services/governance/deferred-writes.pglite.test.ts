@@ -1,22 +1,14 @@
 /**
- * #6 — writes into a space the agent has not joined are KEPT on the join, and
- * replayed as the agent once the join is approved.
+ * Writes held past an agent's daily ceiling are replayed, once the person
+ * approves the pack, each through ITS OWN DOOR as the agent
+ * (`replayDeferredWrites`).
  *
- * Real, on PGlite: the gate (`checkPermissionOrPropose` → the join branch →
- * `appendDeferredWrite`), the `workspace/join` executor (membership in the
- * approval transaction), and the replay engine (`replayDeferredWrites`).
- *
- * Stubbed, and why:
- *   - `createEventBackedProposal` → a plain proposals insert of the SAME row
- *     fields: the event spine and notification fan-out have their own suites,
- *     and what this file asserts is the `data` the gate hands it.
- *   - the four replay DOORS (`entities.create/update`, hub `createDocument`,
- *     `createFocusSession`) → recorders. They capture what a door would see —
- *     the acting agent, the session, whether the membership row exists at that
- *     moment — and answer as the ladder could (applied / proposed / refused).
- *     NOT covered here: the doors' own gate running the full ladder on replay
- *     (NEEDS-DOGFOOD).
- *   - `auditLog` → returns an id (the `.validated` event has its own tests).
+ * Real, on PGlite: the replay engine and the outcome records. Stubbed: the
+ * replay DOORS (`entities.create/update/moveToWorkspace`, hub
+ * `createDocument`, `createFocusSession`) → recorders of what a door would
+ * see (the acting agent, the caller, the session, the input). NOT covered
+ * here: the doors' own gate running the full ladder on replay
+ * (NEEDS-DOGFOOD); the gate filing the pack (`ceiling-pack.pglite.test.ts`).
  */
 
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
@@ -35,10 +27,7 @@ const h = vi.hoisted(() => ({
     /** `ctx.userId` of the door's caller: who the written row belongs to. */
     callerUserId: unknown;
     sessionId: unknown;
-    isMember: boolean;
   }>,
-  /** Per-door scripted answer. */
-  answers: {} as Record<string, () => unknown>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -52,34 +41,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       proposals: actual.proposals as never,
       users: actual.users as never,
       workspaces: actual.workspaces as never,
-      workspaceMembers: actual.workspaceMembers as never,
       focusSessions: actual.focusSessions as never,
     },
   });
   return { ...actual, db: h.db, getDb: async () => h.db };
 });
-
-vi.mock("../../utils/event-backed-proposal.js", () => ({
-  createEventBackedProposal: async (input: Record<string, unknown>) => {
-    const id = randomUUID();
-    await h.client!.query(
-      `insert into proposals (id, status, proposal_type, target_type, target_id, workspace_id, agent_user_id, created_by, session_id, data, created_at, updated_at)
-       values ($1, 'pending', $2, $3, $4, $5, $6, $7, $8, $9::jsonb, now(), now())`,
-      [
-        id,
-        input.proposalType,
-        input.targetType,
-        input.targetId,
-        input.workspaceId,
-        input.agentUserId,
-        input.createdBy,
-        input.sessionId ?? null,
-        JSON.stringify(input.data),
-      ]
-    );
-    return { proposal: { id } };
-  },
-}));
 
 vi.mock("../../utils/audit-log.js", () => ({
   auditLog: async () => ({ id: randomUUID() }),
@@ -88,46 +54,34 @@ vi.mock("../../utils/audit-log.js", () => ({
 async function recordDoor(
   door: string,
   ctx: Record<string, unknown> | null,
-  input: Record<string, unknown>,
-  workspaceId: string,
-  agentUserId: string
+  input: Record<string, unknown>
 ): Promise<unknown> {
   const { getActingAgentUserId } = await import("@synap/database");
-  const { rows } = await h.client!.query<{ n: number }>(
-    `select count(*)::int as n from workspace_members where workspace_id = $1 and user_id = $2`,
-    [workspaceId, agentUserId]
-  );
   h.doorCalls.push({
     door,
     input,
     actingAgent: getActingAgentUserId(),
     callerUserId: ctx?.userId ?? null,
     sessionId: ctx?.sessionId ?? null,
-    isMember: rows[0]!.n > 0,
   });
-  const answer = h.answers[door];
-  return answer ? answer() : { status: "created", id: randomUUID() };
+  return { status: "created", id: randomUUID() };
 }
 
 vi.mock("../../routers/entities.js", () => ({
   entitiesRouter: {
     createCaller: (ctx: Record<string, unknown>) => ({
       create: (input: Record<string, unknown>) =>
-        recordDoor(
-          "entity/create",
-          ctx,
-          input,
-          String(ctx.workspaceId),
-          String(ctx.agentUserId)
-        ),
+        recordDoor("entity/create", ctx, input),
       update: (input: Record<string, unknown>) =>
-        recordDoor(
-          "entity/update",
-          ctx,
-          input,
-          String(ctx.workspaceId),
-          String(ctx.agentUserId)
-        ),
+        recordDoor("entity/update", ctx, input),
+      moveToWorkspace: async (input: Record<string, unknown>) => {
+        await recordDoor("entity/move", ctx, input);
+        return {
+          moved: input.entityIds as string[],
+          proposed: [],
+          errors: [],
+        };
+      },
     }),
   },
 }));
@@ -136,46 +90,28 @@ vi.mock("../../routers/hub-protocol/documents.js", () => ({
   documentsRouter: {
     createCaller: (ctx: Record<string, unknown>) => ({
       createDocument: (input: Record<string, unknown>) =>
-        recordDoor(
-          "document/create",
-          ctx,
-          input,
-          String(ctx.workspaceId),
-          String(ctx.agentUserId)
-        ),
+        recordDoor("document/create", ctx, input),
     }),
   },
 }));
 
 vi.mock("../focus-sessions/create-session.js", () => ({
   createFocusSession: (params: Record<string, unknown>) =>
-    recordDoor(
-      "focus_session/create",
-      null,
-      params,
-      String(params.workspaceId),
-      String(params.agentUserId)
-    ),
+    recordDoor("focus_session/create", null, params),
 }));
 
-import { TRPCError } from "@trpc/server";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
+import { proposals, users, workspaces, focusSessions } from "@synap/database";
+import type { DeferredWrite } from "@synap-core/types/proposals/deferred-writes";
 import {
-  proposals,
-  users,
-  workspaces,
-  workspaceMembers,
-  focusSessions,
-} from "@synap/database";
-import { DEFERRED_WRITES_MAX } from "@synap-core/types/proposals/deferred-writes";
-import { checkPermissionOrPropose } from "../../utils/permission-check.js";
-import { proposalExecRegistry } from "../../routers/proposals/execution-registry.js";
-import { registerWorkspaceExecutors } from "../../routers/proposals/executors/workspace.js";
-import { recordRejectedDeferredWrites } from "./deferred-writes.js";
+  recordRejectedDeferredWrites,
+  replayDeferredWrites,
+} from "./deferred-writes.js";
 
 const HUMAN = randomUUID();
 const AGENT = randomUUID();
 const WS = randomUUID();
+const OTHER_WS = randomUUID();
 const SESSION = randomUUID();
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -195,372 +131,102 @@ const q = <T>(sql: string, params?: unknown[]) =>
   h.client!.query<T>(sql, params);
 
 beforeAll(async () => {
-  for (const t of [
-    proposals,
-    users,
-    workspaces,
-    workspaceMembers,
-    focusSessions,
-  ])
+  for (const t of [proposals, users, workspaces, focusSessions])
     await h.client!.exec(ddlFor(t as PgTable));
-  await h.client!.exec(
-    `create unique index on workspace_members (workspace_id, user_id);`
-  );
   await q(
     `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
     [HUMAN, AGENT]
   );
-  // `ddlFor` defaults every `*_at` column to now(): a live space states its
-  // `archived_at` explicitly, or the gate reads it as archived (86b6faae).
-  await q(
-    `insert into workspaces (id, name, archived_at) values ($1, 'Sales', null)`,
-    [WS]
-  );
-  registerWorkspaceExecutors();
 });
 
 beforeEach(async () => {
   await q(`delete from proposals`);
-  await q(`delete from workspace_members`);
   h.doorCalls.length = 0;
-  h.answers = {};
 });
 
-describe("an archived space takes no join (86b6faae)", () => {
-  it("an agent write into an archived space is refused in words, and no join is filed", async () => {
-    const archived = randomUUID();
-    await q(
-      `insert into workspaces (id, name, archived_at) values ($1, 'Old Clients', now())`,
-      [archived]
-    );
-    const result = await checkPermissionOrPropose({
-      userId: HUMAN,
-      agentUserId: AGENT,
-      workspaceId: archived,
-      subjectType: "entity",
-      action: "create",
-      data: { profileSlug: "note", title: "x" },
-    } as Parameters<typeof checkPermissionOrPropose>[0]);
-    expect(result).toEqual({
-      denied: true,
-      reason:
-        'The space "Old Clients" is archived, so an agent cannot join it or write there. A person must do this, or restore the space first.',
-    });
-    expect(await joinRows()).toEqual([]);
-  });
-});
-
-/** One agent write into WS through the real gate. */
-function agentWrite(
+/** One write as the gate keeps it (`buildDeferredWrite`). */
+function kept(
   subjectType: string,
   action: string,
   data: Record<string, unknown>,
-  sessionId?: string
-) {
-  return checkPermissionOrPropose({
-    userId: HUMAN,
-    agentUserId: AGENT,
-    workspaceId: WS,
+  over: Partial<DeferredWrite> = {}
+): DeferredWrite {
+  return {
+    ref: randomUUID(),
     subjectType,
     action,
     data,
-    sessionId,
-    reasoning: "keeping the pipeline tidy",
-  } as Parameters<typeof checkPermissionOrPropose>[0]);
-}
-
-async function joinRows() {
-  const { rows } = await q<{
-    id: string;
-    status: string;
-    data: Record<string, unknown>;
-  }>(
-    `select id, status, data from proposals where target_type = 'workspace' and proposal_type = 'join'`
-  );
-  return rows;
-}
-
-async function approveJoin(proposalId: string) {
-  const [row] = (
-    await q<{ data: unknown }>(`select data from proposals where id = $1`, [
-      proposalId,
-    ])
-  ).rows;
-  return proposalExecRegistry.resolveExact("workspace/join")!.execute({
-    proposal: {
-      id: proposalId,
-      targetType: "workspace",
-      targetId: WS,
-      proposalType: "join",
-      workspaceId: WS,
-      sessionId: null,
-      projectId: null,
-      agentUserId: AGENT,
-      sourceMessageId: null,
-      data: row!.data,
-    },
-    payload: null,
+    sessionId: SESSION,
+    agentUserId: AGENT,
     userId: HUMAN,
-    input: { proposalId },
-    ctx: {} as never,
-    deps: {
-      emitProposalReviewed: () => undefined,
-      reportProposalOutcome: () => undefined,
-    } as never,
-  });
+    at: new Date().toISOString(),
+    fingerprint: randomUUID(),
+    workspaceId: WS,
+    ...over,
+  };
 }
 
-/** The five writes of the ticket: one files the join, four ride its dedupe. */
-async function fiveWrites() {
-  const entityId = randomUUID();
-  const results = [
-    await agentWrite(
+/** Today's pack holding `writes`, as the gate files it. */
+async function pack(
+  writes: DeferredWrite[],
+  extra: Record<string, unknown> = {}
+): Promise<string> {
+  const id = randomUUID();
+  await q(
+    `insert into proposals (id, status, proposal_type, target_type, target_id, agent_user_id, data)
+     values ($1, 'approved', 'held_writes', 'agent', $2, $2, $3::jsonb)`,
+    [id, AGENT, JSON.stringify({ deferredWrites: writes, ...extra })]
+  );
+  return id;
+}
+
+async function outcomesOf(id: string) {
+  const { rows } = await q<{ data: Record<string, unknown> }>(
+    `select data from proposals where id = $1`,
+    [id]
+  );
+  return (rows[0]!.data.deferredOutcomes ?? {}) as Record<
+    string,
+    { outcome: string; id?: string }
+  >;
+}
+
+describe("replaying an approved held-writes pack", () => {
+  it("replays each write through its door, as the agent, in its own space", async () => {
+    const note = kept("entity", "create", { id: randomUUID(), title: "Note" });
+    const moved = kept(
       "entity",
       "create",
-      { id: randomUUID(), profileSlug: "note", title: "Call notes" },
-      SESSION
-    ),
-    await agentWrite("entity", "update", { id: entityId, title: "Renamed" }),
-    await agentWrite("focus_session", "create", {
-      id: randomUUID(),
-      goal: "Qualify the inbound leads",
-    }),
-    await agentWrite("document", "create", {
-      id: randomUUID(),
-      title: "Brief",
-      type: "markdown",
-      content: "# Brief",
-      workspaceId: WS,
-      userId: HUMAN,
-    }),
-    await agentWrite("entity", "create", {
-      id: randomUUID(),
-      profileSlug: "note",
-      title: "Second note",
-    }),
-  ];
-  return { results, entityId };
-}
-
-describe("join deferral — the gate keeps every replayable write", () => {
-  it("5 writes → ONE join holding 5 deferred writes, each told it was kept", async () => {
-    const { results } = await fiveWrites();
-    const joins = await joinRows();
-    expect(joins).toHaveLength(1);
-    const kept = joins[0]!.data.deferredWrites as Array<
-      Record<string, unknown>
-    >;
-    expect(kept.map((w) => `${w.subjectType}/${w.action}`)).toEqual([
-      "entity/create",
-      "entity/update",
-      "focus_session/create",
-      "document/create",
-      "entity/create",
-    ]);
-    for (const [i, r] of results.entries()) {
-      expect(r).toMatchObject({
-        granted: false,
-        proposalId: joins[0]!.id,
-        proposalType: "join",
-        deferred: true,
-        deferredRef: kept[i]!.ref,
-      });
-    }
-    // Provenance the replay needs rides with each write.
-    expect(kept[0]).toMatchObject({
-      agentUserId: AGENT,
-      userId: HUMAN,
-      sessionId: SESSION,
-      reasoning: "keeping the pipeline tidy",
-    });
-  });
-
-  it("a resend of the same write is kept once, and answers with the kept ref", async () => {
-    const data = { id: randomUUID(), profileSlug: "note", title: "Same" };
-    const first = await agentWrite("entity", "create", data);
-    const again = await agentWrite("entity", "create", {
-      ...data,
-      id: randomUUID(),
-    });
-    const [join] = await joinRows();
-    expect((join!.data.deferredWrites as unknown[]).length).toBe(1);
-    expect(again).toMatchObject({
-      deferred: true,
-      deduped: true,
-      deferredRef: (first as { deferredRef: string }).deferredRef,
-    });
-  });
-
-  it("a pair that cannot be replayed is NOT kept (today's join, retry after)", async () => {
-    const r = await agentWrite("entity", "delete", { id: randomUUID() });
-    const [join] = await joinRows();
-    expect(join!.data.deferredWrites).toBeUndefined();
-    expect(r).toMatchObject({ proposalType: "join" });
-    expect(r).not.toHaveProperty("deferred");
-    // …and on the dedupe path too.
-    await agentWrite("entity", "create", { id: randomUUID(), title: "kept" });
-    const r2 = await agentWrite("view", "delete", { id: randomUUID() });
-    expect(r2).not.toHaveProperty("deferred");
-    const [after] = await joinRows();
-    expect((after!.data.deferredWrites as unknown[]).length).toBe(1);
-  });
-
-  it(`refuses, in words, the write past the cap of ${DEFERRED_WRITES_MAX}`, async () => {
-    for (let i = 0; i < DEFERRED_WRITES_MAX; i++) {
-      const r = await agentWrite("entity", "create", {
-        id: randomUUID(),
-        profileSlug: "note",
-        title: `note ${i}`,
-      });
-      expect(r).toMatchObject({ deferred: true });
-    }
-    const over = await agentWrite("entity", "create", {
-      id: randomUUID(),
-      profileSlug: "note",
-      title: "one too many",
-    });
-    expect(over).toMatchObject({ denied: true });
-    expect((over as { reason: string }).reason).toMatch(
-      /already holds 50 writes/
+      { id: randomUUID(), title: "Elsewhere" },
+      { workspaceId: OTHER_WS }
     );
-    const [join] = await joinRows();
-    expect((join!.data.deferredWrites as unknown[]).length).toBe(
-      DEFERRED_WRITES_MAX
-    );
-  });
-});
+    const id = await pack([note, moved]);
 
-describe("join approval — membership, then replay as the agent", () => {
-  it("approve → member in the same step → 5 writes replayed through their doors, outcomes recorded", async () => {
-    await fiveWrites();
-    const [join] = await joinRows();
-    const kept = join!.data.deferredWrites as Array<{ ref: string }>;
-    // The ladder's answers on replay: the update now needs review, the
-    // document door says no, the rest apply.
-    h.answers["entity/update"] = () => ({
-      status: "proposed",
-      proposalId: "p-update",
-      proposalType: "entity.update",
-    });
-    h.answers["document/create"] = () => {
-      throw new TRPCError({
-        code: "FORBIDDEN",
-        message: "Documents in Sales need review",
-      });
-    };
-    h.answers["focus_session/create"] = () => ({
-      status: "created",
-      session: { id: "s-1" },
-    });
+    await replayDeferredWrites({ proposalId: id });
 
-    const result = await approveJoin(join!.id);
-
-    expect(result).toMatchObject({
-      success: true,
-      effect: { applied: "verified", rows: 1, subject: "workspace_members" },
-    });
-    // Every door ran AS THE AGENT, with the membership already there.
     expect(h.doorCalls.map((c) => c.door)).toEqual([
       "entity/create",
-      "entity/update",
-      "focus_session/create",
-      "document/create",
       "entity/create",
     ]);
     for (const c of h.doorCalls) {
-      expect(c.actingAgent).toBe(AGENT);
-      expect(c.isMember).toBe(true);
+      expect(c).toMatchObject({
+        actingAgent: AGENT,
+        callerUserId: HUMAN,
+        sessionId: SESSION,
+      });
     }
-    expect(h.doorCalls[0]!.sessionId).toBe(SESSION);
-    expect(h.doorCalls[0]!.input).toMatchObject({
-      profileSlug: "note",
-      title: "Call notes",
-      agentUserId: AGENT,
-    });
-    expect(h.doorCalls[2]!.input).toMatchObject({
-      userId: HUMAN,
-      agentUserId: AGENT,
-      workspaceId: WS,
-      goal: "Qualify the inbound leads",
-    });
-
-    const [after] = await joinRows();
-    expect(after!.status).toBe("approved");
-    const outcomes = after!.data.deferredOutcomes as Record<
-      string,
-      Record<string, unknown>
-    >;
-    expect(outcomes[kept[0]!.ref]).toMatchObject({ outcome: "applied" });
-    expect(outcomes[kept[1]!.ref]).toMatchObject({
-      outcome: "proposed",
-      proposalId: "p-update",
-    });
-    expect(outcomes[kept[2]!.ref]).toMatchObject({
-      outcome: "applied",
-      id: "s-1",
-    });
-    expect(outcomes[kept[3]!.ref]).toMatchObject({
-      outcome: "refused",
-      reason: "Documents in Sales need review",
-    });
-    expect(outcomes[kept[4]!.ref]).toMatchObject({ outcome: "applied" });
-    // The writes themselves are still on the row (the approval merged, it did
-    // not overwrite).
-    expect((after!.data.deferredWrites as unknown[]).length).toBe(5);
-    const { rows } = await q<{ role: string }>(
-      `select role from workspace_members where workspace_id = $1 and user_id = $2`,
-      [WS, AGENT]
-    );
-    expect(rows).toEqual([{ role: "editor" }]);
+    const outcomes = await outcomesOf(id);
+    expect(outcomes[note.ref]!.outcome).toBe("applied");
+    expect(outcomes[moved.ref]!.outcome).toBe("applied");
   });
 
-  it("a write the reviewer dropped (rejectItem disposition) is skipped, not replayed", async () => {
-    await agentWrite("entity", "create", { id: randomUUID(), title: "keep" });
-    const r = (await agentWrite("entity", "create", {
-      id: randomUUID(),
-      title: "drop",
-    })) as { deferredRef: string; proposalId: string };
-    await q(
-      `update proposals set data = jsonb_set(data, '{dispositions}', jsonb_build_object($1::text, '{"status":"reject"}'::jsonb)) where id = $2`,
-      [r.deferredRef, r.proposalId]
-    );
-    await approveJoin(r.proposalId);
-    expect(h.doorCalls).toHaveLength(1);
-    expect(h.doorCalls[0]!.input).toMatchObject({ title: "keep" });
-    const [after] = await joinRows();
-    expect(
-      (after!.data.deferredOutcomes as Record<string, { outcome: string }>)[
-        r.deferredRef
-      ]!.outcome
-    ).toBe("skipped_by_reviewer");
-  });
-
-  it("an agent that is already a member: approval is idempotent (0 rows), writes still replay", async () => {
-    const r = (await agentWrite("entity", "create", {
-      id: randomUUID(),
-      title: "x",
-    })) as { proposalId: string };
-    await q(
-      `insert into workspace_members (workspace_id, user_id, role) values ($1, $2, 'editor')`,
-      [WS, AGENT]
-    );
-    const result = await approveJoin(r.proposalId);
-    expect(result.effect).toMatchObject({ applied: "verified", rows: 0 });
-    expect(h.doorCalls).toHaveLength(1);
-  });
-
-  it("a kept document is replayed for its PERSON, not the agent (held-writes 4a021e44)", async () => {
-    // Filed exactly as the document door files it: the gate call names the
-    // AGENT as userId and the person rides in data.userId
-    // (routers/hub-protocol/documents.ts). The shared helper above names the
-    // person, which is why the first test never saw this.
-    const r = (await checkPermissionOrPropose({
-      userId: AGENT,
-      agentUserId: AGENT,
-      workspaceId: WS,
-      subjectType: "document",
-      action: "create",
-      data: {
+  it("a kept document is replayed for its PERSON, not the agent (4a021e44)", async () => {
+    // The document door gates as the agent (so the kept `userId` is the
+    // agent) and carries its person in data.
+    const doc = kept(
+      "document",
+      "create",
+      {
         id: randomUUID(),
         title: "Plan v3",
         type: "markdown",
@@ -568,19 +234,11 @@ describe("join approval — membership, then replay as the agent", () => {
         workspaceId: WS,
         userId: HUMAN,
       },
-      reasoning: "the plan for the founder",
-    } as Parameters<typeof checkPermissionOrPropose>[0])) as {
-      proposalId: string;
-    };
-    const [join] = await joinRows();
-    const [kept] = join!.data.deferredWrites as Array<{ userId: string }>;
-    expect(kept!.userId).toBe(AGENT);
-
-    await approveJoin(r.proposalId);
+      { userId: AGENT }
+    );
+    await replayDeferredWrites({ proposalId: await pack([doc]) });
 
     expect(h.doorCalls.map((c) => c.door)).toEqual(["document/create"]);
-    // The document door owns its row by ctx.userId: the person, or the
-    // replayed document belongs to the agent and the person cannot open it.
     expect(h.doorCalls[0]!.callerUserId).toBe(HUMAN);
     expect(h.doorCalls[0]!.actingAgent).toBe(AGENT);
     expect(h.doorCalls[0]!.input).toMatchObject({
@@ -590,61 +248,85 @@ describe("join approval — membership, then replay as the agent", () => {
     });
   });
 
-  it("a kept document is replayed under the id the agent was handed (held-writes d50550c2)", async () => {
-    // Live 2026-10-27: the agent was told documentId 4203118d, the replay
-    // landed the document as fc52a02e, and every link to the first id broke.
-    const handed = randomUUID();
-    const r = (await checkPermissionOrPropose({
-      userId: AGENT,
-      agentUserId: AGENT,
-      workspaceId: WS,
-      subjectType: "document",
-      action: "create",
-      data: {
-        id: handed,
-        title: "State of the work",
-        type: "markdown",
-        content: "Five lines.",
-        workspaceId: WS,
-        userId: HUMAN,
-      },
-    } as Parameters<typeof checkPermissionOrPropose>[0])) as {
-      proposalId: string;
-    };
+  it("a kept document and a session start land under the ids the agent was handed (d50550c2, f151958b)", async () => {
+    const docId = randomUUID();
+    const sessionId = randomUUID();
+    await replayDeferredWrites({
+      proposalId: await pack([
+        kept("document", "create", {
+          id: docId,
+          title: "State of the work",
+          content: "Five lines.",
+          workspaceId: WS,
+          userId: HUMAN,
+        }),
+        kept("focus_session", "create", {
+          id: sessionId,
+          goal: "No AI request reaches DeepSeek before consent",
+        }),
+      ]),
+    });
 
-    await approveJoin(r.proposalId);
-
-    expect(h.doorCalls.map((c) => c.door)).toEqual(["document/create"]);
-    expect(h.doorCalls[0]!.input).toMatchObject({ proposedDocumentId: handed });
-  });
-
-  it("a kept session start is replayed under the id its proposal names (held-writes f151958b)", async () => {
-    // Live 2026-10-27: pack f151958b held a session start as 4f824834 and the
-    // replay created it as 8ba020af, so the id on the proposal named nothing.
-    const handed = randomUUID();
-    const r = (await agentWrite("focus_session", "create", {
-      id: handed,
-      goal: "No AI request reaches DeepSeek before consent",
-    })) as { proposalId: string };
-
-    await approveJoin(r.proposalId);
-
-    expect(h.doorCalls.map((c) => c.door)).toEqual(["focus_session/create"]);
-    expect(h.doorCalls[0]!.input).toMatchObject({ proposedSessionId: handed });
-  });
-
-  it("a rejected join records `rejected` for every kept write — nothing replays", async () => {
-    await fiveWrites();
-    const [join] = await joinRows();
-    await q(`update proposals set status = 'rejected' where id = $1`, [
-      join!.id,
+    expect(h.doorCalls.map((c) => c.door)).toEqual([
+      "document/create",
+      "focus_session/create",
     ]);
-    await recordRejectedDeferredWrites(join!.id);
-    const [after] = await joinRows();
-    const outcomes = Object.values(
-      after!.data.deferredOutcomes as Record<string, { outcome: string }>
+    expect(h.doorCalls[0]!.input).toMatchObject({ proposedDocumentId: docId });
+    expect(h.doorCalls[1]!.input).toMatchObject({
+      proposedSessionId: sessionId,
+    });
+  });
+
+  it("a kept move replays the MOVE, never a field update (cf54ebb0)", async () => {
+    const entityId = randomUUID();
+    const w = kept("entity", "update", {
+      id: entityId,
+      toWorkspaceId: OTHER_WS,
+    });
+    const id = await pack([w]);
+
+    await replayDeferredWrites({ proposalId: id });
+
+    expect(h.doorCalls.map((c) => c.door)).toEqual(["entity/move"]);
+    expect(h.doorCalls[0]!.input).toEqual({
+      entityIds: [entityId],
+      workspaceId: OTHER_WS,
+    });
+    expect((await outcomesOf(id))[w.ref]).toMatchObject({
+      outcome: "applied",
+      id: entityId,
+    });
+  });
+
+  it("a write the reviewer dropped is skipped, and a second replay runs nothing again", async () => {
+    const keep = kept("entity", "create", { id: randomUUID(), title: "keep" });
+    const drop = kept("entity", "create", { id: randomUUID(), title: "drop" });
+    const id = await pack([keep, drop], {
+      dispositions: { [drop.ref]: { status: "reject" } },
+    });
+
+    await replayDeferredWrites({ proposalId: id });
+    await replayDeferredWrites({ proposalId: id });
+
+    expect(h.doorCalls).toHaveLength(1);
+    expect(h.doorCalls[0]!.input).toMatchObject({ title: "keep" });
+    expect((await outcomesOf(id))[drop.ref]!.outcome).toBe(
+      "skipped_by_reviewer"
     );
-    expect(outcomes).toHaveLength(5);
+  });
+
+  it("a rejected pack records `rejected` for every kept write — nothing replays", async () => {
+    const writes = [
+      kept("entity", "create", { id: randomUUID(), title: "a" }),
+      kept("entity", "create", { id: randomUUID(), title: "b" }),
+    ];
+    const id = await pack(writes);
+    await q(`update proposals set status = 'rejected' where id = $1`, [id]);
+
+    await recordRejectedDeferredWrites(id);
+
+    const outcomes = Object.values(await outcomesOf(id));
+    expect(outcomes).toHaveLength(2);
     expect(outcomes.every((o) => o.outcome === "rejected")).toBe(true);
     expect(h.doorCalls).toHaveLength(0);
   });

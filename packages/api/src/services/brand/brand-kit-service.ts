@@ -44,8 +44,10 @@ import {
   BRAND_ABSENCE_MESSAGES,
   BRAND_KIT_PROFILE_SLUGS,
   brandKitFromEntities,
+  dtcgTokenSetFromEntities,
   exportBrandKit,
   odTokensFromEntities,
+  isBrandTokenFormat,
   pickBrandIdentity,
   pickBrandWorkspace,
   type BrandCandidateWorkspace,
@@ -215,16 +217,24 @@ export async function resolveBrand(
   };
 }
 
-/** Export the kit of a resolved brand — exactly the rows `resolveBrand` chose. */
+/**
+ * Export the kit of a resolved brand — exactly the rows `resolveBrand` chose.
+ * The token formats (`dtcg`, `synap-css`, `css-shadcn`) render that brand's approved DTCG
+ * token set; with none, they render an empty set (`{}` / no declarations), so
+ * the caller keeps Synap's own values.
+ */
 export function exportResolvedBrandKit(
   kitSource: BrandKitSourceEntity[],
   format: BrandKitFormat
 ): BrandKitExport {
-  const tokens =
-    format === "od-design-system" ? odTokensFromEntities(kitSource) : undefined;
-  return exportBrandKit(
-    brandKitFromEntities(kitSource),
-    format,
-    tokens ? { tokens } : {}
-  );
+  const kit = brandKitFromEntities(kitSource);
+  if (format === "od-design-system") {
+    const tokens = odTokensFromEntities(kitSource);
+    return exportBrandKit(kit, format, tokens ? { tokens } : {});
+  }
+  if (isBrandTokenFormat(format)) {
+    const dtcg = dtcgTokenSetFromEntities(kitSource);
+    return exportBrandKit(kit, format, dtcg ? { dtcg } : {});
+  }
+  return exportBrandKit(kit, format);
 }

@@ -26,6 +26,7 @@
  * contexts (same contract as `proposals/proposal-utils.ts`).
  */
 
+import { DRAFT_DECISION_WORDS } from "./draft-words.js";
 import {
   OBJECT_KINDS,
   OBJECT_KIND_ALIASES,
@@ -56,6 +57,13 @@ import type { FilterOperator } from "../views/filters.js";
 import type { NeedsYouBucket } from "../needs-you/buckets.js";
 import type { NeedsYouFold } from "../needs-you/rule.js";
 import type { WaitKind } from "../units/wait-kind.js";
+import type { ProcessStepRunnerKind } from "../processes/steps.js";
+import type { ProcessNeed } from "../processes/read.js";
+import { canonicalNeedSlug, parseNeedRef } from "../needs/index.js";
+import type {
+  ProcessHealth,
+  ProcessHealthReason,
+} from "../processes/health.js";
 import type { SessionVerdict } from "../focus-sessions/verdict.js";
 import type { RunnerState } from "../units/runner-state.js";
 import type {
@@ -108,6 +116,9 @@ export * from "./oauth-scope-words.js";
 
 /** Template or pack, from what a package holds; `package.install` in words. */
 export * from "./package-words.js";
+
+/** A draft decided in place: its state from the proposal's status, approve / discard (`./draft-words.ts`). */
+export * from "./draft-words.js";
 
 /**
  * Words a sentence-cased token must still spell the way people write them —
@@ -310,6 +321,8 @@ const ACTION_VERB_ROWS = {
   link: { imperative: "Link", past: "Linked", present: "Links" },
   unlink: { imperative: "Unlink", past: "Unlinked" },
   attach: { imperative: "Attach", past: "Attached" },
+  // A space's need filled by a provider (0426, the `workspace/bind_need` door).
+  bind_need: { imperative: "Fill need", past: "Filled need" },
   // "Add to <session>" (a capture offered to a running session) — `add`
   // humanized to "Add" in BOTH moods, so the receipt read "Add to X".
   add: { imperative: "Add", past: "Added" },
@@ -351,11 +364,10 @@ const ACTION_VERB_ROWS = {
   "capture.graph": { imperative: "Capture", past: "Captured" },
   "import.graph": { imperative: "Import", past: "Imported" },
   send: { imperative: "Send", past: "Sent", progressive: "Sending" },
-  approve: {
-    imperative: "Approve",
-    past: "Approved",
-    progressive: "Approving",
-  },
+  // The draft decisions' words are defined ONCE, in `./draft-words.ts` (a
+  // dependency-free leaf the SDK vendors for generated apps): approve here and
+  // discard below are those rows.
+  approve: DRAFT_DECISION_WORDS.en.approve,
   // The decision verb for OBJECT-WORK proposals — a proposed entity that
   // renders as the entity, editable, in a draft state. Approving that is not
   // reviewing a diff, it is finishing a draft, and the verb should say so.
@@ -386,7 +398,9 @@ const ACTION_VERB_ROWS = {
   // nothing was proposed, a session simply appeared and a person says whether it
   // is theirs to work.
   accept: { imperative: "Accept", past: "Accepted" },
-  discard: { imperative: "Discard", past: "Discarded" },
+  // Also a DRAFT's negative decision (`./draft-words.ts`: a person throws away
+  // text written for them; the API verb stays `reject`).
+  discard: DRAFT_DECISION_WORDS.en.discard,
   // Undo of a conversion — the inverse verb, not a delete.
   revert: { imperative: "Revert", past: "Reverted" },
   // TWO distinct acts, two verbs. `revert` takes an APPLIED proposal's effect
@@ -410,7 +424,7 @@ const ACTION_VERB_ROWS = {
   // they cannot pay; `upgrade` also covers renewing a plan that has no AI.
   top_up: { imperative: "Top up", past: "Topped up" },
   upgrade: { imperative: "Upgrade", past: "Upgraded" },
-  ask_admin: { imperative: "Ask admin", past: "Asked admin" },
+  ask_admin: { imperative: "Ask an admin", past: "Asked an admin" },
   fix_payment: { imperative: "Fix payment", past: "Fixed payment" },
   // Put a REJECTED proposal back in the queue — the inverse of reject. Without
   // a row `resolveActionLabel("reopen", …)` fell through to `humanizeToken`,
@@ -444,6 +458,8 @@ const ACTION_VERB_ROWS = {
   // `blocked_by` edge. Dotted keys, so a bare `stop` or `release` elsewhere
   // keeps its own reading (pause, resume and rerun share their bare rows).
   "session.stop": { imperative: "Stop", past: "Stopped" },
+  // A run that stopped before its last stage resumes at it (plan 7d71ddcc).
+  "session.continue": { imperative: "Continue", past: "Continued" },
   "session.wait_on": { imperative: "Wait on", past: "Waited on" },
   "session.release": {
     imperative: "Stop waiting on",
@@ -457,6 +473,9 @@ const ACTION_VERB_ROWS = {
     past: "Took their offer",
   },
   "track.keep_ask": { imperative: "Keep my ask", past: "Kept my ask" },
+  // `focus_session/orchestrate`: start ONE orchestrator over several running
+  // sessions (links them, holds each on the person's yes). The proposal's verb.
+  orchestrate: { imperative: "Orchestrate", past: "Orchestrated" },
   // The pod's one "Make them goals" card (founder decision D-3, 2026-10-26):
   // the retired goal / objective / OKR entities the person reviews and makes
   // goals, each through the one convert door. Plural on purpose — the single
@@ -537,6 +556,12 @@ const ACTION_VERB_ROWS = {
   // matter — the button asks, the session receipt reports.
   plan_approval: { imperative: "Approve plan", past: "Approved plan" },
   deploy_approval: { imperative: "Approve deploy", past: "Approved deploy" },
+  // A playbook STAGE GATE (`playbook.stage_gate`, changeType `stage_gate`):
+  // the person agrees to a session entering a stage. Like the dev gates, not
+  // bare "Approve"; titled as a LEAD (`ACTION_TITLE_LEADS`) whose name is the
+  // stage and the thing ("Approve stage: Send proposal for EU deal"), never
+  // "Stage gate Job" (finding 8f2dee79).
+  stage_gate: { imperative: "Approve stage", past: "Approved stage" },
   // Document-edit proposal types (`DOCUMENT_PATCH_PROPOSAL_TYPES` + the legacy
   // `ai_edit`), filed against an EXISTING document by the pod's patch door.
   // Without rows they humanized to "Section update" / "Ai edit" and composed
@@ -625,6 +650,16 @@ const ACTION_VERB_ROWS = {
     past: "Declined",
     progressive: "Declining",
   },
+  // The person's NO to an agent's ask, on every mode (founder, 16 Nov 2026,
+  // plan d717d6ac §3): the stored answer is `{ type: "declined" }`
+  // (`@synap-core/types/ask`). Not `decline` (a connection asking for reach)
+  // and not `reject` (a proposal): the ask closes as refused, the reason goes
+  // to the agent, nothing is handed over.
+  refuse: {
+    imperative: "Refuse",
+    past: "Refused",
+    progressive: "Refusing",
+  },
   // Cutting a connection's sign-in (an account, a channel, an agent's keys).
   // Reversible by connecting again — never "Deleted".
   disconnect: {
@@ -651,6 +686,10 @@ const ACTION_VERB_ROWS = {
   // into a channel (`channel_message.created`).
   ask: { imperative: "Ask", past: "Asked", progressive: "Asking" },
   attest: { imperative: "Mark done", past: "Marked done" },
+  // The person's "Not mine" on a slot an agent handed them
+  // (`focus_session.slot_handed_back`): the slot is the agent's again,
+  // unanswered. Not an answer and not a refusal.
+  hand_back: { imperative: "Hand back", past: "Handed back" },
   post: { imperative: "Post", past: "Posted", progressive: "Posting" },
   see_failure: { imperative: "See what failed", past: "Saw what failed" },
   turn_on: {
@@ -680,6 +719,9 @@ const ACTION_VERB_ROWS = {
   // Library: run a reader on a kept link again (or with another reader). The
   // button asks "Read again"; the receipt says it was "Read".
   read_again: { imperative: "Read again", past: "Read" },
+  // The design door (`design.apply`, matched on its last segment): an
+  // agent's ops applied to a design. Humanized, the receipt said "Apply".
+  apply: { imperative: "Apply", past: "Applied" },
 } satisfies Readonly<Record<string, ActionVerb>>;
 
 export const ACTION_VERBS: Readonly<Record<string, ActionVerb>> =
@@ -723,10 +765,20 @@ type TitlePreposition = "in" | "of" | "for";
 /**
  * Actions whose title is a LEAD, `<verb>: <name>`, with no kind noun: the
  * object is a batch the name describes, not a record of a kind ("Writes held
- * for review: Claude Code, 2026-10-27, 12 items"). Keyed like
- * {@link ACTION_VERBS} (whole token).
+ * for review: Claude Code, 2026-10-27, 12 items"), or a stage gate whose
+ * name says the stage and the thing. Keyed like {@link ACTION_VERBS} (whole
+ * token, then its last dotted segment: `playbook.stage_gate`).
  */
-export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set(["held_writes"]);
+export const ACTION_TITLE_LEADS: ReadonlySet<string> = new Set([
+  "held_writes",
+  "stage_gate",
+]);
+
+function isTitleLead(action: string): boolean {
+  const key = action.toLowerCase();
+  const tail = key.includes(".") ? key.slice(key.lastIndexOf(".") + 1) : key;
+  return ACTION_TITLE_LEADS.has(key) || ACTION_TITLE_LEADS.has(tail);
+}
 
 function resolveActionPreposition(action: string | null | undefined): string {
   if (!action) return "";
@@ -843,6 +895,8 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   replaces: { outgoing: "Replaces", incoming: "Replaced by" },
   // `X --serves--> G`: a session or a sub-goal does its work FOR goal G.
   serves: { outgoing: "Serves", incoming: "Served by" },
+  // `G --advances--> W`: goal G moves space W (a pillar of its project).
+  advances: { outgoing: "Advances", incoming: "Advanced by" },
   // ── Every other stored `links` type, read from its TO end ────────────────
   // Without these an incoming edge showed its FORWARD word ("Targets") plus a
   // reversed-arrow mark. Read as "<focus> <label> <row>": the row is the
@@ -875,6 +929,12 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   // participant(agent) --assigned_to--> playbook|profile|project|workspace:
   // the agent that takes that work by default.
   assigned_to: { outgoing: "Assigned to", incoming: "Assigned agent" },
+  // session --orchestrated_by--> session: coordinated by that orchestrator.
+  orchestrated_by: { outgoing: "Orchestrated by", incoming: "Orchestrates" },
+  // capability(add-on) --extends--> capability(base) (founder decision D6):
+  // the add-on runs through its base. From the base's side the row is the
+  // add-on that extends it.
+  extends: { outgoing: "Add-on of", incoming: "Extended by" },
 };
 
 export function resolveLineageEdgeLabel(
@@ -976,6 +1036,11 @@ const OBJECT_NOUN_ROWS = {
   // backend#637): what a person reads as "its test runs", never a job's name
   // (D-R4). Humanized it read "Test run" in every locale.
   test_run: "Test run",
+  // A session that coordinates several running sessions (founder decision D5,
+  // plan b38bc224): it reads their rooms, posts one merged plan, and holds
+  // each until the person's yes. A session by kind, but the person names it
+  // by its role ("Start an orchestrator"); `orchestrated_by` is its edge.
+  orchestrator: "Orchestrator",
 } satisfies Readonly<Record<string, string>>;
 
 export const OBJECT_NOUNS: Readonly<Record<string, string>> = OBJECT_NOUN_ROWS;
@@ -1017,6 +1082,7 @@ export const OBJECT_NOUN_PLURALS: Readonly<
   room: "Rooms",
   review: "Reviews",
   test_run: "Test runs",
+  orchestrator: "Orchestrators",
 };
 
 // A backend-only noun never shares a slug with a registry kind: both live in
@@ -1047,6 +1113,18 @@ export function resolveObjectNoun(
     translatedWord(`kind.${slug}.one`, catalogLocaleOf(locale)) ??
     englishNoun(slug).one
   );
+}
+
+/**
+ * The English words a kind was called before a rename (`formerLabels` on its
+ * registry row), to RECOGNISE durable stored text that still spells them
+ * (never to show them). Empty for a kind never renamed or unknown.
+ */
+export function resolveFormerObjectNouns(
+  kind: string | null | undefined
+): readonly string[] {
+  if (!kind) return [];
+  return OBJECT_KINDS[canonicalKind(kind)]?.formerLabels ?? [];
 }
 
 function canonicalKind(kind: string): string {
@@ -1275,7 +1353,7 @@ export function buildObjectActionTitle(params: {
   // reaching it were written by the pod, in English.
   const verbEn = resolveActionLabel(actionToken, mood, "en");
   const verb = resolveActionLabel(actionToken, mood, locale);
-  if (actionToken && ACTION_TITLE_LEADS.has(actionToken.toLowerCase())) {
+  if (actionToken && isTitleLead(actionToken)) {
     const lead = nameSlot(objectName, verbEn, verbEn, "");
     return lead ? t("vocabulary.title.lead", { verb, name: lead }) : verb;
   }
@@ -1400,16 +1478,23 @@ const BUILD_TAG_TOKEN =
   /^(?:(?:local|build)-[0-9a-f]{7,}|(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{12,})$/i;
 
 /**
- * One word that is a machine token, not a name. Narrow ON PURPOSE — a false
- * positive deletes a real name from the title a person approves:
+ * THE door for "is this string a machine token, not a name a person can
+ * read" — one word only. Every surface that is about to show a stored name
+ * (a session title, a graph neighbour's name) asks this instead of keeping
+ * its own id pattern. Narrow ON PURPOSE — a false positive deletes a real
+ * name from what a person reads:
  *   - a UUID, a build tag (above);
  *   - a dotted id whose last segment is a known ACTION (`entity.create`,
  *     `gmail.send`) — so `report.pdf`, `synap.live`, `j.doe` stay names;
- *   - a snake_case slug only when the object is a Tool, whose identity IS its
- *     key (`routines_horizon`) — `meeting_notes` names a document.
+ *   - a snake_case slug only when `noun` is the Tool noun, whose identity IS
+ *     its key (`routines_horizon`) — `meeting_notes` names a document. With
+ *     no `noun` a snake_case slug is a name.
+ * Surrounding whitespace is ignored; an empty string is not a token (an
+ * empty name is the caller's own case).
  */
-function isMachineToken(text: string, noun: string): boolean {
-  if (/\s/.test(text)) return false;
+export function isMachineToken(raw: string, noun = ""): boolean {
+  const text = raw.trim();
+  if (!text || /\s/.test(text)) return false;
   if (UUID_TOKEN.test(text) || BUILD_TAG_TOKEN.test(text)) return true;
   if (DOTTED_TOKEN.test(text)) {
     return text.slice(text.lastIndexOf(".") + 1) in ACTION_VERBS;
@@ -1584,6 +1669,26 @@ export function resolveToolKindLabel(kind: string | null | undefined): string {
 }
 
 /**
+ * The plural of {@link TOOL_KIND_LABELS}, for a block that lists several of
+ * one kind. A process's instruction skills ("What agents load",
+ * `ProcessRead.skills`) are "Skills": the noun for instructions an agent
+ * follows, distinct from the umbrella "Tool" (founder D2), which stays the
+ * noun of lists, counts and mentions.
+ */
+export const TOOL_KIND_PLURALS: Readonly<Record<string, string>> = {
+  skill: "Skills",
+  capability: "Capabilities",
+  tool: "Integrations",
+};
+
+export function resolveToolKindPlural(kind: string | null | undefined): string {
+  if (!kind) return "";
+  const key = kind.toLowerCase();
+  const canonical = OBJECT_KIND_ALIASES[key] ?? key;
+  return TOOL_KIND_PLURALS[canonical] ?? humanizeToken(canonical);
+}
+
+/**
  * The human label for a proposal kind. Unknown/new kinds humanize rather than
  * leak, so a future `ProposalKind` addition is safe (if unpolished) before
  * this table is updated.
@@ -1594,6 +1699,14 @@ export function resolveProposalKindLabel(
   if (!kind) return "";
   return PROPOSAL_KIND_LABELS[kind.toLowerCase()] ?? humanizeToken(kind);
 }
+
+/**
+ * The name of the pod acting on its own, with no person and no agent behind
+ * the act (a sweep that expired a request, the failure of a receipt no agent
+ * recorded): "Synap", never "Automation", which is the user's own rules
+ * (`automation` kind). A product name: the same in every locale.
+ */
+export const POD_ACTOR_NAME = "Synap";
 
 /**
  * Lifecycle STATUS labels — the state a thing is in, as a human word.
@@ -1620,7 +1733,11 @@ const STATUS_LABEL_ROWS = {
   // `PROPOSAL_REJECTION_REASONS` taxonomy, and the DB enum value.
   rejected: "Rejected",
   denied: "Rejected",
-  approval_failed: "Approval failed",
+  // DEFAULT word (plan 8032a127 D6, the founder has not decided; override it
+  // here and in `catalog.fr.ts`): the approval happened, applying it did not.
+  // "Couldn't apply" says what the person sees; "Approval failed" read as if
+  // the approving had failed.
+  approval_failed: "Couldn't apply",
   // The proposal's effect was taken back after approval. One word for the row's
   // status chip on every surface (the workbench and the phone both name it).
   reverted: "Reverted",
@@ -1689,8 +1806,9 @@ const STATUS_LABEL_ROWS = {
   // ⚠️ OVERLOADED TOKEN — deliberately rendered as the neutral word.
   // `stale` means three different things in this product: a session the reaper
   // gave up on (progress), a sync that is out of date (freshness), and a broken
-  // renderer binding. "Stalled" imposes the progress reading; "Out of date"
-  // imposes the freshness one. Both are wrong somewhere, so this table — which
+  // renderer binding. "Stalled" imposes the progress reading (and is the
+  // pillar-health word of the separate `stalled` token); "Out of date" imposes
+  // the freshness one. Both are wrong somewhere, so this table — which
   // is GLOBAL and cannot know the domain — stays neutral. A surface that knows
   // its domain should supply its own word (the data-sync and renderer surfaces
   // already do) rather than call this resolver.
@@ -1799,10 +1917,14 @@ const STATUS_LABEL_ROWS = {
   public: "Public",
   // AI AVAILABILITY (`AiAvailabilityKind`, `@synap-core/types/ai-availability`)
   // — the short state chip. Headlines and CTAs live in that module's copy deck.
+  // `suspended` says what the payer does, as the deck's title does: humanized,
+  // "Suspended" named no cause. `account_inactive` is the `not_entitled` chip
+  // when AI was switched off rather than left out of the plan.
   credits_low: "Low credits",
   credits_empty: "Out of credits",
   not_entitled: "No AI plan",
-  suspended: "Suspended",
+  account_inactive: "AI turned off",
+  suspended: "Payment needed",
   budget_paused: "Paused",
   provider_issue: "AI issue",
   service_down: "AI offline",
@@ -1831,6 +1953,15 @@ const STATUS_LABEL_ROWS = {
   // (`automation_runs.status`, `automation_step_runs.status`): a calm outcome,
   // not a failure; its unit state is `blocked` on a rule (`units/state.ts`).
   blocked_by_policy: "Blocked by policy",
+  // A project PILLAR's derived health (`units/pillar-health.ts`), worst
+  // first, and the words of its goal counts (the pillar's bar legend).
+  no_active_goal: "No active goal",
+  stalled: "Stalled",
+  unproven: "Not validated yet",
+  needs_attention: "Needs attention",
+  moving: "Moving",
+  unvalidated_bet: "Not validated",
+  validated: "Validated",
 } satisfies Readonly<Record<string, string>>;
 
 export const STATUS_LABELS: Readonly<Record<string, string>> =
@@ -2433,6 +2564,85 @@ export const WAIT_KIND_LABELS = {
   nobody: "Nobody",
 } as const satisfies Readonly<Record<WaitKind, string>>;
 
+/** The wait kind rows, exactly typed: the keys of the `waitKind.*` catalog. */
+export type WaitKindLabelRows = typeof WAIT_KIND_LABELS;
+
+/**
+ * Who moves a process step on, in a person's words (`PROCESS_STEP_RUNNER_KINDS`,
+ * `classifyStepRunner`, `@synap-core/types/processes`): the step strip's and
+ * pod admin's runner mark, beside the gate's words (`trackStepGateLabel`,
+ * `@synap-core/types/units`), which it never repeats. `automatic` is declared and
+ * unreachable until W2b declares "an automation moves this step". Keyed by
+ * EVERY kind.
+ */
+export const STEP_RUNNER_KIND_LABELS = {
+  person: "You",
+  ai: "An agent",
+  automatic: "Runs by itself",
+} as const satisfies Readonly<Record<ProcessStepRunnerKind, string>>;
+
+/** The step runner rows, exactly typed: the keys of the `stepRunner.*` catalog. */
+export type StepRunnerKindLabelRows = typeof STEP_RUNNER_KIND_LABELS;
+
+/**
+ * A NEED's name (0426, `NEEDS` in `@synap-core/types/needs`): what a process
+ * read, the need picker and a run's "missing" line call it. Keyed by EVERY
+ * need slug; `needs-labels.test.ts` pins each English word to `NEEDS`' own
+ * label, so the two never drift.
+ */
+export const NEED_LABELS = {
+  "code-host": "Code host",
+  "deploy-target": "Deploy target",
+  gate: "Gate",
+  payments: "Payments",
+  messaging: "Messaging",
+  email: "Email",
+  calendar: "Calendar",
+  "file-store": "File store",
+  "media-generation": "Media generation",
+  "social-publishing": "Social publishing",
+  "linkedin-reach": "LinkedIn reach",
+  analytics: "Analytics",
+  compute: "Compute",
+} as const;
+
+/** The need rows, exactly typed: the keys of the `need.*` catalog. */
+export type NeedLabelRows = typeof NEED_LABELS;
+
+/**
+ * A capability INTENT's short name (`CAPABILITY_INTENTS`), for a process
+ * read's need entry and a need ref's `/<intent>`: a noun phrase, never the
+ * consent sentence (`intentRunLabel`). Keyed by EVERY intent
+ * (`needs-labels.test.ts`).
+ */
+export const INTENT_LABELS = {
+  search_external: "Search outside sources",
+  find_people: "Find people",
+  enrich_entity: "Enrich records",
+  fetch_record: "Fetch a record",
+  list_records: "List records",
+  send_message: "Send a message",
+  request_connection: "Request a connection",
+  schedule_event: "Schedule an event",
+  manage_file: "Manage files",
+  generate_media: "Generate media",
+  capture_into_pod: "Bring data into the pod",
+  run_external_job: "Run an outside job",
+  connect_account: "Connect an account",
+  publish_post: "Publish a post",
+  delegate_agent_task: "Hand a task to an agent",
+  read_webpage: "Read a web page",
+  search_web: "Search the web",
+  edit_video: "Edit a video",
+  transcribe_media: "Transcribe media",
+  download_media: "Download media",
+  provision_compute: "Start a cloud machine",
+  release_compute: "Stop a cloud machine",
+} as const;
+
+/** The intent rows, exactly typed: the keys of the `intent.*` catalog. */
+export type IntentLabelRows = typeof INTENT_LABELS;
+
 /**
  * What a session's runner says it is doing (0384, `RUNNER_STATES`), in a
  * person's words: the mark a session page and a needs-you row wear (decision
@@ -2520,9 +2730,181 @@ export function resolveRunnerStateLabelFor(
   return name ? t(sentence.named, { name }) : t(sentence.unnamed);
 }
 
-/** The words for a wait kind; unknown values humanize, never leak. */
-export function resolveWaitKindLabel(v: string | null | undefined) {
-  return resolveFrom(WAIT_KIND_LABELS, v);
+/**
+ * The words for a wait kind, in `opts.locale` (else the ambient catalog
+ * locale), through `waitKind.<kind>`; unknown values humanize, never leak.
+ */
+export function resolveWaitKindLabel(
+  v: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!v) return "";
+  const key = v.trim().toLowerCase();
+  if (!Object.hasOwn(WAIT_KIND_LABELS, key)) return humanizeToken(v);
+  return (
+    translatedWord(`waitKind.${key}`, catalogLocaleOf(opts?.locale)) ??
+    WAIT_KIND_LABELS[key as keyof WaitKindLabelRows]
+  );
+}
+
+/**
+ * The words for who moves a step on (`person` | `ai` | `automatic`, the
+ * answer of `classifyStepRunner`), in `opts.locale` (else the ambient catalog
+ * locale), through `stepRunner.<kind>`. Unknown kinds humanize; none is "".
+ */
+export function resolveStepRunnerLabel(
+  kind: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!kind) return "";
+  const key = kind.trim().toLowerCase();
+  if (!Object.hasOwn(STEP_RUNNER_KIND_LABELS, key)) return humanizeToken(kind);
+  return (
+    translatedWord(`stepRunner.${key}`, catalogLocaleOf(opts?.locale)) ??
+    STEP_RUNNER_KIND_LABELS[key as keyof StepRunnerKindLabelRows]
+  );
+}
+
+/**
+ * A need's name (`code-host` → "Code host"), in `opts.locale` (else the
+ * ambient catalog locale), through `need.<slug>`. An alias reads as its need;
+ * an unknown slug humanizes; none is "".
+ */
+export function resolveNeedLabel(
+  slug: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!slug) return "";
+  const key = canonicalNeedSlug(slug);
+  if (!key || !Object.hasOwn(NEED_LABELS, key)) return humanizeToken(slug);
+  return (
+    translatedWord(`need.${key}`, catalogLocaleOf(opts?.locale)) ??
+    NEED_LABELS[key as keyof NeedLabelRows]
+  );
+}
+
+/**
+ * An intent's short name (`fetch_record` → "Fetch a record"), in
+ * `opts.locale` (else the ambient catalog locale), through `intent.<slug>`.
+ * An unknown slug humanizes; none is "".
+ */
+export function resolveIntentLabel(
+  intent: string | null | undefined,
+  opts?: { locale?: Locale }
+): string {
+  if (!intent) return "";
+  const key = intent.trim();
+  if (!Object.hasOwn(INTENT_LABELS, key)) return humanizeToken(intent);
+  return (
+    translatedWord(`intent.${key}`, catalogLocaleOf(opts?.locale)) ??
+    INTENT_LABELS[key as keyof IntentLabelRows]
+  );
+}
+
+/**
+ * The words a process read's need entry wears (`ProcessNeed`), never its raw
+ * token: a `need:` entry → the need's name, and its `/<intent>` as
+ * `intentLabel`; an intent entry → the intent's name; a capability entry →
+ * the capability's name when the read found it, else null (the surface then
+ * says "a tool it names"). The pod fills `label`/`intentLabel` in English; a
+ * surface in another locale calls this with its locale. PURE.
+ */
+export function resolveProcessNeedLabels(
+  need: Pick<ProcessNeed, "slug" | "kind"> & {
+    providers?: ProcessNeed["providers"];
+  },
+  opts?: { locale?: Locale }
+): { label: string | null; intentLabel: string | null } {
+  if (need.kind === "need") {
+    const ref = parseNeedRef(need.slug);
+    if (!ref) {
+      return {
+        label: humanizeToken(need.slug.replace(/^need:/, "")),
+        intentLabel: null,
+      };
+    }
+    return {
+      label: resolveNeedLabel(ref.need, opts),
+      intentLabel: ref.intent ? resolveIntentLabel(ref.intent, opts) : null,
+    };
+  }
+  if (need.kind === "intent") {
+    return { label: resolveIntentLabel(need.slug, opts), intentLabel: null };
+  }
+  return {
+    label: need.providers?.[0]?.capabilityName ?? null,
+    intentLabel: null,
+  };
+}
+
+/**
+ * A process health's LABEL (its pill / mark text), from its reason code, in
+ * `opts.locale` (else the ambient catalog locale). `waiting_on_you` reads the
+ * status label door (`resolveStatusLabel("waiting_on_you")`). An unknown code
+ * (a newer pod) humanizes, never leaks.
+ */
+export function resolveProcessHealthLabel(
+  health: Pick<ProcessHealth, "reason">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (health.reason === "waiting_on_you") {
+    return resolveStatusLabel("waiting_on_you", locale);
+  }
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  return sentences(locale)(
+    `vocabulary.processHealth.${health.reason}.label` as ProcessHealthLabelKey
+  );
+}
+
+/**
+ * A process health's REASON sentence (the why under the label), from its code
+ * and, for `latest_unresolved`, the status it names (through
+ * `resolveStatusLabel`). An unknown code humanizes.
+ */
+export function resolveProcessHealthReason(
+  health: Pick<ProcessHealth, "reason" | "latestStatus">,
+  opts?: { locale?: Locale }
+): string {
+  const locale = catalogLocaleOf(opts?.locale);
+  if (!isProcessHealthReason(health.reason)) {
+    return humanizeToken(health.reason);
+  }
+  const t = sentences(locale);
+  if (health.reason === "latest_unresolved") {
+    return t("vocabulary.processHealth.latest_unresolved.reason", {
+      status: resolveStatusLabel(health.latestStatus ?? "", locale),
+    });
+  }
+  return t(
+    `vocabulary.processHealth.${health.reason}.reason` as ProcessHealthPlainReasonKey
+  );
+}
+
+type ProcessHealthLabelKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "waiting_on_you"
+>}.label`;
+type ProcessHealthPlainReasonKey = `vocabulary.processHealth.${Exclude<
+  ProcessHealthReason,
+  "latest_unresolved"
+>}.reason`;
+// COVERAGE FLOOR: a reason code without its words does not build.
+type _ProcessHealthWordsCovered = [
+  ProcessHealthLabelKey | ProcessHealthPlainReasonKey,
+] extends [keyof VocabularySentencesEn]
+  ? true
+  : never;
+const _processHealthWordsCovered: _ProcessHealthWordsCovered = true;
+void _processHealthWordsCovered;
+
+function isProcessHealthReason(code: string): code is ProcessHealthReason {
+  return Object.hasOwn(
+    vocabularySentencesEn,
+    `vocabulary.processHealth.${code}.reason`
+  );
 }
 
 function resolveFrom<T extends Readonly<Record<string, string>>>(
@@ -3457,6 +3839,27 @@ export function resolveMembersDecideLabel(
 }
 
 /**
+ * Why the send door sent nothing: the recipient person is marked do not
+ * contact (`doNotContact` on the person, founder 2026-11-09). ONE sentence for
+ * every door that refuses it (the send door's `error`, an approval's failure).
+ * `name` is the person's title, else "this person"; `reason` is their
+ * `doNotContactReason`, said as written, omitted when empty.
+ */
+export function resolveDoNotContactRefusal(params: {
+  name?: string | null;
+  reason?: string | null;
+  locale?: Locale;
+}): string {
+  const t = sentences(catalogLocaleOf(params.locale));
+  const name =
+    params.name?.trim() || t("vocabulary.refusal.doNotContact.unnamed");
+  const reason = params.reason?.trim();
+  return reason
+    ? t("vocabulary.refusal.doNotContact.reason", { name, reason })
+    : t("vocabulary.refusal.doNotContact", { name });
+}
+
+/**
  * Who holds a slot that was HANDED to an agent (`delegatedTo`, an agent TYPE
  * token) — past mood, because the hand-off already happened. ONE spelling for
  * the session page's outcome row, the hand-off toast and Relay's owed rows.
@@ -3470,6 +3873,20 @@ export function resolveHandedToLabel(
 ): string {
   const name = displayName?.trim() || humanizeToken(agentType);
   return sentences(catalogLocaleOf(locale))("vocabulary.handedTo", { name });
+}
+
+/**
+ * A job's child jobs folded on its Activity line: "3 jobs started from here"
+ * (plan 5207fbb6, `@synap-core/types/work-view` `jobBranches`
+ * `descendants`). A child job is a Job, never a "branch" on screen.
+ */
+export function resolveJobsStartedHereLabel(
+  n: number,
+  locale?: Locale
+): string {
+  return sentences(catalogLocaleOf(locale))("vocabulary.job.startedHere", {
+    n,
+  });
 }
 
 // ─── The one-line aim of a sitting (decision D3, 2026-10-23) ────────────────
@@ -3909,6 +4326,7 @@ export const SYNAP_AI_LABEL = "Synap AI";
  */
 export const RUN_CHOICE_VIA_LABELS = {
   named: "Chosen for this run",
+  authored: "Set by the process",
   stored: "Your choice",
   fallback: "Your agent couldn't take it",
   default: "The process's default",
@@ -4052,6 +4470,10 @@ export const vocabularyEn = buildVocabularyEn({
   statuses: STATUS_LABELS,
   needsYouNouns: NEEDS_YOU_ITEM_NOUNS,
   runnerStates: RUNNER_STATE_LABELS,
+  waitKinds: WAIT_KIND_LABELS,
+  stepRunners: STEP_RUNNER_KIND_LABELS,
+  needs: NEED_LABELS,
+  intents: INTENT_LABELS,
 });
 
 /** Every locale's vocabulary catalog, for `createT` and the parity test. */

@@ -87,6 +87,7 @@ export const REQUIRED_CHECK_NAMES = [
   "Full suite",
   "API e2e",
   "Reference docs are current",
+  "Dependent repos typecheck",
 ];
 
 /** The one workflow whose runs are "the PR's checks" (a copy of ciRunCountsAsChecks). */

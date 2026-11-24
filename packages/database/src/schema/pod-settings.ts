@@ -16,6 +16,7 @@
  * routers query the row directly with `.findFirst({})` (only one row exists).
  */
 import { pgTable, uuid, jsonb, timestamp } from "drizzle-orm/pg-core";
+import type { AiBillingInput } from "@synap-core/types/ai-availability";
 
 export interface PodIntelligenceDefaults {
   chatModelId: string | null;
@@ -273,7 +274,48 @@ export interface ControlPlaneEntitlementSync {
   outcome: "ok" | "unreachable" | "refused" | "unsupported" | "invalid";
   /** One plain sentence when `outcome` is not "ok". */
   message: string | null;
+  /**
+   * Failed attempts in a row (absent = none): the pull backs off on them
+   * (`cp-entitlement-sync`), so a refusing or failing CP is not asked every
+   * few minutes. An "ok" attempt resets it.
+   */
+  failures?: number;
 }
+
+/**
+ * This pod's AI AVAILABILITY, as its Control Plane answered
+ * `GET /internal/ai-availability`: the billing block of the POD OWNER's view,
+ * kept to the fields the availability model reads (`AiBillingInput`,
+ * `@synap-core/types/ai-availability`) plus the payer's link. Never a plan
+ * name, a balance, a price or a pack: the pod states availability only.
+ * Written ONLY by the pull (`cp-entitlement-sync`, through
+ * `recordPodAiAvailability`, utils/control-plane-link.ts); read through
+ * `readPodAiAvailability`, resolved per viewer by the api
+ * (`services/ai-availability`). Absent = the CP never answered; `null` = the
+ * CP has no such door (an older CP): unknown, never "available".
+ */
+export interface PodAiAvailability {
+  billing: PodAiBilling | { readFailed: true };
+  /** When the CP computed the answer (its `checkedAt`, ISO). */
+  checkedAt: string;
+  /**
+   * When AI became available, as the pulls observed it (ISO): set by the
+   * first pull that reads "available" (AI runs: the composer is not blocked,
+   * so low credits count) after one that did not (or after none), kept while
+   * it stays available, null while it is not. An `ai:available` hold is met
+   * while this is set and `checkedAt` is after its pause (`aiHoldMet`).
+   */
+  availableSince: string | null;
+}
+
+/**
+ * The owner's billing block, as stored ({@link PodAiAvailability}): the
+ * availability model's own billing input, plus the https page where the payer
+ * acts for `action` (null when it is none).
+ */
+export type PodAiBilling = Extract<AiBillingInput, { readFailed: false }> & {
+  actionUrl: string | null;
+};
 
 /**
  * The pod admin's switch for sharing onboarding milestones with the Control
@@ -347,8 +389,21 @@ export interface PodSettingsBlob {
   officialCatalogSignature?: OfficialCatalogSignature;
   controlPlaneEntitlement?: ControlPlaneEntitlement;
   controlPlaneEntitlementSync?: ControlPlaneEntitlementSync;
+  /** `null` = the CP has no availability door ({@link PodAiAvailability}). */
+  aiAvailability?: PodAiAvailability | null;
+  /** The last attempt to pull it, apart from the answer (as the plan's). */
+  aiAvailabilitySync?: ControlPlaneEntitlementSync;
   onboardingMilestones?: OnboardingMilestonesSetting;
   onboardingMilestonesSync?: OnboardingMilestonesSync;
+  /**
+   * The reactions compile pass's memory (api
+   * `services/reactions/reaction-rules-compile.ts`): which rule row each
+   * reaction produced, and whether the pass retired it — what tells the
+   * owner's pause or deletion apart from the pass's own retirement.
+   */
+  reactionRules?: {
+    rules: Record<string, { ruleId: string; retired?: true }>;
+  };
   [k: string]: unknown;
 }
 

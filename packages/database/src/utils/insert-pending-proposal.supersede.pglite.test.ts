@@ -30,12 +30,12 @@ import { proposals } from "../schema/proposals.js";
 import { notifications } from "../schema/notifications.js";
 import { messages } from "../schema/messages.js";
 import { focusSessions } from "../schema/focus-sessions.js";
+import { lifecycleTransitionOutbox } from "../schema/lifecycle-transition-outbox.js";
 import { channels } from "../schema/channels.js";
 import { relations } from "../schema/relations.js";
 import {
   insertPendingProposal,
   SUPERSEDED_BY_KEY,
-  SUPERSEDED_REASON,
   type InsertPendingProposalInput,
 } from "./insert-pending-proposal.js";
 
@@ -93,6 +93,7 @@ const statusOf = async (id: string) =>
 beforeAll(async () => {
   client = new PGlite();
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     notifications,
     messages,
@@ -133,7 +134,13 @@ describe("supersede — an agent's newer version replaces its older pending one"
     );
     expect(reviewed!.reviewed_at).not.toBeNull();
     expect(old.data[SUPERSEDED_BY_KEY]).toBe(v2.proposal.id);
-    expect(old.data.withdrawReason).toBe(SUPERSEDED_REASON);
+    // Why it ended is `ended.reason`; no sentence stored as if its author
+    // wrote it (finding 156068a6).
+    expect(old.data).not.toHaveProperty("withdrawReason");
+    expect(old.data.ended).toMatchObject({
+      reason: "superseded",
+      supersededBy: v2.proposal.id,
+    });
     expect(old.data.title).toBe("v1");
     expect((await statusOf(v2.proposal.id)).status).toBe("pending");
     const [n] = await q<{ status: string }>(

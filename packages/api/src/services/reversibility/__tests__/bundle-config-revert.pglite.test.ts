@@ -161,9 +161,9 @@ async function fileAndApply(
           const id = randomUUID();
           await client.query(
             `insert into playbooks (id, name, status) values ($1, $2, $3)`,
-            [id, input.name, input.status]
+            [id, input.name, input.status ?? "draft"]
           );
-          return { id };
+          return { id, status: input.status ?? "draft" };
         },
       },
       viewCaller: {

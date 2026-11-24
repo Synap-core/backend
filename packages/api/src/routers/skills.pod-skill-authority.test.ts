@@ -38,7 +38,9 @@ vi.mock("../services/presence/mode.js", async () =>
 );
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
+  const { NO_USERS } = await import("../__tests__/no-users-db.js");
   const db = {
+    ...NO_USERS,
     update: () => ({
       set: (values: Record<string, unknown>) => {
         h.sets.push(values);

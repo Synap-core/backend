@@ -145,6 +145,10 @@ import {
   links,
   tools,
   playbookRuns,
+  lifecycleTransitionOutbox,
+  proposals,
+  automationRuns,
+  sessionStageRuns,
   db,
 } from "@synap/database";
 import { registerFocusSessionsRoutes } from "../../../routers/hub-protocol/rest/focus-sessions.js";
@@ -153,6 +157,7 @@ import {
   CHECKPOINT_MAX_RECORDS,
   MAX_AUTO_CONTINUATIONS,
   RUN_CONTINUE_SLOT_LABEL,
+  TURN_HISTORY_MAX,
   checkpointTurnEntries,
   hasNoPersonInTheLoop,
   runTurnForAnswer,
@@ -305,6 +310,13 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
       links,
       tools,
       playbookRuns,
+      // Read by the one-turn close after a `completed` turn
+      // (run-turn-end-close.pglite.test.ts covers it).
+      proposals,
+      automationRuns,
+      // Who works each step (0422): a completed turn reads it (risk 2).
+      sessionStageRuns,
+      lifecycleTransitionOutbox,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
@@ -451,11 +463,42 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(h.settled).toEqual([{ playbookRunId: runId }]);
   });
 
-  it("an ask that does NOT land keeps the count: the next stop asks again, never a fresh continuation (M7)", async () => {
-    // Before: the count was reset to 0 when the pod DECIDED to ask, inside the
-    // recording transaction. An ask that then failed left the run running with
-    // a fresh count, so the next stops continued twice more on fresh budgets,
-    // asked (failed) again, and so on: unbounded spend, nobody asked.
+  it("the ledger's running cost counts EVERY turn, past the turns it keeps (plan fbfadf54 5c)", async () => {
+    const { sessionId } = await seedRun();
+    const n = TURN_HISTORY_MAX + 3;
+    for (let i = 0; i < n; i++)
+      await completeRun(sessionId, { ...STOPPED, turnKey: `msg-cost-${i}` });
+    const l = await ledger(sessionId);
+    // Non-vacuity: the kept window really is shorter than the run.
+    expect(l.turns).toHaveLength(TURN_HISTORY_MAX);
+    expect(l.cost).toEqual({
+      turns: n,
+      freshInputTokens: n * (131_072 - 100_000),
+      rawInputTokens: n * 131_072,
+      cacheReadInputTokens: n * 100_000,
+      models: ["claude-haiku-5-5"],
+    });
+  });
+
+  it("a report with NO turnKey (an older IS) never adds its tokens to the run's cost: its retry would add them twice", async () => {
+    const { sessionId } = await seedRun();
+    await completeRun(sessionId, { ...STOPPED, turnKey: "msg-keyed-1" });
+    // The same unkeyed report twice: a retry the pod cannot tell from a turn.
+    await completeRun(sessionId, STOPPED);
+    await completeRun(sessionId, STOPPED);
+    expect((await ledger(sessionId)).cost).toEqual({
+      turns: 3,
+      freshInputTokens: 131_072 - 100_000,
+      rawInputTokens: 131_072,
+      cacheReadInputTokens: 100_000,
+      models: ["claude-haiku-5-5"],
+      unmeasuredTurns: 2,
+    });
+  });
+
+  it("an ask that does NOT land ends the run failed: never a fresh continuation (M7)", async () => {
+    // A failed ask must not reset the count (unbounded spend, nobody asked),
+    // and nothing would move the run again, so it ends failed.
     const { sessionId, runId } = await seedRun();
     for (let n = 1; n <= MAX_AUTO_CONTINUATIONS; n++) {
       expect((await completeRun(sessionId, STOPPED)).json).toEqual({
@@ -465,23 +508,17 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
 
     h.failDeclare = true;
     const failed = await completeRun(sessionId, STOPPED);
-    expect(failed.json).toEqual({ status: "left_running" });
-    expect((await runRow(runId)).status).toBe("running");
+    expect(failed.json).toEqual({ status: "failed" });
+    expect((await runRow(runId)).status).toBe("failed");
     expect((await ledger(sessionId)).autoContinues).toBe(
       MAX_AUTO_CONTINUATIONS
     );
+    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
 
-    // The next stop tries the ask again — it does NOT continue on its own.
+    // A later stop finds no live run: it neither continues nor asks.
     const again = await completeRun(sessionId, STOPPED);
-    expect(again.json).toEqual({ status: "left_running" });
+    expect(again.json).toEqual({ status: "no-running-run" });
     expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
-
-    // Once an ask lands, the count resets for after the person answers.
-    h.failDeclare = false;
-    const asked = await completeRun(sessionId, STOPPED);
-    expect(asked.json).toEqual({ status: "waiting_on_you" });
-    expect(h.triggers).toHaveLength(MAX_AUTO_CONTINUATIONS);
-    expect((await ledger(sessionId)).autoContinues).toBe(0);
   });
 
   it("a RETRIED report of one turn (same turnKey) is settled once: one stop, one continuation (S9)", async () => {
@@ -845,6 +882,129 @@ describe("complete-run settles the run from how the IS turn ended (B8)", () => {
     expect(turn).not.toHaveProperty("model");
     expect(turn).not.toHaveProperty("cacheReadInputTokens");
     expect(turn).not.toHaveProperty("cacheWriteInputTokens");
+  });
+
+  it("the first call's inventory (sections, tools, guidance) lands in the ledger; bad values are dropped, never a 400", async () => {
+    const inv = {
+      sections: [
+        { name: "persona", chars: 1_200 },
+        { name: "method", chars: 8_400 },
+      ],
+      tools: ["synap_ask", "synap_capture"],
+      guidance: ["kind:voice-guide"],
+    };
+    const ok = await seedRun();
+    expect(
+      (
+        await completeRun(ok.sessionId, {
+          outcome: "completed",
+          turn: {
+            ceiling: 250_000,
+            spentInputTokens: 9_000,
+            firstCall: { ...FIRST_CALL, ...inv },
+          },
+        })
+      ).json
+    ).toEqual({ status: "completed" });
+    expect((await ledger(ok.sessionId)).firstTurn?.firstCall).toMatchObject(
+      inv
+    );
+
+    // Each bad value reads as absent on its own; the counts and the turn stay.
+    const bad = await seedRun();
+    const done = await completeRun(bad.sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: {
+          ...FIRST_CALL,
+          sections: [{ name: "", chars: -1 }],
+          tools: "synap_ask",
+          guidance: Array.from({ length: 13 }, (_, i) => `kind:k${i}`),
+        },
+      },
+    });
+    expect(done).toEqual({ code: 200, json: { status: "completed" } });
+    const fc = (await ledger(bad.sessionId)).firstTurn?.firstCall;
+    expect(fc).toMatchObject(FIRST_CALL);
+    expect(fc).not.toHaveProperty("sections");
+    expect(fc).not.toHaveProperty("tools");
+    expect(fc).not.toHaveProperty("guidance");
+
+    // An IS that predates the inventory sends none: the turn records as before.
+    const old = await seedRun();
+    await completeRun(old.sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: FIRST_CALL,
+      },
+    });
+    const ofc = (await ledger(old.sessionId)).firstTurn?.firstCall;
+    expect(ofc).toEqual(FIRST_CALL);
+  });
+
+  it("the POD fills the turn's guidance from the run's stamped definition snapshot, over anything the IS sent", async () => {
+    const { sessionId, runId } = await seedRun();
+    await q(
+      `update playbook_runs set definition_snapshot = $2::jsonb where id = $1`,
+      [
+        runId,
+        JSON.stringify({
+          guidance: {
+            status: "ok",
+            hash: "abc",
+            used: [
+              {
+                ref: "kind:voice-guide",
+                label: "Voice guide",
+                hash: "h1",
+                rows: [],
+              },
+              {
+                ref: "skill:house-style",
+                label: "House style",
+                hash: "h2",
+                rows: [],
+              },
+            ],
+            demoted: [],
+            missing: [],
+          },
+        }),
+      ]
+    );
+    await completeRun(sessionId, {
+      outcome: "completed",
+      turn: {
+        ceiling: 250_000,
+        spentInputTokens: 9_000,
+        firstCall: { ...FIRST_CALL, guidance: ["kind:from-the-is"] },
+      },
+    });
+    expect((await ledger(sessionId)).firstTurn?.firstCall?.guidance).toEqual([
+      "kind:voice-guide",
+      "skill:house-style",
+    ]);
+
+    // A turn that reports no first call records none (nothing to attach to).
+    const other = await seedRun();
+    await q(
+      `update playbook_runs set definition_snapshot = $2::jsonb where id = $1`,
+      [
+        other.runId,
+        JSON.stringify({ guidance: { status: "unavailable", error: "x" } }),
+      ]
+    );
+    await completeRun(other.sessionId, {
+      outcome: "completed",
+      turn: { ceiling: 1, spentInputTokens: 1, firstCall: FIRST_CALL },
+    });
+    expect(
+      (await ledger(other.sessionId)).firstTurn?.firstCall
+    ).not.toHaveProperty("guidance");
   });
 
   it("a ledger left by an EARLIER run on the session does not count for this one", async () => {

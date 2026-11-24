@@ -175,6 +175,39 @@ describe("synap_ask detail (MCP door → synthesizeAnswer → IS request)", () =
     expect(payload.queue).toMatchObject({ pendingReview: { count: 3 } });
   });
 
+  it("a queue answer is the live queue ALONE: no stale report counts, no model call (aac8143e)", async () => {
+    // What the IS composed from 10-20..10-25 reports on the live pod.
+    const fetchMock = isReplies({
+      answer:
+        "- **56 pending proposals**, oldest 19 days (10-24 report). - **123 human slots owed** across 74 sessions",
+    });
+    askMock.mockResolvedValue({
+      answers: ANSWERS,
+      routedTo: ["structured"],
+      degraded: [],
+      pending: null,
+      understanding: {},
+      queue: {
+        pendingReview: { count: 60, oldestDays: 6, lens: "authored" },
+        owedByPerson: { count: 84, sessions: 53 },
+        openSessions: { count: 0 },
+      },
+    });
+
+    const { text } = await callAsk({ query: "what is waiting on me" });
+
+    const payload = JSON.parse(text) as {
+      answer: string;
+      sources: Array<{ id: string }>;
+    };
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(payload.answer).toMatch(/^Waiting on you: 60 proposals to review/);
+    expect(payload.answer).toContain("84 answers or decisions owed");
+    expect(payload.answer).not.toMatch(/\b56\b|\b123\b|report/);
+    // The retrieved items are still there to open.
+    expect(payload.sources.map((s) => s.id)).toContain("ent-1");
+  });
+
   it("an empty FULL answer is a classified failure, not a success", async () => {
     isReplies({ answer: "  " });
 

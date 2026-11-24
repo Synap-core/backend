@@ -170,6 +170,8 @@ describe("record_observation — reaches the one writer", () => {
         chainDepth: 2,
         rootRunId: "run-0",
         chainAutomationIds: ["auto-0", "auto-1"],
+        // A person's own automation: no authoring agent.
+        actorAgentUserId: null,
       },
     });
   });

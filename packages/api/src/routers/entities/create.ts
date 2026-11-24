@@ -28,6 +28,8 @@ import {
   getDb,
   ProfileResolutionService,
   PropertyValidationService,
+  PropertyValidationError,
+  misnamedLifecycleKeys,
   validateEntityCreateProperties,
   eventRepository,
   EntityRepository,
@@ -71,7 +73,6 @@ import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
 import { TRPCError } from "@trpc/server";
 import {
   checkPermissionOrPropose,
-  isJoinGate,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
 import { resolveViewTrust } from "../../services/view-trust-service.js";
@@ -145,6 +146,14 @@ export const createProcs = {
         reasoning: z.string().optional(),
         /** Agent user ID when action is performed by an AI agent */
         agentUserId: z.string().uuid().optional(),
+        /**
+         * Caller-requested review: force this create through the proposal path
+         * even when it would otherwise auto-approve (the update door's
+         * `forcePropose`, same rule). Set by the design door when the outer
+         * capability gate asked for review (`design.apply`, a self-gated verb).
+         * Never DOWNGRADES governance; honored on the agent and AI paths only.
+         */
+        forcePropose: z.boolean().optional(),
         /**
          * Host-stamped identity of a framed view originating this write.
          *
@@ -1528,7 +1537,7 @@ export const createProcs = {
       if (isAgentFiling) {
         const validationDb = await getDb();
         const profileResolution = new ProfileResolutionService(validationDb);
-        await validateEntityCreateProperties(
+        const validated = await validateEntityCreateProperties(
           {
             profileResolution,
             propertyValidation: new PropertyValidationService(
@@ -1543,6 +1552,21 @@ export const createProcs = {
           },
           ctx.userId
         );
+        // The kind's status under another key would be stored where nothing
+        // reads it: the agent is told the field's name instead.
+        const misnamed = misnamedLifecycleKeys(
+          validated.unmodeled,
+          validated.modeled
+        );
+        if (misnamed.length > 0) {
+          throw new PropertyValidationError(
+            misnamed.map((m) => ({
+              field: m.key,
+              message: `not a field of this kind: its status field is '${m.field}'. Send the value as '${m.field}'.`,
+            })),
+            validated.profile.id
+          );
+        }
       }
 
       // 2. Permission check (may create proposal with correlationId)
@@ -1556,6 +1580,7 @@ export const createProcs = {
         subjectType: "entity",
         action: "create",
         source: input.source,
+        forcePropose: input.forcePropose === true,
         lifecycleMove: initialLifecycleMove,
         issuer,
         reasoning: input.reasoning,
@@ -1585,41 +1610,23 @@ export const createProcs = {
       // stays null to signal "no materialized row". However, we DO expose the
       // stable `proposedEntityId` (pre-generated at the top of this handler) so
       // AI agents can reference this entity in cross-write proposal graphs.
-      // A "proposed" outcome is NOT always the entity. When the author lacks
-      // membership on the governing workspace, `checkPermissionOrPropose`
-      // deliberately files a WORKSPACE-JOIN gate instead of the content write
-      // (permission-check.ts, join-gate branch). `perm.proposalType` is the
-      // discriminator that says which happened — so derive the prose and the
-      // pre-allocated id FROM it rather than asserting the entity case.
-      //
-      // This is the same defect the PHANTOM ENVELOPE ID comment above fixed
-      // for `id`, one field over: a receipt that narrates a write that never
-      // happened, plus an id that can never resolve. An external agent read
-      // `proposedEntityId` off a join gate, found it unresolvable, and
-      // published a wrong root cause built on it. Hub REST already branches
-      // on this (`hub-protocol/entities.ts`, "JOIN gate" comment); this is
-      // the same rule applied at the shared source instead of one door.
       if ("proposalId" in perm) {
-        const joinGate = isJoinGate(perm.proposalType);
         return {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Entity creation proposed for review",
-            perm.deferred
+            "Entity creation proposed for review"
           ),
           entity: null as Record<string, unknown> | null,
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
-          // Join gate that KEPT the write: it is replayed once the join is
-          // approved — the caller must not resend it.
+          // KEPT on today's held-writes pack: replayed once it is approved —
+          // the caller must not resend it.
           ...(perm.deferred
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
-          // Only real on the entity path: on a join gate no entity id was ever
-          // allocated, and an unresolvable id is worse than an absent field.
-          ...(joinGate ? {} : { proposedEntityId: entityId }),
+          proposedEntityId: entityId,
           // Homed proposal: same as materialize target (may be null = pod-wide).
           workspaceId: resolvedEntityWorkspaceId,
           effectiveWorkspaceId: resolvedEntityWorkspaceId,
@@ -1639,11 +1646,7 @@ export const createProcs = {
             // `status` deprecated (operation-outcome overload) — read `outcome`.
             status: "pending",
             outcome: "pending",
-            message: !joinGate
-              ? "Role will attach when this create proposal is approved"
-              : perm.deferred
-                ? "Kept with the write — attaches when the write is replayed after the join is approved."
-                : "Not attached — no entity was proposed; approve the workspace-join request first.",
+            message: "Role will attach when this create proposal is approved",
           })),
         };
       }
@@ -2222,7 +2225,11 @@ export const createProcs = {
           // granted (a system row would have resolved above). Reuse it, exactly
           // as the template door does (`resolveProfileForApply`), never a twin.
           if (!isProfileKindTwinError(err)) throw err;
-          await profileRepo.grantAccess(err.holder.id, ctx.workspaceId);
+          await profileRepo.grantAccess(
+            err.holder.id,
+            ctx.workspaceId,
+            ctx.userId
+          );
           newProfile = await profileRepo.getById(err.holder.id);
           if (!newProfile) throw err;
         }

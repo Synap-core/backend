@@ -10,6 +10,11 @@
  * `/api/hub/*` — there's no "ping with junk credentials and get a hint"
  * path, because that would leak which keys exist on the pod.
  *
+ * `GET /auth/grant` answers what the calling credential HOLDS, by place: an
+ * app's token reads its own grant to explain itself ("this app can see…").
+ * The grant is the one the hub middleware entered for this request, so a
+ * token never sees another's.
+ *
  * `GET /auth/key-state` is the ONE exception, on purpose: it answers the
  * holder of a key that does NOT authenticate — awaiting approval, replaced,
  * expired — so a CLI can say which fix applies. It is looked up by the
@@ -23,19 +28,36 @@
  */
 
 import { createRoute } from "@hono/zod-openapi";
-import { db, apiKeys, users, eq, getRequestGrant } from "@synap/database";
+import {
+  db,
+  apiKeys,
+  users,
+  eq,
+  getRequestGrant,
+  inArray,
+} from "@synap/database";
+import { workspaces } from "@synap/database/schema";
+import { isUuid } from "@synap-core/types/property-render";
 
 import { authErrorResponse, shortenKeyId } from "../../../utils/auth-error.js";
 import { describeKeyForHolder } from "../../../services/key-holder-state.js";
 import { extractBearerToken } from "../_middleware/auth.js";
 import { apiKeyService } from "../../../services/api-keys.js";
-import { summarizeKeyGrant } from "../../../services/key-grant.js";
+import {
+  describeOwnGrant,
+  grantSpaceIds,
+  summarizeKeyGrant,
+} from "../../../services/key-grant.js";
 import {
   GUEST_REFUSED_BODY,
   isGuestPrincipal,
 } from "../../../access/guest-containment.js";
 import { reportNoPodAccess } from "../../../access/pod-access.js";
-import { AuthStatusSchema, KeyHolderStateSchema } from "./_codecs/auth.js";
+import {
+  AuthStatusSchema,
+  KeyHolderStateSchema,
+  OwnGrantSchema,
+} from "./_codecs/auth.js";
 import { ErrorSchema, trpcErrorResponses } from "./_codecs/_openapi.js";
 import { logger, type HubHono, httpStatusForTrpcError } from "./_shared.js";
 
@@ -162,6 +184,74 @@ export function registerAuthRoutes(app: HubHono): void {
       logger.error({ err, apiKeyId }, "/auth/status lookup failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      ) as never;
+    }
+  });
+
+  const ownGrantRoute = createRoute({
+    method: "get",
+    path: "/auth/grant",
+    tags: ["Auth"],
+    summary: "What the calling credential holds, by place",
+    description:
+      "Returns the calling credential's own grant — the one the pod enforces " +
+      "on this request — as parts of permissions, each with the place it " +
+      "reaches: `pod` (reads everywhere in the pod: an app's pod-wide reads), " +
+      "`spaces` (named, with their names) or `anywhere`. An app reads it to " +
+      "say what it can see. Read-only; never another credential's grant. " +
+      "403 for a caller with no key (a signed-in session holds the person's " +
+      "own reach, not a grant).",
+    security: [{ bearerAuth: [] }],
+    responses: {
+      ...trpcErrorResponses,
+      200: {
+        description: "The calling credential's grant.",
+        content: { "application/json": { schema: OwnGrantSchema } },
+      },
+      401: { $ref: "#/components/responses/Unauthorized" },
+      403: {
+        description: "Forbidden — the caller holds no key grant",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+      500: {
+        description: "Internal error",
+        content: { "application/json": { schema: ErrorSchema } },
+      },
+    },
+  });
+
+  app.openapi(ownGrantRoute, async (c) => {
+    // The grant the hub middleware entered for THIS request (`runWithGrant`):
+    // the one every gate reads, never a lookup by an id the caller sends.
+    const grant = getRequestGrant();
+    if (!c.get("apiKeyId") || !grant) {
+      return c.json(
+        {
+          error:
+            "/auth/grant describes a key's grant. A signed-in session holds your own reach, not a grant.",
+        },
+        403
+      );
+    }
+    try {
+      // Ids as stored; only uuid-shaped ones are looked up (a name, never a row).
+      const ids = grantSpaceIds(grant).filter((id) => isUuid(id));
+      const named =
+        ids.length > 0
+          ? await db
+              .select({ id: workspaces.id, name: workspaces.name })
+              .from(workspaces)
+              .where(inArray(workspaces.id, ids))
+          : [];
+      return c.json(
+        describeOwnGrant(grant, new Map(named.map((w) => [w.id, w.name]))),
+        200
+      );
+    } catch (err) {
+      logger.error({ err }, "/auth/grant failed");
+      return c.json(
+        { error: "Could not read this credential's grant" },
         httpStatusForTrpcError(err)
       ) as never;
     }

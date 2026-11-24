@@ -121,48 +121,113 @@ export const REDACTED_SECRET_VALUE = "***REDACTED***";
 
 /**
  * The ONE redactor for a structured payload about to be STORED where people
- * and agents read it (a proposal's `data.body`): every value under a
- * secret-bearing key is replaced, at any depth. A `vault://` reference is
- * kept — a pointer, not a credential. Numbers / booleans / null and every
- * other key pass through, so the payload stays reviewable.
+ * and agents read it (a proposal's `data.body`): under a secret-bearing key,
+ * every string is replaced, at any depth below it (`api_keys: [...]`,
+ * `credentials: { pass }`), the rule {@link redactPayloadForLog} applies to an
+ * audit line. So is the `value` of an object whose sibling `type` says it is
+ * write-only (`sensitive` / `secret`: a Vercel Secret env var). A `vault://`
+ * reference is kept — a pointer, not a credential.
+ * Numbers / booleans / null stay, as they do in the log (`maxTokens`), and
+ * every other key passes through, so the payload stays reviewable.
  */
-export function redactSecretKeys<T>(value: T, depth = 0): T {
-  if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
-    return value;
+export function redactSecretKeys<T>(
+  value: T,
+  depth = 0,
+  underSecretKey = false
+): T {
+  if (typeof value === "string") {
+    return (
+      underSecretKey && value.trim() && !/^vault:\/\//.test(value.trim())
+        ? REDACTED_SECRET_VALUE
+        : value
+    ) as T;
+  }
+  if (!value || typeof value !== "object") return value;
+  // Past the depth bound, what sits under a credential key is replaced,
+  // never passed through (as the log redactor does).
+  if (depth >= REDACT_DEPTH_LIMIT) {
+    return (underSecretKey ? REDACTED_SECRET_VALUE : value) as T;
   }
   if (Array.isArray(value)) {
-    return value.map((v) => redactSecretKeys(v, depth + 1)) as T;
+    return value.map((v) =>
+      redactSecretKeys(v, depth + 1, underSecretKey)
+    ) as T;
   }
+  const record = value as Record<string, unknown>;
+  const typedSecret = declaresSecretType(record);
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] =
-      isSecretPayloadKey(k) &&
-      typeof v === "string" &&
-      v.trim() &&
-      !/^vault:\/\//.test(v.trim())
-        ? REDACTED_SECRET_VALUE
-        : redactSecretKeys(v, depth + 1);
+  for (const [k, v] of Object.entries(record)) {
+    out[k] = redactSecretKeys(
+      v,
+      depth + 1,
+      underSecretKey || isSecretPayloadKey(k) || (typedSecret && k === "value")
+    );
   }
   return out as T;
 }
 
 /**
- * Does a payload still carry a value `redactSecretKeys` replaced? A replay of
- * such a payload would send the marker as the credential — the caller refuses
- * it instead (the secret was never stored, so it cannot be replayed).
+ * The types a host gives a WRITE-ONLY value (Vercel's `sensitive` env var, a
+ * `secret` field): the object's neutral `value` key then holds a credential.
+ * Keyed on the sibling `type`, because the key itself names nothing secret
+ * (`{ key: "CONTACT_WEBHOOK_SECRET", value, type: "sensitive" }`).
  */
-export function carriesRedactedSecret(value: unknown, depth = 0): boolean {
+const SECRET_VALUE_TYPES: ReadonlySet<string> = new Set([
+  "sensitive",
+  "secret",
+]);
+
+function declaresSecretType(record: Record<string, unknown>): boolean {
+  const type = record.type;
+  return typeof type === "string" && SECRET_VALUE_TYPES.has(type.toLowerCase());
+}
+
+/**
+ * Does a payload still carry a value `redactSecretKeys` replaced, at any depth
+ * under a secret-bearing key? A replay of such a payload would send the marker
+ * as the credential — the caller refuses it instead (the secret was never
+ * stored, so it cannot be replayed).
+ */
+export function carriesRedactedSecret(
+  value: unknown,
+  depth = 0,
+  underSecretKey = false
+): boolean {
+  if (value === REDACTED_SECRET_VALUE) return underSecretKey;
   if (depth >= REDACT_DEPTH_LIMIT || !value || typeof value !== "object") {
     return false;
   }
   if (Array.isArray(value)) {
-    return value.some((v) => carriesRedactedSecret(v, depth + 1));
+    return value.some((v) =>
+      carriesRedactedSecret(v, depth + 1, underSecretKey)
+    );
   }
-  return Object.entries(value as Record<string, unknown>).some(
-    ([k, v]) =>
-      (isSecretPayloadKey(k) && v === REDACTED_SECRET_VALUE) ||
-      carriesRedactedSecret(v, depth + 1)
+  const record = value as Record<string, unknown>;
+  const typedSecret = declaresSecretType(record);
+  return Object.entries(record).some(([k, v]) =>
+    carriesRedactedSecret(
+      v,
+      depth + 1,
+      underSecretKey || isSecretPayloadKey(k) || (typedSecret && k === "value")
+    )
   );
+}
+
+/**
+ * Remove ONE known secret from a text by its value — for the few places that
+ * hold the credential itself in memory while talking to a provider (the
+ * `inbound_source.connect` approval hands a source's secret to a host). Every
+ * error or provider text that executor throws, logs or stores goes through
+ * this first: a provider may echo the value it was sent (Vercel's
+ * `failed[].error.value`), and the pattern scrubber cannot recognise a bare
+ * 64-hex string as a credential. Then {@link redactForStorage} as usual.
+ */
+export function scrubKnownSecret(
+  text: string,
+  secret: string | null | undefined
+): string {
+  if (!secret || secret.length < 8) return text;
+  return text.split(secret).join(REDACTED_SECRET_VALUE);
 }
 
 // ── A mutation's input, about to be LOGGED ──────────────────────────────────

@@ -81,6 +81,12 @@ const RULES = [
     file: FOCUS_SESSIONS,
     needle: "Declare what the work will produce",
   },
+  {
+    // Work-model W4: 22% of sessions repeated an output as a criterion.
+    rule: "criteria hang on the output they check (outputKey)",
+    file: FOCUS_SESSIONS,
+    needle: "Criteria hang on outputs",
+  },
 ] as const;
 
 function markdownFiles(dir: string): string[] {

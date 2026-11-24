@@ -41,6 +41,8 @@ export const contextRouter = router({
         threadId: z.string().uuid(),
         /** Newest messages to return (1–100). Omitted ⇒ 50, the long-standing default. */
         limit: z.number().int().min(1).max(100).optional(),
+        /** The page before this message (a previous read's `nextCursor`): older messages. */
+        cursor: z.string().uuid().optional(),
       })
     )
     .query(async ({ input, ctx }) => {
@@ -111,6 +113,7 @@ export const contextRouter = router({
       const messagesResult = await chatCaller.getMessages({
         threadId: input.threadId,
         limit: input.limit ?? 50,
+        cursor: input.cursor,
       });
 
       // The caller's own recent entities (floored by the caller and its grant).
@@ -236,7 +239,16 @@ export const contextRouter = router({
           // so projecting the teammate alone still renders no attribution.
           routedSource: m.routedSource ?? null,
           sessionId: m.sessionId ?? null,
+          // A channel with a person: which way the message went and the
+          // provider's own message id, so a reader can tell an echoed copy of
+          // our own send from a real reply (additive; null on a message that
+          // is neither, e.g. an in-pod chat turn).
+          direction: m.direction ?? null,
+          externalMessageId: m.externalMessageId ?? null,
         })),
+        // Older messages exist: read them with `cursor: nextCursor`.
+        hasMore: messagesResult.hasMore,
+        nextCursor: messagesResult.nextCursor ?? null,
         recentEntities: entitiesResult.entities.slice(0, 10).map((e) => ({
           id: e.id,
           type: e.type,

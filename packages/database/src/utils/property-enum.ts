@@ -75,6 +75,11 @@ export interface StoredEnumOption {
    * drops is silently stripped from every stored option.
    */
   waits?: Record<string, unknown>;
+  /**
+   * What the step requires of a thing (`utils/lifecycle-model.ts`): kept as
+   * a list here, validated by the lifecycle declaration.
+   */
+  requires?: unknown[];
 }
 
 /** The authoring shape a template property arrives in. */
@@ -144,6 +149,11 @@ export function normalizeEnumOptions(
     // Kept when it is an object; its VALIDITY is the lifecycle declaration's.
     if (raw.waits && typeof raw.waits === "object" && !Array.isArray(raw.waits))
       opt.waits = { ...(raw.waits as Record<string, unknown>) };
+    // Kept when it is a list; its VALIDITY is the lifecycle declaration's.
+    if (Array.isArray(raw.requires) && raw.requires.length > 0)
+      opt.requires = raw.requires.map((r) =>
+        r && typeof r === "object" ? { ...(r as Record<string, unknown>) } : r
+      );
     out.push(opt);
   }
   return out.length ? out : undefined;

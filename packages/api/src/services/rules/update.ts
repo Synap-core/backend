@@ -57,7 +57,16 @@
  * and says so.
  */
 
-import { db, skills, automations, eq, and, inArray } from "@synap/database";
+import {
+  db,
+  skills,
+  automations,
+  eq,
+  and,
+  inArray,
+  setAutomationStatus,
+} from "@synap/database";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import {
   MAX_AI_DISPATCHES_PER_DAY_KEY,
   MAX_RUNS_PER_DAY_KEY,
@@ -65,12 +74,15 @@ import {
 import { createLogger } from "@synap-core/core";
 import type { Context } from "../../context.js";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
+import type { NamedGrantPermission } from "../../utils/grant-write-check.js";
 import { classifyRuleIntent } from "../knowledge/classify-intent.js";
 import { visibleSkillsWhere } from "../skills/visibility.js";
 import {
+  PROSE_RULE_EDIT_MESSAGE,
   RULE_CATEGORY,
   RULE_METADATA_KEY,
   buildRuleMetadata,
+  isProseRule,
   linkRuleHalves,
   readRuleMetadata,
   ruleNameFromIntent,
@@ -120,14 +132,13 @@ export interface UpdateRuleGovernedInput {
   /** Present ⇒ an AGENT authored this edit; the gate routes it to a proposal. */
   agentUserId?: string;
   /**
-   * The agent that authored the BEHAVIOUR, when it is not the caller — threaded
-   * for the same reason `createRuleGoverned` threads it: the compiled
-   * automation's draft floor keys on WHO WROTE IT, and the approval replay
-   * re-enters this door with no `agentUserId` so the gate auto-grants for the
-   * operator. Reading the same field for both questions would make the rule
-   * door a strictly wider path than the automation door.
+   * The approval replay of this write's proposal: who authored it (recorded
+   * as the automation's actor) and whether a person approved it. The replay
+   * re-enters with no `agentUserId`, so the gate auto-grants for the operator;
+   * the automation's status is decided from these facts
+   * (`automationStatusAtCreate`).
    */
-  behaviourAuthorAgentUserId?: string;
+  approval?: { authorAgentUserId: string | null; personApproved: boolean };
   /** The rule (`skills`) row being edited. */
   ruleId: string;
   /** The caller's workspace lens — used for the VISIBILITY floor, not the write. */
@@ -156,6 +167,8 @@ export interface UpdateRuleGovernedInput {
    */
   draft?: boolean;
   auditSource?: string;
+  /** WHY this write — shown to the reviewer when an agent's call is proposed. */
+  reasoning?: string;
   /**
    * A NEW template stamp — set only by the template-rule applier when it
    * updates a rule its owner never touched. Absent ⇒ the stored seed is
@@ -163,6 +176,13 @@ export interface UpdateRuleGovernedInput {
    * the next reconcile (its fields no longer hash to the seed).
    */
   seed?: RuleSeed;
+  /**
+   * A NAMED permission that also permits this edit at rung 0 (the key's
+   * grant), for a door whose act is narrower than editing any rule: a
+   * playbook worker's pause or resume (`setWorkerPaused`, `playbook.update`
+   * in the playbook's space). Rung 0 only; every later rung runs unchanged.
+   */
+  grantNamedPermission?: NamedGrantPermission;
 }
 
 export type UpdateRuleGovernedResult =
@@ -227,8 +247,9 @@ export async function updateRuleGoverned(
   if (!existing) {
     return {
       status: "denied",
-      reason:
-        "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
+      reason: isProseRule(row)
+        ? PROSE_RULE_EDIT_MESSAGE
+        : "This skill is categorised as a rule but carries no rule metadata, so there is nothing to edit.",
     };
   }
 
@@ -328,6 +349,10 @@ export async function updateRuleGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "rule",
     action: "update",
+    ...(input.grantNamedPermission
+      ? { grantNamedPermission: input.grantNamedPermission }
+      : {}),
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // FULL payload — an approved edit must reproduce THIS edit, not a labelled
     // shell. `id` is the rule being changed, so the executor re-enters this same
     // door rather than creating a second rule.
@@ -390,7 +415,6 @@ export async function updateRuleGoverned(
 
   const targetWorkspaceId =
     input.scope.kind === "workspace" ? workspaceId : null;
-  const behaviourAuthor = input.agentUserId ?? input.behaviourAuthorAgentUserId;
   const ownedAfter: string[] = [];
   const toArchive: string[] = [];
 
@@ -477,7 +501,9 @@ export async function updateRuleGoverned(
             typeof materializeAutomationForPrincipal
           >[0]["definition"],
           createdBy: input.userId,
-          ...(behaviourAuthor ? { agentUserId: behaviourAuthor } : {}),
+          agentUserId:
+            input.agentUserId ?? input.approval?.authorAgentUserId ?? null,
+          personApproved: input.approval?.personApproved ?? false,
         });
         if (automationId) ownedAfter.push(automationId);
       } catch (err) {
@@ -497,10 +523,11 @@ export async function updateRuleGoverned(
   }
 
   if (toArchive.length > 0) {
-    await db
-      .update(automations)
-      .set({ status: "archived", updatedAt: new Date() })
-      .where(inArray(automations.id, toArchive));
+    await setAutomationStatus(db, {
+      from: AUTOMATION_STATUSES,
+      to: "archived",
+      where: inArray(automations.id, toArchive),
+    });
     // Drop the membership edge too. An archived automation still named by the
     // `activates` edge would read as a permanent `"missing"` divergence on a
     // rule that is actually fine.
@@ -543,6 +570,9 @@ export async function updateRuleGoverned(
     ...((input.seed ?? existing.seed)
       ? { seed: (input.seed ?? existing.seed)! }
       : {}),
+    // A reaction's rule stays one through every edit (its pause included):
+    // dropping it would orphan the reaction's pause from its row.
+    ...(existing.reaction ? { reaction: existing.reaction } : {}),
   });
   // `createdAt` is the RULE's birthday, not this edit's. `buildRuleMetadata`
   // stamps `now`, which would silently reset it on every save.

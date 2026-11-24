@@ -10,6 +10,18 @@
  * writing host fails loudly here: the host refuses it and the promise
  * rejects with the refusal. `window.synap.ops` lists the readable ops.
  *
+ *   window.synap.open(kind, id)
+ *
+ * asks the host to open one object (`synap:surface:open`, `frame-links.ts`):
+ * a session, an entity, a document… named by its id. The host decides where
+ * it opens; nothing comes back (`window.synap.opens` lists the kinds).
+ *
+ *   window.synap.context() → Promise<SurfaceContext>
+ *
+ * asks the host what the page is about (`synap:context`, frame contract v3,
+ * `surface-context.ts`): its anchor, space, project, goal, filters, brand,
+ * locale and theme. Rejects when the host gives no context.
+ *
  * It only accepts answers from `window.parent` — the host — and only for an
  * id it sent. It holds no token and no pod address: there is none to hold.
  *
@@ -18,6 +30,7 @@
  */
 
 import { CELL_BRIDGE_READ_OP_NAMES } from "./read-ops.js";
+import { FRAME_OPEN_KINDS, FRAME_SURFACE_OPEN_TYPE } from "./frame-links.js";
 
 export const CELL_BRIDGE_SDK = `(function () {
   "use strict";
@@ -30,7 +43,11 @@ export const CELL_BRIDGE_SDK = `(function () {
     if (event.source !== parentWindow) return;
     var msg = event.data;
     if (!msg || typeof msg !== "object" || typeof msg.id !== "string") return;
-    if (msg.type !== "synap:query:result" && msg.type !== "synap:mutate:result") return;
+    if (
+      msg.type !== "synap:query:result" &&
+      msg.type !== "synap:mutate:result" &&
+      msg.type !== "synap:context:result"
+    ) return;
     var call = pending[msg.id];
     if (!call) return;
     delete pending[msg.id];
@@ -47,9 +64,10 @@ export const CELL_BRIDGE_SDK = `(function () {
         reject(new Error("The pod did not answer \\"" + name + "\\" in time."));
       }, TIMEOUT_MS);
       pending[id] = { resolve: resolve, reject: reject, timer: timer };
-      var msg = { type: type, id: id, operation: name };
+      var msg = { type: type, id: id };
+      if (type !== "synap:context") msg.operation = name;
       if (type === "synap:query") msg.params = body || {};
-      else msg.payload = body || {};
+      else if (type === "synap:mutate") msg.payload = body || {};
       try {
         parentWindow.postMessage(msg, "*");
       } catch (err) {
@@ -67,6 +85,19 @@ export const CELL_BRIDGE_SDK = `(function () {
     },
     mutate: function (operation, payload) {
       return ask("synap:mutate", operation, payload);
+    },
+    context: function () {
+      return ask("synap:context", "context");
+    },
+    opens: Object.freeze(${JSON.stringify(FRAME_OPEN_KINDS)}),
+    open: function (kind, id) {
+      parentWindow.postMessage(
+        {
+          type: "${FRAME_SURFACE_OPEN_TYPE}",
+          surface: { kind: "object", objectKind: String(kind), objectId: String(id) }
+        },
+        "*"
+      );
     }
   });
 })();`;

@@ -20,7 +20,9 @@ import type { MediaRef } from "@synap-core/types/presentation";
 import { MediaView } from "../../_lib/media/media-view";
 import { TextDiff } from "../../_lib/object/content/document-changes";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
+import { HtmlPagePreview } from "../../_lib/object/content/html-preview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
+import { proposalPageT } from "./copy";
 import type { PartEdge } from "./composite-parts-model";
 import type { RecordGroup } from "./record-groups";
 import {
@@ -42,6 +44,7 @@ export const RECORD_GRID_CLASS =
 export const CODE_LINES_SHOWN = 40;
 
 export function CodeValue({ text, lines }: { text: string; lines: number }) {
+  const t = proposalPageT();
   const [all, setAll] = useState(false);
   const folded = !all && lines > CODE_LINES_SHOWN;
   return (
@@ -60,10 +63,10 @@ export function CodeValue({ text, lines }: { text: string; lines: number }) {
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
-          Show all {lines} lines
+          {t("record.showAllLines", { lines })}
         </Button>
       )}
     </span>
@@ -80,6 +83,7 @@ function TextValue({
 }: {
   value: Extract<RecordValue, { kind: "text" }>;
 }) {
+  const t = proposalPageT();
   const [all, setAll] = useState(false);
   // Roughly four lines at the card's width, or cut by the model.
   const hasMore =
@@ -101,18 +105,20 @@ function TextValue({
         <Button
           size="sm"
           variant="light"
-          className="h-6 min-w-0 px-1 text-[12px] text-foreground/65"
+          className="h-6 min-w-0 px-1 text-[12px] text-foreground/70"
           onPress={() => setAll(true)}
         >
-          Show all
+          {t("record.showAll")}
         </Button>
       )}
     </span>
   );
 }
 
-function Value({ value }: { value: RecordValue }) {
+function Value({ value, title }: { value: RecordValue; title?: string }) {
   switch (value.kind) {
+    case "page":
+      return <HtmlPagePreview html={value.html} title={title ?? "Preview"} />;
     case "code":
       return <CodeValue text={value.text} lines={value.lines} />;
     case "text":
@@ -131,7 +137,7 @@ function Value({ value }: { value: RecordValue }) {
           href={value.href}
           target="_blank"
           rel="noreferrer noopener"
-          className="break-all text-primary underline decoration-primary/30 underline-offset-2 hover:decoration-primary"
+          className="break-all rq-ink underline decoration-current/40 underline-offset-2 hover:decoration-current"
         >
           {value.text}
         </a>
@@ -172,23 +178,45 @@ function Value({ value }: { value: RecordValue }) {
 }
 
 /** One side of a code change, named: struck-through code would be unreadable. */
-function CodeSide({ label, value }: { label: string; value: RecordValue }) {
+function CodeSide({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: RecordValue;
+  title?: string;
+}) {
+  // The side that is replaced reads as source, never a second running page.
+  const shown: RecordValue =
+    label === "Before" && value.kind === "page"
+      ? {
+          kind: "code",
+          text: value.html,
+          lines: value.html.split("\n").length,
+        }
+      : value;
   return (
     <div className="flex w-full min-w-0 flex-col gap-1">
-      <span className="text-[11px] text-foreground/55">{label}</span>
-      <Value value={value} />
+      <span className="text-[11px] text-foreground/70">{label}</span>
+      <Value value={shown} title={title} />
     </div>
   );
 }
 
 function Field({ field }: { field: RecordField }) {
+  const t = proposalPageT();
   const { before, after, op } = field;
   const label = (
-    <dt className="text-[11px] font-medium uppercase tracking-[0.04em] text-foreground/60">
+    <dt className="text-[12px] font-medium text-foreground/70">
       {field.label}
     </dt>
   );
-  if (op === "change" && before?.kind === "code" && after) {
+  if (
+    op === "change" &&
+    (before?.kind === "code" || before?.kind === "page") &&
+    after
+  ) {
     return (
       <div
         data-record-field={field.key}
@@ -196,8 +224,12 @@ function Field({ field }: { field: RecordField }) {
       >
         {label}
         <dd className="flex min-w-0 flex-col gap-2 text-[13px] leading-relaxed text-foreground/90">
-          <CodeSide label="Before" value={before} />
-          <CodeSide label="After" value={after} />
+          <CodeSide label={t("record.before")} value={before} />
+          <CodeSide
+            label={t("record.after")}
+            value={after}
+            title={field.label}
+          />
         </dd>
       </div>
     );
@@ -210,8 +242,8 @@ function Field({ field }: { field: RecordField }) {
       {label}
       <dd className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] leading-relaxed text-foreground/90">
         {op !== "add" && before !== undefined && (
-          <span className="text-foreground/50 line-through decoration-foreground/30">
-            {before ? <Value value={before} /> : <em>empty</em>}
+          <span className="text-foreground/70 line-through decoration-foreground/30">
+            {before ? <Value value={before} /> : <em>{t("record.empty")}</em>}
           </span>
         )}
         {op === "change" && before !== undefined && (
@@ -222,18 +254,18 @@ function Field({ field }: { field: RecordField }) {
         )}
         {op !== "remove" &&
           (after ? (
-            <Value value={after} />
+            <Value value={after} title={field.label} />
           ) : (
-            <em className="text-foreground/50">empty</em>
+            <em className="text-foreground/70">{t("record.empty")}</em>
           ))}
         {op === "remove" && (
-          <span className="text-[12px] text-status-down">removed</span>
+          <span className="text-[12px] text-status-down">
+            {t("record.removed")}
+          </span>
         )}
       </dd>
       {field.stale && (
-        <span className="text-[11.5px] text-warning">
-          Edited since this was proposed — the value before is out of date.
-        </span>
+        <span className="text-[11.5px] text-warning">{t("record.stale")}</span>
       )}
     </div>
   );
@@ -280,7 +312,7 @@ export function ProposedRecordCard({
         {record.kind && KindIcon && (
           <span
             data-record-kind=""
-            className="inline-flex items-center gap-1 text-[12px] text-foreground/55"
+            className="inline-flex items-center gap-1 text-[12px] text-foreground/70"
           >
             <KindIcon aria-hidden className="h-3.5 w-3.5" />
             {kindLabel(record.kind)}
@@ -308,7 +340,7 @@ export function ProposedRecordCard({
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {record.fields.length} fields
@@ -340,7 +372,7 @@ export function RecordGroupList<T extends ProposedRecord>({
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {group.all.length} {noun.toLowerCase()}
@@ -378,7 +410,7 @@ export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
             className="flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-[13px] text-foreground/85"
           >
             <span className="break-words">{edge.from}</span>
-            <span className="text-[12px] text-foreground/55">{edge.verb}</span>
+            <span className="text-[12px] text-foreground/70">{edge.verb}</span>
             <span className="break-words">{edge.to}</span>
           </li>
         ))}
@@ -387,7 +419,7 @@ export function PartEdgeList({ edges }: { edges: readonly PartEdge[] }) {
         <Button
           size="sm"
           variant="light"
-          className="self-start px-1 text-[12.5px] text-foreground/65"
+          className="self-start px-1 text-[12.5px] text-foreground/70"
           onPress={() => setAll(true)}
         >
           Show all {edges.length} {noun.toLowerCase()}

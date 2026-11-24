@@ -6,8 +6,14 @@
  * executor would leave a stage waiting for an approval nothing applies.
  */
 import { describe, it, expect } from "vitest";
-import { AWAITED_GATE_PROPOSAL_TYPES } from "@synap/playbooks";
-import { AWAITED_GATE_PROPOSAL_TYPES_MIRROR } from "@synap/database";
+import {
+  AWAITED_GATE_PROPOSAL_TYPES,
+  STAGE_GATE_PROPOSAL_TYPES,
+} from "@synap/playbooks";
+import {
+  AWAITED_GATE_PROPOSAL_TYPES_MIRROR,
+  STAGE_GATE_PROPOSAL_TYPES_MIRROR,
+} from "@synap/database";
 import {
   DEV_DEPLOY_APPROVAL_TYPE,
   DEV_PLAN_APPROVAL_TYPE,
@@ -26,6 +32,12 @@ describe("awaited gate types === the dev approval types, each executable", () =>
   it("the database mirror (the reapers' gate wait) matches the playbooks source", () => {
     expect([...AWAITED_GATE_PROPOSAL_TYPES_MIRROR].sort()).toEqual(
       [...AWAITED_GATE_PROPOSAL_TYPES].sort()
+    );
+  });
+
+  it("the database mirror of the HUMAN stage gate types (a run waiting on one is not closed; an ended run expires them) matches the playbooks source", () => {
+    expect([...STAGE_GATE_PROPOSAL_TYPES_MIRROR].sort()).toEqual(
+      [...STAGE_GATE_PROPOSAL_TYPES].sort()
     );
   });
 

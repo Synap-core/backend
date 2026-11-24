@@ -40,6 +40,13 @@
  * age), so one row has exactly one class. "Ended" is the terminal set
  * (`TERMINAL_SESSION_STATUSES`): a forming or scheduled session is not ended.
  *
+ * A PLANNED step (`forming`, founder P2, 21 Nov 2026) owes nothing YET: its
+ * slots are in no list (`null`, like a done slot) until it starts. Not a
+ * fold — a step a year away is not "review later", it is not asked yet. It
+ * is the same rule as the owed-slot predicate's session clause
+ * (`owedSlotWhere`, `@synap/database`). A `scheduled` appointment keeps its
+ * asks: a playbook's params are asked before the slot opens.
+ *
  * ── THE SQL TWIN ────────────────────────────────────────────────────────────
  * `needsYouSlotClassSql` (`@synap/database`, `needs-you-predicate.ts`) is this
  * rule in SQL, for the reapers (jobs cannot import api). The PGlite parity
@@ -67,8 +74,11 @@
 import { askEndsWithSession } from "../ask/ends-with-session.js";
 import { isSetAside } from "./set-aside.js";
 import type { AskCardSlot } from "../ask/card.js";
-import { TERMINAL_SESSION_STATUSES } from "../focus-sessions/statuses.js";
-import { deliverableOwedBy } from "../units/deliverable.js";
+import {
+  TERMINAL_SESSION_STATUSES,
+  isPlannedSessionStatus,
+} from "../focus-sessions/statuses.js";
+import { isOwedByYouIn } from "../units/deliverable.js";
 import { runnerStateWaitKind } from "../units/runner-state.js";
 import { WAIT_KIND_BALL } from "../units/wait-kind.js";
 import { REVIEW_LATER_AFTER_MS } from "../proposals/fate.js";
@@ -180,6 +190,8 @@ export interface NeedsYouSlotFacts {
   askedBy?: unknown;
   askCause?: unknown;
   criterionKey?: unknown;
+  /** On a criterion's grade slot: the output it grades (`isGradeAwaitingOutput`). */
+  outputKey?: unknown;
   paramName?: unknown;
   pendingRelay?: unknown;
   ask?: unknown;
@@ -223,6 +235,14 @@ export interface NeedsYouSessionFacts {
    * Absent / `false` = not measured or none: today's rule.
    */
   blocksOpenPr?: boolean;
+  /**
+   * The session's whole `expected_outputs` list, the slot included: a
+   * criterion's grade waits on the output it checks
+   * (`isGradeAwaitingOutput`). Absent = the slot is read alone, as before
+   * that rule; every pod reader passes it, as the SQL twin reads
+   * `expected_outputs` of the same row.
+   */
+  expectedOutputs?: readonly unknown[];
 }
 
 function isObject(v: unknown): v is Record<string, unknown> {
@@ -239,10 +259,17 @@ function timeOf(v: Date | string | null | undefined): number | null {
   return Number.isFinite(t) ? t : null;
 }
 
-/** Still owed by the person: THE deliverable rule (`OWED_SLOT_CLAUSES` in SQL). */
-function isOwed(slot: NeedsYouSlotFacts): boolean {
-  return (
-    deliverableOwedBy(slot as Parameters<typeof deliverableOwedBy>[0]) === "you"
+/**
+ * Still owed by the person, read in its session: THE deliverable rule
+ * (`owedSlotPredicateIn` in SQL).
+ */
+function isOwed(
+  slot: NeedsYouSlotFacts,
+  outputs: readonly unknown[] | undefined
+): boolean {
+  return isOwedByYouIn(
+    slot as Parameters<typeof isOwedByYouIn>[0],
+    outputs ?? []
   );
 }
 
@@ -366,7 +393,8 @@ export function needsYouAgentWorking(
 
 /**
  * THE rule for one slot on its session. `null` when the slot is not owed by
- * the person at all (done, retired, optional, the agent's): it is in no list.
+ * the person at all (done, retired, optional, the agent's) or its session is
+ * a planned step that has not started (P2): it is in no list.
  * On a stopped session only the agent's own question is Stopped; a person
  * deliverable goes on to the age clause.
  */
@@ -375,7 +403,8 @@ export function classifyOwedAsk(
   session: NeedsYouSessionFacts,
   now: Date | number = Date.now()
 ): NeedsYouSlotClass | null {
-  if (!isOwed(slot)) return null;
+  if (!isOwed(slot, session.expectedOutputs)) return null;
+  if (isPlannedSessionStatus(session.status)) return null;
   if (!needsYouHasRealAsker(slot)) return "from_system";
   const at = now instanceof Date ? now.getTime() : now;
   // The person's own Later wins until its time, like a request's
@@ -471,10 +500,19 @@ export interface NeedsYouProposalFacts {
    * later. Absent / `false` = not measured or none.
    */
   blocksOpenPr?: boolean;
+  /**
+   * The pod HOLDS it: it cannot apply yet and nobody can approve it into
+   * applying now (`cannotApplyYet(row).held`, `../proposals/cannot-apply`: a
+   * message to someone not connected, with no profile on file, or past the
+   * account's daily limit). Absent / `false` = not held.
+   */
+  held?: boolean;
 }
 
 /**
- * THE rule for one pending proposal. A request the reader set aside ("Later")
+ * THE rule for one pending proposal. A request the pod HOLDS (it cannot
+ * apply yet, `held`) is a change to review, never the headline: nobody can
+ * approve it into applying now. A request the reader set aside ("Later")
  * is Review later for them until that time, whatever else holds: they chose
  * it. Otherwise it needs you only when something WAITS on
  * it (a gate, an owed slot, a parked run) on work that has not ended. A gate
@@ -489,6 +527,9 @@ export function classifyPendingProposal(
   now: Date | number = Date.now()
 ): NeedsYouProposalClass | null {
   if (p.status !== "pending") return null;
+  // HELD (plan 8032a127 D6): no headline card while the person cannot act;
+  // it stays counted, as a change to review, and the browser says why.
+  if (p.held === true) return "changes_to_review";
   const at = now instanceof Date ? now.getTime() : now;
   const snoozedUntil = timeOf(p.snoozedUntil);
   if (snoozedUntil !== null && snoozedUntil > at) return "review_later";

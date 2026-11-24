@@ -71,9 +71,12 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
+  users,
   intelligenceServices,
   syncGeneration,
   proposals,
+  lifecycleTransitionOutbox,
 } from "@synap/database/schema";
 import { workspacesRouter } from "./workspaces.js";
 import { proposalExecRegistry } from "./proposals/execution-registry.js";
@@ -167,8 +170,11 @@ async function proposeThenApprove(serviceId: string | null) {
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     workspaces,
     workspaceMembers,
+    apiKeys,
+    users,
     intelligenceServices,
     syncGeneration,
     proposals,

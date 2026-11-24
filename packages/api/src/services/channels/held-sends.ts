@@ -17,9 +17,24 @@
  * And a send the person made OUTSIDE the pod (straight from LinkedIn) closes
  * the drafts it replaces (`withdrawDraftsSentOutside`, contract E).
  *
- * Only `not_connected` holds. Every other refusal is what it was: a failed
- * READ (LinkedIn down) files as before and is checked again at dispatch; an
- * unknown reach is never "not connected".
+ * Three things hold:
+ *   - `not_connected` (above). Every other refusal is what it was: a failed
+ *     READ (LinkedIn down) files as before and is checked again at dispatch;
+ *     an unknown reach is never "not connected".
+ *   - `missing_field`: a LinkedIn first message to someone with no LinkedIn
+ *     profile on file (no URL, public identifier or LinkedIn id; `missing:
+ *     "profile"`), or whose profile on file gave no LinkedIn id (`missing:
+ *     "provider_id"`). Only the person can fix their record (plan 8032a127
+ *     D1: hold what only the person can unblock), so the draft is kept, never
+ *     refused. Adding the profile does NOT release it: the person approves
+ *     the message again, and that approval re-reads the reach live (it sends,
+ *     or holds again, e.g. as `not_connected`). Recording them connected
+ *     releases it (`releaseHeldSends`).
+ *   - `linkedin_limit`: the sending LinkedIn account used today's limit, or
+ *     LinkedIn paused it for the day (`linkedin-account-limits.ts`). Held
+ *     until `until` (the next UTC midnight): from then it reads as not held
+ *     and can be approved again; nothing has to release it. A connection
+ *     request (a `capability.run` proposal) holds the same way.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -31,10 +46,12 @@ import {
   isNotNull,
   lte,
   or,
+  inArray,
   drizzleSql,
   transitionProposal,
 } from "@synap/database";
 import { proposals, ProposalStatus } from "@synap/database/schema";
+import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { discardProposalSourceBlob } from "../../utils/store-entity-source-blob.js";
 
@@ -45,28 +62,70 @@ const SEND_TYPE = "messaging.external.send";
 
 /** Why a pending send cannot go out yet, on `proposals.data.held`. */
 export interface HeldSend {
-  errorClass: "not_connected";
+  errorClass: "not_connected" | "missing_field" | "linkedin_limit";
+  /** `missing_field` only: what is missing (`ChannelSendRefusal.missing`). */
+  missing?: "profile" | "provider_id";
   /** The sentence that names the next step ("Ask to connect first."). */
   reason: string;
   /** When the pod last found it unreachable (ISO). */
   at: string;
+  /** `linkedin_limit`: when it can go (ISO); from then it is not held. */
+  until?: string;
 }
 
-/** The `held` record for a `not_connected` refusal. */
-export function heldSend(reason: string, now: Date = new Date()): HeldSend {
-  return { errorClass: "not_connected", reason, at: now.toISOString() };
+/** The `held` record for a reach refusal: not a connection, or no profile on file. */
+export function heldSend(
+  reason: string,
+  now: Date = new Date(),
+  errorClass: "not_connected" | "missing_field" = "not_connected",
+  missing?: "profile" | "provider_id"
+): HeldSend {
+  return {
+    errorClass,
+    ...(errorClass === "missing_field" && missing ? { missing } : {}),
+    reason,
+    at: now.toISOString(),
+  };
 }
 
-/** The `held` record a proposal's data carries, or null. */
-export function readHeld(data: unknown): HeldSend | null {
+/**
+ * The `held` record a proposal's data carries while it still holds, or null.
+ * A `linkedin_limit` hold past its `until` no longer holds.
+ */
+export function readHeld(
+  data: unknown,
+  now: Date = new Date()
+): HeldSend | null {
   if (!data || typeof data !== "object") return null;
   const held = (data as Record<string, unknown>).held;
   if (!held || typeof held !== "object") return null;
   const h = held as Record<string, unknown>;
-  return typeof h.reason === "string" && typeof h.at === "string"
-    ? { errorClass: "not_connected", reason: h.reason, at: h.at }
-    : null;
+  if (typeof h.reason !== "string" || typeof h.at !== "string") return null;
+  if (h.errorClass !== "linkedin_limit") {
+    if (h.errorClass === "missing_field") {
+      return {
+        errorClass: "missing_field",
+        ...(h.missing === "profile" || h.missing === "provider_id"
+          ? { missing: h.missing }
+          : {}),
+        reason: h.reason,
+        at: h.at,
+      };
+    }
+    return { errorClass: "not_connected", reason: h.reason, at: h.at };
+  }
+  const until = typeof h.until === "string" ? Date.parse(h.until) : NaN;
+  if (Number.isNaN(until) || until <= now.getTime()) return null;
+  return {
+    errorClass: "linkedin_limit",
+    reason: h.reason,
+    at: h.at,
+    until: h.until as string,
+  };
 }
+
+/** The proposals a hold may be written on: a message, or a connection request run. */
+const HOLDABLE_TYPES = [SEND_TYPE, CAPABILITY_RUN_PROPOSAL_TYPE];
 
 /**
  * Keep an approved-but-unreachable send PENDING with `held` (never
@@ -80,6 +139,10 @@ export async function holdPendingSend(
   held: HeldSend
 ): Promise<void> {
   const patch = JSON.stringify({ held });
+  const typeFloor =
+    held.errorClass === "linkedin_limit"
+      ? inArray(proposals.proposalType, HOLDABLE_TYPES)
+      : eq(proposals.proposalType, SEND_TYPE);
   await db
     .update(proposals)
     .set({
@@ -89,7 +152,7 @@ export async function holdPendingSend(
     .where(
       and(
         eq(proposals.id, proposalId),
-        eq(proposals.proposalType, SEND_TYPE),
+        typeFloor,
         eq(proposals.status, ProposalStatus.PENDING)
       )
     );
@@ -101,16 +164,14 @@ export async function holdPendingSend(
       rejectionReason: null,
       updatedAt: new Date(),
     },
-    where: and(
-      eq(proposals.id, proposalId),
-      eq(proposals.proposalType, SEND_TYPE)
-    ),
+    where: and(eq(proposals.id, proposalId), typeFloor),
   });
 }
 
 /**
  * The person is now reachable: every pending send to them that was held is
- * sendable again (`held` removed). Returns how many were released.
+ * sendable again (`held` removed), the ones held for no profile on file too
+ * (a connection is read from their profile). Returns how many were released.
  */
 export async function releaseHeldSends(entityId: string): Promise<number> {
   const rows = await db
@@ -124,7 +185,9 @@ export async function releaseHeldSends(entityId: string): Promise<number> {
         eq(proposals.proposalType, SEND_TYPE),
         eq(proposals.status, ProposalStatus.PENDING),
         drizzleSql`${proposals.data} ->> 'entityId' = ${entityId}`,
-        drizzleSql`${proposals.data} ? 'held'`
+        drizzleSql`${proposals.data} ? 'held'`,
+        // A daily-limit hold ends with its day, not with the connection.
+        drizzleSql`COALESCE(${proposals.data} -> 'held' ->> 'errorClass', 'not_connected') IN ('not_connected', 'missing_field')`
       )
     )
     .returning({ id: proposals.id });
@@ -191,13 +254,15 @@ export async function withdrawDraftsSentOutside(args: {
     );
     return [];
   }
-  const reason = `Sent from ${args.provider} directly; this draft was not needed.`;
+  // Why it ended is `sent_outside` (the end line says it); never a sentence
+  // stored as `withdrawReason`, which reads as its author's own words.
   const rows = await transitionProposal(db, {
     to: ProposalStatus.WITHDRAWN,
     from: [ProposalStatus.PENDING],
+    ended: { reason: "sent_outside" },
     set: {
       updatedAt: new Date(),
-      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text, 'closedByMessageId', ${args.messageId}::text)`,
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('closedByMessageId', ${args.messageId}::text)`,
     },
     where: and(
       eq(proposals.proposalType, SEND_TYPE),

@@ -1,6 +1,7 @@
 {
   "name": "@synap/database",
   "version": "0.1.1",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -45,6 +46,11 @@
       "types": "./dist/utils/person-devices.d.ts",
       "import": "./dist/utils/person-devices.js",
       "default": "./dist/utils/person-devices.js"
+    },
+    "./realtime-room-tickets": {
+      "types": "./dist/utils/realtime-room-tickets.d.ts",
+      "import": "./dist/utils/realtime-room-tickets.js",
+      "default": "./dist/utils/realtime-room-tickets.js"
     },
     "./is-delegation": {
       "types": "./dist/utils/is-delegation.d.ts",
@@ -93,7 +99,8 @@
     "rebuild-property-index": "tsx src/scripts/rebuild-property-index.ts",
     "recompute-last-interaction": "tsx src/scripts/recompute-last-interaction.ts",
     "backfill:default-sources-edges": "tsx src/scripts/backfill-default-sources-edges.ts",
-    "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts"
+    "backfill:comment-threads": "tsx src/scripts/backfill-comment-threads.ts",
+    "backfill:entity-body-spaces": "tsx src/scripts/backfill-entity-body-spaces.ts"
   },
   "dependencies": {
     "@synap-core/core": "workspace:*",
@@ -101,6 +108,7 @@
     "@synap-core/markdown-core": "workspace:*",
     "@synap-core/types": "workspace:*",
     "@synap/governance-policy": "workspace:*",
+    "@synap/shared-utils": "workspace:*",
     "@synap/storage": "workspace:*",
     "bcrypt": "^6.0.0",
     "dotenv": "^17.2.3",

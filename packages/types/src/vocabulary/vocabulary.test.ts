@@ -629,6 +629,26 @@ describe("buildObjectActionTitle", () => {
       })
     ).toBe('Delete View "To-dos"');
   });
+
+  it("a stage gate leads with WHICH gate and names the stage and the thing (finding 8f2dee79)", () => {
+    // What every proposal surface derives: the proposal type, its session
+    // target and the name the gate stored. It read "Stage gate Job".
+    expect(
+      buildObjectActionTitle({
+        action: "playbook.stage_gate",
+        fallbackAction: "stage_gate",
+        objectKind: "focus_session",
+        objectName: "Send proposal for EU data residency deal",
+      })
+    ).toBe("Approve stage: Send proposal for EU data residency deal");
+    // A gate filed before it stored a name still says which act it is.
+    expect(
+      buildObjectActionTitle({
+        action: "playbook.stage_gate",
+        objectKind: "focus_session",
+      })
+    ).toBe("Approve stage");
+  });
 });
 
 /**
@@ -666,6 +686,7 @@ describe("tripwire: no raw machine token reaches a title", () => {
     "renderer.set",
     "declare_source",
     "configure_public_projection",
+    "bind_need",
   ];
   const REAL_TARGET_TYPES = [
     "entity",
@@ -1486,7 +1507,7 @@ describe("capture chip states", () => {
   it("falls back to the lifecycle word, never the raw token", () => {
     expect(resolveCaptureChipStateLabel("failed")).toBe("Failed");
     expect(resolveCaptureChipStateLabel("approval_failed")).toBe(
-      "Approval failed"
+      "Couldn't apply"
     );
   });
 
@@ -1554,7 +1575,7 @@ describe("buildObjectActionTitle — the name slot names, never restates", () =>
       "Update Note",
     ],
     // Head-only is fine as it is.
-    [{ action: "run", objectKind: "playbook" }, "Run Template"],
+    [{ action: "run", objectKind: "playbook" }, "Run Process"],
     // A summary that already quotes the name keeps the name, once.
     [
       {

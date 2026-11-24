@@ -85,6 +85,10 @@ export interface PacketGateItem {
   decidedAt?: string;
   /** A deploy gate's commit (≥ 7 hex chars, may be abbreviated). */
   commitSha?: string;
+  /** The stage being left, as the latest proposal recorded it (`data.fromStage`). */
+  fromStage?: string;
+  /** The latest proposal's own one-line sentence (`data.summary`). */
+  summary?: string;
 }
 
 /** The newest `dev.deploy_approval` a PERSON approved for this session. */
@@ -133,6 +137,9 @@ export interface GateProposalRow {
   targetHost: string | null;
   step: string | null;
   deployCommand: string | null;
+  /** A stage gate's `data.fromStage` and `data.summary`; absent on older rows. */
+  fromStage?: string | null;
+  summary?: string | null;
   reviewerType: string | null;
   reviewedAt: Date | null;
   updatedAt: Date | null;
@@ -224,6 +231,8 @@ export function deriveSessionGates(
       decidedByHuman: humanDecided(latest),
       ...(decidedAt ? { decidedAt } : {}),
       ...(latest.commitSha ? { commitSha: latest.commitSha } : {}),
+      ...(latest.fromStage ? { fromStage: latest.fromStage } : {}),
+      ...(latest.summary ? { summary: latest.summary } : {}),
     });
   }
 
@@ -268,6 +277,8 @@ async function readGateProposals(
       deployCommand: drizzleSql<
         string | null
       >`${proposals.data} ->> 'deployCommand'`,
+      fromStage: drizzleSql<string | null>`${proposals.data} ->> 'fromStage'`,
+      summary: drizzleSql<string | null>`${proposals.data} ->> 'summary'`,
       reviewerType: users.userType,
       reviewedAt: proposals.reviewedAt,
       updatedAt: proposals.updatedAt,

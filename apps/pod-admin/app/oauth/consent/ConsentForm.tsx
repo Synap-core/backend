@@ -93,6 +93,7 @@ import {
   type PodWideSelection,
   type Selection,
 } from "./consent-model";
+import { AskConsent } from "./AskConsent";
 
 export interface ConsentParams {
   clientId: string;
@@ -109,6 +110,11 @@ export interface ConsentParams {
   prompt?: string;
   /** /authorize's signed request time (`auth_req`), round-tripped. */
   authRequest?: string;
+  /**
+   * A pod app's `synap_ask`: it asks for ONE MORE thing (the short consent).
+   * Re-resolved server-side; the screen shows only what the server returns.
+   */
+  synapAsk?: string;
 }
 
 /**
@@ -236,12 +242,20 @@ export function ConsentForm({
       setPodWideSelection(initialPodWide(app.podWide, app.approved));
     }
   }, [app]);
-  const approved = app
-    ? [
-        ...toApproved(selection, app.permissions),
-        ...podWideToApproved(podWideSelection, app.podWide),
-      ]
-    : [];
+  // The short consent: exactly the pairs the server resolved from the ask,
+  // which an approval ADDS to what the app holds.
+  const ask = app?.ask ?? null;
+  const approved = ask
+    ? ask.pairs.map(({ permission, workspaceId }) => ({
+        permission,
+        workspaceId,
+      }))
+    : app
+      ? [
+          ...toApproved(selection, app.permissions),
+          ...podWideToApproved(podWideSelection, app.podWide),
+        ]
+      : [];
 
   const act = useCallback(
     (approve: boolean) => {
@@ -372,12 +386,14 @@ export function ConsentForm({
               {/* The ONE access sentence over what is ticked below: the
                   grant the token will carry, as the app's page will say it. */}
               <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
-                {consentHeadline(
-                  selection,
-                  app.permissions,
-                  podWideSelection,
-                  app.podWide
-                )}
+                {ask
+                  ? ask.title
+                  : consentHeadline(
+                      selection,
+                      app.permissions,
+                      podWideSelection,
+                      app.podWide
+                    )}
               </p>
             </>
           ) : (
@@ -425,6 +441,21 @@ export function ConsentForm({
 
             {context.data &&
               app &&
+              ask &&
+              step.kind !== "denied" &&
+              step.kind !== "error" && (
+                <AskConsent
+                  appName={context.data.clientName}
+                  ask={ask}
+                  busy={busy}
+                  step={step}
+                  onDecide={act}
+                />
+              )}
+
+            {context.data &&
+              app &&
+              !ask &&
               step.kind !== "denied" &&
               step.kind !== "error" && (
                 <AppConsent
@@ -650,7 +681,9 @@ export function ConsentForm({
                     Declined
                   </p>
                   <p className="max-w-[18rem] text-xs text-foreground/65">
-                    Nothing was connected. You can close this tab.
+                    {ask
+                      ? "Nothing was added; what it already has stays. You can close this tab."
+                      : "Nothing was connected. You can close this tab."}
                   </p>
                 </div>
               </div>

@@ -17,7 +17,7 @@
 
 // ── Executor — the agnostic "hands" ──────────────────────────────────────────
 /** IS persona-agent · BYOA external agent (Claude Code, CLI) · hybrid. */
-export type ExecutorRef = "is-agent" | "external-agent" | "hybrid";
+export type ExecutorRef = "is-agent" | "external-agent" | "hybrid" | "generate";
 
 // ── Tool — a registered integration the AI can use ───────────────────────────
 export type ToolKind =
@@ -135,9 +135,10 @@ export interface CapabilityRef {
 export type GrantSubjectKind = GrantableKind | "secret";
 
 /**
- * What happens when a grant is exercised — the governance / execMode axis. The
- * same axis as `Capability.governance`; kept in lock-step with the
- * `grant_exec_mode` pg enum in @synap/database/schema/secrets-vault.
+ * How a capability runs for an agent — the governance / execMode axis. The
+ * same axis as `Capability.governance`. Since decision D2 (migration 0435) a
+ * grant carries none: an approval row (`governance_rules`) is the only
+ * "runs without asking", and a verb's effective mode is read from it.
  *   - `auto`    — run the capability directly.
  *   - `propose` — route the exercise through a reviewable proposal.
  *   - `dry-run` — preview only (stub external writes/sends, keep reads + checks).
@@ -154,6 +155,18 @@ export interface PlaybookParam {
   options?: string[];
   default?: unknown;
   required?: boolean;
+  /**
+   * Where the value comes from when the caller gives none, as a reference:
+   * `subject.<field>` (the subject entity's `title`, `preview` or a property)
+   * or, on an entity param, `subject` (the subject itself). Read by the doors
+   * that know a subject: `snippet.render`, and every playbook run (the run
+   * funnel fills it through `fillParamsFromSubject` before validating, so a
+   * run an activator starts on a post answers `platform` from the post's
+   * `post-platform`). A field with no usable value fills nothing: a required
+   * param then stays missing and the run is refused, naming it. Absent on
+   * every param that does not declare one.
+   */
+  from?: string;
 }
 
 // Reading a stored `params` bag, and validating the answers against it. In its
@@ -161,21 +174,14 @@ export interface PlaybookParam {
 // re-exported here so `@synap/playbooks` stays the one import.
 export * from "./params.js";
 
-// `requiredIntents` — what a playbook NEEDS the pod to be able to do, and the
-// pure matcher that turns that declaration plus a resolver index into a
-// per-intent verdict. Also its own file: the "a gap is a fact, never a
-// rejection" rule and the seam to the resolver are long enough that inlining
-// them into this barrel would bury them.
-export * from "./required-intents.js";
+// The ONE `tools` field of a playbook and its stages, the floor of each run
+// class, and the vocabulary of run tools (plan 08e4fba7, decisions 3 and 4).
+// Its own file: the pod, the catalog mirror and the IS tripwire read it.
+export * from "./run-tools.js";
 
-// `export *` does not bring a name into LOCAL scope, so the composition merge
-// below needs these bound explicitly. Imported rather than re-qualified
-// (`requiredIntents.mergeRequiredIntents`) so the call sites read like the
-// `unionCapabilityRefs` / `mergeStages` helpers they sit beside.
-import {
-  mergeRequiredIntents,
-  type PlaybookRequiredIntents,
-} from "./required-intents.js";
+// `export *` does not bring a name into LOCAL scope: the composition merge
+// below unions `tools` with this reader.
+import { readToolsList } from "./run-tools.js";
 
 /**
  * Fallback used only when a pinned list has nobody eligible. The filter and
@@ -309,6 +315,18 @@ export interface SlotBlocks {
   /** The status it cannot reach yet (a declared option key). Absent ⇒ next. */
   to?: string;
 }
+
+/**
+ * WHAT MOVES when the person answers, as data (work-model W5): ONE thing of
+ * the same session, named by its key — an output or a criterion. The prose
+ * line (`ExpectedOutput.unblocks`) stays what the person reads. The agent
+ * declares it, so the pod only RE-CHECKS what it names, through the existing
+ * doors (`notifications/session-unblock-reactor.ts`, api): the output's claim
+ * is read against its evidence again, the criterion's own check runs again (a
+ * criterion the person grades gets its grade card). It never writes the
+ * person's attestation or verdict. A stage moves on by itself (W6).
+ */
+export type SlotUnblocksTarget = { output: string } | { criterion: string };
 
 /**
  * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
@@ -454,6 +472,13 @@ export interface ExpectedOutput {
    * ownership fields when the slot goes back to the agent.
    */
   unblocks?: string;
+  /**
+   * WHAT MOVES, as data: the output or criterion of this session the answer
+   * re-checks ({@link SlotUnblocksTarget}). DECLARED by the agent beside
+   * `unblocks`, optional, and cleared with it when the slot goes back to the
+   * agent.
+   */
+  unblocksTarget?: SlotUnblocksTarget;
   /**
    * WHEN the slot became the human's — stamped the moment `owner` becomes
    * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -604,6 +629,18 @@ export interface ExpectedOutput {
    */
   criterionKey?: string;
   /**
+   * On a criterion slot: the key of the session output its criterion checks
+   * (the criterion's own `outputKey`), written by the door that files the
+   * slot (api `services/focus-sessions/evaluations/record.ts`) and never by a
+   * client — the `criterionKey` precedent. While that output is not
+   * delivered, the grade is not owed (`isGradeAwaitingOutput`,
+   * `@synap-core/types/units`): the person grades work that exists.
+   *
+   * ABSENT on every slot filed before this field existed and on a slot whose
+   * criterion names no output: such a grade is owed as soon as it is filed.
+   */
+  outputKey?: string;
+  /**
    * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
    * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
    * written once by the door that files the slot (api
@@ -723,6 +760,17 @@ export interface ExpectedOutput {
    */
   relationToSubject?: string;
   /**
+   * WHERE a one-shot playbook's result is written (`executor: "generate"`,
+   * plan 08e4fba7 slice 1). DECLARED by the playbook author on the ONE output
+   * a generate playbook produces; read only by the generate run
+   * (api `services/playbooks/generate-run.ts`), which files the result there
+   * as a PROPOSAL on the subject, approvable inline. Ignored by every other
+   * executor. Today one target: a section of the subject's own document
+   * (`section` is its title; its id is the title's slug), replaced in place
+   * when it is there, else added at the end, and owned by the AI.
+   */
+  lands?: OutputLanding;
+  /**
    * RECEIPT of the output → subject edge {@link relationToSubject} asked for —
    * SERVER-STAMPED by the satisfy door, never authored. `linked` names the
    * relation row; `skipped` says why no edge was written (no subject, no
@@ -752,6 +800,41 @@ export interface ExpectedOutput {
   /** What clears it — see {@link SlotClearedBy}. DECLARED, like `blocks`. */
   clearedBy?: SlotClearedBy;
 }
+
+/** See {@link ExpectedOutput.lands}. */
+export interface OutputLanding {
+  target: "subject_document_section";
+  /** The section's title, e.g. "Caption draft". */
+  section: string;
+  /**
+   * WHOSE section it is (decision "An approved one-shot draft lands in the
+   * person's own target", founder 10 Nov 2026). `ai` (the default): an
+   * AI-owned `synap-section` the app offers as a draft. `person`: the
+   * document's own plain `## <section>` block, the person's words as an app
+   * writes them (e.g. Content Studio's `## Caption`): the proposal replaces
+   * its body on approval (appends it when absent), so approving IS the one
+   * write and no app copies a draft over.
+   */
+  owner?: "ai" | "person";
+  /**
+   * PAST OUTCOMES as context (plan 08e4fba7 §3.6), off when absent: the run
+   * reads the person's last decided drafts of THIS playbook in THIS space, the
+   * approved ones as they were applied (after the person's revisions), the
+   * rejected ones with the reason when one was given, and shows them to the
+   * model as examples. Each count is at most
+   * {@link OUTPUT_LANDING_EXAMPLES_MAX}; 0 or absent reads none of that kind.
+   */
+  examples?: OutputLandingExamples;
+}
+
+/** See {@link OutputLanding.examples}. */
+export interface OutputLandingExamples {
+  approved?: number;
+  rejected?: number;
+}
+
+/** The most past outcomes of one kind a one-shot run reads as examples. */
+export const OUTPUT_LANDING_EXAMPLES_MAX = 5;
 
 /** See {@link ExpectedOutput.subjectEdge}. */
 export interface SlotSubjectEdge {
@@ -784,33 +867,55 @@ export interface PlaybookActivator {
   /**
    * `created` / `enters_status` — the thing is created / enters `status`.
    * `count` — at least `min` things sit in `status` (always per_moment).
-   * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+   * `schedule` — on `cron` in `timezone`, over the things in `status`: one
+   *   run for the set (per_moment, default) or one per thing (per_thing); a
+   *   playbook with no subject runs once per tick.
    * `manual` — a button, never by itself: compiles no rule.
+   * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
+   *   the new run works on the same subject.
    * Mirror of `WorkerActivator` (`@synap-core/types/workers`); this package
    * is dependency-free, the pod's zod schema (`playbook-process.ts`) is
    * `satisfies` both.
    */
-  on: "created" | "enters_status" | "count" | "schedule" | "manual";
-  /** Required for `enters_status` / `count`; optional for `schedule`. */
-  status?: string;
+  on:
+    "created" | "enters_status" | "count" | "schedule" | "manual" | "run_ended";
+  /**
+   * Required for `run_ended`, and only it: the playbook whose run ending
+   * starts this one, by name (the catalog's spelling) or id, in the same
+   * space or pod-wide.
+   */
+  playbook?: string;
+  /** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
+  outcome?: "done" | "not_done";
+  /** Required for `enters_status` / `count`; optional for `schedule` (a list there). */
+  status?: string | string[];
   /** Required for `schedule`. */
   cron?: string;
+  /** `schedule` only: the IANA zone of `cron`; absent = the owner's zone. */
+  timezone?: string;
+  /** `schedule` only: installed paused, the person turns it on. */
+  startsPaused?: true;
+  /** `schedule` in `run` mode only: the agent user id each run is handed to. */
+  handToAgentId?: string;
   /** Required for `count` (≥ 2). */
   min?: number;
-  /** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+  /** `per_thing` (default) or `per_moment`; count is per_moment, schedule defaults to it. */
   size?: "per_thing" | "per_moment";
-  /** `run` starts the run; `propose` files a proposal (the public default). */
-  mode: "run" | "propose";
+  /**
+   * `run` starts the run; `propose` files a proposal (the public default);
+   * `appointment` (schedule only) opens a session that waits for the person.
+   */
+  mode: "run" | "propose" | "appointment";
   /** Pending approvals before the worker stops starting runs (default 20). */
   maxPendingApprovals?: number;
   /**
-   * `created` / `enters_status` only: leave out a thing that carries this
+   * per_thing `created` / `enters_status` / `schedule`: leave out a thing that carries this
    * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
    * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
    */
   unless?: { property: string; present: true };
   /**
-   * `created` / `enters_status` only: keep only a thing whose property holds
+   * per_thing `created` / `enters_status` / `schedule`: keep only a thing whose property holds
    * one of these values (trimmed, any case), e.g. `{ property: "post-format",
    * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
    * (`@synap-core/types/workers`).
@@ -974,7 +1079,22 @@ export interface SlotAskFormSpec {
 export type SlotAskProvide =
   | { kind: "connection"; service: string }
   | { kind: "file"; accept?: string[] }
-  | { kind: "secret"; name: string };
+  | {
+      kind: "secret";
+      name: string;
+      /** What it is for, declared. Mirrors `AskSecretPurpose` (@synap-core/types/ask). */
+      purpose?: SlotAskSecretPurpose;
+      /** One read, or until the job closes (the default). Mirrors `PROVIDE_SECRET_USES`. */
+      uses?: "once" | "session";
+    };
+
+/** Mirrors `AskSecretPurpose` (@synap-core/types/ask): short words, never the secret. */
+export interface SlotAskSecretPurpose {
+  for: string;
+  tool: string;
+  action?: string;
+  on?: string;
+}
 
 /** A `provide` answer stores a REFERENCE, never the value. */
 export type SlotProvideRef =
@@ -996,7 +1116,12 @@ export type SlotAnswerValue =
       then?: SlotAskOption;
     }
   | { type: "form"; values: Record<string, unknown> }
-  | { type: "provide"; ref: SlotProvideRef };
+  | { type: "provide"; ref: SlotProvideRef }
+  /**
+   * The person REFUSED the ask (`@synap-core/types/ask` `./declined.ts`):
+   * taken on every mode, grants nothing, keeps the slot's blocker.
+   */
+  | { type: "declined"; reason?: string };
 
 /**
  * WHERE an answer came from — STRUCTURAL MIRROR of `AnswerProvenance`
@@ -1013,6 +1138,8 @@ export interface SlotAnswerProvenance {
   relaySurface?: string;
   /** The person's own words, verbatim. */
   quote?: string;
+  /** The document holding `quote` whole when it was too long: `quote` is its start. */
+  quoteDocumentId?: string;
   /** The person confirmed a relayed answer (set with `via: 'tap'` only). */
   confirmedAt?: string;
 }
@@ -1028,6 +1155,7 @@ export interface SlotPendingRelay {
   relayedBy: string;
   relaySurface?: string;
   quote?: string;
+  quoteDocumentId?: string;
   relayedAt: string;
 }
 
@@ -1071,6 +1199,14 @@ export interface SlotAnswer extends SlotAnswerProvenance {
    * carried no ask, and on every answer recorded before snapshots existed.
    */
   askSnapshot?: SlotAskSnapshot;
+  /**
+   * A REFUSAL only (`value.type === "declined"`): `askFingerprint` of the ask
+   * the person refused (the slot's effective ask, as shown). The block doors
+   * refuse an identical re-ask while this answer stands (api
+   * `declined-reask.ts`); the hand-back clears the ask itself, so this is the
+   * only record of WHICH ask was refused. Server-stamped with the answer.
+   */
+  askFingerprint?: string;
 }
 
 /** How many prior answers a slot keeps on `answerHistory`. */
@@ -1110,10 +1246,11 @@ export type PlaybookStageCategory =
   "backlog" | "planned" | "started" | "paused" | "completed" | "canceled";
 
 /**
- * How much model a stage's work needs — ADVISORY. `deep` = architecture or
- * judgment-heavy work, `standard` = ordinary work, `quick` = a mechanical step
- * a smaller model can do. An executor MAY map it to a model; nothing reads it
- * yet, and absent means "no preference" (the executor's own default).
+ * How much model a stage's work needs. `deep` = architecture or judgment-heavy
+ * work, `standard` = ordinary work, `quick` = a mechanical step a smaller model
+ * can do. A session run's turn in the stage sends it to the IS, which picks
+ * that model tier unless a person or the space chose a model
+ * (`run-stage-tier.ts`); absent means "no preference" (the IS's own choice).
  */
 export const PLAYBOOK_STAGE_TIERS = ["deep", "standard", "quick"] as const;
 export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
@@ -1124,29 +1261,47 @@ export type PlaybookStageTier = (typeof PLAYBOOK_STAGE_TIERS)[number];
  */
 export const PLAYBOOK_FOR_EACH_MAX_ITEMS = 200;
 
+/** Items one child run of a `forEach` stage may take at most (`batch`). */
+export const PLAYBOOK_FOR_EACH_MAX_BATCH = 50;
+
+/** Child runs of one `forEach` stage running at once; the rest wait their turn. */
+export const PLAYBOOK_FOR_EACH_PARALLEL = 3;
+
 /**
  * A stage that runs once per item of a collection (a UNIT), e.g. one run per
- * shot of a film. DECLARED, ADVISORY UNTIL THE EXECUTOR LANDS: it names WHAT to
- * iterate, it does not iterate; a run executes the stage once. This is the one
- * statement of that for `forEach` and `when`; the schema, the MCP stage schema
- * and the tool text point here.
+ * shot of a film, or per 30 findings. EXECUTED by the pod
+ * (`services/playbooks/stage-for-each.ts` in @synap/api): entering the stage
+ * cuts the collection into batches of `batch` items and starts ONE CHILD RUN
+ * per batch, at most {@link PLAYBOOK_FOR_EACH_PARALLEL} at once. A child runs
+ * the step's `uses` playbook when it names one, else this playbook at the
+ * parent's version reduced to this one stage; it gets its items as the param
+ * `as` and in its goal, under the parent's approval (no new proposal). The
+ * parent waits; when every child has ended it goes on, and names any child
+ * that failed (a failed child does not fail the parent).
  */
 export interface PlaybookStageForEach {
   /**
    * The collection to iterate: a run param name (`shots`) or a dotted path into
-   * the subject or earlier outputs (`subject.shots`). A reference, never data.
+   * a run param or the subject (`subject.shots`). A reference, never data. Its
+   * value is a list, or a text holding a JSON list.
    */
   over: string;
   /** Name the current item goes by inside the stage (default: `item`). */
   as?: string;
   /** Items at most (1 to {@link PLAYBOOK_FOR_EACH_MAX_ITEMS}). */
   max?: number;
+  /**
+   * Items per child run (1 to {@link PLAYBOOK_FOR_EACH_MAX_BATCH}; default 1).
+   * With more than one, the child's `as` param is the list of its items.
+   */
+  batch?: number;
 }
 
 /**
  * A condition under which a stage runs. DECLARED, ADVISORY UNTIL THE EXECUTOR
- * LANDS (see {@link PlaybookStageForEach}): it names the test, it does not
- * evaluate it. Give `equals` or `exists` (or both).
+ * LANDS: it names the test, it does not evaluate it. Give `equals` or
+ * `exists` (or both). This is the one statement of that for `when`; the
+ * schema, the MCP stage schema and the tool text point here.
  */
 export interface PlaybookStageWhen {
   /** A run param or earlier output to test: a name or dotted path. A reference, never data. */
@@ -1155,6 +1310,91 @@ export interface PlaybookStageWhen {
   equals?: string | number | boolean | null;
   /** The stage runs when the value at `param` is present (true) or absent (false). */
   exists?: boolean;
+}
+
+/** At most this many choices in one ordered `runner` list (the rest are fallbacks). */
+export const PLAYBOOK_RUNNER_MAX_CHOICES = 4;
+
+/** At most this many capability keys in one `requires` set. */
+export const PLAYBOOK_REQUIRES_MAX = 16;
+
+/**
+ * How deep a chain of steps that are playbooks may go: a playbook whose step
+ * `uses` a playbook whose step `uses` another … counts each `uses` hop. The
+ * write door refuses a chain deeper than this, and any cycle.
+ */
+export const PLAYBOOK_USES_MAX_DEPTH = 3;
+
+/**
+ * WHO does a playbook or a step (founder decision, proposal 72fdca0b; spec
+ * document 7111934d §2.1). One choice:
+ *   - `"self"`      a STEP only: the run's own agent does it (the default);
+ *   - `"synap_ai"`  the pod's own AI; `{ synapAi: { persona } }` names its
+ *                   persona (an `agents.slug`, today's run param `agentType`);
+ *   - `{ agentId }` one agent (`users.id`): pod-specific, so never in a
+ *                   catalog package; `preset` names one of its presets;
+ *   - `{ role }`    any of the person's agents whose `agent_role`, or one of
+ *                   whose presets, is this slug; portable;
+ *   - `{ engine }`  any of the person's agents of this engine
+ *                   (`users.agent_type`, e.g. "claude-code"); portable.
+ * `computer` narrows a role or engine to the agents on that computer (by id or
+ * name). DECLARED: the write door validates it; resolving it to an agent is the
+ * runner resolution's job (`agent-dispatch/route.ts` stays the only router).
+ */
+export type PlaybookRunnerRef =
+  | "self"
+  | "synap_ai"
+  | { synapAi: { persona: string } }
+  | { agentId: string; preset?: string }
+  | { role: string; computer?: string }
+  | { engine: string; computer?: string };
+
+/** One choice, or an ordered list where each later choice is a fallback. */
+export type PlaybookRunner = PlaybookRunnerRef | PlaybookRunnerRef[];
+
+/** The choices of a `runner`, in order (a single choice is a list of one). */
+export function runnerChoices(
+  runner: PlaybookRunner | null | undefined
+): PlaybookRunnerRef[] {
+  if (runner === null || runner === undefined) return [];
+  return Array.isArray(runner) ? runner : [runner];
+}
+
+/**
+ * Does every choice of this runner land on the pod's own AI? No runner,
+ * `"self"` (a step done by the run's own runner), `"synap_ai"` and
+ * `{ synapAi }` do; an agent, a role or an engine does not. Read on a run of
+ * the pod's AI (a run handed to an agent is checked before). PURE and
+ * tolerant: a loose stage value is read as a runner.
+ */
+export function runsOnPodAi(runner: unknown): boolean {
+  return runnerChoices(runner as PlaybookRunner | null | undefined).every(
+    (c) =>
+      c === "self" ||
+      c === "synap_ai" ||
+      (typeof c === "object" && c !== null && "synapAi" in c)
+  );
+}
+
+/**
+ * A step that IS another playbook, pinned at a version (founder decision,
+ * proposal 72fdca0b). The run starts a child session following that playbook
+ * at that version; the parent waits for it and takes back its outputs.
+ */
+export interface PlaybookStageUses {
+  /** The playbook this step runs (a playbook on this pod). */
+  playbookId: string;
+  /**
+   * The version it runs at. The write door fills in the playbook's current
+   * version when absent, so a STORED step always carries it; optional here
+   * because a definition on its way in may still omit it. A version the pod
+   * no longer keeps is refused.
+   */
+  version?: number;
+  /** Child param ← a parent param or subject path (identifier path). */
+  with?: Record<string, string>;
+  /** Parent step slot label ← child output label (default: the same label). */
+  outputs?: Record<string, string>;
 }
 
 /**
@@ -1184,7 +1424,19 @@ export interface PlaybookStage {
   description?: string;
   /** Stage-scoped goal when this stage is active. */
   goal?: string;
-  /** Capabilities granted while this stage is active. */
+  /**
+   * The tools of this stage, a SUBSET of its playbook's `tools`: while the
+   * stage is active the run gets its class floor plus these, and nothing else
+   * the playbook lists (`activeToolsList`). Absent ⇒ the playbook's list. The
+   * write door refuses an entry the playbook does not list
+   * (`stageToolsOutsidePlaybook`). Replaces the advisory `grants` (folded in by
+   * migration 0419; a definition still sending `grants` has them folded here).
+   */
+  tools?: string[];
+  /**
+   * @deprecated INPUT only: a definition written before 0419 may still send
+   * it; the write door folds it into `tools` and never stores it.
+   */
   grants?: CapabilityRef[];
   /** Deliverables expected from this stage. */
   expectedOutputs?: ExpectedOutput[];
@@ -1236,27 +1488,42 @@ export interface PlaybookStage {
    */
   domain?: string;
   /**
-   * The value of the playbook's `subjectProfile.statusProperty` this stage
-   * CORRESPONDS to. Advancing a run INTO the stage writes it to the run's
-   * subject (governed); the subject ENTERING the value advances an open run on
-   * it to this stage. Absent ⇒ the stage is not tied to the subject lifecycle.
+   * The value of the playbook's `subjectProfile.statusProperty` the subject
+   * holds WHILE this stage is worked (an in-progress status: In Draft,
+   * Review, in_progress). Entering the stage writes it to the run's subject
+   * (governed; a gated stage at its gate's pass); the subject ENTERING the
+   * value advances an open run on it to this stage. Absent ⇒ entering the
+   * stage moves nothing.
    */
   subjectStatus?: string;
+  /**
+   * The value the subject REACHES when this stage's work is APPROVED (a
+   * result status: Scripted, Published, sent, won). Decision D2, 17 Nov 2026.
+   * The approval, in order:
+   *  1. the stage's declared `expectedOutputs` are all delivered (approved,
+   *     attested, answered);
+   *  2. else the NEXT stage's gate passes (the gate approves the work left).
+   * A stage with neither is never written by the engine: the person or the
+   * worker who finishes it moves the subject. Never written on a session's
+   * end (decision 5e377b06). The subject ENTERING the value means the run
+   * stands at the NEXT stage (the last stage: on itself) —
+   * {@link stageForSubjectStatus}. Absent ⇒ approving the stage moves nothing.
+   */
+  onApproved?: string;
   /**
    * Where the run returns when this stage's gate FAILS — a rejected human gate
    * or a check gate that holds. Absent ⇒ today's behaviour (the run pauses).
    */
   onFail?: PlaybookStageOnFail;
   /**
-   * Advisory model tier for this stage's work (`deep` | `standard` | `quick`).
-   * Absent ⇒ no preference. Nothing consumes it yet; an executor may map it to
-   * a model later. Never a control: a stage with or without it runs the same.
+   * Model tier for this stage's work (`deep` | `standard` | `quick`): a
+   * session run's turn in this stage runs on that tier unless a person or the
+   * space chose a model. Absent ⇒ no preference.
    */
   tier?: PlaybookStageTier;
   /**
-   * Run this stage once per item of a collection — see
+   * Run this stage once per item of a collection, as child runs — see
    * {@link PlaybookStageForEach}. Absent ⇒ the stage runs once, as before.
-   * Advisory: nothing consumes it yet.
    */
   forEach?: PlaybookStageForEach;
   /**
@@ -1265,6 +1532,60 @@ export interface PlaybookStage {
    * Advisory: nothing consumes it yet.
    */
   when?: PlaybookStageWhen;
+  /**
+   * WHO does this step — see {@link PlaybookRunner}. Absent ⇒ `"self"`, the
+   * run's own agent, as before.
+   */
+  runner?: PlaybookRunner;
+  /**
+   * The step IS another playbook — see {@link PlaybookStageUses}. Absent ⇒
+   * the step is worked in the run's own session, as before.
+   */
+  uses?: PlaybookStageUses;
+  /**
+   * The tools this step needs, by capability key (`media-ffmpeg`), checked
+   * against the runner's computer before it is handed the step. Added to the
+   * playbook's own `requires`. Absent ⇒ nothing is checked, as before.
+   */
+  requires?: string[];
+  /**
+   * The question the POD asks the person when a run's turn ends this stage —
+   * see {@link PlaybookStageEndAsk}. Absent ⇒ the stage asks nothing, as
+   * before.
+   */
+  endAsk?: PlaybookStageEndAsk;
+}
+
+/**
+ * A stage-end ask (plan 08e4fba7 decision 5, founder 9 Nov 2026): a run never
+ * asks the person — it has no ask tool — so a playbook that needs a person's
+ * structured answer mid-run DECLARES it on the stage the answer ends. When a
+ * run's turn completes with this stage (or an earlier one) current, the pod
+ * raises it as ONE owed slot, the run waits (`waiting_on_you`), and the
+ * person's answer wakes a run turn told which stage comes next.
+ */
+export interface PlaybookStageEndAsk {
+  /** The slot's label: what the answer is ("Next week's priorities"). */
+  label: string;
+  /** One line of facts: why the person is asked now. */
+  why?: string;
+  /** What moves once they answer ("The run creates a task for each one"). */
+  unblocks?: string;
+  /** How they answer — the one ask shape. */
+  ask: SlotAsk;
+  /** A `choose` ask's options read from the pod at raise time. */
+  optionsFrom?: PlaybookStageEndAskOptionsFrom;
+}
+
+/**
+ * Where a stage-end `choose` reads its options: the entities linked TO the
+ * run's subject by `relation` (a variant `derived_from` its asset), newest
+ * first, each an option whose value is the entity id. They come before the
+ * declared options, eight in all. None found ⇒ the ask is not raised: there is
+ * nothing to choose among.
+ */
+export interface PlaybookStageEndAskOptionsFrom {
+  relation: string;
 }
 
 /**
@@ -1337,35 +1658,16 @@ export type AwaitedGateProposalType =
 export const DEFAULT_STAGE_GATE_PROPOSAL_TYPE: StageGateProposalType =
   "playbook.stage_gate";
 
-/** The terminal statuses a session ends in — the keys of {@link PlaybookOnEnd}. */
-export const PLAYBOOK_ON_END_STATUSES = [
-  "closed",
-  "cancelled",
-  "failed",
-] as const;
-export type PlaybookOnEndStatus = (typeof PLAYBOOK_ON_END_STATUSES)[number];
-
-/**
- * `subjectProfile.onEnd` — the status the process moves what it worked on (its
- * subject and every target still open) to when the session ENDS in that
- * terminal status. Each value is an option of the subject's lifecycle; a
- * terminal status with no entry moves nothing. Applied by the one close door
- * (`complete-session.ts`, @synap/api) through the status door, as the session.
- */
-export type PlaybookOnEnd = Partial<Record<PlaybookOnEndStatus, string>>;
-
 /**
  * The subject-LIFECYCLE half of a stored `subjectProfile` — tolerant (stored
  * jsonb is data). `statusProperty` names the subject kind's property holding
- * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose;
- * `onEnd` the value each session end moves the subject to (junk dropped).
+ * its lifecycle; `humanOnlyStatuses` are values no stage covers on purpose.
  * The api's `readPlaybookProcess` adds the zod-parsed `activators` on top.
  */
 export function readSubjectLifecycle(subjectProfile: unknown): {
   profileSlug: string | null;
   statusProperty: string | null;
   humanOnlyStatuses: string[];
-  onEnd: PlaybookOnEnd;
 } {
   const sp =
     subjectProfile && typeof subjectProfile === "object"
@@ -1373,21 +1675,12 @@ export function readSubjectLifecycle(subjectProfile: unknown): {
       : {};
   const str = (v: unknown) =>
     typeof v === "string" && v.trim() ? v.trim() : null;
-  const onEnd: PlaybookOnEnd = {};
-  if (sp.onEnd && typeof sp.onEnd === "object" && !Array.isArray(sp.onEnd)) {
-    const raw = sp.onEnd as Record<string, unknown>;
-    for (const status of PLAYBOOK_ON_END_STATUSES) {
-      const value = str(raw[status]);
-      if (value) onEnd[status] = value;
-    }
-  }
   return {
     profileSlug: str(sp.profileSlug),
     statusProperty: str(sp.statusProperty),
     humanOnlyStatuses: Array.isArray(sp.humanOnlyStatuses)
       ? sp.humanOnlyStatuses.flatMap((v) => (str(v) ? [str(v)!] : []))
       : [],
-    onEnd,
   };
 }
 
@@ -1417,29 +1710,88 @@ export function resolveStageRef(
   return byName ? byName.key : null;
 }
 
+/** A stage's declared status value for `field`, trimmed; null when absent. */
+function stageStatusValue(
+  stage: unknown,
+  field: "subjectStatus" | "onApproved"
+): string | null {
+  if (!stage || typeof stage !== "object") return null;
+  const v = (stage as Record<string, unknown>)[field];
+  return typeof v === "string" && v.trim() ? v.trim() : null;
+}
+
+/** A stage's `onApproved` value (trimmed), or null. PURE. */
+export function stageOnApproved(stage: unknown): string | null {
+  return stageStatusValue(stage, "onApproved");
+}
+
 /**
- * The stage a subject status value CORRESPONDS to (`PlaybookStage.subjectStatus`)
- * — the first in declaration order. `null` when no stage covers the value
- * (e.g. a `humanOnlyStatuses` value like "idea").
+ * Who OWNS a subject status value in a stage list, and where a run stands
+ * when its subject holds it (decision D2):
+ *  - `via: "enter"` — a stage's `subjectStatus`: the run stands AT that stage;
+ *  - `via: "reach"` — a stage's `onApproved`: that stage's work is approved,
+ *    so the run stands at the NEXT stage (the last stage: on itself).
+ * First in stage order wins, reading each stage's `subjectStatus` before its
+ * `onApproved` (a stage is entered before it is approved). `null` when no
+ * stage covers the value (e.g. a `humanOnlyStatuses` value like "idea").
+ */
+export interface SubjectStatusOwner {
+  /** The stage that DECLARES the value. */
+  ownerKey: string;
+  via: "enter" | "reach";
+  /** The stage a run on a subject holding the value stands at. */
+  standsAt: string;
+}
+
+export function subjectStatusOwner(
+  stages: readonly unknown[],
+  value: unknown
+): SubjectStatusOwner | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const v = value.trim();
+  const keyed = stages.filter(
+    (s): s is { key: string } =>
+      !!s &&
+      typeof s === "object" &&
+      typeof (s as { key?: unknown }).key === "string"
+  );
+  for (let i = 0; i < keyed.length; i++) {
+    const st = keyed[i]!;
+    if (stageStatusValue(st, "subjectStatus") === v) {
+      return { ownerKey: st.key, via: "enter", standsAt: st.key };
+    }
+    if (stageStatusValue(st, "onApproved") === v) {
+      const next = keyed[i + 1];
+      return {
+        ownerKey: st.key,
+        via: "reach",
+        standsAt: next ? next.key : st.key,
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * The stage a run stands at when its subject holds `value` — THE follow's
+ * mapping ({@link subjectStatusOwner}`.standsAt`): the stage whose
+ * `subjectStatus` it is, or the stage AFTER the one whose `onApproved` it is.
+ * `null` when no stage covers the value.
  */
 export function stageForSubjectStatus(
   stages: readonly unknown[],
   value: unknown
 ): string | null {
-  if (typeof value !== "string" || !value.trim()) return null;
-  const v = value.trim();
-  for (const s of stages) {
-    if (!s || typeof s !== "object") continue;
-    const st = s as { key?: unknown; subjectStatus?: unknown };
-    if (
-      typeof st.key === "string" &&
-      typeof st.subjectStatus === "string" &&
-      st.subjectStatus.trim() === v
-    ) {
-      return st.key;
-    }
-  }
-  return null;
+  return subjectStatusOwner(stages, value)?.standsAt ?? null;
+}
+
+/** Does any stage tie the run to its subject's lifecycle (either field)? PURE. */
+export function stagesMapSubjectStatus(stages: readonly unknown[]): boolean {
+  return stages.some(
+    (s) =>
+      stageStatusValue(s, "subjectStatus") !== null ||
+      stageStatusValue(s, "onApproved") !== null
+  );
 }
 
 /**
@@ -1573,6 +1925,12 @@ export interface SessionCriterion {
     evidenceKey?: string;
     /** kind=judge: what the judge should look at. */
     hint?: string;
+    /**
+     * kind=capability: the arguments the verb runs with, beside the ones the
+     * evaluator always passes (`sessionId`, `criterionKey`, `outcome`). A
+     * measure is `{ op, params, threshold, comparator }` for `measure.check`.
+     */
+    params?: Record<string, unknown>;
   };
   /** Set when copied from a stage. */
   stageKey?: string;
@@ -1583,6 +1941,8 @@ export interface SessionCriterion {
   checkKind?: CriterionCheckMeaning;
   /** R7 — about the result (absent = result) or the method. */
   about?: CriterionAbout;
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 function optionalString(v: unknown): string | undefined {
@@ -1613,7 +1973,16 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
     const capability = optionalString(check!.capability);
     const evidenceKey = optionalString(check!.evidenceKey);
     const hint = optionalString(check!.hint);
+    // A plain object only (a measure's arguments); anything else is dropped,
+    // the criterion is kept.
+    const params =
+      check!.params &&
+      typeof check!.params === "object" &&
+      !Array.isArray(check!.params)
+        ? (check!.params as Record<string, unknown>)
+        : undefined;
     const stageKey = optionalString(e.stageKey);
+    const outputKey = optionalString(e.outputKey);
     // Closed sets: an unknown meaning or `about` is dropped (the criterion is
     // kept) — the reader stays tolerant, the write doors are strict.
     const checkKind = (CRITERION_CHECK_MEANINGS as readonly unknown[]).includes(
@@ -1634,10 +2003,12 @@ export function readCriteria(raw: unknown): SessionCriterion[] {
         ...(capability ? { capability } : {}),
         ...(evidenceKey ? { evidenceKey } : {}),
         ...(hint ? { hint } : {}),
+        ...(params ? { params } : {}),
       },
       ...(stageKey ? { stageKey } : {}),
       ...(checkKind ? { checkKind } : {}),
       ...(about ? { about } : {}),
+      ...(outputKey ? { outputKey } : {}),
     });
   }
   return out;
@@ -1681,7 +2052,73 @@ export const STAGE_LESSON_MAX_CHARS = 200;
  * so a legacy stage with no `lessons` reads as `[]`.
  */
 export function readStageLessons(stage: unknown): string[] {
-  const raw = (stage as { lessons?: unknown } | null | undefined)?.lessons;
+  return readLessonLines(
+    (stage as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/**
+ * The PLAYBOOK-level lessons (`playbooks.metadata.lessons`):
+ * what earlier runs taught when no stage can hold it (a playbook with no
+ * stages, or a criterion of the whole playbook). Same bound and the same
+ * whole-list revision as a stage's.
+ */
+export function readPlaybookLessons(metadata: unknown): string[] {
+  return readLessonLines(
+    (metadata as { lessons?: unknown } | null | undefined)?.lessons
+  );
+}
+
+/** One tool or skill the successful runs of a playbook used. */
+export interface WhatWorkedPart {
+  kind: "tool" | "skill";
+  name: string;
+  /** How many of the successful runs used it. */
+  runs: number;
+}
+
+/**
+ * What the successful runs of a playbook used (`playbooks.metadata.whatWorked`,
+ * distilled by the lessons scanner from the runs' recorded
+ * `session --used--> tool|skill` edges and approved by a person.
+ */
+export interface WhatWorked {
+  /** The successful runs it was read from. */
+  runs: number;
+  parts: WhatWorkedPart[];
+}
+
+/** At most this many parts are kept. */
+export const MAX_WHAT_WORKED_PARTS = 8;
+
+/** Tolerant read of `metadata.whatWorked`; `null` when absent or empty. */
+export function readWhatWorked(metadata: unknown): WhatWorked | null {
+  const raw = (metadata as { whatWorked?: unknown } | null | undefined)
+    ?.whatWorked as { runs?: unknown; parts?: unknown } | undefined;
+  if (!raw || typeof raw !== "object" || !Array.isArray(raw.parts)) return null;
+  const runs = typeof raw.runs === "number" && raw.runs > 0 ? raw.runs : 0;
+  const parts: WhatWorkedPart[] = [];
+  for (const p of raw.parts) {
+    if (parts.length >= MAX_WHAT_WORKED_PARTS) break;
+    const part = p as Partial<WhatWorkedPart> | null;
+    if (
+      (part?.kind === "tool" || part?.kind === "skill") &&
+      typeof part.name === "string" &&
+      part.name.trim() &&
+      typeof part.runs === "number" &&
+      part.runs > 0
+    ) {
+      parts.push({
+        kind: part.kind,
+        name: part.name.trim().slice(0, STAGE_LESSON_MAX_CHARS),
+        runs: part.runs,
+      });
+    }
+  }
+  return runs > 0 && parts.length > 0 ? { runs, parts } : null;
+}
+
+function readLessonLines(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const out: string[] = [];
   const seen = new Set<string>();
@@ -1766,45 +2203,17 @@ export function resolveStageCategory(stage: unknown): PlaybookStageCategory {
     : DEFAULT_PLAYBOOK_STAGE_CATEGORY;
 }
 
+/**
+ * RETIRED: a schedule is a `schedule` activator ({@link PlaybookActivator}).
+ * Still accepted as input; the activator pass folds it into one.
+ */
 export interface PlaybookSchedule {
   /** 5-field cron expression (e.g. "0 9 * * MON"). */
   cron: string;
   enabled: boolean;
-  /**
-   * WHAT the schedule materializes at each slot. Two different products:
-   *
-   * - `"run"` (DEFAULT, and the pre-existing behaviour byte-for-byte) — an
-   *   unattended run. The slot instantiates a session, opens its channel, writes
-   *   a `playbook_runs` ledger row and DISPATCHES an agent. Nobody has to be
-   *   there.
-   *
-   * - `"appointment"` — an APPOINTMENT. The slot materializes a
-   *   `focus_sessions` row with `status: 'scheduled'` and stops: no channel, no
-   *   run row, no agent kickoff. It waits for the HUMAN, who opens the app and
-   *   finds the session already there, already scoped, saying "this is what you
-   *   are doing now". This is the ONLY producer of
-   *   `FocusSessionStatus.SCHEDULED` — the status existed in the union with zero
-   *   writers until it was built.
-   *
-   * Absent ⇒ `"run"`, so every playbook scheduled before this field existed keeps
-   * behaving exactly as it did.
-   */
+  /** Absent ⇒ `"run"`; folded into the activator's `mode`. */
   mode?: PlaybookScheduleMode;
-  /**
-   * HAND-OFF — the agent (its agent user id, `users.id`, as `synap_list_agents`
-   * returns it; the same identity `synap_start_session` `agentIds` and
-   * `synap_update_session` `addAgentId` take) that each slot's session is handed
-   * to. The compiler writes it onto the `playbook_run` node
-   * (`PlaybookRunNodeDef.data.handToAgentId`); `runPlaybook` resolves it ONCE per
-   * run through THE route, before any session exists, and puts it on the
-   * session's roster INSTEAD of dispatching the playbook's own executor — the
-   * named agent does the work (a `pull` agent picks it up from its orient's
-   * `handedToYou`; a `dispatch` agent is pushed it through its binding). An
-   * unknown, paused or foreign agent fails the slot by name.
-   *
-   * Only meaningful for `mode: "run"`: an appointment waits for the HUMAN, so the
-   * write door refuses the pair. Absent ⇒ unchanged.
-   */
+  /** Folded into the activator's `handToAgentId` (run mode only). */
   handToAgentId?: string;
 }
 
@@ -1930,7 +2339,16 @@ export type LinkType =
   | "assigned_to"
   // session|track --serves--> track: the work is done FOR that goal (a
   // sub-goal serves its parent). NOT a dependency; goal rollups follow it.
-  | "serves";
+  | "serves"
+  // track --advances--> workspace: the goal moves that space of its project
+  // forward (a "pillar"; `metadata.primary` on at most one per goal).
+  | "advances"
+  // session --orchestrated_by--> session: coordinated by that orchestrator
+  // (not lineage, not a dependency; the wait is the child's hold).
+  | "orchestrated_by"
+  // capability(add-on) --extends--> capability(base): written by the
+  // capability applier only (founder decision D6).
+  | "extends";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {
@@ -1990,13 +2408,16 @@ export interface RunContext {
 
 export interface RunResult {
   /**
-   * Terminal: completed | failed | proposed. Non-terminal: `running` — the
-   * executor dispatched the work but it finishes ASYNCHRONOUSLY (e.g. the
-   * is-agent posts into a channel and the IS responds out-of-band; the
-   * external-agent fires a BYOA webhook and the agent captures back later).
-   * The runner records the run as-is and the run is closed via capture-back.
+   * Terminal: completed | failed | proposed. Non-terminal, the work finishes
+   * ASYNCHRONOUSLY and the run is closed via capture-back:
+   *   `queued`  — handed over, its holder has not taken it yet (the is-agent
+   *               posted the kickoff and enqueued the IS turn; a pull
+   *               hand-off waits for the agent). The holder's claim makes it
+   *               `running`;
+   *   `running` — the executor SAW the holder take it (the external agent's
+   *               provider started a task): this is the claim.
    */
-  status: "running" | "completed" | "failed" | "proposed";
+  status: "queued" | "running" | "completed" | "failed" | "proposed";
   summary?: string;
   /** Ids of artifacts/entities produced (used to write `produced` links). */
   producedIds?: string[];
@@ -2104,11 +2525,13 @@ export interface Capability {
  * the AI can see, per verb, whether it is granted and at what exec-mode.
  */
 export interface CapabilityVerbState extends ToolVerb {
-  /** True when an active (non-revoked, non-expired) grant exists for the tool. */
+  /** True when an active (non-revoked, non-expired) grant exists for the tool: "may use". */
   granted: boolean;
   /**
-   * The effective exec-mode for this verb: the active grant's exec-mode when
-   * granted, else the verb's `govDefault`. This is what the gate would apply.
+   * The effective exec-mode for this verb: `auto` when the approval row for
+   * everyone on this verb (or its tool) says auto, else `propose` (decision
+   * D2: the row is the only "runs without asking"). What the gate applies to
+   * an agent with no row of its own.
    */
   effectiveExecMode: ExecMode;
   /**
@@ -2133,6 +2556,20 @@ export interface CapabilityVerbState extends ToolVerb {
 // created. These contracts are pure shapes — NO I/O, NO zod — mirroring the
 // rest of this package; the Hub-REST door + service own validation.
 
+/**
+ * How a PERSON gets a param's value (a key, a token): the numbered steps and
+ * the page they start on. Read by the install proposal's setup row (finding
+ * 91a3bfd3), never by the applier. Same bounds as an `act` ask (at most 7
+ * steps of at most 200 characters; an https `url`), validated by the Hub
+ * door's `ParamObtainSchema` (`services/capabilities/param-obtain.ts`).
+ */
+export interface CapabilityParamObtain {
+  /** Where the steps start, e.g. the provider's API keys page. https only. */
+  url?: string;
+  /** What to do there, in order. 1 to 7 steps. */
+  steps: string[];
+}
+
 /** A declared parameter the applier fills from the `params` map. */
 export interface CapabilityParamSpec {
   name: string;
@@ -2141,6 +2578,8 @@ export interface CapabilityParamSpec {
   required?: boolean;
   default?: unknown;
   description?: string;
+  /** How the person gets this value. See {@link CapabilityParamObtain}. */
+  obtain?: CapabilityParamObtain;
 }
 
 /**
@@ -2193,7 +2632,8 @@ export interface CapabilityToolDef {
    * template-local vault `ref` (resolved to the created `vault://<id>`).
    */
   credentialRef?: string;
-  executor?: ExecutorRef;
+  /** A tool is never a one-shot playbook: `generate` is a playbook executor only. */
+  executor?: Exclude<ExecutorRef, "generate">;
   config?: Record<string, unknown>;
   /** Descriptive behavioral config stored in tool.metadata (does NOT reset approval). */
   metadata?: Record<string, unknown>;
@@ -2404,6 +2844,19 @@ export interface CapabilityDefinition {
   tools: CapabilityToolDef[];
   skills: CapabilitySkillDef[];
   /**
+   * ADD-ON: the `key` of the base capability this one extends (founder
+   * decision D6, document b387ca45 §6), e.g. `"apify"`. An add-on is its own
+   * container, package and listing; it declares no tool or credential of its
+   * own: its skills `require` the base's tools by name, so its actions run
+   * through the base's tool rows and stop when the base's access is off. The
+   * applier refuses it until the base is installed in a scope that covers it,
+   * and records `capability --extends--> capability` (`services/capabilities/
+   * addon.ts`). The catalog authors it once, here; the manifest's
+   * `{kind: capability, relation: require}` dependency on the base is derived
+   * from it and checked by `catalog validate`.
+   */
+  extends?: string;
+  /**
    * Content-addressed hash of this template's canonical definition, injected by
    * the Control Plane into the served definition (flows through
    * `capability_template_cache.definition` jsonb). CONSUMED, never recomputed,
@@ -2441,6 +2894,17 @@ export interface CapabilityDefinition {
    * list-by-producer index ("which capabilities emit event X").
    */
   emits?: string[];
+  /**
+   * The NEEDS this capability fills (0426, founder decision D2): slugs of the
+   * need vocabulary (`@synap-core/types/needs`), e.g. a GitHub pack fills
+   * `["code-host", "gate"]`. Declared by the author and validated by the
+   * catalog and the control plane (each slug a need, and the pack provides at
+   * least one intent the need groups). The pod reads it to find which
+   * installed capability can fill a space's empty need, and which catalog
+   * pack to propose when none can; the applier stamps it on the installed
+   * capability as `metadata.fills`.
+   */
+  fills?: string[];
   /**
    * Where the capability runs and how a computer installs, checks and removes
    * it (installer reconciliation f75fbb48 §3.5): `placement`, `install`,
@@ -2509,21 +2973,14 @@ export interface LoopPlaybookDef {
   /** Conforms to ExpectedOutput[]; stored loosely (validated at the boundary). */
   expectedOutputs?: Record<string, unknown>[];
   /**
-   * The ABSTRACT intents this playbook needs the pod to be able to do — the
-   * process half of the intent spine (a template's `taskIntents` is what the
-   * SPACE needs; a capability's `provides` is what the PACK serves). Slugs of
-   * the closed vocabulary, validated at the write door exactly like
-   * `taskIntents`; see {@link readRequiredIntents} and
-   * {@link mergeRequiredIntents}.
-   *
-   * TYPE-only here, stored loosely like its `stages`/`expectedOutputs`
-   * siblings: this package stays dependency-free, so the vocabulary and the
-   * zod schema both live at the door (`@synap/api` `schemas/playbook-definition`).
+   * The ONE list of what a run of this playbook may use, beyond its class
+   * floor: run tools, intent slugs, capabilities — see `run-tools.ts`. "Only
+   * these" (plan 08e4fba7 decision 3). Composition UNIONs it.
    */
-  requiredIntents?: PlaybookRequiredIntents;
+  tools?: string[];
   /** Capabilities granted to the playbook (resolved local refs → `grants` links). */
   grants?: CapabilityRef[];
-  /** Inline schedule — materializes the backing cron automation via the create path. */
+  /** RETIRED inline schedule — folded into a `schedule` activator. */
   schedule?: PlaybookSchedule;
   /** Conforms to PlaybookStage[]; stored loosely (validated at the boundary). The
    * authored-loop path (create-from-definition) MUST thread these — playbooks.create
@@ -2618,10 +3075,11 @@ export interface LoopDefinition {
 //     defined, else the base value.
 //   - stages: additive by `key` — base stages keep their order; an overlay stage
 //     whose `key` matches a base stage merges onto it (overlay stage fields win,
-//     stage `grants` union); overlay stages with new keys append after.
-//   - grants / params / expectedOutputs / requiredIntents: UNION (grants dedup
-//     by kind+id, params by name, expectedOutputs by kind, requiredIntents by
-//     slug) — base first, overlay appended.
+//     stage `tools` and deprecated `grants` union); overlay stages with new
+//     keys append after.
+//   - grants / params / expectedOutputs / tools: UNION (grants dedup by
+//     kind+id, params by name, expectedOutputs by kind, tools by entry) — base
+//     first, overlay appended.
 //   - `ref` is the overlay's (the concrete playbook); `extends` is dropped.
 
 /** Dedup a CapabilityRef list by (kind,id), keeping first occurrence. */
@@ -2660,12 +3118,13 @@ function unionByField(
   return order.map((k) => byKey.get(k)!);
 }
 
-/** Read a loose object's `grants` as a CapabilityRef[] (or undefined). */
-function readStageGrants(
-  stage: Record<string, unknown>
-): CapabilityRef[] | undefined {
-  const g = stage.grants;
-  return Array.isArray(g) ? (g as CapabilityRef[]) : undefined;
+/** Union two `tools` lists (each entry once, base first), or undefined. */
+function unionTools(base: unknown, overlay: unknown): string[] | undefined {
+  if (!Array.isArray(base) && !Array.isArray(overlay)) return undefined;
+  return readToolsList([
+    ...(Array.isArray(base) ? base : []),
+    ...(Array.isArray(overlay) ? overlay : []),
+  ]);
 }
 
 /** Additive stage merge: base order preserved; overlay merges by `key`, new keys append. */
@@ -2685,11 +3144,19 @@ function mergeStages(
     const key = String(stage.key);
     const existing = byKey.get(key);
     if (existing) {
+      const tools = unionTools(existing.tools, stage.tools);
+      // The deprecated stage `grants` still union (the write door folds them
+      // into `tools`), so a composed definition loses none of the base's.
       const grants = unionCapabilityRefs(
-        readStageGrants(existing),
-        readStageGrants(stage)
+        Array.isArray(existing.grants)
+          ? (existing.grants as CapabilityRef[])
+          : undefined,
+        Array.isArray(stage.grants)
+          ? (stage.grants as CapabilityRef[])
+          : undefined
       );
       const merged: Record<string, unknown> = { ...existing, ...stage };
+      if (tools) merged.tools = tools;
       if (grants) merged.grants = grants;
       byKey.set(key, merged);
     } else {
@@ -2739,13 +3206,10 @@ export function composePlaybookDef(
       "kind"
     ),
     // Declarations UNION — an overlay cannot narrow what a base journey needs.
-    // Same additive rule as grants: a process's requirements are a SET of
-    // capabilities it depends on, and dropping the base's would let an overlay
-    // silently strip a real dependency off a shared method.
-    requiredIntents: mergeRequiredIntents(
-      base.requiredIntents,
-      overlay.requiredIntents
-    ),
+    // Same additive rule as grants: what a process may use is a SET, and
+    // dropping the base's would let an overlay silently strip a real tool off
+    // a shared method.
+    tools: unionTools(base.tools, overlay.tools),
   };
   // Strip keys left undefined so the flattened def matches a hand-authored one.
   for (const key of Object.keys(merged) as (keyof LoopPlaybookDef)[]) {

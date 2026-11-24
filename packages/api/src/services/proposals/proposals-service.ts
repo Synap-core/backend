@@ -23,6 +23,9 @@ import {
   drizzleSql,
   getActingAgentUserId,
   transitionProposal,
+  computeProposalDedupHash,
+  isUniqueViolation,
+  ne,
 } from "@synap/database";
 import type { ProposalRevision } from "@synap/database";
 import { getRequestGrant } from "@synap/database";
@@ -32,9 +35,11 @@ import { withCellContentFingerprint } from "../cells/cell-content-fingerprint.js
 import { TRPCError } from "@trpc/server";
 import { assertReviewedRevision } from "../../utils/reviewed-revision.js";
 import {
+  COMPOSITE_OPERATION_KINDS,
   isCompositeProposalData,
   isNestedEnvelope,
 } from "@synap-core/types/proposals";
+import { findPodRegistrationCode } from "@synap-core/types/proposals/capability-run";
 import type { ProposalStatusFilter } from "../../routers/hub-protocol/rest/_codecs/proposal.js";
 import type { GraphRedecision } from "./redecide-graph-revision.js";
 import { ownAgentUserFilter } from "../agent-identity-service.js";
@@ -66,6 +71,8 @@ export async function listCreatedProposals(params: {
   sessionId?: string;
   status?: string;
   limit?: number;
+  /** Rows to skip (newest first), for paging with `limit`. */
+  offset?: number;
   /**
    * Only rows of this REVIEW PACKAGE (`reviewPackageOfRow`). Decided per row,
    * so it filters a bounded scan ({@link PACKAGE_SCAN_LIMIT}) of the newest
@@ -80,7 +87,7 @@ export async function listCreatedProposals(params: {
   if (!params.package) return rows;
   return rows
     .filter((r) => reviewPackageOfRow(r) === params.package)
-    .slice(0, params.limit ?? 20);
+    .slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 20));
 }
 
 /** Rows a `package` filter scans before taking `limit`. */
@@ -92,6 +99,7 @@ async function listCreatedProposalRows(params: {
   sessionId?: string;
   status?: string;
   limit?: number;
+  offset?: number;
 }): Promise<Array<typeof proposals.$inferSelect>> {
   const statusArg = params.status || "pending";
   // `satisfies` against the wire filter type: adding a status to the column
@@ -135,7 +143,8 @@ async function listCreatedProposalRows(params: {
       .from(proposals)
       .where(and(...conditions))
       .orderBy(desc(proposals.createdAt))
-      .limit(params.limit ?? 20);
+      .limit(params.limit ?? 20)
+      .offset(params.offset ?? 0);
   }
 
   // AUTHOR FLOOR = me OR an agent I created.
@@ -197,7 +206,8 @@ async function listCreatedProposalRows(params: {
     .from(proposals)
     .where(and(...conditions))
     .orderBy(desc(proposals.createdAt))
-    .limit(params.limit ?? 20);
+    .limit(params.limit ?? 20)
+    .offset(params.offset ?? 0);
 }
 
 /** Count PENDING proposals in a workspace (all authors). */
@@ -292,6 +302,31 @@ export const PROTECTED_FIELDS_BY_TYPE: Readonly<
     "platform",
     "threadId",
   ],
+  // `webhook/inbound_source.connect` (decision abaaa696): the card's request
+  // (which source, which host project, which variables), the preview the
+  // person read and its summary ARE what the approval acts on, and the
+  // executor's own stamps (`progress`: which source this card minted;
+  // `receipt`) decide what a retry replaces. Nothing in it is the author's to
+  // reword after a person has seen it; `data` is pinned so a patch cannot
+  // nest a second envelope the card would show instead. `_summary` also
+  // stands for the revise's `summary` argument (the card shows it first).
+  "inbound_source.connect": [
+    "request",
+    "preview",
+    "summary",
+    "_summary",
+    "progress",
+    "receipt",
+    "data",
+  ],
+};
+
+/** Why a type's pinned field is refused, said to the caller that touched it. */
+const PROTECTED_TYPE_REASON: Readonly<Record<string, string>> = {
+  "messaging.external.send":
+    "it names who the message goes to and through which account; the person approves that. Withdraw it and file a new one to write to someone else.",
+  "inbound_source.connect":
+    "it is what the person approves: which source gets a new secret and which host project receives it. Withdraw it and file inbound_source.connect again.",
 };
 
 /**
@@ -366,6 +401,11 @@ export const PROTECTED_ENVELOPE_FIELDS = [
 export const PINNED_PLACEMENT_FIELDS = [
   "resolvedWorkspaceId",
   "resolvedHomeWorkspaceId",
+  // `workspacePlacement` — the rung of the space ladder that placed a
+  // proposed session start (W3); the approval stamps it on the session, and a
+  // ladder rung widens an app grant's reach over it (D2 a). A revise that could
+  // plant or change it would widen that reach after the person read the card.
+  "workspacePlacement",
 ] as const;
 
 /** The pinned placement field a patch would CHANGE at either level, or null. */
@@ -403,6 +443,25 @@ function patchChangesPinnedPlacement(
     }
   }
   return null;
+}
+
+/**
+ * The stored level an inner patch merges into: `.data` of a nested envelope,
+ * else the envelope itself (`computeRevisedEnvelope`).
+ */
+function patchedLevel(
+  envelope: unknown,
+  patch: ProposalRevisionPatch
+): Record<string, unknown> {
+  const env = (envelope ?? {}) as Record<string, unknown>;
+  const inner = env.data;
+  return patch.kind === "inner" &&
+    isNestedEnvelope(env) &&
+    inner &&
+    typeof inner === "object" &&
+    !Array.isArray(inner)
+    ? (inner as Record<string, unknown>)
+    : env;
 }
 
 /**
@@ -510,6 +569,50 @@ export interface ComputeRevisedEnvelopeParams {
    * one — recorded as `actingAgentUserId` on the entry. Attribution only.
    */
   actingAgentUserId?: string | null;
+  /**
+   * The pod's one "does this name read as a credential" rule
+   * (`isSecretParamName`), needed only to apply `parameterEdits`. The locked
+   * revise passes it; a caller without it cannot edit tool-run arguments.
+   */
+  isSecretName?: (key: string) => boolean;
+}
+
+/**
+ * The ONE field a person's edit of a tool run's text arguments travels in
+ * (`proposals.revise` `data.parameterEdits`: `{ <argument>: <new text> }`).
+ * Applied KEY BY KEY onto `parameters`, never as a wholesale replace: the
+ * card cannot see a credential's value (the pod never sends it), so a whole
+ * `parameters` object from it would erase it; and the revision entry then
+ * records only the keys that changed, so no credential rides the chain.
+ * TEXT ONLY in v1: an existing, non-credential argument whose stored value is
+ * text, replaced by text.
+ */
+export const PARAMETER_EDITS_FIELD = "parameterEdits";
+
+function takeParameterEdits(fields: Record<string, unknown>): {
+  rest: Record<string, unknown>;
+  edits: Record<string, string> | null;
+} {
+  if (!(PARAMETER_EDITS_FIELD in fields)) return { rest: fields, edits: null };
+  const { [PARAMETER_EDITS_FIELD]: raw, ...rest } = fields;
+  const bad = (message: string) =>
+    new TRPCError({ code: "BAD_REQUEST", message });
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw bad("`parameterEdits` must be an object of argument -> new text.");
+  }
+  if ("parameters" in rest) {
+    throw bad(
+      "Send either `parameters` (whole) or `parameterEdits` (the changed text), not both."
+    );
+  }
+  const edits: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "string") {
+      throw bad(`\`${key}\` can only be changed to text.`);
+    }
+    edits[key] = value;
+  }
+  return { rest, edits };
 }
 
 /** A nested `cell/define` envelope whose payload carries the content to stamp. */
@@ -538,7 +641,13 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
   merged: Record<string, unknown>;
   revision: ProposalRevision;
 } {
-  const { envelope, patch, summary, reasoning, actorId } = params;
+  const { envelope, summary, reasoning, actorId } = params;
+  const taken = params.patch
+    ? takeParameterEdits(params.patch.fields)
+    : { rest: undefined, edits: null };
+  const patch: ProposalRevisionPatch | undefined = params.patch
+    ? { ...params.patch, fields: taken.rest ?? params.patch.fields }
+    : undefined;
 
   // ── System-authored provenance is not reviewer-editable ─────────────────
   // `data.sourceFile` is written ONLY by `stageSourceBlob`'s callers and names
@@ -569,10 +678,18 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
     patch && typeProtected
       ? patchAltersProtectedField(patch, envelope, typeProtected)
       : null;
-  if (typeField) {
+  // The revise's `summary` argument writes `_summary`, the text the card
+  // shows first: a type that pins `_summary` refuses it too.
+  const summaryField =
+    summary !== undefined &&
+    typeProtected?.includes("_summary") &&
+    summary !== envelope._summary
+      ? "_summary"
+      : null;
+  if (typeField ?? summaryField) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: `A revision cannot change \`${typeField}\` — it names who the message goes to and through which account; the person approves that. Withdraw it and file a new one to write to someone else.`,
+      message: `A revision cannot change \`${typeField ?? summaryField}\` — ${PROTECTED_TYPE_REASON[params.proposalType!]}`,
     });
   }
   // A skill's `kind` is what every review labels it (code, instruction), so
@@ -623,6 +740,63 @@ export function computeRevisedEnvelope(params: ComputeRevisedEnvelopeParams): {
       }
       merged = { ...merged, ...patch.fields };
     }
+  }
+
+  if (taken.edits) {
+    if (
+      params.proposalType !== "capability.run" ||
+      isNestedEnvelope(envelope)
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Only a tool run's arguments can be edited this way.",
+      });
+    }
+    const current = envelope.parameters;
+    if (!current || typeof current !== "object" || Array.isArray(current)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "This tool run has no arguments to change.",
+      });
+    }
+    const currentParams = current as Record<string, unknown>;
+    if (!params.isSecretName) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Tool-run arguments cannot be edited from here.",
+      });
+    }
+    const was: Record<string, unknown> = {};
+    for (const key of Object.keys(taken.edits)) {
+      if (!(key in currentParams) || typeof currentParams[key] !== "string") {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` is not a text argument of this run; only the text it was proposed with can be changed.`,
+        });
+      }
+      if (params.isSecretName(key)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` is a credential; it cannot be changed from the review.`,
+        });
+      }
+      // The review shows this argument with its pod registration code masked
+      // (plan a640c5bb B1): an edit of that text would drop the code.
+      if (findPodRegistrationCode(currentParams[key])) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `\`${key}\` carries a pod registration code; it cannot be changed from the review.`,
+        });
+      }
+      was[key] = currentParams[key];
+    }
+    // Only the changed keys on the chain: `before` is what was proposed.
+    before.parameters = was;
+    historyPatch.parameters = { ...taken.edits };
+    merged = {
+      ...merged,
+      parameters: { ...currentParams, ...taken.edits },
+    };
   }
 
   if (summary !== undefined) {
@@ -926,9 +1100,21 @@ export async function mergeProposalRevision(
       Object.keys(patch.fields).every((k) => MESSAGE_WORD_FIELDS.includes(k)) &&
       params.workspaceId === undefined &&
       params.projectId === undefined;
+    // And the author agent may RENAME what it asked for (60dae4c8: the title
+    // lint flags a defect after filing): a title already in the payload, and
+    // nothing else. A name changes no target, space or act.
+    const renamesOwnOnly =
+      isAuthor &&
+      !!patch &&
+      Object.keys(patch.fields).length === 1 &&
+      typeof patch.fields.title === "string" &&
+      typeof patchedLevel(existing.data, patch).title === "string" &&
+      params.workspaceId === undefined &&
+      params.projectId === undefined;
     if (
       isFencedGrant(getRequestGrant()) &&
       !rewordsMessageOnly &&
+      !renamesOwnOnly &&
       ((patch && Object.keys(patch.fields).length > 0) ||
         params.workspaceId !== undefined ||
         params.projectId !== undefined)
@@ -979,6 +1165,8 @@ export async function mergeProposalRevision(
       actorId: params.actorId,
       actingAgentUserId:
         params.attributionAgentUserId ?? actingAgentUserId ?? null,
+      isSecretName: (await import("../capabilities/capability-catalog.js"))
+        .isSecretParamName,
     });
     // The stamp `computeRevisedEnvelope` derived knows no row; stamped again
     // here against the row this approval writes, at the scope it now targets
@@ -997,7 +1185,7 @@ export async function mergeProposalRevision(
     }
 
     // A revision that changes the PAYLOAD was checked before the lock by
-    // what its approval will run (`REVISED_PAYLOAD_VALIDATORS`); refused here,
+    // the one check its filing ran (`checkRevisedPayload`); refused here,
     // after authority and the PENDING check, so a refusal is never an
     // existence oracle. Judged against the row as read then: a payload that
     // moved in between is refused rather than stored unchecked.
@@ -1026,9 +1214,40 @@ export async function mergeProposalRevision(
       eq(proposals.status, existing.status)
     );
     if (reopening) {
+      // THE DEDUP INDEX. A pending agent row is unique on its `dedup_hash`
+      // (`proposals_agent_dedup_uq`, global across agents), and a failed row is
+      // outside that partial index.
+      const dedupHash = existing.agentUserId
+        ? computeProposalDedupHash({
+            workspaceId:
+              params.workspaceId !== undefined
+                ? params.workspaceId
+                : existing.workspaceId,
+            proposalType: existing.proposalType,
+            targetType: existing.targetType,
+            targetId: existing.targetId,
+            data: merged as Record<string, unknown>,
+          })
+        : null;
+      if (dedupHash) {
+        const [twin] = await tx
+          .select({ id: proposals.id })
+          .from(proposals)
+          .where(
+            and(
+              eq(proposals.status, ProposalStatus.PENDING),
+              eq(proposals.dedupHash, dedupHash),
+              ne(proposals.id, params.proposalId)
+            )
+          )
+          .limit(1);
+        if (twin) throw sameRequestWaiting(twin.id);
+      }
       // Reopened: the failure is history (kept on the revision entry above),
       // and the row waits for a review again: approval_failed → pending,
       // through the status door.
+      // The peek above and this write race a concurrent identical filing: the
+      // index answers it with the same refusal, never a raw unique violation.
       await transitionProposal(tx, {
         to: ProposalStatus.PENDING,
         from: [ProposalStatus.APPROVAL_FAILED],
@@ -1039,6 +1258,7 @@ export async function mergeProposalRevision(
           rejectionReason: null,
           reviewedBy: null,
           reviewedAt: null,
+          ...(dedupHash ? { dedupHash } : {}),
           ...(params.workspaceId !== undefined
             ? { workspaceId: params.workspaceId }
             : {}),
@@ -1047,6 +1267,8 @@ export async function mergeProposalRevision(
             : {}),
         },
         where: unchanged,
+      }).catch((err: unknown) => {
+        throw isUniqueViolation(err) ? sameRequestWaiting(null) : err;
       });
     } else {
       await tx
@@ -1084,6 +1306,14 @@ export async function mergeProposalRevision(
   return redecideOwnGraphRevision({
     proposalId: params.proposalId,
     ...redecide,
+  });
+}
+
+/** The reopen's refusal when the same request already waits as another row. */
+function sameRequestWaiting(twinId: string | null): TRPCError {
+  return new TRPCError({
+    code: "CONFLICT",
+    message: `The same request is already waiting for review${twinId ? ` as proposal ${twinId}` : ""}, so this one was left as it is. Revise that one instead, and withdraw this one (synap_reject_proposal, if it is yours).`,
   });
 }
 
@@ -1140,52 +1370,46 @@ function failureSummaryOf(data: unknown): string | null {
 }
 
 /**
- * Per-target validators for a revised PAYLOAD, keyed `targetType/changeType`
- * — the same key the approve executors register under. Each runs what that
- * executor's replay will run, so a revision it would fail is refused at revise
- * time (BAD_REQUEST, nothing changed) on all three revise doors, instead of
+ * A revised PAYLOAD is judged by the ONE check its filing ran
+ * (`proposalCannotApply`, `can-apply.ts`, keyed like the approve executors):
+ * what that kind's approval would refuse is refused at revise time
+ * (BAD_REQUEST, nothing changed) on all three revise doors, instead of
  * landing as an approval failure. Revise itself stays generic: no
  * target-specific tool or field list, only this hook. Composite `operations`
  * have their own pre-lock preflight (`validateRevisedOperations`).
  */
-const REVISED_PAYLOAD_VALIDATORS: Record<
-  string,
-  (payload: Record<string, unknown>) => Promise<void>
-> = {
-  "playbook/create": async (payload) =>
-    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
-      "create",
-      payload
-    ),
-  "playbook/update": async (payload) =>
-    (await import("../../routers/playbooks.js")).assertRevisedPlaybookPayload(
-      "update",
-      payload
-    ),
-  // A revised shell command is judged by the same policy the Hub door files
-  // it under (audit F1): otherwise a revise is a way around the denylist.
-  "command/execute": async (payload) => {
-    const { commandPolicyRefusal } = await import("@synap/governance-policy");
-    const refusal = commandPolicyRefusal(payload.command);
-    if (refusal) throw new Error(refusal);
-  },
-};
-
 async function checkRevisedPayload(
   params: MergeProposalRevisionParams
 ): Promise<{ base: string; problem: string | null } | null> {
   if (!params.patch) return null;
   const [row] = await db
-    .select({ data: proposals.data })
+    .select({
+      data: proposals.data,
+      targetType: proposals.targetType,
+      targetId: proposals.targetId,
+      proposalType: proposals.proposalType,
+      workspaceId: proposals.workspaceId,
+      subjectUserId: proposals.subjectUserId,
+      agentUserId: proposals.agentUserId,
+      sessionId: proposals.sessionId,
+    })
     .from(proposals)
     .where(eq(proposals.id, params.proposalId))
     .limit(1);
   // Absent row: the locked read answers NOT_FOUND.
   if (!row) return null;
   const before = (row.data ?? {}) as Record<string, unknown>;
-  const validate =
-    REVISED_PAYLOAD_VALIDATORS[`${before.targetType}/${before.changeType}`];
-  if (!validate) return null;
+  // The kind as the request envelope names it (what the approve executors
+  // replay), else as the row's columns do (a flat payload: capability.run).
+  const targetType =
+    typeof before.targetType === "string" ? before.targetType : row.targetType;
+  const proposalType =
+    typeof before.changeType === "string"
+      ? before.changeType
+      : row.proposalType;
+  const { proposalCannotApply, isCheckedProposalKind } =
+    await import("./can-apply.js");
+  if (!isCheckedProposalKind(targetType, proposalType)) return null;
   let merged: Record<string, unknown>;
   try {
     ({ merged } = computeRevisedEnvelope({
@@ -1211,17 +1435,23 @@ async function checkRevisedPayload(
   if (JSON.stringify(payloadOf(before)) === JSON.stringify(payload)) {
     return null;
   }
-  try {
-    await validate(payload);
-    return { base, problem: null };
-  } catch (err) {
-    return {
-      base,
-      problem:
-        `Revision refused — the revised ${String(before.targetType)} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
-        (err instanceof Error ? err.message : String(err)),
-    };
-  }
+  const refusal = await proposalCannotApply({
+    targetType,
+    targetId: row.targetId,
+    proposalType,
+    data: merged,
+    userId: row.subjectUserId ?? params.actorId ?? "",
+    workspaceId: row.workspaceId ?? null,
+    agentUserId: row.agentUserId ?? null,
+    sessionId: row.sessionId ?? null,
+  });
+  return {
+    base,
+    problem: refusal
+      ? `Revision refused — the revised ${targetType} cannot apply, so nothing was changed (the proposal stays pending as it was): ` +
+        refusal.message
+      : null,
+  };
 }
 
 /**
@@ -1256,7 +1486,7 @@ async function validateRevisedOperations(
   if (!isCompositeProposalData(candidate as never)) {
     return {
       problems: [
-        "`operations` must be a non-empty array of recognized composite operations (create_entity, create_relation, create_skill, create_automation, create_rule, create_playbook, create_view, create_project, create_session, create_document, create_link, update_skill, update_automation, update_rule, update_playbook, update_view, update_entity)",
+        `\`operations\` must be a non-empty array of recognized composite operations (${COMPOSITE_OPERATION_KINDS.join(", ")})`,
       ],
       operations: revised,
     };

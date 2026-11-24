@@ -56,6 +56,7 @@ import {
 } from "@synap/database/schema";
 import { GOAL_ACCEPTANCE_DECISIONS } from "@synap-core/types/units";
 import { trackGoalInputSchema } from "../../../services/tracks/goal-content.js";
+import { goalPlacementInputSchema } from "../../../services/tracks/goal-placement.js";
 import { lifecycleConflictOf } from "../../../services/lifecycle/conflict.js";
 import {
   advanceTrackStage,
@@ -108,14 +109,17 @@ const StartSchema = z
     reasoning: z.string().max(2000).optional(),
     // What the goal holds (0345) — refined (2–5 criteria) by the service.
   })
-  .extend(trackGoalInputSchema.shape);
+  .extend(trackGoalInputSchema.shape)
+  // Where it sits: the goal it serves, the pillars it advances.
+  .extend(goalPlacementInputSchema.shape);
 const DirectionSchema = z
   .object({
     direction: z.string().max(280).nullable().optional(),
     kpi: trackKpiInputSchema.nullable().optional(),
     reasoning: z.string().max(2000).optional(),
   })
-  .extend(trackGoalInputSchema.shape);
+  .extend(trackGoalInputSchema.shape)
+  .extend(goalPlacementInputSchema.shape);
 const AcceptanceSchema = z.object({
   decision: z.enum(GOAL_ACCEPTANCE_DECISIONS),
   note: z.string().trim().max(2000).optional(),

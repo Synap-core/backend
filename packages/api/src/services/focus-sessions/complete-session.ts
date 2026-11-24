@@ -66,11 +66,16 @@ import {
   closeOpenRoomQuestions,
   openRoomQuestionConditions,
   setSessionStatus,
+  setRunStatus,
+  oweSlotTransitions,
   workUnitActorOf,
   type WorkUnitActor,
 } from "@synap/database";
 import { WORKER_TARGET_REASONS } from "@synap-core/types/workers";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  isDeliverableOutstanding,
+  LIVE_RUN_STATUSES,
+} from "@synap-core/types/units";
 import { ASK_LIMITS } from "@synap-core/types/ask";
 import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -103,10 +108,14 @@ import {
   cancelRecordMetadataSql,
   type SessionCancelRecord,
 } from "./cancel-session.js";
-import type { SessionVerdict } from "@synap-core/types/focus-sessions";
+import {
+  sessionClosedAs,
+  type SessionVerdict,
+} from "@synap-core/types/focus-sessions";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import {
   boundReason,
+  closedNotDoneItems,
   describeWaiting,
   hasOpenRequiredWork,
   hasWaiting,
@@ -116,6 +125,10 @@ import {
   type WaitingAtClose,
 } from "./close-not-done.js";
 import { sessionNameField } from "./session-update-goal.js";
+import {
+  NOT_TAKEN_REPORT_KEY,
+  type NotTakenRecord,
+} from "./session-closed-as.js";
 import { createLogger } from "@synap-core/core";
 import {
   isPinnedStrategy,
@@ -123,16 +136,8 @@ import {
   shouldDropPin,
 } from "../playbooks/pinned-subject.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
-import {
-  loadSessionProcess,
-  type SessionProcess,
-} from "@synap/jobs/utils/session-process.js";
-// Types only, statically: the end-move writer itself is loaded where it runs
-// (below). A static import put `move-status` → `permission-check` on this
-// module's graph and closed an import cycle through `permission-check`, so a
-// suite that mocks the permission gate got the REAL one inside `moveStatus`
-// (entities.app-role-write.pglite.test.ts, CI run 42040717470).
-import type { SessionEndMovesRecord } from "./session-end-moves.js";
+import { sessionGrantWorkspaceId } from "../../access/session-counted-spaces.js";
+import { FOLLOWED_VIA_METADATA_KEY } from "./follow-markers.js";
 
 const logger = createLogger({ module: "complete-focus-session" });
 
@@ -188,6 +193,14 @@ export interface CompleteFocusSessionParams {
    * a run's end) passes the system.
    */
   actor?: WorkUnitActor;
+  /**
+   * The step is SKIPPED: an arm of a decision that chose another option (P5,
+   * `decision-arms.ts`). Recorded on `verification_report.notTaken`, which
+   * the dependency rule reads as `skipped` (it holds none of its
+   * dependents). Read only on a `cancelled` close by the system actor; a
+   * caller-sent report never carries it.
+   */
+  notTaken?: NotTakenRecord;
 }
 
 /** One of the closing agent's still-open questions, as the refusal lists it. */
@@ -483,29 +496,30 @@ export type CompleteFocusSessionResult = {
    * pending proposal, a delegate). Absent when there were none.
    */
   waiting?: WaitingAtClose;
-  /**
-   * What the end moved (`subjectProfile.onEnd`, session-end-moves.ts): the
-   * subject and every target still open, each moved / proposed / skipped /
-   * failed with why. Absent when the process names nothing for this end.
-   */
-  endMoves?: SessionEndMovesRecord;
 };
 
 /**
- * The report this close writes: the caller's, with any `closedNotDone` it
- * sent dropped (this door alone writes it), plus the door's own record. An
+ * The report this close writes: the caller's, with any `closedNotDone` or
+ * `notTaken` it sent dropped (this door alone writes them: a sent `notTaken`
+ * would free the step's dependents), plus the door's own records. An
  * explicit `null` (clear the report) stays `null`.
  */
 export function withoutCallerCloseRecord(
   report: Record<string, unknown> | null | undefined,
-  closedNotDone: ClosedNotDoneRecord | undefined
+  closedNotDone: ClosedNotDoneRecord | undefined,
+  notTaken?: NotTakenRecord
 ): Record<string, unknown> | null | undefined {
   if (report === null) return null;
+  const own = {
+    ...(closedNotDone ? { closedNotDone } : {}),
+    ...(notTaken ? { [NOT_TAKEN_REPORT_KEY]: notTaken } : {}),
+  };
   if (report === undefined)
-    return closedNotDone ? { closedNotDone } : undefined;
+    return Object.keys(own).length > 0 ? own : undefined;
   const rest = { ...report };
   delete rest.closedNotDone;
-  return closedNotDone ? { ...rest, closedNotDone } : rest;
+  delete rest[NOT_TAKEN_REPORT_KEY];
+  return { ...rest, ...own };
 }
 
 /**
@@ -621,6 +635,7 @@ export async function completeFocusSession(
         criteria: openWork.criteria,
         outcomes: openWork.outcomes,
         owedByPerson: openWork.owedByPerson,
+        unreadMessages: openWork.unreadMessages,
         reason,
         by: params.agentUserId,
         at: new Date().toISOString(),
@@ -630,9 +645,15 @@ export async function completeFocusSession(
   // `closedNotDone` is written by this door only: a caller-sent one is
   // dropped. An explicit `null` report (clear it) is honoured as sent; the
   // record then lives in the room line, the close event and the result.
+  // A skip (P5) is the system's, on a cancel only (`decision-arms.ts`).
+  const notTaken =
+    terminalStatus === "cancelled" && params.actor?.kind === "system"
+      ? params.notTaken
+      : undefined;
   const verificationReport = withoutCallerCloseRecord(
     params.verificationReport,
-    closedNotDone
+    closedNotDone,
+    notTaken
   );
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).
@@ -643,6 +664,13 @@ export async function completeFocusSession(
     userId: params.userId,
     agentUserId: params.agentUserId,
     workspaceId: session.workspaceId,
+    // The key's grant: a project-only session counts in its project's spaces
+    // (`session-counted-spaces.ts`); governance stays at its home.
+    grantWorkspaceId: await sessionGrantWorkspaceId(session, {
+      subjectType: "focus_session",
+      action: "update",
+      data: { id: sessionId },
+    }),
     // Attribute + honor pack-mode escape: stamp would force-propose without
     // ignoreSessionForcePropose; both must be set for lifecycle complete.
     sessionId,
@@ -728,29 +756,6 @@ export async function completeFocusSession(
     }
   }
 
-  // THE PROCESS, READ BEFORE THE RUN IS SETTLED: `loadSessionProcess` reads
-  // a LIVE run's frozen snapshot first, so after the settle below it would
-  // fall back to the live playbook — an edit made since the run started would
-  // decide what this end moves. Read once, here; applied after the commit.
-  // A failed read is said out loud (the end moves nothing it cannot read).
-  let endProcess: SessionProcess | null = null;
-  if (run || session.playbookId) {
-    try {
-      endProcess = await loadSessionProcess({
-        sessionId,
-        playbookId: session.playbookId ?? null,
-      });
-    } catch (err) {
-      logger.warn(
-        { err, sessionId },
-        "session process not read at close — its end moves nothing"
-      );
-      warnings.push(
-        `What this session's process moves at its end could not be read (${err instanceof Error ? err.message : String(err)}); nothing was moved.`
-      );
-    }
-  }
-
   if (run) {
     // The run's terminal status FOLLOWS how the session closed. Stamping
     // `completed` on a failed/cancelled close hid the failure from the parent
@@ -761,16 +766,31 @@ export async function completeFocusSession(
         : terminalStatus === "cancelled"
           ? "cancelled"
           : "completed";
-    await db
-      .update(playbookRuns)
-      .set({
-        status: runStatus,
+    // COMPARE-AND-SET: the run was read LIVE above, but a turn's end, the
+    // reaper or a cancel can settle it between that read and this write. Its
+    // verdict then stands (a run that completed is not re-stamped `cancelled`
+    // by a late close), and nothing is settled again.
+    const { rows: ended } = await setRunStatus(db, {
+      runId: run.id,
+      from: LIVE_RUN_STATUSES,
+      to: runStatus,
+      // The same mover as the session's own close.
+      actor: params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+      reason: `Its session was ${terminalStatus}.`,
+      set: {
         completedAt: new Date(),
         error: runStatus === "failed" ? SESSION_FAILED_RUN_ERROR : null,
-      })
-      .where(eq(playbookRuns.id, run.id));
-    // The parent automation run settles from its children (never throws).
-    await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+      },
+    });
+    if (ended.length > 0) {
+      // The parent automation run settles from its children (never throws).
+      await settleParentAutomationRunFromChild({ playbookRunId: run.id });
+    } else {
+      logger.info(
+        { sessionId, runId: run.id, wanted: runStatus },
+        "complete-session: the run was settled by another writer first; its verdict stands"
+      );
+    }
   }
 
   // THE owed floor (`isDeliverableOutstanding`): a retired or OPTIONAL slot is
@@ -796,11 +816,7 @@ export async function completeFocusSession(
 
   if (closedNotDone) {
     warnings.push(
-      `Closed with required work still open (${[
-        ...closedNotDone.criteria.map((c) => c.key),
-        ...closedNotDone.outcomes.map((o) => o.key),
-        ...closedNotDone.owedByPerson.map((o) => o.key),
-      ].join(", ")}), for the reason you gave: "${closedNotDone.reason}".`
+      `Closed with required work still open (${closedNotDoneItems(closedNotDone)}), for the reason you gave: "${closedNotDone.reason}".`
     );
   }
   const waitingLine = waitingAtClose ? describeWaiting(waitingAtClose) : null;
@@ -911,6 +927,18 @@ export async function completeFocusSession(
             : {}),
       },
     });
+    // The slots the close retired moved (→ retired): owed in the close's own
+    // transaction. Nothing when the close retired none.
+    if (retirement && rows.length > 0) {
+      await oweSlotTransitions(tx, {
+        sessionId,
+        before: lockedOutputs,
+        after: retirement.outputs,
+        actor:
+          params.actor ?? workUnitActorOf(params.userId, params.agentUserId),
+        reason: `Its session was ${terminalStatus}.`,
+      });
+    }
     return rows;
   });
 
@@ -931,10 +959,9 @@ export async function completeFocusSession(
   // `session_closed` — "unfinished" is a mark, never an absence (work model
   // L4). Every exit, after the commit; first verdict wins, so a target already
   // settled keeps its result. A failed stamp never rolls the close back.
-  let openTargets: string[] = [];
   if (updated) {
     try {
-      openTargets = await stampOpenWorkerTargets({
+      await stampOpenWorkerTargets({
         sessionId,
         result: "skipped",
         reason: WORKER_TARGET_REASONS.sessionClosed,
@@ -944,58 +971,6 @@ export async function completeFocusSession(
         { err, sessionId },
         "worker targets not stamped on close (the close stands)"
       );
-    }
-  }
-
-  // THE END MOVES (`subjectProfile.onEnd`, session-end-moves.ts): the subject
-  // and the targets the stamp above just found open move to the status the
-  // process names for this end, through the status door, as the session and
-  // its closer. After the commit, so a move that fails or proposes never
-  // undoes the close: each outcome is reported on the result, a failure as a
-  // warning too.
-  let endMoves: SessionEndMovesRecord | undefined;
-  if (updated && endProcess) {
-    try {
-      const { applySessionEndMoves, endMoveActor } =
-        await import("./session-end-moves.js");
-      endMoves = await applySessionEndMoves({
-        session: {
-          id: sessionId,
-          workspaceId: session.workspaceId ?? null,
-          subjectEntityId: session.subjectEntityId ?? null,
-        },
-        process: endProcess,
-        status: terminalStatus,
-        openTargets,
-        actor: endMoveActor({
-          userId: params.userId,
-          agentUserId: params.agentUserId,
-          closerKind: params.actor?.kind,
-        }),
-      });
-    } catch (err) {
-      logger.warn(
-        { err, sessionId },
-        "session end moves not applied (the close stands)"
-      );
-      warnings.push(
-        `The session closed, but what its process moves at its end was not applied (${err instanceof Error ? err.message : String(err)}).`
-      );
-    }
-    for (const m of endMoves?.moves ?? []) {
-      const what = m.as === "subject" ? "its subject" : "a target";
-      if (m.outcome.status === "failed") {
-        warnings.push(
-          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": ${m.outcome.reason}`
-        );
-      } else if (
-        m.outcome.status === "skipped" &&
-        m.outcome.reason === "no_status_property"
-      ) {
-        warnings.push(
-          `The session's end did not move ${what} (${m.entityId}) to "${endMoves!.value}": its process names no statusProperty and its kind declares no lifecycle.`
-        );
-      }
     }
   }
 
@@ -1139,11 +1114,7 @@ export async function completeFocusSession(
         await import("../messaging/post-message.js");
       await postChannelMessage({
         channelId: updated.channelId,
-        content: `Closed with required work still open (${[
-          ...closedNotDone.criteria.map((c) => c.key),
-          ...closedNotDone.outcomes.map((o) => o.key),
-          ...closedNotDone.owedByPerson.map((o) => o.key),
-        ].join(", ")}). The agent's reason: ${closedNotDone.reason}`,
+        content: `Closed with required work still open (${closedNotDoneItems(closedNotDone)}). The agent's reason: ${closedNotDone.reason}`,
         role: "system",
         triggerAI: false,
         userId: params.userId,
@@ -1184,6 +1155,16 @@ export async function completeFocusSession(
     // Additive: reactors that do not know it ignore it.
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
+    // How the run ended, as a playbook link reads it (`run_ended`) and the
+    // dependency rule reads "delivered": THE derivation (`sessionClosedAs`);
+    // and whether the session was only ATTACHED to its playbook, not run
+    // under it. Every exit is terminal; a status that is not reads not_done.
+    closedAs:
+      sessionClosedAs(updated.status, closedNotDone != null) ?? "not_done",
+    attached:
+      (updated.metadata as Record<string, unknown> | null)?.[
+        FOLLOWED_VIA_METADATA_KEY
+      ] != null,
   };
 
   await logEvent(params.userId, FOCUS_SESSION_CLOSED_EVENT_TYPE, eventData, {
@@ -1223,7 +1204,6 @@ export async function completeFocusSession(
     verdict,
     ...(closedNotDone ? { closedNotDone } : {}),
     ...(waitingAtClose ? { waiting: waitingAtClose } : {}),
-    ...(endMoves ? { endMoves } : {}),
   };
 }
 

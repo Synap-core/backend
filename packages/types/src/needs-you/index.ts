@@ -746,3 +746,23 @@ export {
 export * from "./rule.js";
 export * from "./set-aside.js";
 export * from "./priority.js";
+
+/** One request as a story, and its row as three lines — see `./request-story.ts`, `./request-row.ts`. */
+export * from "./request-context.js";
+export {
+  REQUEST_STORY_BEFORE_CAP,
+  groupRequestEvents,
+  requestStory,
+  requestStoryLine,
+  type RequestStory,
+  type RequestStoryGroup,
+  type RequestStoryHead,
+  type RequestStoryNow,
+  type RequestStoryStep,
+} from "./request-story.js";
+export {
+  requestRow,
+  type RequestRowPart,
+  type RequestRowView,
+} from "./request-row.js";
+export { needsYouCopy, needsYouT } from "./copy.js";

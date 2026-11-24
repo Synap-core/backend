@@ -70,6 +70,12 @@ const EXEMPT: Record<string, string> = {
   "services/focus-sessions/param-slots.ts":
     "Pure shape builder (no write). Persisted by `create-session.ts` (notifies) " +
     "and the approval executor (exempt above).",
+  "services/focus-sessions/start-orchestrator.ts":
+    "The orchestrator's `plan-approval` slot is written THROUGH " +
+    "`createFocusSession`, at the person's own approval of the proposal " +
+    "(or their own signed-in call): they are looking at it, so a push about " +
+    "their own click is noise (as the focus-session approval executor). The " +
+    "orchestrator's agent asks in the room once the merged plan exists.",
   "services/playbooks/playbook-lifecycle.ts":
     "DEFINES `instantiateSession(Row)`; the notification belongs to the DOOR " +
     "that knows who is in front of the run (`run-playbook.ts` notifies).",
@@ -87,6 +93,11 @@ const EXEMPT: Record<string, string> = {
     "`synap_ask_person` builds the owed slot and writes it THROUGH " +
     "`updateFocusSession` (`expectedOutputs`), which notifies. A second push " +
     "here would be two pushes for one hand-off.",
+  "services/document-patch/ask-slots.ts":
+    "A question written in a document: it files the owed slot THROUGH " +
+    "`updateFocusSession` (`expectedOutputs`), exactly as `synap_ask_person` " +
+    "does, and that notifies. A second push here would be two pushes for one " +
+    "hand-off (pinned end to end in `materialize-asks.pglite.test.ts`).",
   "services/agent-dispatch/poll-external-agents.ts":
     "The approval card's owed slot is announced by the QUESTION card posted " +
     "right after it as the agent (`postDispatchNotice` kind 'question' → " +

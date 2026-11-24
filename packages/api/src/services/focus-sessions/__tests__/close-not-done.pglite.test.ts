@@ -29,6 +29,8 @@ const h = vi.hoisted(() => ({
     query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }>;
     close: () => Promise<void>;
   },
+  /** The close events emitted (`emitSideEffects`), for what a link reads. */
+  emitted: [] as Array<{ subjectId?: string; data?: Record<string, unknown> }>,
 }));
 
 vi.mock("@synap/database", async (importOriginal) => {
@@ -58,7 +60,12 @@ vi.mock("@synap/database", async (importOriginal) => {
 });
 vi.mock("@synap/events", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
-  emitSideEffects: async () => undefined,
+  emitSideEffects: async (p: {
+    subjectId?: string;
+    data?: Record<string, unknown>;
+  }) => {
+    h.emitted.push(p);
+  },
 }));
 vi.mock("@synap/jobs", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
@@ -262,6 +269,24 @@ describe("an agent's close is checked against what the session owes", () => {
     const body = await mcpClose({ sessionId: id });
     expect(body.status).toBe("closed");
     expect((await rowOf(id)).status).toBe("closed");
+    // What a playbook link reads off the close event: done, a real run.
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      closedAs: "done",
+      attached: false,
+    });
+  });
+
+  it("a session only ATTACHED to its playbook says so on its close event", async () => {
+    const id = await seed({});
+    await q(
+      `update focus_sessions set metadata = '{"followedVia":"attach"}'::jsonb where id = $1`,
+      [id]
+    );
+    expect((await mcpClose({ sessionId: id })).status).toBe("closed");
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      closedAs: "done",
+      attached: true,
+    });
   });
 
   it("an optional criterion does not hold the close", async () => {
@@ -346,6 +371,7 @@ describe("an agent's close is checked against what the session owes", () => {
           key: "sign-off",
           statement: "Founder sign-off",
           check: { kind: "judge" },
+          outputKey: "sign-off",
         },
       ],
       outputs: [
@@ -411,6 +437,11 @@ describe("an agent's close is checked against what the session owes", () => {
     expect((body.warnings as string[]).join(" ")).toContain(
       "Merged as part of #510 instead"
     );
+    // Closed, but NOT done: a link that waits for a done run does not fire.
+    expect(h.emitted.find((e) => e.subjectId === id)?.data).toMatchObject({
+      status: "closed",
+      closedAs: "not_done",
+    });
   });
 
   it("a blank `reason` is no reason", async () => {
@@ -625,5 +656,176 @@ describe("an agent's close is checked against what the session owes", () => {
     expect((await rowOf(id)).verification_report?.closedNotDone).toMatchObject({
       reason: "Checked by hand on prod",
     });
+  });
+});
+
+/**
+ * Finding cc65844a: a lane closed while another session's `blocked_on_you`
+ * to it was still unread (`ebd32865`, `unread: 1`). An unread wake-worthy
+ * post addressed to the session holds an agent's `closed` like any other
+ * open required work, with the same `reason` way out.
+ */
+describe("an agent's close is held by another session's unread blocked_on_you / handoff", () => {
+  const SENDER_AGENT = "55555555-5555-4555-8555-555555555555";
+
+  async function roomOf(sessionId: string): Promise<string> {
+    return (
+      await q<{ channel_id: string }>(
+        `select channel_id from focus_sessions where id = $1`,
+        [sessionId]
+      )
+    ).rows[0]!.channel_id;
+  }
+
+  /** A coordination post as `session-post.ts` stamps it. */
+  async function postTo(
+    sessionId: string,
+    p: {
+      intent: string;
+      fromSessionId?: string;
+      toSessionId?: string;
+      readAt?: string;
+      agent?: string;
+      text?: string;
+    }
+  ): Promise<string> {
+    const id = randomUUID();
+    const agent = p.agent ?? SENDER_AGENT;
+    await q(
+      `insert into messages (id, channel_id, role, author_type, content, metadata, routed_teammate_id, user_id, hash, timestamp)
+       values ($1, $2, 'assistant', 'ai_agent', $3, $4::jsonb, $5, $6, 'h', now())`,
+      [
+        id,
+        await roomOf(sessionId),
+        p.text ?? "I need your capture fields before I can go on",
+        JSON.stringify({
+          sessionPost: {
+            intent: p.intent,
+            from: {
+              sessionId: p.fromSessionId ?? randomUUID(),
+              agentUserId: agent,
+              harness: "claude-code",
+              conversationId: null,
+            },
+            to: { sessionId: p.toSessionId ?? sessionId },
+            hop: 0,
+            wake: true,
+            ...(p.readAt ? { readAt: p.readAt, readBy: AGENT } : {}),
+          },
+        }),
+        agent,
+        OWNER,
+      ]
+    );
+    return id;
+  }
+
+  it("refuses `closed` while a blocked_on_you to it is unread, naming the message", async () => {
+    const id = await seed({ withRoom: true });
+    const messageId = await postTo(id, { intent: "blocked_on_you" });
+    const body = await mcpClose({ sessionId: id });
+    expect(body).toMatchObject({
+      status: "refused",
+      reasonCode: "NOT_DONE",
+      unmetCriteria: [],
+      openOutcomes: [],
+      owedByPerson: [],
+      unreadMessages: [{ messageId, intent: "blocked_on_you" }],
+    });
+    expect(String(body.error)).toContain(messageId);
+    expect(String(body.error)).toContain("synap_wait_for_answer");
+    expect((await rowOf(id)).status).toBe("active");
+  });
+
+  it("an unread handoff holds it too", async () => {
+    const id = await seed({ withRoom: true });
+    const messageId = await postTo(id, { intent: "handoff" });
+    const body = await mcpClose({ sessionId: id });
+    expect(body).toMatchObject({
+      reasonCode: "NOT_DONE",
+      unreadMessages: [{ messageId, intent: "handoff" }],
+    });
+    expect((await rowOf(id)).status).toBe("active");
+  });
+
+  it("read, non-waking, self-sent, unattributed and other sessions' posts never hold it", async () => {
+    const id = await seed({ withRoom: true });
+    // The discriminating rows: each is in the room and is not open mail.
+    await postTo(id, {
+      intent: "blocked_on_you",
+      readAt: "2026-11-13T10:00:00Z",
+    });
+    await postTo(id, { intent: "fyi" });
+    await postTo(id, { intent: "done" });
+    await postTo(id, { intent: "blocked_on_you", fromSessionId: id });
+    await postTo(id, { intent: "handoff", toSessionId: randomUUID() });
+    // A forged stamp: the row's agent is not the stamped sender.
+    const forged = await postTo(id, { intent: "blocked_on_you" });
+    await q(`update messages set routed_teammate_id = $1 where id = $2`, [
+      AGENT,
+      forged,
+    ]);
+    const body = await mcpClose({ sessionId: id });
+    expect(body.status).toBe("closed");
+    expect((await rowOf(id)).status).toBe("closed");
+  });
+
+  it("with a `reason`, closes, records the unread message and says it in the room", async () => {
+    const id = await seed({ withRoom: true });
+    const messageId = await postTo(id, { intent: "blocked_on_you" });
+    const body = await mcpClose({
+      sessionId: id,
+      reason: "Lane B already answered it in its own PR",
+    });
+    expect(body.status).toBe("closed");
+    expect(body.closedNotDone).toMatchObject({
+      reason: "Lane B already answered it in its own PR",
+      unreadMessages: [{ messageId, intent: "blocked_on_you" }],
+    });
+    const report = (await rowOf(id)).verification_report as {
+      closedNotDone?: { unreadMessages?: Array<{ messageId: string }> };
+    };
+    expect(report.closedNotDone?.unreadMessages?.[0]?.messageId).toBe(
+      messageId
+    );
+    const room = await q<{ content: string; role: string }>(
+      `select content, role from messages where channel_id = $1 and role = 'system'`,
+      [await roomOf(id)]
+    );
+    const line = room.rows.find((r) =>
+      r.content.includes("Closed with required work still open")
+    );
+    expect(line?.content).toContain(`unread blocked_on_you ${messageId}`);
+    expect(line?.content).toContain("Lane B already answered it");
+  });
+
+  it("`cancelled` is never held, and the person's own close is never held", async () => {
+    const cancelled = await seed({ withRoom: true });
+    await postTo(cancelled, { intent: "blocked_on_you" });
+    const body = await mcpClose({
+      sessionId: cancelled,
+      terminalStatus: "cancelled",
+      reason: "Dropped",
+    });
+    expect(body.reasonCode).toBeUndefined();
+    expect((await rowOf(cancelled)).status).toBe("cancelled");
+
+    const mine = await seed({ withRoom: true });
+    await postTo(mine, { intent: "blocked_on_you" });
+    const { completeFocusSession } = await import("../complete-session.js");
+    await completeFocusSession({ sessionId: mine, userId: OWNER });
+    expect((await rowOf(mine)).status).toBe("closed");
+  });
+
+  it("Hub /complete answers the same 409 with unreadMessages", async () => {
+    const id = await seed({ withRoom: true });
+    const messageId = await postTo(id, { intent: "handoff" });
+    const res = await hubComplete(id, {});
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      reasonCode: "NOT_DONE",
+      unreadMessages: [{ messageId, intent: "handoff" }],
+    });
+    expect((await rowOf(id)).status).toBe("active");
   });
 });
