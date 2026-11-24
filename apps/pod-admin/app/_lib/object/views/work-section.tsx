@@ -44,6 +44,7 @@ import { ErrorNote } from "../../copy-button";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import { useProposalDecision } from "../../../proposal/[id]/use-proposal-decision";
 import { objectPage } from "../content/markdown-model";
+import { objectViewsT } from "./copy";
 import {
   afterGateDecision,
   asksOwed,
@@ -102,6 +103,7 @@ export function WorkSection({
   /** A session's page in this frame; null = none to open. */
   sessionHref: (sessionId: string) => string | null;
 }) {
+  const t = objectViewsT();
   const { query, read } = useWorkRead(subjectId);
   const utils = trpc.useUtils();
   useReauthOnUnauthorized(query.error);
@@ -121,7 +123,7 @@ export function WorkSection({
     return (
       <SectionCard variant="flat" title={title}>
         <ResourceRowError
-          message="Where its work stands couldn’t be read."
+          message={t("work.failed")}
           onRetry={() => void query.refetch()}
         />
       </SectionCard>
@@ -132,7 +134,7 @@ export function WorkSection({
       variant="flat"
       title={title}
       count={self ? null : shown.items.length}
-      hint={shown.truncated ? "The most recent work on it." : undefined}
+      hint={shown.truncated ? t("work.truncated") : undefined}
     >
       <ul className="flex flex-col gap-4">
         {shown.items.map((item) => (
@@ -161,6 +163,7 @@ function WorkItem({
   href: string | null;
   onMoved: () => void;
 }) {
+  const t = objectViewsT();
   const utils = trpc.useUtils();
   const stages = workStages(item);
   const gates = gatesWaiting(item);
@@ -255,8 +258,9 @@ function WorkItem({
       {continued && (
         <div role="status" className="flex flex-col gap-1">
           <p className="text-[12.5px] text-foreground/75">
-            Continued{continued.at ? ` from ${continued.at.name}` : ""}. It is
-            working on it now.
+            {continued.at
+              ? t("work.continuedFrom", { name: continued.at.name })
+              : t("work.continued")}
           </p>
           {continued.warnings.map((w) => (
             <p key={w} className="text-[12.5px] text-warning-700">
@@ -267,10 +271,7 @@ function WorkItem({
       )}
 
       {stages === null ? (
-        <ResourceRowError
-          message="Its stages couldn’t be read."
-          onRetry={onMoved}
-        />
+        <ResourceRowError message={t("work.stagesFailed")} onRetry={onMoved} />
       ) : (
         stages.length > 0 && <StageList stages={stages} />
       )}
@@ -282,13 +283,12 @@ function WorkItem({
       {/* On the session page Needs you sits right below and answers them. */}
       {!self && asks !== null && asks > 0 && (
         <p className="text-[12.5px] text-foreground/75">
-          {asks === 1 ? "1 question waits" : `${asks} questions wait`} on the
-          session
+          {t("work.questions", { n: asks })}
           {href ? (
             <>
               {": "}
               <Link href={href} className={DOOR}>
-                answer it there
+                {t("work.answerThere")}
               </Link>
             </>
           ) : (
@@ -297,10 +297,7 @@ function WorkItem({
         </p>
       )}
       {asks === null && (
-        <ResourceRowError
-          message="What it asks of you couldn’t be read."
-          onRetry={onMoved}
-        />
+        <ResourceRowError message={t("work.asksFailed")} onRetry={onMoved} />
       )}
 
       {next && !(item.stopped && next.label === item.stopped.label) && (
@@ -316,10 +313,11 @@ function WorkItem({
 }
 
 function StageList({ stages }: { stages: WorkStageMark[] }) {
+  const t = objectViewsT();
   return (
     <ol
       className="flex flex-wrap items-center gap-x-1.5 gap-y-1"
-      aria-label="Stages"
+      aria-label={t("work.stages")}
     >
       {stages.map((s, i) => {
         const Icon = s.stoppedHere ? OctagonPause : POSITION_ICON[s.position];
@@ -355,7 +353,7 @@ function StageList({ stages }: { stages: WorkStageMark[] }) {
               {s.gate && s.gate.state !== "not_reached" && (
                 <span className="inline-flex items-center gap-0.5 text-foreground/60">
                   <GateIcon state={s.gate.state} />
-                  <span className="sr-only">gate: </span>
+                  <span className="sr-only">{t("work.gate")}</span>
                   {resolveStatusLabel(s.gate.state)}
                 </span>
               )}
@@ -395,6 +393,7 @@ function GateCard({
   canReview: boolean;
   onDecided: () => void;
 }) {
+  const t = objectViewsT();
   const [decided, setDecided] = useState<GateDecided | null>(null);
   // The review's path calls `onRejected` and THEN the common callback: the
   // state follows `afterGateDecision`, and the page moves once.
@@ -438,7 +437,7 @@ function GateCard({
             isDisabled={decision.busy && !decision.approving}
             onPress={() => decision.approve()}
           >
-            Approve
+            {t("work.approve")}
           </Button>
           <Button
             size="sm"
@@ -448,7 +447,7 @@ function GateCard({
             isDisabled={decision.busy && !decision.rejecting}
             onPress={() => decision.reject()}
           >
-            Send back
+            {t("work.sendBack")}
           </Button>
         </span>
       )}

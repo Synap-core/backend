@@ -12,7 +12,11 @@
  * English words equal `lib/console-nav.ts`'s labels, pinned by
  * `shell-copy.test.ts`.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
 
 export const en = {
   "nav.home": "Home",
@@ -68,6 +72,11 @@ export const en = {
     "Searching the {n, plural, one {# template} other {# templates}} loaded so far. Load more to search further.",
   "listSearch.partial.rules":
     "Searching the {n, plural, one {# automation} other {# automations}} loaded (the 2,000 most recent at most).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Previous page",
+  "list.next": "Next page",
+  "list.loadMore": "Load more",
+  "filter.clear": "Clear {label}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -127,4 +136,14 @@ export const fr: Catalog<typeof en> = {
     "Recherche parmi {n, plural, one {# modèle chargé} other {# modèles chargés}} pour l’instant. Chargez-en plus pour chercher plus loin.",
   "listSearch.partial.rules":
     "Recherche parmi {n, plural, one {# automatisation chargée} other {# automatisations chargées}} (2 000 au plus, les plus récentes).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Page précédente",
+  "list.next": "Page suivante",
+  "list.loadMore": "Charger plus",
+  "filter.clear": "Effacer {label}",
 };
+
+/** The words' translator, in the ambient catalog locale. */
+export function shellT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}

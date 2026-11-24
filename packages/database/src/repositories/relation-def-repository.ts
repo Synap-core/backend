@@ -43,7 +43,7 @@ export function pickDefForWorkspace<
   for (const def of defs) {
     if (def.slug !== slug) continue;
     // Only rows usable in the lens are candidates (its own, or pod-wide).
-    if (!usableInSpace(def, workspaceId)) continue;
+    if (!usableInSpace({ ...def, sharedWith: null }, workspaceId)) continue;
     if (!held || (held.workspaceId === null && def.workspaceId !== null)) {
       held = def;
     }

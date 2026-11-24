@@ -50,7 +50,8 @@
 
 import {
   getDb,
-  usableInSpace,
+  isUsableInSpace,
+  usableInSpaceWhere,
   notUsableInSpaceReason,
   eq,
   and,
@@ -97,7 +98,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { isUuid } from "@synap-core/types/property-render";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   playbookAtVersion,
   recordPlaybookVersion,
@@ -364,7 +365,10 @@ async function visibleObjectName(
     .select({ name: playbooks.name })
     .from(playbooks)
     .where(
-      and(eq(playbooks.id, id), userVisibleWhere(playbooks.workspaceId, userId))
+      and(
+        eq(playbooks.id, id),
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
+      )
     )
     .limit(1);
   return playbook?.name ?? null;
@@ -574,18 +578,17 @@ export async function resolveRunnablePlaybook(input: {
       })) as Playbook | undefined)
     : undefined;
   if (!playbook && input.playbookName) {
-    playbook = ((await db.query.playbooks.findFirst({
+    // By name: the space's own, then one shared with it, then a pod-wide one.
+    playbook = (await db.query.playbooks.findFirst({
       where: and(
         eq(playbooks.name, input.playbookName),
-        eq(playbooks.workspaceId, input.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       ),
-    })) ??
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, input.playbookName),
-          isNull(playbooks.workspaceId)
-        ),
-      }))) as Playbook | undefined;
+      orderBy: drizzleSql`case when ${playbooks.workspaceId} = ${input.workspaceId} then 0 when ${playbooks.workspaceId} is null then 2 else 1 end`,
+    })) as Playbook | undefined;
   }
   if (!playbook) {
     throw new Error(
@@ -595,7 +598,7 @@ export async function resolveRunnablePlaybook(input: {
     );
   }
 
-  const refusal = playbookRunRefusal(playbook, input.workspaceId);
+  const refusal = await playbookRunRefusal(playbook, input.workspaceId, db);
   if (refusal) throw new Error(refusal);
 
   return playbook;
@@ -604,16 +607,18 @@ export async function resolveRunnablePlaybook(input: {
 /**
  * Why a run of `playbook` in `workspaceId` (`null` = no space) would be
  * refused at the run door, or `null` when it runs: the one usable-in-space
- * rule (`usableInSpace`: its home, or anywhere when pod-wide),
+ * rule (`usableInSpace`: its home, the spaces it is shared with, or anywhere
+ * when pod-wide),
  * then a retired playbook (archived or paused). Exported so a door that
  * already holds the row asks it BEFORE it files anything (`playbooks.run`
  * before its gate, the `playbook/run` approval before its dispatch claim).
  */
-export function playbookRunRefusal(
+export async function playbookRunRefusal(
   playbook: Pick<Playbook, "id" | "name" | "workspaceId" | "status">,
-  workspaceId: string | null
-): string | null {
-  if (!usableInSpace(playbook, workspaceId)) {
+  workspaceId: string | null,
+  db: Awaited<ReturnType<typeof getDb>>
+): Promise<string | null> {
+  if (!(await isUsableInSpace(db, "playbook", playbook, workspaceId))) {
     return notUsableInSpaceReason("Playbook", playbook, workspaceId);
   }
   if (playbook.status === "archived" || playbook.status === "paused") {

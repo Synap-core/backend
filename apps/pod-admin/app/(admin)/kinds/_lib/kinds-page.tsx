@@ -52,11 +52,13 @@ import {
   type KindRow,
   type TidyItem,
 } from "./kinds-model";
+import { kindsT } from "./copy";
 
 /** The desktop app's Data app holds the kind editor (`apps/manifest.ts` "data"). */
 const DATA_APP = openIn({ kind: "app", appId: "data" });
 
 export function KindsPage() {
+  const t = kindsT();
   const utils = trpc.useUtils();
   const profiles = trpc.profiles.list.useQuery(undefined, {
     staleTime: 60_000,
@@ -128,7 +130,7 @@ export function KindsPage() {
       <PageHeader
         title={KINDS_TITLE}
         description={KINDS_DESCRIPTION}
-        actions={<ExitLink exit={DATA_APP} label="Edit kinds in app" />}
+        actions={<ExitLink exit={DATA_APP} label={t("exit.edit")} />}
       />
 
       <div className="flex flex-col gap-4">
@@ -192,6 +194,7 @@ export function KindsPage() {
 }
 
 function KindRowView({ row }: { row: KindRow }) {
+  const t = kindsT();
   const Icon = kindIcon(row.slug, {
     slug: row.slug,
     label: row.name,
@@ -231,7 +234,7 @@ function KindRowView({ row }: { row: KindRow }) {
                 />
               }
             >
-              Open in app
+              {t("action.openApp")}
             </Button>
           )
         }
@@ -256,6 +259,7 @@ function TidySection({
   outcomes: Record<string, { message: string; proposalId: string | null }>;
   onRetire: (item: TidyItem) => void;
 }) {
+  const t = kindsT();
   // `null` on a phone: the mobile app cannot open the desktop Data app, so the
   // row offers no dead link and the line beneath the list says why. Every row
   // opens the same Data app, so one attempt covers them: a click that opened
@@ -265,25 +269,22 @@ function TidySection({
   const appHref = appPlaced.href;
   if (loading)
     return (
-      <SectionCard title="Needs tidying">
+      <SectionCard title={t("tidy.title")}>
         <ResourceRowSkeleton count={2} />
       </SectionCard>
     );
   if (failed)
     return (
-      <SectionCard title="Needs tidying">
-        <ResourceRowError
-          message="Couldn't check what needs tidying."
-          onRetry={onRetry}
-        />
+      <SectionCard title={t("tidy.title")}>
+        <ResourceRowError message={t("tidy.failed")} onRetry={onRetry} />
       </SectionCard>
     );
   if (items.length === 0) return null;
   const anyInApp = items.some((i) => i.action.kind === "app");
   return (
     <SectionCard
-      title="Needs tidying"
-      hint={`${items.length} ${items.length === 1 ? "thing" : "things"} worth a look`}
+      title={t("tidy.title")}
+      hint={t("tidy.hint", { n: items.length })}
     >
       <ul className="-mx-2 flex flex-col">
         {items.map((item) => {
@@ -317,7 +318,7 @@ function TidySection({
                         href={navHref("review", { focus: outcome.proposalId })}
                         className="font-medium text-primary hover:underline"
                       >
-                        Open in Review
+                        {t("action.openReview")}
                       </Link>
                     )}
                   </span>
@@ -332,7 +333,7 @@ function TidySection({
                     isDisabled={outcome !== undefined}
                     onPress={() => onRetire(item)}
                   >
-                    Retire
+                    {t("action.retire")}
                   </Button>
                 ) : appHref === null ? null : (
                   <Button
@@ -350,7 +351,7 @@ function TidySection({
                       />
                     }
                   >
-                    Open in app
+                    {t("action.openApp")}
                   </Button>
                 )}
               </div>

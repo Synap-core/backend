@@ -69,6 +69,7 @@ import {
   ownerAndActor,
   usableInSpace,
   usableInSpaceWhere,
+  withSpaceGrants,
   verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
@@ -338,7 +339,7 @@ async function resolveVisibleSubjectId(
     where: and(
       eq(entities.id, subjectId),
       entityReadVisibleWhere(ownerId),
-      usableInSpaceWhere(entities.workspaceId, workspaceId)
+      usableInSpaceWhere(entities.workspaceId, workspaceId, null)
     ),
   });
   if (subj) return subj.id;
@@ -932,7 +933,13 @@ const playbookAutomationsRouter = router({
       const automation = await database.query.automations.findFirst({
         where: eq(automations.id, input.automationId),
       });
-      if (!automation || !usableInSpace(automation, playbook.workspaceId)) {
+      if (
+        !automation ||
+        !usableInSpace(
+          { ...automation, sharedWith: null },
+          playbook.workspaceId
+        )
+      ) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `Automation ${input.automationId} not found in this workspace`,
@@ -1670,6 +1677,21 @@ export async function matchPlaybooks(
       (ent?.properties as Record<string, unknown> | null) ?? {};
   }
   const forStrip = input.purpose === "entity-actions";
+  // Usable in the entity's space: home or pod-wide, else a share (whose
+  // grants are read only for the rows homed elsewhere).
+  const space = input.workspaceId ?? null;
+  const homedElsewhere = forStrip
+    ? (rows as Playbook[]).filter(
+        (r) => !usableInSpace({ ...r, sharedWith: null }, space)
+      )
+    : [];
+  const sharedHere = new Set(
+    homedElsewhere.length
+      ? (await withSpaceGrants(database, "playbook", homedElsewhere))
+          .filter((r) => usableInSpace(r, space))
+          .map((r) => r.id)
+      : []
+  );
   const applicable = rows.filter((r) => {
     const row = r as Playbook;
     // A playbook dedicated to one record is offered for that record only.
@@ -1686,7 +1708,8 @@ export async function matchPlaybooks(
     if (!forStrip) return true;
     const sp = row.subjectProfile as { profileSlug?: unknown } | null;
     return (
-      (row.workspaceId == null || row.workspaceId === input.workspaceId) &&
+      (usableInSpace({ ...row, sharedWith: null }, space) ||
+        sharedHere.has(row.id)) &&
       typeof sp?.profileSlug === "string" &&
       row.scope !== "project" &&
       (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"
@@ -1945,10 +1968,10 @@ export const playbooksRouter = router({
             // Narrow-only: a specific workspace still includes pod-wide (NULL)
             // rows, mirroring `automations.listPage`.
             input?.workspaceId
-              ? or(
-                  isNull(playbooks.workspaceId),
-                  eq(playbooks.workspaceId, input.workspaceId)
-                )
+              ? usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+                  type: "playbook",
+                  id: playbooks.id,
+                })
               : undefined,
             input?.status !== undefined
               ? eq(playbooks.status, input.status)
@@ -3406,7 +3429,11 @@ export const playbooksRouter = router({
       // Usable here: refused at FILING by the run door's own rule
       // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
       // proposal is filed that could only fail once approved.
-      const notRunnable = playbookRunRefusal(playbook, runWorkspaceId);
+      const notRunnable = await playbookRunRefusal(
+        playbook,
+        runWorkspaceId,
+        database
+      );
       if (notRunnable) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",

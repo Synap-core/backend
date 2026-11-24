@@ -15,9 +15,10 @@
  * Real: `planRetireInto` / `applyRetireInto` / `retireIntoGoverned`, template
  * health, the pglite tables. Mocked at their module seams: the template
  * resolver (a catalog fetch), one-space-per-domain, the governance gate, and —
- * in the apply cases — the three router doors (`RetireIntoSteps`), whose fakes
+ * in the apply cases — the router doors (`RetireIntoSteps`), whose fakes
  * perform the same row writes (move = set workspace_id) so the archive-if-empty
- * decision reads real data.
+ * decision reads real data. The configuration move is the REAL one (the move
+ * door, `applyMoveToSpace`).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -69,10 +70,15 @@ vi.mock("../../utils/permission-check.js", () => ({
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
+  automations,
   cpCatalogCache,
   entities,
+  playbookAutomations,
+  playbooks,
   podSettings,
   profiles,
+  spaceAccess,
+  views,
   workspaceMembers,
   workspaces,
   users,
@@ -82,6 +88,7 @@ import {
   applyRetireInto,
   planRetireInto,
   retireIntoGoverned,
+  retireIntoStepsFor,
   type RetireIntoSteps,
 } from "../workspace-retire-into.js";
 
@@ -231,6 +238,7 @@ function fakeSteps(): RetireIntoSteps & {
         ]);
       return { moved: ids, proposed: [], errors: [] };
     },
+    moveConfig: retireIntoStepsFor(USER).moveConfig,
     async archive(workspaceId) {
       calls.archive.push(workspaceId);
       await q(`update workspaces set archived_at = now() where id = $1`, [
@@ -259,6 +267,11 @@ beforeEach(async () => {
     "profiles",
     "cp_catalog_cache",
     "pod_settings",
+    "playbooks",
+    "automations",
+    "playbook_automations",
+    "views",
+    "space_access",
   ])
     await h.client!.exec(`drop table if exists "${t}"`);
   for (const t of [
@@ -270,6 +283,11 @@ beforeEach(async () => {
     profiles,
     cpCatalogCache,
     podSettings,
+    playbooks,
+    automations,
+    playbookAutomations,
+    views,
+    spaceAccess,
   ] as PgTable[])
     await h.client!.exec(ddlFor(t));
   await q(`insert into users (id, email) values ($1, 'u@x.test')`, [USER]);
@@ -495,6 +513,144 @@ describe("applyRetireInto — install, move, archive only when empty", () => {
     expect(steps.calls.archive).toEqual([]);
     expect(result.failed).toHaveLength(1);
     expect(result.keptBecause).toMatch(/could not be moved/);
+  });
+});
+
+describe("applyRetireInto — configuration moves through the move door", () => {
+  async function seedConfig(workspaceId: string) {
+    const pb = randomUUID();
+    const auto = randomUUID();
+    const view = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, status) values ($1,$2,$3,'Weekly review','g','active')`,
+      [pb, workspaceId, USER]
+    );
+    await q(
+      `insert into automations (id, workspace_id, created_by, name, trigger_type, status) values ($1,$2,$3,'Weekly review schedule','cron','active')`,
+      [auto, workspaceId, USER]
+    );
+    await q(
+      `insert into playbook_automations (playbook_id, automation_id, role) values ($1,$2,'schedule')`,
+      [pb, auto]
+    );
+    await q(
+      `insert into views (id, workspace_id, user_id, type, category, name) values ($1,$2,$3,'table','structured','Companies')`,
+      [view, workspaceId, USER]
+    );
+    return { pb, auto, view };
+  }
+  const homeOf = async (table: string, id: string) =>
+    (
+      await q<{ workspace_id: string }>(
+        `select workspace_id from ${table} where id = $1`,
+        [id]
+      )
+    ).rows[0]!.workspace_id;
+
+  it("the plan names it; the apply moves the playbook with its automation, and the view", async () => {
+    const target = await seedWorkspace("Ecosystem", {
+      packageSlug: "ecosystem",
+    });
+    await seedProfile("signal", target);
+    const { pb, auto, view } = await seedConfig(SOURCE);
+    const planned = await planRetireInto({ workspaceId: SOURCE, userId: USER });
+    if ("status" in planned) throw new Error(planned.message);
+    expect(planned.plan.configMoves).toEqual([
+      { kind: "playbook", count: 1 },
+      { kind: "automation", count: 1 },
+      { kind: "view", count: 1 },
+    ]);
+
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      fakeSteps()
+    );
+    expect(await homeOf("playbooks", pb)).toBe(target);
+    expect(await homeOf("automations", auto)).toBe(target);
+    expect(await homeOf("views", view)).toBe(target);
+    expect(result.configMoved).toBe(3);
+    expect(result.configFailed).toEqual([]);
+    expect(result.archived).toBe(true);
+  });
+
+  it("a playbook the target already has by name stays, and so does the source", async () => {
+    const target = await seedWorkspace("Ecosystem", {
+      packageSlug: "ecosystem",
+    });
+    await seedProfile("signal", target);
+    const { pb, auto } = await seedConfig(SOURCE);
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, status) values ($1,$2,$3,'weekly REVIEW','g','active')`,
+      [randomUUID(), target, USER]
+    );
+    const steps = fakeSteps();
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      steps
+    );
+    expect(await homeOf("playbooks", pb)).toBe(SOURCE);
+    expect(await homeOf("automations", auto)).toBe(SOURCE);
+    expect(result.configFailed).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ objectType: "playbook", objectId: pb }),
+      ])
+    );
+    expect(steps.calls.archive).toEqual([]);
+    expect(result.archived).toBe(false);
+    expect(result.keptBecause).toMatch(/already has "weekly REVIEW"/);
+  });
+});
+
+describe("applyRetireInto — never archives a source that still holds configuration", () => {
+  async function ecosystem() {
+    const target = await seedWorkspace("Ecosystem", {
+      packageSlug: "ecosystem",
+    });
+    await seedProfile("signal", target);
+    return target;
+  }
+
+  it("an automation that runs a playbook of a third space stays, named, and the source is kept", async () => {
+    await ecosystem();
+    const third = randomUUID();
+    await q(
+      `insert into playbooks (id, workspace_id, created_by, name, goal_template, status) values ($1,$2,$3,'Elsewhere','g','active')`,
+      [third, OTHER, USER]
+    );
+    const auto = randomUUID();
+    await q(
+      `insert into automations (id, workspace_id, created_by, name, trigger_type, status) values ($1,$2,$3,'Runs elsewhere','cron','active')`,
+      [auto, SOURCE, USER]
+    );
+    await q(
+      `insert into playbook_automations (playbook_id, automation_id, role) values ($1,$2,'activator')`,
+      [third, auto]
+    );
+    const steps = fakeSteps();
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      steps
+    );
+    expect(steps.calls.archive).toEqual([]);
+    expect(result.archived).toBe(false);
+    expect(result.keptBecause).toMatch(/1 × automation still here/);
+    expect(result.keptBecause).toMatch(/Elsewhere/);
+  });
+
+  it("archive reads what is LEFT, not what the move reported", async () => {
+    await ecosystem();
+    await q(
+      `insert into views (id, workspace_id, user_id, type, category, name) values ($1,$2,$3,'table','structured','Left behind')`,
+      [randomUUID(), SOURCE, USER]
+    );
+    const steps = fakeSteps();
+    steps.moveConfig = async () => ({ moved: 0, failed: [] });
+    const { result } = await applyRetireInto(
+      { workspaceId: SOURCE, userId: USER },
+      steps
+    );
+    expect(steps.calls.archive).toEqual([]);
+    expect(result.keptBecause).toMatch(/1 × view still here/);
   });
 });
 
