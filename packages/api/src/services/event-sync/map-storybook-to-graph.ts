@@ -67,7 +67,11 @@ export interface StorybookRunContext {
 }
 
 export type StorybookSyncItem =
-  | { type: "component"; record: StorybookBundleComponent; run: StorybookRunContext }
+  | {
+      type: "component";
+      record: StorybookBundleComponent;
+      run: StorybookRunContext;
+    }
   | { type: "page"; record: StorybookBundlePage; run: StorybookRunContext }
   | { type: "flow"; record: StorybookBundleFlow; run: StorybookRunContext }
   | {
@@ -78,7 +82,10 @@ export type StorybookSyncItem =
       title: string;
     };
 
-export const storyUrl = (base: string | null, storyId: string): string | null =>
+export const storyUrl = (
+  base: string | null,
+  storyId: string
+): string | null =>
   base
     ? `${base.replace(/\/+$/, "")}/?path=/story/${encodeURIComponent(storyId)}`
     : null;
@@ -144,7 +151,9 @@ function componentEntity(
       "component-family": c.family,
       "component-level": c.level,
       "source-hash": c.sourceHash,
-      [UI_STATUS_PROPERTY]: c.verdict ? uiStatusFromVerdict(c.verdict) : undefined,
+      [UI_STATUS_PROPERTY]: c.verdict
+        ? uiStatusFromVerdict(c.verdict)
+        : undefined,
       ...shared(run),
     }),
     url
@@ -214,7 +223,8 @@ export function mapStorybookItems(items: StorybookSyncItem[]): {
     refs.add(e.ref);
     graph.entities.push(e);
   };
-  const edges: Array<{ sourceRef: string; targetRef: string; type: string }> = [];
+  const edges: Array<{ sourceRef: string; targetRef: string; type: string }> =
+    [];
   let skipped = 0;
 
   for (const item of items) {
@@ -238,7 +248,11 @@ export function mapStorybookItems(items: StorybookSyncItem[]): {
     }
     const belongs = (ref: string) => {
       if (run.appId) {
-        edges.push({ sourceRef: ref, targetRef: appRef(run.appId), type: RELATION_BELONGS_TO });
+        edges.push({
+          sourceRef: ref,
+          targetRef: appRef(run.appId),
+          type: RELATION_BELONGS_TO,
+        });
       }
     };
     if (item.type === "component") {
@@ -246,24 +260,40 @@ export function mapStorybookItems(items: StorybookSyncItem[]): {
       add(componentEntity(c, run));
       belongs(c.key);
       for (const part of c.composedOf) {
-        edges.push({ sourceRef: c.key, targetRef: part, type: RELATION_COMPOSED_OF });
+        edges.push({
+          sourceRef: c.key,
+          targetRef: part,
+          type: RELATION_COMPOSED_OF,
+        });
       }
       if (c.variantOf) {
-        edges.push({ sourceRef: c.key, targetRef: c.variantOf, type: RELATION_EXTENDS });
+        edges.push({
+          sourceRef: c.key,
+          targetRef: c.variantOf,
+          type: RELATION_EXTENDS,
+        });
       }
     } else if (item.type === "page") {
       const p = item.record;
       add(pageEntity(p, run));
       belongs(p.key);
       for (const part of p.components) {
-        edges.push({ sourceRef: p.key, targetRef: part, type: RELATION_COMPOSED_OF });
+        edges.push({
+          sourceRef: p.key,
+          targetRef: part,
+          type: RELATION_COMPOSED_OF,
+        });
       }
     } else {
       const f = item.record;
       add(flowEntity(f, run));
       belongs(f.key);
       for (const page of new Set(f.steps.map((s) => s.page))) {
-        edges.push({ sourceRef: f.key, targetRef: page, type: RELATION_TRAVERSES });
+        edges.push({
+          sourceRef: f.key,
+          targetRef: page,
+          type: RELATION_TRAVERSES,
+        });
       }
     }
   }

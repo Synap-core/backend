@@ -561,7 +561,10 @@ export async function updateCredential(
   );
   // A source holds no secret, ever, and no credential becomes a source: its
   // hint is written once, by addSourceConnection.
-  if (input.accountHint !== undefined && input.accountHint !== existing.accountHint) {
+  if (
+    input.accountHint !== undefined &&
+    input.accountHint !== existing.accountHint
+  ) {
     refuseSourceHint(input.accountHint);
   }
   if (credentialKind(existing) === "source") {
@@ -570,7 +573,10 @@ export async function updateCredential(
         "A source connection holds no secret: it cannot be given a key."
       );
     }
-    if (input.accountHint !== undefined && input.accountHint !== existing.accountHint) {
+    if (
+      input.accountHint !== undefined &&
+      input.accountHint !== existing.accountHint
+    ) {
       throw new Error(
         "A source connection's account hint names its source: it cannot be changed."
       );

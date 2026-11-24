@@ -87,17 +87,18 @@ export interface StorybookSyncInput {
   brandIdentityId?: string;
 }
 
-export function readStorybookInput(
-  value: unknown
-): StorybookSyncInput | null {
+export function readStorybookInput(value: unknown): StorybookSyncInput | null {
   if (!value || typeof value !== "object") return null;
   const v = value as Record<string, unknown>;
-  const str = (k: string) => (typeof v[k] === "string" ? (v[k] as string) : undefined);
+  const str = (k: string) =>
+    typeof v[k] === "string" ? (v[k] as string) : undefined;
   const input: StorybookSyncInput = {
     ...(str("bundleFileId") ? { bundleFileId: str("bundleFileId") } : {}),
     ...(str("url") ? { url: str("url") } : {}),
     ...(str("appId") ? { appId: str("appId") } : {}),
-    ...(str("brandIdentityId") ? { brandIdentityId: str("brandIdentityId") } : {}),
+    ...(str("brandIdentityId")
+      ? { brandIdentityId: str("brandIdentityId") }
+      : {}),
   };
   return input.bundleFileId || input.url ? input : null;
 }
@@ -117,11 +118,20 @@ const fail = (
   errorClass: "validation" | "target_missing" | "permission" | "provider"
 ) => new SyncReadError(message, STORYBOOK_SYNC_VERB, { errorClass });
 
-function problemsError(what: string, problems: StorybookProblem[]): SyncReadError {
+function problemsError(
+  what: string,
+  problems: StorybookProblem[]
+): SyncReadError {
   const errors = problems.filter((p) => p.severity === "error");
   const shown = errors.slice(0, 10);
-  const more = errors.length > shown.length ? ` (and ${errors.length - shown.length} more)` : "";
-  return fail(`${what} cannot be mirrored: ${describeProblems(shown)}${more}`, "validation");
+  const more =
+    errors.length > shown.length
+      ? ` (and ${errors.length - shown.length} more)`
+      : "";
+  return fail(
+    `${what} cannot be mirrored: ${describeProblems(shown)}${more}`,
+    "validation"
+  );
 }
 
 /** A pod file's bytes, through the file read floor, as JSON. */
@@ -135,13 +145,19 @@ async function readBundleFile(owner: string, fileId: string): Promise<unknown> {
     );
   }
   if (!readable.entity.storageKey) {
-    throw fail(`The storybook bundle (file ${fileId}) has no stored bytes.`, "target_missing");
+    throw fail(
+      `The storybook bundle (file ${fileId}) has no stored bytes.`,
+      "target_missing"
+    );
   }
   const bytes = await storage.downloadBuffer(readable.entity.storageKey);
   try {
     return JSON.parse(bytes.toString("utf8"));
   } catch {
-    throw fail(`The storybook bundle (file ${fileId}) is not JSON.`, "validation");
+    throw fail(
+      `The storybook bundle (file ${fileId}) is not JSON.`,
+      "validation"
+    );
   }
 }
 
@@ -162,7 +178,8 @@ async function readPublicStorybook(baseUrl: string): Promise<{
   if (index.status !== "ok") {
     throw fail(
       `The Storybook at ${base} cannot be read: ${index.message}`,
-      index.reason === "host_not_allowed" || index.reason === "redirect_host_not_allowed"
+      index.reason === "host_not_allowed" ||
+        index.reason === "redirect_host_not_allowed"
         ? "permission"
         : "provider"
     );
@@ -171,8 +188,10 @@ async function readPublicStorybook(baseUrl: string): Promise<{
     { url: `${base}/manifests/components.json` },
     { maxBytes: STORYBOOK_FETCH_MAX_BYTES }
   );
-  if (manifest.status === "ok") return { index: index.json, manifest: manifest.json };
-  if (manifest.reason === "expired") return { index: index.json, manifest: undefined };
+  if (manifest.status === "ok")
+    return { index: index.json, manifest: manifest.json };
+  if (manifest.reason === "expired")
+    return { index: index.json, manifest: undefined };
   throw fail(
     `The Storybook at ${base} serves a components manifest that cannot be read: ${manifest.message}`,
     "provider"
@@ -187,7 +206,11 @@ export async function loadStorybookBundle(
   if (input.bundleFileId) {
     const raw = await readBundleFile(owner, input.bundleFileId);
     const read = parseStorybookBundle(raw);
-    if (!read.ok) throw problemsError(`The storybook bundle (file ${input.bundleFileId})`, read.problems);
+    if (!read.ok)
+      throw problemsError(
+        `The storybook bundle (file ${input.bundleFileId})`,
+        read.problems
+      );
     return read.value;
   }
   const url = input.url!;
@@ -221,7 +244,11 @@ export function bundleItems(
     storybookUrl: bundle.source.url ?? null,
   };
   return [
-    ...bundle.components.map((record) => ({ type: "component" as const, record, run })),
+    ...bundle.components.map((record) => ({
+      type: "component" as const,
+      record,
+      run,
+    })),
     ...bundle.pages.map((record) => ({ type: "page" as const, record, run })),
     ...bundle.flows.map((record) => ({ type: "flow" as const, record, run })),
   ];
@@ -258,7 +285,12 @@ async function goneItems(
 
 /** Pure half of {@link goneItems}: which mirrored rows the bundle stopped emitting. */
 export function goneFromRows(
-  rows: Array<{ externalId: string; title: string | null; status: string | null; profileSlug: string }>,
+  rows: Array<{
+    externalId: string;
+    title: string | null;
+    status: string | null;
+    profileSlug: string;
+  }>,
   keys: Set<string>
 ): StorybookSyncItem[] {
   const out: StorybookSyncItem[] = [];
@@ -266,7 +298,11 @@ export function goneFromRows(
   for (const r of rows) {
     if (keys.has(r.externalId) || seen.has(r.externalId)) continue;
     if (r.externalId.startsWith(APP_EXTERNAL_ID_PREFIX)) continue;
-    if (r.profileSlug !== UI_COMPONENT_PROFILE && r.profileSlug !== UI_PAGE_PROFILE) continue;
+    if (
+      r.profileSlug !== UI_COMPONENT_PROFILE &&
+      r.profileSlug !== UI_PAGE_PROFILE
+    )
+      continue;
     if (r.status === "gone") continue;
     seen.add(r.externalId);
     out.push({
@@ -296,12 +332,17 @@ async function fetchStorybookPage(ctx: SyncKindContext, req: SyncFetchRequest) {
       "validation"
     );
   }
-  const gone = req.mode === "steady" ? await goneItems(ctx.connectionId, bundleKeys(bundle)) : [];
+  const gone =
+    req.mode === "steady"
+      ? await goneItems(ctx.connectionId, bundleKeys(bundle))
+      : [];
   return { items: [...items, ...gone], nextPageToken: null };
 }
 
 /** The code facts the sync owns on each kind: written on refresh when they changed. */
-export const SYNC_OWNED_PROPERTIES: Readonly<Record<string, readonly string[]>> = {
+export const SYNC_OWNED_PROPERTIES: Readonly<
+  Record<string, readonly string[]>
+> = {
   [UI_COMPONENT_PROFILE]: [
     "source-path",
     "export-name",
@@ -336,7 +377,8 @@ export const SYNC_OWNED_PROPERTIES: Readonly<Record<string, readonly string[]>> 
   ],
 };
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+const same = (a: unknown, b: unknown) =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * Pure: what a refresh writes on an existing record. `patch` = owned facts that
@@ -349,10 +391,14 @@ export function planRefresh(
 ): { patch: Record<string, unknown>; moveTo: string | null } {
   const patch: Record<string, unknown> = {};
   const lifecycled =
-    incoming.profileSlug === UI_COMPONENT_PROFILE || incoming.profileSlug === UI_PAGE_PROFILE;
+    incoming.profileSlug === UI_COMPONENT_PROFILE ||
+    incoming.profileSlug === UI_PAGE_PROFILE;
 
   if (isGone(incoming)) {
-    return { patch, moveTo: lifecycled && current.status !== "gone" ? "gone" : null };
+    return {
+      patch,
+      moveTo: lifecycled && current.status !== "gone" ? "gone" : null,
+    };
   }
   for (const key of SYNC_OWNED_PROPERTIES[incoming.profileSlug] ?? []) {
     const next = incoming.properties[key];
@@ -364,7 +410,11 @@ export function planRefresh(
     const sourceHash = incoming.properties["source-hash"];
     const reviewed = current.properties["reviewed-hash"];
     const state = current.properties["review-state"];
-    if (typeof reviewed === "string" && reviewed.length > 0 && state !== "in-review") {
+    if (
+      typeof reviewed === "string" &&
+      reviewed.length > 0 &&
+      state !== "in-review"
+    ) {
       const next = reviewed === sourceHash ? "fresh" : "changed";
       if (next !== state) patch["review-state"] = next;
     }
@@ -375,7 +425,12 @@ export function planRefresh(
     const verdict = incoming.properties[UI_STATUS_PROPERTY];
     const wanted = typeof verdict === "string" ? verdict : null;
     if (current.status === "gone") moveTo = wanted ?? "proposed";
-    else if (wanted && current.status !== wanted && current.status !== "deprecated") moveTo = wanted;
+    else if (
+      wanted &&
+      current.status !== wanted &&
+      current.status !== "deprecated"
+    )
+      moveTo = wanted;
   }
   return { patch, moveTo };
 }
@@ -429,15 +484,24 @@ async function refreshStorybookRecord(
 }
 
 /** The app stand-in resolves to the existing app the owner can see, never a new one. */
-async function findStorybookApp(entity: SyncGraphEntity, ctx: SyncKindContext): Promise<string | null> {
+async function findStorybookApp(
+  entity: SyncGraphEntity,
+  ctx: SyncKindContext
+): Promise<string | null> {
   if (!isAppStandIn(entity)) return null;
   const appId = entity.identity.externalId.slice(APP_EXTERNAL_ID_PREFIX.length);
   if (!isUuid(appId)) return null;
   const found = await readableEntityOfKind(ctx.owner, appId, APP_PROFILE);
   if (!found) {
     // storybook.sync checked the app before the run; it vanished since.
-    logger.warn({ appId, connectionId: ctx.connectionId }, "storybook sync: the app is gone");
-    throw fail(`The app ${appId} cannot be read any more; run storybook.sync without it or with another app.`, "target_missing");
+    logger.warn(
+      { appId, connectionId: ctx.connectionId },
+      "storybook sync: the app is gone"
+    );
+    throw fail(
+      `The app ${appId} cannot be read any more; run storybook.sync without it or with another app.`,
+      "target_missing"
+    );
   }
   return found;
 }
@@ -447,7 +511,12 @@ registerSyncKind({
   kind: STORYBOOK_SYNC_KIND,
   // windowDays is unused (a bundle is not dated); itemLimit bounds one bundle.
   defaults: { enabled: true, windowDays: 1, itemLimit: 10_000, sources: [] },
-  profileSlugs: [UI_COMPONENT_PROFILE, UI_PAGE_PROFILE, USER_FLOW_PROFILE, APP_PROFILE],
+  profileSlugs: [
+    UI_COMPONENT_PROFILE,
+    UI_PAGE_PROFILE,
+    USER_FLOW_PROFILE,
+    APP_PROFILE,
+  ],
   openableProfileSlugs: [UI_COMPONENT_PROFILE, UI_PAGE_PROFILE],
   brokered: false,
   scheduled: false,

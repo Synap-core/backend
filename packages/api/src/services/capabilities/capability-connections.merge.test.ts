@@ -129,8 +129,10 @@ describe("mergeCredentialViews", () => {
  * old and new rules could disagree.
  */
 describe("credentialKind", () => {
-  const kind = (providerIntegrationId: string | null, accountHint: string | null) =>
-    credentialKind({ providerIntegrationId, accountHint });
+  const kind = (
+    providerIntegrationId: string | null,
+    accountHint: string | null
+  ) => credentialKind({ providerIntegrationId, accountHint });
 
   it("keeps every existing row as it was: nango stays nango, a key stays vault", () => {
     expect(kind(null, null)).toBe("vault");
@@ -153,6 +155,8 @@ describe("credentialKind", () => {
       [row({ id: "s1", accountHint: "storybook:https://sb.example.com" })],
       { ok: true, connections: [] }
     );
-    expect(views.map((v) => [v.id, v.kind, v.provider])).toEqual([["s1", "source", null]]);
+    expect(views.map((v) => [v.id, v.kind, v.provider])).toEqual([
+      ["s1", "source", null],
+    ]);
   });
 });

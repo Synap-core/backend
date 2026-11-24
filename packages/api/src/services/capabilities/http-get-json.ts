@@ -183,7 +183,11 @@ export async function httpGetJson(
   input: HttpGetJsonInput,
   deps: HttpGetJsonDeps = {}
 ): Promise<HttpGetJsonResult> {
-  const read = await readAllowedJson(input, { maxBytes: MAX_RESPONSE_BYTES }, deps);
+  const read = await readAllowedJson(
+    input,
+    { maxBytes: MAX_RESPONSE_BYTES },
+    deps
+  );
   if (read.status !== "ok") return read;
   const cut = truncateJson(read.json);
   return { ...read, truncated: cut.truncated, json: cut.value };

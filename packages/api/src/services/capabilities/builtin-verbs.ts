@@ -5091,9 +5091,8 @@ const storybookSyncHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 const storybookChangedHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = storybookChangedParams.parse(params);
-  const { changedStorybookComponents } = await import(
-    "../event-sync/storybook-door.js"
-  );
+  const { changedStorybookComponents } =
+    await import("../event-sync/storybook-door.js");
   return changedStorybookComponents(ctx.userId, input);
 };
 

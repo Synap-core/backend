@@ -38,10 +38,7 @@ import { isFailureErrorClass } from "@synap-core/types/failures";
 import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
 import { addSourceConnection } from "../capabilities/capability-connections.js";
 import { VerbRefusal } from "../capabilities/verb-refusal.js";
-import {
-  runConnectionSync,
-  type KindSyncResult,
-} from "./connection-sync.js";
+import { runConnectionSync, type KindSyncResult } from "./connection-sync.js";
 import {
   APP_PROFILE,
   STORYBOOK_SYNC_KIND,
@@ -63,7 +60,10 @@ export const BRAND_IDENTITY_PROFILE = "brand-identity";
 function asRefusal(err: unknown): never {
   if (err instanceof SyncReadError) {
     const cls = err.failure.errorClass;
-    throw new VerbRefusal(err.message, isFailureErrorClass(cls) ? cls : "provider");
+    throw new VerbRefusal(
+      err.message,
+      isFailureErrorClass(cls) ? cls : "provider"
+    );
   }
   throw err;
 }
@@ -76,7 +76,11 @@ async function storybookTool(
   workspaceId: string | null
 ): Promise<{ id: string; capabilityId: string } | null> {
   const rows = await db
-    .select({ id: tools.id, workspaceId: tools.workspaceId, capabilityId: links.toId })
+    .select({
+      id: tools.id,
+      workspaceId: tools.workspaceId,
+      capabilityId: links.toId,
+    })
     .from(tools)
     .innerJoin(
       links,
@@ -90,7 +94,9 @@ async function storybookTool(
     .where(eq(tools.name, STORYBOOK_PROVIDER))
     .orderBy(asc(tools.createdAt));
   const row =
-    (workspaceId ? rows.find((r) => r.workspaceId === workspaceId) : undefined) ??
+    (workspaceId
+      ? rows.find((r) => r.workspaceId === workspaceId)
+      : undefined) ??
     rows.find((r) => r.workspaceId === null) ??
     null;
   return row ? { id: row.id, capabilityId: row.capabilityId } : null;
@@ -120,12 +126,22 @@ export async function syncStorybook(
   if (input.url && !/^https:\/\//i.test(input.url)) {
     throw new VerbRefusal("The Storybook url must be https.", "validation");
   }
-  if (input.appId && !(await readableEntityOfKind(actor.userId, input.appId, APP_PROFILE))) {
-    throw new VerbRefusal(`No app (${APP_PROFILE}) ${input.appId} you can read.`, "target_missing");
+  if (
+    input.appId &&
+    !(await readableEntityOfKind(actor.userId, input.appId, APP_PROFILE))
+  ) {
+    throw new VerbRefusal(
+      `No app (${APP_PROFILE}) ${input.appId} you can read.`,
+      "target_missing"
+    );
   }
   if (
     input.brandIdentityId &&
-    !(await readableEntityOfKind(actor.userId, input.brandIdentityId, BRAND_IDENTITY_PROFILE))
+    !(await readableEntityOfKind(
+      actor.userId,
+      input.brandIdentityId,
+      BRAND_IDENTITY_PROFILE
+    ))
   ) {
     throw new VerbRefusal(
       `No brand identity ${input.brandIdentityId} you can read.`,
@@ -159,7 +175,9 @@ export async function syncStorybook(
     ...(input.bundleFileId ? { bundleFileId: input.bundleFileId } : {}),
     ...(input.url ? { url: input.url.replace(/\/+$/, "") } : {}),
     ...(input.appId ? { appId: input.appId } : {}),
-    ...(input.brandIdentityId ? { brandIdentityId: input.brandIdentityId } : {}),
+    ...(input.brandIdentityId
+      ? { brandIdentityId: input.brandIdentityId }
+      : {}),
   };
   await patchKindState(
     { toolId: tool.id, kind: STORYBOOK_SYNC_KIND, connectionId: conn.id },
@@ -172,10 +190,18 @@ export async function syncStorybook(
     connectionId: conn.id,
     reason: "manual",
   });
-  const run: StorybookSyncOutcome["run"] =
-    ran.connections?.find((c) => c.connectionId === conn.id)?.kinds[STORYBOOK_SYNC_KIND] ??
-    { skipped: true, reason: ran.reason ?? "not_run" };
-  return { connectionId: conn.id, connectionCreated: conn.created, source, run };
+  const run: StorybookSyncOutcome["run"] = ran.connections?.find(
+    (c) => c.connectionId === conn.id
+  )?.kinds[STORYBOOK_SYNC_KIND] ?? {
+    skipped: true,
+    reason: ran.reason ?? "not_run",
+  };
+  return {
+    connectionId: conn.id,
+    connectionCreated: conn.created,
+    source,
+    run,
+  };
 }
 
 export interface ChangedComponent {
@@ -224,7 +250,9 @@ export async function changedStorybookComponents(
         entityReadVisibleWhere(userId),
         drizzleSql`COALESCE(${entities.status}, '') <> 'gone'`,
         drizzleSql`(${props}->>'source-hash') IS DISTINCT FROM (${props}->>'reviewed-hash')`,
-        ...(opts.appId ? [drizzleSql`${props}->>'design-app' = ${opts.appId}`] : [])
+        ...(opts.appId
+          ? [drizzleSql`${props}->>'design-app' = ${opts.appId}`]
+          : [])
       )
     )
     .orderBy(desc(usedBy), asc(entities.title))

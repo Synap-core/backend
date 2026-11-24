@@ -182,7 +182,10 @@ describe("addSourceConnection", () => {
     });
     expect(first.created).toBe(true);
     expect(holder.plaintexts).toEqual([""]);
-    expect(await row(first.id)).toMatchObject({ account_hint: HINT, encrypted_data: "enc()" });
+    expect(await row(first.id)).toMatchObject({
+      account_hint: HINT,
+      encrypted_data: "enc()",
+    });
 
     const again = await addSourceConnection({
       capabilityId,
@@ -258,12 +261,25 @@ describe("a secret and a source hint never meet", () => {
       accountHint: HINT,
     });
     await expect(
-      updateCredential({ capabilityId, credentialId: id, actorUserId: USER, value: "sk-real-key" })
+      updateCredential({
+        capabilityId,
+        credentialId: id,
+        actorUserId: USER,
+        value: "sk-real-key",
+      })
     ).rejects.toThrow(/holds no secret/);
     await expect(
-      updateCredential({ capabilityId, credentialId: id, actorUserId: USER, accountHint: "conn_x" })
+      updateCredential({
+        capabilityId,
+        credentialId: id,
+        actorUserId: USER,
+        accountHint: "conn_x",
+      })
     ).rejects.toThrow(/cannot be changed/);
-    expect(await row(id)).toMatchObject({ account_hint: HINT, encrypted_data: "enc()" });
+    expect(await row(id)).toMatchObject({
+      account_hint: HINT,
+      encrypted_data: "enc()",
+    });
     expect(holder.plaintexts).toEqual([""]);
     // A rename stays allowed.
     const renamed = await updateCredential({
@@ -286,7 +302,12 @@ describe("a secret and a source hint never meet", () => {
     });
     expect(key.kind).toBe("vault");
     await expect(
-      updateCredential({ capabilityId, credentialId: key.id, actorUserId: USER, accountHint: HINT })
+      updateCredential({
+        capabilityId,
+        credentialId: key.id,
+        actorUserId: USER,
+        accountHint: HINT,
+      })
     ).rejects.toThrow(/names a source/);
     expect((await row(key.id)).account_hint).toBeNull();
   });

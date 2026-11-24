@@ -30,7 +30,10 @@ import {
 import { mapStorybookItems } from "./map-storybook-to-graph.js";
 import { getSyncKinds } from "./sync-kind-registry.js";
 
-const BUTTON = componentKey("packages/web/src/spatial-ui/components.tsx", "SpatialButton");
+const BUTTON = componentKey(
+  "packages/web/src/spatial-ui/components.tsx",
+  "SpatialButton"
+);
 const ROW = componentKey("packages/web/src/proposals/row.tsx", "ProposalRow");
 const HOME = pageKey("pages-desktop-home");
 const FLOW = flowKey("morning-check");
@@ -40,7 +43,11 @@ function bundle(): StorybookBundle {
   return {
     version: STORYBOOK_BUNDLE_VERSION,
     generatedAt: "2026-11-23T15:00:00.000Z",
-    source: { repo: "Synap-core/app-bases", sha: "12813c62e", storybookVersion: "10.6.1" },
+    source: {
+      repo: "Synap-core/app-bases",
+      sha: "12813c62e",
+      storybookVersion: "10.6.1",
+    },
     components: [
       {
         key: BUTTON,
@@ -89,8 +96,10 @@ function bundle(): StorybookBundle {
   };
 }
 
-const graphOf = (b: StorybookBundle, input = { bundleFileId: "f", appId: APP }) =>
-  mapStorybookItems(bundleItems(b, input));
+const graphOf = (
+  b: StorybookBundle,
+  input = { bundleFileId: "f", appId: APP }
+) => mapStorybookItems(bundleItems(b, input));
 
 describe("storybook ui kind: registration", () => {
   it("is one `ui` kind of provider storybook, never ticked and never reported to the broker", () => {
@@ -112,7 +121,8 @@ describe("mapStorybookItems", () => {
       ["ui-page", HOME],
       ["user-flow", FLOW],
     ]);
-    for (const e of graph.entities) expect(e.identity.source).toBe(STORYBOOK_PROVIDER);
+    for (const e of graph.entities)
+      expect(e.identity.source).toBe(STORYBOOK_PROVIDER);
     expect(graph.relations).toEqual(
       expect.arrayContaining([
         { sourceRef: ROW, targetRef: BUTTON, type: "composed_of" },
@@ -123,11 +133,15 @@ describe("mapStorybookItems", () => {
       ])
     );
     // A flow that visits a page twice traverses it once.
-    expect(graph.relations.filter((r) => r.type === "traverses")).toHaveLength(1);
+    expect(graph.relations.filter((r) => r.type === "traverses")).toHaveLength(
+      1
+    );
   });
 
   it("keeps the record of a retitled story: same key, new title", () => {
-    const before = graphOf(bundle()).graph.entities.find((e) => e.ref === BUTTON)!;
+    const before = graphOf(bundle()).graph.entities.find(
+      (e) => e.ref === BUTTON
+    )!;
     const b = bundle();
     b.components[0]!.name = "Button";
     b.components[0]!.storyIds = ["actions-button--default"];
@@ -141,9 +155,11 @@ describe("mapStorybookItems", () => {
     expect(page.properties["story-id"]).toBe("pages-desktop-home--full");
     const b = bundle();
     b.pages[0]!.storyIds.reverse();
-    const reordered = graphOf(b, { bundleFileId: "f", appId: APP, url: undefined } as never).graph.entities.find(
-      (e) => e.profileSlug === "ui-page"
-    )!;
+    const reordered = graphOf(b, {
+      bundleFileId: "f",
+      appId: APP,
+      url: undefined,
+    } as never).graph.entities.find((e) => e.profileSlug === "ui-page")!;
     expect(reordered.identity.externalId).toBe(HOME);
     expect(reordered.properties["story-id"]).toBe("pages-desktop-home--empty");
   });
@@ -164,7 +180,12 @@ describe("mapStorybookItems", () => {
 
   it("maps a tombstone to the record's identity under a gone ref, with nothing else", () => {
     const { graph } = mapStorybookItems([
-      { type: "gone", externalId: BUTTON, profileSlug: "ui-component", title: "SpatialButton" },
+      {
+        type: "gone",
+        externalId: BUTTON,
+        profileSlug: "ui-component",
+        title: "SpatialButton",
+      },
     ]);
     expect(graph.entities).toEqual([
       {
@@ -180,7 +201,11 @@ describe("mapStorybookItems", () => {
 });
 
 describe("goneFromRows (tombstones)", () => {
-  const row = (externalId: string, profileSlug = "ui-component", status: string | null = "stable") => ({
+  const row = (
+    externalId: string,
+    profileSlug = "ui-component",
+    status: string | null = "stable"
+  ) => ({
     externalId,
     title: externalId,
     status,
@@ -192,10 +217,19 @@ describe("goneFromRows (tombstones)", () => {
     const lost = componentKey("packages/web/src/old.tsx", "Old");
     const lostPage = pageKey("pages-old--full");
     const gone = goneFromRows(
-      [row(BUTTON), row(lost), row(lost), row(lostPage, "ui-page"), row(HOME, "ui-page")],
+      [
+        row(BUTTON),
+        row(lost),
+        row(lost),
+        row(lostPage, "ui-page"),
+        row(HOME, "ui-page"),
+      ],
       keys
     );
-    expect(gone.map((g) => g.type === "gone" && g.externalId)).toEqual([lost, lostPage]);
+    expect(gone.map((g) => g.type === "gone" && g.externalId)).toEqual([
+      lost,
+      lostPage,
+    ]);
   });
 
   it("skips what is already gone, the app stand-in and a user-flow (its lifecycle is a person's)", () => {
@@ -212,54 +246,96 @@ describe("goneFromRows (tombstones)", () => {
 });
 
 describe("planRefresh", () => {
-  const incoming = (b = bundle()) => graphOf(b).graph.entities.find((e) => e.ref === BUTTON)!;
-  const current = (over: Record<string, unknown> = {}, status: string | null = "stable") => ({
+  const incoming = (b = bundle()) =>
+    graphOf(b).graph.entities.find((e) => e.ref === BUTTON)!;
+  const current = (
+    over: Record<string, unknown> = {},
+    status: string | null = "stable"
+  ) => ({
     properties: { ...incoming().properties, ...over },
     status,
   });
 
   it("a second run of the same bundle writes nothing and moves nothing", () => {
-    expect(planRefresh(incoming(), current())).toEqual({ patch: {}, moveTo: null });
+    expect(planRefresh(incoming(), current())).toEqual({
+      patch: {},
+      moveTo: null,
+    });
   });
 
   it("writes only the owned facts that changed; a fact the bundle drops keeps its value", () => {
     const b = bundle();
     b.components[0]!.sourceHash = "h1b";
     delete b.components[0]!.level;
-    const plan = planRefresh(incoming(b), current({ "component-level": "primitive" }));
+    const plan = planRefresh(
+      incoming(b),
+      current({ "component-level": "primitive" })
+    );
     expect(plan.patch).toEqual({ "source-hash": "h1b" });
   });
 
   it("marks a reviewed component changed when its source moved, fresh when it is back, and leaves one in review alone", () => {
     const b = bundle();
     b.components[0]!.sourceHash = "h9";
-    expect(planRefresh(incoming(b), current({ "reviewed-hash": "h1", "review-state": "fresh" })).patch).toEqual({
+    expect(
+      planRefresh(
+        incoming(b),
+        current({ "reviewed-hash": "h1", "review-state": "fresh" })
+      ).patch
+    ).toEqual({
       "source-hash": "h9",
       "review-state": "changed",
     });
-    expect(planRefresh(incoming(), current({ "reviewed-hash": "h1", "review-state": "changed" })).patch).toEqual({
+    expect(
+      planRefresh(
+        incoming(),
+        current({ "reviewed-hash": "h1", "review-state": "changed" })
+      ).patch
+    ).toEqual({
       "review-state": "fresh",
     });
-    expect(planRefresh(incoming(b), current({ "reviewed-hash": "h1", "review-state": "in-review" })).patch).toEqual({
+    expect(
+      planRefresh(
+        incoming(b),
+        current({ "reviewed-hash": "h1", "review-state": "in-review" })
+      ).patch
+    ).toEqual({
       "source-hash": "h9",
     });
     // Never reviewed: no review state is invented.
-    expect(planRefresh(incoming(b), current()).patch).toEqual({ "source-hash": "h9" });
+    expect(planRefresh(incoming(b), current()).patch).toEqual({
+      "source-hash": "h9",
+    });
   });
 
   it("follows the inventory verdict, but never moves a person's deprecated", () => {
     const b = bundle();
     b.components[0]!.verdict = "consolidate";
-    expect(planRefresh(incoming(b), current({}, "stable")).moveTo).toBe("consolidate");
-    expect(planRefresh(incoming(b), current({}, "deprecated")).moveTo).toBeNull();
+    expect(planRefresh(incoming(b), current({}, "stable")).moveTo).toBe(
+      "consolidate"
+    );
+    expect(
+      planRefresh(incoming(b), current({}, "deprecated")).moveTo
+    ).toBeNull();
   });
 
   it("moves a tombstone to gone once, and a returning record back to its verdict", () => {
     const tomb = mapStorybookItems([
-      { type: "gone", externalId: BUTTON, profileSlug: "ui-component", title: "x" },
+      {
+        type: "gone",
+        externalId: BUTTON,
+        profileSlug: "ui-component",
+        title: "x",
+      },
     ]).graph.entities[0]!;
-    expect(planRefresh(tomb, current({}, "stable"))).toEqual({ patch: {}, moveTo: "gone" });
-    expect(planRefresh(tomb, current({}, "gone"))).toEqual({ patch: {}, moveTo: null });
+    expect(planRefresh(tomb, current({}, "stable"))).toEqual({
+      patch: {},
+      moveTo: "gone",
+    });
+    expect(planRefresh(tomb, current({}, "gone"))).toEqual({
+      patch: {},
+      moveTo: null,
+    });
     expect(planRefresh(incoming(), current({}, "gone")).moveTo).toBe("stable");
   });
 });
@@ -268,7 +344,13 @@ describe("the source a run reads", () => {
   it("reads the stored input only when it names a bundle file or a url", () => {
     expect(readStorybookInput({ appId: APP })).toBeNull();
     expect(readStorybookInput(null)).toBeNull();
-    expect(readStorybookInput({ url: "https://sb.example.com", appId: APP, extra: 1 })).toEqual({
+    expect(
+      readStorybookInput({
+        url: "https://sb.example.com",
+        appId: APP,
+        extra: 1,
+      })
+    ).toEqual({
       url: "https://sb.example.com",
       appId: APP,
     });
@@ -278,6 +360,8 @@ describe("the source a run reads", () => {
     expect(storybookAccountHint({ url: "https://sb.example.com/" }, null)).toBe(
       "storybook:https://sb.example.com"
     );
-    expect(storybookAccountHint({}, bundle())).toBe("storybook:Synap-core/app-bases");
+    expect(storybookAccountHint({}, bundle())).toBe(
+      "storybook:Synap-core/app-bases"
+    );
   });
 });
