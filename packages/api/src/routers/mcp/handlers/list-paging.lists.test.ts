@@ -250,12 +250,7 @@ describe("synap_list_cells pages", () => {
     expect(first.body.cells.length).toBeLessThanOrEqual(15);
     expect(first.body.total).toBeGreaterThan(15);
     expect(first.body.nextOffset).toBe(first.body.cells.length);
-    const { ids } = await walk(
-      h0,
-      "synap_list_cells",
-      "cells",
-      (r) => r.key
-    );
+    const { ids } = await walk(h0, "synap_list_cells", "cells", (r) => r.key);
     expect(ids).toHaveLength(first.body.total);
     expect(new Set(ids).size).toBe(ids.length);
   });

@@ -4,10 +4,10 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 ### When to Use ViewFrame
 
-| Situation                                                                                                                    | Action                        |
-| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| Situation                                                                                                                  | Action                        |
+| -------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | An existing cell or view type covers the need: check `synap_list_cells` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
-| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                            | Generate a ViewFrame cell     |
+| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                          | Generate a ViewFrame cell     |
 
 A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
 

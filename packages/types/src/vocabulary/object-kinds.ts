@@ -756,8 +756,7 @@ export function resolveObjectIdentity(
   // alias table, as `resolveObjectNoun` and `resolveObjectGlyph` read it), so
   // a retired `widget` is a Cell here too, never a humanized "Widget".
   const key =
-    !Object.hasOwn(OBJECT_KINDS, raw) &&
-    Object.hasOwn(OBJECT_KIND_ALIASES, raw)
+    !Object.hasOwn(OBJECT_KINDS, raw) && Object.hasOwn(OBJECT_KIND_ALIASES, raw)
       ? OBJECT_KIND_ALIASES[raw]!
       : raw;
   const base: ObjectKindDef =

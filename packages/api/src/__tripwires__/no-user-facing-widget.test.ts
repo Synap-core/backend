@@ -125,9 +125,9 @@ describe("tripwire: no user- or agent-facing 'widget'", () => {
   it("SELF-CHECK: the detector fires on the prose it retired, and lets the wire names through", () => {
     expect(widgetLines("Arrange widgets on a bento.")).toHaveLength(1);
     expect(widgetLines("List compose widgets")).toHaveLength(1);
-    expect(widgetLines("A dashboard of {n, plural, one {# widget}}")).toHaveLength(
-      1
-    );
+    expect(
+      widgetLines("A dashboard of {n, plural, one {# widget}}")
+    ).toHaveLength(1);
     expect(
       widgetLines(
         'Call synap_list_widgets (GET /widget-definitions); a block is {kind: "widget", widgetType}.'
