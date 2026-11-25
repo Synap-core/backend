@@ -5525,6 +5525,17 @@ export interface WorkerOnly {
 	in: string[];
 }
 /**
+ * A playbook's schedule as every surface reads it: its clock, the zone it
+ * runs in (`null` = its owner's), and whether it fires now. Projected by the
+ * playbook reads (`playbooks.list`, `get`); a client never joins activators
+ * with rule status itself.
+ */
+export interface PlaybookScheduleView {
+	cron: string;
+	timezone: string | null;
+	on: boolean;
+}
+/**
  * AutomationTriggerConfig
  *
  * Typed configuration stored as JSONB on the automations table.
@@ -17654,6 +17665,13 @@ export interface UnifiedRun {
 	replayOf: string | null;
 	summary: string | null;
 	error: string | null;
+	/**
+	 * Why a failed run stopped before it finished (`stop_reason`): `budget` (it
+	 * reached a limit, nothing broke), `stages_left` (its turns kept ending
+	 * early: a fault), `no_effect` (its turn changed nothing). Null on every
+	 * other ledger.
+	 */
+	stopReason: string | null;
 	/** Who/what triggered the run (userId or "system"); null where the ledger has none. */
 	triggeredBy: string | null;
 	/** Steps that completed / failed (automation runs only; null for other ledgers). */
@@ -28531,6 +28549,8 @@ export interface RecentFlowRun {
 	status: RunStatus;
 	startedAt: Date;
 	completedAt: Date | null;
+	/** Why a failed run stopped (`stop_reason`; `UnifiedRun.stopReason`). */
+	stopReason: string | null;
 	/**
 	 * The focus session this run drives, or null when it has none — the door a
 	 * `waiting_on_you` mark opens (the owed slot lives on that session). A
@@ -52598,7 +52618,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52695,7 +52715,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				projectsUsingCount: number;
 				requires: unknown;
 				runner: unknown;
-				schedule: unknown;
+				schedule: PlaybookScheduleView | null;
 				scope: "project" | "session" | null;
 				stages: unknown;
 				status: "active" | "archived" | "draft" | "paused";
@@ -52736,7 +52756,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					requires: unknown;
 					runHealth: RunHealth | null;
 					runner: unknown;
-					schedule: unknown;
+					schedule: PlaybookScheduleView | null;
 					scope: "project" | "session" | null;
 					servesGoals: ServedGoal[];
 					stages: unknown;
@@ -52758,7 +52778,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			meta: object;
 			output: {
 				nextCursor: string | null;
-				playbooks: {
+				playbooks: (Omit<{
 					agentUserId: string | null;
 					channelSpec: unknown;
 					createdAt: Date;
@@ -52786,7 +52806,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					updatedAt: Date;
 					version: number;
 					workspaceId: string | null;
-				}[];
+				}, "schedule"> & {
+					schedule: PlaybookScheduleView | null;
+				})[];
 			};
 		}>;
 		match: import("@trpc/server").TRPCQueryProcedure<{

@@ -388,3 +388,54 @@ export const WORKER_SKIP_REASONS = {
 } as const;
 export type WorkerSkipReason =
   (typeof WORKER_SKIP_REASONS)[keyof typeof WORKER_SKIP_REASONS];
+
+/**
+ * A playbook's schedule as every surface reads it: its clock, the zone it
+ * runs in (`null` = its owner's), and whether it fires now. Projected by the
+ * playbook reads (`playbooks.list`, `get`); a client never joins activators
+ * with rule status itself.
+ */
+export interface PlaybookScheduleView {
+  cron: string;
+  timezone: string | null;
+  on: boolean;
+}
+
+/**
+ * THE schedule of one playbook: its enabled schedule worker (one that fires
+ * first), else a retired `playbooks.schedule` no activator could say (it
+ * still fires through its own automation while `enabled`), else none.
+ */
+export function playbookScheduleOf(input: {
+  workers: ReadonlyArray<{
+    activator: Pick<WorkerActivator, "on" | "cron" | "timezone"> | null;
+    state: "running" | "paused" | "stopped";
+    /** The automation that fires it: null while it does not fire. */
+    automationId: string | null;
+  }>;
+  retired?: unknown;
+}): PlaybookScheduleView | null {
+  const clocks = input.workers.filter(
+    (w) => w.activator?.on === "schedule" && w.activator.cron
+  );
+  // It fires only while its worker runs AND its automation is active.
+  const fires = (w: (typeof clocks)[number]) =>
+    w.state === "running" && w.automationId !== null;
+  const worker = clocks.find(fires) ?? clocks[0];
+  if (worker) {
+    return {
+      cron: worker.activator!.cron!,
+      timezone: worker.activator!.timezone ?? null,
+      on: fires(worker),
+    };
+  }
+  const retired = input.retired as
+    { cron?: unknown; enabled?: unknown } | null | undefined;
+  if (typeof retired?.cron !== "string" || !retired.cron) return null;
+  return {
+    cron: retired.cron,
+    // The retired column's cron was always read in UTC.
+    timezone: "UTC",
+    on: retired.enabled !== false,
+  };
+}

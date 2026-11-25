@@ -238,6 +238,20 @@ describe("cancelRun", () => {
     expect((await runRow(runId)).status).toBe("running");
   });
 
+  it("a run nobody claimed yet, or nobody picked up, is cancelled", async () => {
+    for (const status of ["queued", "blocked"]) {
+      const runId = await dispatchedRun(NO_CANCEL, "plain");
+      await q(
+        `update playbook_runs set status = $2, external_agent = null where id = $1`,
+        [runId, status]
+      );
+      expect((await cancelRun({ runId, userId: OWNER })).status).toBe(
+        "cancelled"
+      );
+      expect((await runRow(runId)).status).toBe("cancelled");
+    }
+  });
+
   it("a run that is not live is refused", async () => {
     const runId = await dispatchedRun(NO_CANCEL, "plain");
     await cancelRun({ runId, userId: OWNER });

@@ -712,7 +712,7 @@ export function trackStageTone(position: TrackStagePosition): UnitTone {
  *
  *   - completed / archived → `terminal` (done), whatever its sessions say;
  *   - paused               → the `paused` arm, reached the way a paused
- *                            SESSION reaches it: `{ cron: "", enabled: false }`
+ *                            SESSION reaches it: `{ cron: "", on: false }`
  *                            — an empty cron is a placeholder, never a
  *                            fabricated cadence;
  *   - otherwise            → the project aggregate, over this track's
@@ -726,7 +726,7 @@ export function trackUnitInput(
     return { terminal: true };
   }
   if (track.status === "paused") {
-    return { schedule: { cron: "", enabled: false } };
+    return { schedule: { cron: "", on: false } };
   }
   return projectAggregateInput({ sessions, unreadable: false });
 }

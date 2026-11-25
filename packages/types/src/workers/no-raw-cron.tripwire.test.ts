@@ -46,7 +46,7 @@ const DRIVEN: Record<string, (cron: string) => unknown> = {
     words.playbookTriggerFact({
       workers: [],
       workersFailed: false,
-      schedule: { cron: c, enabled: false },
+      schedule: { cron: c, timezone: null, on: false },
     }),
   ],
 };
