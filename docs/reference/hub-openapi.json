@@ -21816,7 +21816,7 @@
                           "accountHint": { "type": ["string", "null"] },
                           "kind": {
                             "type": "string",
-                            "enum": ["nango", "vault"]
+                            "enum": ["nango", "vault", "source"]
                           },
                           "isPodWide": { "type": "boolean" },
                           "provider": { "type": ["string", "null"] },
@@ -21923,7 +21923,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {
@@ -22032,7 +22035,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {

@@ -777,6 +777,8 @@ const WITHHELD_FILES: Record<string, string> = {
     "a step's wait: the asked things and the one each step names, by id",
   "services/status/status-floor.ts":
     "statusOf's read floor: the named ids, and who a realtime status event about one subject reaches, by id",
+  "services/event-sync/storybook-refs.ts":
+    "the app / brand identity a Storybook sync names, by id (link target gate)",
   "services/surfaces/renderer-usage.ts":
     "renderer-removal impact count: a demo row's override is affected too",
   "services/timeline/read-timeline.ts":

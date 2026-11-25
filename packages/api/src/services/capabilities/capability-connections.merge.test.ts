@@ -1,7 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { secrets } from "@synap/database/schema";
 
-import { mergeCredentialViews } from "./capability-connections.js";
+import {
+  credentialKind,
+  mergeCredentialViews,
+} from "./capability-connections.js";
 
 /**
  * `mergeCredentialViews` — the pure core of the MERGED credential list (the fix
@@ -116,5 +119,44 @@ describe("mergeCredentialViews", () => {
     expect(views.filter((v) => v.isDefault)).toHaveLength(1);
     // First row (persisted order) wins.
     expect(views[0].isDefault).toBe(true);
+  });
+});
+
+/**
+ * `credentialKind` gained `source` (a Storybook: a registry row with no secret
+ * whose account hint names what the pod reads). Every row that classified
+ * before classifies exactly as before; the rows below are the ones where the
+ * old and new rules could disagree.
+ */
+describe("credentialKind", () => {
+  const kind = (
+    providerIntegrationId: string | null,
+    accountHint: string | null
+  ) => credentialKind({ providerIntegrationId, accountHint });
+
+  it("keeps every existing row as it was: nango stays nango, a key stays vault", () => {
+    expect(kind(null, null)).toBe("vault");
+    expect(kind(null, CONN)).toBe("nango");
+    expect(kind(null, "6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b")).toBe("nango");
+    expect(kind("pi-1", null)).toBe("nango");
+    expect(kind("pi-1", CONN)).toBe("nango");
+    // A hint that only CONTAINS the word, or names it without the colon, is no source.
+    expect(kind(null, "my-storybook:x")).toBe("nango");
+    expect(kind(null, "storybook")).toBe("nango");
+  });
+
+  it("reads a storybook hint with no provider integration as a source, and a provider integration always wins", () => {
+    expect(kind(null, "storybook:Synap-core/app-bases")).toBe("source");
+    expect(kind("pi-1", "storybook:Synap-core/app-bases")).toBe("nango");
+  });
+
+  it("shows a source row as a source in the merged list", () => {
+    const views = mergeCredentialViews(
+      [row({ id: "s1", accountHint: "storybook:https://sb.example.com" })],
+      { ok: true, connections: [] }
+    );
+    expect(views.map((v) => [v.id, v.kind, v.provider])).toEqual([
+      ["s1", "source", null],
+    ]);
   });
 });
