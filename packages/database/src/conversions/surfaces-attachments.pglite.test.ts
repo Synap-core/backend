@@ -123,14 +123,20 @@ beforeAll(async () => {
   );
   sql = makePgliteSql(db);
   const cell = (cellKey: string, props?: object) =>
-    JSON.stringify({ renderer: { kind: "cell", cellKey, ...(props ? { props } : {}) } });
+    JSON.stringify({
+      renderer: { kind: "cell", cellKey, ...(props ? { props } : {}) },
+    });
   await q(
     `INSERT INTO entities (id, user_id, workspace_id, system_data, deleted_at) VALUES
       ($1, $4, $5, $6::jsonb, NULL),
       ($2, $4, NULL, $7::jsonb, NULL),
       ($3, $4, $5, $8::jsonb, now())`,
     [
-      E1, E2, E3, USER, WS,
+      E1,
+      E2,
+      E3,
+      USER,
+      WS,
       JSON.stringify({
         ...JSON.parse(cell("deal-cockpit", { compact: true })),
         bentoViewId: V_BENTO,
@@ -143,7 +149,11 @@ beforeAll(async () => {
       cell("ghost"),
     ]
   );
-  await q(`INSERT INTO views (id) VALUES ($1), ($2), ($3)`, [V_BENTO, V_PB, V_OTHER]);
+  await q(`INSERT INTO views (id) VALUES ($1), ($2), ($3)`, [
+    V_BENTO,
+    V_PB,
+    V_OTHER,
+  ]);
   await q(`INSERT INTO playbooks (id, workspace_id) VALUES ($1, $2)`, [PB, WS]);
   await q(
     `INSERT INTO renderer_bindings (scope_kind, workspace_id, subject_kind, subject_id, content_kind, ref, created_by, revoked_at) VALUES
@@ -218,7 +228,10 @@ describe("p3.surfaces.* (foldAnchorsIntoAttachments)", () => {
     const look = all.find(
       (e) => e.from_id === E1 && e.metadata.migratedFrom === "entity-renderer"
     );
-    expect(look).toMatchObject({ from_type: "entity", to_type: "cell_instance" });
+    expect(look).toMatchObject({
+      from_type: "entity",
+      to_type: "cell_instance",
+    });
     expect(look.metadata.slot).toBe("detail");
     const [made] = await q(
       `SELECT workspace_id, user_id, cell_type, config FROM cell_instances WHERE id = $1`,
@@ -233,10 +246,27 @@ describe("p3.surfaces.* (foldAnchorsIntoAttachments)", () => {
     // e1's bento and its linked cell: the same view / instance, no slot.
     expect(all).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ from_id: E1, to_type: "view", to_id: V_BENTO }),
-        expect.objectContaining({ from_id: E1, to_type: "cell_instance", to_id: C1 }),
-        expect.objectContaining({ from_type: "playbook", from_id: PB, to_type: "view", to_id: V_PB }),
-        expect.objectContaining({ from_type: "playbook", from_id: PB, to_type: "cell_instance" }),
+        expect.objectContaining({
+          from_id: E1,
+          to_type: "view",
+          to_id: V_BENTO,
+        }),
+        expect.objectContaining({
+          from_id: E1,
+          to_type: "cell_instance",
+          to_id: C1,
+        }),
+        expect.objectContaining({
+          from_type: "playbook",
+          from_id: PB,
+          to_type: "view",
+          to_id: V_PB,
+        }),
+        expect.objectContaining({
+          from_type: "playbook",
+          from_id: PB,
+          to_type: "cell_instance",
+        }),
       ])
     );
     // Nothing for the deleted entity, the space-less override, the view's own
@@ -251,7 +281,9 @@ describe("p3.surfaces.* (foldAnchorsIntoAttachments)", () => {
     expect(new Set(e1Positions).size).toBe(3);
 
     // Additive: the legacy values are still there for clients that read them.
-    const [e1] = await q(`SELECT system_data FROM entities WHERE id = $1`, [E1]);
+    const [e1] = await q(`SELECT system_data FROM entities WHERE id = $1`, [
+      E1,
+    ]);
     expect(e1.system_data.renderer.cellKey).toBe("deal-cockpit");
     expect(e1.system_data.bentoViewId).toBe(V_BENTO);
 

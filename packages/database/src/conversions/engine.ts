@@ -3384,7 +3384,9 @@ async function applyFoldAnchorsIntoAttachments(
             SELECT 1 FROM links l
             WHERE l.from_type = 'entity' AND l.from_id = e.id::text
               AND l.link_type = 'attaches' AND l.metadata->>'migratedFrom' = '${op.source}')`;
-      const rows = (await runStatement(tx, `
+      const rows = (await runStatement(
+        tx,
+        `
         WITH s AS MATERIALIZED (${src}),
         cells AS (
           INSERT INTO cell_instances (id, workspace_id, user_id, cell_type, config, created_by_kind, trust_level)
@@ -3404,14 +3406,18 @@ async function applyFoldAnchorsIntoAttachments(
         )
         SELECT (SELECT count(*)::int FROM cells) AS cells,
                (SELECT count(*)::int FROM edges) AS edges
-      `)) as unknown as Array<{ cells: number; edges: number }>;
-      const kept = (await runStatement(tx, `
+      `
+      )) as unknown as Array<{ cells: number; edges: number }>;
+      const kept = (await runStatement(
+        tx,
+        `
         SELECT count(*)::int AS n FROM entities e
         WHERE e.deleted_at IS NULL
           AND e.system_data->'renderer'->>'kind' = 'cell'
           AND coalesce(e.system_data->'renderer'->>'cellKey', '') <> ''
           AND e.workspace_id IS NULL
-      `)) as unknown as Array<{ n: number }>;
+      `
+      )) as unknown as Array<{ n: number }>;
       tally(rows[0]?.edges ?? 0, rows[0]?.cells ?? 0, kept[0]?.n ?? 0);
       return counts;
     }
@@ -3434,7 +3440,9 @@ async function applyFoldAnchorsIntoAttachments(
             SELECT 1 FROM links l
             WHERE l.from_type = 'playbook' AND l.from_id = b.subject_id
               AND l.link_type = 'attaches' AND l.metadata->>'bindingId' = b.id::text)`;
-      const cellRows = (await runStatement(tx, `
+      const cellRows = (await runStatement(
+        tx,
+        `
         WITH s AS MATERIALIZED (
           SELECT * FROM (${src}) x
           WHERE x.r->>'kind' = 'cell' AND coalesce(x.r->>'cellKey', '') <> ''
@@ -3458,8 +3466,11 @@ async function applyFoldAnchorsIntoAttachments(
         )
         SELECT (SELECT count(*)::int FROM cells) AS cells,
                (SELECT count(*)::int FROM edges) AS edges
-      `)) as unknown as Array<{ cells: number; edges: number }>;
-      const viewRows = (await runStatement(tx, `
+      `
+      )) as unknown as Array<{ cells: number; edges: number }>;
+      const viewRows = (await runStatement(
+        tx,
+        `
         WITH s AS MATERIALIZED (
           SELECT x.*, x.r->>'viewId' AS view_id FROM (${src}) x
           WHERE x.r->>'kind' = 'view'
@@ -3474,10 +3485,13 @@ async function applyFoldAnchorsIntoAttachments(
           RETURNING id
         )
         SELECT count(*)::int AS edges FROM edges
-      `)) as unknown as Array<{ edges: number }>;
+      `
+      )) as unknown as Array<{ edges: number }>;
       // Left as they are, counted: a VIEW's own binding (a view is not an
       // anchor kind), a cell look with no space, any other ref kind.
-      const kept = (await runStatement(tx, `
+      const kept = (await runStatement(
+        tx,
+        `
         SELECT count(*)::int AS n FROM renderer_bindings b
         LEFT JOIN playbooks p ON p.id::text = b.subject_id
         WHERE b.subject_id IS NOT NULL AND b.revoked_at IS NULL
@@ -3490,7 +3504,8 @@ async function applyFoldAnchorsIntoAttachments(
                 AND EXISTS (SELECT 1 FROM views v WHERE v.id::text = b.ref->>'viewId'))
             )
           )
-      `)) as unknown as Array<{ n: number }>;
+      `
+      )) as unknown as Array<{ n: number }>;
       tally(
         (cellRows[0]?.edges ?? 0) + (viewRows[0]?.edges ?? 0),
         cellRows[0]?.cells ?? 0,
@@ -3499,7 +3514,9 @@ async function applyFoldAnchorsIntoAttachments(
       return counts;
     }
     case "entity-bento": {
-      const rows = (await runStatement(tx, `
+      const rows = (await runStatement(
+        tx,
+        `
         WITH s AS MATERIALIZED (
           SELECT e.id::text AS anchor_id, e.workspace_id, e.user_id,
                  v.id::text AS view_id, 0 AS rank
@@ -3516,18 +3533,24 @@ async function applyFoldAnchorsIntoAttachments(
           RETURNING id
         )
         SELECT count(*)::int AS edges FROM edges
-      `)) as unknown as Array<{ edges: number }>;
-      const kept = (await runStatement(tx, `
+      `
+      )) as unknown as Array<{ edges: number }>;
+      const kept = (await runStatement(
+        tx,
+        `
         SELECT count(*)::int AS n FROM entities e
         WHERE e.deleted_at IS NULL
           AND coalesce(e.system_data->>'bentoViewId', '') <> ''
           AND NOT EXISTS (SELECT 1 FROM views v WHERE v.id::text = e.system_data->>'bentoViewId')
-      `)) as unknown as Array<{ n: number }>;
+      `
+      )) as unknown as Array<{ n: number }>;
       tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
       return counts;
     }
     case "cell-relation": {
-      const rows = (await runStatement(tx, `
+      const rows = (await runStatement(
+        tx,
+        `
         WITH s AS MATERIALIZED (
           SELECT DISTINCT ON (r.target_entity_id, r.source_cell_id)
                  r.target_entity_id::text AS anchor_id, e.workspace_id,
@@ -3549,15 +3572,19 @@ async function applyFoldAnchorsIntoAttachments(
           RETURNING id
         )
         SELECT count(*)::int AS edges FROM edges
-      `)) as unknown as Array<{ edges: number }>;
-      const kept = (await runStatement(tx, `
+      `
+      )) as unknown as Array<{ edges: number }>;
+      const kept = (await runStatement(
+        tx,
+        `
         SELECT count(*)::int AS n FROM relations r
         WHERE r.source_kind = 'cell' AND r.source_cell_id IS NOT NULL
           AND (
             NOT EXISTS (SELECT 1 FROM cell_instances c WHERE c.id = r.source_cell_id)
             OR NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.target_entity_id AND e.deleted_at IS NULL)
           )
-      `)) as unknown as Array<{ n: number }>;
+      `
+      )) as unknown as Array<{ n: number }>;
       tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
       return counts;
     }

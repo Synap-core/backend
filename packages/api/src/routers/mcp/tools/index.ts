@@ -4087,8 +4087,7 @@ export const tools = {
             },
             label: {
               type: "string",
-              description:
-                "Optional name shown in the object's Surfaces list.",
+              description: "Optional name shown in the object's Surfaces list.",
             },
             reasoning: {
               type: "string",
@@ -4108,7 +4107,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "Put an existing surface (a view, a bento, a document, an HTML artifact, a cell) on one more object, or take it off (`detach: true`). Use it for \"give this project an investor radar\" when the radar exists, and instead of a per-object renderer. Governed: may propose.",
+          'Put an existing surface (a view, a bento, a document, an HTML artifact, a cell) on one more object, or take it off (`detach: true`). Use it for "give this project an investor radar" when the radar exists, and instead of a per-object renderer. Governed: may propose.',
         inputSchema: {
           type: "object",
           properties: {

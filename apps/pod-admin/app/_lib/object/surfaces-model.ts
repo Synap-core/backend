@@ -28,7 +28,10 @@ export function surfaceKind(row: Pick<SurfaceRow, "body">): string {
 }
 
 /** Pod admin's own page for an attached surface: the object, opened on it. */
-export function surfacePagePath(anchor: SurfaceAnchor, surfaceId: string): string {
+export function surfacePagePath(
+  anchor: SurfaceAnchor,
+  surfaceId: string
+): string {
   return `/open/${encodeURIComponent(anchor.kind)}/${encodeURIComponent(anchor.id)}?surface=${encodeURIComponent(surfaceId)}`;
 }
 

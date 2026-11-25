@@ -149,15 +149,24 @@ type HubContext = Context<{ Variables: HubVariables }>;
  */
 async function surfaceActor(
   c: HubContext,
-  body: { userId?: string; agentUserId?: string; reasoning?: string; sessionId?: string },
+  body: {
+    userId?: string;
+    agentUserId?: string;
+    reasoning?: string;
+    sessionId?: string;
+  },
   door: string
-): Promise<{ ok: true; actor: SurfaceActor } | { ok: false; status: 400 | 403; error: string }> {
+): Promise<
+  | { ok: true; actor: SurfaceActor }
+  | { ok: false; status: 400 | 403; error: string }
+> {
   const acting = await resolveActingContext(c, { userId: body.userId });
   if (!acting.ok) return acting;
   const agentUserId =
     body.agentUserId ?? (c.get("agentUserId") as string | undefined);
   const resolved = await resolveActorId(agentUserId, acting.userId);
-  if ("error" in resolved) return { ok: false, status: 400, error: resolved.error };
+  if ("error" in resolved)
+    return { ok: false, status: 400, error: resolved.error };
   const sessionId =
     (await resolveVerifiedSessionId(
       acting.userId,
@@ -168,8 +177,7 @@ async function surfaceActor(
     ok: true,
     actor: {
       userId: acting.userId,
-      agentUserId:
-        resolved.actorId !== acting.userId ? resolved.actorId : null,
+      agentUserId: resolved.actorId !== acting.userId ? resolved.actorId : null,
       sessionId,
       ...(body.reasoning?.trim() ? { reasoning: body.reasoning.trim() } : {}),
       door,
@@ -325,7 +333,10 @@ export function registerSurfacesRoutes(app: HubHono): void {
     const body = await c.req.json().catch(() => null);
     const parsed = AttachSurfaceBodySchema.safeParse(body);
     if (!parsed.success) {
-      return c.json({ error: `Invalid attachment: ${parsed.error.message}` }, 400);
+      return c.json(
+        { error: `Invalid attachment: ${parsed.error.message}` },
+        400
+      );
     }
     const who = await surfaceActor(c, parsed.data, "POST /surfaces/attach");
     if (!who.ok) return c.json({ error: who.error }, who.status);

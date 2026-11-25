@@ -22,7 +22,12 @@ vi.mock("../../../lib/trpc", () => ({
       forObject: {
         useQuery: (input: { kind: string; id: string }) => {
           asked.push(input);
-          return { isLoading: false, isError: false, refetch: vi.fn(), ...read };
+          return {
+            isLoading: false,
+            isError: false,
+            refetch: vi.fn(),
+            ...read,
+          };
         },
       },
     },
@@ -68,8 +73,17 @@ describe("SurfacesSection", () => {
             openUrl: "/open/22222222-2222-4333-8444-555555555555",
           }),
           // The body and the detail look are already on the page.
-          row({ id: "33333333-2222-4333-8444-555555555555", relation: "body", title: "The body" }),
-          row({ id: "task-card", body: "cell", relation: "renders", title: "Kind look" }),
+          row({
+            id: "33333333-2222-4333-8444-555555555555",
+            relation: "body",
+            title: "The body",
+          }),
+          row({
+            id: "task-card",
+            body: "cell",
+            relation: "renders",
+            title: "Kind look",
+          }),
         ],
         unavailable: [],
       },

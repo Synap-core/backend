@@ -18,11 +18,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import {
-  db,
-  getWorkspaceMembership,
-  isUniqueViolation,
-} from "@synap/database";
+import { db, getWorkspaceMembership, isUniqueViolation } from "@synap/database";
 import { cellInstances } from "@synap/database/schema";
 import {
   CREATABLE_SURFACE_BODIES,
@@ -52,7 +48,8 @@ import {
   type SurfaceRefusal,
 } from "./attach.js";
 
-export type CreateOutcome = CreateSurfaceResult | SurfaceRefusal | SurfaceDenied;
+export type CreateOutcome =
+  CreateSurfaceResult | SurfaceRefusal | SurfaceDenied;
 
 /** An HTML artifact's page: the same 2 MB cap `synap_create_document` holds. */
 export const HTML_SURFACE_MAX_BYTES = 2 * 1024 * 1024;
@@ -155,7 +152,10 @@ export async function createSurface(
   const data: Record<string, unknown> = {
     title: buildObjectActionTitle({
       action: "create",
-      objectKind: surfaceTypeOf(input.body) === "cell_instance" ? "cell" : surfaceTypeOf(input.body),
+      objectKind:
+        surfaceTypeOf(input.body) === "cell_instance"
+          ? "cell"
+          : surfaceTypeOf(input.body),
       objectName: title,
     }),
     name: title,
@@ -189,8 +189,7 @@ export async function createSurface(
       ...(perm.reviewUrl ? { reviewUrl: perm.reviewUrl } : {}),
     };
   }
-  const receiptId =
-    "granted" in perm ? perm.autoApprovedProposalId : undefined;
+  const receiptId = "granted" in perm ? perm.autoApprovedProposalId : undefined;
   const applied = await applyCreateSurface({
     ownerUserId: actor.userId,
     agentUserId: actor.agentUserId ?? null,
@@ -255,8 +254,7 @@ export async function applyCreateSurface(input: {
   data: Record<string, unknown>;
   proposalId: string | null;
 }): Promise<
-  | { ok: true; surface: SurfaceRef; linkId: string }
-  | { ok: false; why: string }
+  { ok: true; surface: SurfaceRef; linkId: string } | { ok: false; why: string }
 > {
   const d = input.data;
   const anchor = d.anchor as SurfaceAnchor | undefined;
@@ -272,7 +270,10 @@ export async function applyCreateSurface(input: {
     !surfaceId ||
     !name
   ) {
-    return { ok: false, why: "the proposal does not name an object, a body and a title." };
+    return {
+      ok: false,
+      why: "the proposal does not name an object, a body and a title.",
+    };
   }
   const owner = input.ownerUserId;
   if (!owner) {
@@ -363,8 +364,7 @@ async function makeBody(input: {
           workspaceId,
           workspaceRole: membership?.role ?? "owner",
         } as unknown as Context);
-        const type =
-          body === "view" ? (spec.viewType ?? "table") : body;
+        const type = body === "view" ? (spec.viewType ?? "table") : body;
         const res = (await caller.create({
           id,
           name,

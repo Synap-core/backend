@@ -94,8 +94,10 @@ export interface SurfaceDenied {
   reason: string;
 }
 
-export type AttachOutcome = AttachSurfaceResult | SurfaceRefusal | SurfaceDenied;
-export type DetachOutcome = DetachSurfaceResult | SurfaceRefusal | SurfaceDenied;
+export type AttachOutcome =
+  AttachSurfaceResult | SurfaceRefusal | SurfaceDenied;
+export type DetachOutcome =
+  DetachSurfaceResult | SurfaceRefusal | SurfaceDenied;
 
 const refuse = (
   httpStatus: SurfaceRefusal["httpStatus"],
@@ -443,7 +445,9 @@ async function surfaceTitle(surface: SurfaceRef): Promise<string | null> {
     case "cell_instance":
       return pick(
         db
-          .select({ t: drizzleSql<string>`coalesce(${cellInstances.name}, ${cellInstances.cellType})` })
+          .select({
+            t: drizzleSql<string>`coalesce(${cellInstances.name}, ${cellInstances.cellType})`,
+          })
           .from(cellInstances)
           .where(eq(cellInstances.id, surface.id))
           .limit(1)
@@ -618,7 +622,10 @@ export async function applyApprovedSurfaceLink(input: {
   const anchor = input.data.anchor as SurfaceAnchor | undefined;
   const surface = input.data.surface as SurfaceRef | undefined;
   if (!anchor || !surface || surfaceShapeProblem(anchor, surface)) {
-    return { ok: false, why: "the proposal does not name an object and a surface." };
+    return {
+      ok: false,
+      why: "the proposal does not name an object and a surface.",
+    };
   }
   if (!input.ownerUserId) {
     return {
@@ -729,12 +736,15 @@ export async function readAttachedSurfaces(
   const out: SurfaceRow[] = [];
   for (const e of edges) {
     const meta = (e.metadata ?? {}) as Partial<AttachmentMeta>;
-    const label = typeof meta.label === "string" && meta.label ? meta.label : null;
+    const label =
+      typeof meta.label === "string" && meta.label ? meta.label : null;
     const base = {
       id: e.toId,
       relation: "attached" as const,
       anchor,
-      ...(typeof meta.slot === "string" && meta.slot ? { slot: meta.slot } : {}),
+      ...(typeof meta.slot === "string" && meta.slot
+        ? { slot: meta.slot }
+        : {}),
       openUrl: attachedSurfaceOpenUrl(anchor, e.toId),
       source: "attaches",
     };
@@ -742,7 +752,11 @@ export async function readAttachedSurfaces(
       const v = viewById.get(e.toId);
       if (!v) continue;
       const body =
-        v.type === "bento" ? "bento" : v.type === "whiteboard" ? "whiteboard" : "view";
+        v.type === "bento"
+          ? "bento"
+          : v.type === "whiteboard"
+            ? "whiteboard"
+            : "view";
       out.push({
         ...base,
         body,

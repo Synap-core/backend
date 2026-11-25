@@ -63,12 +63,14 @@ export const en = {
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Loading the surfaces on this…",
   "surfaces.failed": "The surfaces on this couldn’t be read.",
-  "surfaces.partial": "Some places couldn’t be read, so this list may be short.",
+  "surfaces.partial":
+    "Some places couldn’t be read, so this list may be short.",
   "surfaces.untitled": "Untitled",
   "surfaces.showAll": "Show all {n}",
   "surfaces.showLess": "Show fewer",
   "surfaces.back": "Back to the page",
-  "surfaces.missing": "This surface isn’t on this page any more, or you can’t see it.",
+  "surfaces.missing":
+    "This surface isn’t on this page any more, or you can’t see it.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -127,12 +129,14 @@ export const fr: Catalog<typeof en> = {
   "surfaces.title": "Surfaces",
   "surfaces.loading": "Chargement des surfaces…",
   "surfaces.failed": "Les surfaces n’ont pas pu être lues.",
-  "surfaces.partial": "Certains endroits n’ont pas pu être lus : la liste peut être incomplète.",
+  "surfaces.partial":
+    "Certains endroits n’ont pas pu être lus : la liste peut être incomplète.",
   "surfaces.untitled": "Sans titre",
   "surfaces.showAll": "Tout afficher ({n})",
   "surfaces.showLess": "En afficher moins",
   "surfaces.back": "Retour à la page",
-  "surfaces.missing": "Cette surface n’est plus sur cette page, ou vous ne pouvez pas la voir.",
+  "surfaces.missing":
+    "Cette surface n’est plus sur cette page, ou vous ne pouvez pas la voir.",
 };
 
 /** `/open`'s translator, in the ambient catalog locale. */

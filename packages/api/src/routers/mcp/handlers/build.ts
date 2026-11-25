@@ -1142,7 +1142,9 @@ export const buildHandlers: McpHandlerMap = {
         {
           anchor: args.attachTo as SurfaceAnchor,
           body:
-            type === "bento" || type === "whiteboard" ? type : ("view" as const),
+            type === "bento" || type === "whiteboard"
+              ? type
+              : ("view" as const),
           title: typeof args.name === "string" ? args.name : "",
           spec: {
             ...(type && type !== "bento" && type !== "whiteboard"

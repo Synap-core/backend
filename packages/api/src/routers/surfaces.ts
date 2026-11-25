@@ -76,7 +76,11 @@ function settle<T extends { status: string }>(
 }
 
 function actorOf(
-  ctx: { userId?: string | null; agentUserId?: string | null; sessionId?: string | null },
+  ctx: {
+    userId?: string | null;
+    agentUserId?: string | null;
+    sessionId?: string | null;
+  },
   door: string
 ): SurfaceActor {
   return {

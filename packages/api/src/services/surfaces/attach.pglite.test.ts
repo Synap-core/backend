@@ -271,7 +271,11 @@ describe("surfaces.create (one act: the body and its edge)", () => {
       action: "create",
       workspaceId: W,
     });
-    const cell = await q<{ workspace_id: string; cell_type: string; user_id: string }>(
+    const cell = await q<{
+      workspace_id: string;
+      cell_type: string;
+      user_id: string;
+    }>(
       `select workspace_id, cell_type, user_id from cell_instances where id=$1`,
       [id]
     );
@@ -305,7 +309,9 @@ describe("surfaces.create (one act: the body and its edge)", () => {
     expect(h.permCalls).toHaveLength(1);
     const data = h.permCalls[0]!.data as Record<string, unknown>;
     const reserved = data.surfaceId as string;
-    const none = await q(`select id from cell_instances where id=$1`, [reserved]);
+    const none = await q(`select id from cell_instances where id=$1`, [
+      reserved,
+    ]);
     expect(none.rows).toHaveLength(0);
 
     const made = await applyCreateSurface({

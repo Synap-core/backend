@@ -117,9 +117,9 @@ describe("tripwire: LinkEndpointType SSOT (derived registration sites)", () => {
     expect(sites.map((s) => s.file)).toContain(SCHEMA_FILE);
     expect(sites.length).toBeGreaterThanOrEqual(3);
     // The hand-copied list the scan exists for is still found by it.
-    expect(sites.filter((s) => s.kind === "array").map((s) => s.file)).toContain(
-      REST_DOOR
-    );
+    expect(
+      sites.filter((s) => s.kind === "array").map((s) => s.file)
+    ).toContain(REST_DOOR);
     expect(schemaUnion()).toContain(SIGNATURE_MEMBER);
   });
 

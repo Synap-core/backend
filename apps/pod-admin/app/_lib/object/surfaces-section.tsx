@@ -15,7 +15,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@heroui/react";
-import type { SurfaceAnchor, SurfacesForObject } from "@synap-core/types/surfaces";
+import type {
+  SurfaceAnchor,
+  SurfacesForObject,
+} from "@synap-core/types/surfaces";
 import { trpc } from "../../../lib/trpc";
 import { ResourceRowError } from "../../(admin)/components/resource-row";
 import { SectionCard } from "../../(admin)/components/section-card";
@@ -78,7 +81,10 @@ export function SurfacesSection({ anchor }: { anchor: SurfaceAnchor }) {
               key={row.key}
               className="flex min-h-6 min-w-0 items-center gap-2 py-0.5"
             >
-              <Icon aria-hidden className="h-4 w-4 shrink-0 text-foreground/50" />
+              <Icon
+                aria-hidden
+                className="h-4 w-4 shrink-0 text-foreground/50"
+              />
               {row.href ? (
                 <Link href={row.href} className={DOOR}>
                   {name}

@@ -1704,8 +1704,7 @@ export const mutateProcs = {
       await replaceDetailCellLook({
         anchor: { kind: "entity", id: input.entityId },
         cellKey: input.ref?.cellKey ?? null,
-        props: (input.ref as { props?: Record<string, unknown> } | null)
-          ?.props,
+        props: (input.ref as { props?: Record<string, unknown> } | null)?.props,
         workspaceId: entity.workspaceId,
         ownerUserId: ctx.userId,
         agentUserId: ctx.agentUserId ?? null,
