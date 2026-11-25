@@ -26,6 +26,11 @@ import {
 import { SYNAP_VIEW_SDK, SYNAP_WIDGET_SDK } from "./frame-sdks.js";
 import { HOST_PROVIDED_FRAME_SPECIFIERS } from "../renderables/cell-source-checks.js";
 import type { Locale } from "../i18n/locale.js";
+import {
+  frameTokensWithBrand,
+  type SurfaceContextAnchor,
+  type SurfaceContextBrand,
+} from "./surface-context.js";
 
 /**
  * The iframe `sandbox` value of a module frame, exactly: scripts and modal
@@ -106,6 +111,20 @@ export interface CellFrameInitContext {
    * words follow it. Absent from an older host: the frame keeps its default.
    */
   locale?: Locale;
+  /*
+   * Frame contract v3 (`SurfaceContext`, `surfaceContextInitFields`): what
+   * the frame is about. Absent from an older host; `null` when there is none.
+   */
+  /** The object the frame is anchored to. */
+  anchor?: SurfaceContextAnchor | null;
+  /** The project the anchor belongs to. */
+  projectId?: string | null;
+  /** The goal (track) the anchor serves. */
+  goalId?: string | null;
+  /** The host's filters on what the frame shows. */
+  filters?: Record<string, unknown>;
+  /** The project's brand; its CSS is already in the frame's tokens. */
+  brand?: SurfaceContextBrand | null;
 }
 
 const BASE64 =
@@ -203,6 +222,8 @@ export interface CellModuleFrameInput {
   externalHosts?: readonly string[];
   /** The host's modules (React and the kit for a react frame) and its tokens. */
   hostModules: CellFrameModuleInputs;
+  /** The project's brand CSS (`SurfaceContext.brand.css`), written after the host's tokens. */
+  brandCss?: string | null;
 }
 
 /**
@@ -278,8 +299,8 @@ export function buildCellModuleFrameSrcdoc(
 
   const csp = buildCellModuleFrameCsp(input.externalHosts ?? []);
   const htmlAttributes = input.themeAttributes ?? `data-theme="${theme}"`;
-  // `<\/` is the same text to CSS, and cannot end the element.
-  const tokens = hostModules.tokensCss.replace(/<\//g, "<\\/");
+  // The host's tokens, then the brand's (`<\/` cannot end the element).
+  const tokens = frameTokensWithBrand(hostModules.tokensCss, input.brandCss);
 
   return `<!DOCTYPE html>
 <html ${htmlAttributes}>

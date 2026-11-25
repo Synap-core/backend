@@ -88,6 +88,8 @@ vi.mock("../../../lib/trpc", async () => ({
       await import("../../_lib/presence/__tests__/trpc-double")
     ).presenceTrpcDouble(),
     useUtils: () => ({}),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     useQueries: () => [],
     proposals: {
       get: {

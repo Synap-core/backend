@@ -991,6 +991,25 @@ export const GRANT_REST_GET_READS: ReadonlyArray<
   // its list to a pin: a key pinned to a space, project or object stays
   // refused (finding de33a075: a computer's key, unpinned, was refused).
   [/^\/workspaces\/?$/, READS("entity", "project", "proposal")],
+  // A frame's context (`resolveSurfaceContext`, frame contract v3): the
+  // anchor (an entity, a document, a project, a goal, a session, a playbook,
+  // a view, a space or a kind), the space and project it sits in, and the
+  // project's brand (rows of the Brand space). Most of it reads through
+  // `scopedDb` (grant ANDed), but a space and a kind have no grant subject
+  // and the brand reads the Brand space's rows: a key pinned to a space,
+  // project or object stays refused, as for `/workspaces`.
+  [
+    /^\/surfaces\/context\/?$/,
+    READS(
+      "entity",
+      "document",
+      "project",
+      "track",
+      "session",
+      "playbook",
+      "view"
+    ),
+  ],
   // What is installed, every kind (`installed.ts`): the spaces' template
   // state and steps (proposals), capabilities (subject `tool`, as MCP
   // `synap_list_capabilities`), views, skills, automations and cells

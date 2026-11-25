@@ -50,6 +50,7 @@ import type { SyncConnectorConnection } from "../../connectors/SyncConnector.js"
 import { enqueueConnectionSync } from "../event-sync/connection-sync.js";
 import { staleConnectionIds } from "../../connectors/stale-connections.js";
 import { resolveCapabilityNangoProviderKeys } from "./capability-provider-resolution.js";
+import { isSourceAccountHint } from "./source-account-hint.js";
 
 const logger = createLogger({ module: "capability-nango-sync" });
 
@@ -114,8 +115,12 @@ export async function syncNangoConnectionsToRegistry(
         isNull(secrets.deletedAt)
       )
     );
+  // A source row (no secret, `storybook:…`) is no broker connection: never
+  // read as one Nango stopped reporting.
   const known = new Set(
-    existing.map((r) => r.accountHint).filter((h): h is string => !!h)
+    existing
+      .map((r) => r.accountHint)
+      .filter((h): h is string => !!h && !isSourceAccountHint(h))
   );
   let needsDefault = !existing.some((r) => r.isDefault);
 

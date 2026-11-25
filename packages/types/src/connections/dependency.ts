@@ -85,9 +85,8 @@ export const REPLACES_LINK_TYPE = "replaces" as const;
 /**
  * `links.metadata.option` on a `blocked_by` edge to a decision: the option key
  * (`askOptionKey`: `value ?? label`) the waiting step is the arm of. Written
- * by the session doors (`<id>:<option>`, {@link parseArmRef}).
- * MARKED SPOT (lane B3): the capture plan's cross-kind `links[]` (a step →
- * a decision) carries the same key once B3's links land; not wired before.
+ * by the session doors (`<id>:<option>`, {@link parseArmRef}) and by a
+ * capture plan's cross-kind `links[]` (a step → a decision, `option`).
  */
 export const DECISION_ARM_OPTION_KEY = "option" as const;
 

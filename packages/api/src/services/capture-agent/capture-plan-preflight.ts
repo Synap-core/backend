@@ -10,6 +10,7 @@
  *     same owner floor the edge producers apply at approval, raised at propose
  *     time so a proposal that approval would refuse is never filed;
  *   - every existing entity / project id is visible to that owner;
+ *   - an arm (`option`) on an EXISTING decision names one of its options;
  *   - each `create_project` step's EVIDENCE: in-plan entity refs + visible
  *     existing ids, against the agent floor `projects.create` enforces. Below
  *     the floor is NOT a refusal inside a plan — the verdict is stamped onto
@@ -40,6 +41,7 @@ import {
   bodyReplaceRefusal,
   loadExistingBody,
 } from "../entity-body/body-replace-guard.js";
+import { armOptionProblem } from "../links/arm-option.js";
 import {
   planRefKinds,
   validatePlanOperations,
@@ -241,6 +243,36 @@ export async function preflightPlanOperations(
       }
     }
   });
+
+  // ── Existing decisions: an arm names one of their options ─────────────
+  // The rule the dependency door applies at approval (`armOptionProblem`),
+  // raised now: an arm on an EXISTING decision is otherwise filed and fails
+  // only when the person approves. An in-plan decision is judged by the pure
+  // half (`validatePlanOperations`), which reads its options in the plan.
+  const armLinks = operations.flatMap((op, i) =>
+    op.op === "create_link" &&
+    op.toEntityId &&
+    typeof op.option === "string" &&
+    op.option.trim() &&
+    visibleEntityIds.has(op.toEntityId)
+      ? [{ opIndex: i, toId: op.toEntityId, option: op.option }]
+      : []
+  );
+  if (armLinks.length > 0) {
+    const rows = await database
+      .select({
+        id: entities.id,
+        type: entities.type,
+        properties: entities.properties,
+      })
+      .from(entities)
+      .where(inArray(entities.id, [...new Set(armLinks.map((a) => a.toId))]));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (const arm of armLinks) {
+      const problem = armOptionProblem(byId.get(arm.toId), arm.option);
+      if (problem) push(arm.opIndex, problem);
+    }
+  }
 
   // ── Existing entities: a document step never replaces a body ──────────
   // The rule `entities.update` enforces at approval (body-replace-guard),

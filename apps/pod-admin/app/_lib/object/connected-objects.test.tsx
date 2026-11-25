@@ -14,6 +14,8 @@ const mediaAsked: Array<{ documentId?: string; viaEntityId?: string | null }> =
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
     useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     graph: {
       getObjectGraph: {
         useQuery: () => ({

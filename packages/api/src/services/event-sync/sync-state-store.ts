@@ -52,6 +52,13 @@ export interface KindSyncState {
    */
   failure?: SyncFailure | null;
   leaseUntil?: string | null;
+  /**
+   * What the next read takes, when the handler reads a source named per run
+   * rather than a fixed provider account (the storybook sync: the bundle file
+   * or the Storybook URL `storybook.sync` was given). Handler-owned: the runner
+   * never reads or clears it.
+   */
+  input?: Record<string, unknown> | null;
 }
 
 export interface KindStateKey {

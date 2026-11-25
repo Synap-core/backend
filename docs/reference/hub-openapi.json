@@ -21893,7 +21893,7 @@
                           "accountHint": { "type": ["string", "null"] },
                           "kind": {
                             "type": "string",
-                            "enum": ["nango", "vault"]
+                            "enum": ["nango", "vault", "source"]
                           },
                           "isPodWide": { "type": "boolean" },
                           "provider": { "type": ["string", "null"] },
@@ -22000,7 +22000,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {
@@ -22109,7 +22112,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {
@@ -53952,6 +53958,141 @@
                     "projectId"
                   ]
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/surfaces/context": {
+      "get": {
+        "tags": ["Surfaces"],
+        "summary": "What a frame anchored to an object is about, and its brand",
+        "description": "The context a host hands a frame (frame contract v3, `window.synap.context()`): the anchor, its space, project and goal, and the project's brand as `--synap-*` CSS to write after the host's tokens. `brand` is null when the anchor has no project or its project no brand. 404 when the caller cannot read the anchor; a failed read is a 5xx, never an empty context.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "entity",
+                "profile",
+                "workspace",
+                "project",
+                "track",
+                "playbook",
+                "session",
+                "document",
+                "view"
+              ]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["light", "dark"] },
+            "required": false,
+            "name": "theme",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z]{2}(-[A-Za-z]{2})?$"
+            },
+            "required": false,
+            "name": "locale",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "anchor": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "kind": { "type": "string" },
+                        "id": { "type": "string" }
+                      },
+                      "required": ["kind", "id"]
+                    },
+                    "workspaceId": { "type": ["string", "null"] },
+                    "projectId": { "type": ["string", "null"] },
+                    "goalId": { "type": ["string", "null"] },
+                    "filters": { "type": "object", "additionalProperties": {} },
+                    "brand": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "hash": { "type": "string" },
+                        "css": { "type": "string" }
+                      },
+                      "required": ["id", "hash", "css"]
+                    },
+                    "locale": { "type": "string" },
+                    "theme": { "type": "string", "enum": ["light", "dark"] }
+                  },
+                  "required": [
+                    "anchor",
+                    "workspaceId",
+                    "projectId",
+                    "goalId",
+                    "filters",
+                    "brand",
+                    "locale",
+                    "theme"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },

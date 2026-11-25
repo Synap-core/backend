@@ -41,7 +41,7 @@ const CredentialSchema = z.object({
   contextId: z.string().nullable(),
   isDefault: z.boolean(),
   accountHint: z.string().nullable(),
-  kind: z.enum(["nango", "vault"]),
+  kind: z.enum(["nango", "vault", "source"]),
   isPodWide: z.boolean(),
   // Merged live-truth fields (capability-connections.listCredentials): the Nango
   // provider key, connection health, and whether the row is a real secrets row or
