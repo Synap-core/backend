@@ -21,7 +21,13 @@
  * nothing is propagated; the links stand and a person reviews the ripple.
  */
 import { and, eq } from "drizzle-orm";
-import { db, entityLinks, entities, focusSessions, playbooks } from "@synap/database";
+import {
+  db,
+  entityLinks,
+  entities,
+  focusSessions,
+  playbooks,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { StatusMoveActor } from "./move-status.js";
 import { withPropagationScope } from "./propagation-guard.js";
@@ -129,7 +135,9 @@ async function checkInStage(
       subjectStatus?: string | null;
     }>;
     const stage = stages.find((s) => s.key === session.currentStage);
-    if (stage && stage.subjectStatus != null && stage.subjectStatus !== newStatus) {
+    if (stage &&
+      stage.subjectStatus != null &&
+      stage.subjectStatus !== newStatus) {
       return {
         ok: false,
         reason: `moved status "${newStatus}" is not the current stage ("${session.currentStage}")'s status`,

@@ -17,7 +17,15 @@
  * that must survive a re-parenting read and cascade-delete with its ends.
  */
 
-import { pgTable, uuid, text, timestamp, jsonb, index, uniqueIndex } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  uuid,
+  text,
+  timestamp,
+  jsonb,
+  index,
+  uniqueIndex,
+} from "drizzle-orm/pg-core";
 import { entities } from "./entities.js";
 
 export const entityLinks = pgTable(

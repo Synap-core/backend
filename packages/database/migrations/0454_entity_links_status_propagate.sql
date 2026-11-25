@@ -7,13 +7,13 @@
 -- (source status → target status).
 
 CREATE TABLE IF NOT EXISTS "entity_links" (
-  "id"                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  "source_entity_id"  uuid NOT NULL REFERENCES "entities"("id") ON DELETE CASCADE,
-  "target_entity_id"  uuid NOT NULL REFERENCES "entities"("id") ON DELETE CASCADE,
-  "link_type"         text NOT NULL DEFAULT 'status-propagates',
-  "config"            jsonb,
-  "created_at"        timestamp with time zone NOT NULL DEFAULT now(),
-  "updated_at"        timestamp with time zone NOT NULL DEFAULT now()
+  "id" uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "source_entity_id" uuid NOT NULL REFERENCES "entities" ("id") ON DELETE CASCADE,
+  "target_entity_id" uuid NOT NULL REFERENCES "entities" ("id") ON DELETE CASCADE,
+  "link_type" text NOT NULL DEFAULT 'status-propagates',
+  "config" jsonb,
+  "created_at" timestamp with time zone NOT NULL DEFAULT now(),
+  "updated_at" timestamp with time zone NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS "entity_links_source_target_type_unique"
@@ -21,4 +21,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS "entity_links_source_target_type_unique"
 
 CREATE INDEX IF NOT EXISTS "entity_links_source_idx" ON "entity_links" ("source_entity_id");
 CREATE INDEX IF NOT EXISTS "entity_links_target_idx" ON "entity_links" ("target_entity_id");
-CREATE INDEX IF NOT EXISTS "entity_links_type_idx"   ON "entity_links" ("link_type");
+CREATE INDEX IF NOT EXISTS "entity_links_type_idx" ON "entity_links" ("link_type");
