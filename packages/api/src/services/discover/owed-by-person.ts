@@ -48,10 +48,16 @@ export type OwedInbox = "needs-you" | "proposed";
 export interface OwedByPerson {
   /**
    * The headline: asks that really need the person (THE needs-you rule,
-   * `classifyOwedAsk`, decision E) plus a draft's ask-less slots (Proposed).
-   * Every other owed ask is in {@link folds}, never dropped.
+   * `classifyOwedAsk`, decision E) — this is the count that aligns with
+   * `countNeedsYou().needsYou` from the signals system.
    */
   count: number;
+  /**
+   * Draft ask-less slots that are PROPOSED (not yet counted in needs-you).
+   * These are drafts whose asks have not been answered; they contribute to
+   * the draft's `Proposed` row, not to the needs-you headline.
+   */
+  proposedCount: number;
   /**
    * Real asks owed for more than 7 days — the Review later fold, out of the
    * headline (the same class the needs-you count reads).
@@ -143,7 +149,8 @@ export function foldOwedByPerson(p: {
     )
   );
   return {
-    count: headline.length + p.proposed.length,
+    count: headline.length,
+    proposedCount: p.proposed.length,
     reviewLater: folds.reviewLater,
     folds,
     sessions: rows.length,

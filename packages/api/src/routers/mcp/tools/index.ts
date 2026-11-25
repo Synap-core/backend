@@ -315,6 +315,31 @@ function buildAutomationDataContractJsonSchema(): Record<string, unknown> {
   }) as Record<string, unknown>;
   delete derived.$schema;
 
+  // Ensure all array fields have explicit items for MCP serialization.
+  // Recursive: nested arrays inside objects must also carry explicit items.
+  const ensureArrayItems = (obj: unknown): void => {
+    if (!obj || typeof obj !== "object") return;
+    const v = obj as Record<string, unknown>;
+    if (v.type === "array" && !v.items) {
+      v.items = { type: "string" };
+    }
+    if (v.type === "array" && v.items && typeof v.items === "object") {
+      ensureArrayItems(v.items);
+    }
+    if (v.properties) {
+      for (const pv of Object.values(v.properties as Record<string, unknown>)) {
+        ensureArrayItems(pv);
+      }
+    }
+    if (v.items) ensureArrayItems(v.items);
+    if (v.anyOf) {
+      for (const pv of Object.values(v.anyOf as Record<string, unknown>)) {
+        ensureArrayItems(pv);
+      }
+    }
+  };
+  ensureArrayItems(derived);
+
   const properties = derived.properties as Record<
     string,
     Record<string, unknown>

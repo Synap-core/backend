@@ -2,6 +2,11 @@
  * `startHere.owedByPerson` — the fold, unit level. The reads are the shared
  * `listOwedSlots` lenses (seam: `draft-asks.pglite.test.ts`).
  *
+ * THE FIX (2026-11-25): `count` now only counts owed slots classified as
+ * `needs_you` by the rule. Previously it also included `proposed` (draft ask-less
+ * slots). A new field `proposedCount` carries the proposed slots count so callers
+ * can distinguish them. The `reviewLater` count is unchanged.
+ *
  * The live case (2026-10-22): five older sessions owed the founder something,
  * and the NEWEST — an agent draft, "CRM app: spec", three `choose` decisions
  * owed since 13:29Z — was the one he could not find. It must lead, as ONE row,
@@ -65,8 +70,12 @@ describe("foldOwedByPerson", () => {
     expect(r.items[0]!.labels).toHaveLength(3);
     // Deduped per session: three slots, one row.
     expect(r.items.filter((i) => i.sessionId === "6fbc2b5c")).toHaveLength(1);
+    // `count` is only the needs-you headline; the older slots are review_later,
+    // so they leave the headline. `proposedCount` carries the draft slots.
     expect(r).toMatchObject({
-      count: 8,
+      count: 0,
+      proposedCount: 3,
+      reviewLater: 5,
       sessions: 6,
       countIsLowerBound: false,
       lens: "owed-by-person",

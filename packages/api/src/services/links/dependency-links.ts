@@ -910,6 +910,11 @@ async function gate(
     ...(input.issuer ? { issuer: input.issuer } : {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.reasoning?.trim() ? { reasoning: input.reasoning.trim() } : {}),
+    // A delete removes a dependency edge the agent itself created — the re-plan
+    // door (removeBlockedBy*) must not dead-end at the rung-0 grant floor.
+    // Let the governance ladder proceed to rung 2, where agent permissions are
+    // evaluated and a proposal is filed if the grant does not cover link.delete.
+    ...(action === "delete" ? { proposeBeyondGrant: true } : {}),
     data: {
       title: linkProposalTitle(input.edge),
       fromType: input.edge.fromType,
