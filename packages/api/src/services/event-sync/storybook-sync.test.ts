@@ -307,9 +307,9 @@ describe("planRefresh", () => {
     expect(JSON.stringify(stored["props-summary"])).not.toBe(
       JSON.stringify(fresh.properties["props-summary"])
     );
-    expect(planRefresh(fresh, { properties: stored, status: "stable" })).toEqual(
-      { patch: {}, moveTo: null }
-    );
+    expect(
+      planRefresh(fresh, { properties: stored, status: "stable" })
+    ).toEqual({ patch: {}, moveTo: null });
     // A real change to a prop is still written.
     b.components[0]!.props![0]!.required = true;
     expect(
