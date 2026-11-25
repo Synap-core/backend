@@ -117,6 +117,7 @@ export function boxRunAsUnifiedRun(
     replayOf: null,
     summary: boxRunSummary(run, status, place),
     error: run.status === "failed" ? run.error : null,
+    stopReason: null,
     triggeredBy: run.agentUserId ?? run.userId,
     stepsCompleted: null,
     stepsFailed: null,

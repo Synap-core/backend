@@ -98,6 +98,7 @@ function run(
     replayOf: null,
     summary: null,
     error: null,
+    stopReason: null,
     triggeredBy,
     stepsCompleted: null,
     stepsFailed: null,

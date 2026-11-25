@@ -40,7 +40,7 @@ describe("playbookTriggerFact — the header says what starts it", () => {
       playbookTriggerFact({
         workers: paused,
         workersFailed: false,
-        schedule: { cron: "0 9 * * 1", enabled: true },
+        schedule: { cron: "0 9 * * 1", timezone: null, on: true },
       })
     ).toEqual({ state: "known", text: "Every Monday at 09:00 UTC" });
     expect(

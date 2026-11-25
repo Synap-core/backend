@@ -11,6 +11,8 @@
 
 import { humanizeToken, resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { StatusKind } from "../../components/status-pill";
+import { LIVE_RUN_FEED_STATUSES, statusMark } from "@synap-core/types/units";
+import { statusMarkPill } from "../../components/status-tone";
 import {
   formatRelative,
   isUuid,
@@ -87,16 +89,8 @@ export function flowHealthPill(
   status: string | null,
   group: FlowHealthFacts | null | undefined
 ): { kind: StatusKind; label: string } {
-  switch (status) {
-    case "error":
-      return { kind: "down", label: "Stopped on error" };
-    case "paused":
-      return { kind: "unknown", label: "Paused" };
-    case "draft":
-      return { kind: "unknown", label: "Draft" };
-    case "archived":
-      return { kind: "unknown", label: "Archived" };
-  }
+  const own = statusMark("automation", status);
+  if (own?.category && own.category !== "active") return statusMarkPill(own);
   if (!group) return { kind: "unknown", label: "Never ran" };
   if (group.latestStatus === "failed") {
     return { kind: "down", label: "Failed last run" };
@@ -140,8 +134,11 @@ export function runActions(run: {
   status: string;
 }): { cancel: boolean; runAgain: boolean } {
   return {
-    // `playbookRuns.cancelRun` refuses anything not live (CONFLICT).
-    cancel: run.flowType === "playbook" && run.status === "running",
+    // `playbookRuns.cancelRun` takes a live run (queued, running, blocked,
+    // waiting on you, the feed's paused) and refuses anything else (CONFLICT).
+    cancel:
+      run.flowType === "playbook" &&
+      LIVE_RUN_FEED_STATUSES.includes(run.status),
     // A rule re-runs through `automations.trigger` (governed for agents).
     runAgain: run.flowType === "automation" && run.flowId !== null,
   };

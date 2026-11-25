@@ -69,6 +69,8 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   DEFAULT_WORKER_MODE,
   effectiveWorkerSize,
+  playbookScheduleOf,
+  type PlaybookScheduleView,
   type WorkerScopeKind,
   type WorkerSize,
 } from "@synap-core/types/workers";
@@ -1402,4 +1404,29 @@ export async function playbookGoalsAndHealth(input: {
     });
   }
   return out;
+}
+
+/**
+ * Each playbook's schedule (`playbookScheduleOf`), for a page of rows in one
+ * read: the `schedule` a playbook read returns, in place of the retired column.
+ */
+export async function withPlaybookSchedules<
+  R extends { id: string; schedule: unknown },
+>(
+  userId: string,
+  rows: readonly R[]
+): Promise<
+  Array<Omit<R, "schedule"> & { schedule: PlaybookScheduleView | null }>
+> {
+  const workers =
+    rows.length > 0
+      ? await listEnabledWorkers({ userId, playbookIds: rows.map((r) => r.id) })
+      : [];
+  return rows.map((r) => ({
+    ...r,
+    schedule: playbookScheduleOf({
+      workers: workers.filter((w) => w.playbookId === r.id),
+      retired: r.schedule,
+    }),
+  }));
 }

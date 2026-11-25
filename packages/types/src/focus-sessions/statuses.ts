@@ -211,6 +211,18 @@ export function sessionClosedAs(
   return category === "lost" ? "not_done" : null;
 }
 
+/**
+ * A row's `verification_report` holds the close door's not-done record
+ * (`closedNotDone`, an object). The SQL twin is `closedNotDoneRecordedSql`.
+ */
+export function closedNotDoneRecorded(verificationReport: unknown): boolean {
+  const record = (verificationReport as { closedNotDone?: unknown } | null)
+    ?.closedNotDone;
+  return (
+    typeof record === "object" && record !== null && !Array.isArray(record)
+  );
+}
+
 export function isTerminalSessionStatus(
   v: string | null | undefined
 ): v is TerminalSessionStatus {

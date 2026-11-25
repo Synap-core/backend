@@ -38,6 +38,8 @@ export interface RecentFlowRun {
   status: RunStatus;
   startedAt: Date;
   completedAt: Date | null;
+  /** Why a failed run stopped (`stop_reason`; `UnifiedRun.stopReason`). */
+  stopReason: string | null;
   /**
    * The focus session this run drives, or null when it has none — the door a
    * `waiting_on_you` mark opens (the owed slot lives on that session). A
@@ -59,6 +61,7 @@ type RawRunRow = {
   status: string;
   startedAt: Date | string;
   completedAt: Date | string | null;
+  stopReason?: string | null;
   sessionId: string | null;
 };
 
@@ -74,6 +77,7 @@ function mapRow(row: RawRunRow): RecentFlowRun {
     status: runStatusOfPlaybookRun(row.status),
     startedAt: new Date(row.startedAt),
     completedAt: row.completedAt ? new Date(row.completedAt) : null,
+    stopReason: row.stopReason ?? null,
     sessionId: row.sessionId ?? null,
   };
 }
@@ -93,6 +97,7 @@ async function loadAutomationHistory(
         ${automationRuns.status} AS "status",
         ${automationRuns.startedAt} AS "startedAt",
         ${automationRuns.completedAt} AS "completedAt",
+        ${automationRuns.stopReason} AS "stopReason",
         (
           SELECT fs.id FROM focus_sessions fs
           WHERE fs.metadata->>'automationRunId' = ${automationRuns.id}::text
@@ -137,6 +142,7 @@ async function loadPlaybookHistory(
         ${playbookRuns.status} AS "status",
         ${playbookRuns.startedAt} AS "startedAt",
         ${playbookRuns.completedAt} AS "completedAt",
+        ${playbookRuns.stopReason} AS "stopReason",
         ${playbookRuns.sessionId} AS "sessionId",
         count(*) FILTER (
           WHERE ${settledRunStatusWhere(playbookRuns.status)}
