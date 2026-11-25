@@ -935,6 +935,9 @@ export const LINEAGE_EDGE_LABELS: Readonly<
   // the add-on runs through its base. From the base's side the row is the
   // add-on that extends it.
   extends: { outgoing: "Add-on of", incoming: "Extended by" },
+  // <anchor> --attaches--> view|document|cell_instance (Surfaces P3): a screen
+  // put on the object. From the surface's side the row is the object it is on.
+  attaches: { outgoing: "Shows", incoming: "Shown on" },
 };
 
 export function resolveLineageEdgeLabel(
