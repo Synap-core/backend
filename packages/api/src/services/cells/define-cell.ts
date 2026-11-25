@@ -840,7 +840,7 @@ async function writeCell(
       : "trustLevel" in trustDemotion
         ? trustDemotion
         : {
-            trustLevel: drizzleSql<"trusted" | "installed" | "generated">`CASE WHEN ${widgetDefinitions.trustLevel} = 'installed' THEN 'generated' ELSE ${widgetDefinitions.trustLevel} END`,
+            trustLevel: drizzleSql<"trusted" | "installed" | "generated">`${widgetDefinitions.trustLevel}`,
           };
 
   // ONE instant for the insert's timestamps, set here rather than left to the
