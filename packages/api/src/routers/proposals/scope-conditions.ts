@@ -158,8 +158,7 @@ export function buildProposalScopeConditions(
       ) as SQL
     );
   } else {
-    // The user floor already carries it.
-    conditions.push(proposalUserFloor(userId));
+    // negctl: the user floor removed.
   }
 
   if (input.targetType) {
