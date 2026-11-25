@@ -53,6 +53,8 @@ const EXEMPT: Record<string, string> = {
     "connection sync — wave 2 (founder: keep a COPY of each provider record); out of wave 1 scope",
   "services/playbook-app/propose-app-from-playbook.ts":
     "builds a playbook's UI bundle from FACTS read off the pod (the playbook, its kind's declared lifecycle): there is no raw input to keep, only a playbook id",
+  "services/tracks/pathway-replan.ts":
+    "the pathway re-plan files the POD's own revision, derived from the pathway's rows (a step that ended without delivering, the steps waiting on it): there is no raw input to keep",
   "services/library/run-action.ts":
     "a Library chip files ONE proposal from a Library item — a document ALREADY staged as the raw (library/add.ts, imports/stage.ts → stageIntakeSource) — and forwards its id (`sourceDocumentIds: [args.itemId]`)",
 };

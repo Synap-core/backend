@@ -59,6 +59,7 @@ import {
   drizzleSql,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import type { SQL } from "@synap/database";
 import type { ProjectTrack } from "@synap/database/schema";
 import {
   GOAL_LOOP_WINDOW_DAYS,
@@ -153,21 +154,25 @@ export function asRunCriterion(c: GoalCriterion): SessionCriterion {
 }
 
 /**
- * The proposals this goal's loop filed: still pending, and in the window.
- * Narrowed by the indexed author column first (`idx_proposals_created_by`:
- * only the loop's own rows), then by the goal in their payload (F5).
+ * The proposals a loop beside a goal filed (the goal loop, the pathway
+ * re-plan): still pending, and in the budget window. Narrowed by the indexed
+ * author column first (`idx_proposals_created_by`: only that loop's own
+ * rows), then by the goal its payload names (`loopOf`, F5).
  */
-async function loopProposalCounts(
-  goalId: string
-): Promise<{ pending: number; recent: number }> {
-  const loopOf = drizzleSql`${proposals.data}->'data'->>'goalLoopOf'`;
+export async function loopProposalCounts(input: {
+  author: `system:${string}`;
+  goalId: string;
+  /** The payload path that names the goal (the loop's own key). */
+  loopOf: SQL;
+}): Promise<{ pending: number; recent: number }> {
+  const { author, goalId, loopOf } = input;
   const recentSql = drizzleSql<boolean>`${proposals.createdAt} > now() - (${GOAL_LOOP_WINDOW_DAYS}::int * interval '1 day')`;
   const rows = await db
     .select({ status: proposals.status, recent: recentSql })
     .from(proposals)
     .where(
       and(
-        eq(proposals.createdBy, GOAL_LOOP_AUTHOR),
+        eq(proposals.createdBy, author),
         drizzleSql`${loopOf} = ${goalId}`,
         or(eq(proposals.status, ProposalStatus.PENDING), recentSql)
       )
@@ -205,7 +210,11 @@ export async function runGoalLoop(goalId: string): Promise<GoalLoopRunResult> {
   ]);
   const runs = runsOf.get(track.id) ?? [];
   const states = deriveGoalCriteria(criteria, runs, { judgeId });
-  const counts = await loopProposalCounts(track.id);
+  const counts = await loopProposalCounts({
+    author: GOAL_LOOP_AUTHOR,
+    goalId: track.id,
+    loopOf: drizzleSql`${proposals.data}->'data'->>'goalLoopOf'`,
+  });
   const decision = decideGoalNextRun({
     loop,
     category: trackStatusCategory(track.status),
@@ -388,7 +397,8 @@ export async function askOwnerLoopStopped(
 export const GOAL_LOOP_SWEEP_PAGE = 200;
 
 /**
- * The hourly re-check (the focus-session reaper's tick): every ACTIVE goal
+ * The hourly re-check (the focus-session reaper's tick), then the pathway
+ * re-plan's (`sweepPathwayReplans`): every ACTIVE goal
  * whose loop is on and that has criteria — an open run is `runGoalLoop`'s
  * own hold (`run_open`, the shared terminal-status rule), never re-spelled
  * here. Pages through them by id (code-core F5): ordered by `updated_at` and
@@ -435,5 +445,14 @@ export async function sweepGoalLoops(
     if (page.length < pageSize) break;
     after = page[page.length - 1]!.id;
   }
-  return { checked, proposed, failed };
+  // The pathway re-plan rides the same tick (P9): its net for an end no
+  // event reached, and for a revision its budget or a pending one held.
+  // Lazy: it imports this module (the shared count), never the reverse.
+  const { sweepPathwayReplans } = await import("./pathway-replan.js");
+  const pathways = await sweepPathwayReplans({ pageSize });
+  return {
+    checked: checked + pathways.checked,
+    proposed: proposed + pathways.proposed,
+    failed: failed + pathways.failed,
+  };
 }
