@@ -68,13 +68,14 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Goal**            | project_tracks          | what goal am I pursuing?              | in ONE project; open while it matters, or its judge closes it with a verdict; criteria say when it is done; work = sessions · grow the newsletter · tools say "track"                                |
 | **Step**            | stage                   | where does this work stand?           | = the subject's status: move the thing, the step follows · legacy: steps of a goal started from a method                                                                                             |
 | **Work**            | focus_session           | what am I doing this sitting?         | one aim · no noun: "Start work"                                                                                                                                                                      |
+| **Pathway**         | goal (`workKind: pathway`) + its sessions | how do I get there, step by step?     | a plan lived once: a goal, a root session, steps that wait on each other (born planned), decisions for the choices · fund to seed · a lens, not a store; not a Process (repeated work) · `from-intent` §2d |
 | **Process**         | playbook                | how do I reuse it?                    | kind DERIVED, never declared: scope session = process (a method a session or worker follows), project = goal process (legacy) · "Template" now names only a space template                           |
 | **Pack**            | suite                   | which templates come together?        | a bundle; depends on space templates, never creates a space                                                                                                                                          |
 | **Rule**            | skill rule              | what do my agents always follow?      | a standing instruction written for agents · "always cite sources" · not an Automation, not Approvals                                                                                                 |
 | **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                               |
 | **Approvals**       | governance rules        | which AI writes wait for me?          | decides review vs auto, does no work                                                                                                                                                                 |
 | **Tools**           | capability, skill, tool | what can it act with?                 | one word; the detail shows the kind                                                                                                                                                                  |
-| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · never Cell, Widget or Interface                                                                                                                              |
+| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · agents call it a **Cell** (decision of 23 Nov 2026): placed in a bento, a document or a board · "card" is also a renderer slot · never Widget or Interface   |
 | **Display**         | renderer                | how does this kind look?              | a card bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                     |
 | **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Card                                                                                                                                        |
 | **App**             | built-in surface        | what do I open in Synap?              | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                                                       |
@@ -95,7 +96,7 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Inbox**           | needs-you signals       | what needs me?                        | one list: decisions, questions, routine changes, broken · not Work                                                                                                                                   |
 | **Questions**       | owed slot ask           | what did an agent ask me?             | an Inbox filter · answer it, the work resumes                                                                                                                                                        |
 | **Routine changes** | reversible proposal     | what can I approve in a batch?        | an Inbox filter · only reversible changes batch; undo says what it cannot restore                                                                                                                    |
-| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a stuck session                                                                                                                                                      |
+| **Broken**          | failed or stuck work    | what needs a fix?                     | an Inbox filter · a failed run, a run nobody claimed (`blocked`), a stuck session                                                                                                                                  |
 | **Library**         | data (things, files)    | what did we bring in?                 | what you and your agents kept or made: things, files, imports · not a space                                                                                                                          |
 | **Unfiled**         | entity in no project    | what is not filed yet?                | things outside every project · file them into one                                                                                                                                                    |
 | **Agents**          | agent users + keys      | who acts for me?                      | Claude Code, Codex, any MCP client; each has its own page · not a Tool                                                                                                                               |
@@ -135,7 +136,7 @@ A process is the life of a **thing**, not a script. A lead, a post or a feature 
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
 
-A **one-off long plan** (lived once: steps that wait on each other, choices on the way) is not a noun either: it is a root session, child sessions linked by `blocked_by`, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
+A **pathway**, a one-off long plan (lived once: steps that wait on each other, choices on the way), is not a noun either: it is a goal (`workKind: "pathway"`), a root session, child sessions linked by `blocked_by` and born planned, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
 
 How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
@@ -198,7 +199,7 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`, `timezone`: default the owner's zone) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into an automation the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 
@@ -369,11 +370,11 @@ Before the first write, name the layer in one word, then take its door. Most req
 | Layer          | The user wants…                                                        | Door                                                                                                                                                          |
 | -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **data**       | a thing remembered: a company, a note, a decision, a link between two  | `synap_capture` for messy input; `synap_create_entity` (`tools:data`) when the kind and fields are known. Never a note standing in for a view or a session.   |
-| **view**       | to SEE existing things: a list, a grouping, a board, a dashboard       | `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them.            |
+| **surface**    | to SEE or SHOW something: a list, a board, a dashboard, a page, a deck, a brainstorm | Pick the body first and say which and why: records of one kind → a View; text to read → a Document (`synap_create_document`); a cockpit to monitor → a Bento (`synap_create_view` type `bento`); a page or deck for outside the pod → an HTML artifact (`synap_create_document` type `html`); thinking together → a Whiteboard. `synap_list_views` first, so you do not duplicate one; then `synap_create_view` (`tools:build`). Never copy records into a new space to show them. |
 | **capability** | access beyond the graph: connect Gmail, send mail, search the live web | §2b: `synap_list_capabilities`, then run it or file its install. Never build a view to stand in for a capability.                                             |
 | **session**    | "I'm starting work on X": one bounded piece of work                    | `synap_start_session` with a one-line goal. Not a task.                                                                                                       |
 | **goal**       | a goal inside a project: "launch the new site" (a _track_)             | §2c: `synap_list_tracks`, else `synap_start_track` (both on every key). Not a project, not a pack, not a playbook.                                               |
-| **one-off plan** | a long plan lived once: steps that wait on each other, choices on the way ("fund the company to seed") | §2d: ONE `synap_capture`, a root session and one child session per step (`blockedByRefs`), choices as `decision` entities. Repeated work is a playbook; a lasting aim is a goal. |
+| **pathway**    | a long plan lived once: steps that wait on each other, choices and dates on the way ("fund the company to seed") | §2d: ONE `synap_capture` with the goal (`tracks[]`), a root session and one child session per step (`blockedByRefs`), choices as `decision` entities. Repeated work is a playbook; a lasting aim is a goal. |
 | **rule**       | a standing intent: "always…", "from now on…", "every Monday…"          | `synap_create_rule` (`tools:governance`) with the user's own words as `intent`; a trigger→steps reaction is `synap_create_automation` (`tools:capabilities`). |
 | **structure**  | a new area of work that needs kinds, spaces or a project               | the rest of this skill, from §0.                                                                                                                              |
 
@@ -395,7 +396,7 @@ If a close project exists, **reuse it**. Do not mint a twin. Name-match is enoug
 
 **Propose its `criteria` — do not grade yourself without them.** Two to five binary, observable statements the person can validate or rewrite ("`list_profiles` returns the `grp-run` kind"), not "the pack is good". They may equally be written by the person; what is not allowed is neither. A session with no criteria leaves you nothing to report against but your own opinion, which is how "85% complete" gets said about work nobody can check. Criteria are declarable at `synap_start_session` (as `outcomes` with `kind: 'fact'`, or the older `criteria`) and upserted later with `synap_update_session` — a session created inside a plan (`synap_capture` `sessions[]`) carries both: give each step its `criteria` with its `expectedOutputs`, and they land when the plan is approved.
 
-**A discovered prerequisite is a blocking child, not a paragraph in the same session.** When the goal cannot be finished until infrastructure exists, start that infrastructure as its own session: `parentSessionId` of the goal session, plus `suspendedIntent` — one line naming what the goal was about to do. That pair links the child (`spawned_from`) and blocks the parent (`blocked_by` the child). Work the child. Do not keep building the parent goal beside it. The parent stays open and waits; when the child is validated and closed, the parent unblocks and `suspendedIntent` is what you resume. A child that is only a slice of the same goal passes `parentSessionId` alone and does not block the parent.
+**A discovered prerequisite is a blocking child, not a paragraph in the same session.** When the goal cannot be finished until infrastructure exists, start that infrastructure as its own session: `parentSessionId` of the goal session, plus `suspendedIntent` — one line naming what the goal was about to do. That pair links the child (`spawned_from`) and blocks the parent (`blocked_by` the child). Work the child. Do not keep building the parent goal beside it. The parent stays open and waits; when the child closes done, the parent unblocks (a child closed not done, cancelled or failed holds it) and `suspendedIntent` is what you resume. A child that is only a slice of the same goal passes `parentSessionId` alone and does not block the parent.
 
 ### 1. Ask before you build (required)
 
@@ -425,7 +426,7 @@ Then **wait**. After that write lands (`proposed` is success), the _next_ turn m
 
 #### ONE write may be a whole connected PLAN
 
-`synap_capture` accepts `projects[]` / `sessions[]` / `documents[]` / `links[]` / `entities[]` / `relations[]` — and `skills[]` / `automations[]` / `rules[]` — in a **single call** that files **ONE proposal**. Steps reference each other by `ref`; ids exist only after approval. A plan carrying a session or project applies **all-or-none**, compensated if any step fails.
+`synap_capture` accepts `projects[]` / `sessions[]` / `documents[]` / `links[]` / `entities[]` / `relations[]` — and `workspaces[]` / `kinds[]` / `lifecycles[]` / `playbooks[]` / `skills[]` / `automations[]` / `rules[]` — in a **single call** that files **ONE proposal**. Steps reference each other by `ref`; ids exist only after approval, and the person's approval creates every step (an automation in it is turned on). A plan carrying a session or project applies **all-or-none**, compensated if any step fails.
 
 This is the difference between a reviewer seeing one graph and deciding once, and seeing fourteen cards with no visible relationship. **Prefer the plan whenever the structure is connected.** It is not a 7-step sequence — it is one decision about one shape.
 
@@ -479,36 +480,56 @@ A **goal** is a _track_ in every tool and field name (`synap_start_track`, `trac
 | new **kinds of things** no workspace owns        | a workspace (four-test, `workspace-design`) — never to represent a goal                                                                 |
 | a new long-lived commitment with its own gravity | a project — never a twin project for a goal of an existing one                                                                          |
 
-**A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. While a goal is active, its agent may work in the spaces its project links (`synap_project_use_workspace`); pausing it suspends that, closing or dropping it ends it. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
+**A goal steers; its sessions verify.** A session that passes a criterion CLAIMS it; the judge accepts or sends it back — never accept your own claim. Report a lasting goal's number with `synap_update_track` `kpi: { current }`: a STATED value, stamped with when and by whom — never invent a measurement. Reaching the target nudges the person to re-aim it or close the goal; never change the target or close the goal yourself. A goal grants no access: its agent works where its person is a member. Pause, resume, close (`completed` + a `verdict`) or drop (`archived`, with a `verdict` saying why) it with `synap_set_track_status`, sending `expectedStatus` = the status you read (`conflict` = someone moved it: re-read, decide again); your close is a proposal the person approves. Goal writes are governed: `proposed` is success. Installing a pack onto a project does **not** start goals — start each one.
 
 **Legacy only: goals with steps.** Goals have no stages. A goal started from a goal template (`scope: "project"`, `playbookId` on `synap_start_track`) has re-enterable stages. Work a stage with `synap_start_stage_session` (`trackId`, optional `stageKey`); never `synap_advance_track` without the user — advancing returns an `offer` (show it, start it only on a yes). Do not create new goal templates; a new goal needs none.
 
-### 2d. A one-off long plan
+### 2d. A pathway: a one-off long plan
 
-Use this when the person wants a plan they will live once: many steps, some that wait on others, choices to make on the way, an end state. "Lay out how we fund the company to seed." "Plan the move to the new office."
+Use this when the person wants a plan they will live once: many steps, some that wait on others, choices on the way, dates, an end state. "Lay out how we fund the company to seed." "Plan the move to the new office."
 
-Tell it apart first. Ask yourself: "If we did this again next month, would the steps be the same, with other names?"
+**Classify it first.** Ask yourself: "If we did this again next month, would the steps be the same, with other names?"
 
-| The work                                            | It is                                          |
-| --------------------------------------------------- | ---------------------------------------------- |
-| the same steps each time, with a new subject        | a playbook: a template that sessions follow    |
-| one bounded piece of work                           | a session                                      |
-| a lasting aim, closed with a verdict                | a goal (§2c); the plan's steps may serve it    |
-| lived once, long, with dependent steps and choices  | a one-off long plan: this section              |
+| The work                                            | It is                                              |
+| --------------------------------------------------- | -------------------------------------------------- |
+| the same steps each time, with a new subject        | a playbook: a template that sessions follow        |
+| one bounded piece of work                           | a session                                          |
+| a lasting aim, closed with a verdict                | a goal (§2c); a pathway's steps may serve it       |
+| lived once, long, with dependent steps and choices  | a pathway: this section                            |
 
 Never write a playbook for work nobody will repeat. Never make each step a goal.
 
+A pathway is not a new object. It is a lens: a goal (`workKind: "pathway"`), a root session, one child session per step, the decisions on the way, and the links between them. The map the person sees is drawn from those. The sessions and their links ARE the plan: never keep a step only in a document.
+
 **Lay it out in ONE `synap_capture`**, so the person reviews one plan, not a pile of cards:
 
-- `sessions[]`: one root session for the whole plan, and one child session per step (`parentRef` = the root). A step that cannot start before others lists ALL of them in `blockedByRefs`. Give each step 2 to 5 `criteria` and its `expectedOutputs`. A step about a thing (an investor, a deal, a contract) names it: `subjectEntityId`, or `subjectRef` for a thing created in the same call.
-- `entities[]`: each choice the person must make is a `decision` with `decisionStatus: "proposed"`, its `decisionOptions` and one `recommendedOption` (fields: `writes`). A proposed decision that an agent wrote asks the person by itself: it becomes an ask they owe (wait kind `decide`). The `decisions` number in needs-you counts pending proposals, not these asks.
-- The sessions and their links ARE the plan. A document may explain it; never put a step only in prose.
+- `tracks[]`: the goal, with `workKind: "pathway"`, its `endState`, 2 to 5 `criteria` and its project (`projectId`). A sub-goal names the goal it serves (`parentRef`); a goal that cannot start before another lists it in `blockedByRefs`.
+- `sessions[]`: one root session for the whole plan, and one child session per step (`parentRef` = the root). Each step joins its goal with `trackRef`. A step that cannot start before others lists ALL of them in `blockedByRefs`. Give each step 2 to 5 `criteria` and its `expectedOutputs`. A step about a thing (an investor, a deal, a contract) names it: `subjectEntityId`, or `subjectRef` for a thing made in the same call.
+- `entities[]`: each choice the person must make, as a `decision` (below).
+- `links[]`: a step that waits on a decision or a goal: `{ "type": "blocked_by", "fromRef": "<step>", "toEntityRef": "<decision>" }` (`toTrackRef` for a goal). Add `"option"` to make the step one arm of the decision (below).
 
-**How a step waits.** `blocked_by` clears when the step it waits on is delivered. A blocker that ends cancelled or failed does not clear: the step holds until you re-plan it with `synap_update_session` (`removeBlockedBySessionIds`, plus `addBlockedBySessionIds` for a retry).
+**Steps are born planned.** A step that waits on something, or whose `plannedFor` date is still to come, is born planned. A planned step owes nothing: no agent starts it and it is not in the person's needs-you. The pod starts it by itself when its last blocker is delivered and its `plannedFor` date is reached. So write no pause and no hold. Give `startNow: true` only to a step that waits on something but must start today. A step that waits on nothing starts at once. A planned step that follows a playbook has its run queued, not started.
 
-**Declare the person's part only when a step can start.** In the 21 Nov 2026 test, a step a year away topped the person's needs-you because it declared, at plan time, an output owed by the person (`owner: "human"`, "Term sheet"). So: declare person-owed outputs and asks on a step only when it can start. On later steps, keep outputs agent-owned or leave them undeclared; add the person's part with `synap_update_session` `outcomes` when the step's blockers are delivered.
+**Dates.** `plannedFor` is when a step may start, `dueBy` is its deadline: a month (`2027-03`), a day (`2027-03-14`) or an ISO date-time with its offset. Put a date only where the person gave one, or the thing the step is about has one.
 
-Example, "fund the company to seed": a root session "Fund to seed"; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both), "Negotiate the term sheet" (waits on the meetings); one decision "Raise from angels or a fund". Today the person owes only that decision; no later step declares an output owed by the person. The full call: `multi-entity-capture`, second plan example.
+**Every choice is a decision; every branch is one of its options.** A choice the person must make is a `decision` with `decisionStatus: "proposed"`, its `decisionOptions` and one `recommendedOption` (fields: `writes`). A proposed decision that an agent wrote asks the person by itself: it becomes an ask they owe (wait kind `decide`). The `decisions` number in needs-you counts pending proposals, not these asks.
+
+- A step that runs whatever is chosen waits on the decision: accepted clears it, rejected holds it.
+- A step that runs only for ONE option is an arm of the decision. In the plan, its link names the option: `{ "type": "blocked_by", "fromRef": "<step>", "toEntityRef": "<decision>", "option": "angels" }` (the option's `value`, else its `label`). When the person chooses, the arm chosen goes on, every other arm closes as skipped, and a skipped step holds nothing that waits on it. When no arm matches the choice, nothing is skipped and the owner is told. A rejected decision holds every arm. The pod refuses an option the decision does not list.
+- On a step that already exists, an arm is `<decision id>:<option>`: `synap_update_session` `addBlockedByEntityIds: ["<decision id>:<option>"]`.
+- A decision with a date: `answerBy`. When it passes, the `defaultOption` applies only if the PERSON set it; a default an agent set only reminds them. So propose `answerBy` and the `recommendedOption`, and leave `defaultOption` to the person.
+
+**Milestones are measured, never typed.** A criterion on a number the pod can count runs `measure.check`: `"check": { "kind": "capability", "capability": "measure.check", "params": { "op": "entities.list", "params": { "profileSlug": "company", "facetSlug": "investor" }, "threshold": 40 } }`. The ops are `entities.list`, `lifecycle.board`, `lifecycle.throughput` and `attention.count`; `comparator` is `gte` unless you say otherwise. The kind and role it counts must exist (`synap_list_profiles`). The pod counts as the session's owner and keeps the number as evidence.
+
+**Declare the person's part only when a step can start.** In the 21 Nov 2026 test, a step a year away topped the person's needs-you because it declared, at plan time, an output owed by the person (`owner: "human"`, "Term sheet"). A planned step owes nothing, but the day it starts, every slot it declared for the person shows at once, often before anyone knows what to ask. So: on later steps, keep outputs agent-owned or leave them undeclared, and add the person's part with `synap_update_session` `outcomes` when the step starts.
+
+**How a step waits.** A wait clears when what it waits on is delivered: a session closed done, a decision accepted, a goal completed. A wait on something that ends cancelled or failed, or on a decision rejected, does not clear: the step holds (next move `blocker_dropped`) until the plan changes. To put a started step back to planned: `synap_update_session` `status: "forming"`.
+
+**How a pathway changes.** Never rewrite it silently. You may add a wait (`synap_update_session` `addBlockedBy*Ids`), but an agent cannot remove one on its own: that is the person's call. Re-plan through a plan the person approves: ONE `synap_capture` with `edits[]`, `{ "op": "remove_link", "type": "blocked_by", "fromSessionId": "<step id>", "toSessionId": "<its old wait>" }` (or `toEntityId`, `toTrackId`) to drop a wait, and `{ "op": "update_session", "ref": "s1", "sessionId": "<step id>", "patch": { "goal": "<the new aim>" } }` to change a step's `title`, `goal` or `status`, plus the new `sessions[]` and `links[]`. A new wait from an existing step to something that already exists needs an `update_session` on that step in the same plan. To change a plan still waiting for review, revise it (`synap_revise_proposal`).
+
+**What the person sees.** Only what can start, or what they are asked now: planned steps owe nothing. The flow view draws the pathway from its goal, sessions, decisions and links; `synap_get_work_graph` with `rootSessionId` (or `trackId`) reads the same map. A written story of the plan, if the person wants one, is made from that read, never kept as a second copy.
+
+Example, "fund the company to seed": a goal "Fund to seed" (`workKind: "pathway"`, done when the money is in the bank); a root session; steps "Build the investor list", "Write the deck" (waits on the list), "Run the first meetings" (waits on both, from March 2027); one decision "Raise from angels or a fund" with two arms, "Close the angel round" (`angels`) and "Sign a lead fund" (`fund`), each also waiting on the meetings. Today the person owes only the decision. The full call: `multi-entity-capture`, PLAN EXAMPLE 2.
 
 ### 3. Which skill to load next
 
@@ -756,7 +777,7 @@ GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
 ```
 
 `scope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
-`scope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).  
+`scope: "workspace"` = scoped to one workspace (deal, file, capture, and custom kinds declared so; a custom kind defaults to pod).  
 Each profile includes its full property schema. Use `createCommand` as a template.
 
 **2. Ask before answering**  
@@ -912,7 +933,7 @@ The person approves it on one page and may narrow it, never widen it; the key is
 
 1. The user explicitly says "in my `X` workspace" / "inside this space".
 2. You're inside a clear workspace context (the user is on a project page, discussing that project — new tasks go into that workspace).
-3. The profile is workspace-scoped by definition (`deal`, `file`, `capture`, and custom profiles). The backend already uses the user's active workspace when you don't pass one — usually this is what you want.
+3. The profile is workspace-scoped by definition (`deal`, `file`, `capture`, and any kind declared `entityScope: "workspace"`; a custom kind is pod-wide unless declared so). The backend already uses the user's active workspace when you don't pass one — usually this is what you want.
 
 **Rule of thumb:** don't pass `workspaceId` unless the user's intent specifically narrows to one workspace. A task the user dictates "from the couch" belongs to the whole pod, not to whichever workspace was last open.
 
@@ -1359,7 +1380,9 @@ retry it into another space.
 `synap_update_session` with `moveToWorkspaceId` (never `workspaceId` — that is
 the connection's lens). A kind another space needs: `synap_change_kind_scope`
 (`scope: "shared"` + `allowedWorkspaceIds`), never a twin kind. Records:
-`synap_move_entities`. All three are reviewed.
+`synap_move_entities`; a playbook: its `playbookIds` (it carries its
+automations). To let another space use a playbook or skill without moving it:
+`synap_grant_profile_access` (`playbookId` / `skillId`). All are reviewed.
 
 **Removing one: `synap_delete_entity`** (`entityId`, optional `reasoning`). For an agent it is always a proposal — nothing is deleted until the person approves, and no rule can widen that. An approved delete hides the entity (its body is kept) and the person can undo it from the proposal. Do not retry a `proposed` answer.
 
@@ -1910,11 +1933,11 @@ The loop has three moves that compound. Each takes a one-off act and, if it's wo
 
 When the task is a unit of work with a deliverable — research, a build, an investigation, a sprint — and there's no active session, **`start_session`** with a clear `goal` and `expectedOutputs`. The start door hands back the pod's matching playbooks (`playbooks.candidates`) — read them before working ad-hoc, and start again with `templateId` when one fits. The session is the spine that accrues results (see the focus-sessions skill). Don't open one for a one-shot lookup or a casual reply.
 
-### 2. Create a cell to REPORT — don't dump data into chat
+### 2. Show it in the right body — don't dump data into chat
 
-When you have something to _show_ the user — a list of leads, a summary, a comparison, a chart — author a **cell** with `create_cell` instead of pasting rows into the message.
+When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_widgets` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
 
-- **Declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
+- **When you generate a cell, declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
 - Keep one cell to one job. A good, focused cell is the raw material for the next move.
 
 ### 3. Promote a good cell to a renderer — recurring presentation
@@ -2081,9 +2104,9 @@ Everything lands as ONE reviewable proposal (or auto-applies when every op is sa
 { "entities": [ { "ref": "acme", "profileSlug": "company", "title": "Acme Corp", "properties": { "website": "https://acme.com" } } ], "projects": [ { "ref": "p1", "name": "Acme onboarding", "subjectRef": "acme", "evidenceRefs": ["acme"] } ], "sessions": [ { "ref": "s0", "title": "Onboard Acme", "goal": "Acme is live on the platform", "projectRef": "p1", "subjectRef": "acme" }, { "ref": "s1", "title": "Write the spec", "goal": "Spec signed off by Acme", "parentRef": "s0", "projectRef": "p1" }, { "ref": "s2", "title": "Build the import", "goal": "Acme data imported", "parentRef": "s0", "projectRef": "p1", "blockedByRefs": ["s1"] } ], "documents": [ { "ref": "spec", "title": "Acme onboarding spec", "content": "# Spec\n…", "sessionRef": "s1" } ] }
 ```
 
-**PLAN EXAMPLE 2: a one-off long plan, with a root session, four steps that wait on each other and one decision** (when to use it: `from-intent` §2d). Each step lists ALL the steps it waits on in `blockedByRefs`. The decision is `proposed`, so the person is asked to choose. No step declares an output owed by the person: the term sheet is months away, and the person's part is added to a step only when it can start.
+**PLAN EXAMPLE 2: a pathway, a one-off long plan: its goal, a root session, steps that wait on each other, a decision with two arms, a measured milestone** (when to use it: `from-intent` §2d). The goal is in the plan (`tracks[]`, `workKind: "pathway"`) and every step joins it with `trackRef`. Each step lists ALL the steps it waits on in `blockedByRefs`, so it is born planned and owes nothing until they are delivered; "Run the first meetings" also waits for March 2027 (`plannedFor`). The decision is `proposed`, so the person is asked to choose; `answerBy` is when. "Close the angel round" and "Sign a lead fund" are its two arms: each link in `links[]` waits on the decision and names its `option` (`angels`, `fund`), so the arm not chosen closes as skipped. The investor count is measured by the pod (`measure.check`), and the goal shares that criterion key with the step that delivers it. No step declares an output owed by the person: their part is added to a step when it starts. `projectId` is the project the goal lives in.
 ```json
-{ "sessions": [ { "ref": "root", "title": "Fund to seed", "goal": "The seed round is closed and the money is in the bank" }, { "ref": "list", "title": "Build the investor list", "goal": "Forty investors who fit our stage, each with a ticket size", "parentRef": "root", "criteria": [ { "key": "forty-fit", "statement": "The list holds 40 investors, each with stage and ticket size", "check": { "kind": "evidence", "evidenceKey": "investor-list" } } ], "expectedOutputs": [ { "kind": "document", "label": "Investor list" } ] }, { "ref": "deck", "title": "Write the deck", "goal": "A deck ready to send", "parentRef": "root", "blockedByRefs": ["list"], "criteria": [ { "key": "deck-ready", "statement": "The deck covers problem, traction, team and the ask", "check": { "kind": "evidence", "evidenceKey": "deck" } } ], "expectedOutputs": [ { "kind": "document", "label": "Pitch deck" } ] }, { "ref": "meet", "title": "Run the first meetings", "goal": "Ten first meetings held and logged", "parentRef": "root", "blockedByRefs": ["list", "deck"], "criteria": [ { "key": "ten-meetings", "statement": "Ten meetings are logged, each with a next step", "check": { "kind": "evidence", "evidenceKey": "meeting-log" } } ], "expectedOutputs": [ { "kind": "document", "label": "Meeting log" } ] }, { "ref": "terms", "title": "Negotiate the term sheet", "goal": "One term sheet we can sign", "parentRef": "root", "blockedByRefs": ["meet"], "criteria": [ { "key": "terms-compared", "statement": "Every offer received is compared on valuation, amount and control", "check": { "kind": "evidence", "evidenceKey": "offer-table" } } ], "expectedOutputs": [ { "kind": "document", "label": "Offer comparison" } ] } ], "entities": [ { "ref": "route", "profileSlug": "decision", "title": "Raise from angels or a fund", "properties": { "decisionStatus": "proposed", "summary": "Angels close faster; a fund brings a lead and a bigger round.", "decisionOptions": [ { "label": "Angels", "value": "angels" }, { "label": "A fund", "value": "fund" } ], "recommendedOption": "angels" } } ] }
+{ "tracks": [ { "ref": "goal", "name": "Fund to seed", "projectId": "<the project's id>", "workKind": "pathway", "endState": "The seed round is closed and the money is in the bank.", "criteria": [ { "key": "round-closed", "statement": "The round is signed and the money is in the bank", "check": { "kind": "human" } }, { "key": "forty-investors", "statement": "At least 40 investors who fit our stage are on the list", "check": { "kind": "capability", "capability": "measure.check", "params": { "op": "entities.list", "params": { "profileSlug": "company", "facetSlug": "investor" }, "threshold": 40 } } } ] } ], "sessions": [ { "ref": "root", "title": "Fund to seed", "goal": "The seed round is closed and the money is in the bank", "trackRef": "goal" }, { "ref": "list", "title": "Build the investor list", "goal": "Forty investors who fit our stage, each with a ticket size", "parentRef": "root", "trackRef": "goal", "criteria": [ { "key": "forty-investors", "statement": "At least 40 investors who fit our stage are on the list", "check": { "kind": "capability", "capability": "measure.check", "params": { "op": "entities.list", "params": { "profileSlug": "company", "facetSlug": "investor" }, "threshold": 40 } } } ], "expectedOutputs": [ { "kind": "document", "label": "Investor list" } ] }, { "ref": "deck", "title": "Write the deck", "goal": "A deck ready to send", "parentRef": "root", "trackRef": "goal", "blockedByRefs": ["list"], "criteria": [ { "key": "deck-ready", "statement": "The deck covers problem, traction, team and the ask", "check": { "kind": "evidence", "evidenceKey": "deck" } } ], "expectedOutputs": [ { "kind": "document", "label": "Pitch deck" } ] }, { "ref": "meet", "title": "Run the first meetings", "goal": "Ten first meetings held and logged", "parentRef": "root", "trackRef": "goal", "blockedByRefs": ["list", "deck"], "plannedFor": "2027-03", "dueBy": "2027-05", "criteria": [ { "key": "ten-meetings", "statement": "Ten meetings are logged, each with a next step", "check": { "kind": "evidence", "evidenceKey": "meeting-log" } } ], "expectedOutputs": [ { "kind": "document", "label": "Meeting log" } ] }, { "ref": "angels", "title": "Close the angel round", "goal": "Enough angels have signed to close the round", "parentRef": "root", "trackRef": "goal", "blockedByRefs": ["meet"], "criteria": [ { "key": "angels-signed", "statement": "The signed tickets add up to the round", "check": { "kind": "evidence", "evidenceKey": "cap-table" } } ], "expectedOutputs": [ { "kind": "document", "label": "Cap table" } ] }, { "ref": "fund", "title": "Sign a lead fund", "goal": "One lead fund has signed a term sheet", "parentRef": "root", "trackRef": "goal", "blockedByRefs": ["meet"], "criteria": [ { "key": "offers-compared", "statement": "Every offer is compared on valuation, amount and control", "check": { "kind": "evidence", "evidenceKey": "offer-table" } } ], "expectedOutputs": [ { "kind": "document", "label": "Offer comparison" } ] } ], "entities": [ { "ref": "route", "profileSlug": "decision", "title": "Raise from angels or a fund", "properties": { "decisionStatus": "proposed", "summary": "Angels close faster; a fund brings a lead and a bigger round.", "decisionOptions": [ { "label": "Angels", "value": "angels" }, { "label": "A fund", "value": "fund" } ], "recommendedOption": "angels", "answerBy": "2027-04-30" } } ], "links": [ { "type": "blocked_by", "fromRef": "angels", "toEntityRef": "route", "option": "angels" }, { "type": "blocked_by", "fromRef": "fund", "toEntityRef": "route", "option": "fund" } ] }
 ```
 
 **DOMAIN EXAMPLE — a new space, a kind with its lifecycle, the playbook that works it, an automation that runs it, a pipeline and a page for each record, in ONE plan the person approves once.** Every step lives in the new space through `workspaceRef`; the playbook runs on the kind through `subjectProfileRef`; the lifecycle names the kind through `kindRef`; a flow names the playbook by its name (`playbookName`: the plan applies playbooks before automations, so the name resolves); a renderer names the cell (`cellRef`) and the playbook (`target.ref`). The pod applies them in that order (space, kinds, lifecycles, playbooks, automations, views, cells, renderers), whatever the order you send. Approving it on its page turns the playbook and the automation on (send `status: "draft"` / `enabled: false` to keep one off).
@@ -2475,7 +2498,7 @@ Every automation has:
 | Type      | Config                       | Example                              |
 | --------- | ---------------------------- | ------------------------------------ |
 | `event`   | `{ eventPattern, filters? }` | Entity created with specific profile |
-| `cron`    | `{ expression }`             | Daily at 9am: `"0 9 * * *"`          |
+| `cron`    | `{ expression, timezone? }`  | Daily at 9am: `"0 9 * * *"`          |
 | `webhook` | `{ webhookSubscriptionId }`  | External service sends data          |
 | `manual`  | `{}`                         | User-triggered from UI               |
 
@@ -2517,11 +2540,11 @@ Other subjects move through the same door and emit their own transition event, f
 
 **The pod applies some automations itself.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each shows in the same list as the person's automations (Built in, Declared on a link), applied by the pod after the move (`work-model`). Do not write an automation that repeats one.
 
-**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
+**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to an automation like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
 ### Cron Expressions
 
-Standard 5-field cron (minute hour day month weekday):
+Standard 5-field cron (minute hour day month weekday), read in `triggerConfig.timezone` (an IANA zone such as `"Europe/Paris"`). Without a zone it runs in UTC, so the person's 9am needs their zone; an unknown zone is refused.
 
 - `"0 9 * * *"` — daily at 9am
 - `"0 9 * * MON"` — every Monday at 9am
@@ -2666,7 +2689,7 @@ Only server-encrypted secrets can be resolved by the automation engine. The user
 2. **Name clearly** — Use descriptive labels: "When task created with high priority" not "Trigger 1".
 3. **One purpose** — Each automation should do one thing well. Compose multiple automations rather than building one complex flow.
 4. **Filter early** — Use trigger filters to avoid unnecessary execution. Don't use a condition step when a trigger filter suffices.
-5. **Test first** — Create automations as `draft` status. Let the user review the flow visualization before activating.
+5. **Review first** — An agent's create is a proposal: the person reviews the flow visualization, and approving it turns the automation on. Ask for `draft` only when they want to switch it on later themselves.
 
 ## Example: Auto-archive completed tasks
 
@@ -2903,11 +2926,12 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 ### When to Use ViewFrame
 
-| Situation                                                              | Action                        |
-| ---------------------------------------------------------------------- | ----------------------------- |
-| An existing cell or view type covers the need                          | Use the existing cell or view |
-| User asks for a specific chart type, map, 3D scene, or custom layout   | Generate a ViewFrame widget   |
-| User says "show X as a [funnel / heatmap / treemap / scatter / globe]" | Generate a ViewFrame widget   |
+| Situation                                                                                                                    | Action                        |
+| ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| An existing cell or view type covers the need: check `synap_list_widgets` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
+| The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                            | Generate a ViewFrame cell     |
+
+A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
 
 ### Default vs. generated — never the reflex, always the explicit ask
 
@@ -3004,20 +3028,6 @@ synap://open/cell/{typeKey}
 ```
 
 The browser receives this deep link, looks the typeKey up in the cell registry (which polls `widget_definitions` every 10s), and opens it as a side panel tab with the cell's registered `meta.name` as the tab title.
-
-**Full AI artifact workflow over REST** (an MCP agent does step 1 with `synap_create_cell`):
-
-```
-// 1. Define the cell (an ES module or an HTML page)
-POST /api/hub/cells/define
-{ "name": "Q2 Revenue Report", "rendererSource": "<!DOCTYPE html>…</html>" }
-// → { "success": true, "typeKey": "generated:q2-revenue-report" }
-
-// 2. Open it in the user's browser
-synap://open/cell/generated:q2-revenue-report
-```
-
-The cell appears immediately in the side panel with "Q2 Revenue Report" as the tab title. It persists across sessions and is available from any workspace.
 
 > **Note:** `POST /api/hub/widget-definitions` (tRPC path) still works but is the internal/admin path. Use `POST /api/hub/cells/define` for all agent-generated cells.
 
@@ -3476,7 +3486,7 @@ proposal; the review is the catalog commit.
 | `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`.                                                                                                                                                                               |
-| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition. |
+| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, `timezone`) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to an automation the owner can pause; it fires once per thing per transition. |
 | `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                                                                                                                                                                                               |
 | `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -3491,8 +3501,8 @@ lifecycle kinds with no process may only go down).
 
 `synap_create_playbook` takes the contract as-is. Before calling it, read the
 subject kind (`synap_list_profiles`) and copy the options of its lifecycle
-property exactly. Over MCP you cannot declare or change a lifecycle; it comes
-with the kind's template.
+property exactly. A kind with no lifecycle yet: `synap_declare_lifecycle`, or a
+`lifecycles[]` step in the same `synap_capture` plan as the kind and playbook.
 
 ```json
 {
@@ -3535,8 +3545,10 @@ with the kind's template.
 ```
 
 These are the Content OS post options; use the ones the kind really has. A
-batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
-"Idea", "mode": "propose" }` (one session over every post in Idea, weekly) or
+batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "timezone":
+"Europe/Paris", "status": "Idea", "mode": "propose" }` (one session over every
+post in Idea, Mondays at 8:00 Paris time; without `timezone` the cron is read in
+the playbook owner's zone) or
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
@@ -3679,7 +3691,7 @@ The person says "start this on my devbox", "have my Mac's Claude Code do it", "g
 - **`paused: true` → say it is paused** and that a person must resume it (Settings › Agents). Do not hand it off.
 - **`live: false` → say when it was last seen** (`lastSeenAt`) and that it picks the work up the next time it checks in. Hand off only if the person still wants it.
 - **Is a runner serving it? Read `servedAt` and `nobodyRuns`.** `nobodyRuns: false` (a recent `servedAt`): a runner serves it now. `nobodyRuns: true`: nothing on that computer runs it now; say so ("the agent on your Mac has not run since <servedAt>") and hand off only if the person wants the run to wait. `nobodyRuns: null`: the pod cannot tell (no runner ever stamped, or an old CLI); say "I cannot tell whether anything runs it; last seen <lastSeenAt>". `live` says only that its key was used.
-- **No runner online → recommend waiting, never a second path.** The session shows who holds it (nobody, or the agent stopped) until a runner picks it up. Do not do the same job another way; if the computer must be awake, that is the person's step.
+- **No runner online → recommend waiting, never a second path.** The run waits `queued` for its named holder; if nobody claims it in time it turns `blocked` and the person is asked who runs it instead. Do not do the same job another way; if the computer must be awake, that is the person's step.
 - **`canTakeYourWork: false`** — `whyNot` says why: `not_owned` (another person's agent: it would never see this work), `wrong_reach` (the pod's own agent: it answers in rooms, it never picks work up), `paused`.
 
 **2. Hand it — through a session.** The session's roster is how work reaches an agent.

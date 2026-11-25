@@ -13,6 +13,7 @@ import Link from "next/link";
 import { RotateCw } from "lucide-react";
 import { resolveObjectIdentity } from "@synap-core/types/vocabulary";
 import { kindIcon } from "../kind-icon";
+import { contentMarksT } from "./copy";
 import { EmbedHostContext, type EmbedHost } from "./embed-context";
 import {
   objectRefView,
@@ -25,13 +26,15 @@ const UNRESOLVED: ObjectRefRead = { state: "unresolved" };
 
 /** The lookup broke: the words stay, and this mark asks again. */
 function RetryMark({ retry }: { retry?: () => void }) {
-  const title = "Couldn’t look this up";
+  const t = contentMarksT();
+  const title = t("ref.failed");
+  const retryTitle = t("ref.retry");
   return retry ? (
     <button
       type="button"
       onClick={retry}
-      title={`${title}. Try again`}
-      aria-label={`${title}. Try again`}
+      title={retryTitle}
+      aria-label={retryTitle}
       className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-sm align-[-2px] text-foreground/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
     >
       <RotateCw aria-hidden className="h-3 w-3" />

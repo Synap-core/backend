@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 import { stripComments } from "../../../../../scripts/strip-comments.mjs";
 
 vi.mock("../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
+  },
 }));
 
 import { HtmlPagesPanel } from "./DocumentUpdateChanges";

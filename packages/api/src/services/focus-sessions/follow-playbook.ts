@@ -56,7 +56,7 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  usableInSpace,
+  isUsableInSpace,
   notUsableInSpaceReason,
   focusSessions,
   playbooks,
@@ -91,7 +91,7 @@ import {
 } from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   createLinks,
   resolveGrantedCapabilities,
@@ -336,7 +336,7 @@ export async function followPlaybook(
     .where(
       and(
         eq(playbooks.id, followPlaybookId),
-        userVisibleWhere(playbooks.workspaceId, userId)
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
       )
     )
     .limit(1);
@@ -348,7 +348,10 @@ export async function followPlaybook(
   }
   // The run door's rule: a session in a space follows only a playbook usable
   // there. A session in no space is not checked (it runs nowhere yet).
-  if (session.workspaceId && !usableInSpace(playbook, session.workspaceId)) {
+  if (
+    session.workspaceId &&
+    !(await isUsableInSpace(db, "playbook", playbook, session.workspaceId))
+  ) {
     return {
       status: "refused",
       reason: notUsableInSpaceReason("Playbook", playbook, session.workspaceId),

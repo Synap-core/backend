@@ -114,6 +114,7 @@ import {
   type SyncFailure,
 } from "./sync-kind-registry.js";
 import "./google-sync-kinds.js";
+import "./storybook-sync.js";
 
 export {
   registerSyncKind,
@@ -274,7 +275,9 @@ class KindRun {
     );
     // pageToken + cursor are left as they were, so the next run resumes.
     await this.finish("failed", { error: message, failure });
-    await reportSyncFailure(this.ctx, failure, message, this.state);
+    if (this.handler.brokered !== false) {
+      await reportSyncFailure(this.ctx, failure, message, this.state);
+    }
     if (
       failure.errorClass === "auth" ||
       failure.errorClass === "no_connection" ||
@@ -706,7 +709,10 @@ export async function upsertSyncGraph(
       }
       let refreshed = false;
       for (const h of handlers) {
-        if (h.refreshExisting && (await h.refreshExisting(res.entity.id, e))) {
+        if (
+          h.refreshExisting &&
+          (await h.refreshExisting(res.entity.id, e, ctx))
+        ) {
           refreshed = true;
         }
       }
@@ -1283,6 +1289,9 @@ export async function runScheduledConnectionSyncs(
     RunConnectionSyncResult & { toolId: string; error?: string }
   > = [];
   for (const provider of getSyncProviders()) {
+    // A provider whose every kind is run per call (its source is handed over,
+    // not polled) is never ticked.
+    if (getSyncKinds(provider).every((h) => h.scheduled === false)) continue;
     const rows = await db.query.tools.findMany({
       where: eq(tools.name, provider),
       columns: { id: true, workspaceId: true, metadata: true },

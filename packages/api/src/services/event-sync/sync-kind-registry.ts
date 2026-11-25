@@ -129,7 +129,24 @@ export interface SyncKindHandler {
    * Refresh volatile properties on an already-existing entity (an event's
    * times). Return true when something was written.
    */
-  refreshExisting?(entityId: string, entity: SyncGraphEntity): Promise<boolean>;
+  refreshExisting?(
+    entityId: string,
+    entity: SyncGraphEntity,
+    ctx: SyncKindContext
+  ): Promise<boolean>;
+  /**
+   * Whether the provider's connections live with the connection broker (Nango):
+   * a failed run is then reported to the broker's operator as well as recorded
+   * on the pod. Default true. False for a source no broker holds (a Storybook):
+   * its failures stay on the pod's sync status, never sent to Nango.
+   */
+  brokered?: boolean;
+  /**
+   * Whether the scheduled tick runs this kind. Default true. False for a kind
+   * whose source is handed over per run (the storybook sync runs when
+   * `storybook.sync` is called, after a push), so a tick never re-reads it.
+   */
+  scheduled?: boolean;
 }
 
 const REGISTRY: SyncKindHandler[] = [];

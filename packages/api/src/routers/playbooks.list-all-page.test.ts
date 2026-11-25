@@ -54,6 +54,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     asc: vi.fn((column) => ({ asc: column })),
     gt: vi.fn((column, value) => ({ gt: [column, value] })),
     lt: vi.fn((column, value) => ({ lt: [column, value] })),
+    usableInSpaceWhere: vi.fn(
+      (_home: unknown, space: unknown, shared: { type: string } | null) => ({
+        usableIn: [space, shared?.type ?? null],
+      })
+    ),
   };
 });
 
@@ -173,7 +178,7 @@ describe("playbooks.listAllPage", () => {
     });
   });
 
-  it("narrows to a specific workspace (still includes pod-wide rows) when workspaceId is passed", async () => {
+  it("narrows to what is usable in a specific workspace (home, shared, pod-wide) when workspaceId is passed", async () => {
     const chain = selectChain([]);
     mockGetDb.mockResolvedValue({ select: vi.fn(() => chain) });
 
@@ -184,17 +189,8 @@ describe("playbooks.listAllPage", () => {
 
     const where = chain._captured.where as { and: unknown[] };
     expect(where.and).toContainEqual({ __visibility: true });
-    expect(where.and).toContainEqual(
-      expect.objectContaining({
-        or: expect.arrayContaining([
-          expect.objectContaining({ isNull: expect.anything() }),
-          expect.objectContaining({
-            eq: expect.arrayContaining([
-              "00000000-0000-4000-8000-000000000010",
-            ]),
-          }),
-        ]),
-      })
-    );
+    expect(where.and).toContainEqual({
+      usableIn: ["00000000-0000-4000-8000-000000000010", "playbook"],
+    });
   });
 });

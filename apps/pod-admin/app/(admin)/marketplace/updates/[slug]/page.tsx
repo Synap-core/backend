@@ -733,10 +733,10 @@ function Receipt({
   } else if (outcome.result.status === "proposed") {
     headline = t("receipt.proposed");
     // One request opens itself; several (one per row) are in Requests.
-    const ids = outcome.result.proposalIds;
+    const [only, ...others] = outcome.result.proposalIds;
     request =
-      ids.length === 1
-        ? `/proposal/${encodeURIComponent(ids[0]!)}`
+      only !== undefined && others.length === 0
+        ? `/proposal/${encodeURIComponent(only)}`
         : navHref("review");
   } else {
     const r = outcome.result.receipt;

@@ -73,12 +73,12 @@ export const SYNAP_WIDGET_SDK = `
 
   window.addEventListener('message', function(e) {
     if (!e.data || typeof e.data.type !== 'string') return;
-    if (e.data.type === 'synap:query:result' || e.data.type === 'synap:mutate:result') {
+    if (e.data.type === 'synap:query:result' || e.data.type === 'synap:mutate:result' || e.data.type === 'synap:context:result') {
       var p = _pending[e.data.id];
       if (!p) return;
       delete _pending[e.data.id];
       if (e.data.error) { p.reject(new Error(e.data.error)); }
-      else { p.resolve(e.data.type === 'synap:query:result' ? e.data.data : { status: e.data.status, data: e.data.data, proposalId: e.data.proposalId }); }
+      else { p.resolve(e.data.type === 'synap:mutate:result' ? { status: e.data.status, data: e.data.data, proposalId: e.data.proposalId } : e.data.data); }
     }
   });
 
@@ -95,6 +95,16 @@ export const SYNAP_WIDGET_SDK = `
       var id = String(++_pendingId);
       _pending[id] = { resolve: resolve, reject: reject };
       post({ type: 'synap:mutate', id: id, operation: operation, payload: payload });
+    });
+  };
+
+  // v3: what the frame is about (anchor, space, project, goal, filters,
+  // brand, locale, theme), answered by the host ('synap:context').
+  window.SynapWidget.context = function() {
+    return new Promise(function(resolve, reject) {
+      var id = String(++_pendingId);
+      _pending[id] = { resolve: resolve, reject: reject };
+      post({ type: 'synap:context', id: id });
     });
   };
 

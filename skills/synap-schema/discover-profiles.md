@@ -11,7 +11,7 @@ GET /api/hub/profiles?workspaceId={workspaceId}
 Read the response:
 
 - `entityScope: "pod"` — visible across all workspaces
-- `entityScope: "workspace"` — scoped to this workspace only (custom types, CRM profiles, template-seeded types)
+- `entityScope: "workspace"` — scoped to this workspace only (process kinds such as CRM deals; a custom kind defaults to pod)
 - `parentSlug` — inheritance chain (e.g. `contact` extends `person`)
 
 ### Commonly seeded profiles (verify before using)

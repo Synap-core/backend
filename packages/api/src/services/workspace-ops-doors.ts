@@ -6,7 +6,9 @@
  *   rename             → `workspacesRouter.update`         (ADMIN floor)
  *   start page         → `workspacesRouter.setPrimarySurface` (ADMIN floor)
  *   move entities      → `entitiesRouter.moveToWorkspace`  (per-entity gate)
+ *   move playbooks     → `moveToSpace`                     (ADMIN floor, destination)
  *   grant kind access  → `profilesRouter.grantAccess`      (ADMIN floor)
+ *   share playbook/skill → `shareWithSpace`                (ADMIN floor, destination)
  *   file into project  → `projectsRouter.fileEntities`     (ACCESS: agent proposes;
  *                         un-file = link/delete, DESTRUCTIVE floor)
  *
@@ -27,6 +29,7 @@ import {
   eq,
   inArray,
   isNull,
+  playbooks,
   profiles,
   type WorkspacePrimarySurface,
 } from "@synap/database";
@@ -38,6 +41,11 @@ import { entitiesRouter } from "../routers/entities.js";
 import { entityWriteVisibleWhere } from "../routers/entities/helpers.js";
 import { profilesRouter } from "../routers/profiles.js";
 import { projectsRouter } from "../routers/projects.js";
+import {
+  loadPlacedObject,
+  moveToSpace,
+  shareWithSpace,
+} from "./move-to-space.js";
 
 /** Who is acting — the fields every Hub / MCP door already has in hand. */
 export interface WorkspaceOpsActor {
@@ -158,6 +166,100 @@ export async function moveEntitiesDoor(
     entityIds: input.entityIds,
     workspaceId: input.workspaceId,
     ...(input.reason ? { reason: input.reason } : {}),
+  });
+}
+
+/**
+ * Move playbooks into a space, each with the automations that run it, through
+ * the one move door (`moveToSpace`), best-effort per playbook like
+ * {@link moveEntitiesDoor}. A key bound to a space moves only its own
+ * playbooks, and only into it.
+ */
+export async function movePlaybooksDoor(
+  actor: WorkspaceOpsActor,
+  input: { playbookIds: string[]; workspaceId: string; reasoning?: string }
+) {
+  resolveConfinedWorkspace(
+    actor.keyType,
+    actor.keyWorkspaceId,
+    input.workspaceId
+  );
+  if (actor.keyWorkspaceId) {
+    const homes = await db
+      .select({ workspaceId: playbooks.workspaceId })
+      .from(playbooks)
+      .where(inArray(playbooks.id, input.playbookIds));
+    if (homes.some((r) => r.workspaceId !== actor.keyWorkspaceId)) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `This key is confined to workspace ${actor.keyWorkspaceId}: every playbook it moves must be in it.`,
+      });
+    }
+  }
+  const moved: string[] = [];
+  const proposed: Array<{ playbookId: string; proposalId: string }> = [];
+  const errors: Array<{ playbookId: string; error: string }> = [];
+  for (const playbookId of input.playbookIds) {
+    try {
+      const r = await moveToSpace({
+        userId: actor.userId,
+        agentUserId: actor.agentUserId ?? null,
+        objectType: "playbook",
+        objectId: playbookId,
+        workspaceId: input.workspaceId,
+        ...(input.reasoning ? { reasoning: input.reasoning } : {}),
+      });
+      if (r.status === "proposed")
+        proposed.push({ playbookId, proposalId: r.proposalId });
+      else moved.push(playbookId);
+    } catch (err) {
+      errors.push({
+        playbookId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  return { moved, proposed, errors };
+}
+
+/**
+ * Share a playbook or a skill with a space (or, with `revoke`, stop): its
+ * members can then read and run it, and it keeps its home (`shareWithSpace`).
+ * Kinds share through {@link grantProfileAccessDoor}. A key bound to a space
+ * shares only what lives in it, and only into it (so it shares nothing).
+ */
+export async function shareWithSpaceDoor(
+  actor: WorkspaceOpsActor,
+  input: {
+    objectType: "playbook" | "skill";
+    objectId: string;
+    targetWorkspaceId: string;
+    revoke?: boolean;
+    reasoning?: string;
+  }
+) {
+  resolveConfinedWorkspace(
+    actor.keyType,
+    actor.keyWorkspaceId,
+    input.targetWorkspaceId
+  );
+  if (actor.keyWorkspaceId) {
+    const object = await loadPlacedObject(input.objectType, input.objectId);
+    if (object.workspaceId !== actor.keyWorkspaceId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `This key is confined to workspace ${actor.keyWorkspaceId}: it shares only what lives there.`,
+      });
+    }
+  }
+  return shareWithSpace({
+    userId: actor.userId,
+    agentUserId: actor.agentUserId ?? null,
+    objectType: input.objectType,
+    objectId: input.objectId,
+    workspaceId: input.targetWorkspaceId,
+    revoke: input.revoke === true,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
   });
 }
 

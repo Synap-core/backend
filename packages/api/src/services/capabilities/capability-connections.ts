@@ -36,6 +36,7 @@ import {
   vaultGrants,
 } from "@synap/database/schema";
 import { makeVaultReference, vaultSecretIdOf } from "@synap-core/types/vault";
+import { isSourceAccountHint } from "./source-account-hint.js";
 
 import { requirePodAdmin, isPodAdmin } from "../../utils/workspace-role.js";
 import { resolveBroker } from "../../connectors/index.js";
@@ -58,8 +59,12 @@ export interface CapabilityCredentialView {
   contextId: string | null;
   isDefault: boolean;
   accountHint: string | null;
-  /** 'nango' when the credential delegates to Nango, else 'vault' (direct key). */
-  kind: "nango" | "vault";
+  /**
+   * 'nango' when the credential delegates to Nango, 'source' for a SOURCE the
+   * pod reads that holds no secret at all (a Storybook: its account hint names
+   * it), else 'vault' (direct key).
+   */
+  kind: "nango" | "vault" | "source";
   /**
    * Pod-wide (0211): a shared vault key any member may USE for this capability
    * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
@@ -90,15 +95,26 @@ export interface CapabilityCredentialView {
  * cheap and must never touch plaintext). A Nango credential is the one that
  * delegates its secret to a provider connection: it carries a
  * `provider_integration_id` FK or an `account_hint` (the 1-of-N account
- * selector). Everything else is a direct vault key.
+ * selector). A source carries a source account hint and no provider
+ * integration (a `provider_integration_id` always wins: that row is Nango).
+ * Everything else is a direct vault key.
  */
-function credentialKind(row: {
+export function credentialKind(row: {
   providerIntegrationId: string | null;
   accountHint: string | null;
-}): "nango" | "vault" {
-  return row.providerIntegrationId != null || row.accountHint != null
-    ? "nango"
-    : "vault";
+}): "nango" | "vault" | "source" {
+  if (row.providerIntegrationId != null) return "nango";
+  if (row.accountHint == null) return "vault";
+  return isSourceAccountHint(row.accountHint) ? "source" : "nango";
+}
+
+/** The credential doors never write a source hint: only `addSourceConnection` does. */
+function refuseSourceHint(hint: string | null | undefined): void {
+  if (isSourceAccountHint(hint)) {
+    throw new Error(
+      "This account hint names a source the pod reads (it holds no secret); connect it with its own verb (storybook.sync), not as a credential."
+    );
+  }
 }
 
 /**
@@ -543,6 +559,29 @@ export async function updateCredential(
     credentialId,
     actorUserId
   );
+  // A source holds no secret, ever, and no credential becomes a source: its
+  // hint is written once, by addSourceConnection.
+  if (
+    input.accountHint !== undefined &&
+    input.accountHint !== existing.accountHint
+  ) {
+    refuseSourceHint(input.accountHint);
+  }
+  if (credentialKind(existing) === "source") {
+    if (input.value !== undefined) {
+      throw new Error(
+        "A source connection holds no secret: it cannot be given a key."
+      );
+    }
+    if (
+      input.accountHint !== undefined &&
+      input.accountHint !== existing.accountHint
+    ) {
+      throw new Error(
+        "A source connection's account hint names its source: it cannot be changed."
+      );
+    }
+  }
 
   // Promoting a per-user credential TO pod-wide is itself a pod-level privileged
   // action (loadOwnedCredential only gated the existing state). VAULT ONLY: a
@@ -970,8 +1009,55 @@ async function disconnectConnectionWrite(input: {
 export async function addCredential(
   ...args: Parameters<typeof addCredentialWrite>
 ): ReturnType<typeof addCredentialWrite> {
+  refuseSourceHint(args[0].accountHint);
   try {
     return await addCredentialWrite(...args);
+  } finally {
+    invalidateUrlReaderCache();
+  }
+}
+
+/**
+ * Record a SOURCE connection: a registry row with no secret (an empty blob, as
+ * a Nango pointer row stores) whose account hint names what the pod reads
+ * (`storybook:<repo|url>`). Its only job is to give connection sync a
+ * connection to run and govern: the first run is still ONE import proposal the
+ * person approves. Idempotent per (capability, owner, hint): an existing live
+ * row is returned as it is.
+ */
+export async function addSourceConnection(input: {
+  capabilityId: string;
+  actorUserId: string;
+  label: string;
+  accountHint: string;
+}): Promise<{ id: string; created: boolean }> {
+  if (!isSourceAccountHint(input.accountHint)) {
+    throw new Error(
+      `addSourceConnection: ${JSON.stringify(input.accountHint)} is not a source account hint.`
+    );
+  }
+  const [existing] = await db
+    .select({ id: secrets.id })
+    .from(secrets)
+    .where(
+      and(
+        eq(secrets.capabilityId, input.capabilityId),
+        eq(secrets.userId, input.actorUserId),
+        eq(secrets.accountHint, input.accountHint),
+        isNull(secrets.deletedAt)
+      )
+    )
+    .limit(1);
+  if (existing) return { id: existing.id, created: false };
+  try {
+    // No `value`: the row stores the empty blob, never a secret.
+    const view = await addCredentialWrite({
+      capabilityId: input.capabilityId,
+      actorUserId: input.actorUserId,
+      label: input.label,
+      accountHint: input.accountHint,
+    });
+    return { id: view.id, created: true };
   } finally {
     invalidateUrlReaderCache();
   }

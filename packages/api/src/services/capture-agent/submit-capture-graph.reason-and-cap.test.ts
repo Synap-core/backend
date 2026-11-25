@@ -216,3 +216,55 @@ describe("an agent graph meets the same pending budget as its single writes", ()
     expect(pending).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("a proposal the POD files (a loop: the pathway re-plan)", () => {
+  const filedByPod = {
+    author: "system:pathway-replan" as const,
+    data: { replanOf: "goal-1", replanFor: ["step-1"] },
+  };
+  function podCapture(agentUserId: string | null = null) {
+    const pending = vi
+      .spyOn(writer, "createEventBackedProposal")
+      .mockImplementation(async (input) => ({
+        proposal: { id: "prop-pod", data: input.data } as never,
+        requestedEvent: null,
+        correlationId: "c",
+      }));
+    const result = submitCaptureGraph({
+      userId: "user-1",
+      ...(agentUserId ? { agentUserId } : {}),
+      workspaceId: null,
+      entities: [
+        { ref: "p1", profileSlug: "person", title: "Jane Doe", properties: {} },
+      ] as never,
+      summary: "Re-plan the pathway",
+      filedByPod,
+    } as never);
+    return { result, pending };
+  }
+
+  it("files it PENDING under the pod's machine author, its facts on the payload", async () => {
+    // Rules out: the loop's revision read as the person's own act, or its
+    // budget keys lost (the loop could then never count what it filed).
+    const { result, pending } = await podCapture();
+    await expect(result).resolves.toMatchObject({
+      proposalId: "prop-pod",
+      applied: false,
+    });
+    const filed = pending.mock.calls[0]![0];
+    expect(filed.createdBy).toBe("system:pathway-replan");
+    expect(filed.agentUserId).toBeUndefined();
+    expect(filed.data).toMatchObject({
+      replanOf: "goal-1",
+      replanFor: ["step-1"],
+    });
+    expect(Array.isArray(filed.data.operations)).toBe(true);
+  });
+
+  it("is refused with an agent key: the pod only ever proposes", async () => {
+    // Rules out: an agent-mode auto-apply of what the pod may only propose.
+    const { result, pending } = await podCapture("agent-1");
+    await expect(result).rejects.toThrow(/carries no agent key/);
+    expect(pending).not.toHaveBeenCalled();
+  });
+});

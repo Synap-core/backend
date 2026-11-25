@@ -477,8 +477,15 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
       inspected += 1;
       // `key` is stamped on a legacy expectedOutputs slot, but on an `outcomes`
       // declaration it is the stable id the agent names (completeOutput).
+      // `outputKey` is stamped on a GRADE slot, but on an `outcomes`
+      // declaration it is a fact's criterion pairing (finding 09ba3d2d),
+      // stored on the criterion and refused on a deliverable: the test below
+      // proves it never reaches a slot.
+      const outcomeOwned = new Set(["key", "outputKey"]);
       const advertised = Object.keys(props).filter(
-        (k) => stamped.has(k) && !(k === "key" && schema?.properties?.outcomes)
+        (k) =>
+          stamped.has(k) &&
+          !(outcomeOwned.has(k) && schema?.properties?.outcomes)
       );
       expect(
         advertised,
@@ -496,5 +503,24 @@ describe("tripwire: the MCP door advertises no server-stamped field", () => {
     }
     expect(inspected).toBeGreaterThanOrEqual(3);
     expect(handOffDoors).toBeGreaterThanOrEqual(2);
+  });
+
+  it("an outcome's `outputKey` never reaches a slot (why it is not a stamp there)", async () => {
+    const { outcomeDeclarationsSchema, splitOutcomes } =
+      await import("../services/focus-sessions/outcome-declarations.js");
+    // On a fact: stored on the criterion only; the fact files no slot.
+    const fact = splitOutcomes(
+      outcomeDeclarationsSchema.parse([
+        { label: "Reads right", kind: "fact", outputKey: "copy" },
+      ])
+    );
+    expect(fact.expectedOutputs).toEqual([]);
+    expect(fact.criteria[0]?.outputKey).toBe("copy");
+    // On a deliverable (a slot): refused, nothing parsed.
+    expect(
+      outcomeDeclarationsSchema.safeParse([
+        { label: "Copy", kind: "document", outputKey: "other" },
+      ]).success
+    ).toBe(false);
   });
 });

@@ -175,6 +175,7 @@ import {
   automations,
   podMembers,
   projectMembers,
+  spaceAccess,
   sessionEvaluations,
   trackParticipants,
   channels,
@@ -288,6 +289,7 @@ beforeAll(async () => {
     lifecycleTransitionOutbox,
     podMembers,
     projectMembers,
+    spaceAccess,
     sessionEvaluations,
     // Who is on a goal (0348): `startTrack` seeds the owner row.
     trackParticipants,

@@ -4,12 +4,7 @@
 
 import { z } from "zod";
 import { getDb, and, eq, inArray, isNull, or } from "@synap/database";
-import {
-  widgetDefinitions,
-  CONTENT_KINDS,
-  isPackageCellRendererType,
-  type PackageCellRendererType,
-} from "@synap/database/schema";
+import { widgetDefinitions, CONTENT_KINDS } from "@synap/database/schema";
 import {
   assertCellSourceMounts,
   CellDefinitionError,
@@ -17,10 +12,13 @@ import {
   AgentCellRequiresProposalError,
   validateDeps,
 } from "../../../services/cells/define-cell.js";
-// The ONE explicit-then-derive-from-viewTypes rule for a package cell's
-// renderer slot — shared with the tRPC twin and both package appliers.
-import { resolveCellContentKind } from "../../../services/cells/install-cell-from-definition.js";
-import { admitOfficialDefinition } from "../../../services/capabilities/official-catalog-trust.js";
+import {
+  cellInstallRefusal,
+  cellRetireRefusal,
+  findActiveCellType,
+  installMarketplaceCell,
+  retireCellType,
+} from "../../../services/cells/marketplace-cell-lifecycle.js";
 // typeKey PROVENANCE FLOOR — the SAME guard the tRPC door (`widgetDefinitions.
 // upsert`) applies, not a second implementation. This door declared `typeKey`
 // and passed it straight to `defineCell`, so an operator-scoped key could MINT
@@ -41,7 +39,6 @@ import { jsonGoverned } from "../proposal-response.js";
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
-import { controlPlaneBaseUrl } from "@synap-core/core/control-plane-url";
 import { grantReadPredicate } from "../../../access/grant-read.js";
 import {
   CellPlacementSchema,
@@ -57,6 +54,8 @@ const InstallBodySchema = z.object({
   packageSlug: z.string().min(1),
   cellKey: z.string().min(1),
   workspaceId: uuidQueryParam.optional(),
+  /** Why an agent asks for it: shown to the person on the proposal. */
+  reasoning: z.string().max(2000).optional(),
 });
 
 /** One installed source cell, as `GET /cells` projects it. */
@@ -243,7 +242,12 @@ export function registerCellsRoutes(app: HubHono): void {
   /**
    * POST /cells/install
    * Install a cell from the marketplace into a workspace.
-   * Body: { packageSlug, cellKey, workspaceId }
+   * Body: { packageSlug, cellKey, workspaceId, reasoning? }
+   *
+   * GOVERNED: an agent's install is a `cell/install` proposal (floored, 2.09:
+   * an agent adding to what the pod can draw always asks); approving it runs
+   * the SAME `installMarketplaceCell` as the approver. A person installs
+   * directly. The person behind the call must be able to write in the space.
    */
   app.post("/cells/install", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -263,112 +267,52 @@ export function registerCellsRoutes(app: HubHono): void {
       );
     }
 
-    const { packageSlug, cellKey, workspaceId } = parsed.data;
+    const { packageSlug, cellKey, workspaceId, reasoning } = parsed.data;
     if (!workspaceId) {
       return c.json({ error: "workspaceId is required" }, 400);
     }
 
-    const userId = c.get("userId");
-    if (!(await canWrite(userPrincipal(userId), { workspace: workspaceId }))) {
-      return c.json({ error: "Access denied to workspace" }, 403);
-    }
-
-    const cpUrl = controlPlaneBaseUrl();
-    if (!cpUrl) {
-      return c.json(
-        {
-          error:
-            "Cell marketplace install requires CONTROL_PLANE_URL (or CP_URL) to be configured on this pod",
-        },
-        503
-      );
-    }
+    const userId = c.get("userId") ?? "";
+    const refused = await cellInstallRefusal(userId, workspaceId);
+    if (refused) return c.json({ error: refused.error }, refused.status);
 
     try {
-      const resp = await fetch(
-        `${cpUrl}/api/marketplace/cells?q=${encodeURIComponent(cellKey)}`
-      );
-      if (!resp.ok) {
-        return c.json({ error: `CP responded with ${resp.status}` }, 502);
-      }
-      const data = (await resp.json()) as { cells?: CellDef[] } | CellDef[];
-      const list = Array.isArray(data)
-        ? data
-        : ((data as { cells?: CellDef[] }).cells ?? []);
-      const cell = list.find(
-        (cell) =>
-          cell?.key === cellKey || cell?.key === `${packageSlug}:${cellKey}`
-      );
-
-      if (!cell) {
-        return c.json(
-          { error: `Cell '${cellKey}' not found in package '${packageSlug}'` },
-          404
-        );
-      }
-
-      // Fix 4: verify CP-returned key matches what was requested
-      const resolvedKey = cell.key.includes(":")
-        ? cell.key.split(":").pop()!
-        : cell.key;
-      if (resolvedKey !== cellKey) {
-        return c.json(
-          {
-            error: `CP returned cell key '${cell.key}' which does not match requested '${cellKey}'`,
-          },
-          400
-        );
-      }
-
-      // Synap's signature rule: the cell the Control Plane served must be the
-      // one its signed index lists for this package (refused once enforced).
-      const admission = await admitOfficialDefinition({
-        kind: "cell",
-        slug: `${packageSlug}/${cellKey}`,
-        definition: cell as unknown as Record<string, unknown>,
-      });
-      if (!admission.admitted) {
-        return c.json({ error: admission.reason }, 412);
-      }
-
-      const depsError = validateDeps(cell.deps);
-      if (depsError) {
-        return c.json({ error: depsError }, 400);
-      }
-
-      // Route through the ONE door (defineCell) — same idempotent upsert +
-      // realtime event MCP's synap_create_cell and POST /cells/define use.
-      // Pass the pre-existing marketplace typeKey scheme explicitly so
-      // already-installed cells keep resolving under it.
-      const { typeKey } = await defineCell({
-        name: cell.name,
-        rendererSource: cell.code,
+      const { checkPermissionOrPropose, proposedMessageFor } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: c.get("agentUserId") as string | undefined,
         workspaceId,
-        typeKey: `cell:${packageSlug}:${cellKey}`,
-        description: cell.description,
-        defaultSize: cell.defaultSize,
-        // Parity with the other two install doors (`installCellFromDefinition`
-        // and `/packages/apply`). Dropped here, the SAME CP cell installed
-        // through THIS door loses its render floor.
-        minSize: cell.minSize,
-        deps: cell.deps,
-        viewTypes: cell.viewTypes,
-        // Renderer SLOT. Its tRPC twin (`routers/cells.ts` cells.install) has
-        // threaded this since the raw-insert fix; this Hub door had not, so the
-        // SAME CP cell installed here landed as the column default `widget` and
-        // was invisible to `renderersForType`. Resolved through the ONE shared
-        // resolver so the explicit-then-derive-from-viewTypes rule cannot fork.
-        contentKind: resolveCellContentKind(cell.contentKind, cell.viewTypes),
-        // Rendering MECHANISM. Unrecognised values are dropped rather than
-        // forwarded — `"builtin"`/`"native"` must never reach the column
-        // through a marketplace payload.
-        rendererType: isPackageCellRendererType(cell.rendererType)
-          ? cell.rendererType
-          : undefined,
-        userId: userId ?? "",
+        subjectType: "cell",
+        action: "install",
+        data: { packageSlug, cellKey, workspaceId },
+        reasoning:
+          reasoning ??
+          `Install the cell "${cellKey}" from the package "${packageSlug}" in this space.`,
       });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm && perm.proposalId) {
+        return jsonGoverned(c, {
+          status: "proposed",
+          proposalId: perm.proposalId,
+          reviewUrl: perm.reviewUrl,
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Installing this cell was proposed: it is installed once the person approves it."
+          ),
+        });
+      }
 
-      return c.json({ success: true, typeKey });
+      const result = await installMarketplaceCell({
+        packageSlug,
+        cellKey,
+        workspaceId,
+        userId,
+      });
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+      return c.json({ success: true, typeKey: result.typeKey });
     } catch (err) {
       if (err instanceof AgentCellRequiresProposalError) {
         return c.json({ error: err.message, code: err.code }, 403);
@@ -647,35 +591,53 @@ export function registerCellsRoutes(app: HubHono): void {
 
   /**
    * DELETE /cells/:typeKey?workspaceId=...
-   * Uninstall a cell (soft-delete widget_definition).
-   * workspaceId is optional — when omitted, deletes the pod-global row (workspaceId IS NULL).
+   * Retire (soft-delete) an installed cell type.
+   * workspaceId is optional — when omitted, retires the POD-WIDE row
+   * (workspaceId IS NULL), which only a pod admin may do: every space draws it.
+   *
+   * GOVERNED: an agent's retire is a `cell/retire` proposal (floored, 2.09);
+   * approving it re-checks the approver with the same floor and retires it.
    */
   app.delete("/cells/:typeKey", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
       return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
     }
     const typeKey = c.req.param("typeKey");
-    const workspaceId = c.req.query("workspaceId");
-    const userId = c.get("userId");
-    if (
-      workspaceId &&
-      !(await canWrite(userPrincipal(userId), { workspace: workspaceId }))
-    ) {
-      return c.json({ error: "Access denied to workspace" }, 403);
-    }
+    const workspaceId = c.req.query("workspaceId") || null;
+    const userId = c.get("userId") ?? "";
+    const refused = await cellRetireRefusal(userId, workspaceId);
+    if (refused) return c.json({ error: refused.error }, refused.status);
     try {
-      const db = await getDb();
-      await db
-        .update(widgetDefinitions)
-        .set({ isActive: false, updatedAt: new Date() })
-        .where(
-          and(
-            eq(widgetDefinitions.typeKey, typeKey),
-            workspaceId
-              ? eq(widgetDefinitions.workspaceId, workspaceId)
-              : isNull(widgetDefinitions.workspaceId)
-          )
-        );
+      const cell = await findActiveCellType(typeKey, workspaceId);
+      if (!cell) return c.json({ error: "Cell not found" }, 404);
+
+      const { checkPermissionOrPropose, proposedMessageFor } =
+        await import("../../../utils/permission-check.js");
+      const perm = await checkPermissionOrPropose({
+        userId,
+        agentUserId: c.get("agentUserId") as string | undefined,
+        workspaceId,
+        subjectType: "cell",
+        action: "retire",
+        data: { id: cell.id, typeKey, workspaceId, name: cell.name },
+        reasoning: `Retire the cell "${cell.name}": every view that draws it stops drawing it.`,
+      });
+      if ("denied" in perm && perm.denied) {
+        return c.json({ error: perm.reason }, 403);
+      }
+      if ("proposalId" in perm && perm.proposalId) {
+        return jsonGoverned(c, {
+          status: "proposed",
+          proposalId: perm.proposalId,
+          reviewUrl: perm.reviewUrl,
+          message: proposedMessageFor(
+            perm.proposalType,
+            "Retiring this cell was proposed: it is retired once the person approves it."
+          ),
+        });
+      }
+
+      await retireCellType(typeKey, workspaceId);
       return c.json({ success: true });
     } catch (err) {
       logger.error({ err }, "cells.uninstall failed");
@@ -685,25 +647,4 @@ export function registerCellsRoutes(app: HubHono): void {
       );
     }
   });
-}
-
-interface CellDef {
-  key: string;
-  name: string;
-  code: string;
-  deps?: Record<string, string>;
-  description?: string;
-  defaultSize?: { w: number; h: number };
-  /** Minimum grid footprint declared by the package — the Card's render floor. */
-  minSize?: { w: number; h: number };
-  /** View-type affinity declared by the package (0221) — optional. */
-  viewTypes?: string[];
-  /** Renderer slot declared by the package — see `resolveCellContentKind`. */
-  contentKind?: string;
-  /**
-   * Rendering MECHANISM declared by the package. Absent ⇒ `defineCell`'s
-   * `"frame"` default — which is exactly how an `iframe` HTML Card used to
-   * install as an ESM React cell and fail to mount.
-   */
-  rendererType?: PackageCellRendererType;
 }

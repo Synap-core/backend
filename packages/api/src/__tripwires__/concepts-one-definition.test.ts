@@ -12,7 +12,8 @@
  *      (`@synap-core/types/vocabulary`): aligned (the registry label IS the user
  *      word), derived (template nouns), a destination or Inbox-filter word
  *      (`resolveDestinationLabel` / `resolveNeedsYouBucketLabel`, founder 2A/3A),
- *      or no-row (with the reason). The heading set is
+ *      a goal work-kind word (`resolveTrackWorkKindLabel`), or no-row (with
+ *      the reason). The heading set is
  *      DERIVED from the file, so a new concept joins by existing and fails until
  *      it is classified.
  *   2. The glossary reaches the doors: `_teaching.json` (alwaysOn — without an
@@ -43,6 +44,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveTemplateNoun,
+  resolveTrackWorkKindLabel,
 } from "@synap-core/types/vocabulary";
 import { describe, expect, it } from "vitest";
 
@@ -107,6 +109,15 @@ const INBOX_FILTER: Record<string, "question" | "routine" | "broken"> = {
   "Routine changes": "routine",
   Broken: "broken",
 };
+/**
+ * A goal's kind of work (`TRACK_WORK_KINDS`): the word IS
+ * `resolveTrackWorkKindLabel(key)`. Pathway (P6, 23 Nov 2026): a one-off long
+ * plan is a lens over a goal of this kind, its sessions and decisions, never
+ * an object kind of its own.
+ */
+const WORK_KIND: Record<string, string> = {
+  Pathway: "pathway",
+};
 /** No registry row carries this word, and why. */
 const NO_ROW: Record<string, string> = {
   // D1 (founder, 2026-11-16): a playbook is a Process ("Template" now names
@@ -156,6 +167,7 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
       ...Object.keys(ALIGNED_PLURAL),
       ...Object.keys(DESTINATION),
       ...Object.keys(INBOX_FILTER),
+      ...Object.keys(WORK_KIND),
       ...Object.keys(NO_ROW),
     ]);
     expect(headings.filter((h) => !classified.has(h))).toEqual([]);
@@ -189,6 +201,12 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
     }
     for (const [word, key] of Object.entries(INBOX_FILTER)) {
       expect(resolveNeedsYouBucketLabel(key), `${word} ↔ ${key}`).toBe(word);
+    }
+  });
+
+  it("work-kind words ARE the vocabulary's goal work-kind label", () => {
+    for (const [word, key] of Object.entries(WORK_KIND)) {
+      expect(resolveTrackWorkKindLabel(key), `${word} ↔ ${key}`).toBe(word);
     }
   });
 

@@ -32,6 +32,8 @@ const { bundle, answered } = vi.hoisted(() => ({
 vi.mock("../../../../lib/trpc", () => ({
   trpc: {
     useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     renderers: {
       hostModules: answered(() => bundle.answer),
       status: answered(() => ({ data: bundle.status })),
