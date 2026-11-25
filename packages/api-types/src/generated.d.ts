@@ -25938,8 +25938,11 @@ export interface SurfaceContext {
 	locale: string;
 	theme: "dark" | "light";
 }
-/** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
-export type RendererBindingStore = "profile" | "view" | "workspace";
+/**
+ * Where a binding was found. `binding` = a `renderer_bindings` row. `entity`
+ * (per-entity override) is deferred (v1).
+ */
+export type RendererBindingStore = "binding" | "profile" | "view" | "workspace";
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
 export type RendererKeyKind = "cell" | "other" | "view" | "view-adapter";
 export interface RendererBinding {
@@ -25955,6 +25958,10 @@ export interface RendererBinding {
 	/** True when the ref sits under a deprecated slot key / column. */
 	legacy?: boolean;
 	workspaceId: string | null;
+	/** `binding` store only: the row's scope (user | workspace | pod). */
+	scope?: string;
+	/** `binding` store only: the one object it pins, absent for a whole kind. */
+	subjectId?: string;
 }
 export interface RendererUsage {
 	/** `cellKey` | `adapterKey` | `view:<uuid>` | `<refKind>:<appId>`. */
@@ -25977,6 +25984,79 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
+	/**
+	 * The stores that could not be read, with their error: NOT "no bindings".
+	 * Always set by this builder; optional on the type because the field joined
+	 * an existing door's output (an older pod omits it, and typed fixtures in
+	 * dependent repos predate it).
+	 */
+	unavailable?: {
+		error: string;
+		source: string;
+	}[];
+}
+declare const ANCHOR_KIND_SET: {
+	readonly entity: true;
+	readonly playbook: true;
+	readonly profile: true;
+	readonly project: true;
+	readonly session: true;
+	readonly track: true;
+	readonly workspace: true;
+};
+export type AnchorKind = keyof typeof ANCHOR_KIND_SET;
+export interface SurfaceAnchor {
+	kind: AnchorKind;
+	id: string;
+}
+declare const SURFACE_BODIES: readonly [
+	"view",
+	"document",
+	"html",
+	"bento",
+	"whiteboard",
+	"cell",
+	"site",
+	"app"
+];
+export type SurfaceBody = (typeof SURFACE_BODIES)[number];
+declare const SURFACE_RELATIONS: readonly [
+	"renders",
+	"attached",
+	"body",
+	"pinned",
+	"home",
+	"session-output",
+	"exposed"
+];
+export type SurfaceRelation = (typeof SURFACE_RELATIONS)[number];
+export interface SurfaceRow {
+	/** The body's own id (view, document, cell instance, binding, share…). */
+	id: string;
+	body: SurfaceBody;
+	relation: SurfaceRelation;
+	anchor: SurfaceAnchor;
+	title: string;
+	/** For a view body: its view type (table, kanban, pipeline…). */
+	viewType?: string;
+	/** For a cell body: the cell's key. */
+	cellKey?: string;
+	/** For a renders row: the renderer slot (list, detail, card, dashboard). */
+	slot?: string;
+	/** Today the existing `/open/<id>` link of the body. */
+	openUrl: string;
+	/** True when the surface cannot be edited through it (an HTML artifact). */
+	readOnly: boolean;
+	/** Which store answered (for debugging and inspection). */
+	source: string;
+}
+export interface SurfacesForObject {
+	rows: SurfaceRow[];
+	/** A store that could not be read: NOT "nothing there". */
+	unavailable: {
+		error: string;
+		source: string;
+	}[];
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -60879,6 +60959,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SurfaceContext;
 		}>;
 	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		forObject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: SurfacesForObject;
+		}>;
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cellKey?: string | undefined;

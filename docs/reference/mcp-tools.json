@@ -8,7 +8,7 @@
     "group": "Which listing group the tool belongs to: 'entry' tools are listed to every key; other groups are listed to an entry-profile key once unlocked with synap_load_skill('tools:<group>'). A group narrows listing only and is not a permission.",
     "scopes": "Tool definitions declare no required API key scopes. Scope checks (mcp.read / mcp.write) run inside the handlers when a tool is called."
   },
-  "toolCount": 126,
+  "toolCount": 127,
   "entryTools": [
     "synap_orient",
     "synap_ask",
@@ -131,6 +131,7 @@
     "build": [
       "synap_create_view",
       "synap_list_views",
+      "synap_find_surfaces",
       "synap_update_view_content",
       "synap_update_view",
       "synap_set_start_page",
@@ -5348,6 +5349,73 @@
           }
         },
         "required": ["viewId"]
+      }
+    },
+    {
+      "name": "synap_find_surfaces",
+      "title": "Find an object's surfaces",
+      "group": "build",
+      "annotations": {
+        "title": "Find an object's surfaces",
+        "readOnlyHint": true,
+        "openWorldHint": false
+      },
+      "description": "Find every Surface an object carries before you make one: its kind's renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not \"nothing there\". Read-only.",
+      "parameters": [
+        {
+          "name": "kind",
+          "type": "enum",
+          "required": true,
+          "description": "The anchor's kind (profile = a kind of record, by id or slug; track = a goal).",
+          "enum": [
+            "entity",
+            "profile",
+            "workspace",
+            "project",
+            "track",
+            "playbook",
+            "session"
+          ]
+        },
+        {
+          "name": "id",
+          "type": "string",
+          "required": true,
+          "description": "The anchor's id (a profile also by its slug)."
+        },
+        {
+          "name": "workspaceId",
+          "type": "string",
+          "required": false,
+          "description": "Optional space to narrow to. Omit for everything you can see."
+        }
+      ],
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "profile",
+              "workspace",
+              "project",
+              "track",
+              "playbook",
+              "session"
+            ],
+            "description": "The anchor's kind (profile = a kind of record, by id or slug; track = a goal)."
+          },
+          "id": {
+            "type": "string",
+            "description": "The anchor's id (a profile also by its slug)."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Optional space to narrow to. Omit for everything you can see."
+          }
+        },
+        "required": ["kind", "id"]
       }
     },
     {
@@ -11783,7 +11851,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "List views you own, optionally narrowed by workspaceId, type, or profileId. Call this BEFORE synap_create_view so you do not duplicate an existing board. Owner-only (same floor as hub listViews). Omit filters for the full catalog.",
+      "description": "List the Views and boards you can see (not only your own), narrowed by workspaceId, projectId, type or profileId. Call it before synap_create_view so you do not duplicate one. For what ONE object already carries (its views, bentos, documents, HTML artifacts, renders), use synap_find_surfaces. `type` accepts every view type, bento and whiteboard included.",
       "parameters": [
         {
           "name": "detail",
@@ -11796,13 +11864,19 @@
           "name": "workspaceId",
           "type": "string",
           "required": false,
-          "description": "Optional workspace UUID to narrow to. Omit for every view you own."
+          "description": "Optional workspace UUID to narrow to. Omit for every view you can see."
+        },
+        {
+          "name": "projectId",
+          "type": "string",
+          "required": false,
+          "description": "Optional project UUID: only views pinned to or exposed in that project."
         },
         {
           "name": "type",
           "type": "string",
           "required": false,
-          "description": "Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow)."
+          "description": "Optional view type filter: sheet, table, list, grid, gallery, kanban, pipeline, matrix, masonry, calendar, gantt, timeline, graph, flow, branch_tree, bento, whiteboard, mindmap, map, zoom_map."
         },
         {
           "name": "profileId",
@@ -11833,11 +11907,15 @@
           },
           "workspaceId": {
             "type": "string",
-            "description": "Optional workspace UUID to narrow to. Omit for every view you own."
+            "description": "Optional workspace UUID to narrow to. Omit for every view you can see."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Optional project UUID: only views pinned to or exposed in that project."
           },
           "type": {
             "type": "string",
-            "description": "Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow)."
+            "description": "Optional view type filter: sheet, table, list, grid, gallery, kanban, pipeline, matrix, masonry, calendar, gantt, timeline, graph, flow, branch_tree, bento, whiteboard, mindmap, map, zoom_map."
           },
           "profileId": {
             "type": "string",

@@ -205,6 +205,8 @@ import type {
   HubProposal,
   HubFileUrl,
   HubView,
+  HubSurfaceAnchorKind,
+  HubSurfacesForObject,
   HubWidgetDefinition,
   HubSearchResult,
   HubCommand,
@@ -1640,6 +1642,26 @@ export class HubRestClient {
       `/api/hub/views?${params}`
     );
     return unwrapList(result);
+  }
+
+  /**
+   * Every surface ONE object carries (GET /surfaces): its kind's renderers,
+   * its body document, views pinned to it, its home or start page, session
+   * outputs and Sites. A store the pod could not read is listed in
+   * `unavailable`, never folded into an empty `rows`. A missing or invisible
+   * anchor throws a 404 `HubApiError`.
+   */
+  async listSurfaces(input: {
+    kind: HubSurfaceAnchorKind;
+    id: string;
+    workspaceId?: string;
+  }): Promise<HubSurfacesForObject> {
+    const params = new URLSearchParams({ kind: input.kind, id: input.id });
+    if (input.workspaceId) params.set("workspaceId", input.workspaceId);
+    return this.request<HubSurfacesForObject>(
+      "GET",
+      `/api/hub/surfaces?${params}`
+    );
   }
 
   /**

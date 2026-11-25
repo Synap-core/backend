@@ -39,6 +39,7 @@ import {
   PROPOSAL_REJECTION_REASONS,
   type CompositeCreateLinkOp,
 } from "@synap-core/types/proposals";
+import { ANCHOR_KINDS } from "@synap-core/types/surfaces";
 import { DENIED_BY_RULE_REASON } from "@synap/governance-policy";
 import { workClockIn } from "@synap-core/types/work-clock";
 import {
@@ -51,6 +52,7 @@ import {
 import {
   CONTENT_KINDS,
   AGENT_CREATABLE_VIEW_DEFINITIONS,
+  VIEW_TYPE_KEYS,
 } from "@synap-core/types/renderables";
 const CREATABLE_VIEW_TYPE_KEYS = AGENT_CREATABLE_VIEW_DEFINITIONS.map(
   (d) => d.key
@@ -3638,6 +3640,37 @@ export const tools = {
         },
       },
       {
+        name: "synap_find_surfaces",
+        annotations: {
+          title: "Find an object's surfaces",
+          readOnlyHint: true,
+          openWorldHint: false,
+        },
+        description:
+          'Find every Surface an object carries before you make one: its kind\'s renderers (renders), surfaces attached to it, its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor {kind: entity|profile|workspace|project|track|playbook|session, id}. Each row: body (view, document, html, bento, whiteboard, cell, site, app), relation, title and an open link. A store that could not be read is listed under `unavailable`: that is not "nothing there". Read-only.',
+        inputSchema: {
+          type: "object",
+          properties: {
+            kind: {
+              type: "string",
+              enum: [...ANCHOR_KINDS],
+              description:
+                "The anchor's kind (profile = a kind of record, by id or slug; track = a goal).",
+            },
+            id: {
+              type: "string",
+              description: "The anchor's id (a profile also by its slug).",
+            },
+            workspaceId: {
+              type: "string",
+              description:
+                "Optional space to narrow to. Omit for everything you can see.",
+            },
+          },
+          required: ["kind", "id"],
+        },
+      },
+      {
         name: "synap_list_sessions",
         annotations: {
           title: "List focus sessions",
@@ -6461,7 +6494,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          "List views you own, optionally narrowed by workspaceId, type, or profileId. Call this BEFORE synap_create_view so you do not duplicate an existing board. Owner-only (same floor as hub listViews). Omit filters for the full catalog.",
+          "List the Views and boards you can see (not only your own), narrowed by workspaceId, projectId, type or profileId. Call it before synap_create_view so you do not duplicate one. For what ONE object already carries (its views, bentos, documents, HTML artifacts, renders), use synap_find_surfaces. `type` accepts every view type, bento and whiteboard included.",
         inputSchema: {
           type: "object",
           properties: {
@@ -6474,12 +6507,16 @@ export const tools = {
             workspaceId: {
               type: "string",
               description:
-                "Optional workspace UUID to narrow to. Omit for every view you own.",
+                "Optional workspace UUID to narrow to. Omit for every view you can see.",
+            },
+            projectId: {
+              type: "string",
+              description:
+                "Optional project UUID: only views pinned to or exposed in that project.",
             },
             type: {
               type: "string",
-              description:
-                "Optional view type filter (table, kanban, list, gallery, calendar, bento, masonry, flow).",
+              description: `Optional view type filter: ${VIEW_TYPE_KEYS.join(", ")}.`,
             },
             profileId: {
               type: "string",
