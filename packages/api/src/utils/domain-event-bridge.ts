@@ -63,11 +63,10 @@ function mapToSocketEvent(
   eventType: string
 ): { event: string; workspaceIdRequired: boolean } | null {
   const m: Record<string, { event: string; workspaceIdRequired: boolean }> = {
-    // Entities are pod-wide-capable (workspaceId NULL = visible in every
-    // workspace). Per the unified room rule, a NULL-workspace entity falls back
-    // to the owner's `user:<ownerUserId>` room instead of being DROPPED — so
-    // pod-wide entities (the bridge-discovered person/company, the pod-wide
-    // bridge model) still push realtime. This MUST be `false`: with `true` the
+    // Entities are pod-wide-capable (workspaceId NULL). Per the unified room
+    // rule (header), a NULL-workspace entity goes to the room of each person
+    // who may read it instead of being DROPPED — so pod-wide entities (most
+    // kinds) still push realtime. This MUST be `false`: with `true` the
     // guard at emitDomainEventToRealtime (workspaceIdRequired && !workspaceId)
     // silently skipped every pod-wide entity emit — the "pod-wide = no realtime"
     // gap. Workspace-scoped entities are unaffected (they carry a workspaceId →
@@ -342,8 +341,12 @@ async function sendToEntityReaders(
       (id): id is string => typeof id === "string" && id.length > 0
     )
   );
-  for (const userId of recipients) {
-    postToBridge(JSON.stringify({ event: socketEvent, data, userId }), ctx);
+  try {
+    for (const userId of recipients) {
+      postToBridge(JSON.stringify({ event: socketEvent, data, userId }), ctx);
+    }
+  } catch (err) {
+    logger.warn({ ...ctx, entityId, err }, "pod-wide entity push not sent");
   }
 }
 
