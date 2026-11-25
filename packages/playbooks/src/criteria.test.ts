@@ -80,6 +80,59 @@ describe("readCriteria", () => {
     ]);
     expect(loose).toEqual(ok);
   });
+
+  // W1 (work model): the output a criterion checks survives every read; a
+  // blank or non-string one reads as none named.
+  it("round-trips outputKey; a blank or non-string one is dropped, the criterion kept", () => {
+    const stored = { ...ok, outputKey: "pr-backend" };
+    const [c] = readCriteria(JSON.parse(JSON.stringify([stored])));
+    expect(c).toEqual(stored);
+    for (const outputKey of ["", "  ", 3, null]) {
+      expect(readCriteria([{ ...ok, outputKey }])).toEqual([ok]);
+    }
+  });
+
+  it("a stage criterion keeps its outputKey through collectPlaybookCriteria", () => {
+    const [c] = collectPlaybookCriteria({
+      stages: [{ key: "pr", criteria: [{ ...ok, outputKey: "pr-backend" }] }],
+    });
+    expect(c).toEqual({ ...ok, outputKey: "pr-backend", stageKey: "pr" });
+  });
+
+  // P8 (pathways): a measure's arguments ride on `check.params`; a reader
+  // that rebuilt the check without them would turn every measure into a
+  // capability run with no question to answer.
+  it("round-trips check.params; a non-object one is dropped, the criterion kept", () => {
+    const measured = {
+      key: "ten-meetings",
+      statement: "Ten meetings are logged",
+      check: {
+        kind: "capability",
+        capability: "measure.check",
+        params: {
+          op: "entities.list",
+          params: { profileSlug: "meeting" },
+          threshold: 10,
+          comparator: "gte",
+        },
+      },
+    };
+    const [c] = readCriteria(JSON.parse(JSON.stringify([measured])));
+    expect(c).toEqual(measured);
+    const [s] = collectPlaybookCriteria({
+      stages: [{ key: "meet", criteria: [measured] }],
+    });
+    expect(s).toEqual({ ...measured, stageKey: "meet" });
+    for (const params of ["x", 3, null, ["op"]]) {
+      const [loose] = readCriteria([
+        { ...measured, check: { ...measured.check, params } },
+      ]);
+      expect(loose!.check).toEqual({
+        kind: "capability",
+        capability: "measure.check",
+      });
+    }
+  });
 });
 
 describe("collectPlaybookCriteria", () => {

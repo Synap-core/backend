@@ -32,6 +32,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       return { linked: true, suspendedIntentRecorded: false };
     },
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       // X1: the executor's claim runs in a transaction on the same handle.
       transaction: async (fn: (tx: unknown) => unknown) =>
         fn((await import("@synap/database")).db),

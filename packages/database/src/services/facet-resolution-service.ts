@@ -292,11 +292,17 @@ export async function resolveRolePayload(
  * routing) and `views.execute` (the role branch of `scopeProfileIds`) go
  * through here so the EXISTS is never hand-rolled twice (see also
  * `profileScopeConditions`).
+ *
+ * `facetWhere` (optional) narrows WHICH facet must exist — the status
+ * primitive of the filter grammar passes a condition on
+ * `entity_facets.status` / `status_category` (`ViewFilterCompiler`). Absent,
+ * the predicate is byte-identical to the plain scope test.
  */
 export function facetRoleExists(
   db: PostgresJsDatabase<typeof schema>,
   roleProfileIds: string[],
-  opts: FacetVisibilityScope
+  opts: FacetVisibilityScope,
+  facetWhere?: SQL
 ): SQL {
   return exists(
     db
@@ -307,7 +313,8 @@ export function facetRoleExists(
           eq(entityFacets.entityId, entities.id),
           inArray(entityFacets.profileId, roleProfileIds),
           isNull(entityFacets.deletedAt),
-          ...facetVisibilityConditions(opts)
+          ...facetVisibilityConditions(opts),
+          ...(facetWhere ? [facetWhere] : [])
         )
       )
   );

@@ -152,6 +152,8 @@ describe("tripwire: the one skill door handles a box skill", () => {
       metadata: null,
       parameters: null,
       executionMode: "box",
+      intent: null,
+      inputMap: null,
     };
     const out = await runResolvedSkill(
       row,

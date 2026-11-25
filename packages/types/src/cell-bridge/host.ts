@@ -1,0 +1,212 @@
+/**
+ * The host's side of the page bridge: one `message` handler per running HTML
+ * page. ONE implementation for every host (pod admin's `html-frame.tsx`, the
+ * desktop's `HtmlPageFrame.tsx`); each host only supplies its frame's window
+ * and its own read door. Pure, like the rest of this leaf: no React, no DOM
+ * types (the frame is anything with `postMessage`), no fetch — so every
+ * refusal is testable with a fake window.
+ *
+ * A message is answered only when ALL hold:
+ *   - its `source` is THIS frame's window (`frameWindow()`), so another frame,
+ *     a browser extension or the host app itself can never ask;
+ *   - its `origin` is "null": the opaque origin of the sandboxed srcdoc. A
+ *     page that navigated its frame to a real address (https://…) no longer
+ *     has it, so the bridge is shut to it even before the host notices;
+ *   - it parses as a bridge message (`parseCellBridgeMessage`).
+ * Then: `synap:context` is answered with the host's context (`context()`,
+ * frame contract v3), or an error when the host gives none; every write is
+ * refused (`CELL_BRIDGE_WRITE_REFUSED`); an op outside
+ * the shared table is refused; an allowed op is read with only its own params
+ * (`pickBridgeParams`), by `read` (the viewer's own session, the host's lens).
+ * The answer is posted back to that same window, only while it is still the
+ * frame's, with targetOrigin "*" — an opaque-origin frame has no origin to
+ * name; what is posted is only the answer the page asked for.
+ *
+ * A failed read is answered as an ERROR the page can show, never as an empty
+ * answer. An answer too large to hand over is an error too, never a cut list.
+ */
+
+import {
+  CELL_BRIDGE_WRITE_REFUSED,
+  cellBridgeUnknownOp,
+  parseCellBridgeMessage,
+  type CellBridgeHostMessage,
+} from "./protocol.js";
+import {
+  FRAME_NO_CONTEXT,
+  parseSurfaceContext,
+  type SurfaceContext,
+} from "./surface-context.js";
+import {
+  isCellBridgeReadOp,
+  pickBridgeParams,
+  type CellBridgeParamValue,
+  type CellBridgeReadOp,
+} from "./read-ops.js";
+
+/** What the host posts to: the frame's `contentWindow`. */
+export interface CellBridgeTarget {
+  postMessage(message: unknown, targetOrigin: string): void;
+}
+
+/** The slice of a `MessageEvent` the host reads. */
+export interface CellBridgeEventLike {
+  source: unknown;
+  origin: string;
+  data: unknown;
+}
+
+export interface CellBridgeHostOptions {
+  /** The running frame's window, or null when there is none. Read per message. */
+  frameWindow: () => CellBridgeTarget | null;
+  /** One allowed read, as the viewer. Throws on a failed read. */
+  read: (
+    op: CellBridgeReadOp,
+    params: Record<string, CellBridgeParamValue>
+  ) => Promise<unknown>;
+  /**
+   * What the page is about (`window.synap.context()`): the anchor, its space,
+   * project and goal, the host's filters and the project's brand. Absent: the
+   * page reads an error. Throws on a failed read.
+   */
+  context?: () => SurfaceContext | Promise<SurfaceContext>;
+}
+
+/**
+ * The answer to `synap:context`: the context as plain contract data, or why
+ * there is none (no context here, a failed read, something that is not one).
+ */
+export async function cellBridgeContextAnswer(
+  id: string,
+  context: (() => SurfaceContext | Promise<SurfaceContext>) | undefined
+): Promise<CellBridgeHostMessage> {
+  if (!context)
+    return { type: "synap:context:result", id, error: FRAME_NO_CONTEXT };
+  try {
+    const data = parseSurfaceContext(await context());
+    return data
+      ? { type: "synap:context:result", id, data }
+      : {
+          type: "synap:context:result",
+          id,
+          error: "The frame's context could not be handed over.",
+        };
+  } catch (err) {
+    return {
+      type: "synap:context:result",
+      id,
+      error: cellBridgeErrorText(err),
+    };
+  }
+}
+
+/** The largest answer handed to a page: 1 M characters of JSON. */
+export const CELL_BRIDGE_MAX_ANSWER_CHARS = 1_000_000;
+/** Reads one page may have in flight at once. */
+export const CELL_BRIDGE_MAX_IN_FLIGHT = 8;
+
+const MAX_ERROR_CHARS = 300;
+
+/** A thrown read's message for the page: its own words, capped; never empty. */
+export function cellBridgeErrorText(err: unknown): string {
+  const message =
+    err instanceof Error && err.message.trim()
+      ? err.message.trim()
+      : "The read failed.";
+  return message.length > MAX_ERROR_CHARS
+    ? `${message.slice(0, MAX_ERROR_CHARS - 1)}…`
+    : message;
+}
+
+/**
+ * The answer as plain JSON data (dates → strings, no functions, no class
+ * instances), or the reason it cannot be handed over.
+ */
+export function cellBridgeAnswer(
+  id: string,
+  data: unknown
+): CellBridgeHostMessage {
+  let json: string;
+  try {
+    json = JSON.stringify(data ?? null);
+  } catch {
+    return {
+      type: "synap:query:result",
+      id,
+      error: "The answer could not be handed to the page.",
+    };
+  }
+  if (json.length > CELL_BRIDGE_MAX_ANSWER_CHARS) {
+    const mb = (json.length / 1_000_000).toFixed(1);
+    return {
+      type: "synap:query:result",
+      id,
+      error: `The answer is too large to hand to the page (${mb} MB). Ask for fewer items.`,
+    };
+  }
+  return { type: "synap:query:result", id, data: JSON.parse(json) as unknown };
+}
+
+/** The `message` handler for one running page. */
+export function createCellBridgeHost(options: CellBridgeHostOptions) {
+  let inFlight = 0;
+  return async function onMessage(event: CellBridgeEventLike): Promise<void> {
+    const frame = options.frameWindow();
+    if (!frame || event.source !== frame) return;
+    if (event.origin !== "null") return;
+    const msg = parseCellBridgeMessage(event.data);
+    if (!msg) return;
+
+    const reply = (message: CellBridgeHostMessage) => {
+      // The frame may have been reloaded or torn down while the read ran.
+      if (options.frameWindow() !== frame) return;
+      frame.postMessage(message, "*");
+    };
+
+    if (msg.type === "synap:context") {
+      reply(await cellBridgeContextAnswer(msg.id, options.context));
+      return;
+    }
+    if (msg.type === "synap:mutate") {
+      reply({
+        type: "synap:mutate:result",
+        id: msg.id,
+        status: "denied",
+        error: CELL_BRIDGE_WRITE_REFUSED,
+      });
+      return;
+    }
+    if (!isCellBridgeReadOp(msg.operation)) {
+      reply({
+        type: "synap:query:result",
+        id: msg.id,
+        error: cellBridgeUnknownOp(msg.operation),
+      });
+      return;
+    }
+    if (inFlight >= CELL_BRIDGE_MAX_IN_FLIGHT) {
+      reply({
+        type: "synap:query:result",
+        id: msg.id,
+        error: "Too many reads at once. Wait for the others to finish.",
+      });
+      return;
+    }
+    inFlight += 1;
+    try {
+      const data = await options.read(
+        msg.operation,
+        pickBridgeParams(msg.operation, msg.params)
+      );
+      reply(cellBridgeAnswer(msg.id, data));
+    } catch (err) {
+      reply({
+        type: "synap:query:result",
+        id: msg.id,
+        error: cellBridgeErrorText(err),
+      });
+    } finally {
+      inFlight -= 1;
+    }
+  };
+}

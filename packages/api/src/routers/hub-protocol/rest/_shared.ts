@@ -32,8 +32,11 @@ import {
   or,
   drizzleSql,
   getWorkspaceMembership,
+  getDelegatedTurnAgent,
+  inArray,
+  membershipHolderIds,
 } from "@synap/database";
-import { apiKeys } from "@synap/database/schema";
+import { APP_PERSON_KEY_TYPE, apiKeys } from "@synap/database/schema";
 
 import { hubProtocolRouter } from "../index.js";
 import { createHubProtocolCallerContext } from "../utils.js";
@@ -325,8 +328,11 @@ export const AGENT_CANNOT_PURGE =
  * owner action), and the agent-key remap makes `userId` the human owner — so
  * the ownership checks behind these doors passed for the owner's agent.
  * "An agent caller" is the existing definition `isAgentCaller`: an agent key
- * or the Intelligence Service's internal key. A human session or a human
- * personal access token still purges. The tRPC twin
+ * or the Intelligence Service's internal key. A pod app's person token
+ * (`app_person`, key-identity.ts: it resolves AS the person, bounded by its
+ * grant, with no agent) is refused too: a site the person connected is not
+ * the person at the keyboard, and purge reads no grant (2026-11-17). A human
+ * session or a human personal access token still purges. The tRPC twin
  * (`workspaces.adminDelete`) is session-only (`podAdminProcedure` →
  * `protectedProcedure`, never an API key), and no MCP tool purges.
  */
@@ -336,10 +342,14 @@ export function rejectAgentPurger(
 ): Response | null {
   const agentUserId = c.get("agentUserId");
   const keyType = c.get("keyType") as string | undefined;
-  if (!isAgentCaller({ agentUserId, keyType })) return null;
+  if (
+    !isAgentCaller({ agentUserId, keyType }) &&
+    keyType !== APP_PERSON_KEY_TYPE
+  )
+    return null;
   logger.warn(
     { agentUserId, keyType, what },
-    "agent credential attempted a hard purge — blocked (human credential required)"
+    "agent or app credential attempted a hard purge — blocked (human credential required)"
   );
   return c.json({ error: AGENT_CANNOT_PURGE, code: "AGENT_CANNOT_PURGE" }, 403);
 }
@@ -898,6 +908,18 @@ export function confineWorkspaceOrForbidden<
  *      (`api_keys.linkedUserId = userId`, the "act-as" grant minted by
  *      `POST /setup/agent`).
  *
+ * OR, for (2): the request is an AI-service turn whose POD-SIGNED delegation
+ * names this exact agent (`act.sub`) for this exact operator (`sub`) —
+ * `getDelegatedTurnAgent()`, entered only by `authenticateIsDelegation` after
+ * verifying the pod's own signature. The pod chose that agent for the turn
+ * (`resolveIntelligenceService` → the operator's house agent), and a house
+ * agent holds no key of its own, so no `api_keys` row can ever link it: without
+ * this, every direct write of a turn the pod itself attributed to a house
+ * agent was refused here (live 2026-11-09: approved Brand runs, 400 on
+ * create_document / update_entity, while capture — which never reads a body
+ * agent — went through). The IS cannot widen it: `act.sub` is the pod's
+ * signature, not a value the caller picks, and it holds for one operator only.
+ *
  * SECURITY: without check (2), any caller could pass an arbitrary
  * `agentUserId` belonging to someone else's agent and have every write
  * attributed to (and governed as) that agent — a governed-agent-write →
@@ -927,7 +949,14 @@ export async function resolveActorId(
 
   // Acting as your OWN agent identity is always allowed (agentUserId === the
   // verified acting userId — e.g. an agent key calling on its own behalf).
-  if (agentUserId !== userId) {
+  // The agent the pod signed for this AI-service turn, for this operator, is
+  // allowed too (see above).
+  const delegated = getDelegatedTurnAgent();
+  const podSignedForTurn =
+    delegated !== undefined &&
+    delegated.agentUserId === agentUserId &&
+    delegated.operatorUserId === userId;
+  if (agentUserId !== userId && !podSignedForTurn) {
     const grant = await db.query.apiKeys.findFirst({
       where: and(
         eq(apiKeys.userId, agentUserId),
@@ -992,11 +1021,13 @@ export async function getUserMemberWorkspaceIds(
         .innerJoin(workspaces, eq(workspaces.id, workspaceMembers.workspaceId))
         .where(
           and(
-            eq(workspaceMembers.userId, userId),
+            inArray(workspaceMembers.userId, membershipHolderIds(userId)),
             isNull(workspaces.archivedAt)
           )
         )
-    : await query.where(eq(workspaceMembers.userId, userId));
+    : await query.where(
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
+      );
   return rows.map((r) => r.workspaceId);
 }
 
@@ -1086,7 +1117,10 @@ export async function getCaller(
       ? undefined
       : ((c.get("agentUserId") as string | undefined) ?? undefined),
     keyType,
-    keyWorkspaceId
+    keyWorkspaceId,
+    // Only the middleware-verified session: a body-named `sessionId` is
+    // provenance, never the session a question may be filed on.
+    (c.get("sessionId") as string | undefined) ?? null
   );
   return hubProtocolRouter.createCaller(ctx as any);
 }

@@ -36,11 +36,10 @@ import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { createLink } from "../links/links-service.js";
 import { isOutputRefVisible } from "./assert-output-ref-visible.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
+import { isPlannedSessionStatus } from "@synap-core/types/focus-sessions";
 
 const logger = createLogger({ module: "focus-sessions/session-inputs" });
-
-/** Statuses a session can take an input in: it is still being worked. */
-const ATTACHABLE_STATUSES = ["active", "paused", "forming"] as const;
 
 export type AttachSessionInputResult =
   | {
@@ -91,7 +90,15 @@ export async function attachSessionInput(input: {
     )
     .limit(1);
   if (!session) return { status: "not_found", what: "session" };
-  if (!(ATTACHABLE_STATUSES as readonly string[]).includes(session.status)) {
+  // A planned step (`forming`) has not started, but what it will work FROM
+  // may be attached ahead of it: only an ended session (or an appointment)
+  // takes no input.
+  if (
+    !(IN_FLIGHT_SESSION_STATUSES as readonly string[]).includes(
+      session.status
+    ) &&
+    !isPlannedSessionStatus(session.status)
+  ) {
     return { status: "closed", sessionStatus: session.status };
   }
 

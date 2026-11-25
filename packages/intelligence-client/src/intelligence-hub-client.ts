@@ -27,6 +27,7 @@ import { isDelegationHeaders } from "@synap/database/is-delegation";
 import type { AgentTurnOverrides } from "@synap/database";
 
 import { iterateISChatStream, iterateSSEDataFrames } from "./is-chat-stream.js";
+import { extractFailureEnvelope } from "./is-call-budget.js";
 
 /**
  * Structured follow-up the IS `structure` endpoint may emit instead of a plain
@@ -525,32 +526,6 @@ function extractValidationDetail(body: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/**
- * The IS's `failure` envelope from a non-2xx JSON body, when it sent one.
- *
- * The IS's own refusals (`enforceQuota` 429, entitlement 403, inactive-account
- * 403, spend-guard 429) answer `{ error, message, failure: { code, retryable } }`.
- * This body used to be logged and dropped, so the pod classified on the bare
- * status: a monthly-quota 429 read as "rate-limited, try again" and a
- * not-entitled / inactive 403 as "credentials rejected".
- */
-function extractFailureEnvelope(body: string): IsFailureEnvelope | undefined {
-  if (!body) return undefined;
-  try {
-    const failure = (JSON.parse(body) as { failure?: unknown })?.failure;
-    if (
-      typeof failure === "object" &&
-      failure !== null &&
-      typeof (failure as { code?: unknown }).code === "string"
-    ) {
-      return failure as IsFailureEnvelope;
-    }
-  } catch {
-    // Not JSON — nothing to carry; the body stays in the logs.
-  }
-  return undefined;
 }
 
 /**
@@ -1303,20 +1278,27 @@ export class IntelligenceHubClient {
           console.warn(
             `[IntelligenceHubClient] structure failed: ${response.status} ${response.statusText} (baseUrl=${this.baseUrl}, hasApiKey=${!!this.apiKey})`
           );
+          const body = await response.json().catch(() => null);
+          const envelope = failureEnvelopeOf(body);
           // Auth failures are the ONLY failure that should drive re-provisioning;
           // surface them as a typed throw so callers can distinguish them from
-          // the graceful `null` we return for every other non-ok status.
-          if (isAuthStatus(response.status)) {
+          // the graceful `null` we return for every other non-ok status. An
+          // ACCOUNT refusal answered 403 (`not_entitled`, `account_inactive`)
+          // is not one: the credentials were accepted and the account said
+          // no, so it is reported like every other refusal, envelope and all.
+          if (
+            isAuthStatus(response.status) &&
+            !isAccountRefusal(envelope.failure as IsFailureEnvelope | undefined)
+          ) {
             throw new IntelligenceAuthError(
               response.status,
               `Intelligence Service rejected credentials: ${response.status} ${response.statusText}`
             );
           }
-          const body = await response.json().catch(() => null);
           reportStructureFailure(options.onFailure, {
             cause: "http",
             status: response.status,
-            ...failureEnvelopeOf(body),
+            ...envelope,
           });
           return null;
         }

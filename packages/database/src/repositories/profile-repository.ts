@@ -8,12 +8,17 @@ import {
   eq,
   and,
   or,
+  isNull,
   sql,
   sql as drizzleSql,
-  isNotNull,
   inArray,
+  type SQL,
 } from "drizzle-orm";
 import type { ProfileRetirement } from "../utils/resolve-profile-for-apply.js";
+import {
+  grantSpaceAccess,
+  revokeSpaceAccess,
+} from "../utils/usable-in-space.js";
 import { unionAll } from "drizzle-orm/pg-core";
 import {
   memberWorkspaceIds as memberWorkspaceIdsQuery,
@@ -37,7 +42,7 @@ import {
 } from "../utils/request-write-context.js";
 import {
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   type Profile,
   type NewProfile,
   type AiPosture,
@@ -200,6 +205,83 @@ export function resolveEntityScope(
 export interface AccessibleProfileFilters {
   ids?: string[];
   slugs?: string[];
+}
+
+/**
+ * THE kind floor: which profiles resolve under a lens, shared by the slug
+ * resolvers and the listing (`getBySlug`, `getBySlugForWorkspace`,
+ * `getAccessibleProfiles`).
+ *
+ *  - system rows, and the person's own user rows;
+ *  - in a workspace lens: rows homed there, and shared rows granted to it
+ *    (`space_access`);
+ *  - with no lens: the same for every workspace the person can see, plus
+ *    shared rows with no home; with no person either (a system caller), every
+ *    shared row;
+ *  - a POD-WIDE kind (`entityScope = 'pod'`, profileKind kind): its entities
+ *    have no space, so the kind resolves in every lens, but only for a person
+ *    who can see its home space (a private space's kind stays private); a
+ *    system caller with no lens and no person reads every one. Its `scope` is
+ *    not changed to `system`: system rows are the catalog's, owned by
+ *    reconcilers.
+ */
+export function kindVisibleWhere(lens: {
+  workspaceId?: string | null;
+  userId?: string;
+}): SQL {
+  const { workspaceId, userId } = lens;
+  const seen = userId
+    ? unionAll(
+        memberWorkspaceIdsQuery(userId),
+        ownedWorkspaceIdsQuery(userId),
+        podVisibleWorkspaceIdsQuery(userId)
+      )
+    : undefined;
+  // Plain names: a relational query re-aliases every column of the outer table.
+  const grantedIn = (spaces: string | NonNullable<typeof seen>) =>
+    sql`exists (select 1 from space_access sa where sa.object_type = 'profile' and sa.object_id = ${profiles.id} and ${
+      typeof spaces === "string"
+        ? sql`sa.workspace_id = ${spaces}`
+        : sql`sa.workspace_id in (${spaces})`
+    })`;
+  const homed = inArray(profiles.scope, [
+    ProfileScope.WORKSPACE,
+    ProfileScope.SHARED,
+  ]);
+
+  const branches: Array<SQL | undefined> = [
+    eq(profiles.scope, ProfileScope.SYSTEM),
+    seen || !workspaceId
+      ? and(
+          eq(profiles.profileKind, "kind"),
+          eq(profiles.entityScope, "pod"),
+          homed,
+          seen ? inArray(profiles.workspaceId, seen) : undefined
+        )
+      : undefined,
+  ];
+  if (userId) {
+    branches.push(
+      and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId))
+    );
+  }
+  if (workspaceId) {
+    branches.push(
+      and(homed, eq(profiles.workspaceId, workspaceId)),
+      and(eq(profiles.scope, ProfileScope.SHARED), grantedIn(workspaceId))
+    );
+  } else if (seen) {
+    branches.push(
+      and(homed, inArray(profiles.workspaceId, seen)),
+      and(
+        eq(profiles.scope, ProfileScope.SHARED),
+        or(isNull(profiles.workspaceId), grantedIn(seen))
+      )
+    );
+  } else {
+    branches.push(eq(profiles.scope, ProfileScope.SHARED));
+  }
+  return or(...branches)!;
 }
 
 /**
@@ -378,114 +460,49 @@ export class ProfileRepository {
     userId?: string
   ): Promise<Profile | null> {
     if (workspaceId) {
-      return this.getBySlugForWorkspace(slug, workspaceId);
+      return this.getBySlugForWorkspace(slug, workspaceId, userId);
     }
-    // No workspace context. Base floor = pod-wide concepts (SYSTEM + SHARED).
-    // When a userId is known, broaden to the caller's REAL floor: their own
-    // USER profiles + profiles owned by / shared to a MEMBER workspace (member
-    // workspaces only — never other users'/non-member private profiles). This
-    // mirrors getAccessibleProfiles' workspace-less branch so a slug `get`
-    // resolves the same set. Setup/system callers pass no userId → floor only.
-    const scopeBranches = [
-      eq(profiles.scope, ProfileScope.SYSTEM),
-      eq(profiles.scope, ProfileScope.SHARED),
-    ];
-    if (userId) {
-      // Same floor as getAccessibleProfiles' workspace-less branch — member ∪
-      // OWNED ∪ POD-VISIBLE — which is what the comment above promises. It used
-      // to be membership-only here too, so a sovereign pod owner with no member
-      // row resolved a DIFFERENT (smaller) set from `get` than from `list`.
-      const visibleWorkspaceIds = unionAll(
-        memberWorkspaceIdsQuery(userId),
-        ownedWorkspaceIdsQuery(userId),
-        podVisibleWorkspaceIdsQuery(userId)
-      );
-      scopeBranches.push(
-        and(
-          eq(profiles.scope, ProfileScope.USER),
-          eq(profiles.userId, userId)
-        )!,
-        and(
-          eq(profiles.scope, ProfileScope.WORKSPACE),
-          inArray(profiles.workspaceId, visibleWorkspaceIds)
-        )!
-      );
-    }
-    // Deterministic twin resolution: one slug can be carried by several rows
-    // (system row + workspace-scope twin). findFirst has no ORDER BY, so which
-    // twin won was arbitrary — and this resolver feeds entities.create's
-    // entityScope decision and FacetRepository.attach's profile pick, making
-    // entity visibility scope nondeterministic on twin slugs. Ranked by the
-    // shared precedence rule below; created_at ASC as tie-break.
+    // Deterministic twin resolution: one slug can be carried by several rows,
+    // and this resolver feeds entities.create's entityScope decision and
+    // FacetRepository.attach's profile pick. Ranked by the shared precedence
+    // rule (the pod-wide row wins with no lens); created_at ASC as tie-break.
     const rows = await this.db.query.profiles.findMany({
       where: and(
         eq(profiles.slug, slug),
         eq(profiles.isActive, true),
         slugResolvableWhere(),
-        or(...scopeBranches)
+        kindVisibleWhere({ userId })
       ),
     });
     if (rows.length === 0) return null;
-    // ONE precedence rule (`utils/profile-slug-precedence.ts`), pod lens: the
-    // caller's own user row, then — for a KIND — the pod-wide row over any
-    // workspace twin (no lens ⇒ a workspace pick is arbitrary), and among
-    // workspace kinds the one built to hold pod-wide rows (entityScope pod).
     rows.sort(compareForSlug("pod"));
     return rows[0];
   }
 
   /**
-   * Get the best-matching profile for a slug within a workspace context.
-   *
-   * Priority order:
-   *   1. Workspace-owned profile (scope=workspace, workspaceId matches)
-   *   2. Shared profile the workspace has access to (scope=shared + profile_workspace_access row)
-   *   3. System profile (scope=system)
-   *
-   * Returns null if no matching profile is accessible to this workspace.
+   * The best-matching profile for a slug inside one workspace, by the shared
+   * precedence rule: the workspace's own row, then a shared row, then system,
+   * then a pod-wide kind homed in another space. Null when none is visible
+   * there ({@link kindVisibleWhere}).
    */
   async getBySlugForWorkspace(
     slug: string,
-    workspaceId: string
+    workspaceId: string,
+    userId?: string
   ): Promise<Profile | null> {
-    // Fetch all profiles with this slug that are accessible
     const rows = await this.db
-      .select({
-        p: profiles,
-        accessWorkspaceId: profileWorkspaceAccess.workspaceId,
-      })
+      .select({ p: profiles })
       .from(profiles)
-      .leftJoin(
-        profileWorkspaceAccess,
-        and(
-          eq(profileWorkspaceAccess.profileId, profiles.id),
-          eq(profileWorkspaceAccess.workspaceId, workspaceId)
-        )
-      )
       .where(
         and(
           eq(profiles.slug, slug),
           eq(profiles.isActive, true),
           slugResolvableWhere(),
-          or(
-            eq(profiles.scope, ProfileScope.SYSTEM),
-            and(
-              eq(profiles.scope, ProfileScope.WORKSPACE),
-              eq(profiles.workspaceId, workspaceId)
-            ),
-            and(
-              eq(profiles.scope, ProfileScope.SHARED),
-              // accessWorkspaceId will be non-null only if the join matched
-              sql`${profileWorkspaceAccess.workspaceId} IS NOT NULL`
-            )
-          )
+          kindVisibleWhere({ workspaceId, userId })
         )
       );
-
     if (rows.length === 0) return null;
-
-    // Pick by the ONE precedence rule, workspace lens: workspace > shared > system.
-    const byPrecedence = compareForSlug("workspace");
+    const byPrecedence = compareForSlug("workspace", workspaceId);
     rows.sort((a, b) => byPrecedence(a.p, b.p));
     return rows[0].p;
   }
@@ -597,25 +614,28 @@ export class ProfileRepository {
    * Grant a workspace access to a shared profile.
    * Safe to call multiple times (no-op if access already exists).
    */
-  async grantAccess(profileId: string, workspaceId: string): Promise<void> {
-    await this.db
-      .insert(profileWorkspaceAccess)
-      .values({ profileId, workspaceId })
-      .onConflictDoNothing();
+  async grantAccess(
+    profileId: string,
+    workspaceId: string,
+    grantedBy?: string
+  ): Promise<void> {
+    await grantSpaceAccess(this.db, {
+      objectType: "profile",
+      objectId: profileId,
+      workspaceId,
+      grantedBy,
+    });
   }
 
   /**
    * Revoke a workspace's access to a shared profile.
    */
   async revokeAccess(profileId: string, workspaceId: string): Promise<void> {
-    await this.db
-      .delete(profileWorkspaceAccess)
-      .where(
-        and(
-          eq(profileWorkspaceAccess.profileId, profileId),
-          eq(profileWorkspaceAccess.workspaceId, workspaceId)
-        )
-      );
+    await revokeSpaceAccess(this.db, {
+      objectType: "profile",
+      objectId: profileId,
+      workspaceId,
+    });
   }
 
   /**
@@ -623,9 +643,14 @@ export class ProfileRepository {
    */
   async getGrantedWorkspaces(profileId: string): Promise<string[]> {
     const rows = await this.db
-      .select({ workspaceId: profileWorkspaceAccess.workspaceId })
-      .from(profileWorkspaceAccess)
-      .where(eq(profileWorkspaceAccess.profileId, profileId));
+      .select({ workspaceId: spaceAccess.workspaceId })
+      .from(spaceAccess)
+      .where(
+        and(
+          eq(spaceAccess.objectType, "profile"),
+          eq(spaceAccess.objectId, profileId)
+        )
+      );
     return rows.map((r) => r.workspaceId);
   }
 
@@ -650,77 +675,10 @@ export class ProfileRepository {
     ) {
       return [];
     }
-    // A workspace-less context (capture/structure when no workspace is active,
-    // hydration onboarding) passes "" here. The workspace-scoped predicates bind
-    // workspaceId into UUID columns, so binding "" makes Postgres throw
-    // `invalid input syntax for type uuid: ""`. When there is no workspace, drop
-    // every workspace-scoped branch and return SYSTEM + USER profiles only —
-    // exactly what a workspace-less user should see (and what callers document).
-    const hasWorkspace = Boolean(workspaceId);
-
-    // Join only on profileId when workspace-less (never binds "" to a uuid). The
-    // SHARED branch — which depends on a matched access row — is dropped below in
-    // that case, so the broader join can't widen the result.
-    const joinCondition = hasWorkspace
-      ? and(
-          eq(profileWorkspaceAccess.profileId, profiles.id),
-          eq(profileWorkspaceAccess.workspaceId, workspaceId)
-        )
-      : eq(profileWorkspaceAccess.profileId, profiles.id);
-
-    // The caller's REAL floor of workspaces. This MUST be the same floor
-    // `userVisibleWhere` uses — member ∪ OWNED ∪ POD-VISIBLE — not membership
-    // alone. `workspaces.owner_id` is a first-class column separate from
-    // `workspace_members`, and on a sovereign single-user pod the owner often
-    // has NO member row; flooring on membership alone silently returned
-    // SYSTEM + USER profiles only, i.e. a truncated vocabulary at pod altitude
-    // (kinds/roles simply missing from pickers). Composed from the shared
-    // branch builders so there is one definition of the floor, not a fourth copy.
-    const visibleWorkspaceIds = unionAll(
-      memberWorkspaceIdsQuery(userId),
-      ownedWorkspaceIdsQuery(userId),
-      podVisibleWorkspaceIdsQuery(userId)
-    );
-
-    const scopeBranches = [
-      eq(profiles.scope, ProfileScope.SYSTEM),
-      and(eq(profiles.scope, ProfileScope.USER), eq(profiles.userId, userId)),
-    ];
-    if (hasWorkspace) {
-      scopeBranches.push(
-        and(
-          eq(profiles.scope, ProfileScope.WORKSPACE),
-          eq(profiles.workspaceId, workspaceId)
-        ),
-        and(
-          eq(profiles.scope, ProfileScope.SHARED),
-          isNotNull(profileWorkspaceAccess.workspaceId)
-        )
-      );
-    } else {
-      // No active workspace: broaden to the caller's member-workspace floor
-      // instead of SYSTEM+USER only — mirrors user-visible-where's member-ws
-      // semi-join and the union listMulti computes. Correlated subqueries let
-      // Postgres run these as semi-joins (one round-trip, no client fan-out).
-      scopeBranches.push(
-        and(
-          eq(profiles.scope, ProfileScope.WORKSPACE),
-          inArray(profiles.workspaceId, visibleWorkspaceIds)
-        ),
-        and(
-          eq(profiles.scope, ProfileScope.SHARED),
-          sql`EXISTS (
-            SELECT 1 FROM ${profileWorkspaceAccess}
-            WHERE ${profileWorkspaceAccess.profileId} = ${profiles.id}
-              AND ${profileWorkspaceAccess.workspaceId} IN (${visibleWorkspaceIds})
-          )`
-        )
-      );
-    }
-
+    // A workspace-less context passes "" here: no lens, the person's floor.
     const selectionConditions = [
       eq(profiles.isActive, true),
-      or(...scopeBranches),
+      kindVisibleWhere({ userId, workspaceId: workspaceId || null }),
     ];
     if (filters?.ids)
       selectionConditions.push(inArray(profiles.id, filters.ids));
@@ -730,7 +688,6 @@ export class ProfileRepository {
     const rows = await this.db
       .selectDistinctOn([profiles.id], { p: profiles })
       .from(profiles)
-      .leftJoin(profileWorkspaceAccess, joinCondition)
       .where(and(...selectionConditions))
       .orderBy(profiles.id, profiles.displayName);
 

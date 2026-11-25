@@ -97,6 +97,8 @@ export async function createPlaybookDoor(
     name: unknown;
     goalTemplate: unknown;
     description?: string;
+    /** WHY this write, shown to the reviewer of a proposal (governance gate). */
+    reasoning?: string;
     stages?: PlaybookStageInput[];
     status?: PlaybookStatus;
     /**
@@ -136,6 +138,17 @@ export async function createPlaybookDoor(
     expectedOutputs?: PlaybookDefinition["expectedOutputs"];
     /** The rules it follows, by ref (`playbookGuidanceSchema`, validated by `playbooks.create`). */
     guidance?: PlaybookDefinition["guidance"];
+    /** Who runs it by default (`playbookRunnerSchema`, validated by `playbooks.create`). */
+    runner?: PlaybookDefinition["runner"];
+    /** The tools every step needs (`requiresSchema`, validated by `playbooks.create`). */
+    requires?: PlaybookDefinition["requires"];
+    /** What a run may use, "only these" (`playbookToolsSchema`, validated by `playbooks.create`). */
+    tools?: PlaybookDefinition["tools"];
+    /**
+     * The phrases that offer it (`metadata.triggers`), validated by
+     * `playbooks.create` (`playbookTriggersSchema`).
+     */
+    triggers?: string[];
   }
 ): Promise<
   PlaybookDoorOutcome<
@@ -160,6 +173,7 @@ export async function createPlaybookDoor(
     name: input.name,
     goalTemplate: input.goalTemplate,
     description: input.description,
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // `playbooks.create` validates these with `playbookStagesSchema` (category
     // required, keys unique); this only types the untyped input.
     stages: input.stages,
@@ -179,6 +193,12 @@ export async function createPlaybookDoor(
       ? { expectedOutputs: input.expectedOutputs }
       : {}),
     ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
+    ...(input.runner !== undefined ? { runner: input.runner } : {}),
+    ...(input.requires !== undefined ? { requires: input.requires } : {}),
+    ...(input.tools !== undefined ? { tools: input.tools } : {}),
+    ...(input.triggers !== undefined
+      ? { metadata: { triggers: input.triggers } }
+      : {}),
   });
   return { kind: "result", result: withReviewUrl(result) };
 }
@@ -266,6 +286,13 @@ export async function runPlaybookDoor(
     /** Synap AI for this run (`RunPlaybookInput.runOn`); never with handToAgentId. */
     runOn?: "synap_ai";
     /**
+     * Who runs this run, in the playbook runner grammar (`playbooks.run`
+     * `runner`, validated there): mapped onto a hand-off or Synap AI.
+     */
+    runner?: unknown;
+    /** Who works each step (`playbooks.run` `stageRunners`, validated there). */
+    stageRunners?: unknown;
+    /**
      * Remember this run's choice as the person's for the playbook
      * (`playbooks.run` `remember`). Refused for an agent.
      */
@@ -275,6 +302,11 @@ export async function runPlaybookDoor(
      * drafts render in place, nothing is written. A person's act.
      */
     trial?: { guidanceOverride: Record<string, string> };
+    /**
+     * Start a second run although one is live on the subject (`playbooks.run`
+     * `startAnother`); otherwise the live run comes back as `already_running`.
+     */
+    startAnother?: boolean;
     /** Provenance label of the door (`mcp`, `hub-rest`). */
     source: string;
   }
@@ -390,8 +422,23 @@ export async function runPlaybookDoor(
       : {}),
     ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
     ...(input.runOn ? { runOn: input.runOn } : {}),
+    ...(input.runner !== undefined
+      ? {
+          runner: input.runner as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["run"]
+          >[0]["runner"],
+        }
+      : {}),
+    ...(input.stageRunners !== undefined
+      ? {
+          stageRunners: input.stageRunners as Parameters<
+            ReturnType<typeof playbooksRouter.createCaller>["run"]
+          >[0]["stageRunners"],
+        }
+      : {}),
     ...(input.remember ? { remember: true } : {}),
     ...(input.trial ? { trial: input.trial } : {}),
+    ...(input.startAnother ? { startAnother: true } : {}),
     source: input.source,
     reasoning: input.reasoning,
     agentUserId: identity.agentUserId,
@@ -439,6 +486,43 @@ export async function getPlaybookDoor(
   const caller = await callerFor(identity, null);
   const result = await caller.get({ id: playbookId.trim() });
   return { kind: "result", result };
+}
+
+/**
+ * ONE process, whole (`playbooks.process`, the ONE process read): the Hub door
+ * of the Process view (Process wave W2). Same floor as `get`: a playbook the
+ * caller cannot see THROWS the procedure's NOT_FOUND (there is no other
+ * outcome, so it returns the read itself).
+ */
+export async function getProcessDoor(
+  identity: PlaybookDoorIdentity,
+  playbookId: string
+): Promise<
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["process"]>
+  >
+> {
+  const caller = await callerFor(identity, null);
+  return caller.process({ playbookId: playbookId.trim() });
+}
+
+/**
+ * A space's process index (`playbooks.processes`): the cards and the
+ * automations outside any process, or every visible one (`workspaceId`
+ * omitted; `null` = pod-wide only).
+ */
+export async function listProcessesDoor(
+  identity: PlaybookDoorIdentity,
+  input: { workspaceId?: string | null }
+): Promise<
+  Awaited<
+    ReturnType<ReturnType<typeof playbooksRouter.createCaller>["processes"]>
+  >
+> {
+  const caller = await callerFor(identity, null);
+  return caller.processes(
+    input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}
+  );
 }
 
 /**

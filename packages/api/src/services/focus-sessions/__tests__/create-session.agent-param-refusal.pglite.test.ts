@@ -99,7 +99,7 @@ beforeAll(async () => {
     [USER, AGENT]
   );
   await h.client!.query(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, required_intents, version, executor, status)
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, version, executor, status)
      values ($1, null, $2, 'Design a screen', 'Design {{design}}', $3::jsonb, '{"kind":"none"}'::jsonb, '{}'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, '[]'::jsonb, 1, 'is-agent', 'active')`,
     [
       PLAYBOOK,

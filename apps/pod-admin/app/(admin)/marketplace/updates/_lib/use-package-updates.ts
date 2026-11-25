@@ -10,7 +10,9 @@
 
 import { useMutation } from "@tanstack/react-query";
 import { trpc } from "../../../../../lib/trpc";
+import { useMemo } from "react";
 import type { PackageUpdateRowKind } from "./contract";
+import { updateHolds } from "./updates-model";
 
 /** Every installed package compared with the catalog, one row each. */
 export function usePackageUpdateList({
@@ -22,6 +24,21 @@ export function usePackageUpdateList({
     // A pod that said no will say no again; the failed state has its retry.
     retry: false,
   });
+}
+
+/**
+ * What each space's template is held on, from the pod's own health rows
+ * (`workspaces.templateHealth`). `failed`: the read failed, so the list cannot
+ * say an update is ready to apply; the page says so instead of staying quiet.
+ */
+export function useUpdateHolds({ enabled = true }: { enabled?: boolean } = {}) {
+  const q = trpc.workspaces.templateHealth.useQuery(undefined, {
+    enabled,
+    staleTime: 60_000,
+    retry: false,
+  });
+  const holds = useMemo(() => updateHolds(q.data?.workspaces ?? []), [q.data]);
+  return { holds, failed: q.isError };
 }
 
 /** One update, field by field (`packageUpdates.get`). */
@@ -39,7 +56,10 @@ export function useApplyPackageUpdate() {
   const utils = trpc.useUtils();
   // `applyUpdate`: tRPC reserves `apply` as a procedure name.
   return trpc.packageUpdates.applyUpdate.useMutation({
-    onSettled: () => utils.packageUpdates.invalidate(),
+    onSettled: () => {
+      void utils.workspaces.templateHealth.invalidate();
+      return utils.packageUpdates.invalidate();
+    },
   });
 }
 

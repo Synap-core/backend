@@ -39,6 +39,7 @@ import {
   getCapabilityMemberParts,
 } from "../links/links-service.js";
 import { listRuns } from "../runs/index.js";
+import { loadAddOnParents } from "../capabilities/addon.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { deriveCapabilityMode } from "../signal/capability-mode.js";
 import { createLogger } from "@synap-core/core";
@@ -345,6 +346,14 @@ export async function listCapabilityCompositions(args: {
   // omission — the contract this function's doc already promises — instead of a 500.
   // TODO(perf): rollUpHealth still issues N listRuns per container; listRunGroups
   // groups by flowId in-DB and would collapse that to one grouped read per call.
+  // ADD-ONS: each row's base, in ONE read for the page (Tools marks an add-on
+  // row "Add-on of <base>").
+  const parents = await loadAddOnParents(
+    db,
+    userId,
+    rows.map((r) => r.id)
+  );
+
   const built = await Promise.all(
     rows.map(async (row) => {
       try {
@@ -364,6 +373,10 @@ export async function listCapabilityCompositions(args: {
           workspaceName: row.workspaceId
             ? (workspaceNames.get(row.workspaceId) ?? null)
             : null,
+          extends: (() => {
+            const base = parents.get(row.id);
+            return base ? { id: base.id, name: base.name } : null;
+          })(),
         };
         return enriched;
       } catch (err) {

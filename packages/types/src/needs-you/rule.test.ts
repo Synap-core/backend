@@ -177,17 +177,35 @@ describe("stopped: the agent's question on work no agent moved for 7 days, or th
     for (const status of ["closed", "failed", "cancelled"]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("stopped");
     }
-    // S4: forming and scheduled have not ended (nor has an unknown status).
-    for (const status of [
-      "active",
-      "paused",
-      "stale",
-      "forming",
-      "scheduled",
-      "weird",
-    ]) {
+    // S4: scheduled has not ended (nor has an unknown status).
+    for (const status of ["active", "paused", "stale", "scheduled", "weird"]) {
       expect(classifyOwedAsk(ask, { ...live, status }, NOW)).toBe("needs_you");
     }
+  });
+
+  it("P2: a PLANNED step (forming) owes nothing yet: in no list, not a fold", () => {
+    // Rules out "planned = a quiet fold" (Review later, From the system): a
+    // step a year away is not asked yet, whatever its slot is.
+    const planned = { ...live, status: "forming" };
+    expect(classifyOwedAsk(ask, planned, NOW)).toBeNull();
+    expect(
+      classifyOwedAsk(
+        { ...ask, askedBy: undefined, askCause: { kind: "gate" } },
+        planned,
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      classifyOwedAsk(
+        { ...ask, askedBy: undefined, askCause: { kind: "decision" } },
+        planned,
+        NOW
+      )
+    ).toBeNull();
+    // The same ask the moment the step starts.
+    expect(classifyOwedAsk(ask, { ...planned, status: "active" }, NOW)).toBe(
+      "needs_you"
+    );
   });
 
   // M4: closing keeps a person deliverable owed, and "Resume or close" can
@@ -460,6 +478,21 @@ describe("proposals: needs you only when something waits on it", () => {
 
   it("a waited-on proposal on open work needs you", () => {
     expect(classifyPendingProposal(base, NOW)).toBe("needs_you");
+  });
+
+  it("HELD (it cannot apply yet, plan 8032a127 D6) ⇒ never the headline, even when a gate waits on it", () => {
+    expect(classifyPendingProposal({ ...base, held: true }, NOW)).toBe(
+      "changes_to_review"
+    );
+    expect(
+      classifyPendingProposal(
+        { ...base, held: true, waits: { waits: true, reason: "gate" } },
+        NOW
+      )
+    ).toBe("changes_to_review");
+    expect(classifyPendingProposal({ ...base, held: false }, NOW)).toBe(
+      "needs_you"
+    );
   });
 
   it("nothing waits ⇒ a change to review (bookkeeping)", () => {

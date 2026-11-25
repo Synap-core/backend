@@ -21,6 +21,15 @@
  *    in every ready state, and in code mode the code is the primary action
  *    and no passkey notice shows. With no passkey but a code, the dialog
  *    opens in code mode.
+ *  - "Add this device" (founder decision of 9 Nov 2026): when this browser
+ *    cannot prove (no passkey of this pod reaches it: the prompt failed or
+ *    was closed, or the person's ways in are elsewhere), "Set up this
+ *    device" is offered (`setUp`). It switches the dialog's body to the
+ *    device-link panel (`panel`): a device the person already uses approves
+ *    this one, which then creates its own passkey; the dialog then reads a
+ *    new challenge and Confirm runs again. Never offered while approving a
+ *    device link itself or changing a passkey, nor where this browser cannot
+ *    create a passkey (`setUpAllowed`, decided by the provider).
  */
 
 import type { PasskeyRoute } from "../../../lib/passkey";
@@ -51,6 +60,8 @@ export interface PresenceDialogInput {
         fallback?: PasskeyRoute | null;
         /** The failed prompt's error (name and message), for "Copy details". */
         copyDetail?: string | null;
+        /** The passkey prompt ran and did not sign (closed, or no passkey here). */
+        promptFailed?: boolean;
       };
   /** This browser can run `navigator.credentials.get`. */
   passkeySupported: boolean;
@@ -67,6 +78,13 @@ export interface PresenceDialogInput {
   typed?: boolean;
   /** The person chose "Use a code instead" (or holds no passkey but a code). */
   codeMode?: boolean;
+  /**
+   * "Set up this device" may be offered: the subject is not a device link's
+   * own approval, and this browser can create a passkey.
+   */
+  setUpAllowed?: boolean;
+  /** The person pressed "Set up this device": the panel is the body. */
+  setUpOpen?: boolean;
 }
 
 export interface PresenceDialogView {
@@ -93,6 +111,10 @@ export interface PresenceDialogView {
   /** The enrolled Relay device to offer, or null: never promise Relay blind. */
   relayDevice: string | null;
   busy: boolean;
+  /** Offer "Set up this device" (a link that opens the device-link panel). */
+  setUp: boolean;
+  /** The body is the device-link panel: no status, notice or primary. */
+  panel: boolean;
 }
 
 export function presenceDialogView(
@@ -110,6 +132,8 @@ export function presenceDialogView(
     relayDevice: null,
     codeField: false,
     useCode: false,
+    setUp: false,
+    panel: false,
   } as const;
   if (phase.kind === "reading") {
     return {
@@ -130,10 +154,26 @@ export function presenceDialogView(
       busy: false,
     };
   }
+  if (input.setUpOpen && input.setUpAllowed) {
+    return {
+      ...base,
+      status: null,
+      tone: "muted",
+      primary: null,
+      panel: true,
+      busy: false,
+    };
+  }
   const relayDevice =
     !input.inBrowserOnly && phase.deviceKeys.length > 0
       ? phase.deviceKeys[0]!.label.trim() || ""
       : null;
+  // This browser cannot prove here: no passkey of this pod, or its prompt
+  // did not sign. A device the person already uses can bring it in.
+  const setUp =
+    Boolean(input.setUpAllowed) &&
+    phase.kind === "ready" &&
+    (!phase.passkey || Boolean(phase.promptFailed));
   if (input.typed && (input.codeMode || !phase.passkey)) {
     const signing = phase.kind === "signing";
     return {
@@ -148,6 +188,7 @@ export function presenceDialogView(
       codeField: true,
       relayDevice,
       busy: signing,
+      setUp,
     };
   }
   const useCode = Boolean(input.typed);
@@ -162,6 +203,7 @@ export function presenceDialogView(
       relayDevice,
       useCode,
       busy: false,
+      setUp,
     };
   }
   if (!phase.passkey) {
@@ -175,6 +217,7 @@ export function presenceDialogView(
       relayDevice,
       useCode,
       busy: false,
+      setUp,
     };
   }
   if (!input.passkeySupported) {
@@ -210,6 +253,7 @@ export function presenceDialogView(
     relayDevice,
     useCode: useCode && !signing,
     busy: signing,
+    setUp,
   };
 }
 

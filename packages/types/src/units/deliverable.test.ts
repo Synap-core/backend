@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  newestOwedFirst,
   deliverableOwedBy,
   isDecidedByAnswer,
   isDeliverableDelivered,
   isDeliverableOutstanding,
   resolveDeliverableState,
+  slotStatusOf,
   tallyDeliverables,
   type DeliverableFacts,
 } from "./deliverable.js";
@@ -295,5 +297,123 @@ describe("a decision the person answered is delivered", () => {
     const asked = { kind: "decision", decisionId: "d-1", owner: "human" };
     expect(isDeliverableOutstanding(asked)).toBe(true);
     expect(deliverableOwedBy(asked)).toBe("you");
+  });
+});
+
+/**
+ * A REFUSAL (`answer.value.type === "declined"`) never reads as decided: the
+ * person said no, which decides nothing. The discriminating input is a
+ * refused decision that ALREADY carries a `decisionId` (an ask opened for a
+ * decision has one before anyone answers) and a confirm/choose snapshot —
+ * every other clause of `isDecidedByAnswer` says "decided" on it. Rival ruled
+ * out: "a decisionId + a confirm/choose answer is a decision".
+ */
+describe("a refused ask is never decided, never delivered", () => {
+  const REFUSED = {
+    text: "Refused: not this quarter",
+    value: { type: "declined", reason: "not this quarter" },
+    askSnapshot: { mode: "choose", chosenKey: null },
+  };
+  const refused: DeliverableFacts = {
+    kind: "decision",
+    decisionId: "d-1",
+    answer: REFUSED,
+  };
+
+  it("is not decided, not delivered, still outstanding (the agent's)", () => {
+    expect(isDecidedByAnswer(refused)).toBe(false);
+    expect(
+      isDecidedByAnswer({
+        ...refused,
+        answer: { ...REFUSED, askSnapshot: { mode: "confirm" } },
+      })
+    ).toBe(false);
+    expect(isDeliverableDelivered(refused)).toBe(false);
+    expect(isDeliverableOutstanding(refused)).toBe(true);
+    expect(deliverableOwedBy(refused)).toBe("session");
+    expect(tallyDeliverables([refused])).toEqual({
+      done: 0,
+      total: 1,
+      owedByYou: 0,
+    });
+  });
+
+  it("reads blocked on the refusal, on an open session and a finished one", () => {
+    for (const sessionTerminal of [false, true]) {
+      const view = resolveDeliverableState(refused, { sessionTerminal });
+      expect(view.state).toBe("blocked");
+    }
+  });
+
+  it("the same answer with a real pick is still a decision (no over-reach)", () => {
+    expect(
+      isDecidedByAnswer({
+        ...refused,
+        answer: { ...REFUSED, value: { type: "chip" } },
+      })
+    ).toBe(true);
+  });
+});
+
+describe("newestOwedFirst", () => {
+  it("orders by owedSince, newest first; none last; ties keep their order", () => {
+    const slots = [
+      { k: "a", owedSince: "2026-11-01T00:00:00Z" },
+      { k: "b", owedSince: null },
+      { k: "c", owedSince: "2026-11-10T00:00:00Z" },
+      { k: "d", owedSince: "2026-11-01T00:00:00Z" },
+    ];
+    expect([...slots].sort(newestOwedFirst).map((s) => s.k)).toEqual([
+      "c",
+      "a",
+      "d",
+      "b",
+    ]);
+  });
+});
+
+/**
+ * W5 review (item 9): the readers that count and mark a slot read a declared
+ * grade in its session's list, like needs-you does. A grade waiting on its
+ * output is outstanding but not yet the person's; once the output is claimed
+ * it is.
+ */
+describe("a declared grade read in its session's list", () => {
+  const grade = {
+    kind: "criterion",
+    label: "Check: the copy reads well",
+    owner: "human",
+    outputKey: "landing-copy",
+  };
+  const copy = { key: "landing-copy", label: "Landing copy" };
+  const waiting = [grade, copy];
+  const due = [grade, { ...copy, claimedDone: true }];
+
+  it("tallyDeliverables: outstanding, owed by you only once the output is made", () => {
+    expect(tallyDeliverables(waiting)).toEqual({
+      done: 0,
+      total: 2,
+      owedByYou: 0,
+    });
+    expect(tallyDeliverables(due).owedByYou).toBe(1);
+  });
+
+  it("slotStatusOf: pending while it waits, owed once due; alone it reads owed", () => {
+    expect(slotStatusOf(grade, waiting)).toBe("pending");
+    expect(slotStatusOf(grade, due)).toBe("owed");
+    expect(slotStatusOf(grade)).toBe("owed");
+  });
+
+  it("resolveDeliverableState: the agent's work while it waits, the person's once due", () => {
+    expect(
+      resolveDeliverableState(grade, {
+        sessionTerminal: false,
+        outputs: waiting,
+      }).state
+    ).toBe("working");
+    expect(
+      resolveDeliverableState(grade, { sessionTerminal: false, outputs: due })
+        .state
+    ).toBe("needs_you");
   });
 });

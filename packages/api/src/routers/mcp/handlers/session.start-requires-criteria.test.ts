@@ -48,6 +48,31 @@ describe("synap_start_session — done is declared", () => {
     ).toBe(true);
   });
 
+  it("says an outcome with `verify` was declared, even one that makes no criterion (d24c5897)", async () => {
+    h.create.mockResolvedValue({
+      status: "created",
+      session: { id: "s-1", title: null, metadata: {} },
+    });
+    await sessionHandlers.synap_start_session!(
+      ctx({
+        outcomes: [
+          {
+            key: "pr",
+            kind: "pull_request",
+            label: "The PR",
+            verify: { kind: "evidence" },
+          },
+        ],
+      })
+    );
+    const params = h.create.mock.calls[0][0] as {
+      declaredVerify?: boolean;
+      criteria?: unknown[];
+    };
+    expect(params.criteria ?? []).toEqual([]);
+    expect(params.declaredVerify).toBe(true);
+  });
+
   it("answers NO_CRITERIA as a refusal the agent can act on", async () => {
     h.create.mockRejectedValue(
       Object.assign(new Error("Not started: say what done means."), {

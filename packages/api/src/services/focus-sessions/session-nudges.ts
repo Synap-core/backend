@@ -34,7 +34,10 @@ import type { FocusSession } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
 import { createLogger } from "@synap-core/core";
 import { createHash } from "node:crypto";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  CHECK_GATE_METADATA_KEY,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   attachSessionVerdicts,
   loadSessionEvaluationSummary,
@@ -49,7 +52,7 @@ import {
   isOpenAgentSlot,
   type ContinuationNextMove,
 } from "./continuation-packet.js";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
 import { mergeSessionMetadata } from "./session-metadata.js";
 import { attachNextMove } from "./session-path-sections.js";
 import { openLink } from "../../utils/deep-links.js";
@@ -80,7 +83,10 @@ export type NudgeSessionLike = Pick<
   | "stages"
   | "expectedOutputs"
   | "metadata"
->;
+> & {
+  /** Read by the check-gate nudge (W6); a caller without it gets no "held" line. */
+  status?: FocusSession["status"];
+};
 
 export interface SessionNudges {
   /** Declared criteria with no pass/fail verdict yet (keys). */
@@ -96,6 +102,20 @@ export interface SessionNudges {
     state: "unset" | "not_final";
     current: string | null;
     stages: string[];
+  };
+  /**
+   * The last CHECK gate's verdict (`metadata.checkGate`, `stage-gate.ts`):
+   * the stage it judged, what failed, and the gate's own reason — for an
+   * owed output, which slot to deliver and how (W6). `held`: the session is
+   * paused on it and resumes by itself once that is met; otherwise its
+   * `onFail` sent the run back (`sentBackTo`), and the agent advances again.
+   */
+  heldByCheck?: {
+    stageKey: string;
+    fromStage: string;
+    failing: string[];
+    held: boolean;
+    sentBackTo?: string;
   };
   /** Outputs handed to the person (`owner: 'human'`) still pending. */
   owedByPerson?: number;
@@ -151,7 +171,8 @@ export function shouldOfferPlaybooks(session: NudgeSessionLike): boolean {
  */
 export function computeSessionNudges(input: {
   session: NudgeSessionLike;
-  evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations">;
+  evaluation: Pick<SessionEvaluationSummary, "criteria" | "evaluations"> &
+    Partial<Pick<SessionEvaluationSummary, "verdict">>;
   phase: NudgePhase;
   playbookCandidates?: PlaybookCandidate[];
   /** The session's next move as THE rule derived it — see `readyToClose`. */
@@ -182,7 +203,7 @@ export function computeSessionNudges(input: {
       out.hints.push(
         phase === "complete"
           ? `Closed with ${ungraded.length} ungraded criteri${ungraded.length === 1 ? "on" : "a"} — grade them now with evaluate_session and real evidence.`
-          : `${ungraded.length} criteri${ungraded.length === 1 ? "on" : "a"} ungraded — grade with evaluate_session and real evidence before saying done. One only the person can check goes to them as an act task under that criterion's key: their "I did this" grades it.`
+          : `${ungraded.length} criteri${ungraded.length === 1 ? "on" : "a"} ungraded — grade with evaluate_session and real evidence before saying done. One only the person can check goes to them as an act task the criterion names by \`outputKey\`: their "I did this" grades it.`
       );
     }
   }
@@ -203,6 +224,57 @@ export function computeSessionNudges(input: {
     }
   }
 
+  // A check gate's hold: its reason names the slot to deliver and how.
+  const held = (session.metadata as Record<string, unknown> | null)?.[
+    CHECK_GATE_METADATA_KEY
+  ] as
+    | {
+        stageKey?: unknown;
+        fromStage?: unknown;
+        failing?: unknown;
+        reason?: unknown;
+      }
+    | undefined;
+  if (
+    phase === "update" &&
+    typeof held?.stageKey === "string" &&
+    typeof held.fromStage === "string"
+  ) {
+    const failing = Array.isArray(held.failing)
+      ? held.failing.filter((k): k is string => typeof k === "string")
+      : [];
+    // Paused on the gate's stage: the gate holds it. On another stage: its
+    // `onFail` sent the run back there (the record stays, it says why).
+    const paused =
+      session.status === "paused" && session.currentStage === held.stageKey;
+    // A record the run has since passed (it stands after the gate's stage)
+    // says nothing about now.
+    const order = stageKeys(session.stages);
+    const at = session.currentStage ? order.indexOf(session.currentStage) : -1;
+    const backTo =
+      !paused && at >= 0 && at < order.indexOf(held.stageKey)
+        ? session.currentStage!
+        : undefined;
+    const why =
+      typeof held.reason === "string" && held.reason
+        ? held.reason
+        : `The check of "${held.fromStage}" did not pass: ${failing.join(", ")}.`;
+    if (paused || backTo) {
+      out.heldByCheck = {
+        stageKey: held.stageKey,
+        fromStage: held.fromStage,
+        failing,
+        held: paused,
+        ...(backTo ? { sentBackTo: backTo } : {}),
+      };
+      out.hints.push(
+        paused
+          ? `${why} The session resumes at "${held.stageKey}" by itself once that is met.`
+          : `${why} Its check sent the run back to "${backTo}": once that is met, advance to "${held.stageKey}" again.`
+      );
+    }
+  }
+
   // Answered and back with the agent, not yet delivered or claimed — the same
   // open-agent-slot rule the continuation packet's `aiCanDo` uses.
   const answered = readSlots(session.expectedOutputs)
@@ -215,7 +287,8 @@ export function computeSessionNudges(input: {
     );
   }
 
-  const owed = readSlots(session.expectedOutputs).filter(isOwedSlot).length;
+  const slots = readSlots(session.expectedOutputs);
+  const owed = slots.filter((s) => isOwedSlot(s, slots)).length;
   if (owed > 0) {
     out.owedByPerson = owed;
     out.hints.push(
@@ -250,6 +323,30 @@ export function computeSessionNudges(input: {
     );
   }
 
+  // Retrospective, at close only. Text, never a write. Read off the shared
+  // verdict (`verdict.state`), not re-derived: "passing" = every REQUIRED
+  // criterion passes, "failing" = a required one failed.
+  if (phase === "complete") {
+    const bound = !!session.playbookId || session.origin === "playbook";
+    // No verdict given ⇒ no retrospective hint (never guessed).
+    const state = evaluation.verdict?.state;
+    if (bound && state === "failing") {
+      out.hints.push(
+        "A required criterion failed under a playbook: if its stage lessons caused it or would have prevented it, propose the patch with synap_update_playbook."
+      );
+    }
+    if (state === "passing") {
+      if (!bound) {
+        out.hints.push(
+          "Will this work repeat? If yes, synap_promote_session_to_playbook turns this session into a playbook; if not, ignore this."
+        );
+      }
+      out.hints.push(
+        "Capture what you learned that stays true: synap_ask first, then synap_capture (knowledge)."
+      );
+    }
+  }
+
   return out.hints.length > 0 ? out : undefined;
 }
 
@@ -263,7 +360,7 @@ export function mayBeReadyToClose(session: NudgeSessionLike): boolean {
   return (
     slots.some((s) => s?.retiredAt == null) &&
     !slots.some((s) => isOpenAgentSlot(s)) &&
-    !slots.some(isOwedSlot)
+    !slots.some((s) => isOwedSlot(s, slots))
   );
 }
 
@@ -449,10 +546,7 @@ export async function listSessionsOwingGrade(
     .where(
       and(
         eq(focusSessions.userId, userId),
-        inArray(
-          focusSessions.status,
-          OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-        ),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         drizzleSql`(CASE WHEN jsonb_typeof(${focusSessions.criteria}) = 'array' THEN jsonb_array_length(${focusSessions.criteria}) ELSE 0 END) > 0`
       )
     )

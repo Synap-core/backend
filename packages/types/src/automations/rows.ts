@@ -39,7 +39,10 @@ export interface Automation {
   triggerType: AutomationRowTriggerType;
   triggerConfig: AutomationTriggerConfig;
   flowDefinition: FlowDefinition;
+  /** The OWNER: the person it runs for (an agent only for a humanless agent). */
   createdBy: string;
+  /** The ACTOR: the agent that authored it; null for a person's own (0442). */
+  agentUserId: string | null;
   version: number;
   errorMessage: string | null;
   lastRunAt: Date | null;
@@ -63,6 +66,7 @@ export interface NewAutomation {
   triggerConfig?: AutomationTriggerConfig;
   flowDefinition?: FlowDefinition;
   createdBy: string;
+  agentUserId?: string | null;
   version?: number;
   errorMessage?: string | null;
   lastRunAt?: Date | null;

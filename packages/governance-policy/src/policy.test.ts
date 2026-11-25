@@ -75,6 +75,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   set_run_choice: "write", // playbooks.setRunChoice (run choice v3)
   grant_capability: "write",
   assign_agent: "write", // agent-hand-off.ts (focus_session roster add)
+  orchestrate: "write", // start-orchestrator.ts (focus_session orchestrate)
   register: "write", // widget-definitions.ts
   arrange: "write", // hub-protocol/views.ts bento.arrange
   invite: "write", // member.invite (ADMIN_ACTIONS-gated on top)
@@ -84,6 +85,7 @@ const INVENTORIED_VERBS: Record<string, RequiredPermission> = {
   session_narrative_update: "write", // services/session-document/upsert-section.ts
   refresher_section_update: "write", // services/document-patch/apply-document-patch.ts (D4)
   declare_source: "write", // workspace source-edge declaration (Enterprise-OS Wave 0)
+  bind_need: "write", // a space's need filled by a provider (0426)
   configure_public_projection: "write", // workspace public-projection config door
   transition: "write", // services/lifecycle moveStatus door (entity.transition)
   write: "write", // filesystem.write
@@ -2108,6 +2110,8 @@ describe("deriveGatePairFromOperations", () => {
       "create_rule",
       "create_playbook",
       "create_view",
+      "create_cell",
+      "bind_renderer",
     ] as const;
     const rank = (p: { subjectType: string; action: string }) => {
       const key = `${p.subjectType}.${p.action}`;

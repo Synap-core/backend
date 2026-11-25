@@ -15,6 +15,10 @@
  * `executionMode` and `timeoutSeconds` swappable under an existing approval.
  */
 
+import {
+  SKILL_METADATA_PROPOSE_ONLY,
+  declaredProposeOnly,
+} from "@synap-core/types/proposals";
 import { canonicalJson } from "./capability-drift.js";
 
 /**
@@ -82,6 +86,27 @@ export function readOnlyWidened(
 }
 
 /**
+ * `metadata.proposeOnly` LOOSENED — a live `true` turned off (`false`) on an
+ * already-approved skill. The mirror image of `readOnlyWidened`: a verb that
+ * declared it is never run on its own by an auto grant or an auto rule
+ * (`capabilityVerbAllowsRuleWiden`), so dropping it lets a reviewed verb start
+ * running unattended. Only that direction re-earns approval; turning it ON
+ * tightens and keeps the approval. A patch that omits the key is inert: the
+ * applier never revokes a key the definition stops declaring.
+ */
+export function proposeOnlyLoosened(
+  metadataPatch: Record<string, unknown> | undefined,
+  existingMetadata: Record<string, unknown> | null | undefined
+): boolean {
+  if (!metadataPatch || !(SKILL_METADATA_PROPOSE_ONLY in metadataPatch))
+    return false;
+  return (
+    declaredProposeOnly(existingMetadata) === true &&
+    declaredProposeOnly(metadataPatch) !== true
+  );
+}
+
+/**
  * `metadata.box` CHANGED on a box skill (0356): its language, packages, hosts
  * and limits are what the person approved besides the code — a new package is
  * new code, a new host is a wider egress allowlist. Same peeled-off-metadata
@@ -139,7 +164,21 @@ export function execFieldsChanged(
   patch: Record<string, unknown>,
   existing: Record<string, unknown>
 ): boolean {
-  return fields.some(
+  return changedExecFieldNames(fields, patch, existing).length > 0;
+}
+
+/**
+ * The same rule as `execFieldsChanged`, naming WHICH of `fields` the patch
+ * changes (in `fields` order) instead of only whether one does. The boolean is
+ * derived from this list, so the two can never disagree; a held capability
+ * update reports these names to the owner (`definitionSkillExecChanges`).
+ */
+export function changedExecFieldNames(
+  fields: readonly string[],
+  patch: Record<string, unknown>,
+  existing: Record<string, unknown>
+): string[] {
+  return fields.filter(
     (k) =>
       patch[k] !== undefined &&
       canonicalJson(patch[k]) !== canonicalJson(existing[k])

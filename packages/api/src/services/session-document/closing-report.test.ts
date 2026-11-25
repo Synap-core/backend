@@ -42,14 +42,24 @@ const FIXTURE: ClosingReportInput = {
       key: "tsc",
       statement: "Typecheck passes",
       check: { kind: "evidence", evidenceKey: "tsc" },
+      outputKey: "toggle",
     },
-    { key: "copy", statement: "Copy | reads well", check: { kind: "judge" } },
+    {
+      key: "copy",
+      statement: "Copy | reads well",
+      check: { kind: "judge" },
+      outputKey: "toggle",
+    },
     {
       key: "docs",
       statement: "Docs updated",
       required: false,
       check: { kind: "human" },
     },
+  ],
+  declaredOutputs: [
+    { key: "toggle", label: "Theme toggle" },
+    { key: "notes", label: "Release notes" },
   ],
   evaluations: [
     {
@@ -155,7 +165,8 @@ describe("buildClosingReportSections — structured, deterministic", () => {
     const rows = dod.body
       .split("\n")
       .filter((l) => l.startsWith("| ") && !l.startsWith("| ---"));
-    expect(rows).toHaveLength(1 + FIXTURE.criteria.length);
+    // Two tables (the output's, then the rest), each with its header row.
+    expect(rows).toHaveLength(2 + FIXTURE.criteria.length);
     expect(dod.body).toContain(
       "| Typecheck passes | Passed | Evidence | 0 errors |"
     );
@@ -168,6 +179,33 @@ describe("buildClosingReportSections — structured, deterministic", () => {
     );
     expect(dod.body).not.toContain("agent-uuid");
     expect(dod.body).not.toContain("{");
+  });
+
+  it("criteria hang under the output they check, in declared order; the rest after", () => {
+    const body = sections[1]!.body;
+    const lines = body.split("\n");
+    const toggle = lines.indexOf("**Theme toggle**");
+    const other = lines.indexOf("**Other criteria**");
+    expect(toggle).toBe(0);
+    expect(other).toBeGreaterThan(toggle);
+    // An output no criterion checks gets no table.
+    expect(body).not.toContain("Release notes");
+    const at = (needle: string) => lines.findIndex((l) => l.includes(needle));
+    expect(at("Typecheck passes")).toBeGreaterThan(toggle);
+    expect(at("Copy \\| reads well")).toBeLessThan(other);
+    expect(at("Docs updated")).toBeGreaterThan(other);
+  });
+
+  it("a key shared with an output pairs nothing: no outputKey, one plain table (W4)", () => {
+    const body = buildClosingReportSections({
+      ...FIXTURE,
+      criteria: FIXTURE.criteria.map(({ outputKey: _o, ...c }) => c),
+      declaredOutputs: [{ key: "tsc", label: "Typecheck" }],
+    })[1]!.body;
+    expect(body.split("\n")[0]).toBe(
+      "| Criterion | Result | Checked by | Why |"
+    );
+    expect(body).not.toContain("**");
   });
 
   it("no criteria ⇒ no status stamp and a plain sentence", () => {

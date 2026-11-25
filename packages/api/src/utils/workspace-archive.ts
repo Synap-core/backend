@@ -32,6 +32,7 @@ import {
   toWorkspaceIdentityError,
   workspaces,
   type getDb,
+  setAutomationStatus,
 } from "@synap/database";
 import { isPodAdmin } from "./workspace-role.js";
 
@@ -148,18 +149,18 @@ export async function setWorkspaceArchived(
           at: now.toISOString(),
         },
       });
-      const paused = await tx
-        .update(automations)
-        .set({
-          status: "paused",
+      const paused = await setAutomationStatus(tx, {
+        from: "active",
+        to: "paused",
+        set: {
           metadata: drizzleSql`coalesce(${automations.metadata}, '{}'::jsonb) || ${stamp}::jsonb`,
           updatedAt: now,
-        })
-        .where(archiveRulesWhere(args.workspaceId, true))
-        .returning({ id: automations.id, name: automations.name });
+        },
+        where: archiveRulesWhere(args.workspaceId, true),
+      });
       return {
         archivedAt,
-        pausedAutomations: paused,
+        pausedAutomations: paused.map(({ id, name }) => ({ id, name })),
         pausedByArchive: [],
       };
     }

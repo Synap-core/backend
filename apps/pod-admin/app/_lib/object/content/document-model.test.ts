@@ -56,9 +56,10 @@ describe("documentContent — readable bodies", () => {
     });
   });
 
-  it("an html document is a page to run in the frame, its source beside it", () => {
+  it("an html document is a page to run in the frame, its source beside it, anchored to its document", () => {
     const out = documentContent(null, {
       document: {
+        id: "doc-1",
         type: "html",
         storageKey: "k",
         storageUrl: null,
@@ -72,6 +73,7 @@ describe("documentContent — readable bodies", () => {
       bytes: 20,
       tooLarge: false,
       workspaceId: "ws-1",
+      documentId: "doc-1",
       source: {
         format: "source",
         text: "<script>x()</script>",
@@ -171,6 +173,21 @@ describe("isLivingDocument — the app is the first door (Q8)", () => {
       const body = `Intro\n\n:::${directive}{id="00000000-0000-4000-8000-000000000001"}\nFallback\n:::`;
       expect(isLivingDocument(md(body))).toBe(true);
     }
+  });
+
+  it("a page whose only embed is a question is NOT living: its card answers here", () => {
+    const ask =
+      ':::synap-ask{sessionId="00000000-0000-4000-8000-000000000001" slot="ship-it"}\nWhich do you prefer?\n:::';
+    expect(isLivingDocument(md(`Intro\n\n${ask}`))).toBe(false);
+    // …but a question beside a live cell or view is still living.
+    expect(isLivingDocument(md(`${ask}\n\n${CELL}`))).toBe(true);
+    expect(
+      isLivingDocument(
+        md(
+          `${ask}\n\n:::synap-view{viewId="00000000-0000-4000-8000-000000000002"}\n:::`
+        )
+      )
+    ).toBe(true);
   });
 
   it("a stored scope or a bound refresher makes it living with no embed", () => {

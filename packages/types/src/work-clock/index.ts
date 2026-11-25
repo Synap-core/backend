@@ -54,6 +54,9 @@ export const WORK_CLOCK: Readonly<Record<WorkClockRung, number>> = {
   stuck: 7 * DAY_MS,
 };
 
+/** No recorded activity for this long => an open session has gone quiet (decision 12). */
+export const SESSION_GONE_QUIET_MS = WORK_CLOCK.quiet;
+
 /** A rung in the unit a reader stores (hours, days, minutes). */
 export function workClockIn(
   rung: WorkClockRung,

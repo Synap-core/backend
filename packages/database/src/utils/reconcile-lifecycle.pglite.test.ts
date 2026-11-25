@@ -12,7 +12,11 @@
  *    (`!profileIsReused`), and every existing profile resolves as reused;
  *  - a system kind the template extends (`deal`) gets the template's
  *    lifecycle on first apply;
- *  - a reused profile that already declares a lifecycle KEEPS it.
+ *  - a reused profile that already declares a lifecycle KEEPS it;
+ *  - the template's `lifecycle.initialStatus` becomes the status new things
+ *    start in (the link default every birth door reads), on a fresh apply AND
+ *    a re-apply onto a lifecycle that has none; an initial already set is
+ *    kept; one that is not an option is reported, never written.
  *
  * Schema: derived from the drizzle tables, plus the 0319 one-lifecycle index.
  */
@@ -95,6 +99,7 @@ type CatalogProfile = {
   lifecycle?: {
     property: string;
     options: Array<{ key: string; category: string; humanOnly?: boolean }>;
+    initialStatus?: string;
   };
   [k: string]: unknown;
 };
@@ -121,8 +126,8 @@ beforeAll(async () => {
   await h.client!.exec(`
     create unique index if not exists profile_properties_pk
       on profile_properties (profile_id, property_def_id);
-    create unique index if not exists profile_workspace_access_pk
-      on profile_workspace_access (profile_id, workspace_id);
+    create unique index if not exists space_access_pk
+      on space_access (object_type, object_id, workspace_id);
     create unique index if not exists profile_properties_one_lifecycle_uniq
       on profile_properties (profile_id) where is_lifecycle;
   `);
@@ -134,7 +139,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
   await h.client!.exec(
-    `delete from profile_properties; delete from property_defs; delete from profile_workspace_access; delete from profiles; delete from workspaces;`
+    `delete from profile_properties; delete from property_defs; delete from space_access; delete from profiles; delete from workspaces;`
   );
   WS = randomUUID();
   await q(
@@ -276,5 +281,74 @@ describe("reconcile declares the catalog lifecycle", () => {
     expect(report.properties.lifecycles?.declared).toEqual([]);
     expect(report.properties.lifecycles?.refused).toEqual([]);
     expect((await lifecycleOf("task"))?.propertySlug).toBe("status");
+  });
+});
+
+describe("reconcile fills the template's initial status", () => {
+  const design = (initialStatus?: string): CatalogProfile => ({
+    slug: "ui-design",
+    displayName: "Design",
+    properties: [
+      {
+        slug: "design-status",
+        label: "Status",
+        valueType: "string",
+        inputType: "select",
+        enumValues: ["draft", "in-review", "approved", "implemented"],
+      },
+    ],
+    lifecycle: {
+      property: "design-status",
+      options: [
+        { key: "draft", category: "open" },
+        { key: "in-review", category: "active" },
+        { key: "approved", category: "active", humanOnly: true },
+        { key: "implemented", category: "done" },
+      ],
+      ...(initialStatus ? { initialStatus } : {}),
+    },
+  });
+
+  it("a fresh apply: new designs start in the template's initial status", async () => {
+    const report = await reconcile([design("draft")]);
+    expect(report.properties.lifecycles?.initial).toEqual([
+      { profile: "ui-design", status: "draft" },
+    ]);
+    expect((await lifecycleOf("ui-design"))?.initialStatus).toBe("draft");
+  });
+
+  it("a RE-APPLY onto a lifecycle declared with no initial status fills it (every live pod)", async () => {
+    await reconcile([design()]);
+    expect((await lifecycleOf("ui-design"))?.initialStatus).toBeNull();
+    const report = await reconcile([design("draft")]);
+    expect(report.profiles.reused).toContain("ui-design");
+    expect(report.properties.lifecycles?.initial).toEqual([
+      { profile: "ui-design", status: "draft" },
+    ]);
+    expect((await lifecycleOf("ui-design"))?.initialStatus).toBe("draft");
+    // Converged: a third apply writes nothing.
+    const again = await reconcile([design("draft")]);
+    expect(again.properties.lifecycles?.initial).toBeUndefined();
+  });
+
+  it("an initial status already set (a person's choice) is kept", async () => {
+    await reconcile([design()]);
+    await q(
+      `update profile_properties set default_value = '"in-review"'::jsonb where is_lifecycle`
+    );
+    const report = await reconcile([design("draft")]);
+    expect(report.properties.lifecycles?.initial).toBeUndefined();
+    expect((await lifecycleOf("ui-design"))?.initialStatus).toBe("in-review");
+  });
+
+  it("an initial status that is not an option is reported, never written", async () => {
+    const report = await reconcile([design("nope")]);
+    expect(report.properties.lifecycles?.refused).toEqual([
+      {
+        profile: "ui-design",
+        reason: expect.stringMatching(/^initialStatus: "nope" is not one/),
+      },
+    ]);
+    expect((await lifecycleOf("ui-design"))?.initialStatus).toBeNull();
   });
 });

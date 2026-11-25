@@ -4,8 +4,11 @@ import {
   connectedReceipt,
   provideReceipt,
   provideSheet,
+  secretCard,
+  secretUseState,
   type ProvideOptions,
 } from "./provide-options";
+import type { ProvideSecretUse } from "../../../_lib/request/api";
 
 const base = {
   sessionId: "11111111-1111-4111-8111-111111111111",
@@ -73,13 +76,33 @@ describe("provideSheet · secret: the person's existing secrets only", () => {
       kind: "secret",
       name: "Stripe key",
       choices: [
-        { ref: "vault://a", name: "Stripe key", type: "api key" },
-        { ref: "vault://b", name: "GitHub token", type: "token" },
+        {
+          ref: "vault://a",
+          name: "Stripe key",
+          type: "api key",
+          standingGrant: null,
+        },
+        {
+          ref: "vault://b",
+          name: "GitHub token",
+          type: "token",
+          standingGrant: null,
+        },
       ],
       initialRef: "vault://a",
-      grantNote: ASK_COPY.provideGrantNote("Scout", 60),
       // Sent back on the answer: the read goes to Scout or to no one.
       expectedGranteeId: "agent-scout",
+      grant: {
+        status: "will_grant",
+        agentUserId: "agent-scout",
+        agentName: "Scout",
+        minutes: 60,
+      },
+      agentName: "Scout",
+      // An ask posed before purposes existed: said, never inferred.
+      purpose: null,
+      // The card's default: this session only.
+      uses: "session",
     });
   });
 
@@ -95,9 +118,11 @@ describe("provideSheet · secret: the person's existing secrets only", () => {
     );
     expect(sheet).toMatchObject({
       initialRef: null,
-      grantNote: ASK_COPY.provideNoGrantNote,
       expectedGranteeId: null,
+      agentName: null,
     });
+    // The sheet carries facts, never a worded note: the card words them.
+    expect(sheet).not.toHaveProperty("grantNote");
   });
 });
 
@@ -269,5 +294,142 @@ describe("provideReceipt", () => {
       title: "File handed over",
     });
     expect(connectedReceipt("Stripe").title).toBe("Stripe connected");
+  });
+});
+
+describe("secretCard · the honest secret card (plan d717d6ac §4)", () => {
+  const grant = {
+    status: "will_grant" as const,
+    agentUserId: "a1",
+    agentName: "Claude Code",
+    minutes: 60,
+    uses: "session" as const,
+  };
+  const withPurpose = (
+    purpose: unknown,
+    rows = [{ ref: "vault://s1", name: "GITHUB_TOKEN", type: "api_key" }]
+  ) =>
+    provideSheet({
+      ...base,
+      kind: "secret",
+      secret: { name: "GITHUB_TOKEN", rows, grant, purpose },
+    } as unknown as ProvideOptions);
+
+  it("says what the agent declared: for, used by, on, and this session only by default", () => {
+    const sheet = withPurpose({
+      for: "Merging the delivery PR",
+      tool: "GitHub tool",
+      action: "merge",
+      on: "Synap-core/backend",
+    });
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", sheet.uses);
+    expect(card.purpose).toEqual({
+      for: "Merging the delivery PR",
+      tool: "GitHub tool",
+      action: "merge",
+      on: "Synap-core/backend",
+    });
+    expect(card.usedBy).toBe("Claude Code");
+    expect(card.until).toBe("session");
+    expect(card.canPickUses).toBe(true);
+    // The facts the card words: a session read lasts the grant's minutes.
+    expect(card.minutes).toBe(60);
+  });
+
+  it("no purpose: nothing inferred, the card says the agent did not say", () => {
+    const sheet = withPurpose(null);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    expect(secretCard(sheet, "vault://s1", "session").purpose).toBeNull();
+  });
+
+  it("one read, when the person picks it", () => {
+    const sheet = withPurpose(null);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", "once");
+    expect(card.until).toBe("once");
+    expect(card.minutes).toBe(15);
+  });
+
+  it("a standing grant on the picked secret is said as such, never as an hour", () => {
+    const sheet = withPurpose(null, [
+      {
+        ref: "vault://s1",
+        name: "GITHUB_TOKEN",
+        type: "api_key",
+        standingGrant: { grantId: "g1", useCount: 3 },
+      } as never,
+    ]);
+    if (sheet.kind !== "secret") throw new Error("secret sheet");
+    const card = secretCard(sheet, "vault://s1", "session");
+    expect(card.until).toBe("standing");
+    expect(card.canPickUses).toBe(false);
+    expect(card.usedBy).toBe("Claude Code");
+  });
+});
+
+describe("secretUseState · what became of a handed-over secret", () => {
+  const use: ProvideSecretUse = {
+    grantId: "g1",
+    secretId: "s1",
+    secretName: "GITHUB_TOKEN",
+    agentUserId: "a1",
+    agentName: "Claude Code",
+    uses: "session",
+    expiresAt: "2026-11-16T15:00:00.000Z",
+    revokedAt: null,
+    active: true,
+    useCount: 2,
+    maxUses: null,
+    lastUsedAt: "2026-11-16T14:02:00.000Z",
+    takeBack: { door: "secretsVault.revokeGrant", grantId: "g1" },
+  };
+
+  it("still readable: the grant Take back revokes, never standing for a new grant", () => {
+    expect(secretUseState(use)).toEqual({
+      kind: "active",
+      grantId: "g1",
+      standing: false,
+    });
+    expect(secretUseState({ ...use, uses: "standing" })).toMatchObject({
+      kind: "active",
+      standing: true,
+    });
+  });
+
+  it("revoked: taken back, and only then", () => {
+    expect(
+      secretUseState({
+        ...use,
+        active: false,
+        takeBack: null,
+        revokedAt: "2026-11-16T14:30:00.000Z",
+      })
+    ).toEqual({ kind: "takenBack" });
+  });
+
+  it("a one-read grant read once: used up, never Taken back", () => {
+    const state = secretUseState({
+      ...use,
+      uses: "once",
+      active: false,
+      takeBack: null,
+      useCount: 1,
+      maxUses: 1,
+    });
+    expect(state).toEqual({ kind: "usedUp" });
+    expect(state.kind).not.toBe("takenBack");
+  });
+
+  it("expired: ended, with its time; with none, ended with no time", () => {
+    const ran = { ...use, active: false, takeBack: null, useCount: 0 };
+    expect(secretUseState(ran)).toEqual({
+      kind: "ended",
+      at: "2026-11-16T15:00:00.000Z",
+    });
+    expect(secretUseState({ ...ran, expiresAt: null })).toEqual({
+      kind: "ended",
+      at: null,
+    });
   });
 });

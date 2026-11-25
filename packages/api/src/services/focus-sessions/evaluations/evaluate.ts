@@ -27,12 +27,15 @@
  *                the session is evaluated).
  */
 
+import { looksLikeNeedRef } from "@synap-core/types/needs";
+import { resolveNeedVerb } from "../../needs/space-needs.js";
 import {
   db,
   focusSessions,
   and,
   eq,
   drizzleSql,
+  listHolds,
   setSessionStatus,
 } from "@synap/database";
 import {
@@ -41,14 +44,26 @@ import {
   type SessionCriterion,
 } from "@synap/playbooks";
 import { deriveSlotKeys } from "../slot-keys.js";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import {
   isJudgeRequestRefused,
   judgeSessionCriteria,
   resolveIntelligenceService,
 } from "@synap/intelligence-client";
 import { createLogger } from "@synap-core/core";
-import type { EvaluationVerdict } from "@synap-core/types/focus-sessions";
+import {
+  isTerminalSessionStatus,
+  type EvaluationVerdict,
+} from "@synap-core/types/focus-sessions";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../../utils/ai-failure.js";
 import { executeCapability } from "../../capabilities/execute-capability.js";
+import {
+  describeMeasure,
+  isMeasureDetail,
+} from "../../capabilities/measure-check.js";
 import {
   CHECK_GATE_METADATA_KEY,
   checkGateFailing,
@@ -85,7 +100,12 @@ export interface EvaluateSessionParams {
   userId: string;
   agentUserId?: string | null;
   evidence?: PostedEvidence;
-  /** Restrict to the criteria copied from this stage (the `check` gate). */
+  /**
+   * Restrict to the criteria copied from this stage (the `check` gate).
+   * Absent (and no `criterionKeys`): the criteria of a stage the session has
+   * not reached yet are skipped, never graded early (db6a5e17) — see
+   * {@link criteriaNotReached}.
+   */
   stageKey?: string;
   /**
    * Restrict to these check kinds. The evidence door passes `["evidence"]` so
@@ -95,8 +115,8 @@ export interface EvaluateSessionParams {
   /**
    * Restrict to the criteria a fact is ABOUT: a criterion whose key, or whose
    * evidence key, is listed. The event re-check (`dev-loop/recheck-criteria.ts`)
-   * passes the outcome keys a fact just moved, so a merge re-grades the
-   * criteria on that PR and never the rest of the session.
+   * passes the criteria about the outcome a fact just moved, so a merge
+   * re-grades the criteria on that PR and never the rest of the session.
    */
   criterionKeys?: ReadonlyArray<string>;
   /**
@@ -105,6 +125,12 @@ export interface EvaluateSessionParams {
    * tRPC `evaluate`) set it; absent ⇒ a spent criterion stays the agent's work.
    */
   escalate?: boolean;
+  /**
+   * The check of a stage gate, inside an advance (`stage-gate.ts`): the
+   * gate reads the grades itself, so this evaluation neither resumes a held
+   * gate nor advances the step (that would advance twice in one move).
+   */
+  asGateCheck?: boolean;
 }
 
 export interface CriterionRunOutcome {
@@ -114,6 +140,13 @@ export interface CriterionRunOutcome {
   verdict?: EvaluationVerdict;
   reason?: string;
   escalated?: boolean;
+  /**
+   * Set on a `skipped` judge criterion when the judge could not run: the AI
+   * failure class, read by the one failure door (`utils/ai-failure.ts`). It is
+   * not a verdict on the work, so a check gate whose only misses carry it
+   * holds the stage instead of sending the run back (`stage-gate.ts`).
+   */
+  failureClass?: AiFailureClass;
 }
 
 export type EvaluateSessionResult =
@@ -150,11 +183,29 @@ export function pendingCriteria(
  */
 export function capabilityVerdict(
   result: Awaited<ReturnType<typeof executeCapability>>
-): { verdict: EvaluationVerdict; rationale: string } {
+): {
+  verdict: EvaluationVerdict;
+  rationale: string;
+  /** A structured `detail` (a measure's value and bar), kept as the grade's evidence. */
+  evidence?: Record<string, unknown>;
+} {
   if (result.kind === "run") {
     const passed = (result.result as { passed?: unknown } | null)?.passed;
     if (typeof passed === "boolean") {
       const detail = (result.result as { detail?: unknown }).detail;
+      if (detail && typeof detail === "object" && !Array.isArray(detail)) {
+        // `measure.check` (P8): `{ value, threshold, comparator, op }`. The
+        // sentence is the grade's rationale and its evidence `detail` (what
+        // the scorecard shows); the numbers stay beside it.
+        const rationale = isMeasureDetail(detail)
+          ? describeMeasure(detail)
+          : `passed: ${passed}`;
+        return {
+          verdict: passed ? "pass" : "fail",
+          rationale,
+          evidence: { detail: rationale, result: detail },
+        };
+      }
       return {
         verdict: passed ? "pass" : "fail",
         rationale: typeof detail === "string" ? detail : `passed: ${passed}`,
@@ -179,22 +230,24 @@ export function capabilityVerdict(
 
 /**
  * The outcome a criterion checks, as a capability parameter: the session's
- * slot with the criterion's key, `{ outcome: {key, kind, label, ref?} }`, or
- * nothing when there is none. Pure.
+ * slot the criterion names by `outputKey`, `{ outcome: {key, kind, label,
+ * ref?} }`, or nothing when it names none the session holds. Pure.
  */
 export function outcomeParameter(
   expectedOutputs: unknown,
-  criterionKey: string
+  criterion: Pick<SessionCriterion, "outputKey">
 ): { outcome?: { key: string; kind: string; label: string; ref?: unknown } } {
+  const outputKey = criterion.outputKey;
+  if (!outputKey) return {};
   const slots = Array.isArray(expectedOutputs)
     ? (expectedOutputs as ExpectedOutput[])
     : [];
-  const index = deriveSlotKeys(slots).indexOf(criterionKey);
+  const index = deriveSlotKeys(slots).indexOf(outputKey);
   const slot = index === -1 ? undefined : slots[index];
   if (!slot) return {};
   return {
     outcome: {
-      key: criterionKey,
+      key: outputKey,
       kind: slot.kind,
       label: slot.label,
       ...(slot.ref ? { ref: slot.ref } : {}),
@@ -231,6 +284,16 @@ export async function evaluateSession(
   );
 
   const results: CriterionRunOutcome[] = [];
+  // BOUNDED BY DEFAULT (db6a5e17): a call that names no stage and no criteria
+  // grades the stages up to the session's current one. A judge run on a stage
+  // whose work does not exist yet spends one of its attempts for nothing.
+  const notReached =
+    params.stageKey === undefined && params.criterionKeys === undefined
+      ? await criteriaNotReached(session, pending, params.evidence)
+      : new Map<string, string>();
+  for (const [key, reason] of notReached) {
+    results.push({ key, status: "skipped", reason });
+  }
   const exhausted: SessionCriterion[] = [];
   const record = async (
     c: SessionCriterion,
@@ -264,6 +327,7 @@ export async function evaluateSession(
 
   const judged: SessionCriterion[] = [];
   for (const c of pending) {
+    if (notReached.has(c.key)) continue;
     if (c.check.kind === "evidence") {
       const posted = c.check.evidenceKey
         ? params.evidence?.[c.check.evidenceKey]
@@ -281,15 +345,38 @@ export async function evaluateSession(
         ...(posted.detail ? { rationale: posted.detail } : {}),
       });
     } else if (c.check.kind === "capability") {
+      // A NEED ref (`need:gate/fetch_record`, 0426): the verb the provider the
+      // session's space bound to it. Not filled (or no single verb): the
+      // criterion is not graded, and the reason is said, never a silent pass.
+      let verbId = c.check.capability;
+      if (verbId && looksLikeNeedRef(verbId)) {
+        const resolved = await resolveNeedVerb({
+          need: verbId,
+          workspaceId: session.workspaceId,
+          userId,
+        });
+        if ("reason" in resolved) {
+          results.push({
+            key: c.key,
+            status: "skipped",
+            reason: resolved.reason,
+          });
+          continue;
+        }
+        verbId = resolved.verbId;
+      }
       const run = await executeCapability({
-        verbId: c.check.capability,
+        verbId,
         parameters: {
+          // The criterion's own arguments (`check.params`, P8: a measure's
+          // op, params and bar) first, so the evaluator's own keys win.
+          ...(c.check.params ?? {}),
           sessionId,
           criterionKey: c.key,
-          // The outcome this criterion checks (same key), with its `ref`, so
-          // a verb that reads the world (a GitHub PR read) can find WHAT to
-          // check without a second lookup (plan v5 T2).
-          ...outcomeParameter(session.expectedOutputs, c.key),
+          // The outcome this criterion checks (`outputKey`), with its `ref`,
+          // so a verb that reads the world (a GitHub PR read) can find WHAT
+          // to check without a second lookup (plan v5 T2).
+          ...outcomeParameter(session.expectedOutputs, c),
         },
         workspaceId: session.workspaceId,
         userId,
@@ -300,8 +387,12 @@ export async function evaluateSession(
         observability: "mirror",
         sessionId,
       });
-      const { verdict, rationale } = capabilityVerdict(run);
-      await record(c, verdict, { evaluatorId: c.check.capability, rationale });
+      const { verdict, rationale, evidence } = capabilityVerdict(run);
+      await record(c, verdict, {
+        evaluatorId: verbId,
+        rationale,
+        ...(evidence ? { evidence } : {}),
+      });
     } else if (c.check.kind === "judge") {
       judged.push(c);
     }
@@ -362,11 +453,27 @@ export async function evaluateSession(
         try {
           const judge = (m: string) =>
             judgeSessionCriteria(svc.endpoint, svc.serviceApiKey, {
-              criteria: group.map((c) => ({
-                key: c.key,
-                statement: c.statement,
-                ...(c.check.hint ? { hint: c.check.hint } : {}),
-              })),
+              criteria: group.map((c) => {
+                // The output it checks, so the judge grades that output.
+                const { outcome } = outcomeParameter(
+                  session.expectedOutputs,
+                  c
+                );
+                return {
+                  key: c.key,
+                  statement: c.statement,
+                  ...(c.check.hint ? { hint: c.check.hint } : {}),
+                  ...(outcome
+                    ? {
+                        output: {
+                          key: outcome.key,
+                          kind: outcome.kind,
+                          label: outcome.label,
+                        },
+                      }
+                    : {}),
+                };
+              }),
               material: m,
               ...(typeof modelId === "string" && modelId
                 ? { excludeModel: modelId }
@@ -394,10 +501,19 @@ export async function evaluateSession(
           for (const c of group) {
             const v = byKey.get(c.key);
             if (judgement.decider === "none" || !judgement.model || !v) {
+              // The judge answered without a verdict (its only model is the
+              // one that did the work, or it named none for this criterion):
+              // the judge could not run, which is not a verdict on the work.
+              // It carries a class like every could-not-run, so a check gate
+              // holds on it instead of sending the run back (decision 8:
+              // nothing is failed by a judge that did not answer). No failure
+              // class names this case; `unknown` is the one that claims no
+              // cause.
               results.push({
                 key: c.key,
                 status: "skipped",
-                reason: v?.rationale || "No judge could grade this criterion.",
+                reason: `The AI judge could not run: ${v?.rationale || "no judge could grade this criterion."}`,
+                failureClass: "unknown",
               });
               continue;
             }
@@ -407,15 +523,11 @@ export async function evaluateSession(
             });
           }
         } catch (err) {
-          const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-          for (const c of group)
-            results.push({ key: c.key, status: "skipped", reason });
+          results.push(...judgeCouldNotRun(sessionId, group, err));
         }
       }
     } catch (err) {
-      const reason = `The judge could not run: ${err instanceof Error ? err.message : String(err)}`;
-      for (const c of judged)
-        results.push({ key: c.key, status: "skipped", reason });
+      results.push(...judgeCouldNotRun(sessionId, judged, err));
     }
   }
 
@@ -432,12 +544,116 @@ export async function evaluateSession(
     session.criteria,
     await listSessionEvaluations({ sessionId, userId })
   );
+  if (params.asGateCheck) {
+    return { status: "evaluated", results, resumed: false, ...after };
+  }
   const resumed = await resumeCheckGateIfMet({
     sessionId,
     userId,
     summary: after,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  const passed = results
+    .filter((r) => r.status === "recorded" && r.verdict === "pass")
+    .map((r) => r.key);
+  if (!resumed && passed.length > 0) {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({ sessionId, criterionKeys: passed });
+  }
   return { status: "evaluated", results, resumed, ...after };
+}
+
+/**
+ * The skipped results of criteria the judge could not grade because the call
+ * failed. The reason is the failure in words from the one failure door
+ * (`describeAiFailure`: the IS's own classification when it sent one), never
+ * the raw HTTP body, which stays in the log. Its class rides along so the
+ * check gate can tell "the AI could not run" from a verdict.
+ */
+function judgeCouldNotRun(
+  sessionId: string,
+  criteria: readonly SessionCriterion[],
+  err: unknown
+): CriterionRunOutcome[] {
+  const failure = describeAiFailure(err);
+  logger.warn(
+    {
+      sessionId,
+      failureClass: failure.class,
+      err: err instanceof Error ? err.message : String(err),
+    },
+    "the judge could not run"
+  );
+  const reason = `The AI judge could not run: ${failure.message}`;
+  return criteria.map((c): CriterionRunOutcome => ({
+    key: c.key,
+    status: "skipped",
+    reason,
+    failureClass: failure.class,
+  }));
+}
+
+/**
+ * The pending criteria of a stage AFTER the session's current one, each with
+ * the reason it is skipped. The stage order is the session's own stages, else
+ * its run's (`loadSessionProcess`: the frozen snapshot, then the playbook). A
+ * criterion with no stage, or a stage the order does not list, is graded as
+ * before; so is an evidence criterion whose evidence this call posts (the
+ * caller named it). A session in no stage has reached none; a session at a
+ * stage the order does not list (renamed, another snapshot) is at an unknown
+ * place, so everything is graded, as before. A closed session enters no
+ * more stages: everything is graded.
+ */
+async function criteriaNotReached(
+  session: {
+    id: string;
+    status: string;
+    playbookId: string | null;
+    currentStage: string | null;
+    stages: unknown;
+  },
+  pending: readonly SessionCriterion[],
+  evidence: PostedEvidence | undefined
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const staged = pending.filter(
+    (c) =>
+      !!c.stageKey &&
+      !(
+        c.check.kind === "evidence" &&
+        c.check.evidenceKey !== undefined &&
+        evidence?.[c.check.evidenceKey] !== undefined
+      )
+  );
+  if (staged.length === 0 || isTerminalSessionStatus(session.status)) {
+    return out;
+  }
+  let stages: unknown[] = Array.isArray(session.stages) ? session.stages : [];
+  if (stages.length === 0) {
+    const { loadSessionProcess } =
+      await import("@synap/jobs/utils/session-process.js");
+    stages =
+      (
+        await loadSessionProcess({
+          sessionId: session.id,
+          playbookId: session.playbookId,
+        })
+      )?.stages ?? [];
+  }
+  const keys = stages.map((s) => (s as { key?: unknown } | null)?.key);
+  const at = session.currentStage ? keys.indexOf(session.currentStage) : -1;
+  if (session.currentStage && at === -1) return out;
+  for (const c of staged) {
+    const index = keys.indexOf(c.stageKey);
+    if (index === -1 || index <= at) continue;
+    out.set(
+      c.key,
+      session.currentStage
+        ? `Stage "${c.stageKey}" is not reached yet (the session is at "${session.currentStage}"): it is graded once the session enters it.`
+        : `Stage "${c.stageKey}" is not reached yet (the session is in no stage): it is graded once the session enters it.`
+    );
+  }
+  return out;
 }
 
 /**
@@ -499,6 +715,14 @@ export async function gradeCriterionAsOwner(params: {
     sessionId: params.sessionId,
     userId: params.userId,
   });
+  // A pass may complete the stage's work: the step moves on by itself (W6).
+  if (!resumed && params.verdict === "pass") {
+    const { advanceOnGrade } = await import("../advance-if-stage-met.js");
+    await advanceOnGrade({
+      sessionId: params.sessionId,
+      criterionKeys: [params.criterionKey],
+    });
+  }
   return { out, resumed };
 }
 
@@ -540,13 +764,34 @@ export async function gradeCriterionAfterAct(params: {
 }
 
 /**
+ * Is the session's CURRENT hold the check gate's own (`check:<stageKey>`,
+ * the hold `applyCheckGate` records)? `metadata.checkGate` outlives the hold
+ * it explains (an `onFail` return keeps it, a person's resume leaves it), so
+ * only the hold says the gate is what holds the session now: a session a
+ * person paused, or a run that stopped to wait on them, is never released
+ * by its outcomes.
+ */
+export async function heldByCheckGate(
+  sessionId: string,
+  stageKey: string
+): Promise<boolean> {
+  const [hold] = await listHolds(db, {
+    subjects: [{ subjectType: "focus_session", subjectId: sessionId }],
+  });
+  return hold?.hold.ref === `check:${stageKey}`;
+}
+
+/**
  * The RESUME half of a `check` stage gate (services/playbooks/stage-gate.ts):
  * a session paused by a check gate goes back to `active` once every required
- * criterion of the stage it left passes. Called after every evaluation and every
- * human grade — re-running the check IS the resume, no proposal involved.
- * Guarded on `status = 'paused'` so a session a person paused for another reason
- * (no `checkGate` record) is never resumed by it. Resuming writes the gated
- * stage's `subjectStatus` (the pass the advance door was waiting for).
+ * outcome of the stage it left is met (`checkGateFailing`). Called after every
+ * evaluation and every human grade, and by the step rule when an outcome
+ * settles (W6) — re-running the check IS the resume, no proposal involved.
+ * Guarded on `status = 'paused'` AND the gate's own hold being the current one
+ * ({@link heldByCheckGate}), so a session paused for another reason is never
+ * resumed by it, even with a stale `checkGate` record. Resuming writes the judged
+ * stage's `onApproved`, then the gated stage's `subjectStatus` (the pass the
+ * advance door was waiting for).
  */
 export async function resumeCheckGateIfMet(params: {
   sessionId: string;
@@ -565,7 +810,9 @@ export async function resumeCheckGateIfMet(params: {
   if (
     !session ||
     session.status !== "paused" ||
-    typeof gate?.fromStage !== "string"
+    typeof gate?.fromStage !== "string" ||
+    typeof gate.stageKey !== "string" ||
+    !(await heldByCheckGate(session.id, gate.stageKey))
   ) {
     return false;
   }
@@ -578,7 +825,20 @@ export async function resumeCheckGateIfMet(params: {
         userId: params.userId,
       })
     );
-  if (checkGateFailing(summary, gate.fromStage).length > 0) return false;
+  const proc = await loadSessionProcess({
+    sessionId: session.id,
+    playbookId: session.playbookId,
+  });
+  const failing = checkGateFailing(
+    {
+      stages: proc?.stages ?? [],
+      expectedOutputs: session.expectedOutputs,
+      criteria: summary.criteria,
+      evaluations: summary.evaluations,
+    },
+    gate.fromStage
+  );
+  if (failing.length > 0) return false;
   // The check gate's own release: the system's move.
   const { rows: resumed } = await setSessionStatus(db, {
     sessionId: session.id,
@@ -592,19 +852,28 @@ export async function resumeCheckGateIfMet(params: {
     },
   });
   if (resumed.length === 0) return false;
-  // The gate PASSED: the gated stage's `subjectStatus` is written now — the
-  // advance door held it while the check failed. Only while the run still
-  // stands on that stage; a skip/failure never un-resumes.
+  // The gate PASSED: the stage it judged (`fromStage`) reached its
+  // `onApproved`, then the gated stage's `subjectStatus` is written now — the
+  // advance door held both while the check failed (decision D2). Only while
+  // the run still stands on that stage; a skip/failure never un-resumes.
   if (
     typeof gate.stageKey === "string" &&
     session.currentStage === gate.stageKey
   ) {
-    const { writeStageSubjectStatus } =
+    const { writeGatePassStatuses } =
       await import("../stage-subject-status.js");
-    await writeStageSubjectStatus({
+    await writeGatePassStatuses({
       session,
-      toStage: gate.stageKey,
+      gatedStage: gate.stageKey,
+      fromStage: gate.fromStage,
       userId: params.userId,
+    });
+    // The gate passed: the stage now RUNS (`enterStage`, never throws).
+    const { enterStage } = await import("../../playbooks/stage-runner.js");
+    await enterStage({
+      sessionId: session.id,
+      stageKey: gate.stageKey,
+      cause: { kind: "gate_passed" },
     });
   }
   return true;

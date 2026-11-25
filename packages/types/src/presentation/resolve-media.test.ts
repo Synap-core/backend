@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { declaredSourceYields } from "./resolve-media.js";
 import {
   resolveEntityMedia,
   resolvePresentationFamily,
@@ -357,5 +358,40 @@ describe("resolvePresentationFamily", () => {
     [undefined, undefined],
   ] as const)("mime %s → %s", (mime, family) => {
     expect(resolvePresentationFamily(undefined, mime)).toBe(family);
+  });
+});
+
+describe("declaredSourceYields agrees with resolveEntityMedia", () => {
+  const cases: [
+    string,
+    ProfilePresentation["media"],
+    Record<string, unknown>,
+  ][] = [
+    ["uuid", { source: { property: "p" } }, { p: DOC }],
+    ["padded uuid", { source: { property: "p" } }, { p: ` ${DOC} ` }],
+    ["list of uuid", { source: { property: "p" } }, { p: [DOC] }],
+    ["http url", { source: { property: "p" } }, { p: URL_A }],
+    ["junk string", { source: { property: "p" } }, { p: "hello" }],
+    ["blank", { source: { property: "p" } }, { p: "  " }],
+    ["entityRef uuid", { source: { entityRef: "p" } }, { p: ENT }],
+    ["entityRef padded", { source: { entityRef: "p" } }, { p: ` ${ENT} ` }],
+    ["entityRef junk", { source: { entityRef: "p" } }, { p: "hello" }],
+  ];
+  it.each(cases)("%s", (_name, media, props) => {
+    const presentation: ProfilePresentation = { family: "media", media };
+    const drawn =
+      resolveEntityMedia({ id: ENT, properties: props }, presentation).primary
+        .via !== "none";
+    expect(declaredSourceYields(media!.source!, props, {})).toBe(drawn);
+  });
+
+  it("{documentId: true} follows the own document (string or flag)", () => {
+    const src = { documentId: true } as const;
+    expect(declaredSourceYields(src, {}, {})).toBe(false);
+    expect(declaredSourceYields(src, {}, { documentId: null })).toBe(false);
+    expect(declaredSourceYields(src, {}, { documentId: false })).toBe(false);
+    expect(declaredSourceYields(src, {}, { documentId: DOC })).toBe(true);
+    expect(declaredSourceYields(src, {}, { documentId: true })).toBe(true);
+    expect(declaredSourceYields(src, null, { documentId: "  " })).toBe(false);
   });
 });

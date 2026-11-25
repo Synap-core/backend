@@ -25,8 +25,12 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
+import {
+  AUTOMATION_RUN_STATUSES,
+  AUTOMATION_STATUSES,
+} from "@synap-core/types/units";
 import { workspaces } from "./workspaces.js";
-import { RUN_STOP_REASONS } from "./playbook-runs.js";
+import { AUTOMATION_RUN_STOP_REASONS } from "./playbook-runs.js";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
 
 // ── Flow definition types ───────────────────────────────────────────────────
@@ -163,7 +167,10 @@ export const automations = pgTable(
     workspaceId: uuid("workspace_id").references(() => workspaces.id, {
       onDelete: "cascade",
     }),
+    /** Owner: the person it runs for (an agent only if nobody installed it). */
     createdBy: text("created_by").notNull(),
+    /** Actor: the agent that authored it, null for a person's own (0442). FK in SQL. */
+    agentUserId: text("agent_user_id"),
 
     // Definition
     name: text("name").notNull(),
@@ -189,10 +196,10 @@ export const automations = pgTable(
     // or a retired automation. It is EXCLUDED from the name-uniqueness index
     // (archived rows free the name) and from scheduling/matching (both filter
     // status = 'active'), so it never fires. Not a user-selectable input value —
-    // the create/update/list zod enums stay draft|active|paused|error.
-    status: text("status", {
-      enum: ["draft", "active", "paused", "error", "archived"],
-    })
+    // the create/update/list zod enums stay draft|active|paused|error. Declared
+    // in `@synap-core/types/units` (`AUTOMATION_STATUS_DECLARATION`); written
+    // only through `setAutomationStatus`; `automations_status_check` (0447).
+    status: text("status", { enum: AUTOMATION_STATUSES })
       .notNull()
       .default("draft"),
     errorMessage: text("error_message"),
@@ -248,6 +255,9 @@ export const automations = pgTable(
     triggerTypeIdx: index("automations_trigger_type_idx").on(table.triggerType),
     nextRunAtIdx: index("automations_next_run_at_idx").on(table.nextRunAt),
     createdByIdx: index("automations_created_by_idx").on(table.createdBy),
+    agentUserIdIdx: index("automations_agent_user_id_idx").on(
+      table.agentUserId
+    ),
     // Name-identity backstop (0230, mirrors playbooks_workspace_name_active_uq /
     // 0227): at-most-one non-archived automation per (workspace | pod-wide,
     // lower(name)). MCP create_automation re-authored the SAME automation into a
@@ -307,30 +317,12 @@ export const automationRuns = pgTable(
       .default({})
       .notNull(),
 
-    // 'skipped' (Wave 4.V3) — a run whose flow-level precondition evaluated false
-    // at start: finalized before any step executes, distinct from a genuine
-    // 'completed'. 'blocked_by_policy' — a run whose effect a GOVERNANCE verdict
-    // refused (an agent-produced trigger fired a human-owned automation and the
-    // producer ladder / a policy floor blocked the THEN-action): a calm governance
-    // OUTCOME, not a transport error, so it reads distinct from 'failed'. The DB
-    // column is unconstrained `text` (no CHECK; see 0000_baseline_schema.sql), so
-    // both are TS-only enum widenings — exactly as automation_step_runs.status
-    // added 'skipped' with no migration. Nothing to migrate at the DB level, and
-    // schema-coherence validates column existence, not enum membership.
-    status: text("status", {
-      enum: [
-        "running",
-        "completed",
-        "failed",
-        "cancelled",
-        "skipped",
-        "blocked_by_policy",
-        // 'waiting_on_you' (W2 calm) — the run reaper found this run past its
-        // window with its session still owing the person an open slot: not
-        // orphaned, not failed — waiting on the human. Same TS-only widening.
-        "waiting_on_you",
-      ],
-    })
+    // 'skipped' — a run whose flow-level precondition evaluated false at start.
+    // 'blocked_by_policy' — a run whose effect a GOVERNANCE verdict refused: a
+    // calm outcome, distinct from 'failed'. Declared in `@synap-core/types/units`
+    // (`AUTOMATION_RUN_STATUS_DECLARATION`); `automation_runs_status_check`
+    // (0447) spells the same set.
+    status: text("status", { enum: AUTOMATION_RUN_STATUSES })
       .notNull()
       .default("running"),
     errorMessage: text("error_message"),
@@ -339,7 +331,7 @@ export const automationRuns = pgTable(
      * (0361, `playbook_runs.stop_reason`). The breakers skip such a run: a
      * budget stop is not the rule breaking. NULL = an ordinary verdict.
      */
-    stopReason: text("stop_reason", { enum: [...RUN_STOP_REASONS] }),
+    stopReason: text("stop_reason", { enum: [...AUTOMATION_RUN_STOP_REASONS] }),
 
     stepsCompleted: integer("steps_completed").default(0).notNull(),
     stepsFailed: integer("steps_failed").default(0).notNull(),

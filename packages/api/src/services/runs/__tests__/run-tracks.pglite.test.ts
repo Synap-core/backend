@@ -43,6 +43,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
   playbooks,
   playbookRuns,
   automations,
@@ -147,6 +148,7 @@ beforeAll(async () => {
   for (const t of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     playbooks,
     playbookRuns,
     automations,

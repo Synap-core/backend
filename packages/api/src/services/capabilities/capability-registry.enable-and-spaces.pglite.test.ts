@@ -163,6 +163,7 @@ beforeAll(async () => {
       s.intelligenceCommands!,
       s.workspaces!,
       s.workspaceMembers!,
+      s.apiKeys!,
       s.podMembers!,
       s.users!,
       s.projectMembers!,
@@ -213,7 +214,7 @@ describe("enable is approval, never grant — display agrees with the run gate",
     });
     await skill("granted_do", false);
     await q(
-      `insert into vault_grants (grantable_type, grantable_id, exec_mode) values ('tool',$1,'auto')`,
+      `insert into vault_grants (grantable_type, grantable_id, created_by) values ('tool',$1,'u')`,
       [granted]
     );
 
@@ -319,7 +320,7 @@ describe('per verb: `blocked: "not_enabled"` ⇔ the run door refuses it (ticket
       ],
     });
     await q(
-      `insert into vault_grants (grantable_type, grantable_id, exec_mode) values ('tool',$1,'propose')`,
+      `insert into vault_grants (grantable_type, grantable_id, created_by) values ('tool',$1,'u')`,
       [apify]
     );
     await skill("apify_get_dataset", true);

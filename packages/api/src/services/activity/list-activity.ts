@@ -8,7 +8,8 @@
  *              Auto-approved `focus_session` receipts are left out: the
  *              session source already carries that lifecycle, once.
  *   decision — a person's approve / reject / revert / failed approval, by the
- *              REVIEWER, at `reviewed_at`.
+ *              REVIEWER, at `reviewed_at`; and an automatic receipt's failure
+ *              (no reviewer), by its agent, or the pod (`system`).
  *   run      — automation + playbook runs, at `coalesce(completed_at,
  *              started_at)`. An automation run is a RULE acting (`system`).
  *   session  — one row per session of the project-path population (work +
@@ -106,7 +107,10 @@ import {
   type ActivitySource,
   type ParsedActivityActorFilter,
 } from "@synap-core/types/activity";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  LIVE_RUN_SESSION_STATUSES,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   buildRequestFromProposal,
   type Proposal,
@@ -121,6 +125,7 @@ import {
   ownAgentUserFilter,
 } from "../agent-identity-service.js";
 import { activityActorOf } from "./activity-actors.js";
+import { answeredRowWhere, DECISION_STATUSES } from "./decision-events.js";
 import { proposalPayloadTargetName } from "../../routers/proposals/display.js";
 import { nameRedactedProposals } from "../object-graph/graph-service.js";
 import { redactUnreadableSessionTargets } from "../proposals/session-content-redaction.js";
@@ -325,16 +330,6 @@ interface Candidate extends ActivityCursor {
   origin?: string | null;
 }
 
-/** The decisions a PERSON makes on a proposal (the `reviewed_by` stamp). */
-const DECISION_STATUSES = [
-  "approved",
-  "rejected",
-  "reverted",
-  "approval_failed",
-] as const;
-
-const LIVE_SESSION_STATUSES = ["active", "paused", "forming"] as const;
-
 /**
  * A proposal filed into one of this track's sessions, or about the track
  * itself — a track stage gate (`target_type = 'track'`, no session), which a
@@ -450,15 +445,18 @@ async function readDecisions<P extends Projection>(
     q.outcome
   ) ?? [...DECISION_STATUSES];
   if (statuses.length === 0) return none;
-  const actorId = drizzleSql<string>`${proposals.reviewedBy}`;
-  const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent')`;
+  // The reviewer; a receipt's failure has none and is its agent's (null =
+  // the pod). Never the person the row is about.
+  const actorId = drizzleSql<
+    string | null
+  >`coalesce(${proposals.reviewedBy}, ${proposals.agentUserId})`;
+  const isAgent = drizzleSql<boolean>`(${users.userType} = 'agent' or (${proposals.reviewedBy} is null and ${proposals.agentUserId} is not null))`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
   const at = drizzleSql`${proposals.reviewedAt}`;
   const where = and(
     proposalFloor(viewer, q.workspaceLens),
-    isNotNull(proposals.reviewedBy),
-    isNotNull(proposals.reviewedAt),
+    answeredRowWhere,
     inArray(proposals.status, statuses as never[]),
     q.projectId ? eq(proposals.projectId, q.projectId) : undefined,
     q.trackId ? proposalInTrack(q.trackId) : undefined,
@@ -471,7 +469,7 @@ async function readDecisions<P extends Projection>(
     const days = await database
       .select(dayFields(at, p.tz))
       .from(proposals)
-      .leftJoin(users, eq(users.id, proposals.reviewedBy))
+      .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
       .where(where)
       .groupBy(byDay);
     return asDays(days) as Projected<P>;
@@ -482,14 +480,14 @@ async function readDecisions<P extends Projection>(
       at: exactAt(at),
       status: proposals.status,
       proposalType: proposals.proposalType,
-      actorId: proposals.reviewedBy,
+      actorId,
       isAgent,
       projectId: proposals.projectId,
       sessionId: proposals.sessionId,
       changeCount: proposalChangeCountSql(),
     })
     .from(proposals)
-    .leftJoin(users, eq(users.id, proposals.reviewedBy))
+    .leftJoin(users, drizzleSql`${users.id} = ${actorId}`)
     .where(where)
     .orderBy(...order(at, proposals.id))
     .limit(p.take);
@@ -700,7 +698,7 @@ async function readSessions<P extends Projection>(
   const actorId = drizzleSql<string>`coalesce(${agentId}, ${focusSessions.userId})`;
   const actor = actorWhere(q.actor, viewer, actorId, isAgent);
   if (actor === null) return none;
-  const live = drizzleSql`${focusSessions.status} in ('active', 'paused', 'forming')`;
+  const live = inArray(focusSessions.status, [...LIVE_RUN_SESSION_STATUSES]);
   const at = drizzleSql`case when ${live} then coalesce(${focusSessions.startedAt}, ${focusSessions.createdAt}) else coalesce(${focusSessions.closedAt}, ${focusSessions.updatedAt}) end`;
   const where = and(
     scopedDb(q.access).predicate(focusSessions),
@@ -1102,7 +1100,7 @@ async function enrich(
     }
 
     // session
-    const live = (LIVE_SESSION_STATUSES as readonly string[]).includes(
+    const live = (LIVE_RUN_SESSION_STATUSES as readonly string[]).includes(
       c.status
     );
     const action = live ? "start" : "close";

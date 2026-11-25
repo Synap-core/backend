@@ -99,6 +99,36 @@ describe("proposals.later — the door", () => {
     expect(forBen.get(PENDING)).toBe("changes_to_review");
   });
 
+  it("a request the pod HOLDS (data.held) is a change to review, set aside or not: no headline card while nobody can act (plan 8032a127 D6)", async () => {
+    await setRequestLater({
+      proposalId: PENDING,
+      userId: "ana",
+      until: new Date(NOW.getTime() + 3 * HOUR),
+      now: NOW,
+    });
+    const held = {
+      ...row,
+      data: {
+        held: {
+          errorClass: "missing_field",
+          reason: "No Linkedin profile on file for Marie.",
+          at: NOW.toISOString(),
+        },
+      },
+    };
+    expect(
+      (await classifyPendingProposals([held], { userId: "ana" }, NOW)).get(
+        PENDING
+      )
+    ).toBe("changes_to_review");
+    // The same row without its hold: Ana's Later stands.
+    expect(
+      (await classifyPendingProposals([row], { userId: "ana" }, NOW)).get(
+        PENDING
+      )
+    ).toBe("review_later");
+  });
+
   it("comes back on its own once the time passes", async () => {
     await setRequestLater({
       proposalId: PENDING,

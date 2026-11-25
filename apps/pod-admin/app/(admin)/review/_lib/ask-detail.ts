@@ -85,6 +85,12 @@ export interface AskSlot {
   sessionId: string;
   /** The DECLARED label — the key every slot door matches on. */
   label: string;
+  /**
+   * The slot's own key, when the reader resolved the slot by key (an embed):
+   * the doors take it where they take the label (`slotRefOf`), so a label two
+   * slots share cannot send the answer to the other one.
+   */
+  slotKey?: string;
   sessionTitle: string | null;
   /** Null = no typed ask: a free-text answer, "I did this" or "Not mine". */
   ask: Ask | null;
@@ -226,6 +232,8 @@ export interface AskView {
   heading: string;
   /** The `why`, only when it adds to the heading. */
   context: string | null;
+  /** Refuse, on every mode: its button, reason field and what it does. */
+  refuse: AskCardView["refuse"];
   /** The asking agent (its session is the door), or the cause; null = unknown. */
   asker: AskCardAsker | null;
   /** Age + fate as one mark ("8d · Stays until you decide"). */
@@ -352,6 +360,7 @@ export function askView(slot: AskSlot, now: number = Date.now()): AskView {
   return {
     heading: card.heading,
     context: card.context,
+    refuse: card.refuse,
     asker: card.asker,
     ageFate: card.ageFate,
     note: card.note,
@@ -451,7 +460,12 @@ export type AskDraft =
   /** A reference to what is handed over — a vault secret, a connection, a file. */
   | { type: "provide"; ref: AskProvideRef }
   /** A slot with no typed ask: the answer in words. */
-  | { type: "text"; text: string };
+  | { type: "text"; text: string }
+  /**
+   * REFUSE, offered on every mode (`askCardView(...).refuse`): the person's
+   * no, with the reason the agent reads (`{ type: "declined" }`).
+   */
+  | { type: "declined"; reason?: string };
 
 /** `focusSessions.answerOutput`'s input. */
 export interface AnswerCall {
@@ -462,6 +476,8 @@ export interface AnswerCall {
   askFingerprint: string;
   /** A secret answer: the agent the person was told will read it. */
   expectedGranteeId?: string;
+  /** A secret answer: one read or this session (the person's pick). */
+  secretUses?: "once" | "session";
 }
 
 /** `attestOutput` / `askAboutSlot` input: the slot, and the ask the reader saw. */
@@ -534,6 +550,13 @@ function valueOf(
       };
     case "provide":
       return { ok: true, value: { type: "provide", ref: draft.ref } };
+    case "declined": {
+      const reason = draft.reason?.trim();
+      return {
+        ok: true,
+        value: reason ? { type: "declined", reason } : { type: "declined" },
+      };
+    }
   }
 }
 
@@ -543,6 +566,24 @@ function valueOf(
  * fingerprint of the ask the reader SAW, so an ask the agent changed
  * underneath is refused as stale instead of answered blind.
  */
+/** What every slot door is sent to name the slot: its key when held, else its label. */
+export function slotRefOf(slot: Pick<AskSlot, "label" | "slotKey">): string {
+  return slot.slotKey ?? slot.label;
+}
+
+/**
+ * A door's refusal quotes the slot by what it was sent (`"ship-it"`). When the
+ * slot was addressed by its key, say its label, which is what the reader knows.
+ */
+export function withSlotLabel(
+  message: string,
+  slot: Pick<AskSlot, "label" | "slotKey">
+): string {
+  return slot.slotKey && slot.slotKey !== slot.label
+    ? message.split(`"${slot.slotKey}"`).join(`"${slot.label}"`)
+    : message;
+}
+
 export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
   const built = valueOf(slot, draft);
   if (!built.ok) return built;
@@ -552,7 +593,7 @@ export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
     ok: true,
     call: {
       sessionId: slot.sessionId,
-      expectedLabel: slot.label,
+      expectedLabel: slotRefOf(slot),
       value: checked.value,
       ...(built.text ? { text: built.text } : {}),
       askFingerprint: askFingerprint(slot.ask),
@@ -563,7 +604,7 @@ export function answerCall(slot: AskSlot, draft: AskDraft): AnswerCallResult {
 export function slotCall(slot: AskSlot): SlotCall {
   return {
     sessionId: slot.sessionId,
-    expectedLabel: slot.label,
+    expectedLabel: slotRefOf(slot),
     askFingerprint: askFingerprint(slot.ask),
   };
 }
@@ -609,7 +650,7 @@ export type RelayCall =
   | { sessionId: string; expectedLabel: string; rejectRelayed: true };
 
 export function relayCall(slot: AskSlot, act: "confirm" | "reject"): RelayCall {
-  const at = { sessionId: slot.sessionId, expectedLabel: slot.label };
+  const at = { sessionId: slot.sessionId, expectedLabel: slotRefOf(slot) };
   return act === "confirm"
     ? { ...at, confirmRelayed: true }
     : { ...at, rejectRelayed: true };

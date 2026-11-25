@@ -17,31 +17,33 @@
 
 import { createHash } from "node:crypto";
 import { and, db, eq, inArray, isNull, type KeyGrant } from "@synap/database";
-import {
-  apps,
-  isPodWideReadPermission,
-  workspaces,
-} from "@synap/database/schema";
+import { apps, oauthClients, workspaces } from "@synap/database/schema";
 import { isAppPublicId } from "@synap-core/types/membrane";
 import {
   accessModel,
   assertNeverPlace,
   describeAccess,
+  grantScopesForAccess,
   grantsOfRequests,
-  parsePlace,
+  LiftTooLargeError,
+  normalizeAppAccess,
+  pairsOfAccess,
   parseRequestPlace,
   placeSpaceIds,
+  scopesWithinBound,
   summarizeGrant,
+  type AppAccess,
 } from "@synap-core/types/grants";
 import {
   GRANT_ACTIONS,
   parsePermission,
+  patternMatches,
   QUALIFIED_GRANT_SUBJECTS,
 } from "@synap/governance-policy/grants";
 
 import { getUserWorkspaceIds } from "../../utils/workspace-membership.js";
 import { isPodAdmin } from "../../utils/workspace-role.js";
-import { isSynapApp, oauthKeyInstanceId, podAppActsAs } from "./config.js";
+import { isSynapApp, oauthKeyInstanceId } from "./config.js";
 import type { AppGrantRequest, StoredClient } from "./store.js";
 
 /**
@@ -98,12 +100,12 @@ export async function loadLiveApp(publicId: string) {
  * act as the person — the ONE loader `classifyAppPersonKey` reads:
  *  - a live REGISTERED app (`mode = 'specific'`, `loadLiveApp`): "Sign in with
  *    Synap" (A1);
- *  - a live pod app CONNECTION (`mode = 'oauth'`) whose OAuth client is a
- *    SYNAP app (`isSynapApp` on its CIMD client_id, founder 2026-10-22). Any
- *    other connection is an unverified app's: its tokens are its agent's, and
- *    a person token naming one is dead.
- * The verified test is re-read here on every request, so taking an id off
- * `SYNAP_APP_IDS` ends its people's tokens at their next call.
+ *  - a live pod app CONNECTION (`mode = 'oauth'`) whose document still holds
+ *    (`consentedDocumentHolds`): any Synap app (`isSynapApp`, founder
+ *    2026-10-22), and since 12 Nov 2026 any other app whose client-id
+ *    document is the one the person consented to. A changed document, or a
+ *    connection consented before 12 Nov, makes its person token dead.
+ * Re-read here on every request.
  */
 export async function loadPersonTokenApp(publicId: string) {
   const [app] = await db
@@ -122,10 +124,43 @@ export async function loadPersonTokenApp(publicId: string) {
   if (
     app.mode === "oauth" &&
     app.oauthClientId &&
-    isSynapApp(app.oauthClientId)
+    (await consentedDocumentHolds(app))
   )
     return app;
   return null;
+}
+
+/** The document hash the pod holds NOW for this client id, or null. */
+export async function currentDocumentSha256(
+  oauthClientId: string
+): Promise<string | null> {
+  const [row] = await db
+    .select({ sha: oauthClients.metadataSha256 })
+    .from(oauthClients)
+    .where(eq(oauthClients.clientId, oauthClientId))
+    .limit(1);
+  return row?.sha ?? null;
+}
+
+/**
+ * May this pod app connection still act as its person, as far as its
+ * DOCUMENT goes? A Synap app: always (Synap serves its document, decision
+ * 2026-10-22). Any other app: only while the client-id document the pod holds
+ * hashes to the one the person consented to (`metadata
+ * .consentedDocumentSha256`, recorded by `connectOAuthApp`). A changed
+ * document, or a connection made before 12 Nov 2026 (consented as an
+ * ask-first agent, so never to "saved as you"), has the person connect it
+ * again. Re-read on every request (`loadPersonTokenApp`).
+ */
+export async function consentedDocumentHolds(app: {
+  oauthClientId: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<boolean> {
+  if (!app.oauthClientId) return false;
+  if (isSynapApp(app.oauthClientId)) return true;
+  const consented = (app.metadata ?? {})["consentedDocumentSha256"];
+  if (typeof consented !== "string" || !consented) return false;
+  return (await currentDocumentSha256(app.oauthClientId)) === consented;
 }
 
 /**
@@ -199,6 +234,8 @@ export function intersectAppGrant(
  *  2. WHAT: the app's current approval ∩ what its owner could STILL give
  *     (an approval outlives a role — `ownerGrantableNow`) ∩ the spaces the
  *     person can reach. Their own role still decides each write.
+ *  3. DECISIONS: a pod app connection (`mode = 'oauth'`) that is not a
+ *     Synap app never holds the review verbs (`grantsDecision`).
  *
  * `"not_for_you"` = rule 1 refused; `[]` = nothing left.
  */
@@ -206,6 +243,9 @@ export async function appSignInReach(
   app: {
     ownerUserId: string;
     approvedRequests: readonly AppGrantRequest[] | null;
+    /** Required, so no caller can skip rule 3 by passing a partial row. */
+    mode: string;
+    oauthClientId: string | null;
   },
   personUserId: string
 ): Promise<AppGrantRequest[] | "not_for_you"> {
@@ -215,7 +255,13 @@ export async function appSignInReach(
   ) {
     return "not_for_you";
   }
-  const approved = app.approvedRequests ?? [];
+  // 3. DECISIONS: a pod app that is not a Synap app never decides proposals
+  //    for the person (founder, 12 Nov 2026): the review verbs, and `*`
+  //    which covers them, are never in its reach, whatever was ticked.
+  const decides = app.mode === "oauth" && !isSynapApp(app.oauthClientId ?? "");
+  const approved = (app.approvedRequests ?? []).filter(
+    (r) => !decides || !grantsDecision(r.permission)
+  );
   if (approved.length === 0) return [];
   // Loaded on use: the app service pulls a large graph the protocol
   // endpoints (and their tests) otherwise never load.
@@ -235,6 +281,8 @@ export async function appSignInReach(
           return place.ids.every((id) => reach.has(id));
         case "unbounded":
           return false; // an app never holds one
+        case "projects":
+          return false; // a pair names no project (W2: projects are v2 only)
         default:
           return assertNeverPlace(place);
       }
@@ -248,37 +296,213 @@ export function appNotForYou(appName: string): string {
 }
 
 /**
+ * What a person may get from an app RIGHT NOW, as the grant scopes a token
+ * carries (W3d): THE reach rule (`appSignInReach`'s three rules) applied to
+ * the connection's v2 access (`appApprovalOf`, the stored v2 is the
+ * authority), so a token reaches the PROJECTS the person chose, not only
+ * spaces. Each tier's places are cut to what its owner could still give
+ * (reads where they read, writes where they still write, projects they still
+ * see or write in) and to the person's own reach (the spaces they read, the
+ * projects they see). All spaces stays the owner's own (a pod-wide read is
+ * never handed to another member). "all" projects is resolved NOW
+ * (`allProjects`: the projects both the owner and the person see), so a
+ * project made later is reached at the next mint.
+ *
+ * A connection whose pairs cannot become v2 (a re-consent, Q3) keeps its
+ * pairs until W5: `appSignInReach` and their per-space grants.
+ */
+export interface AppSignInGrant {
+  /** The grant scopes the token holds now (never mixing spaces and projects). */
+  scopes: GrantInputScope[];
+  /** Its space and pod part as the old pairs (`synap_grant`, the fingerprint). */
+  pairs: AppGrantRequest[];
+  /** The v2 reach, or null for a connection that keeps its pairs. */
+  access: AppAccess | null;
+  /** What "all" projects meant at this read. */
+  allProjects: string[];
+}
+
+/** One grant scope as minted (`GrantInput` without its label). */
+export interface GrantInputScope {
+  permissions: string[];
+  workspaceIds?: string[];
+  projectIds?: string[];
+}
+
+export async function appSignInGrant(
+  app: {
+    ownerUserId: string;
+    approvedRequests: readonly AppGrantRequest[] | null;
+    approvedAccess?: unknown;
+    mode: string;
+    oauthClientId: string | null;
+  },
+  personUserId: string
+): Promise<AppSignInGrant | "not_for_you"> {
+  const { appApprovalOf, grantsForPairs, ownerAccessFloor } =
+    await import("../../services/app-connect.js");
+  // The stored v2 only (no lift per request): a row with none keeps its
+  // pairs, whose reach a lift would only restate.
+  const approval = appApprovalOf(app, { lift: false });
+  if (!approval.access) {
+    const reach = await appSignInReach(app, personUserId);
+    if (reach === "not_for_you") return reach;
+    return {
+      scopes: grantsForPairs(reach),
+      pairs: reach,
+      access: null,
+      allProjects: [],
+    };
+  }
+  // 1. WHO: unchanged.
+  if (
+    personUserId !== app.ownerUserId &&
+    !(await isPodAdmin(app.ownerUserId))
+  ) {
+    return "not_for_you";
+  }
+  const a = approval.access;
+  // 3. DECISIONS: never the review verbs for a pod app that is not a Synap app.
+  const decides = app.mode === "oauth" && !isSynapApp(app.oauthClientId ?? "");
+  const permissions = a.permissions.filter(
+    (p) => !decides || !grantsDecision(p)
+  );
+  // 2. WHAT: each tier cut to the owner's floor now and the person's reach.
+  const projects =
+    (a.read.spaces !== "all" &&
+      (a.read.projects === "all" || a.read.projects.length > 0)) ||
+    a.write.projects.length > 0;
+  const owner = await ownerAccessFloor(app.ownerUserId, {
+    projects,
+    writeSpaces: a.write.spaces,
+  });
+  const person =
+    personUserId === app.ownerUserId
+      ? owner
+      : await ownerAccessFloor(personUserId, { projects, writeSpaces: [] });
+  const both = (
+    ids: readonly string[],
+    x: readonly string[],
+    y: readonly string[]
+  ) => ids.filter((id) => x.includes(id) && y.includes(id));
+  const allProjects =
+    a.read.projects === "all"
+      ? both(owner.readProjects, owner.readProjects, person.readProjects)
+      : [];
+  const access = normalizeAppAccess({
+    version: 2,
+    permissions,
+    read: {
+      spaces:
+        a.read.spaces === "all"
+          ? personUserId === app.ownerUserId
+            ? "all"
+            : []
+          : both(a.read.spaces, owner.readSpaces, person.readSpaces),
+      projects:
+        a.read.projects === "all"
+          ? "all"
+          : both(a.read.projects, owner.readProjects, person.readProjects),
+    },
+    write: {
+      spaces: both(a.write.spaces, owner.writeSpaces, person.readSpaces),
+      projects: both(
+        a.write.projects,
+        owner.writeProjects,
+        person.readProjects
+      ),
+    },
+  });
+  return {
+    scopes: grantScopesForAccess(access, { allProjects }),
+    pairs: pairsOfAccess(access).pairs,
+    access,
+    allProjects,
+  };
+}
+
+/** `narrowKeyGrant`'s memo: (stored, reach) → kept scopes, oldest out first. */
+const NARROW_MEMO = new Map<string, KeyGrant["scopes"][number][]>();
+const NARROW_MEMO_MAX = 512;
+
+/** Deep copies of scopes (their id and permission lists included). */
+function cloneScopes(
+  scopes: readonly KeyGrant["scopes"][number][]
+): KeyGrant["scopes"][number][] {
+  // Each list copied as it is (null stays null): a copy, not a reading.
+  const copy = (ids: readonly string[] | null | undefined) =>
+    Array.isArray(ids) ? [...ids] : ids;
+  return scopes.map((s) => ({
+    ...s,
+    permissions: [...s.permissions],
+    workspaceIds: copy(s.workspaceIds),
+    projectIds: copy(s.projectIds),
+    entityIds: copy(s.entityIds),
+  }));
+}
+
+/** A scope's structure, order-free: equal keys mean the same scope. */
+function scopeKey(scope: {
+  permissions: readonly string[];
+  workspaceIds?: readonly string[] | null;
+  projectIds?: readonly string[] | null;
+  entityIds?: readonly string[] | null;
+}): string {
+  const list = (ids: readonly string[] | null | undefined) =>
+    ids && ids.length > 0 ? [...ids].sort().join(",") : "-";
+  return [
+    [...scope.permissions].sort().join(","),
+    list(scope.workspaceIds),
+    list(scope.projectIds),
+    list(scope.entityIds),
+  ].join("|");
+}
+
+/**
  * A key's grant cut down to `reach` (PR #29 L1): every request a person token
- * makes is bounded by what `appSignInReach` allows NOW, not only by what was
- * attached at mint. Nothing left = one deny-all scope.
+ * makes is bounded by what the reach rule allows NOW (`appSignInGrant`), not
+ * only by what was attached at mint. Compared BY MEANING (W3d, review finding
+ * 4 of #1196): what the stored grant permits that the reach permits too
+ * (`scopesWithinBound`: each stored scope whole, else each of its pieces, one
+ * permission in one place), so a read held through a wider pattern
+ * (`entity.note.read` in A under `entity.read` in A) is kept. A stored scope
+ * that IS a reach scope (the token was minted from this reach) passes as is.
+ * Too large to compare: only the stored scopes that are literally reach
+ * scopes are kept (fail closed). Nothing left = one deny-all scope.
  */
 export function narrowKeyGrant(
   grant: KeyGrant,
-  reach: readonly AppGrantRequest[]
+  reach: { readonly scopes: readonly GrantInputScope[] }
 ): KeyGrant {
-  const ok = new Set(reach.map((r) => `${r.workspaceId} ${r.permission}`));
-  const scopes: KeyGrant["scopes"][number][] = [];
-  for (const scope of grant.scopes) {
-    const place = parsePlace(scope, "app");
-    if (place.kind !== "spaces") {
-      // A scope with no space holds the pod-wide reads: kept only as the
-      // reach's own pod-wide pairs (`workspaceId: null`), never anything else.
-      if (scope.projectIds || scope.entityIds) continue;
-      const permissions = scope.permissions.filter(
-        (p) => isPodWideReadPermission(p) && ok.has(`null ${p}`)
-      );
-      if (permissions.length > 0) scopes.push({ ...scope, permissions });
-      continue;
-    }
-    for (const ws of place.ids) {
-      const permissions = scope.permissions.filter((p) => ok.has(`${ws} ${p}`));
-      if (permissions.length > 0)
-        scopes.push({ ...scope, permissions, workspaceIds: [ws] });
+  const reachKeys = new Set(reach.scopes.map(scopeKey));
+  const live = grant.scopes.filter((s) => s.permissions.length > 0);
+  let kept: KeyGrant["scopes"][number][];
+  if (live.every((s) => reachKeys.has(scopeKey(s)))) kept = live;
+  else {
+    // Pure in its two inputs, and asked on every request of the token: the
+    // answer is kept per (stored, reach) pair, a bounded memo.
+    const memoKey = `${live.map(scopeKey).sort().join(";")}#${[...reachKeys].sort().join(";")}`;
+    const memo = NARROW_MEMO.get(memoKey);
+    if (memo) kept = cloneScopes(memo);
+    else {
+      try {
+        kept = scopesWithinBound(live, reach.scopes);
+      } catch (err) {
+        if (!(err instanceof LiftTooLargeError)) throw err;
+        kept = live.filter((s) => reachKeys.has(scopeKey(s)));
+      }
+      if (NARROW_MEMO.size >= NARROW_MEMO_MAX) {
+        const oldest = NARROW_MEMO.keys().next().value;
+        if (oldest !== undefined) NARROW_MEMO.delete(oldest);
+      }
+      // Stored as a copy, handed out as copies: nothing a caller does to
+      // its grant reaches another request (review of #1197).
+      NARROW_MEMO.set(memoKey, cloneScopes(kept));
     }
   }
   return {
     clientId: grant.clientId,
-    scopes: scopes.length > 0 ? scopes : [{ permissions: [] }],
+    scopes: kept.length > 0 ? kept : [{ permissions: [] }],
   };
 }
 
@@ -290,6 +514,18 @@ export function appGrantFingerprint(
     ...new Set(requests.map((r) => `${r.workspaceId} ${r.permission}`)),
   ].sort();
   return createHash("sha256").update(pairs.join("\n")).digest("hex");
+}
+
+/**
+ * Does this permission let its holder decide proposals (approve or reject)?
+ * Matched with the grant matcher the approval door itself uses, so `*`,
+ * `proposal.*` and the review verbs are all caught (backend#984,
+ * `decidesProposals`).
+ */
+export function grantsDecision(pattern: string): boolean {
+  return (["approve", "reject"] as const).some((action) =>
+    patternMatches(pattern, { subject: "proposal", action })
+  );
 }
 
 /** Does this permission pattern grant `verb` on anything? (grammar.ts) */
@@ -413,12 +649,14 @@ export async function describeAppSignIn(
 
 /**
  * What a POD APP's consent screen says about who its token acts as
- * (`podAppActsAs`), every word from here — the screen writes none of it.
- *  - `person` (a Synap app): `note` says it acts as the person, how a write
- *    lands and what it cannot do, derived from the permissions the app asked
- *    for. What it may do where is the consent's headline, the ONE access
- *    sentence over the person's ticks (pod admin `consentHeadline`).
- *  - `agent` (any other app): the ask-first sentence, unchanged.
+ * (`podAppActsAs`: the person, for every pod app since 12 Nov 2026), every
+ * word from here — the screen writes none of it. `note` says it acts as the
+ * person, how a write lands and what it cannot do, derived from the
+ * permissions the app asked for; deciding proposals only for a Synap app
+ * (`appSignInReach` rule 3). What it may do where is the consent's headline,
+ * the ONE access sentence over the person's ticks (pod admin
+ * `consentHeadline`). `agent` stays in the type for the pod admin screen,
+ * which still renders an older pod's answer.
  */
 export type PodAppActsAsDescription =
   { kind: "person"; note: string } | { kind: "agent"; note: string };
@@ -428,19 +666,18 @@ export function describePodAppActsAs(
   appName: string,
   permissions: readonly string[]
 ): PodAppActsAsDescription {
-  if (podAppActsAs(clientId) === "agent") {
-    return {
-      kind: "agent",
-      // No "see other spaces": a space grant reads what a member of the space
-      // reads, including records of other spaces with a role there (the
-      // consent screen's SPACE_REACH_NOTE, rv-ui U1).
-      note: "Every change it makes is sent to you for review first. It can never approve its own changes or create keys.",
-    };
-  }
-  const canApprove = permissions.some((p) => patternGrants(p, "approve"));
+  const canApprove =
+    isSynapApp(clientId) &&
+    permissions.some((p) => patternGrants(p, "approve"));
   const canDelete = permissions.some((p) => patternGrants(p, "delete"));
-  // No "see other spaces" (rv-ui U1): see the agent note above.
-  const cannot = [...(canDelete ? [] : ["delete"]), "create keys"];
+  // No "see other spaces": a space grant reads what a member of the space
+  // reads, including records of other spaces with a role there (the consent
+  // screen's SPACE_REACH_NOTE, rv-ui U1).
+  const cannot = [
+    ...(canApprove ? [] : ["approve changes"]),
+    ...(canDelete ? [] : ["delete"]),
+    "create keys",
+  ];
   return {
     kind: "person",
     note: `What you do in ${appName} is saved as you, right away — not sent for review${

@@ -33,8 +33,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: { automations: { findFirst: async () => h.automation } },
       update: () => ({
         set: (v: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             h.updates.push(v);
+            const rows = Promise.resolve([{ id: "row" }]) as Promise<
+              unknown[]
+            > & { returning: () => Promise<unknown[]> };
+            rows.returning = async () => [{ id: "row" }];
+            return rows;
           },
         }),
       }),

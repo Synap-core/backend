@@ -10,6 +10,7 @@
  *     same owner floor the edge producers apply at approval, raised at propose
  *     time so a proposal that approval would refuse is never filed;
  *   - every existing entity / project id is visible to that owner;
+ *   - an arm (`option`) on an EXISTING decision names one of its options;
  *   - each `create_project` step's EVIDENCE: in-plan entity refs + visible
  *     existing ids, against the agent floor `projects.create` enforces. Below
  *     the floor is NOT a refusal inside a plan — the verdict is stamped onto
@@ -24,12 +25,14 @@ import {
   entities,
   focusSessions,
   projects,
+  projectTracks,
   MIN_EVIDENCE_ENTITIES,
   type db,
 } from "@synap/database";
-import type {
-  CompositeProposalOperation,
-  PlanProjectEvidence,
+import {
+  isPlanOperation,
+  type CompositeProposalOperation,
+  type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { ownerPrivateVisibleWhere } from "../../utils/user-visible-where.js";
 import { isSubjectEntityVisible } from "../../utils/project-subject.js";
@@ -38,6 +41,7 @@ import {
   bodyReplaceRefusal,
   loadExistingBody,
 } from "../entity-body/body-replace-guard.js";
+import { armOptionProblem } from "../links/arm-option.js";
 import {
   planRefKinds,
   validatePlanOperations,
@@ -85,9 +89,11 @@ export async function preflightPlanOperations(
     if (op.op === "create_session") {
       noteSession(op.parentSessionId, i);
       for (const id of op.blockedBySessionIds ?? []) noteSession(id, i);
-    } else if (op.op === "create_link") {
+    } else if (op.op === "create_link" || op.op === "remove_link") {
       noteSession(op.fromSessionId, i);
       noteSession(op.toSessionId, i);
+    } else if (op.op === "update_session") {
+      noteSession(op.sessionId, i);
     } else if (op.op === "create_document") {
       noteSession(op.sessionId, i);
     }
@@ -118,7 +124,9 @@ export async function preflightPlanOperations(
   const projectIdsByOp = new Map<string, number[]>();
   operations.forEach((op, i) => {
     const id =
-      op.op === "create_session" || op.op === "create_entity"
+      op.op === "create_session" ||
+      op.op === "create_entity" ||
+      op.op === "create_track"
         ? op.projectId
         : undefined;
     if (id) projectIdsByOp.set(id, [...(projectIdsByOp.get(id) ?? []), i]);
@@ -126,14 +134,7 @@ export async function preflightPlanOperations(
   // `create_entity.projectId` is also validated by the submit door's own pin
   // check; only plan batches reach this query for it, and a stale pin there is
   // still a problem worth naming at propose time.
-  const hasPlanOp = operations.some((op) =>
-    [
-      "create_session",
-      "create_document",
-      "create_project",
-      "create_link",
-    ].includes(op.op)
-  );
+  const hasPlanOp = operations.some(isPlanOperation);
   if (hasPlanOp && projectIdsByOp.size > 0) {
     const ids = [...projectIdsByOp.keys()];
     const visible = await database
@@ -158,6 +159,46 @@ export async function preflightPlanOperations(
     }
   }
 
+  // ── Existing goals: visible (a goal is visible iff its project is) ─────
+  const trackIdsByOp = new Map<string, number[]>();
+  const noteTrack = (id: string | undefined, opIndex: number) => {
+    if (!id) return;
+    trackIdsByOp.set(id, [...(trackIdsByOp.get(id) ?? []), opIndex]);
+  };
+  operations.forEach((op, i) => {
+    if (op.op === "create_session") noteTrack(op.trackId, i);
+    else if (op.op === "create_link" || op.op === "remove_link")
+      noteTrack(op.toTrackId, i);
+    else if (op.op === "create_track") {
+      noteTrack(op.parentGoalId, i);
+      for (const id of op.blockedByTrackIds ?? []) noteTrack(id, i);
+    }
+  });
+  const trackIds = [...trackIdsByOp.keys()].filter((id) => isUuid(id));
+  if (trackIds.length > 0) {
+    const visible = await database
+      .select({ id: projectTracks.id })
+      .from(projectTracks)
+      .innerJoin(projects, eq(projects.id, projectTracks.projectId))
+      .where(
+        and(
+          inArray(projectTracks.id, trackIds),
+          ownerPrivateVisibleWhere(
+            projects.workspaceId,
+            projects.userId,
+            userId
+          )
+        )
+      );
+    const visibleIds = new Set(visible.map((r) => r.id));
+    for (const id of trackIds) {
+      if (visibleIds.has(id)) continue;
+      for (const opIndex of trackIdsByOp.get(id) ?? []) {
+        push(opIndex, `goal ${id} was not found`);
+      }
+    }
+  }
+
   // ── Existing entities: visible (subject / attach / evidence) ───────────
   const entityChecks = new Map<string, number[]>();
   const noteEntity = (id: string | undefined, opIndex: number) => {
@@ -167,6 +208,9 @@ export async function preflightPlanOperations(
   operations.forEach((op, i) => {
     if (op.op === "create_session") noteEntity(op.subjectEntityId, i);
     else if (op.op === "create_document") noteEntity(op.entityId, i);
+    // A step that waits on a decision (an existing entity).
+    else if (op.op === "create_link" || op.op === "remove_link")
+      noteEntity(op.toEntityId, i);
     // A rebuild's change to an existing entity (the reused group container).
     else if (op.op === "update_entity") noteEntity(op.entityId, i);
     else if (op.op === "create_project") {
@@ -190,13 +234,45 @@ export async function preflightPlanOperations(
             ? [op.subjectEntityId]
             : op.op === "update_entity"
               ? [op.entityId]
-              : [];
+              : op.op === "create_link" || op.op === "remove_link"
+                ? [op.toEntityId]
+                : [];
     for (const id of mustSee) {
       if (id && !visibleEntityIds.has(id)) {
         push(i, `entity ${id} was not found`);
       }
     }
   });
+
+  // ── Existing decisions: an arm names one of their options ─────────────
+  // The rule the dependency door applies at approval (`armOptionProblem`),
+  // raised now: an arm on an EXISTING decision is otherwise filed and fails
+  // only when the person approves. An in-plan decision is judged by the pure
+  // half (`validatePlanOperations`), which reads its options in the plan.
+  const armLinks = operations.flatMap((op, i) =>
+    op.op === "create_link" &&
+    op.toEntityId &&
+    typeof op.option === "string" &&
+    op.option.trim() &&
+    visibleEntityIds.has(op.toEntityId)
+      ? [{ opIndex: i, toId: op.toEntityId, option: op.option }]
+      : []
+  );
+  if (armLinks.length > 0) {
+    const rows = await database
+      .select({
+        id: entities.id,
+        type: entities.type,
+        properties: entities.properties,
+      })
+      .from(entities)
+      .where(inArray(entities.id, [...new Set(armLinks.map((a) => a.toId))]));
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    for (const arm of armLinks) {
+      const problem = armOptionProblem(byId.get(arm.toId), arm.option);
+      if (problem) push(arm.opIndex, problem);
+    }
+  }
 
   // ── Existing entities: a document step never replaces a body ──────────
   // The rule `entities.update` enforces at approval (body-replace-guard),

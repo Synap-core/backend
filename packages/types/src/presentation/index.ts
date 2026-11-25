@@ -124,6 +124,26 @@ export const INLINE_IMAGE_MIME_TYPES = [
 export const INLINE_VIDEO_MIME_TYPES = ["video/mp4", "video/webm"] as const;
 
 /**
+ * Audio containers played inline in an `<audio>`. A THIRD list, for the same
+ * reason as {@link INLINE_VIDEO_MIME_TYPES}: an `<audio>` only ever DECODES its
+ * bytes as sound — it never renders its source as a document — so it cannot
+ * reopen the SVG hole, and an audio mime must never reach an `<img>` or a
+ * `<video>`. mp3 is `audio/mpeg`; m4a is `audio/mp4`. Pod admin plays these
+ * (founder, 2026-11-11); the app's `SpatialMediaPreview` still draws audio as a
+ * file chip until it adopts this list. Never move a type between the lists.
+ */
+export const INLINE_AUDIO_MIME_TYPES = [
+  "audio/mpeg",
+  "audio/mp4",
+  "audio/aac",
+  "audio/ogg",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/webm",
+  "audio/flac",
+] as const;
+
+/**
  * What a renderer gets back for "this entity's media". A REFERENCE, never a
  * URL: signing is async and lives in the display door (`useStoredFileUrl` →
  * `SpatialMediaPreview`), which also decides renderability (mime allowlist).

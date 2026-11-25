@@ -481,6 +481,35 @@ describe("lifecycle.home", () => {
     expect(ids.indexOf(LIB)).toBeGreaterThan(ids.indexOf(MISC));
   });
 
+  it("a kind the template marks a helper says so on its row; an output says nothing", async () => {
+    const intent = {
+      label: "Sales",
+      produces: ["deal", "no_such_kind"],
+      source: "template",
+    };
+    await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+      JSON.stringify({ intent: { ...intent, helpers: ["deal"] } }),
+      DEV,
+    ]);
+    try {
+      const dev = (await caller().home()).spaces.find(
+        (s) => s.workspaceId === DEV
+      )!;
+      expect(dev.produces.map((p) => [p.profileSlug, p.as])).toEqual([
+        ["deal", "helper"],
+      ]);
+    } finally {
+      await q(`update workspaces set settings = $1::jsonb where id = $2`, [
+        JSON.stringify({ intent }),
+        DEV,
+      ]);
+    }
+    const dev = (await caller().home()).spaces.find(
+      (s) => s.workspaceId === DEV
+    )!;
+    expect("as" in dev.produces[0]!).toBe(false);
+  });
+
   it("per produced kind: the board's columns, windowed done, totals, words", async () => {
     const dev = (await caller().home()).spaces.find(
       (s) => s.workspaceId === DEV

@@ -30,25 +30,30 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ALREADY_QUEUED,
   GITHUB_ACTIONS_APP_ID,
+  HOLD_ASSOCIATIONS,
   INFRA_HOLD_HOURS,
   INFRA_PATHS,
   INFRA_REASON,
   MAX_QUEUE_FAILURES_PER_HEAD,
   MAX_TOGGLES_PER_SWEEP,
+  MERGE_BOT_LOGIN,
   RERUN_CHECK_NAME,
   commitCarriers,
   descendantNumbers,
   dependabotOnly,
   dependsState,
+  dequeueReason,
   enqueueDecision,
   ghTransport,
   greenSince,
   headCiSince,
   holdOf,
+  markHolders,
   infraFilesOf,
   isInfraPath,
   isMainRedFix,
   jumpReason,
+  latestEnqueueOf,
   liveRequiredChecks,
   mainRedWindow,
   mainState,
@@ -577,7 +582,7 @@ describe("merge-bot: greenSince, when the required checks all went green", () =>
 });
 
 describe("merge-bot: the required checks", () => {
-  it("are the ruleset's four, posted by the app the ruleset names", () => {
+  it("are the ruleset's five, posted by the app the ruleset names", () => {
     const sh = readFileSync(
       join(REPO, "scripts/apply-main-protection.sh"),
       "utf8"
@@ -587,13 +592,13 @@ describe("merge-bot: the required checks", () => {
         /"([^"]+)"/g
       ),
     ].map((m) => m[1]);
-    expect(required.length).toBe(4);
+    expect(required.length).toBe(5);
     expect([...REQUIRED_CHECKS].sort()).toEqual([...required].sort());
     expect(Number(/^GITHUB_ACTIONS_APP_ID=(\d+)/m.exec(sh)?.[1])).toBe(
       GITHUB_ACTIONS_APP_ID
     );
   });
-  it("all four success on the head: ok", () => {
+  it("all five success on the head: ok", () => {
     expect(greenChecks().ok).toBe(true);
   });
   it.each(REQUIRED_CHECKS.map((n: string) => [n]))(
@@ -1130,12 +1135,19 @@ if (args[1] === "graphql") {
     if (jump && data.refuseJump) die("GraphQL: jump not allowed");
     say({ data: { enqueuePullRequest: { mergeQueueEntry: { position: 1, state: "QUEUED" } } } });
   }
+  if (q.includes("dequeuePullRequest")) {
+    if (data.refuseDequeue) die("GraphQL: Resource not accessible by integration (dequeuePullRequest)");
+    say({ data: { dequeuePullRequest: { mergeQueueEntry: { state: "QUEUED" } } } });
+  }
   if (q.includes("convertPullRequestToDraft")) say({ data: { convertPullRequestToDraft: { pullRequest: { isDraft: true } } } });
   if (q.includes("markPullRequestReadyForReview")) say({ data: { markPullRequestReadyForReview: { pullRequest: { isDraft: false } } } });
   die("fake gh: unknown query");
 }
 const method = args[2], path = args[3];
+let perm;
+if ((perm = /collaborators\\/([^/]+)\\/permission$/.exec(path))) say({ permission: (data.permissions || {})[perm[1]] || "read" });
 if (method === "POST" && path.endsWith("/check-runs")) say({ id: 1 });
+if (method === "POST" && /issues\\/\\d+\\/comments$/.test(path)) say({ id: 1 });
 let m;
 if (method === "PUT" && (m = /pulls\\/(\\d+)\\/update-branch$/.exec(path))) {
   if ((data.refuseUpdate || []).includes(Number(m[1]))) die("gh: refusing to allow a GitHub App to create or update workflow \`.github/workflows/ci.yml\` without \`workflows\` permission (HTTP 403)");
@@ -1939,6 +1951,297 @@ describe("merge-bot: riding, end to end", { timeout: 30_000 }, () => {
   });
 });
 
+// 16 Nov 2026: #1080 was enqueued by the bot at 22:56:05Z, held with a
+// `/hold` at 22:58:23Z, and merged at 23:08:17Z: the hold only kept a PR
+// from ENTERING the queue (finding acefce6d).
+const holdComment = (
+  body: string,
+  at: string,
+  assoc = "OWNER",
+  login = "Antoinesrvt"
+) => ({ body, createdAt: at, authorAssociation: assoc, author: { login } });
+const enqueuedBy = (login: string, at: string) => ({
+  createdAt: at,
+  enqueuer: { login },
+});
+const queuedHeld = (over: Pr = {}) =>
+  pr({
+    isInMergeQueue: true,
+    enqueues: {
+      nodes: [enqueuedBy(`${MERGE_BOT_LOGIN}[bot]`, "2026-11-16T22:56:05Z")],
+    },
+    comments: { nodes: [holdComment("/hold", "2026-11-16T22:58:23Z")] },
+    ...over,
+  });
+
+describe("merge-bot: a /hold takes a queued PR out of the merge queue (E)", () => {
+  it("#1080: a /hold after the bot enqueued it takes it out", () => {
+    expect(dequeueReason(queuedHeld())).toBe(
+      "/hold by Antoinesrvt at 22:58Z, after the merge bot enqueued it at 22:56Z"
+    );
+  });
+  it("the bot's enqueue never outranks a hold, even one it raced (enqueued after the /hold)", () => {
+    const raced = queuedHeld({
+      enqueues: {
+        nodes: [enqueuedBy(`${MERGE_BOT_LOGIN}[bot]`, "2026-11-16T22:59:00Z")],
+      },
+    });
+    expect(dequeueReason(raced)).toContain("/hold by Antoinesrvt");
+  });
+  it("a person's enqueue AFTER the hold (the founder's prcheck) keeps it in; one before does not", () => {
+    const at = (t: string) =>
+      dequeueReason(
+        queuedHeld({ enqueues: { nodes: [enqueuedBy("Antoinesrvt", t)] } })
+      );
+    expect(at("2026-11-16T23:00:00Z")).toBeNull();
+    expect(at("2026-11-16T22:57:00Z")).toContain(
+      "after Antoinesrvt enqueued it"
+    );
+  });
+  it("the LATEST enqueue counts", () => {
+    expect(
+      latestEnqueueOf({
+        enqueues: {
+          nodes: [
+            enqueuedBy("Antoinesrvt", "2026-11-16T23:00:00Z"),
+            enqueuedBy(`${MERGE_BOT_LOGIN}[bot]`, "2026-11-16T23:05:00Z"),
+          ],
+        },
+      })
+    ).toEqual({
+      by: `${MERGE_BOT_LOGIN}[bot]`,
+      at: Date.parse("2026-11-16T23:05:00Z"),
+    });
+  });
+  it("an unknown enqueue does not save a held PR", () => {
+    expect(dequeueReason(queuedHeld({ enqueues: undefined }))).toBe(
+      "/hold by Antoinesrvt at 22:58Z"
+    );
+  });
+  it("leaves it in when it is not queued, released by /unhold, or held by someone without write access", () => {
+    expect(dequeueReason(queuedHeld({ isInMergeQueue: false }))).toBeNull();
+    expect(
+      dequeueReason(
+        queuedHeld({
+          comments: {
+            nodes: [
+              holdComment("/hold", "2026-11-16T22:58:23Z"),
+              holdComment("/unhold", "2026-11-16T23:01:00Z"),
+            ],
+          },
+        })
+      )
+    ).toBeNull();
+    expect(
+      dequeueReason(
+        queuedHeld({
+          comments: {
+            nodes: [holdComment("/hold", "2026-11-16T22:58:23Z", "NONE")],
+          },
+        })
+      )
+    ).toBeNull();
+  });
+});
+
+describe(
+  "merge-bot: the /hold dequeue, end to end, through `gh api`",
+  { timeout: 30_000 },
+  () => {
+    const held = () =>
+      queuedHeld({ number: 1080, id: "PR_1080", headRefOid: sha("8") });
+    it("a sweep dequeues it with the APP's token, says so on the PR, and does not enqueue it again", async () => {
+      const { r, calls, out } = await bot({
+        prs: [held()],
+        checks: { [sha("8")]: greenOn(sha("8")) },
+      });
+      expect(r).toMatchObject({ code: 0, dequeued: [1080], enqueued: [] });
+      expect(
+        mutations(calls, "dequeuePullRequest").map((c) => [
+          varOf(c, "id"),
+          c.token,
+        ])
+      ).toEqual([["PR_1080", "bot-token"]]);
+      const posts = calls.filter(
+        (c) => c.args[2] === "POST" && /issues\/1080\/comments$/.test(c.args[3])
+      );
+      expect(posts).toHaveLength(1);
+      expect(posts[0].token).toBe("bot-token");
+      const body = JSON.parse(posts[0].input).body as string;
+      expect(body).toContain("took this PR out of the merge queue");
+      // The bot's own comment never reads as a /hold or /unhold line.
+      expect(body.split("\n").map((l: string) => l.trim())).not.toContain(
+        "/unhold"
+      );
+      expect(mutations(calls, "enqueuePullRequest")).toEqual([]);
+      expect(out).toMatch(/#1080 not enqueued: on hold/);
+    });
+    it("a /hold comment's pass only dequeues: it enqueues nothing and runs no victim", async () => {
+      const { r, calls, out } = await bot(
+        {
+          ...queueData(),
+          prs: [...queueData().prs, held()],
+          checks: { ...queueData().checks, [sha("8")]: greenOn(sha("8")) },
+        },
+        {
+          vars: { GITHUB_EVENT_NAME: "issue_comment" },
+          payload: { issue: { number: 1080, pull_request: {} } },
+        }
+      );
+      expect(r).toMatchObject({ code: 0, dequeued: [1080], enqueued: [] });
+      expect(mutations(calls, "enqueuePullRequest")).toEqual([]);
+      expect(
+        calls.filter(isWrite).map((c) => c.args.slice(1, 4).join(" "))
+      ).toHaveLength(2); // the dequeue and its comment
+      expect(out).toContain(
+        "/hold pass: 1 taken out of the merge queue (#1080)"
+      );
+    });
+    it("without the app's token: logs what it would do and writes nothing", async () => {
+      const { r, calls, out } = await bot(
+        { prs: [held()], checks: { [sha("8")]: greenOn(sha("8")) } },
+        { vars: { MERGE_BOT_TOKEN: "" } }
+      );
+      expect(calls.filter(isWrite)).toEqual([]);
+      expect(r.dequeued).toEqual([]);
+      expect(out).toContain("#1080 WOULD leave the merge queue: /hold by");
+    });
+    it("a refused dequeue fails the run and posts no comment", async () => {
+      const { r, calls } = await bot({
+        prs: [held()],
+        checks: { [sha("8")]: greenOn(sha("8")) },
+        refuseDequeue: true,
+      });
+      expect(r).toMatchObject({ code: 1, dequeued: [] });
+      expect(
+        calls.filter((c) => c.args[2] === "POST" && /comments$/.test(c.args[3]))
+      ).toEqual([]);
+    });
+  }
+);
+
+describe("merge-bot: a /hold from a member whose org membership is private (finding 7bab9b9c)", () => {
+  // The API reads such a member as CONTRIBUTOR to a token outside the org.
+  const hidden = (body: string, at: string, login = "Antoinesrvt") =>
+    holdComment(body, at, "CONTRIBUTOR", login);
+  const lookups = (perms: Record<string, string | Error>) => {
+    const asked: string[] = [];
+    return {
+      asked,
+      gh: {
+        rest: (path: string) => {
+          const login = /collaborators\/([^/]+)\/permission$/.exec(path)![1];
+          asked.push(login);
+          const p = perms[login];
+          if (p instanceof Error) throw p;
+          return { permission: p ?? "none" };
+        },
+      },
+    };
+  };
+  const withNodes = (...nodes: Pr[]) => ({ comments: { nodes } });
+  it("counts once the author's write permission is read, and not before", () => {
+    const c = hidden("/hold", "2026-11-20T15:54:41Z");
+    expect(holdOf(withNodes(c))).toBeNull();
+    const prs = [withNodes(c)];
+    const { gh, asked } = lookups({ Antoinesrvt: "admin" });
+    markHolders(gh, BACKEND, prs, "t");
+    expect(asked).toEqual(["Antoinesrvt"]);
+    expect(holdOf(prs[0])).toMatchObject({ by: "Antoinesrvt" });
+  });
+  it("write and admin count; read and none do not; one lookup per login", () => {
+    const prs = [
+      withNodes(
+        hidden("/hold", "2026-11-20T15:00:00Z", "w"),
+        hidden("/hold", "2026-11-20T15:01:00Z", "w"),
+        hidden("/hold", "2026-11-20T15:02:00Z", "r"),
+        hidden("/hold", "2026-11-20T15:03:00Z", "n")
+      ),
+    ];
+    const { gh, asked } = lookups({ w: "write", r: "read", n: "none" });
+    markHolders(gh, BACKEND, prs, "t");
+    expect(asked).toEqual(["w", "r", "n"]);
+    expect(prs[0].comments.nodes.map((c: Pr) => c.canHold)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(holdOf(withNodes(prs[0].comments.nodes[2]))).toBeNull();
+  });
+  it("looks up only hold commands the association does not already vouch for", () => {
+    const { gh, asked } = lookups({});
+    markHolders(
+      gh,
+      BACKEND,
+      [
+        withNodes(
+          hidden("nice work", "2026-11-20T15:00:00Z", "chatty"),
+          holdComment("/hold", "2026-11-20T15:01:00Z", "MEMBER", "vouched")
+        ),
+      ],
+      "t"
+    );
+    expect(asked).toEqual([]);
+  });
+  it("a failed lookup honours the hold", () => {
+    const prs = [withNodes(hidden("/hold", "2026-11-20T15:54:41Z"))];
+    const lines: string[] = [];
+    markHolders(
+      lookups({ Antoinesrvt: new Error("HTTP 502") }).gh,
+      BACKEND,
+      prs,
+      "t",
+      (l: string) => lines.push(l)
+    );
+    expect(holdOf(prs[0])).toMatchObject({ by: "Antoinesrvt" });
+    expect(lines.join("\n")).toContain(
+      "could not read Antoinesrvt's permission"
+    );
+  });
+  it("an /unhold from such a member releases it", () => {
+    const prs = [
+      withNodes(
+        hidden("/hold", "2026-11-20T15:54:41Z"),
+        hidden("/unhold", "2026-11-20T16:21:29Z")
+      ),
+    ];
+    markHolders(lookups({ Antoinesrvt: "write" }).gh, BACKEND, prs, "t");
+    expect(holdOf(prs[0])).toBeNull();
+  });
+  it("end to end: #1205's hold takes it out of the queue; a non-writer's does not", async () => {
+    const pr1205 = (login: string) =>
+      queuedHeld({
+        number: 1205,
+        id: "PR_1205",
+        headRefOid: sha("9"),
+        comments: {
+          nodes: [
+            hidden(
+              "/hold\nHolding before landing",
+              "2026-11-20T15:54:41Z",
+              login
+            ),
+          ],
+        },
+      });
+    const run = (login: string) =>
+      bot({
+        prs: [pr1205(login)],
+        checks: { [sha("9")]: greenOn(sha("9")) },
+        permissions: { Antoinesrvt: "admin", stranger: "read" },
+      });
+    const held = await run("Antoinesrvt");
+    expect(held.r).toMatchObject({ dequeued: [1205], enqueued: [] });
+    expect(mutations(held.calls, "dequeuePullRequest")).toHaveLength(1);
+    const perm = held.calls.find((c) => /permission$/.test(c.args[3]));
+    expect(perm?.token).toBe("bot-token");
+    const other = await run("stranger");
+    expect(other.r.dequeued).toEqual([]);
+    expect(mutations(other.calls, "dequeuePullRequest")).toEqual([]);
+  });
+});
+
 describe("merge-bot: what it must never do", () => {
   const HERE = dirname(fileURLToPath(import.meta.url));
   const script = readFileSync(join(HERE, "merge-bot.mjs"), "utf8");
@@ -1996,10 +2299,22 @@ describe("merge-bot: what it must never do", () => {
     const on = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\npermissions:"));
     expect(on).toMatch(/\n {2}push:\n\s+branches: \[main\]\n/);
   });
-  it("one concurrency group for every pass (never two enqueues of one PR at once)", () => {
-    expect(
-      /^concurrency:\n(?:\s+#.*\n)*\s+group: (\S+)\s*$/m.exec(wf)?.[1]
-    ).toBe("merge-bot");
+  it("one concurrency group for every enqueue pass (never two enqueues of one PR at once); a /hold comment's pass, which never enqueues, gets its own per PR", () => {
+    expect(/^concurrency:\n(?:\s+#.*\n)*\s+group: (.+)$/m.exec(wf)?.[1]).toBe(
+      "${{ github.event_name == 'issue_comment' && format('merge-bot-hold-{0}', github.event.issue.number) || 'merge-bot' }}"
+    );
+  });
+  it("a maintainer's /hold comment on a PR starts a pass at once", () => {
+    const on = wf.slice(wf.indexOf("\non:\n"), wf.indexOf("\npermissions:"));
+    expect(on).toMatch(/\n {2}issue_comment:\n\s+types: \[created\]\n/);
+    const cond = wf.slice(wf.indexOf("    if: >-"), wf.indexOf("    runs-on:"));
+    for (const part of [
+      "github.event.issue.pull_request",
+      "github.event.comment.user.type != 'Bot'",
+      "contains(github.event.comment.body, '/hold')",
+      `contains(fromJSON('${JSON.stringify(HOLD_ASSOCIATIONS)}'), github.event.comment.author_association)`,
+    ])
+      expect(cond).toContain(part);
   });
   it("listens to the workflow ci.yml is named, and sparse-checks-out every file the script imports", () => {
     const ciName = /^name: (.+)$/m.exec(

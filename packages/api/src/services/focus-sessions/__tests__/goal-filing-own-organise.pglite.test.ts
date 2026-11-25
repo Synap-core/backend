@@ -442,3 +442,41 @@ describe("D1: an agent files its own fresh session into a goal of its focus proj
     expect((await rowOf(old)).track_id).toBeNull();
   });
 });
+
+describe("W1 filing rule: every filing door asks rung 0 with grantFilesIntoProject", () => {
+  const filingCalls = () =>
+    permSpy.mock.calls
+      .map((c) => c[0] as Record<string, unknown>)
+      .filter((a) => a.grantFilesIntoProject === true);
+
+  it("an agent's goal filing (the filing gate)", async () => {
+    const sessionId = await ownSession({ workspaceId: BUILDER });
+    fileInto({
+      trackId: randomUUID(),
+      projectId: SYNAP,
+      homeWorkspaceId: BUILDER,
+      setsProject: true,
+    });
+    await fileSession(sessionId, (h.goal!.set as { trackId: string }).trackId);
+    expect(filingCalls().length).toBeGreaterThan(0);
+  });
+
+  it("a person's project filing rides the update gate with it", async () => {
+    const project = randomUUID();
+    await q(
+      `insert into projects (id, user_id, workspace_id, name, status) values ($1,$2,null,'Mine','active')`,
+      [project, USER]
+    );
+    const sessionId = await ownSession({ workspaceId: BUILDER });
+    await updateFocusSession({ sessionId, userId: USER, projectId: project });
+    expect(filingCalls()).toHaveLength(1);
+    expect(filingCalls()[0]!.data).toMatchObject({ projectId: project });
+  });
+
+  it("CONTROL — a rename files nothing and carries no flag", async () => {
+    const sessionId = await ownSession({ workspaceId: BUILDER });
+    await updateFocusSession({ sessionId, userId: USER, title: "Renamed" });
+    expect(permSpy).toHaveBeenCalled();
+    expect(filingCalls()).toHaveLength(0);
+  });
+});

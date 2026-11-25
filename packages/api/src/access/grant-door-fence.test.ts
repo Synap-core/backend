@@ -18,17 +18,24 @@ import {
   hubRouteClass,
   GRANT_OWNER_WIDE_UNSUPPORTED,
   GRANT_WRITE_DOOR_UNSUPPORTED,
+  grantReadsInSpace,
   isFencedGrant,
   isUnboundedFullAccess,
   mcpToolAllowed,
+  needsYouReadableWhole,
   ownerWideDoorAllowed,
   packagePreflightReadable,
   restDoorAllowed,
+  runDetailReadable,
+  statusOfReach,
   sessionPacketReadable,
   TRPC_KEY_MUTATION_DOORS,
   trpcProcedureAllowed,
   trpcRefusalMessage,
+  timelineReach,
+  workGraphReach,
   workReleaseReach,
+  WORKER_VIEW_SUBJECTS,
 } from "./grant-door-fence.js";
 
 describe("isFencedGrant", () => {
@@ -95,11 +102,16 @@ describe("restDoorAllowed", () => {
     ["GET", "/playbooks/promote-from-session", false],
     ["POST", "/playbooks/11111111-1111-4111-8111-111111111111/run", true], // a write — bounded by the gate
     ["GET", `/projects/${U}/path`, false], // userVisibleWhere sessions — not migrated
-    ["GET", "/search", false],
     // The list door: seamed; its ?q= (Typesense) branch is refused by the
     // route itself for a limited key (entities.scoped-key-list.pglite.test.ts).
     ["GET", "/entities", true],
     ["GET", "/entities/", true],
+    // The search door reads through the entity floor for a fenced grant (withinGrantSearchHits); its siblings do not.
+    ["GET", "/search", true],
+    ["GET", "/search/", true],
+    ["GET", "/search/collection", false],
+    ["GET", "/search/documents", false],
+    ["GET", "/vector-search", false],
     ["GET", "/knowledge", false],
     ["GET", "/compacted-states/latest", false],
     ["POST", "/knowledge/ask", false],
@@ -111,6 +123,111 @@ describe("restDoorAllowed", () => {
     ["DELETE", `/entities/${U}`, true],
   ] as const)("%s %s → %s", (method, path, ok) => {
     expect(restDoorAllowed(method, path, DOC_ONLY)).toBe(ok);
+  });
+});
+
+describe("GET /runs/:id (one run): admitted to a key that reads playbooks, narrowed by the route", () => {
+  const R = "11111111-1111-4111-8111-111111111111";
+  it("an app pinned to its space with playbook.read is admitted; the route narrows it", () => {
+    const app = key({
+      permissions: ["playbook.read", "entity.*.read"],
+      workspaceIds: ["w1"],
+    });
+    expect(restDoorAllowed("GET", `/runs/${R}`, app)).toBe(true);
+    expect(runDetailReadable(app)).toBe(false);
+  });
+  it("a key with no playbook read, or deny-all, stays refused", () => {
+    expect(restDoorAllowed("GET", `/runs/${R}`, DOC_ONLY)).toBe(false);
+    expect(restDoorAllowed("GET", `/runs/${R}`, key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+  it("the run list and another run door are not admitted by it", () => {
+    const app = key({ permissions: ["playbook.read"], workspaceIds: ["w1"] });
+    expect(restDoorAllowed("GET", "/runs", app)).toBe(false);
+    expect(restDoorAllowed("GET", `/runs/${R}/activity`, app)).toBe(false);
+  });
+  it("the whole detail: unfenced, or one scope reading every subject unbounded", () => {
+    expect(runDetailReadable(null)).toBe(true);
+    expect(runDetailReadable(key({ permissions: ["*"] }))).toBe(true);
+    expect(
+      runDetailReadable(
+        key({
+          permissions: [
+            "playbook.read",
+            "session.read",
+            "channel.read",
+            "proposal.read",
+            "entity.*.read",
+            "link.read",
+            "event.*.read",
+            "agent.read",
+          ],
+        })
+      )
+    ).toBe(true);
+    // The same permissions pinned to a space: narrowed.
+    expect(
+      runDetailReadable(key({ permissions: ["*"], workspaceIds: ["w1"] }))
+    ).toBe(false);
+  });
+});
+
+describe("GET /workers: admitted to a key that reads playbooks, a worker shown where it reads runs and approvals", () => {
+  it("an app pinned to its space with playbook.read is admitted; without it, refused", () => {
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workers",
+        key({ permissions: ["playbook.read"], workspaceIds: ["w1"] })
+      )
+    ).toBe(true);
+    expect(
+      restDoorAllowed(
+        "GET",
+        "/workers",
+        key({ permissions: ["automation.read", "proposal.read"] })
+      )
+    ).toBe(false);
+    expect(restDoorAllowed("GET", "/workers", key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+  it("grantReadsInSpace: every subject, in that space, never through a project or object pin", () => {
+    const both = ["automation.read", "proposal.read"];
+    const g = (scope: Record<string, unknown>) =>
+      grantReadsInSpace(key(scope), WORKER_VIEW_SUBJECTS, "w1");
+    expect(g({ permissions: both, workspaceIds: ["w1"] })).toBe(true);
+    expect(g({ permissions: both })).toBe(true); // unpinned
+    expect(g({ permissions: ["*"] })).toBe(true);
+    expect(g({ permissions: both, workspaceIds: ["w2"] })).toBe(false);
+    expect(g({ permissions: ["automation.read"], workspaceIds: ["w1"] })).toBe(
+      false
+    );
+    expect(
+      g({ permissions: both, workspaceIds: ["w1"], projectIds: ["p1"] })
+    ).toBe(false);
+    expect(g({ permissions: both, entityIds: ["e1"] })).toBe(false);
+    expect(g({ permissions: [] })).toBe(false);
+    // A row in no space: only an unpinned scope reads it.
+    expect(
+      grantReadsInSpace(
+        key({ permissions: both, workspaceIds: ["w1"] }),
+        WORKER_VIEW_SUBJECTS,
+        null
+      )
+    ).toBe(false);
+    // Two scopes, one subject each, both in the space: read (as the seams).
+    expect(
+      grantReadsInSpace(
+        key(
+          { permissions: ["automation.read"], workspaceIds: ["w1"] },
+          { permissions: ["proposal.read"], workspaceIds: ["w1"] }
+        ),
+        WORKER_VIEW_SUBJECTS,
+        "w1"
+      )
+    ).toBe(true);
   });
 });
 
@@ -365,10 +482,18 @@ describe("self-introspection doors", () => {
   // A computer / agent key from the device flow carries the AI preset; it must
   // still learn who it is (2026-10-11: Claude Code's installer got 403 here).
   const denyAll = key({ permissions: [] });
-  it.each(["/users/me", "/auth/status"])(
+  // An app's token: pinned to a space, plus pod-wide reads, naming the app.
+  const appToken = {
+    scopes: [
+      { permissions: ["entity.note.create"], workspaceIds: ["w1"] },
+      { permissions: ["playbook.read"] },
+    ],
+    clientId: "app_00000000-0000-4000-8000-000000000001",
+  } as never;
+  it.each(["/users/me", "/auth/status", "/auth/grant"])(
     "GET %s is open to every scoped key",
     (path) => {
-      for (const grant of [AI, DOC_ONLY, denyAll]) {
+      for (const grant of [AI, DOC_ONLY, appToken, denyAll]) {
         expect(restDoorAllowed("GET", path, grant)).toBe(true);
       }
     }
@@ -634,6 +759,55 @@ describe("connection status door (decision 3): the person's accounts, by a named
       "/connectors/sync-status",
     ])
       expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+});
+
+describe("connector health doors (finding 67b6c332): the person's connections, by `tool.read`", () => {
+  // An app's grant is always pinned to the spaces the person ticked; an agent's
+  // AI preset holds `tool.read` (AI_READ_SUBJECTS).
+  const pinned = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["w1"] });
+  const DOORS = ["/connectors/sync-status", "/connectors/providers"] as const;
+  it.each([
+    [["tool.read"], true],
+    [["tool"], true],
+    [["*"], true],
+    [["messaging.read"], false], // another person door's read
+    [["entity.deal.create"], false], // any write in one space is not enough
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)("a pinned key holding %j → %s", (permissions, ok) => {
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", path, pinned(...permissions)), path).toBe(
+        ok
+      );
+  });
+  it("opens exactly those two doors, nothing beside them", () => {
+    const READER = pinned("tool.read");
+    for (const path of DOORS)
+      expect(restDoorAllowed("GET", `${path}/`, READER), path).toBe(true);
+    for (const path of [
+      "/connectors/broker-diagnostics", // pod admin only
+      "/connectors/connections/google",
+      "/connectors/connect",
+      "/connectors/sync-status/extra",
+    ])
+      expect(restDoorAllowed("GET", path, READER), path).toBe(false);
+  });
+  it("opens no write: tool.read changes no connector write's verdict", () => {
+    // The fence leaves a write to its gate, so a write door's verdict is not
+    // "refused"; what this pins is that `tool.read` adds nothing to it: the
+    // same verdict as a key holding only another door's read.
+    const READER = pinned("tool.read");
+    const OTHER = pinned("messaging.read");
+    for (const [method, path] of [
+      ["POST", "/connectors/connect"],
+      ["POST", "/connectors/session"],
+      ["POST", "/connectors/disconnect"],
+      ["DELETE", "/connectors/connections/conn-1"],
+    ] as const)
+      expect(restDoorAllowed(method, path, READER), `${method} ${path}`).toBe(
+        restDoorAllowed(method, path, OTHER)
+      );
   });
 });
 
@@ -1249,5 +1423,298 @@ describe("a computer's waker poll: GET /computers/me/wakes", () => {
     expect(restDoorAllowed("GET", "/computers/me/wakes/x", COMPUTER)).toBe(
       false
     );
+  });
+});
+
+describe("the needs-you door: an app reads what needs the person, narrowed", () => {
+  // A pod app's grant: pinned to one space, as every app's.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["space-a"] });
+  it.each([
+    [["session.read"], true],
+    [["session.read", "proposal.read"], true],
+    [["session.*"], true],
+    [["proposal.read", "entity.read", "channel.read"], false], // no session
+    [["session.update"], false], // a write is not a read
+    [[], false], // deny-all (a revoked or expired grant)
+  ] as const)(
+    "Hub GET /needs-you, a pinned key holding %j → %s",
+    (permissions, ok) => {
+      expect(restDoorAllowed("GET", "/needs-you", app(...permissions))).toBe(
+        ok
+      );
+    }
+  );
+
+  it("MCP synap_needs_you keeps its rule: every subject, unbounded", () => {
+    expect(mcpToolAllowed("synap_needs_you", true, app("session.read"))).toBe(
+      false
+    );
+    const all = key({
+      permissions: [
+        "session.read",
+        "proposal.read",
+        "channel.read",
+        "entity.read",
+      ],
+    });
+    expect(mcpToolAllowed("synap_needs_you", true, all)).toBe(true);
+    expect(restDoorAllowed("GET", "/needs-you", all)).toBe(true);
+  });
+
+  it("the whole read: a person, a full key, a key reading every subject unbounded — never a pinned one", () => {
+    expect(needsYouReadableWhole(null)).toBe(true);
+    expect(needsYouReadableWhole(key({ permissions: ["*"] }))).toBe(true);
+    expect(
+      needsYouReadableWhole(
+        key({
+          permissions: [
+            "session.read",
+            "proposal.read",
+            "channel.read",
+            "entity.read",
+          ],
+        })
+      )
+    ).toBe(true);
+    expect(
+      needsYouReadableWhole(
+        key({ permissions: ["*"], workspaceIds: ["space-a"] })
+      )
+    ).toBe(false);
+    expect(needsYouReadableWhole(app("session.read", "proposal.read"))).toBe(
+      false
+    );
+  });
+});
+
+describe("the work graph and timeline doors: an app reads them under its grant (D1)", () => {
+  // A pod app: a pod-wide session read (unpinned), the rest pinned to a space.
+  const app = (...permissions: string[]) =>
+    key({ permissions, workspaceIds: ["space-a"] });
+  const podWide = (...permissions: string[]) => key({ permissions });
+  it.each([
+    [app("session.read"), true],
+    [podWide("session.read"), true],
+    [podWide("session.read", "proposal.read", "agent.read"), true],
+    [app("proposal.read", "entity.read", "channel.read"), false], // no session
+    [app("session.update"), false], // a write is not a read
+    [app(), false], // deny-all
+  ] as const)(
+    "Hub GET /focus-sessions/graph and /timeline, a key %# → %s",
+    (grant, ok) => {
+      expect(restDoorAllowed("GET", "/focus-sessions/graph", grant)).toBe(ok);
+      expect(restDoorAllowed("GET", "/timeline", grant)).toBe(ok);
+    }
+  );
+
+  it("MCP keeps the whole rule: a session-only key is refused there", () => {
+    const narrow = podWide("session.read");
+    expect(mcpToolAllowed("synap_get_work_graph", true, narrow)).toBe(false);
+    expect(mcpToolAllowed("synap_get_timeline", true, narrow)).toBe(false);
+  });
+
+  it("whole for a person, a full key, a key reading every subject unbounded", () => {
+    expect(workGraphReach(null)).toEqual({ whole: true });
+    expect(workGraphReach(key({ permissions: ["*"] }))).toEqual({
+      whole: true,
+    });
+    const every = key({
+      permissions: [
+        "session.read",
+        "link.read",
+        "proposal.read",
+        "channel.read",
+        "event.read",
+        "automation.read",
+        "entity.read",
+        "track.read",
+      ],
+    });
+    expect(workGraphReach(every)).toEqual({ whole: true });
+    expect(
+      timelineReach(
+        key({
+          permissions: [
+            "track.read",
+            "session.read",
+            "event.read",
+            "proposal.read",
+          ],
+        })
+      )
+    ).toEqual({ whole: true });
+    expect(timelineReach(null)).toEqual({ whole: true });
+  });
+
+  it("narrowed for a pod app: the holder only with agent.read, never the goals", () => {
+    expect(workGraphReach(podWide("session.read"))).toEqual({
+      whole: false,
+      holder: false,
+      goals: false,
+    });
+    expect(workGraphReach(podWide("session.read", "agent.read"))).toEqual({
+      whole: false,
+      holder: true,
+      goals: false,
+    });
+    // `*` pinned to a space reads every subject only there: still narrowed.
+    expect(workGraphReach(app("*")).whole).toBe(false);
+  });
+
+  it("the timeline's decisions and room posts only with a read no pin narrows; runners with agent.read", () => {
+    expect(timelineReach(podWide("session.read"))).toEqual({
+      whole: false,
+      decisions: false,
+      roomPosts: false,
+      runners: false,
+    });
+    expect(
+      timelineReach(
+        podWide("session.read", "proposal.read", "channel.read", "agent.read")
+      )
+    ).toEqual({
+      whole: false,
+      decisions: true,
+      roomPosts: true,
+      runners: true,
+    });
+    // Pinned to a space: the proposal and channel reads do not count; the
+    // agent read is the person's own roster (any pin).
+    expect(
+      timelineReach(
+        app("session.read", "proposal.read", "channel.read", "agent.read")
+      )
+    ).toEqual({
+      whole: false,
+      decisions: false,
+      roomPosts: false,
+      runners: true,
+    });
+  });
+});
+
+describe("a PROJECT pin is narrowed like a space pin (app-permission plan W1)", () => {
+  const S = "11111111-1111-4111-8111-111111111111";
+  const PERMS = [
+    "session.read",
+    "proposal.read",
+    "channel.read",
+    "view.read",
+    "track.read",
+    "project.read",
+    "entity.read",
+  ];
+  const IN_PROJECT = key({ permissions: PERMS, projectIds: ["p1"] });
+  const IN_SPACE = key({ permissions: PERMS, workspaceIds: ["w1"] });
+
+  it.each([
+    // Seamed list doors: the grant clause narrows each row (`projectReach`).
+    ["GET", "/focus-sessions"],
+    ["GET", "/proposals"],
+    ["GET", "/views"],
+    ["GET", "/channels"],
+    ["GET", "/tracks"],
+    ["GET", "/projects"],
+    // A narrowed door: the row read through the grant-aware predicate.
+    ["GET", `/focus-sessions/${S}`],
+  ] as const)(
+    "%s %s admits a project pin as it admits a space pin",
+    (m, path) => {
+      expect(restDoorAllowed(m, path, IN_SPACE)).toBe(true);
+      expect(restDoorAllowed(m, path, IN_PROJECT)).toBe(true);
+    }
+  );
+
+  it("an aggregate READS door refuses a project pin as it refuses a space pin", () => {
+    for (const tool of ["synap_list_sessions", "synap_list_proposals"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(false);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(false);
+    }
+    // The seamed MCP lists pass both.
+    for (const tool of ["synap_list_tracks", "synap_list_views"]) {
+      expect(mcpToolAllowed(tool, true, IN_SPACE)).toBe(true);
+      expect(mcpToolAllowed(tool, true, IN_PROJECT)).toBe(true);
+    }
+  });
+
+  it("events stay fail-closed on a project pin (no project path)", () => {
+    expect(
+      workReleaseReach(
+        key({ permissions: ["event.read", "session.read"], projectIds: ["p1"] })
+      ).snapshotSpaces
+    ).toEqual([]);
+  });
+});
+
+describe("GET /renderers/host-modules: the renderer kit, full keys only", () => {
+  it("is refused to every scoped key, however wide its reads", () => {
+    for (const g of [
+      AI,
+      DOC_ONLY,
+      key({ permissions: aiDefaultCapabilities() }),
+      key({ permissions: ["entity.read", "widget.read", "document.read"] }),
+      key({ permissions: [] }),
+    ]) {
+      expect(isFencedGrant(g)).toBe(true);
+      expect(restDoorAllowed("GET", "/renderers/host-modules", g)).toBe(false);
+      expect(restDoorAllowed("GET", "/renderers/host-modules/", g)).toBe(false);
+    }
+    expect(hubRouteClass("GET", "/renderers/host-modules")).toBe("read");
+  });
+});
+
+describe("GET /status-of: the per-subject status door for a pinned key", () => {
+  const PINNED = key({
+    permissions: ["entity.read", "session.read"],
+    workspaceIds: ["w1"],
+  });
+  const FULL = key({ permissions: ["*"] });
+  const UNPINNED = key({ permissions: aiDefaultCapabilities() });
+  const NO_ENTITY = key({
+    permissions: ["session.read"],
+    workspaceIds: ["w1"],
+  });
+
+  it("admits a space-pinned key holding entity.read, and not one without it", () => {
+    expect(restDoorAllowed("GET", "/status-of", PINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of/", PINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of", NO_ENTITY)).toBe(false);
+    expect(restDoorAllowed("GET", "/status-of", key({ permissions: [] }))).toBe(
+      false
+    );
+  });
+
+  it("GET /orient (statusOf rides it) stays refused to the pinned key", () => {
+    expect(restDoorAllowed("GET", "/orient", PINNED)).toBe(false);
+  });
+
+  it("a full-access and an unpinned key keep their doors", () => {
+    expect(restDoorAllowed("GET", "/status-of", FULL)).toBe(true);
+    expect(restDoorAllowed("GET", "/status-of", UNPINNED)).toBe(true);
+    expect(restDoorAllowed("GET", "/orient", UNPINNED)).toBe(true);
+  });
+
+  it("only a person, a full key or one reading every subject unbounded is answered whole", () => {
+    expect(statusOfReach(null).whole).toBe(true);
+    expect(statusOfReach(FULL as never).whole).toBe(true);
+    expect(statusOfReach(PINNED as never).whole).toBe(false);
+    expect(
+      statusOfReach(
+        key({
+          permissions: [
+            "entity.read",
+            "session.read",
+            "track.read",
+            "proposal.read",
+            "channel.read",
+            "link.read",
+            "event.read",
+            "playbook.read",
+            "project.read",
+          ],
+        }) as never
+      ).whole
+    ).toBe(true);
   });
 });

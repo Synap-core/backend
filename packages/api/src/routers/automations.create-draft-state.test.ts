@@ -10,8 +10,8 @@
  * `status='active'` rows) until a human explicitly activates it.
  *
  * A human's own direct create (no `agentUserId`) is NOT forced — it keeps
- * whatever `status` it requested. This test pins both halves of that
- * contract at `insertAutomationAfterGovernance`'s single INSERT door.
+ * whatever `status` it requested; a person's approval keeps the stated status
+ * and activates one that stated none (`automationStatusAtCreate`).
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -47,8 +47,9 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
 
 import {
   automationsRouter,
-  materializeApprovedAutomation,
+  materializeAutomationForPrincipal,
 } from "./automations.js";
+import { NO_USERS } from "../__tests__/no-users-db.js";
 
 function insertChain(captured: { values?: Record<string, unknown> }) {
   const chain = {
@@ -111,7 +112,10 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("forces an agent-originated (auto-approved) create to 'draft', overriding the requested 'active' status", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     const result = await caller.create({
@@ -132,7 +136,10 @@ describe("P2-3 draft-state remedy — automation create", () => {
 
   it("does NOT force a human direct create (no agentUserId) — requested 'active' status is honored", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    mockGetDb.mockResolvedValue({ insert: vi.fn(() => insertChain(captured)) });
+    mockGetDb.mockResolvedValue({
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    });
 
     const caller = automationsRouter.createCaller(callerCtx());
     const result = await caller.create({
@@ -151,11 +158,16 @@ describe("P2-3 draft-state remedy — automation create", () => {
     expect(result.message).toContain("active");
   });
 
-  it("materializeApprovedAutomation (proposal-approved, always agent-originated) also forces 'draft'", async () => {
+  it("a person's approval keeps the author's stated status", async () => {
     const captured: { values?: Record<string, unknown> } = {};
-    const database = { insert: vi.fn(() => insertChain(captured)) };
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
 
-    const result = await materializeApprovedAutomation({
+    const result = await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
       database: database as never,
       agentUserId: "agent-1",
       stableId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
@@ -170,7 +182,78 @@ describe("P2-3 draft-state remedy — automation create", () => {
       },
     });
 
-    expect(captured.values?.status).toBe("draft");
+    expect(captured.values?.status).toBe("active");
     expect(result).toBe("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  });
+
+  it("a person's approval keeps an explicit 'draft' (prepare, do not run)", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
+      database: database as never,
+      agentUserId: "agent-1",
+      stableId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      definition: {
+        name: "Approved but held",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: MANUAL_FLOW,
+        status: "draft",
+        source: "ai",
+        metadata: { dataContract: VALID_DATA_CONTRACT },
+      },
+    });
+    expect(captured.values?.status).toBe("draft");
+  });
+
+  it("a person's approval activates an automation that stated no status", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      personApproved: true,
+      database: database as never,
+      agentUserId: "agent-1",
+      definition: {
+        name: "Approved, no status stated",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: MANUAL_FLOW,
+        source: "ai",
+        metadata: { dataContract: VALID_DATA_CONTRACT },
+      },
+    });
+    expect(captured.values?.status).toBe("active");
+  });
+
+  it("an agent's automation no person approved is born 'draft', whatever it asked", async () => {
+    const captured: { values?: Record<string, unknown> } = {};
+    const database = {
+      ...NO_USERS,
+      insert: vi.fn(() => insertChain(captured)),
+    };
+    await materializeAutomationForPrincipal({
+      createdBy: "person-1",
+      database: database as never,
+      agentUserId: "agent-1",
+      definition: {
+        name: "Unapproved agent automation",
+        triggerType: "manual",
+        triggerConfig: {},
+        flowDefinition: MANUAL_FLOW,
+        status: "active",
+        source: "ai",
+        metadata: { dataContract: VALID_DATA_CONTRACT },
+      },
+    });
+    expect(captured.values?.status).toBe("draft");
   });
 });

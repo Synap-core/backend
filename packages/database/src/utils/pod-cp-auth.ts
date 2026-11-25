@@ -45,7 +45,11 @@ export type PodCpPurpose =
   | "relay"
   | "broker"
   | "entitlement"
-  | "onboarding";
+  | "onboarding"
+  /** Whether a new pod's server registered (compute lease sweeper, plan B1). */
+  | "compute"
+  /** The official renderer bundle (`GET /internal/renderer-bundles/:slug`). */
+  | "renderers";
 
 /** The credential a call site used before R1-b (its transition fallback). */
 export type PodCpLegacyCredential = "internal-key" | "relay-key";

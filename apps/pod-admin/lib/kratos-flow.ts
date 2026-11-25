@@ -16,6 +16,8 @@ import {
   POD_PUBLIC_URL_CONFIGURATION_ERROR,
   publicPodUrl as runtimePublicPodUrl,
 } from "./public-pod-url";
+import { libT } from "./copy";
+import { clearPersistedQueryCache } from "./query-persist";
 
 /**
  * Resolve the public Pod API URL from server-injected runtime configuration.
@@ -411,7 +413,7 @@ export function unconfirmedSessionCopy(
       title: "You're still signed in",
       body:
         n > 0
-          ? `The pod asked for a short pause. You can continue in ${n} ${n === 1 ? "second" : "seconds"}.`
+          ? libT()("rateLimited.wait", { n })
           : "The pod asked for a short pause. You can continue now.",
       actionLabel: "Continue",
       action: "continue",
@@ -673,6 +675,9 @@ export async function listOtherSessions(): Promise<KratosSessionListItem[]> {
  * the caller says so rather than pretending the account changed.
  */
 export async function signOutInPlace(): Promise<void> {
+  // The page stays, the person changes: stop keeping the query cache for the
+  // old identity and wipe what was kept (`lib/query-persist.ts`).
+  await clearPersistedQueryCache();
   const created = await fetch(`${kratosPublic()}/self-service/logout/browser`, {
     credentials: "include",
     headers: { Accept: "application/json" },

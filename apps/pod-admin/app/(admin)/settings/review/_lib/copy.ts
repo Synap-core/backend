@@ -62,10 +62,10 @@ export const en = {
   "handOffs.asksAgain": "{name} asks again before handing work on",
   "handOffs.notChanged": "Couldn’t change this rule",
   "handOffs.notChangedHint": "Nothing changed. Try again.",
-  "requestRules.title": "Always and never",
+  "requestRules.title": "Your approvals",
   "requestRules.hint":
     "What you answered “always” or “never” on a request. Take one back and that AI asks you again.",
-  "requestRules.failed": "Couldn’t load your rules.",
+  "requestRules.failed": "Couldn’t load your approvals.",
   "requestRules.empty":
     "Nothing yet. “Always” or “never” on a request adds a line here.",
   "requestRules.always": "Always, without asking: {what}",
@@ -73,8 +73,9 @@ export const en = {
   "requestRules.takeBack": "Take back",
   "requestRules.takeBack.aria": "Take back for {name}: {rule}",
   "requestRules.takenBack": "{name} asks you again",
-  "requestRules.notChanged": "Couldn’t take this rule back",
+  "requestRules.notChanged": "Couldn’t take this approval back",
   "requestRules.notChangedHint": "Nothing changed. Try again.",
+  "requestRules.all": "All approvals",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -135,10 +136,10 @@ export const fr: Catalog<typeof en> = {
     "{name} vous demandera de nouveau avant de confier du travail",
   "handOffs.notChanged": "Impossible de modifier cette règle",
   "handOffs.notChangedHint": "Rien n’a changé. Réessayez.",
-  "requestRules.title": "Toujours et jamais",
+  "requestRules.title": "Vos approbations",
   "requestRules.hint":
     "Ce que vous avez répondu «\u00a0toujours\u00a0» ou «\u00a0jamais\u00a0» sur une demande. Retirez-en un et cette IA vous demandera de nouveau.",
-  "requestRules.failed": "Impossible de charger vos règles.",
+  "requestRules.failed": "Impossible de charger vos approbations.",
   "requestRules.empty":
     "Rien pour l’instant. «\u00a0Toujours\u00a0» ou «\u00a0jamais\u00a0» sur une demande ajoute une ligne ici.",
   "requestRules.always": "Toujours, sans vous demander\u00a0: {what}",
@@ -146,6 +147,7 @@ export const fr: Catalog<typeof en> = {
   "requestRules.takeBack": "Retirer",
   "requestRules.takeBack.aria": "Retirer pour {name}\u00a0: {rule}",
   "requestRules.takenBack": "{name} vous demandera de nouveau",
-  "requestRules.notChanged": "Impossible de retirer cette règle",
+  "requestRules.notChanged": "Impossible de retirer cette approbation",
   "requestRules.notChangedHint": "Rien n’a changé. Réessayez.",
+  "requestRules.all": "Toutes les approbations",
 };

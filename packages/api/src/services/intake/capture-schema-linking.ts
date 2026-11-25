@@ -15,7 +15,7 @@
  * of the space the capture started in. Deterministic, no model call.
  */
 
-import { placeBeyondPodWideReads } from "@synap-core/types/grants";
+import { spacesOfScopeRows } from "@synap-core/types/grants";
 import { COMMON_STOPWORDS } from "../retrieval/stopwords.js";
 import {
   scoreProfileCatalog,
@@ -69,11 +69,18 @@ export interface LinkableLifecycle {
 
 /**
  * The spaces a request may route into, from its key grant: `null` = not
- * narrowed (no grant, or a scope without a space list); otherwise the union of
- * the scopes' spaces — a key granted on Content and CRM sees exactly those.
+ * narrowed (no grant, or a scope with no space, project or object pin);
+ * otherwise the union of the spaces its scopes' rows sit in
+ * (`spacesOfScopeRows`) — a key granted on Content and CRM sees exactly
+ * those. A scope pinned to projects (or objects) with no space names none
+ * (decision 51ad8d1e F3): it adds no space and never lifts the narrowing,
+ * nor does the deny-all scope, so a grant of project pins alone is narrowed
+ * to no space (the
+ * facet loaders then read no role row, as the `entity_facets` read clause,
+ * which has no project path, reads none).
  *
- * A POD-WIDE READ scope (`placeBeyondPodWideReads`: an app's "read decisions
- * everywhere", decision e1b59d38 "B") reads its kinds and nothing else, so it
+ * A POD-WIDE READ scope (null there: an app's "read decisions everywhere",
+ * decision e1b59d38 "B") reads its kinds and nothing else, so it
  * never lifts the space narrowing its grant's other scopes set (facet reach,
  * capture routing). A grant of such scopes alone keeps today's reading.
  */
@@ -91,16 +98,16 @@ export function grantedWorkspaceIdsOf(
     | undefined
 ): ReadonlySet<string> | null {
   if (!grant) return null;
-  const places = grant.scopes.flatMap((scope) => {
-    const place = placeBeyondPodWideReads(scope);
-    return place ? [place] : [];
+  const reached = grant.scopes.flatMap((scope) => {
+    const spaces = spacesOfScopeRows(scope);
+    return spaces === null ? [] : [spaces];
   });
   // A grant of pod-wide reads alone keeps today's reading: not narrowed.
-  if (places.length === 0) return null;
+  if (reached.length === 0) return null;
   const out = new Set<string>();
-  for (const place of places) {
-    if (place.kind !== "spaces") return null;
-    for (const id of place.ids) out.add(id);
+  for (const spaces of reached) {
+    if (spaces === "anywhere") return null;
+    for (const id of spaces) out.add(id);
   }
   return out;
 }

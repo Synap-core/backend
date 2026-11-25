@@ -16,6 +16,12 @@
  *     resolves the session itself to read `authentication_methods`.
  *     An API flow (no cookie) cannot prove a pod-held factor: it is treated
  *     as Cloud-only (fail closed). No client uses API settings flows today.
+ *     A passkey grant is redeemed only by the session that obtained it
+ *     (founder decision of 9 Nov 2026, "Add this device", session 84c74a23):
+ *     the session the cookie resolves to gives the key
+ *     (`presenceSessionKey("kratos", session.id)`, the derivation the pod's
+ *     `callerSessionKey` uses), and with no session there is no key, so a
+ *     guarded passkey change is refused.
  *
  *   POST /login/cloud — `login.after.oidc`. Runs before the session cookie is
  *     issued (selfservice/flow/login/hook.go PostLoginHook: hooks, then
@@ -32,6 +38,7 @@ import {
   PASSKEY_CHANGE_NEEDS_PRESENCE,
 } from "@synap-core/types/kratos-messages";
 import type { CloudTrustMode } from "@synap-core/types/account-recovery";
+import { presenceSessionKey } from "@synap-core/types/presence";
 import {
   decideCredentialChange,
   sessionIsCloudOnly,
@@ -49,11 +56,17 @@ export interface CloudTrustHookDeps {
    * A passkey change (`?method=passkey`, W3 slice 3, founder decision 2): a
    * person who already holds a proof factor (a passkey, a Relay device key)
    * changes passkeys only by redeeming a proof from one of them
-   * (`presence.authorizePasskeyChange`), once. Each read throws on failure.
+   * (`presence.authorizePasskeyChange`), or an approved device link
+   * ("Add this device"), once, by the session that obtained it
+   * (`sessionKey`, null when the hook carried no session). Each read throws
+   * on failure.
    */
   passkeyChange: {
     hasProofFactor(identityId: string): Promise<boolean>;
-    redeemGrant(identityId: string): Promise<boolean>;
+    redeemGrant(
+      identityId: string,
+      sessionKey: string | null
+    ): Promise<boolean>;
     /** Tell the person; never throws (the change is about to land). */
     notify(identityId: string): Promise<void>;
   };
@@ -84,10 +97,12 @@ export function createCloudTrustHookRouter(deps: CloudTrustHookDeps) {
     try {
       const trust = await deps.readCloudTrust();
       let cloudOnly = true;
+      let sessionKey: string | null = null;
       if (cookie) {
         const session = await deps.resolveSession(cookie);
         if (session?.identity?.id === identityId) {
           cloudOnly = sessionIsCloudOnly(session);
+          sessionKey = presenceSessionKey("kratos", session.id);
         }
       }
       const decision = decideCredentialChange({
@@ -115,7 +130,10 @@ export function createCloudTrustHookRouter(deps: CloudTrustHookDeps) {
       }
       if (c.req.query("method") === "passkey") {
         const guarded = await deps.passkeyChange.hasProofFactor(identityId);
-        if (guarded && !(await deps.passkeyChange.redeemGrant(identityId))) {
+        if (
+          guarded &&
+          !(await deps.passkeyChange.redeemGrant(identityId, sessionKey))
+        ) {
           deps.logger.info(
             { identityId },
             "[synap:auth] passkey change refused: no proof from an existing factor"

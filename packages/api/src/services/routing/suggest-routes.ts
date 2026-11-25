@@ -49,6 +49,26 @@
  * returned at all. On the same live call, 9 of the 20 candidates returned
  * matched no word at all and rode back as "Runs for anything new" at 0.5.
  *
+ * ── THE NAME IS THE EVIDENCE (tickets b2ba4b6b, 84d2add0, 9753144a) ───────
+ * A candidate's body (description, goal template, stage names) holds so many
+ * words that common ones always hit somewhere, so:
+ *   - a word that is also in the candidate's NAME counts twice
+ *     (`WEIGHT.nameTerm` on top of `WEIGHT.intentTerm`);
+ *   - RELEVANCE FLOOR (`FLOOR`): a candidate whose only evidence is words (no
+ *     subject, kind or facet signal) is returned only when its NAME holds one
+ *     of the request's words per five words asked, or its DESCRIPTION holds
+ *     half of them. Body matches score but never admit a candidate alone.
+ *     With nothing better, nothing is offered.
+ * A structural signal (subject, kind, facet) is evidence about the ENTITY, so
+ * a candidate carrying one is never cut by the floor.
+ *
+ * ── DECLARED TRIGGERS (plan a640c5bb) ───────────────────────────────────────
+ * A playbook DECLARES `triggers`, phrases it is for (`metadata.triggers`). A
+ * trigger the request holds whole (every word, with the request's stems,
+ * stopwords and generic work words) ADMITS the candidate, and its words score
+ * like name words (`WEIGHT.nameTerm`). A trigger held only in part is body
+ * text: it scores, never admits.
+ *
  * ── TIES ────────────────────────────────────────────────────────────────────
  * Broken by relevance, never by recency: more distinct intent words, then the
  * rarest word matched, then the structural signal (kind > facet), then the
@@ -76,6 +96,17 @@ export interface RouteCandidate {
   name: string;
   /** Other searchable text: description, goal template… */
   text?: ReadonlyArray<string | null | undefined>;
+  /**
+   * The candidate's own "when to use me". Searched like `text`, and the one
+   * body field that can admit a word-only candidate (the relevance floor).
+   */
+  description?: string | null;
+  /**
+   * Phrases the candidate declares it is for (a playbook's
+   * `metadata.triggers`): one whose every word is in the request admits it,
+   * and those words score like name words (header, DECLARED TRIGGERS).
+   */
+  triggers?: ReadonlyArray<string>;
   /** The kind the candidate is built for; `null` = fires for any kind. */
   subjectProfileSlug: string | null;
   /**
@@ -123,8 +154,18 @@ export interface RankedRoute<C extends RouteCandidate = RouteCandidate> {
   signals: RouteSignal[];
 }
 
+/** The relevance floor (header): what admits a candidate on words alone. */
+const FLOOR = {
+  /** One name word per this many words of the request. */
+  requestWordsPerNameWord: 5,
+  /** Or this share of the request's words in the description. */
+  descriptionShare: 0.5,
+} as const;
+
 const WEIGHT = {
   intentTerm: 3,
+  /** Added to `intentTerm` when the word is also in the candidate's name. */
+  nameTerm: 3,
   subject: 4,
   kind: 2,
   facet: 1.5,
@@ -132,12 +173,28 @@ const WEIGHT = {
 } as const;
 
 /** Words too common to be evidence of anything. Pod-wide: `tokenize` is also
- * the lexical tokenizer of session recall, so this list is exactly main's. */
+ * the lexical tokenizer of session recall, so this list is exactly main's.
+ * "own" (added 9 Nov 2026): a determiner-like word ("You don't own your digital
+ * life") that pulled unrelated carousels into a caption run's recall on its own;
+ * it names no domain object. The measured sibling "don" is NOT listed: it was a
+ * fragment of "don't", which `tokenize` now drops whole (`CONTRACTION`). */
 const STOPWORDS: ReadonlySet<string> = new Set(
-  "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very".split(
+  "the and for with this that from into your you our are was were will have has had not but can all any its about when then than them they what which who how why also just more some such only very own".split(
     " "
   )
 );
+
+/**
+ * English contractions that are function words end to end: "don't", "can't",
+ * "you're", "we've", "they'll", "I'd", "I'm". Splitting on the apostrophe made
+ * fragments ("don" + "t") that rode through as evidence, so the whole word is
+ * dropped. A possessive "'s" ("Alice's report") keeps its stem, so it is NOT
+ * here (`POSSESSIVE` strips just the suffix). Only these English suffixes: a
+ * French elision ("l'agent", "aujourd'hui") must still split into its words.
+ */
+const CONTRACTION =
+  /\p{L}+(?:n['\u2019]t|['\u2019](?:re|ve|ll|d|m))(?![\p{L}\p{N}])/giu;
+const POSSESSIVE = /(\p{L})['\u2019]s(?![\p{L}\p{N}])/giu;
 
 /**
  * The generic vocabulary of describing work itself ("every work session binds
@@ -168,13 +225,25 @@ export function tokenize(
   extraStopwords?: ReadonlySet<string>
 ): Map<string, string> {
   const out = new Map<string, string>();
-  for (const raw of (text ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+  const plain = (text ?? "")
+    .replace(CONTRACTION, " ")
+    .replace(POSSESSIVE, "$1");
+  for (const raw of plain.toLowerCase().split(/[^\p{L}\p{N}]+/u)) {
     if (raw.length < 3 || STOPWORDS.has(raw) || extraStopwords?.has(raw))
       continue;
     const s = stem(raw);
     if (!out.has(s)) out.set(s, raw);
   }
   return out;
+}
+
+/**
+ * The words a trigger phrase is matched on — exactly the ranker's own reading
+ * of a request (`tokenize` + the generic work words). Empty = a phrase of stop
+ * words only, which can never match (the write door refuses it).
+ */
+export function triggerWords(phrase: string): string[] {
+  return [...tokenize(phrase, GENERIC_WORK_WORDS).keys()];
 }
 
 function nounFor(slug: string): string {
@@ -222,8 +291,43 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   const own =
     intent.size > 0
       ? input.candidates.map((c) =>
-          tokenize([c.name, ...(c.text ?? [])].join(" "), GENERIC_WORK_WORDS)
+          tokenize(
+            [
+              c.name,
+              c.description,
+              ...(c.text ?? []),
+              ...(c.triggers ?? []),
+            ].join(" "),
+            GENERIC_WORK_WORDS
+          )
         )
+      : [];
+  // The words of every trigger the request holds WHOLE (header, DECLARED
+  // TRIGGERS): they admit the candidate and count as name words.
+  const triggered =
+    intent.size > 0
+      ? input.candidates.map((c) => {
+          const words = new Set<string>();
+          for (const phrase of c.triggers ?? []) {
+            const stems = triggerWords(phrase);
+            if (stems.length > 0 && stems.every((s) => intent.has(s))) {
+              for (const s of stems) words.add(s);
+            }
+          }
+          return words;
+        })
+      : [];
+  const named =
+    intent.size > 0
+      ? input.candidates.map((c, index) => {
+          const words = tokenize(c.name, GENERIC_WORK_WORDS);
+          for (const s of triggered[index]!) if (!words.has(s)) words.set(s, s);
+          return words;
+        })
+      : [];
+  const described =
+    intent.size > 0
+      ? input.candidates.map((c) => tokenize(c.description, GENERIC_WORK_WORDS))
       : [];
   // Rarity of each intent stem over THIS pool (the ONE IDF formula).
   const weightOf = new Map<string, number>();
@@ -236,6 +340,8 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
     const signals: RouteSignal[] = [];
     let score = 0;
     let termCount = 0;
+    let nameHits = 0;
+    let descriptionHits = 0;
     let rarest = 0;
 
     if (intent.size > 0) {
@@ -246,6 +352,11 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
         for (const [s] of hits) {
           const w = weightOf.get(s) ?? 0;
           score += WEIGHT.intentTerm * w;
+          if (named[index]!.has(s)) {
+            score += WEIGHT.nameTerm * w;
+            nameHits += 1;
+          }
+          if (described[index]!.has(s)) descriptionHits += 1;
           rarest = Math.max(rarest, w);
         }
       }
@@ -282,6 +393,14 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
 
     return {
       termCount,
+      // The relevance floor (header, `FLOOR`), or a declared trigger the
+      // request holds whole (header, DECLARED TRIGGERS).
+      admitted:
+        (triggered[index]?.size ?? 0) > 0 ||
+        (nameHits > 0 &&
+          nameHits * FLOOR.requestWordsPerNameWord >= intent.size) ||
+        (descriptionHits > 0 &&
+          descriptionHits >= FLOOR.descriptionShare * intent.size),
       rarest,
       structural: structuralRank(signals),
       route: {
@@ -294,7 +413,9 @@ export function rankRouteCandidates<C extends RouteCandidate>(input: {
   });
 
   return ranked
-    .filter((r) => r.route.signals.length > 0)
+    .filter(
+      (r) => r.route.signals.length > 0 && (r.structural > 0 || r.admitted)
+    )
     .sort(
       (a, b) =>
         b.route.score - a.route.score ||

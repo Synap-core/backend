@@ -23,6 +23,7 @@ vi.mock("./market-sources.js", () => ({
 }));
 
 import { BUILTIN_VERBS, BUILTIN_VERB_PARAM_SCHEMAS } from "./builtin-verbs.js";
+import { deriveBuiltinVerbParamsSchema } from "./capability-registry.js";
 
 const ctx = { userId: "user-1", workspaceId: null };
 
@@ -62,5 +63,35 @@ describe("market.install — kind agent", () => {
       userId: "user-1",
     });
     expect(out).toEqual({ kind: "agent", status: "installed" });
+  });
+});
+
+/**
+ * 237175b5: `synap market --type` lists a `workflow`, the pod called the same
+ * package an `automation`, and `market.install {kind: "workflow"}` died on a
+ * raw schema error. The kind is read through the ONE catalog-kind schema
+ * (`@synap-core/types/marketplace-source`), never a second label map.
+ */
+describe("market.install — the Control Plane's kind names", () => {
+  it("takes `workflow` as `automation`, and hands the pod's kind on", async () => {
+    runMarketInstallMock.mockResolvedValue({
+      kind: "automation",
+      status: "installed",
+    });
+    await BUILTIN_VERBS["market.install"]!(
+      { slug: "lead-converted-becomes-client", kind: "workflow" },
+      ctx as never
+    );
+    expect(runMarketInstallMock.mock.calls[0]![0]).toMatchObject({
+      slug: "lead-converted-becomes-client",
+      kind: "automation",
+    });
+  });
+
+  it("still offers the kinds as a picker, with the pod's tokens only", () => {
+    const kind = deriveBuiltinVerbParamsSchema("market.install")?.kind;
+    expect(kind).toMatchObject({ required: true, type: "enum" });
+    expect(kind?.options).toContain("automation");
+    expect(kind?.options).not.toContain("workflow");
   });
 });

@@ -38,6 +38,34 @@ const logger = createLogger({ module: "scan-stale-proposals" });
 /** Don't re-notify the same stale proposal more than once per this window. */
 const RENOTIFY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24h
 
+/**
+ * The HUMAN owner of a proposal — the person whose bell its news goes to. An
+ * AI-authored proposal carries proposedByUserId=NULL and createdBy=the AGENT
+ * user (which has no workspace_members row and never reads a bell), so
+ * `proposedByUserId ?? createdBy` would address the alert to a non-human.
+ * Resolve the agent's creator (`users.createdByUserId`) — the SAME human the
+ * approve-path canReview admits as owner (routers/proposals.ts:472).
+ * Human-authored proposals keep proposedByUserId (or a human createdBy) and
+ * skip the lookup. Shared with the unseen-failure notice
+ * (`unseen-approval-failure.ts`), so both reach the same person.
+ */
+export async function resolveProposalHumanOwner(p: {
+  proposedByUserId: string | null;
+  agentUserId: string | null;
+  createdBy: string | null;
+}): Promise<string | null> {
+  if (p.proposedByUserId) return p.proposedByUserId;
+  if (p.agentUserId) {
+    const [agent] = await db
+      .select({ createdByUserId: users.createdByUserId })
+      .from(users)
+      .where(eq(users.id, p.agentUserId))
+      .limit(1);
+    return agent?.createdByUserId ?? null;
+  }
+  return p.createdBy;
+}
+
 export async function scanStaleProposals(): Promise<{
   scanned: number;
   notified: number;
@@ -62,27 +90,7 @@ export async function scanStaleProposals(): Promise<{
   const cooldownFloor = new Date(Date.now() - RENOTIFY_COOLDOWN_MS);
 
   for (const p of pending) {
-    // Resolve the HUMAN owner — the recipient must be someone who reads a bell.
-    // An AI-authored proposal carries proposedByUserId=NULL and createdBy=the
-    // AGENT user (which has no workspace_members row and never reads a bell), so
-    // `proposedByUserId ?? createdBy` would false-flag every AI proposal as stale
-    // AND address the alert to a non-human. Resolve the agent's creator
-    // (`users.createdByUserId`) — the SAME human the approve-path canReview admits
-    // as owner (routers/proposals.ts:472). Human-authored proposals keep
-    // proposedByUserId (or a human createdBy) and skip the lookup.
-    let owner: string | null;
-    if (p.proposedByUserId) {
-      owner = p.proposedByUserId;
-    } else if (p.agentUserId) {
-      const [agent] = await db
-        .select({ createdByUserId: users.createdByUserId })
-        .from(users)
-        .where(eq(users.id, p.agentUserId))
-        .limit(1);
-      owner = agent?.createdByUserId ?? null;
-    } else {
-      owner = p.createdBy;
-    }
+    const owner = await resolveProposalHumanOwner(p);
     // No attributable human owner, or (defensively) no workspace → can't act.
     if (!owner || !p.workspaceId) continue;
 

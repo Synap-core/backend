@@ -100,6 +100,8 @@ function skill(metadata: unknown): ResolvedSkillRow {
     metadata,
     parameters: null,
     executionMode: "sync",
+    intent: null,
+    inputMap: null,
   };
 }
 
@@ -149,6 +151,7 @@ beforeAll(async () => {
     schema.projects,
     schema.workspaces,
     schema.workspaceMembers,
+    schema.apiKeys,
     schema.projectMembers,
     schema.podMembers,
     schema.users,

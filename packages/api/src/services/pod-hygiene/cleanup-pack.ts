@@ -650,14 +650,16 @@ async function supersedePack(
   supersededBy: string | null,
   now: Date
 ): Promise<boolean> {
-  const reason = supersededBy
-    ? "Superseded by a fresher cleanup pack."
-    : "Nothing in it is left to tidy.";
+  // Why it ended is the stamp's reason (the end line says it); never a
+  // sentence stored as `withdrawReason`, which reads as its author's words.
   const rows = await transitionProposal(db, {
     to: ProposalStatus.WITHDRAWN,
+    ended: supersededBy
+      ? { reason: "superseded", supersededBy }
+      : { reason: "request_changed" },
     set: {
       updatedAt: now,
-      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('supersededBy', ${supersededBy}::text, 'withdrawReason', ${reason}::text)`,
+      data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('supersededBy', ${supersededBy}::text)`,
     },
     where: and(
       eq(proposals.id, id),

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  HOLD_DEV_MOVES_HELP,
   HOLD_REQUIRED_MESSAGE,
   HOLD_UNSPECIFIED_BY_AGENT_MESSAGE,
   HOLD_WAIT_MOVES_HELP,
@@ -13,6 +14,7 @@ import {
   holdWaitSlotMatches,
   holdWokenBy,
   parseHoldDevRef,
+  HOLD_AI_MOVES,
   parseHoldWaitRef,
   resolveOccurredAt,
   type RecordedHold,
@@ -25,6 +27,8 @@ const pause = {
   fromCategory: "active",
   toCategory: "paused",
   since: NOW,
+  // Every fixture date is relative to NOW; the real clock would age them out.
+  now: NOW,
 } as const;
 
 describe("decideMoveHold", () => {
@@ -317,7 +321,15 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
       given: { on: "external", until },
     });
 
-  it("parses the three forms, and nothing else", () => {
+  it("names ai:available where a pause is refused, never in the tool descriptions' dev help", () => {
+    expect(HOLD_DEV_MOVES_HELP).not.toContain("ai:");
+    expect(HOLD_REQUIRED_MESSAGE).toContain('"ai:available"');
+    expect(
+      holdProblem({ on: "external", until: { moves: "ai:later" } }, NOW)
+    ).toContain("'ai:available' when this pod's AI is back");
+  });
+
+  it("parses the four forms, and nothing else", () => {
     expect(parseHoldDevRef("pr:Synap-core/backend#47")).toEqual({
       kind: "pr",
       repo: "Synap-core/backend",
@@ -331,7 +343,11 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
       kind: "job",
       name: "dev-feed-h",
     });
+    expect(parseHoldDevRef("ai:available")).toEqual({ kind: "ai" });
     for (const bad of [
+      "ai:",
+      "ai:credits_empty",
+      "ai:Available",
       "pr:backend#47",
       "pr:Synap-core/backend",
       "pr:Synap-core/backend#0",
@@ -351,6 +367,8 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     });
     const m = pauseOn({ moves: "main:Synap-core/Backend" });
     expect(m.ok && m.hold?.until).toEqual({ moves: "main:synap-core/backend" });
+    const a = pauseOn({ moves: HOLD_AI_MOVES });
+    expect(a.ok && a.hold?.until).toEqual({ moves: "ai:available" });
     // An open-ended wait still gets its review date.
     expect(d.ok && d.hold?.reviewBy).toBe(
       new Date(NOW.getTime() + 14 * DAY).toISOString()
@@ -369,6 +387,10 @@ describe("a hold on a DEV FACT (pr: / main: / job:)", () => {
     expect(
       pauseOn({ moves: "pr:Synap-core/backend#47", to: "done" })
     ).toMatchObject({
+      ok: false,
+      code: "HOLD_INVALID",
+    });
+    expect(pauseOn({ moves: HOLD_AI_MOVES, to: "ok" })).toMatchObject({
       ok: false,
       code: "HOLD_INVALID",
     });

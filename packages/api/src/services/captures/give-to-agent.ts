@@ -47,11 +47,11 @@ import {
   drizzleSql,
   eq,
   inArray,
-  LIVE_RUN_STATUSES,
   playbookRuns,
   readDocumentVersionContent,
   users,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import { resolveAgentDirection } from "@synap-core/types/agents";
 import { type AccessContext, scopedDb } from "../../access/index.js";
 import { queryAgentUsers } from "../../routers/agent-users.js";

@@ -6,7 +6,11 @@
  * the operator's (behind "All tools"). DRAFT French ("vous"), awaiting the
  * founder's review.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
 
 export const en = {
   title: "Home",
@@ -20,13 +24,14 @@ export const en = {
   "brief.failed": "Couldn’t load the morning brief.",
   "brief.history": "See what was decided",
   "requests.title": "Requests waiting",
-  "requests.hint": "The newest requests waiting for you",
+  "requests.hint": "Approve or refuse what agents want to change.",
   "requests.seeAll":
     "{n, plural, one {See the request} other {See all # requests}}",
   "requests.seeAllFloor": "See all {n}+ requests",
   "requests.open": "Open requests",
+  "requests.work": "Open Work in the desktop app",
   "requests.empty": "Nothing waits for you.",
-  "requests.failed": "Couldn’t load the requests.",
+  "requests.failed": "Couldn’t count the requests.",
   "needsYou.title": "Needs you",
   "needsYou.hint": "Most urgent first",
   "needsYou.none": "Nothing needs you.",
@@ -39,6 +44,11 @@ export const en = {
   "failed.health": "Couldn’t run the health checks.",
   "failed.sync": "Couldn’t load the sync status.",
   "failed.updates": "Couldn’t read the update status.",
+  "band.title": "Getting started",
+  "band.saved":
+    "Your setup is saved at step {n} of {of}. The next steps are not in the console yet.",
+  "band.change": "Change what Synap runs first",
+  "band.failed": "Couldn't load your setup progress.",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -53,13 +63,14 @@ export const fr: Catalog<typeof en> = {
   "brief.failed": "Impossible de charger le point du matin.",
   "brief.history": "Voir ce qui a été décidé",
   "requests.title": "Demandes en attente",
-  "requests.hint": "Les dernières demandes qui vous attendent",
+  "requests.hint": "Acceptez ou refusez ce que les agents veulent changer.",
   "requests.seeAll":
     "{n, plural, one {Voir la demande} other {Voir les # demandes}}",
   "requests.seeAllFloor": "Voir les {n}+ demandes",
   "requests.open": "Ouvrir les demandes",
+  "requests.work": "Ouvrir Work dans l’app de bureau",
   "requests.empty": "Rien ne vous attend.",
-  "requests.failed": "Impossible de charger les demandes.",
+  "requests.failed": "Impossible de compter les demandes.",
   "needsYou.title": "À traiter",
   "needsYou.hint": "Le plus urgent d’abord",
   "needsYou.none": "Rien ne demande votre attention.",
@@ -73,4 +84,14 @@ export const fr: Catalog<typeof en> = {
   "failed.health": "Impossible de lancer les vérifications.",
   "failed.sync": "Impossible de charger l’état de la synchronisation.",
   "failed.updates": "Impossible de lire l’état des mises à jour.",
+  "band.title": "Pour démarrer",
+  "band.saved":
+    "Votre configuration est enregistrée à l’étape {n} sur {of}. Les étapes suivantes ne sont pas encore dans la console.",
+  "band.change": "Changer ce que Synap lance en premier",
+  "band.failed": "Impossible de charger l’avancement de votre configuration.",
 };
+
+/** The words' translator, in the ambient catalog locale. */
+export function homeT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}

@@ -5,6 +5,7 @@
  * Auth: Hub Protocol API key (Bearer). All writes go through governance.
  */
 
+import { readProjectPillarFields } from "../../../services/projects/pillar-health.js";
 import { z } from "zod";
 import { isProjectIcon } from "@synap-core/types/projects";
 import {
@@ -127,6 +128,8 @@ const UpdateProjectSchema = z.object({
    * the gate — same helper as the tRPC `projects.update`).
    */
   homeWorkspaceId: z.string().uuid().optional(),
+  /** The project's main goal (0423): one of its live goals; `null` clears. */
+  mainGoalId: z.string().uuid().nullable().optional(),
   settings: z.record(z.string(), z.unknown()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   /** Why — shown to the reviewer; never stored on the project. */
@@ -764,6 +767,11 @@ export function registerProjectsRoutes(app: HubHono): void {
       // Additive INDEX: workspaces this project uses. Not an ACL.
       usedWorkspaceIds,
       usedWorkspaces,
+      // Parity with tRPC `projects.get`: `?include=pillars` adds `mainGoal`,
+      // `pillars`, `rootHealth` (a failed part is `{ status: "unavailable" }`).
+      ...((c.req.query("include") ?? "").split(",").includes("pillars")
+        ? await readProjectPillarFields(userId, row.id)
+        : {}),
     });
   });
 

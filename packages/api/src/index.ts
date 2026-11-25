@@ -116,6 +116,7 @@ export {
   reconcileChangedCapabilityTemplates,
   type CapabilityReconcileReport,
   type CapabilityReconcileEntry,
+  type CapabilityUpdateHold,
 } from "./services/capabilities/reconcile-capabilities-to-templates.js";
 export {
   notifyCapabilityUpdatesAvailable,
@@ -416,6 +417,10 @@ export {
   type RunCalBackfillResult,
 } from "./services/calcom/run-cal-backfill.js";
 export {
+  sweepDegradedCaptures,
+  type DegradedSweepResult,
+} from "./services/captures/restructure-degraded-captures.js";
+export {
   runFirefliesIngest,
   type RunFirefliesIngestInput,
   type RunFirefliesIngestResult,
@@ -527,12 +532,19 @@ export { registerPodWideProposalReactor } from "./notifications/pod-wide-proposa
 // `focus_session.closed`, this reactor derives whether the LAST open blocker
 // just went away and notifies once. See session-unblock-reactor.ts.
 export { registerSessionUnblockReactor } from "./notifications/session-unblock-reactor.js";
+// Same close event: a child run that works a step of another run (a stage that
+// `uses` a playbook) hands its outputs back and moves that run on.
+export { registerStageChildReactor } from "./services/playbooks/stage-child.js";
+export { registerLaneRollupReactor } from "./services/focus-sessions/lane-rollup.js";
 // A `proposed` decision is a question for the person: the decision-ask
 // reactor opens ONE owed ask slot for it, and retires it once the decision is
 // resolved elsewhere. See services/decisions/decision-ask-reactor.ts.
 export { registerDecisionAskReactor } from "./services/decisions/decision-ask-reactor.js";
 export { retireUnaskedDecisionAsks } from "./services/decisions/retire-unasked-decision-asks.js";
 export { registerAgentChoiceRedispatchReactor } from "./services/agent-dispatch/redispatch-on-choice.js";
+export { registerRunBlockedReactors } from "./services/runs/run-blocked-ask.js";
+// Exported for @synap/jobs' `registerRunTurnPersisted` IoC slot.
+export { settleRunTurnPersisted } from "./services/runs/run-turn-end.js";
 // Session recall runner — apps/api fills the @synap/jobs `registerSessionRecallRunner`
 // slot with it at boot.
 export { runSessionRecall } from "./services/focus-sessions/session-recall.js";
@@ -546,6 +558,28 @@ export { registerGoalLoopReactor } from "./services/tracks/goal-loop-reactor.js"
 // Exported for @synap/jobs' `registerHoldResumeFollowUp` IoC slot (W4): what
 // a goal's or a session's hold resume owes after the move.
 export { holdResumeFollowUp } from "./services/lifecycle/hold-resume-follow-up.js";
+// Exported for @synap/jobs' `registerAiHeldGateRegrader` IoC slot: a check
+// gate held because AI was not available grades again when AI is back.
+export { regradeAiHeldGate } from "./services/focus-sessions/ai-held-gate.js";
+// Exported for @synap/jobs' `registerAiAvailabilityNotifier` IoC slot: the
+// payers' notice when the pulled AI availability changes (W3 C5).
+export { notifyAiAvailabilityChange } from "./services/ai-availability/notify.js";
+export { meetOutcomesReactionEffect } from "./services/reactions/meet-outcomes-effect.js";
+export { reachStageStatusReactionEffect } from "./services/reactions/reach-stage-status-effect.js";
+export { advanceStageReactionEffect } from "./services/reactions/advance-stage-effect.js";
+export {
+  listReactionRules,
+  type ReactionRuleView,
+} from "./services/reactions/list-reaction-rules.js";
+// Reactions: the roll-up a relation declares (its effect, its source of
+// declarations), each rule's pause, and the pass that seeds their rows.
+export { rollUpReactionEffect } from "./services/reactions/roll-up-effect.js";
+export { relationReactionSource } from "./services/reactions/relation-reactions.js";
+export { reactionEnabledStates } from "./services/reactions/reaction-rule-rows.js";
+export {
+  convergeReactionRules,
+  convergeReactionRulesSafely,
+} from "./services/reactions/reaction-rules-compile.js";
 // Exported for @synap/jobs' `registerStatusWatcherRunner` IoC slot (W6): the
 // hourly watcher that raises late / approaching / stuck / hold-review signals.
 export {
@@ -565,6 +599,9 @@ export {
 // The external-agent status poll (services/agent-dispatch) — apps/api fills
 // the @synap/jobs `registerExternalAgentPoller` slot with it at boot.
 export { pollExternalAgentRuns } from "./services/agent-dispatch/poll-external-agents.js";
+// The compute lease sweeper (services/compute) — apps/api fills the @synap/jobs
+// `registerComputeLeaseSweeper` slot with it at boot.
+export { releaseExpiredComputeLeases } from "./services/compute/release-expired-leases.js";
 export {
   runSessionRecap,
   type RunSessionRecapInput,
@@ -574,6 +611,10 @@ export {
   executeCapability,
   type ExecuteCapabilityResult,
 } from "./services/capabilities/execute-capability.js";
+// A need ref → the verb its space's bound provider runs (0426): the jobs slot.
+export { resolveNeedVerb } from "./services/needs/space-needs.js";
+// The boot backfill of the spaces' need bindings (0426).
+export { backfillSpaceNeedBindings } from "./services/needs/space-need-coverage.js";
 // Exported for @synap/jobs' `registerSessionCloser` IoC slot. A session's
 // TERMINAL status has ONE door (@synap-core/types/focus-sessions) — three job
 // workers stamped `status:'closed'` with a raw UPDATE and skipped the review

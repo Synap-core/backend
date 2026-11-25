@@ -265,7 +265,7 @@ export function ApproveBatchForm({
           <p className="text-small leading-relaxed text-foreground/65">
             <code className="font-mono text-foreground/80">synap init</code>{" "}
             wants to connect these agents to your pod. They can read it and make
-            changes under your trust rules.
+            changes within your approvals.
           </p>
         </div>
       </CardHeader>

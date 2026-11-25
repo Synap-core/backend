@@ -61,7 +61,6 @@ import {
   playbooks,
   projects,
   projectTracks,
-  users,
   links,
   drizzleSql,
   classifyLifecycleMove,
@@ -99,7 +98,6 @@ import {
   isTrackVerdict,
   TRACK_LIFECYCLE,
   trackStatusCategory,
-  type TrackStatusIn,
   type TrackVerdict,
   deriveTrackStages,
   readTrackDirection,
@@ -139,6 +137,7 @@ import type { ActivityActor } from "@synap-core/types/activity";
 import { trackRepository } from "./track-repo.js";
 import {
   agentSwitchesLoopOn,
+  hasTrackGoalInput,
   isGoalJudge,
   loadTrackGoalFacts,
   parseTrackGoalInput,
@@ -189,7 +188,18 @@ import {
 } from "@synap-core/types/units";
 import { REPLACES_LINK_TYPE } from "@synap-core/types/connections";
 import { createLinks } from "../links/links-service.js";
-import { writeDependencyLink } from "../links/dependency-links.js";
+import {
+  writeDependencyLink,
+  type LinkAttribution,
+} from "../links/dependency-links.js";
+import {
+  applyGoalPlacement,
+  checkGoalPlacement,
+  hasGoalPlacementInput,
+  parseGoalPlacementInput,
+  pickGoalPlacementInput,
+  type GoalPlacementInput,
+} from "./goal-placement.js";
 import { requestClientKey } from "../focus-sessions/resolve-work-session.js";
 import { linkProjectToWorkspace } from "../../utils/project-workspace.js";
 import {
@@ -202,12 +212,6 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
-import {
-  TRACK_SPACE_GRANT_KEY,
-  endTrackSpaceGrant,
-  resolveTrackGrantSpaces,
-  type TrackSpaceGrant,
-} from "./track-space-grant.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import {
   applyStageGate,
@@ -909,6 +913,13 @@ export interface StartTrackInput {
   /** The goal's loop (0350, W4): `{ on, perWeek? }`; absent = the birth default. */
   loop?: unknown;
   /**
+   * WHERE IT SITS (goal placement, `goal-placement.ts`): the goal it serves
+   * (its primary parent when it has none) and the pillars of its project it
+   * advances. Ride the gate payload; written after the birth is authorized.
+   */
+  parentGoalId?: unknown;
+  pillars?: unknown;
+  /**
    * "MAKE IT A GOAL" (D2): the `goal` / `objective` / `okr` entity this goal
    * is made from (`convertEntityToGoal` maps its fields onto the input above).
    * Re-checked on every start, the replay included (`assertGoalSource`); the
@@ -926,16 +937,13 @@ export interface StartTrackInput {
    */
   id?: string;
   /**
-   * ONLY the `track/create` approval replay passes it: the consent the person
-   * just gave (decision 2a). `agentUserId` is the proposing agent (the
-   * proposal's own column, never its payload); `listedWorkspaceIds` are the
-   * step spaces the proposal LISTED. The grant is the step spaces resolved
-   * now ∩ the listed ones — approval can never admit a space nobody read.
+   * ONLY the `track/create` approval replay passes it: the proposal and the
+   * agent that proposed it (the proposal's own column, never its payload),
+   * for the attribution of what the start writes.
    */
-  approvedSpaceGrant?: {
+  approval?: {
     proposalId: string;
     agentUserId: string | null;
-    listedWorkspaceIds: string[];
   };
 }
 
@@ -946,7 +954,14 @@ export type StartTrackResult = (
       /** `null` for a stage-less track started with no method. */
       playbook: { id: string; name: string; version: number } | null;
     }
-  | ProposedOutcome
+  | (ProposedOutcome & {
+      /**
+       * The id the goal WILL have once the person approves: minted before the
+       * proposal is filed and replayed by its approval (`id` above). Not a
+       * goal yet: no door accepts it as a `trackId` until it is approved.
+       */
+      pendingTrackId: string;
+    })
 ) & {
   /**
    * Stage domains (workspace template slugs) with no live workspace the
@@ -1077,26 +1092,6 @@ export async function startTrack(
   }
   const trackId = input.id ?? randomUUID();
 
-  // DECISION 2a / W5 — the spaces this track will work in: the project's
-  // linked spaces (+ a legacy method's step spaces). An agent's start names
-  // them in its proposal, so approving the start IS consenting to let that
-  // agent work there for this track — and nowhere else, and no longer.
-  const stepSpaces = await resolveTrackGrantSpaces(db, {
-    stages: playbook?.stages ?? [],
-    projectId: project.id,
-    userId: actor.userId,
-  });
-  const spaceGrantConsent =
-    actor.agentUserId && stepSpaces.length > 0
-      ? {
-          agentUserId: actor.agentUserId,
-          agentName: await agentDisplayName(db, actor.agentUserId),
-          spaces: stepSpaces.map(({ workspaceId, name }) => ({
-            workspaceId,
-            name,
-          })),
-        }
-      : null;
   // Refused BEFORE governance, so a malformed answer is told to its author
   // rather than filed for a human to approve.
   const trackParams =
@@ -1122,6 +1117,16 @@ export async function startTrack(
     goalInput,
     actor.agentUserId ? null : actor.userId
   );
+  // Where it sits — refused here, to the author, before anything is filed.
+  const placement = parseGoalPlacementInput(
+    pickGoalPlacementInput(input as unknown as Record<string, unknown>)
+  );
+  await checkGoalPlacement(placement, {
+    projectId: project.id,
+    userId: actor.userId,
+    trackId,
+    goalExists: false,
+  });
   // An entity that was ACHIEVED arrives closed as met, and `met` needs every
   // required criterion met — none can be yet, so its criteria ride the end
   // state instead (`goalFromEntity`). Refused here, before anything is filed.
@@ -1174,10 +1179,8 @@ export async function startTrack(
       ...(spawnedFrom ? { spawnedFromTrackId: spawnedFrom.track.id } : {}),
       // The entity this goal is made from (D2) — re-checked at approval.
       ...(input.fromEntity ? { fromEntity: input.fromEntity } : {}),
-      // The consent the summary states ("…and let <agent> work in …").
-      ...(spaceGrantConsent
-        ? { [TRACK_SPACE_GRANT_KEY]: spaceGrantConsent }
-        : {}),
+      // Its parent goal and pillars — re-checked by the door at approval.
+      ...pickGoalPlacementInput(placement),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -1193,6 +1196,9 @@ export async function startTrack(
           objectName: trackName,
         }) + " — proposed for review"
       ),
+      // The id the proposal was filed under, so the caller can wait on the
+      // approval and name the goal afterwards.
+      pendingTrackId: trackId,
       missingDomains,
     };
   }
@@ -1218,7 +1224,6 @@ export async function startTrack(
         ? resolveTrackKpi(null, kpiInput, actor.agentUserId ?? actor.userId)
         : null,
       ...(goalPatch ? { goal: goalPatch } : {}),
-      ...trackSpaceGrantMetadata(input, stepSpaces),
     },
     actor.userId
   );
@@ -1245,6 +1250,7 @@ export async function startTrack(
         spawnedFrom,
         source,
         endedAs,
+        placement,
       });
     } catch (err) {
       await undoTrackBirth(track.id, actor.userId);
@@ -1288,6 +1294,7 @@ async function completeTrackBirth(p: {
   spawnedFrom: Awaited<ReturnType<typeof assertOperationSource>> | null;
   source: Awaited<ReturnType<typeof assertGoalSource>> | null;
   endedAs: TrackFromEntity["ended"] | null;
+  placement: GoalPlacementInput;
 }): Promise<ProjectTrack> {
   const { input, track, project, playbook, replaces, spawnedFrom } = p;
   const { source, endedAs } = p;
@@ -1339,8 +1346,8 @@ async function completeTrackBirth(p: {
       },
       userId: actor.userId,
       attribution: {
-        agentUserId: input.approvedSpaceGrant?.agentUserId ?? actor.agentUserId,
-        proposalId: input.approvedSpaceGrant?.proposalId ?? null,
+        agentUserId: input.approval?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approval?.proposalId ?? null,
         sessionId: actor.sessionId ?? null,
       },
     });
@@ -1364,6 +1371,21 @@ async function completeTrackBirth(p: {
         linkType: "spawned_from",
       },
     ]);
+  }
+  // WHERE IT SITS: its parent goal and its pillars, through THE dependency
+  // door (the start is authorized; the door re-checks every floor). A
+  // refusal undoes the birth: a goal must not be born half-placed.
+  if (hasGoalPlacementInput(p.placement)) {
+    await applyGoalPlacement({
+      trackId: track.id,
+      input: p.placement,
+      userId: actor.userId,
+      attribution: {
+        agentUserId: input.approval?.agentUserId ?? actor.agentUserId,
+        proposalId: input.approval?.proposalId ?? null,
+        sessionId: actor.sessionId ?? null,
+      },
+    });
   }
   // MAKE IT A GOAL (D2): the lineage edge, then — for an entity that had
   // ended — the close or drop, through THE status write (`applyTrackStatus`:
@@ -1683,54 +1705,6 @@ async function loadTrackMethod(
     });
   }
   return playbook;
-}
-
-/** The agent's name for the consent sentence — never its id. */
-async function agentDisplayName(
-  db: Awaited<ReturnType<typeof getDb>>,
-  agentUserId: string
-): Promise<string> {
-  const [row] = await db
-    .select({ name: users.name })
-    .from(users)
-    .where(eq(users.id, agentUserId))
-    .limit(1);
-  return row?.name?.trim() || "the agent";
-}
-
-/**
- * The grant stamped on a NEW track (decision 2a; see `track-space-grant.ts`).
- * Approval replay ⇒ the proposing agent, resolved ∩ listed spaces. Direct
- * agent start ⇒ that agent. A person's own start ⇒ any agent acting for them
- * (`agentUserIds: null`). No space (no project link, no step space) ⇒
- * nothing stamped.
- */
-function trackSpaceGrantMetadata(
-  input: StartTrackInput,
-  stepSpaces: ReadonlyArray<{ workspaceId: string }>
-): { metadata?: Record<string, unknown> } {
-  const approved = input.approvedSpaceGrant;
-  const resolved = stepSpaces.map((s) => s.workspaceId);
-  const workspaceIds = approved
-    ? resolved.filter((w) => approved.listedWorkspaceIds.includes(w))
-    : resolved;
-  if (workspaceIds.length === 0) return {};
-  const agentUserIds = approved
-    ? approved.agentUserId
-      ? [approved.agentUserId]
-      : null
-    : input.actor.agentUserId
-      ? [input.actor.agentUserId]
-      : null;
-  const grant: TrackSpaceGrant = {
-    operatorUserId: input.actor.userId,
-    agentUserIds,
-    workspaceIds,
-    grantedBy: input.actor.userId,
-    grantedAt: new Date().toISOString(),
-    ...(approved ? { proposalId: approved.proposalId } : {}),
-  };
-  return { metadata: { [TRACK_SPACE_GRANT_KEY]: grant } };
 }
 
 // ── writes on an existing track ─────────────────────────────────────────────
@@ -2118,16 +2092,8 @@ export async function applyTrackStatus(
       hold: transition.hold,
       occurredAt: transition.occurredAt,
       appId: transition.appId,
-      // Decision 2a: closing/dropping ENDS the track's space grant — a stamp,
-      // so nothing revives it (a reopened goal is a NEW track with its own).
-      // Pausing needs no stamp: the gate admits only an ACTIVE track (W5), so
-      // resuming restores it.
       ...(terminal
         ? {
-            metadataPatch: endTrackSpaceGrant(
-              track.metadata,
-              status as TrackStatusIn<"done" | "lost">
-            ),
             // A drop with no verdict (a client shipped before verdicts)
             // stamps nothing: it reads like a track dropped before 0344.
             ...(verdict
@@ -2549,8 +2515,7 @@ export async function resolveTrackFiling(params: {
   // A closed or dropped goal takes no new work (both are final — reopen it as
   // a new version). A goal still being SHAPED (proposed · agreed · ready)
   // does: agreeing its criteria and clearing its prerequisites is work, and a
-  // session filed there is how it gets done. Its agent is not admitted to the
-  // project's spaces until it is active (`track-space-grant.ts`).
+  // session filed there is how it gets done.
   if (isTrackClosed(track)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -2789,6 +2754,10 @@ export async function setTrackDirection(input: {
   confirmKind?: unknown;
   /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
   loop?: unknown;
+  /** Where it sits (`goal-placement.ts`): a parent goal it serves. */
+  parentGoalId?: unknown;
+  /** Where it sits: pillars of its project it advances (parsed here). */
+  pillars?: unknown;
   actor: TrackActor;
 }): Promise<SetTrackDirectionResult> {
   const { track, project } = await loadTrackForWrite(
@@ -2798,15 +2767,27 @@ export async function setTrackDirection(input: {
   const goalRaw = pickTrackGoalInput(
     input as unknown as Record<string, unknown>
   );
+  const placement = parseGoalPlacementInput(
+    pickGoalPlacementInput(input as unknown as Record<string, unknown>)
+  );
+  const placing = hasGoalPlacementInput(placement);
   if (
     input.direction === undefined &&
     input.kpi === undefined &&
-    Object.keys(goalRaw).length === 0
+    Object.keys(goalRaw).length === 0 &&
+    !placing
   ) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        "Nothing to change — pass a direction, a kpi, or what the goal holds (endState, criteria, dropConditions, workKind, uncertainty, loop).",
+        "Nothing to change — pass a direction, a kpi, what the goal holds (endState, criteria, dropConditions, workKind, uncertainty, loop), or where it sits (parentGoalId, pillars).",
+    });
+  }
+  if (placing) {
+    await checkGoalPlacement(placement, {
+      projectId: track.projectId,
+      userId: input.actor.userId,
+      trackId: track.id,
     });
   }
   const patch = normalizeDirectionPatch(input);
@@ -2823,7 +2804,8 @@ export async function setTrackDirection(input: {
   if (
     next.direction === readTrackDirection(track.direction) &&
     sameKpiValue(next.kpi, readTrackKpi(track.kpi)) &&
-    goalPatch === null
+    goalPatch === null &&
+    !placing
   ) {
     return { status: "unchanged", track };
   }
@@ -2853,6 +2835,8 @@ export async function setTrackDirection(input: {
       // resolves them against the goal as it stands at approval. `criteria`
       // here is what floors an agent's criteria change to a proposal.
       ...pickTrackGoalInput(goalInput),
+      // Where it sits — re-checked by the door at approval.
+      ...pickGoalPlacementInput(placement),
     },
   });
   if ("denied" in perm && perm.denied) {
@@ -2871,11 +2855,21 @@ export async function setTrackDirection(input: {
   return applyTrackDirection(
     track,
     project,
-    { ...patch, ...pickTrackGoalInput(goalInput) },
+    {
+      ...patch,
+      ...pickTrackGoalInput(goalInput),
+      ...pickGoalPlacementInput(placement),
+    },
     {
       userId: input.actor.userId,
       statedBy: input.actor.agentUserId ?? input.actor.userId,
       confirmedBy: input.actor.agentUserId ? null : input.actor.userId,
+      attribution: {
+        agentUserId: input.actor.agentUserId ?? null,
+        proposalId:
+          "granted" in perm ? (perm.autoApprovedProposalId ?? null) : null,
+        sessionId: input.actor.sessionId ?? null,
+      },
     }
   );
 }
@@ -2898,6 +2892,9 @@ interface RawDirectionPatch {
   confirmKind?: unknown;
   /** The goal's loop (0350, W4): `{ on, perWeek? }` or `null` (off). */
   loop?: unknown;
+  /** Where it sits (`goal-placement.ts`) — written after the patch. */
+  parentGoalId?: unknown;
+  pillars?: unknown;
 }
 
 function normalizeDirectionPatch(input: RawDirectionPatch): DirectionPatch {
@@ -2964,9 +2961,39 @@ export async function applyTrackDirection(
      * Absent ⇒ `null`: a write never confirms by omission.
      */
     confirmedBy?: string | null;
+    /** Who the placement links are attributed to (agent, proposal, session). */
+    attribution?: LinkAttribution;
   }
 ): Promise<{ status: "updated"; track: ProjectTrack }> {
   const patch = normalizeDirectionPatch(rawPatch);
+  const rawBag = rawPatch as unknown as Record<string, unknown>;
+  // Where it sits, re-parsed (a replay's payload) and written AFTER the
+  // patch, through THE dependency door, which re-checks every floor now.
+  const placement = parseGoalPlacementInput(pickGoalPlacementInput(rawBag));
+  // Checked BEFORE the goal's columns are written: a placement the door
+  // would refuse (a replay's parent or space may have changed) changes
+  // nothing at all.
+  if (hasGoalPlacementInput(placement)) {
+    await checkGoalPlacement(placement, {
+      projectId: track.projectId,
+      userId: who.userId,
+      trackId: track.id,
+    });
+  }
+  if (
+    patch.direction === undefined &&
+    patch.kpi === undefined &&
+    !hasTrackGoalInput(rawBag)
+  ) {
+    // Only the placement changes: no column write, no KPI nudge.
+    await applyGoalPlacement({
+      trackId: track.id,
+      input: placement,
+      userId: who.userId,
+      ...(who.attribution ? { attribution: who.attribution } : {}),
+    });
+    return { status: "updated", track };
+  }
   // Re-parsed and resolved against the goal as it stands NOW (a replay's
   // goal may have moved since the proposal was filed).
   const goal = resolveTrackGoalPatch(
@@ -3019,6 +3046,14 @@ export async function applyTrackDirection(
       });
     }
     throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
+  }
+  if (hasGoalPlacementInput(placement)) {
+    await applyGoalPlacement({
+      trackId: track.id,
+      input: placement,
+      userId: who.userId,
+      ...(who.attribution ? { attribution: who.attribution } : {}),
+    });
   }
   const after = readTrackKpi(updated.kpi);
   if (trackKpiJustReached(before, after)) {
@@ -3454,10 +3489,12 @@ async function startTrackSession(
   // Dynamic: `create-session.ts` imports this module (resolveTrackFiling).
   const { createFocusSession } =
     await import("../focus-sessions/create-session.js");
+  // No space named: the session space ladder places it in the project's home
+  // (`project_home`) when the actor may start work there, never through a
+  // join proposal.
   const result = await createFocusSession({
     userId: actor.userId,
     agentUserId: actor.agentUserId ?? undefined,
-    workspaceId: project.workspaceId ?? null,
     projectId: track.projectId,
     trackId: track.id,
     title: input.title?.trim() || null,
@@ -3571,8 +3608,10 @@ export async function startStageSession(input: {
 
   // PER-STEP DOMAIN (W2a): the stage names a workspace TEMPLATE; work it in a
   // live workspace of that template the caller can write to (one the project
-  // already uses wins). None ⇒ the project's home, REPORTED, never silent.
-  let sessionWorkspaceId: string | null = project.workspaceId ?? null;
+  // already uses wins). None ⇒ the project's home through the session space
+  // ladder (`project_home`, only where the actor may start work), REPORTED,
+  // never silent.
+  let sessionWorkspaceId: string | null = null;
   let domainWorkspaceId: string | null = null;
   let domainFallback:
     { wanted: string; reason: StageDomainFallbackReason } | undefined;

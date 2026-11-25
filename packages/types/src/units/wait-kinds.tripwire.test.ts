@@ -20,6 +20,10 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  AI_AVAILABILITY_KINDS,
+  type AiAvailabilityKind,
+} from "../ai-availability/index.js";
 import { HOLD_ON } from "../lifecycle/hold.js";
 import {
   WAIT_KINDS,
@@ -118,9 +122,45 @@ describe("the one map table → waitKind", () => {
     expect(waitKindOf({ kind: "hold", on, devRef: null })).toBe("vendor");
   });
 
+  it("an ai hold is the payer's while a payer state holds AI, else the vendor's", () => {
+    const on = "external" as const;
+    const ai = (aiKind?: AiAvailabilityKind | null) =>
+      waitKindOf({ kind: "hold", on, devRef: "ai", aiKind });
+    // Every state but ok has a row (the table is keyed by them, the build
+    // checks it); the payer's four are a payment, the operator's three the
+    // vendor's.
+    expect(Object.keys(WAIT_KIND_FROM.ai).sort()).toEqual(
+      AI_AVAILABILITY_KINDS.filter((k) => k !== "ok").sort()
+    );
+    for (const k of [
+      "credits_low",
+      "credits_empty",
+      "suspended",
+      "not_entitled",
+    ] as const)
+      expect(ai(k), k).toBe("payment");
+    for (const k of [
+      "budget_paused",
+      "provider_issue",
+      "service_down",
+    ] as const)
+      expect(ai(k), k).toBe("vendor");
+    // The pod knows no state (no pull yet, a CP without the door) or AI reads
+    // available while the hold waits: the AI service holds it.
+    expect(ai(null)).toBe("vendor");
+    expect(ai(undefined)).toBe("vendor");
+    expect(ai("ok")).toBe("vendor");
+    // The state means nothing on another dev ref.
+    expect(
+      waitKindOf({ kind: "hold", on, devRef: "pr", aiKind: "credits_empty" })
+    ).toBe("ci");
+  });
+
   it("every source maps, a work unit by its checks", () => {
     const cases: Array<[WaitingOnSource, string]> = [
       [{ kind: "pending_proposal" }, "approval"],
+      [{ kind: "pending_proposal", held: false }, "approval"],
+      [{ kind: "pending_proposal", held: true }, "their_reply"],
       [{ kind: "blocked_by" }, "another_work"],
       [{ kind: "child_session" }, "another_work"],
       [{ kind: "work_unit", state: "open" }, "ci"],

@@ -13,8 +13,8 @@
  * reads targets reads both: process-sync stamps each one's result when the
  * thing moves (own move `done`, anyone else's `skipped`; it never needs
  * `metadata.worker`, whose absence means any lifecycle move settles), the close
- * door stamps the open ones `skipped` and applies the process's `onEnd` to them
- * (`session-end-moves.ts`), `worked-by.ts` and the session page list them.
+ * door stamps the open ones `skipped` (a session's end moves nothing),
+ * `worked-by.ts` and the session page list them.
  *
  * ADD-ONLY. A door adds targets (idempotently: a target already declared is
  * reported `already`, never a second edge). There is no removal: a target's

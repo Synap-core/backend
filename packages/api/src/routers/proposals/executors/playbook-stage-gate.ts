@@ -20,9 +20,12 @@
  * is returned there by the process engine off the `proposal.rejected` event
  * (`@synap/jobs` `utils/process-sync.ts`) — declared, not invented.
  *
- * APPROVAL also writes the stage's `subjectStatus` onto the run's subject
- * (`writeStageSubjectStatus`) — the advance door holds that write while the
- * gate is open, because entering the stage was not agreed yet.
+ * APPROVAL also writes the subject's statuses (`writeGatePassStatuses`,
+ * decision D2): the stage LEFT reached its `onApproved` (the gate approves
+ * the work before it), THEN the gated stage's `subjectStatus` — the advance
+ * door holds both while the gate is open, because entering the stage was not
+ * agreed yet. Both are written AS THE APPROVER (a person: a humanOnly status
+ * is theirs to write, never a second proposal).
  */
 
 import { TRPCError } from "@trpc/server";
@@ -35,6 +38,7 @@ import {
   transitionProposal,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import {
   registerProposalExecutor,
   type ProposalEffect,
@@ -65,14 +69,30 @@ export function registerPlaybookStageGateExecutors(): void {
         });
       }
 
-      // Resume ONLY from `paused`. A session the human has since closed, failed
-      // or cancelled must not be reanimated by an approval that was about a
-      // stage boundary, not about the session's life. The guard is in the WHERE
-      // clause so the decision and the write cannot disagree.
+      // A gate on a run that ENDED is never approvable into nothing. A session
+      // that ends expires its pending gates (`setSessionStatus`), so this is a
+      // gate left from before that rule, or a race with the close: refuse,
+      // naming why, instead of an approval that changes nothing (live: 9c527c67
+      // approved on closed run be143ceb, 9 Nov 2026). More work is a new run.
+      if (isTerminalSessionStatus(session.status)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            `This run ended (${session.status}) before its stage gate was answered, ` +
+            "so approving it cannot continue it. Nothing was changed. " +
+            "Start the playbook again on the same record to go on.",
+        });
+      }
+
+      // Resume ONLY from a pause (`paused`, or `stale`: the reaper's aging of a
+      // pause, still waiting on this gate). A session the human has since
+      // closed, failed or cancelled is refused above: an approval about a
+      // stage boundary never reanimates a session's life. The guard is in the
+      // WHERE clause so the decision and the write cannot disagree.
       // The approver resumes it; the transition names the proposal.
       const { rows: resumed } = await setSessionStatus(db, {
         sessionId,
-        from: "paused",
+        from: ["paused", "stale"],
         to: "active",
         actor: { kind: "human", userId },
         proposalId: proposal.id,
@@ -100,24 +120,39 @@ export function registerPlaybookStageGateExecutors(): void {
                 "keeps the state its owner left it in.",
             };
 
-      // The person agreed to the stage: its `subjectStatus` (if any) is written
-      // NOW — the advance door skipped it while the gate held. As the approver,
-      // through the governed entity door; a skip/failure never un-approves.
+      // The person agreed to the stage: the stage left reached its
+      // `onApproved`, then the gated stage's `subjectStatus` is written (if
+      // any) NOW — the advance door skipped both while the gate held. As the
+      // approver, through the status door; a skip/failure never un-approves.
       // Only while the run still stands on the GATED stage: a run that moved on
       // since (a follow, a manual advance) must not get the old stage's value.
-      const gatedStage = (proposal.data as { stageKey?: unknown } | null)
-        ?.stageKey;
+      const gateData = proposal.data as {
+        stageKey?: unknown;
+        fromStage?: unknown;
+      } | null;
+      const gatedStage = gateData?.stageKey;
       if (
         resumed.length > 0 &&
         session.currentStage &&
         (typeof gatedStage !== "string" || gatedStage === session.currentStage)
       ) {
-        const { writeStageSubjectStatus } =
+        const { writeGatePassStatuses } =
           await import("../../../services/focus-sessions/stage-subject-status.js");
-        await writeStageSubjectStatus({
+        await writeGatePassStatuses({
           session,
-          toStage: session.currentStage,
+          gatedStage: session.currentStage,
+          fromStage:
+            typeof gateData?.fromStage === "string" ? gateData.fromStage : null,
           userId,
+        });
+        // The gate passed: the stage now RUNS — the stage runner hands it to
+        // whoever works it (`enterStage`, never throws).
+        const { enterStage } =
+          await import("../../../services/playbooks/stage-runner.js");
+        await enterStage({
+          sessionId: session.id,
+          stageKey: session.currentStage,
+          cause: { kind: "gate_passed" },
         });
       }
 

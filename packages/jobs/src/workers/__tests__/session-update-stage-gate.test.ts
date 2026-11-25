@@ -70,6 +70,12 @@ vi.mock("../../utils/automation-governance.js", async (importOriginal) => {
 vi.mock("../../utils/session-process.js", () => ({
   loadSessionProcess: async () => null,
 }));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("../../utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
+}));
 
 const { executeOutputStep } = await import("../automation-executor.js");
 const { registerStageAdvancer, advanceSessionStageViaSlot } =

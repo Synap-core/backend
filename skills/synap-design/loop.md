@@ -10,7 +10,10 @@ The process "Design to implementation" (Builder space) carries a design from dra
 person, or an agent asked to, starts it on the request design with `synap_run_playbook`; it does not
 start itself on every new `ui-design`, because sibling variants are `ui-design`s too.
 
-## 1. The design is Puck JSON from real components
+## 1. The design is a canvas of Puck pages from real components
+
+A design is a canvas (`schema-version` `3`): one frame per screen, and a single screen is a canvas with one
+frame (section 1b). This section is the rules of a frame's page, the Puck data each frame holds:
 
 ```json
 {
@@ -23,13 +26,14 @@ start itself on every new `ui-design`, because sibling variants are `ui-design`s
       "type": "SpatialButton",
       "props": {
         "id": "SpatialButton-1",
-        "children": "Add agent",
+        "children": [
+          { "type": "Text", "props": { "id": "Text-1", "text": "Add agent" } }
+        ],
         "size": "md"
       }
     }
   ],
-  "root": { "props": { "title": "Settings › Agents" } },
-  "zones": {}
+  "root": { "props": { "title": "Settings › Agents" } }
 }
 ```
 
@@ -39,24 +43,80 @@ start itself on every new `ui-design`, because sibling variants are `ui-design`s
   `canvas`). `props` are props it declares, with values of the declared type: an enum takes one of its
   literals. Function props, `className`, `style`, `as` and raw HTML are never accepted.
 - A `children` prop of type ReactNode is a slot that holds an array of blocks. Other ReactNode props
-  (`label`, `title`) are plain text. Keep `zones` as `{}`. `root.props` holds page settings only.
+  (`label`, `title`) are plain text. A frame's page is slots only: no `zones`. `root.props` holds page settings only.
 - No hex, rgb, px or font family in a prop; colour, spacing and type come from components and tokens.
+- A canvas design (schema-version 3) lays each frame's page on a column grid: `Section` blocks hold it
+  (12 / 8 / 4 columns by the frame's width), a block in a Section or Grid takes `span`, `start` and `hide`
+  per width class, and a frame with `pageOf` shows another frame's page at its own width. The full shape is in
+  `designing-with-real-components`.
 - Motion is not in the props. List it in the design's `motion` property as
   `[{ "trigger": "enter", "target": "SpatialPanel-1", "preset": "fade-rise" }]` with named presets only.
 - Lay out every state the screen has: empty, loading, failed, full, long content. Each empty state is
   OMIT, INVITE, EXPLAIN or REASSURE; a failed read is its own state with a retry.
-- The canvas validates on load: an unknown `type` refuses the whole design; an undeclared or wrong prop
-  is stripped and listed. Check yours with the canvas's Paste JSON.
+- The Map canvas (Design app, `#/map/canvas/<id>`) opens the design and validates on load: an unknown
+  `type`, an undeclared or wrong prop and a block a slot does not allow are dropped and named. Open yours
+  there.
+
+## 1b. The canvas: one frame per screen
+
+**Every design is a canvas**: `schema-version` `3`, and `design-json` is a board of frames, each frame
+holding one screen's Puck page. One screen is a canvas with one frame; several screens or a user flow
+are several frames. Always write `schema-version` `3`, never `1` or `2`: the canvas migrates an older
+design on read (a page becomes one frame) and every save writes 3.
+
+```json
+{
+  "format": "synap-board/2",
+  "frames": [
+    {
+      "id": "f1", "name": "Home", "x": 0, "y": 0, "w": 1440, "h": 900,
+      "page": {
+        "root": { "props": {} },
+        "content": [
+          { "type": "Stack", "props": { "id": "s1", "gap": "space-300", "padding": "space-400", "children": [
+            { "type": "Heading", "props": { "id": "h1", "text": "Welcome back", "level": "title" } },
+            { "type": "SpatialButton", "props": { "id": "b1", "variant": "primary", "children": [
+              { "type": "Text", "props": { "id": "t1", "text": "Continue" } } ] } } ] } }
+        ]
+      }
+    }
+  ]
+}
+```
+
+- `frames[]` is the canvas. `x`, `y` place a frame on the canvas; `w` is the page width (1440 desktop,
+  1280 laptop, 834 tablet, 390 phone); `h` is a minimum, the frame grows with its content. Name each
+  frame for its screen or state; one frame per screen.
+- Each `page` follows every rule of section 1: real components only, `props.id` unique in its frame,
+  no hex, rgb, px or font family. Layout is flow only: stack blocks with `Stack`, `Row`, `Grid`, `Box`;
+  a component never gets its own x or y.
+- Layout blocks take exact values, never pixels: `gap`, `padding`, `paddingX`, `paddingY` take `none` or a
+  spacing name (`space-025`, `space-050`, `space-075`, `space-100`, `space-125`, `space-150`, `space-200`,
+  `space-250`, `space-300`, `space-400`, `space-500`, `space-600`, `space-800`, `space-1000`,
+  `space-1200`); a `Box` `background` takes `none`, `background`, `background-surface` or `paper`;
+  `radius` takes `none`, `radius-container` or `radius-floating`; `border` takes `none` or `hairline`.
+- A label slot (a button's `children`) holds only inline blocks: `Text` or a component whose name ends in
+  `Icon` or `Glyph`. Never another button or a layout block.
+- The canvas drops and names, at any depth: an unknown `type`, an undeclared or wrong prop, and a block
+  a slot does not allow. Check yours on the Map canvas.
+- `components-used` is the distinct `type` values across every frame, nested slot blocks included,
+  sorted.
 
 ## 2. Save it as a `ui-design` entity
 
 Find before you create: `synap_find` for an existing `ui-design` on the same `target-surface`.
 
+When the pod has the `design` capability installed, create and change designs through its three verbs
+(section 2b), not raw entity writes: the pod then checks every block against the catalog before it
+lands. The rules below still say what a design holds.
+
 - Create with `synap_create_entity`, `profileSlug: "ui-design"`, a title, and properties:
-  `target-surface` (app and screen), `design-scope` (`component` or `page`), `design-goal` (the job the
+  `target-surface` (app and screen), `design-scope` (`component` or `page`; a canvas is `page`), `design-goal` (the job the
   screen does; the critique judges against it), `design-json`, `components-used` (the distinct `type`
-  values, derived from the JSON, never typed by hand), `schema-version` (`1`), `motion`,
-  `current-story-id` (the story of the screen as it is today, when it exists), `design-notes`.
+  values, derived from the JSON, recursive across every frame of a canvas, never typed by hand),
+  `schema-version` (`3`), `motion`,
+  `current-story-id` (the story of the screen as it is today, when it exists), `frame-stories` (the
+  built stories per frame of a multi-frame design, see section 5), `design-notes`.
 - **Three variants by default.** One request is three designs: the request plus two siblings, sharing
   one `variant-group`, `target-surface`, `design-scope` and `design-goal`. Make them genuinely
   different answers (structure, density, order), not three colourings. Link each sibling to the
@@ -65,6 +125,50 @@ Find before you create: `synap_find` for an existing `ui-design` on the same `ta
 - Revise with `synap_update_entity`, writing `design-json` and `components-used` together.
 - `proposed` is success: a person reviews the write. Do not retry.
 - Never save a screenshot as the design, and never mirror components into the pod as entities.
+
+## 2b. The design door: `design.read`, `design.catalog`, `design.apply`
+
+Three verbs of the `design` capability (`synap_run_capability`). Without it installed they are not
+there: say so, and fall back to section 2.
+
+- **`design.catalog`** (read): the installed kit (`kitId`, `hash`), its `components` and their props
+  (a slot is a prop of kind `slot`, with `allow` when it takes only some blocks), the canvas blocks
+  (`layout`: Section, Box, Stack, Row, Grid, Heading, Text, Motion; their spacing, radius and colour
+  props take token steps), the grid (12 / 8 / 4 columns, breakpoints 600 / 1024) and the frame presets.
+  It answers in two steps, because the whole catalog is longer than one tool reply:
+  - `design.catalog {}` (`detail: "summary"`, the default): every block with its prop names and their
+    kind (`text`, `select`, `slot`, `list`...), no select options.
+  - `design.catalog {components: ["Section", "Stack", "Heading", "SpatialCard", ...]}`: the blocks you
+    will use, kit components and canvas blocks alike, with their full specs (the select options, a
+    list's item fields, what a slot takes). A name the catalog does not have comes back in `unknown`.
+  Read both before you design; never guess a component or a prop value. `detail: "full"` is the whole
+  catalog at once: too long for one reply, do not ask for it.
+- **`design.read {designId}`** (read): the design (`status`, `updatedAt`, `appId`, whether it is
+  `editable`), its `board`, an outline per frame (width class, columns, block ids and types), and
+  `dropped`: what the catalog cannot place. Keep `updatedAt`: it is your `baseUpdatedAt`.
+- **`design.apply {designId, baseUpdatedAt, ops}`** (write): ops applied in order, all or nothing.
+  - `create_design {title, appId?, projectId?}`, first and with no `designId`: a new design for that
+    app (`devplane_app`), filed into the project. The rest of the batch fills it.
+  - frames: `add_frame {preset: desktop|laptop|tablet|phone, name?, id?, pageOf?}` (`pageOf`: this
+    frame shows that frame's page at its own width),
+    `update_frame {frameId, name?, preset?, x?, y?, w?, h?}`, `remove_frame {frameId}`.
+  - blocks: `add_block {frameId, parentId?, slot?, index?, type, props?}` (no `parentId`: the page's
+    own content; give `props.id` to name it in a later op), `update_block {id, props?, unset?}`,
+    `move_block {id, frameId?, parentId?, slot?, index?}`, `remove_block {id}`.
+  - grid: `set_span {id, class: compact|medium|expanded, span}` (whole columns, 1 to 4 / 8 / 12; `null`
+    clears), `set_start {id, class, start}` (the column the block starts at; with no span it runs to the
+    row's end; start + span − 1 stays within the columns; `null`: the grid places it),
+    `set_hide {id, class, hide}`.
+  - whole pages: `replace_page {frameId, page}` (a generated page), `replace_board {board}`.
+- `status: "refused"` changes nothing and names the op's index (`opIndex`), why (`reasons`: an unknown
+  component, a prop value that is not a token step, a span wider than the grid or a start and span that
+  run past it, a block a slot does not take) and the catalog hash. Fix that op and send the batch again. `status: "conflict"`: the
+  design changed since you read it (`updatedAt` is its time now): read it again. A stored design the
+  catalog cannot fully place is refused until you pass `acceptDrops: true`.
+- The answer is `applied`, `created`, `proposed` (a person reviews it: success, do not retry) or
+  `revised`: a design past its review (`approved` and after) is never written; the change becomes a
+  new design in `draft` (`revisedFrom` names the old one).
+- `design.apply` never moves `design-status`: that stays section 4's move with `expectedStatus`.
 
 ## 3. Critique: three tiers, not equally trusted
 
@@ -101,17 +205,24 @@ finding. Write the list into each variant's `critique`.
   review: stop and say so. Move `approved` to `implementing` with `expectedStatus: "approved"`.
 - Read it with `synap_get_entity`. For each distinct `type`, confirm the component and its props in
   the catalog. A missing type or prop: stop, record it in `design-notes`, propose the component.
-- Build only those components, in the order of `content[]` and its slots, with tokens only and the
+- Build only those components, in the order of `content[]` and its slots (for a canvas, one screen per
+  frame: each frame's `page` is that screen's design), with tokens only and the
   named motion presets. The design gives layout, not data wiring: data still flows through the layers.
-- Give the screen a story and record its id in `implemented-story-id`. Never edit `design-json` to
-  match what you built; revise as a new draft instead.
+- Record the built stories on the design. A single-frame design records its story id in
+  `implemented-story-id`. A design with several frames records a map in `frame-stories`,
+  `{ "<frameId>": ["<storyId>", ...] }`: every frame id of `design-json` is a key, and one frame may
+  serve several stories (its states), so a story is never guessed from a frame's name. Leave
+  `implemented-story-id` empty for a multi-frame design; existing designs are not migrated, so a
+  reader uses `implemented-story-id` when the map is empty. Never edit `design-json` to match what
+  you built; revise as a new draft instead.
 
 ## 6. Verify against the design
 
 - Run the gates yourself and quote them: type-check, story tests (render, interaction, axe), visual
   regression when a primitive changed (a moved pixel is a finding first, never a baseline update),
   the token, hex and motion guards.
-- **Compare Today, Design and Built.** Capture the built story and, when set, the `current-story-id`
+- **Compare Today, Design and Built.** Capture each built story (`implemented-story-id`, or every
+  story in `frame-stories`, compared frame by frame) and, when set, the `current-story-id`
   (today) with `pnpm --filter @synap-core/storybook capture`, the one capture door; render the design on
   the canvas; list every difference. Then run the Checked tier on the built story.
 - Walk the screen in the running app with screenshots: WORKS, BROKEN or CANNOT-TELL.
@@ -123,7 +234,8 @@ finding. Write the list into each variant's `critique`.
 
 - **Team devbox, always on, built from `main`:** an index at `http://devbox:3000`, Storybook, the
   Design app at `http://devbox:3007`: the Map (`#/`, every component Figma-style; tokens on its
-  Foundations page, also at `#/design-tokens`), the design canvas (`#/design`) and the Lab
+  Foundations page, also at `#/design-tokens`), a design on the Map canvas (`#/map/canvas/<id>`, one frame at
+  `#/map/canvas/<id>/frame/<frameId>`) and the Lab
   (`#/lab`, live full experiences), and the
   Storybook MCP at `http://devbox:3006/mcp`. These hosts are on the founder's private tailnet only:
   an agent or pod outside it cannot reach them.

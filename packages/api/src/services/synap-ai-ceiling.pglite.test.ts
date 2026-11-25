@@ -190,7 +190,7 @@ describe("resolveSynapAiCeiling", () => {
     });
   });
 
-  it("the live grants of an active key with client_id synap-ai are the ceiling (non-vacuity: every field arrives)", async () => {
+  it("the live grants of the held key (service, instance synap-ai) are the ceiling (non-vacuity: every field arrives)", async () => {
     await reset();
     const key = await addKey(SYNAP_AI);
     await addGrant(key, {
@@ -351,6 +351,21 @@ describe("ensureSynapAiKey", () => {
     );
     const next = await ensureSynapAiKey(OPERATOR);
     expect(next.keyId).not.toBe(old.keyId);
+  });
+
+  it("two first turns racing end on ONE active key, and both get the same id (never twin rows where one revoke leaves the other live)", async () => {
+    await reset();
+    const [a, b, c] = await Promise.all([
+      ensureSynapAiKey(OPERATOR),
+      ensureSynapAiKey(OPERATOR),
+      ensureSynapAiKey(OPERATOR),
+    ]);
+    expect(new Set([a.keyId, b.keyId, c.keyId]).size).toBe(1);
+    const active = (await q(
+      `select id from api_keys where user_id = $1 and instance_id = $2 and is_active and revoked_at is null`,
+      [SYNAP_AI, SYNAP_AI_KEY_INSTANCE]
+    )) as { rows: { id: string }[] };
+    expect(active.rows.map((r) => r.id)).toEqual([a.keyId]);
   });
 });
 

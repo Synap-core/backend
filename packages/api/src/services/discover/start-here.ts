@@ -114,7 +114,7 @@ export async function readHandedToYou(
       users,
       sessionStartedByAgentSql,
     } = await import("@synap/database");
-    const { OPEN_SESSION_STATUSES } =
+    const { IN_FLIGHT_SESSION_STATUSES } =
       await import("@synap-core/types/focus-sessions");
     const { movedWithinDaysSql } = await import("../status/status-facts.js");
     // Reach is exclusive (THE route): a bound agent is handed work through its
@@ -153,10 +153,7 @@ export async function readHandedToYou(
         and(
           eq(focusSessions.userId, userId),
           or(
-            inArray(
-              focusSessions.status,
-              OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-            ),
+            inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
             and(stale, staleInWindow)
           ),
           drizzleSql`${agentUserId} = ANY(${focusSessions.agentIds})`,
@@ -436,11 +433,17 @@ async function readStatusRollup(p: {
 async function readStatusOfSection(
   userId: string,
   ids: string[],
-  include?: readonly StatusOfInclude[]
+  include: readonly StatusOfInclude[] | undefined,
+  agentUserId: string | null
 ): Promise<StartHere["statusOf"]> {
   try {
     const { readStatusOf } = await import("../status/status-read.js");
-    return await readStatusOf(userId, ids, include ? { include } : {});
+    return await readStatusOf(userId, ids, {
+      ...(include ? { include } : {}),
+      // Both orient doors (MCP, Hub REST) are Hub Protocol doors: no session
+      // roster (`rosterReadFor`), so the stricter review verdict.
+      viewer: { agentUserId, roster: false },
+    });
   } catch (err) {
     logger.warn({ err }, "orient: statusOf NOT read — unavailable");
     return UNAVAILABLE;
@@ -550,7 +553,12 @@ export async function buildStartHere(p: {
         })
       : Promise.resolve(undefined),
     p.statusOf?.length
-      ? readStatusOfSection(p.userId, p.statusOf, p.statusOfInclude)
+      ? readStatusOfSection(
+          p.userId,
+          p.statusOf,
+          p.statusOfInclude,
+          p.agentUserId ?? null
+        )
       : Promise.resolve(undefined),
   ]);
   const pendingReview = foldPendingReview(p.pending);

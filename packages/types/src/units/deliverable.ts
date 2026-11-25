@@ -42,6 +42,7 @@
  *       (a JUDGEMENT of the agent's claim, whoever owns the slot — it
  *       outranks the owner: the act asked is "check this", not "make this")
  *   the person's                        → owed from you  → needs_you
+ *   the person refused its ask          → blocked on "Refused: …" → blocked
  *   handed back by its delegate         → blocked on the reason → blocked
  *   the session's, session still open   → running        → working
  *   the session's, session finished     → never started  → not_started
@@ -52,6 +53,12 @@
  */
 
 import { CRITERION_SLOT_KIND } from "../focus-sessions/criterion-slot.js";
+import type { LifecycleCategory } from "../lifecycle/option.js";
+import {
+  declinedAnswerText,
+  declinedReasonOf,
+  isDeclinedAnswer,
+} from "../ask/declined.js";
 import {
   resolveUnitState,
   type UnitStateInput,
@@ -103,6 +110,11 @@ export const DECIDING_ASK_MODES = ["confirm", "choose"] as const;
  *     words with no ask file none).
  * A criterion's grade slot never counts, though its ask is a choose: it is a
  * verdict on the agent's work, discharged by the grade door, not a decision.
+ * A REFUSAL never counts either (`answer.value.type === "declined"`,
+ * `../ask/declined.ts`): the person said no to the ask, which decides
+ * nothing, so the slot stays owed (by the agent, after the hand-back). A
+ * decision ask OPENED FOR a decision already carries `decisionId` before any
+ * answer, which is why the value is read, not only the filing.
  *
  * READ-TIME, so a slot answered before the rule existed reads delivered too,
  * and a re-answer or a relay correction moves it with no second write. The
@@ -126,6 +138,7 @@ export function isDecidedByAnswer(
   if (!answer || typeof answer !== "object" || Array.isArray(answer)) {
     return false;
   }
+  if (isDeclinedAnswer(answer)) return false;
   const snapshot = (answer as { askSnapshot?: unknown }).askSnapshot;
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
     return false;
@@ -208,6 +221,165 @@ export function deliverableOwedBy(
   return slot.owner === "human" ? "you" : "session";
 }
 
+/** The fields {@link isGradeAwaitingOutput} reads. */
+type GradeFacts = Pick<DeliverableFacts, "kind"> & {
+  /** On a grade slot: the key of the output its criterion checks. */
+  outputKey?: unknown;
+};
+
+/**
+ * A DECLARED grade slot (work-model W5) that waits on the output its
+ * criterion checks: a criterion slot naming that output's key (`outputKey`,
+ * stamped only by the door that files a grade declared up front, never by the
+ * escalation), and no slot of the same session with that stored `key` has
+ * been MADE yet. Until it is made the grade is not the person's move: it is
+ * not owed, so it neither counts in needs-you nor parks the run.
+ *
+ * MADE is: delivered (`done`, or decided by the person's answer), CLAIMED by
+ * the agent (`claimedDone: true` — an output a required criterion checks never
+ * reaches `done` by evidence, it waits for that check), or LET GO (retired, or
+ * optional): a let-go output never hides its grade forever. An output NOT
+ * DECLARED yet is not made: a playbook's later stage brings its outputs in
+ * when it is entered, while its criteria sit on the session from the start
+ * (wave lead default, W5 review B). A grade slot is never the output another
+ * grade waits on.
+ *
+ * The SQL mirror is `gradeAwaitsOutputSql` (`@synap/database`,
+ * `owed-slot-predicate.ts`), held to this by its PGlite parity test.
+ */
+export function isGradeAwaitingOutput(
+  slot: GradeFacts,
+  outputs: readonly unknown[]
+): boolean {
+  if (slot.kind !== CRITERION_SLOT_KIND) return false;
+  const key = slot.outputKey;
+  if (typeof key !== "string" || key === "") return false;
+  return !outputs.some((raw) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const o = raw as DeliverableFacts & { key?: unknown };
+    return (
+      o.key === key &&
+      o.kind !== CRITERION_SLOT_KIND &&
+      (isDeliverableDelivered(o) ||
+        o.claimedDone === true ||
+        o.retiredAt != null ||
+        o.optional === true)
+    );
+  });
+}
+
+/**
+ * Owed by the person NOW, read in its session: {@link deliverableOwedBy} is
+ * `"you"` and it is not a grade waiting on its output
+ * ({@link isGradeAwaitingOutput}). THE question needs-you, run parking and
+ * the reapers ask (`owedSlotExistsIn` in SQL). `outputs` is the session's
+ * whole `expected_outputs` list, the slot included.
+ */
+export function isOwedByYouIn(
+  slot: FloorFacts & Pick<DeliverableFacts, "owner"> & GradeFacts,
+  outputs: readonly unknown[]
+): boolean {
+  return (
+    deliverableOwedBy(slot) === "you" && !isGradeAwaitingOutput(slot, outputs)
+  );
+}
+
+/**
+ * NEWEST OWED FIRST: the order every "what does the person owe, latest
+ * first" read uses (orient's owed-by-person rows, the slot a stopped run
+ * waits on). `owedSince` is an ISO instant, so text order is time order; a
+ * slot with none sorts last. A comparator for `Array.prototype.sort` (stable:
+ * ties keep their order).
+ */
+export function newestOwedFirst(
+  a: { owedSince?: string | null },
+  b: { owedSince?: string | null }
+): number {
+  const x = a.owedSince ?? "";
+  const y = b.owedSince ?? "";
+  return x < y ? 1 : x > y ? -1 : 0;
+}
+
+/**
+ * A slot's STATUS as a transition subject: DERIVED from the owed rule above,
+ * never stored — a slot has no status column, and gets none. The doors that
+ * change it (answer, block, unblock, satisfy, attest, retire, delegate, the
+ * decision-ask reactor) owe a `slot` transition when this value changes
+ * (`oweSlotTransitions`, @synap/database).
+ *
+ *   owed      outstanding and the person's (`deliverableOwedBy` = you): the
+ *             ask is open;
+ *   pending   outstanding and the session's, never answered; or optional and
+ *             unfilled (owed by nobody, not made either);
+ *   answered  the person answered it and it went back to the session, which
+ *             still owes the slot (an answer that filed its decision is
+ *             already `done`);
+ *   done      delivered (`isDeliverableDelivered`);
+ *   retired   let go without being delivered (`retiredAt`).
+ */
+export const SLOT_STATUSES = [
+  "owed",
+  "pending",
+  "answered",
+  "done",
+  "retired",
+] as const;
+export type SlotStatus = (typeof SLOT_STATUSES)[number];
+
+/**
+ * THE slot lifecycle (founder decision D9, 17 Nov 2026): owed = open,
+ * answered or done = done, retired = lost. A slot the session owes is `open`
+ * too: it is owed, by the agent.
+ */
+export const SLOT_STATUS_DECLARATION = {
+  owed: { category: "open" },
+  pending: { category: "open" },
+  answered: { category: "done" },
+  done: { category: "done" },
+  retired: { category: "lost" },
+} as const satisfies Record<SlotStatus, { category: LifecycleCategory }>;
+
+/** The fields {@link slotStatusOf} reads. */
+export type SlotStatusFacts = FloorFacts & Pick<DeliverableFacts, "owner">;
+
+/**
+ * One slot → its derived status. Delivered wins over retired, as the floor
+ * reads it. `outputs` (the session's whole list): a grade waiting on its
+ * output ({@link isGradeAwaitingOutput}) is `pending`, not yet `owed`; without
+ * it the slot is read alone.
+ */
+export function slotStatusOf(
+  slot: SlotStatusFacts & GradeFacts,
+  outputs?: readonly unknown[]
+): SlotStatus {
+  if (isDeliverableDelivered(slot)) return "done";
+  if (slot.retiredAt != null) return "retired";
+  if (
+    deliverableOwedBy(slot) === "you" &&
+    !(outputs && isGradeAwaitingOutput(slot, outputs))
+  ) {
+    return "owed";
+  }
+  const answer = slot.answer;
+  const answered =
+    answer != null &&
+    (typeof answer !== "object" || Object.keys(answer).length > 0);
+  return answered ? "answered" : "pending";
+}
+
+/**
+ * A slot's transition subject id: `<session id>/<slot key>` (the label when
+ * the slot has no key) — the `answer:` wait's spelling without its prefix, so
+ * a hold may wait on `slot:<session id>/<key>`.
+ */
+export function slotSubjectId(
+  sessionId: string,
+  slot: { key?: string | null; label?: string | null }
+): string | null {
+  const name = slot.key || slot.label;
+  return name ? `${sessionId}/${name}` : null;
+}
+
 /** The session a deliverable belongs to — the one fact the slot cannot carry. */
 export interface DeliverableContext {
   /**
@@ -216,6 +388,12 @@ export interface DeliverableContext {
    * default would guess.
    */
   sessionTerminal: boolean;
+  /**
+   * The session's whole `expected_outputs` list: a grade waiting on its output
+   * ({@link isGradeAwaitingOutput}) is the agent's work in the making, not
+   * the person's. Absent = the slot is read alone.
+   */
+  outputs?: readonly unknown[];
 }
 
 /** One deliverable → the shared derivation's input. See the header for the order. */
@@ -231,7 +409,16 @@ export function deliverableUnitInput(
   const owedBy = deliverableOwedBy(slot);
   if (owedBy === null) return { terminal: true };
   if (slot.claimedDone) return { pendingDecisions: 1 };
-  if (owedBy === "you") return { owedFromYou: 1 };
+  const waiting =
+    !!ctx.outputs &&
+    isGradeAwaitingOutput(slot as DeliverableFacts & GradeFacts, ctx.outputs);
+  if (owedBy === "you" && !waiting) return { owedFromYou: 1 };
+  // The person REFUSED the ask: the agent owes a new plan, and the slot says
+  // why it is stuck, on an open session and a finished one alike (a refused
+  // slot of a closed session must not read "never started").
+  if (isDeclinedAnswer(slot.answer)) {
+    return { blockedBy: declinedAnswerText(declinedReasonOf(slot.answer)) };
+  }
   if (slot.returnedReason) return { blockedBy: slot.returnedReason };
   if (ctx.sessionTerminal) return { everStarted: false };
   return { running: true };
@@ -255,7 +442,10 @@ export interface DeliverableCounts {
   owedByYou: number;
 }
 
-/** Count a session's declared slots by the same two questions. */
+/**
+ * Count a session's declared slots by the same two questions. `slots` is the
+ * session's whole list, so a grade is read in it ({@link isOwedByYouIn}).
+ */
 export function tallyDeliverables(
   slots: readonly DeliverableFacts[]
 ): DeliverableCounts {
@@ -270,7 +460,8 @@ export function tallyDeliverables(
     const by = deliverableOwedBy(slot);
     if (by === null) continue; // retired, or optional and unfilled
     owed += 1;
-    if (by === "you") owedByYou += 1;
+    // A grade waiting on its output is outstanding, not yet the person's.
+    if (by === "you" && isOwedByYouIn(slot, slots)) owedByYou += 1;
   }
   return { done, total: done + owed, owedByYou };
 }

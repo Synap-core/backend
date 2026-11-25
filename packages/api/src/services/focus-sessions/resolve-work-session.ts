@@ -11,6 +11,8 @@
  *      it started itself, else the one the governance gate auto-opened for it
  *      while that is still in its window. A KEY-scoped client (option A: the
  *      door knows no conversation) only ever gets the key's auto-opened one.
+ *      SEVERAL started and open ⇒ NO guess (plan a640c5bb): `none`, with them listed in
+ *      `clientSessions`, and the gate files into the client's receipt.
  *   3. UNCLAIMED — exactly ONE open WORK session that no client has claimed (a
  *      session the person opened) and that was TOUCHED in the last
  *      {@link UNCLAIMED_TOUCHED_WITHIN_HOURS} hours. More than one ⇒ NO guess,
@@ -49,7 +51,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { workClockIn } from "@synap-core/types/work-clock";
-import { OPEN_SESSION_STATUSES } from "./session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "./session-statuses.js";
 import { ambientWorkWhere } from "./session-kind.js";
 
 const logger = createLogger({ module: "focus-sessions/resolve-work-session" });
@@ -75,6 +77,14 @@ export interface WorkSessionResolution {
   ignoredSession?: {
     sessionId: string;
     reason: "not-owned" | "ownership-check-failed";
+  };
+  /**
+   * Rung 2 found SEVERAL open sessions this client started: none is
+   * guessed, and these are the ones the caller may name (`sessionId`).
+   */
+  clientSessions?: {
+    count: number;
+    sessions: Array<{ id: string; title: string; startedAt: string | null }>;
   };
 }
 
@@ -133,10 +143,7 @@ function unclaimedOpenWorkWhere(userId: string) {
   return and(
     eq(focusSessions.userId, userId),
     // `scheduled` is a future appointment, never where a present write goes.
-    inArray(
-      focusSessions.status,
-      OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-    ),
+    inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
     // A session the PERSON is in — `work`, plus a work session they
     // later attached to a playbook (which reads `run` by design).
     ambientWorkWhere(),
@@ -205,6 +212,28 @@ export async function resolveWorkSession(
   if (clientKey) {
     try {
       const bound = await findClientSession(input.userId, clientKey);
+      // A STARTED session answers only when it is the only one open; the
+      // newest of several is never guessed (one conversation's sub-agents
+      // share this key). The gate then files into the client's receipt.
+      if (bound && !bound.autoOpened) {
+        const started = await resolveClientOpenSession({
+          userId: input.userId,
+          clientKey,
+        });
+        if (started.status === "several") {
+          return {
+            source: "none",
+            unclaimedOpenCount: null,
+            clientSessions: {
+              count: started.count,
+              sessions: started.sessions,
+            },
+          };
+        }
+        if (started.status === "unavailable") {
+          return { source: "none", unclaimedOpenCount: null };
+        }
+      }
       if (bound) {
         return {
           sessionId: bound.id,
@@ -303,7 +332,7 @@ function startedByClientWhere(
   clientKey: string,
   statuses: ReadonlyArray<
     (typeof focusSessions.$inferSelect)["status"]
-  > = OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
+  > = IN_FLIGHT_SESSION_STATUSES
 ) {
   return and(
     eq(focusSessions.userId, userId),

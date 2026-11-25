@@ -54,7 +54,7 @@ describe("selectSlotToAttest — a RETIRED slot is not dischargeable", () => {
   });
 
   it("is not reachable through the owed read either — belt and braces", () => {
-    expect(isOwedSlot(RETIRED)).toBe(false);
+    expect(isOwedSlot(RETIRED, [])).toBe(false);
   });
 
   it("still accepts the SAME slot before it was retired", () => {
@@ -148,7 +148,7 @@ describe("stampAttested — the receipt", () => {
 
   it("takes the slot off the owed board — via `status`, not via erasure", () => {
     const [slot] = stampAttested([OWED], 0, USER);
-    expect(isOwedSlot(slot!)).toBe(false);
+    expect(isOwedSlot(slot!, [])).toBe(false);
   });
 
   it("leaves every other slot untouched", () => {

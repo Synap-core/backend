@@ -402,6 +402,70 @@ describe("a catalog update never switches off an approved capability on its own"
       CONTAINER,
     ]);
     expect(report.updatesAvailable[0]!.reason).toContain("fal_generate_image");
+    // The hold is a typed fact, not only a sentence: which approved skill the
+    // update would switch off, and the execution field that does it.
+    expect(report.updatesAvailable[0]!.held).toBe("changes_execution");
+    expect(report.updatesAvailable[0]!.changedExecFields).toEqual({
+      fal_generate_image: ["code"],
+    });
+  });
+
+  // The Unipile case (6788c5c7, 12 Nov 2026): the catalog added an `inputMap`
+  // to approved verbs, the pod held the update, and the dry run the owner
+  // could read said only "it changes what they run". The hold now names the
+  // field, on the dry run too, and nothing is written.
+  it("an inputMap added to an approved verb: held, named, on a dry run too, nothing written", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    const def = falDefinition();
+    catalogPublishes({
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        inputMap: { params: { prompt: "$.text" } },
+      })),
+    });
+
+    const report = await reconcileCapabilitiesToTemplates({ dryRun: true });
+
+    expect(report.applied).toEqual([]);
+    expect(report.updatesAvailable).toHaveLength(1);
+    expect(report.updatesAvailable[0]).toMatchObject({
+      containerId: CONTAINER,
+      held: "changes_execution",
+      changedExecFields: { fal_generate_image: ["inputMap"] },
+    });
+    const [row] = (
+      await h.client!.query<{ input_map: unknown; approved: boolean }>(
+        `select input_map, approved from skills where name = 'fal_generate_image'`
+      )
+    ).rows;
+    expect(row).toEqual({ input_map: null, approved: true });
+  });
+
+  it("a new box skill the owner never turned on: held as moves_to_box, no exec fields", async () => {
+    await installAsContainer();
+    const def = falDefinition();
+    catalogPublishes({
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        kind: "code",
+        executionMode: "box",
+        code: "print('hi')",
+        metadata: {
+          readOnly: false,
+          box: { language: "python", entrypoint: "main.py" },
+        },
+      })),
+    });
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied).toEqual([]);
+    expect(report.updatesAvailable).toHaveLength(1);
+    expect(report.updatesAvailable[0]!.held).toBe("moves_to_box");
+    expect(report.updatesAvailable[0]!.changedExecFields).toBeUndefined();
   });
 
   it("the owner's Apply updates lands it, and what the owner turned on stays on", async () => {
@@ -458,6 +522,59 @@ describe("a catalog update never switches off an approved capability on its own"
     expect((await skillRows())[0]!.approved).toBe(false);
   });
 
+  // 231020d4: a pack marks a verb propose-only. Adding the flag only
+  // tightens (no auto grant or rule runs the verb any more), so the update
+  // lands on its own and the approval stays; turning it off widens, so it is
+  // held for the owner like any execution change.
+  const withProposeOnly = (value: boolean) => {
+    const def = falDefinition();
+    return {
+      ...def,
+      skills: def.skills.map((sk) => ({
+        ...sk,
+        metadata: { proposeOnly: value },
+      })),
+    };
+  };
+  const skillMetadata = async () =>
+    (
+      await h.client!.query<{ metadata: Record<string, unknown> | null }>(
+        `select metadata from skills where name = 'fal_generate_image'`
+      )
+    ).rows[0]!.metadata;
+
+  it("a catalog update adding metadata.proposeOnly applies on its own: the flag lands, approval kept", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    catalogPublishes(withProposeOnly(true));
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
+    expect(report.updatesAvailable).toEqual([]);
+    expect(await skillMetadata()).toMatchObject({ proposeOnly: true });
+    expect((await skillRows())[0]!.approved).toBe(true);
+  });
+
+  it("a catalog update turning metadata.proposeOnly off is held for the owner, named", async () => {
+    await installAsContainer();
+    await ownerTurnsItOn();
+    await h.client!.query(
+      `update skills set metadata = '{"proposeOnly": true}'::jsonb where name = 'fal_generate_image'`
+    );
+    catalogPublishes(withProposeOnly(false));
+
+    const report = await reconcileCapabilitiesToTemplates();
+
+    expect(report.applied).toEqual([]);
+    expect(report.updatesAvailable[0]!.held).toBe("changes_execution");
+    expect(report.updatesAvailable[0]!.changedExecFields).toEqual({
+      fal_generate_image: ["metadata.proposeOnly"],
+    });
+    expect(await skillMetadata()).toMatchObject({ proposeOnly: true });
+    expect((await skillRows())[0]!.approved).toBe(true);
+  });
+
   it("an update that leaves what the skill runs alone still applies on its own, approval kept", async () => {
     await installAsContainer();
     await ownerTurnsItOn();
@@ -474,6 +591,8 @@ describe("a catalog update never switches off an approved capability on its own"
 
     expect(report.applied.map((a) => a.containerId)).toEqual([CONTAINER]);
     expect(report.updatesAvailable).toEqual([]);
+    expect(report.applied[0]!.held).toBeUndefined();
+    expect(report.applied[0]!.changedExecFields).toBeUndefined();
     expect(
       (
         await h.client!.query<{ description: string; approved: boolean }>(

@@ -44,7 +44,17 @@ import { getMessagingConnector } from "./index.js";
 import { resolveBroker } from "./index.js";
 import type { SyncConnectorConnection } from "./SyncConnector.js";
 import { resolveVaultSecret } from "../utils/vault-resolver.js";
-import { resolveCapabilityGrant, getRequestGrant } from "@synap/database";
+import {
+  resolveCapabilityGrant,
+  getRequestGrant,
+  inArray,
+  proposals,
+  ProposalStatus,
+  UNDECIDED_PROPOSAL_STATUSES,
+  endReplacedProposal,
+  getOpenSupersedes,
+} from "@synap/database";
+import { settleSupersededProposals } from "../services/proposals/settle-superseded.js";
 import {
   validateExternalUrl,
   safePublicFetch,
@@ -98,6 +108,14 @@ import {
 } from "./channel-send.js";
 import type { MessagingConnector } from "./MessagingConnector.js";
 import { heldSend, type HeldSend } from "../services/channels/held-sends.js";
+import {
+  guardLinkedinAction,
+  holdOnThrottle,
+  LINKEDIN_UNCOUNTED,
+  linkedinAccountOf,
+  linkedinActionBlock,
+  linkedinProviderAction,
+} from "../services/channels/linkedin-account-limits.js";
 import { trialSessionWriteRefusal } from "@synap/capability-gate";
 import type { SendGuidanceStamp } from "../services/playbooks/playbook-guidance.js";
 
@@ -256,6 +274,10 @@ const CONNECT_AFFORDANCE =
 // leaf module below (see its docstring for why it's split out).
 export { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { refuseWorkerSendPastCeiling } from "../services/playbooks/worker-send-ceiling.js";
+import {
+  doNotContactRefusal,
+  readRecipientDoNotContact,
+} from "../services/channels/do-not-contact.js";
 import { EXTERNAL_DISPATCH_SOURCE } from "./external-dispatch-constants.js";
 import { encodeFormBody } from "./form-encode.js";
 import { isUuid } from "@synap-core/types/property-render";
@@ -756,11 +778,6 @@ export interface SendExternalMessageInput {
   sessionId?: string | null;
   playbookId?: string | null;
   /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
-  /**
    * BYPASS CONTRACT (W3b): set ONLY by the `messaging.external.send` proposal
    * executor (the send is already past governance at proposal-approval time).
    * When `true`, the capability-execution gate is SKIPPED and the send dispatches
@@ -835,6 +852,8 @@ export interface SendExternalMessageResult {
   errorClass?: FailureErrorClass;
   /** P1: the provider/platform the failed send targeted (for the action label). */
   providerRef?: string;
+  /** A `missing_field` refusal of a channel send: what is missing. */
+  missing?: "profile" | "provider_id";
   /** A channel send: the channel the message landed in (another one when its chat was already held). */
   channelId?: string;
   /** A channel send: the provider's chat id. */
@@ -949,7 +968,13 @@ export async function sendExternalMessage(
             eq(channels.channelType, ChannelType.EXTERNAL),
             eq(channels.externalId as any, threadId)
           ),
-          columns: { id: true, externalSource: true, workspaceId: true },
+          columns: {
+            id: true,
+            externalSource: true,
+            workspaceId: true,
+            contextObjectType: true,
+            contextObjectId: true,
+          },
         })
       : undefined;
   if (!threadId && !sendChannel) {
@@ -999,6 +1024,22 @@ export async function sendExternalMessage(
     }
   }
 
+  // Do not contact (founder, 2026-11-09): the person the conversation is
+  // bound to may be flagged, and then NOTHING goes to them, whoever asks (a
+  // person, an app, an agent, an automation). Refused before the gate, so
+  // nothing is filed; and on an approved replay too, since the flag may have
+  // been set after the send was filed. A conversation bound to no person goes
+  // on as before (`services/channels/do-not-contact.ts`).
+  const doNotContact = await readRecipientDoNotContact(linkedChannel);
+  if (doNotContact) {
+    return {
+      success: false,
+      error: doNotContactRefusal(doNotContact),
+      errorClass: "do_not_contact",
+      providerRef: linkedChannel?.externalSource ?? undefined,
+    };
+  }
+
   const provider = linkedChannel?.externalSource ?? undefined;
   const connector = await getMessagingConnector(provider);
   if (!connector) {
@@ -1043,11 +1084,24 @@ export async function sendExternalMessage(
   // owner branch would have sent it with no review.
   const appSend = !!getRequestGrant()?.clientId;
   const mustPropose = !!input.mustPropose || beyondGrant;
-  if ((input.agentUserId || appSend || mustPropose) && !input.alreadyApproved) {
+  // A LinkedIn account that used today's limit, or that LinkedIn paused for
+  // the day, files the message HELD, whoever sends it (a person too): kept
+  // with its text, sendable again from `until`
+  // (`services/channels/linkedin-account-limits.ts`).
+  const limitHold =
+    sendChannel && !input.alreadyApproved
+      ? await linkedinHoldAtFiling(sendChannel, input.accountId)
+      : null;
+  if (
+    (input.agentUserId || appSend || mustPropose || limitHold) &&
+    !input.alreadyApproved
+  ) {
     // The reach check at FILING (CRM Messages contract b4f8c2cd, B): a
-    // LinkedIn first message to someone who is not a connection is HELD, never
+    // LinkedIn first message to someone who is not a connection, or who has
+    // no LinkedIn profile on file (plan 8032a127 D1), is HELD, never
     // refused: filed as a proposal with `data.held` and the next step named,
-    // so the draft is kept and shown, and becomes sendable once they connect
+    // so the draft is kept and shown. It becomes sendable once they connect;
+    // a missing profile, on an approval after the person fixes their record
     // (`services/channels/held-sends.ts`). Same rule as at dispatch
     // (`readChannelReach`); a failed read files as before. An ungated send
     // skips it: the dispatch check runs straight after.
@@ -1058,8 +1112,17 @@ export async function sendExternalMessage(
         connector,
         namedAccountId: input.accountId,
       });
-      if (unreachable) held = heldSend(unreachable.error);
+      if (unreachable)
+        held = heldSend(
+          unreachable.error,
+          new Date(),
+          unreachable.errorClass === "missing_field"
+            ? "missing_field"
+            : "not_connected",
+          unreachable.missing
+        );
     }
+    held = held ?? limitHold;
     const gateResult = await gateMessagingSend({
       ...input,
       guidance,
@@ -1115,7 +1178,63 @@ export async function sendExternalMessage(
       errorClass: "validation",
     };
   }
-  await connector.sendMessage(accountId, threadId, body);
+  // A LinkedIn account counts this message against its day (and pauses on
+  // LinkedIn's "slow down"); a hold, or a count that could not be taken, is
+  // a definite not-sent.
+  const linkedinAccount = await linkedinAccountOf(userId, accountId);
+  if (linkedinAccount) {
+    const guarded = await guardLinkedinAction({
+      accountRowId: linkedinAccount.id,
+      kind: "message",
+      call: async () => {
+        try {
+          await connector.sendMessage(accountId, threadId, body);
+          return null;
+        } catch (err) {
+          return err instanceof Error ? err : new Error(String(err));
+        }
+      },
+      refusalOf: (err) =>
+        err
+          ? { status: providerStatusOf(err.message), message: err.message }
+          : null,
+    });
+    if ("uncounted" in guarded) {
+      return {
+        success: false,
+        error: LINKEDIN_UNCOUNTED,
+        errorClass: "transient",
+        providerRef: provider,
+      };
+    }
+    if ("held" in guarded) {
+      return {
+        success: false,
+        error: guarded.held.reason,
+        errorClass: "transient",
+        providerRef: provider,
+        held: guarded.held,
+      };
+    }
+    if (guarded.result) {
+      // LinkedIn said "slow down" (the guard paused the account): a definite
+      // not-sent, held with the account. Any other failure throws as before.
+      if (!guarded.paused) throw guarded.result;
+      const message = guarded.result.message;
+      return {
+        success: false,
+        error: guarded.paused.reason,
+        errorClass: classifyDispatchFailure({
+          status: providerStatusOf(message),
+          message,
+        }),
+        providerRef: provider,
+        held: guarded.paused,
+      };
+    }
+  } else {
+    await connector.sendMessage(accountId, threadId, body);
+  }
 
   // Mirror the outbound message into the messages table.
   let messageId: string | undefined;
@@ -1204,6 +1323,21 @@ const providerStatusOf = (message: string): number =>
   Number(/failed: (\d{3})\b/.exec(message)?.[1] ?? 0);
 
 /**
+ * The account a LinkedIn message filed on this channel would go out from,
+ * when it may not act today: the hold it is filed under. No account (or not
+ * a LinkedIn one): null, the send door decides as before.
+ */
+async function linkedinHoldAtFiling(
+  channel: SendChannel,
+  named: string | null | undefined
+): Promise<HeldSend | null> {
+  const accountId = await resolveSendAccount(channel, named);
+  if (!accountId) return null;
+  const account = await linkedinAccountOf(channel.userId, accountId);
+  return account ? linkedinActionBlock(account.id, "message") : null;
+}
+
+/**
  * Deliver a send that names the person's channel (channels wave, lane D):
  * the account the channel's owner holds, the plan (attendee,
  * 1st-degree check, start or continue the chat, the outbound row, events),
@@ -1228,6 +1362,8 @@ async function sendOnChannel(args: {
     };
   }
   let accountId = "";
+  // The sending account, when it is a LinkedIn one: its day is counted.
+  let linkedinRowId: string | null = null;
   let plan!: Awaited<ReturnType<typeof planChannelSend>>;
   // Before anything is sent: the account, then continue the chat or start it
   // (attendee resolved, 1st-degree check). Everything here is a read: a
@@ -1246,6 +1382,8 @@ async function sendOnChannel(args: {
         };
       }
       accountId = resolved;
+      linkedinRowId =
+        (await linkedinAccountOf(channel.userId, accountId))?.id ?? null;
     }
     plan = await planChannelSend({ channel, connector, accountId });
   } catch (err) {
@@ -1255,6 +1393,9 @@ async function sendOnChannel(args: {
       { err, channelId: channel.id, provider },
       "channel send: a read before the send failed; nothing was sent"
     );
+    const held = linkedinRowId
+      ? await holdOnThrottle(linkedinRowId, { status, message })
+      : null;
     return {
       success: false,
       error: `Nothing was sent: ${humanizeToken(provider)} could not be read before sending (${redactForStorage(message, 160)}).`,
@@ -1262,6 +1403,7 @@ async function sendOnChannel(args: {
         ? classifyDispatchFailure({ status, message })
         : "transient",
       providerRef: provider,
+      ...(held ? { held, channelId: channel.id } : {}),
     };
   }
   if (!plan.ok) {
@@ -1270,6 +1412,7 @@ async function sendOnChannel(args: {
       error: plan.error,
       errorClass: plan.errorClass,
       providerRef: plan.providerRef ?? provider,
+      ...(plan.missing ? { missing: plan.missing } : {}),
     };
   }
   // THE provider call. The provider REFUSING it (an HTTP 4xx answer: a rate
@@ -1278,28 +1421,81 @@ async function sendOnChannel(args: {
   // retry can run. Any other throw (a timeout, a network error, a 5xx that
   // may come after the provider acted, a 2xx it could not read) is AMBIGUOUS:
   // it propagates, and the executor keeps its claim.
-  let chatId: string;
-  let externalMessageId: string | null;
-  try {
-    if (plan.kind === "continue") {
-      chatId = plan.chatId;
-      const sent = await connector.sendMessage(accountId, chatId, input.body);
-      externalMessageId = (sent && sent.messageId) || null;
-    } else {
+  const ready = plan;
+  const callProvider = async (): Promise<
+    | { sent: { chatId: string; externalMessageId: string | null } }
+    | { refused: { status: number; message: string } }
+  > => {
+    try {
+      if (ready.kind === "continue") {
+        const sent = await connector.sendMessage(
+          accountId,
+          ready.chatId,
+          input.body
+        );
+        return {
+          sent: {
+            chatId: ready.chatId,
+            externalMessageId: (sent && sent.messageId) || null,
+          },
+        };
+      }
       const started = await connector.startChat!(
         accountId,
-        plan.attendee,
+        ready.attendee,
         input.body
       );
-      chatId = started.chatId;
-      externalMessageId = started.messageId;
+      return {
+        sent: { chatId: started.chatId, externalMessageId: started.messageId },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = providerStatusOf(message);
+      if (status < 400 || status >= 500) throw err;
+      return { refused: { status, message } };
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const status = providerStatusOf(message);
-    if (status < 400 || status >= 500) throw err;
+  };
+  // A LinkedIn account spends one action of its day right before the send
+  // (`guardLinkedinAction`): past its limit (or while LinkedIn paused it)
+  // the message is HELD, not sent; a count that could not be taken is a
+  // definite not-sent too; LinkedIn saying "slow down" pauses the account
+  // and this message waits with it, never retried by itself.
+  let attempt: Awaited<ReturnType<typeof callProvider>>;
+  let paused: HeldSend | null = null;
+  if (linkedinRowId) {
+    const guarded = await guardLinkedinAction({
+      accountRowId: linkedinRowId,
+      kind: "message",
+      call: callProvider,
+      refusalOf: (a) => ("refused" in a ? a.refused : null),
+    });
+    if ("uncounted" in guarded) {
+      return {
+        success: false,
+        error: LINKEDIN_UNCOUNTED,
+        errorClass: "transient",
+        providerRef: provider,
+      };
+    }
+    if ("held" in guarded) {
+      return {
+        success: false,
+        error: guarded.held.reason,
+        errorClass: "transient",
+        providerRef: provider,
+        held: guarded.held,
+        channelId: channel.id,
+      };
+    }
+    attempt = guarded.result;
+    paused = guarded.paused;
+  } else {
+    attempt = await callProvider();
+  }
+  if ("refused" in attempt) {
+    const { status, message } = attempt.refused;
     logger.warn(
-      { err, channelId: channel.id, provider, status },
+      { message, channelId: channel.id, provider, status },
       "channel send: the provider refused the message; nothing was sent"
     );
     return {
@@ -1307,8 +1503,10 @@ async function sendOnChannel(args: {
       error: `Nothing was sent: ${humanizeToken(provider)} refused the message (${redactForStorage(message, 160)}).`,
       errorClass: classifyDispatchFailure({ status, message }),
       providerRef: provider,
+      ...(paused ? { held: paused, channelId: channel.id } : {}),
     };
   }
+  const { chatId, externalMessageId } = attempt.sent;
   // The message went out: from here a failure to RECORD it is logged, never
   // reported as "not sent" (that would invite a second send).
   let recorded: { channelId: string; messageId: string | undefined } = {
@@ -1378,6 +1576,83 @@ async function sendOnChannel(args: {
     externalMessageId: delivered.externalMessageId,
     first: delivered.first,
   };
+}
+
+/**
+ * ONE UNDECIDED SEND PER PERSON'S CHANNEL (plan 8032a127 D2; decision Q3, 17
+ * Nov 2026). The undecided send already on `channelId` for its owner
+ * (pending, or failed and never dispatched: `externalDispatchedAt` is the
+ * at-most-once claim), newest pending first; null when there is none.
+ *
+ * Its AUTHOR filing again revises it in place, through the normal author rung
+ * ({@link reviseOwnUndecidedSend}). Anyone else's send, or a revise that fails,
+ * is filed as a new row that ends this one (`endReplacedProposal`).
+ */
+export async function undecidedSendOn(input: {
+  ownerUserId: string;
+  channelId: string;
+}): Promise<{ id: string; agentUserId: string | null } | null> {
+  const [row] = await db
+    .select({ id: proposals.id, agentUserId: proposals.agentUserId })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.proposalType, "messaging.external.send"),
+        eq(proposals.targetType, "messaging"),
+        eq(proposals.targetId, input.channelId),
+        eq(proposals.subjectUserId, input.ownerUserId),
+        inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES]),
+        isNull(proposals.externalDispatchedAt)
+      )
+    )
+    .orderBy(
+      drizzleSql`CASE WHEN ${proposals.status} = ${ProposalStatus.PENDING} THEN 0 ELSE 1 END`,
+      desc(proposals.createdAt)
+    )
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * The author's new words on its own undecided send: the one revise door, its
+ * author rung (the acting agent is the row's author), only the words. A
+ * failed row reopens for review. True when it landed; false when the revise
+ * refused (decided meanwhile, a payload refusal): the caller files instead.
+ */
+async function reviseOwnUndecidedSend(input: {
+  proposalId: string;
+  ownerUserId: string;
+  authorAgentUserId: string;
+  body: string;
+  subject: string | null;
+}): Promise<boolean> {
+  const { mergeProposalRevision } =
+    await import("../services/proposals/proposals-service.js");
+  try {
+    await mergeProposalRevision({
+      proposalId: input.proposalId,
+      patch: {
+        kind: "envelope",
+        fields: {
+          body: input.body,
+          ...(input.subject !== null ? { subject: input.subject } : {}),
+        },
+      },
+      actorId: input.ownerUserId,
+      actingAgentUserId: input.authorAgentUserId,
+    });
+  } catch (err) {
+    logger.warn(
+      { err, proposalId: input.proposalId },
+      "send refile: the author's revise refused, filing a new send instead"
+    );
+    return false;
+  }
+  // A `supersedes` naming this very row is answered: the row now carries the
+  // corrected request (the MCP door must not say it was left failed).
+  const slot = getOpenSupersedes();
+  if (slot?.proposalId === input.proposalId) slot.replacedBy = input.proposalId;
+  return true;
 }
 
 /**
@@ -1453,7 +1728,6 @@ async function gateMessagingSend(
     capabilityId,
     tool:
       input.mustPropose && !seeded ? { ...toolRow, approved: null } : toolRow,
-    grantMetadata: input.grantMetadata ?? null,
     actorUserId: input.agentUserId ?? input.userId,
     agentUserId: input.agentUserId ?? null,
     workspaceId: input.workspaceId ?? null,
@@ -1526,6 +1800,28 @@ async function gateMessagingSend(
     const accountId = channel
       ? input.accountId || (channelMeta(channel).accountId as string) || null
       : null;
+    // ONE UNDECIDED SEND PER PERSON'S CHANNEL (`undecidedSendOn`): never a
+    // second card for the same person, of which both could go out.
+    const undecided = channel
+      ? await undecidedSendOn({
+          ownerUserId: input.userId,
+          channelId: channel.id,
+        })
+      : null;
+    if (
+      undecided &&
+      input.agentUserId &&
+      undecided.agentUserId === input.agentUserId &&
+      (await reviseOwnUndecidedSend({
+        proposalId: undecided.id,
+        ownerUserId: input.userId,
+        authorAgentUserId: input.agentUserId,
+        body: input.body,
+        subject: input.subject ?? null,
+      }))
+    ) {
+      return { kind: "propose", proposalId: undecided.id };
+    }
     const proposal = await createPendingProposal({
       userId: input.userId,
       // ATTRIBUTION IS ADDITIVE (routers/capture.ts:2745). Without an explicit
@@ -1574,6 +1870,21 @@ async function gateMessagingSend(
         ? `Send a ${humanizeToken(provider)} message to ${channel.title ?? "them"}`
         : `Send message via ${provider}`,
     });
+    if (undecided && channel) {
+      // The new send replaces the one already there (another author's, or one
+      // its revise refused): it ends withdrawn, pointing here.
+      const ended = await endReplacedProposal(db, {
+        replacedId: undecided.id,
+        replacement: {
+          id: proposal.id,
+          proposalType: "messaging.external.send",
+          targetType: "messaging",
+          targetId: channel.id,
+        },
+        from: UNDECIDED_PROPOSAL_STATUSES,
+      });
+      await settleSupersededProposals(ended, input.userId);
+    }
     return { kind: "propose", proposalId: proposal.id };
   }
 
@@ -1669,11 +1980,6 @@ export interface TriggerProviderActionInput {
    * below (a non-owner `userId` is treated as a delegated agent → propose).
    */
   agentUserId?: string | null;
-  /**
-   * The acting `grants`-link metadata (carrying the per-grant `execMode`), when
-   * the caller resolved a grant for this run. Threaded to the gate.
-   */
-  grantMetadata?: Record<string, unknown> | null;
   /** Optional session/playbook context for the gate's proposal payload + audit. */
   sessionId?: string | null;
   playbookId?: string | null;
@@ -1693,7 +1999,14 @@ export interface TriggerProviderActionInput {
   connectionSelector?: ConnectionSelector | null;
   /**
    * BYPASS CONTRACT (Wave 3a/3b): set ONLY by the `capability/run` proposal
-   * executor (and the auto `run` decision re-entry). When `true`, the
+   * executor (and the auto `run` decision re-entry), and by
+   * `services/webhooks/connect-inbound-source.ts`: its approval executor
+   * (`webhook/inbound_source.connect`, with `sourceProposalId`) writes the
+   * host's env vars and redeploys, and its filing preflight READS the host
+   * (project, env var keys) once the caller's own gate on each read verb said
+   * run (`gateHostReads`), as `executeProviderVerb` sends a read once its
+   * verb's gate ran. That module checks the tool's enable floor itself, since
+   * this flag skips it, and pins the pod-wide tool by id. When `true`, the
    * capability-execution gate is SKIPPED and the dispatch runs directly, exactly
    * once — so an already-approved proposal never loops back into a new proposal.
    * No external/untrusted caller may supply it.
@@ -1783,6 +2096,14 @@ export interface TriggerProviderActionResult {
    * it. Absent for non-connection schemes / when no connection was resolved.
    */
   connectionId?: string;
+  /**
+   * Not sent, and it waits rather than fails: a LinkedIn action its account
+   * may not make today (its daily limit, or LinkedIn paused it), until
+   * `held.until` (`linkedin-account-limits.ts`). The ONE signal an approval
+   * holds on; a refusal without it (e.g. LinkedIn's 422 cannot_resend_yet)
+   * fails with LinkedIn's own sentence.
+   */
+  held?: HeldSend;
 }
 
 /** A resolved `tools` row, passed to each scheme handler. */
@@ -1881,6 +2202,13 @@ export function extractProviderErrorMessage(
 
 /** Bound on the provider-authored error text a caller is shown. */
 const PROVIDER_ERROR_MAX = 400;
+
+/** The `type` a provider's error body names (Unipile: `errors/<kind>`). */
+function providerErrorType(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const t = (body as Record<string, unknown>).type;
+  return typeof t === "string" && t ? t : null;
+}
 
 function providerErrorText(body: unknown): string | null {
   if (!body || typeof body !== "object") return null;
@@ -3174,7 +3502,6 @@ export async function triggerProviderAction(
         approved: tool.approved,
         createdBy: tool.createdBy,
       },
-      grantMetadata: input.grantMetadata ?? null,
       actorUserId: effectiveActorUserId,
       agentUserId: input.agentUserId ?? null,
       workspaceId: input.workspaceId ?? null,
@@ -3360,7 +3687,57 @@ export async function triggerProviderAction(
             ? { accountHint: accountHintOverride }
             : {}),
         };
-  const result = await handler({ input: dispatchInput, tool });
+  // A LinkedIn action through a verb's provider call (a code skill's
+  // connection request or message, which reaches no send door): spent from
+  // the account's day first, and a held one is not sent; a "slow down"
+  // answer pauses the account (`linkedin-account-limits.ts`).
+  const linkedinAction = linkedinProviderAction(input.method, input.path);
+  const linkedinAccount = linkedinAction
+    ? await linkedinAccountOf(input.userId, linkedinAction.accountExternalId)
+    : null;
+  let result: TriggerProviderActionResult;
+  if (linkedinAction && linkedinAccount) {
+    const guarded = await guardLinkedinAction({
+      accountRowId: linkedinAccount.id,
+      kind: linkedinAction.kind,
+      call: () => handler({ input: dispatchInput, tool }),
+      // Unipile names the refusal in its body's `type`
+      // (`errors/checkpoint_error`), which the error text leaves out.
+      refusalOf: (r) =>
+        r.success
+          ? null
+          : {
+              status: r.status,
+              message: [r.error, providerErrorType(r.body)]
+                .filter(Boolean)
+                .join(" "),
+            },
+    });
+    if ("uncounted" in guarded) {
+      return {
+        success: false,
+        status: 503,
+        errorCode: "unavailable",
+        error: LINKEDIN_UNCOUNTED,
+        errorClass: "transient",
+      };
+    }
+    if ("held" in guarded) {
+      return {
+        success: false,
+        status: 429,
+        errorCode: "unavailable",
+        error: guarded.held.reason,
+        errorClass: "transient",
+        held: guarded.held,
+      };
+    }
+    result = guarded.paused
+      ? { ...guarded.result, held: guarded.paused }
+      : guarded.result;
+  } else {
+    result = await handler({ input: dispatchInput, tool });
+  }
 
   // P1 — stamp the structured failure scalars at the SINGLE dispatcher exit, from
   // data already in scope: the classifier maps the result's own {status, error,

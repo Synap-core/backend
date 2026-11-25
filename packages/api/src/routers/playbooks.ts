@@ -59,22 +59,27 @@ import {
   playbookAutomations,
   playbookEnrollments,
   entities,
+  profiles,
   secrets,
   vaultGrants,
   workspaceMembers,
   links,
   loadFacetSlugsBatch,
   isUniqueViolation,
-  canonicalLifecycleOptionKey,
+  ownerAndActor,
+  usableInSpace,
+  usableInSpaceWhere,
+  withSpaceGrants,
+  verifyPermission,
   type FlowDefinition,
 } from "@synap/database";
+import { requiredPermissionFor } from "@synap/governance-policy";
 import type {
   Playbook,
+  PlaybookRun,
   FocusSession,
-  Automation,
 } from "@synap/database/schema";
 import {
-  readSubjectLifecycle,
   resolveStageCategory,
   type PlaybookStageCategory,
 } from "@synap/playbooks";
@@ -83,6 +88,7 @@ import { evaluateSubjectFilter } from "../services/playbooks/subject-filter.js";
 import {
   carryProcessOver,
   foldProcessIntoSubjectProfile,
+  keepDeclaredZones,
   humanOnlyStatusesSchema,
   playbookActivatorsSchema,
   playbookSubjectProfileSchema,
@@ -90,7 +96,10 @@ import {
   readPlaybookProcess,
 } from "../schemas/playbook-process.js";
 import { sessionCriteriaSchema } from "../schemas/session-criteria.js";
-import { playbookScheduleInputSchema } from "../schemas/playbook-schedule.js";
+import {
+  playbookScheduleInputSchema,
+  retiredScheduleRefusal,
+} from "../schemas/playbook-schedule.js";
 import {
   playbookDefinitionSchema,
   playbookParamsInputSchema,
@@ -99,8 +108,29 @@ import {
   playbookScopeSchema,
   playbookExpectedOutputSchema,
   playbookRequiredIntentsSchema,
+  playbookToolsSchema,
   playbookGuidanceSchema,
+  playbookMetadataSchema,
+  foldPlaybookTools,
+  describeStageToolsOutside,
 } from "../schemas/playbook-definition.js";
+import {
+  playbookRunnerSchema,
+  stageRunnerSchema,
+  requiresSchema,
+} from "../schemas/playbook-runner.js";
+import { recordPlaybookVersion } from "../services/playbooks/playbook-versions.js";
+import { resolveStageUses } from "../services/playbooks/stage-uses.js";
+import {
+  findPlaybookLinkCycle,
+  playbookLinkCycleMessage,
+} from "../services/playbooks/playbook-links.js";
+import type { RunChoice } from "@synap-core/types/agents";
+import {
+  mapRunnerAtRun,
+  runnerOfferFor,
+  type RunnerOffer,
+} from "../services/playbooks/run-runner-choice.js";
 import { AccessContext, scopedDb } from "../access/index.js";
 import { playbookGoalsAndHealth } from "../services/playbooks/workers.js";
 import { rankRouteCandidates } from "../services/routing/suggest-routes.js";
@@ -117,14 +147,22 @@ import {
 } from "../utils/permission-check.js";
 import { definitionVersionChanged } from "../services/playbooks/definition-version.js";
 import {
+  playbookSearchText,
+  playbookTriggers,
+} from "../services/playbooks/playbook-search-text.js";
+import {
   PINNED_ENTITY_IDS_KEY,
   explainPinnedIdRejection,
   parsePinnedEntityIds,
   isPinnedStrategy,
+  dedicatedSubjectId,
   subjectProfileSlug,
 } from "../services/playbooks/pinned-subject.js";
 import { loadVisibleEntitiesById } from "../services/playbooks/pinned-subject-query.js";
+import { entityReadVisibleWhere } from "../access/entity-read-floor.js";
 import { assertKnownProfileSlug } from "../utils/assert-known-profile-slug.js";
+import { accessScopeWhere } from "../utils/project-scope.js";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import { findDuplicateCandidates } from "../services/duplicates/find-duplicate-candidates.js";
 import type { DuplicateCheck } from "@synap-core/types/proposals";
 import { getLinksFor, createLinks } from "../services/links/links-service.js";
@@ -136,6 +174,7 @@ import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { auditLog } from "../utils/audit-log.js";
 import {
   PlaybookParamsError,
+  playbookRunRefusal,
   promoteSessionToPlaybook,
 } from "../services/playbooks/playbook-lifecycle.js";
 import {
@@ -143,15 +182,31 @@ import {
   resolveRunChoice,
   handedToLine,
 } from "../services/playbooks/run-playbook.js";
+import {
+  alreadyRunningMessage,
+  findLiveRunOfSubject,
+  type AlreadyRunningReason,
+} from "../services/playbooks/live-run-of-subject.js";
+import { PRE_APPROVAL_HELD_LINE } from "../services/playbooks/pre-approved-run.js";
 import { readPlaybookRunChoice } from "../services/playbooks/run-choice.js";
+import {
+  declaresStepTools,
+  refuseRunMissingTools,
+  runToolsSaveWarnings,
+} from "../services/playbooks/run-tools-missing.js";
 import { setPlaybookRunChoiceGoverned } from "../services/playbooks/set-run-choice.js";
 import { setRunChoice } from "../services/agent-dispatch/agent-assignment.js";
 import { resolvePlaybookRunWriteWorkspace } from "../services/playbooks/resolve-playbook-name.js";
 import { computePlaybookScorecard } from "@synap/jobs/utils/playbook-scorecard.js";
 import {
-  materializePlaybookCronAutomation,
-  findNonArchivedAutomationByName,
-} from "../services/playbooks/cron-automation.js";
+  addPlaybookAutomation,
+  readDriverAutomationId,
+} from "../services/playbooks/playbook-automation-links.js";
+import {
+  listProcesses,
+  processReaderOf,
+  readProcess,
+} from "../services/playbooks/process-read.js";
 import {
   describeGoalPlaceholderProblems,
   findGoalPlaceholderProblems,
@@ -159,12 +214,11 @@ import {
 } from "../services/playbooks/goal-references.js";
 import { findUnenabledPlaybookSkills } from "../services/playbooks/playbook-skill-preflight.js";
 import { proposeCapabilityEnable } from "../services/capabilities/propose-capability-enable.js";
-import { flowValidationErrorMessage } from "../services/automations/validate-flow.js";
+import { revokeGrantApprovalRows } from "../services/capabilities/grant-approval-rows.js";
 import {
   decodeDefinitionCursor,
   encodeDefinitionCursor,
 } from "../utils/keyset-cursor.js";
-import { unfilteredAiFanoutError } from "@synap-core/types/automations";
 
 const logger = createLogger({ module: "playbooks-router" });
 
@@ -268,28 +322,133 @@ function assertGoalPlaceholdersDeclared(
 }
 
 /**
- * Resolve a subject entity id to bind to a run/session, guarding cross-workspace
- * IDOR: `subject_entity_id` has no FK, so every writer must verify the entity is
- * visible (its own workspace OR pod-wide NULL) before binding. Mirrors the
- * automation-executor guard. Throws NOT_FOUND if the id isn't visible here.
+ * Resolve a subject entity id to bind to a run/session: `subject_entity_id`
+ * has no FK, so the id must name a record the person can read (the entity
+ * read floor) that is usable in the run's space (`usableInSpaceWhere`: its
+ * own, or pod-wide). Throws NOT_FOUND otherwise.
  */
 async function resolveVisibleSubjectId(
   database: Awaited<ReturnType<typeof getDb>>,
   subjectId: string | undefined,
-  workspaceId: string
+  workspaceId: string | null,
+  ownerId: string
 ): Promise<string | undefined> {
   if (!subjectId) return undefined;
   const subj = await database.query.entities.findFirst({
-    columns: { id: true, workspaceId: true },
-    where: eq(entities.id, subjectId),
+    columns: { id: true },
+    where: and(
+      eq(entities.id, subjectId),
+      entityReadVisibleWhere(ownerId),
+      usableInSpaceWhere(entities.workspaceId, workspaceId, null)
+    ),
   });
-  if (subj && (subj.workspaceId === workspaceId || subj.workspaceId === null)) {
-    return subj.id;
-  }
+  if (subj) return subj.id;
   throw new TRPCError({
     code: "NOT_FOUND",
     message: `Subject entity ${subjectId} not found in this workspace`,
   });
+}
+
+/**
+ * The fields of `playbooks.run`'s `status: "already_running"` answer (the
+ * person already has a live run of the playbook on the subject, one live run
+ * per object): NOTHING started. `session` is the live run to open, `run` its
+ * newest ledger row (null for an agent's draft that waits for the person),
+ * `reason` why nothing started. The status literal stays at each return in
+ * `run` itself, where `write-door-outcome-contract.test.ts` reads the
+ * door's statuses.
+ */
+function alreadyRunningFields(
+  playbookName: string,
+  live: {
+    session: FocusSession;
+    run: PlaybookRun | null;
+    reason: AlreadyRunningReason;
+  }
+) {
+  return {
+    run: live.run,
+    session: live.session as FocusSession | null,
+    reason: live.reason,
+    message: alreadyRunningMessage(playbookName, live.reason),
+    proposalId: null as string | null,
+  };
+}
+
+/** The run choice a `playbooks.run` call carries, as its checks read it. */
+interface RunChoiceAsked {
+  handToAgentId?: string;
+  runOn?: "synap_ai";
+  remember?: boolean;
+  agentUserId?: string;
+}
+
+/**
+ * RUN CHOICE — refuse a choice this run cannot take (an agent nobody could
+ * hand it to, Synap AI on a playbook that runs only on agents, or both at
+ * once), and a `remember` that an agent asked for or that names nothing,
+ * with exactly the arguments `runPlaybook` resolves the choice with again
+ * when the run starts.
+ */
+async function assertRunChoice(args: {
+  input: RunChoiceAsked;
+  ctxAgentUserId: string | null | undefined;
+  userId: string;
+  workspaceId: string;
+  playbook: Playbook;
+}): Promise<void> {
+  const { input } = args;
+  if (input.handToAgentId || input.runOn) {
+    await resolveRunChoice({
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      agentUserId: input.agentUserId,
+      handToAgentId: input.handToAgentId,
+      runOn: input.runOn,
+      playbook: args.playbook,
+    });
+  }
+  if (input.remember) {
+    if (input.agentUserId || args.ctxAgentUserId) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Only a person can choose who runs this from now on — an agent cannot.",
+        cause: { reasonCode: "PERSON_ONLY" },
+      });
+    }
+    if (!input.runOn && !input.handToAgentId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
+      });
+    }
+  }
+}
+
+/**
+ * Remember the person's run choice for this playbook (`remember`, checked by
+ * {@link assertRunChoice}) so the next launch does not ask
+ * (`readPlaybookRunChoice`). The playbook's own runner comes before a
+ * remembered choice: when it names another, the answer is the offer to make
+ * this one its runner. Null when nothing is to be remembered.
+ */
+async function rememberRunChoice(args: {
+  input: RunChoiceAsked;
+  userId: string;
+  playbook: Playbook;
+}): Promise<RunnerOffer | null> {
+  if (!args.input.remember) return null;
+  const remembered: RunChoice = args.input.handToAgentId
+    ? { executor: "external-agent", agentUserId: args.input.handToAgentId }
+    : { executor: "is-agent" };
+  await setRunChoice({
+    callerId: args.userId,
+    playbookId: args.playbook.id,
+    choice: remembered,
+  });
+  return runnerOfferFor(args.playbook, remembered);
 }
 
 // ── Shared input schemas ─────────────────────────────────────────────────────
@@ -337,7 +496,13 @@ export const createInputSchema = playbookDefinitionSchema.extend({
    */
   proposedPlaybookId: z.string().uuid().optional(),
   executor: executorRefSchema.default("is-agent"),
-  status: playbookStatusSchema.default("draft"),
+  /**
+   * NO schema default: an unstated status must stay unstated in a PROPOSAL's
+   * stored data, so approval can tell "the author asked for draft" (kept) from
+   * "the author said nothing" (an approval IS the activation, `playbook/create`
+   * executor). A direct, ungated create still lands `draft` (insert below).
+   */
+  status: playbookStatusSchema.optional(),
   /**
    * Layer-2 "context skill" — an AI-generated HOW-to-run-this-playbook
    * instruction (Markdown). Persisted as a non-runnable `instruction` skill and
@@ -372,6 +537,44 @@ function foldProcessDeclarationsOrRefuse(
 }
 
 /**
+ * A playbook's links and steps must not start each other in a loop
+ * (`findPlaybookLinkCycle`): refused at the write door, before the gate,
+ * over the definition as it will be stored.
+ */
+async function assertNoPlaybookLinkCycle(self: {
+  id: string | null;
+  name: string;
+  workspaceId: string | null;
+  subjectProfile: unknown;
+  stages: unknown;
+}): Promise<void> {
+  const { activators } = readPlaybookProcess(self.subjectProfile);
+  // A playbook nothing new starts (no link, no step that uses one, and on a
+  // create no id another step could use) can close no loop: no read.
+  const starts =
+    activators.some((a) => a.on === "run_ended") ||
+    (Array.isArray(self.stages) &&
+      self.stages.some((s) => !!(s as { uses?: unknown } | null)?.uses));
+  if (!starts && self.id === null) return;
+  const cycle = await findPlaybookLinkCycle({ ...self, activators });
+  if (cycle) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: playbookLinkCycleMessage(cycle),
+    });
+  }
+}
+
+/** The retired `schedule` input is refused when it could never fire. */
+function refuseUnfoldableSchedule(
+  schedule: unknown,
+  subjectProfile: unknown
+): void {
+  const reason = retiredScheduleRefusal(schedule, subjectProfile);
+  if (reason) throw new TRPCError({ code: "BAD_REQUEST", message: reason });
+}
+
+/**
  * Converge a playbook's activator rules after its definition or status landed
  * — through the ONE non-fatal wrapper (`convergePlaybookActivatorsSafely`).
  */
@@ -403,12 +606,11 @@ export const updateInputSchema = z.object({
   /** See `createInputSchema.criteria`. */
   criteria: sessionCriteriaSchema.optional(),
   /**
-   * See `playbookDefinitionSchema.requiredIntents` — REPLACES the declared
-   * list (the same all-optional PATCH contract `params` has). Declared here as
-   * a hand-copy-able shape because this is a PATCH, not a definition; the
-   * vocabulary rule it applies is the ONE door's, exported from there so a
-   * change cannot make the patch and the create accept different slugs.
+   * See `playbookDefinitionSchema.tools` — REPLACES the list (the same
+   * all-optional PATCH contract `params` has), the ONE door's schema.
    */
+  tools: playbookToolsSchema.optional(),
+  /** DEPRECATED input, folded into `tools` (`foldPlaybookTools`). */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
   /** See `playbookGuidanceSchema` — REPLACES the declared list, same schema. */
   guidance: playbookGuidanceSchema.optional(),
@@ -418,19 +620,25 @@ export const updateInputSchema = z.object({
   activators: playbookActivatorsSchema.optional(),
   /** See `playbookDefinitionSchema.humanOnlyStatuses` — folded likewise. */
   humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
-  /** Validated so `mode` ("run" | "appointment") has a declared writer. Loose; null clears. */
+  /** RETIRED input, folded into a `schedule` activator (`schemas/playbook-schedule.ts`). */
   schedule: playbookScheduleInputSchema.optional(),
   executor: executorRefSchema.optional(),
   status: playbookStatusSchema.optional(),
   /** See `createInputSchema.scope`. */
   scope: playbookScopeSchema.optional(),
+  /** See `playbookDefinitionSchema.runner` — REPLACES it; `null` clears. */
+  runner: playbookRunnerSchema.nullable().optional(),
+  /** See `playbookDefinitionSchema.requires` — REPLACES the set. */
+  requires: requiresSchema.optional(),
   /**
    * A PATCH shallow-merged onto the row's `metadata` bag (keys not named are
    * kept) — the same contract views/skills/automations `.update` honour. It is
    * how the template reconcile advances a playbook's `metadata.marketSource`
-   * baseline through this governed door instead of a raw UPDATE.
+   * baseline through this governed door instead of a raw UPDATE. Parsed with
+   * the create door's schema, so a `triggers` list is checked the same way
+   * (`playbookTriggersSchema`).
    */
-  metadata: jsonRecord.optional(),
+  metadata: playbookMetadataSchema.optional(),
 });
 
 /**
@@ -567,6 +775,7 @@ const capabilityGrantsRouter = router({
           id: true,
           grantableType: true,
           grantableId: true,
+          grantedTo: true,
           workspaceId: true,
           revokedAt: true,
         },
@@ -604,10 +813,18 @@ const capabilityGrantsRouter = router({
       }
 
       if (!grant.revokedAt) {
-        await db
-          .update(vaultGrants)
-          .set({ revokedAt: new Date() })
-          .where(eq(vaultGrants.id, input.grantId));
+        await db.transaction(async (tx) => {
+          await tx
+            .update(vaultGrants)
+            .set({ revokedAt: new Date() })
+            .where(eq(vaultGrants.id, input.grantId));
+          // The grant's "runs without asking" is an approval row (decision
+          // D2): revoking the grant takes back the auto row on exactly its
+          // agent × action × space, so the agent asks again.
+          if (grant.grantableType !== "secret") {
+            await revokeGrantApprovalRows(tx, [grant]);
+          }
+        });
 
         auditLog({
           subjectType: "capability_grant",
@@ -633,7 +850,7 @@ const capabilityGrantsRouter = router({
 // the first EDITABLE surface for that composition — until now only the
 // automation-trigger-matcher worker read it. Auth mirrors this router's other
 // write procedures: load-by-id, `assertWorkspaceWrite` on the LOADED
-// workspaceId (never caller input) — see `saveFlow` above.
+// workspaceId (never caller input) — see `update` above.
 const playbookAutomationsRouter = router({
   /** List a playbook's composed automations, joined + ordered by sortOrder. */
   listAutomations: protectedProcedure
@@ -674,7 +891,7 @@ const playbookAutomationsRouter = router({
 
   /**
    * Compose an automation into a playbook. Write-gate on the LOADED playbook's
-   * workspaceId (mirrors `update`/`saveFlow`), plus an explicit IDOR guard that
+   * workspaceId (mirrors `update`), plus an explicit IDOR guard that
    * the automation itself is visible in that same workspace (or pod-wide) —
    * mirrors `resolveVisibleSubjectId` above. Governance-gated as a playbook
    * "update" (composition is a playbook-shape change).
@@ -718,8 +935,10 @@ const playbookAutomationsRouter = router({
       });
       if (
         !automation ||
-        (automation.workspaceId !== playbook.workspaceId &&
-          automation.workspaceId !== null)
+        !usableInSpace(
+          { ...automation, sharedWith: null },
+          playbook.workspaceId
+        )
       ) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -727,7 +946,7 @@ const playbookAutomationsRouter = router({
         });
       }
 
-      // 4. Governance membrane — same verb/subject as update/saveFlow.
+      // 4. Governance membrane — same verb/subject as update.
       const perm = await checkPermissionOrPropose({
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -756,36 +975,14 @@ const playbookAutomationsRouter = router({
         };
       }
 
-      // 5. First-class join row (role/sortOrder live here — the links edge
-      // below can't carry them).
-      await database
-        .insert(playbookAutomations)
-        .values({
-          playbookId: input.playbookId,
-          automationId: input.automationId,
-          role: input.role ?? null,
-          sortOrder: input.sortOrder ?? null,
-        })
-        .onConflictDoNothing({
-          target: [
-            playbookAutomations.playbookId,
-            playbookAutomations.automationId,
-          ],
-        });
-
-      // 6. Symmetric `links` edge (transition — createLinks also dual-writes
-      // the join row above, so this is a no-op there and just keeps the
-      // read-only graph view in sync).
-      await createLinks([
-        {
-          workspaceId: playbook.workspaceId,
-          fromType: "automation",
-          fromId: input.automationId,
-          toType: "playbook",
-          toId: input.playbookId,
-          linkType: "member_of",
-        },
-      ]);
+      // 5. The ONE link (0425): the join row. The legacy
+      // `automation --member_of--> playbook` edge is no longer written.
+      await addPlaybookAutomation(database, {
+        playbookId: input.playbookId,
+        automationId: input.automationId,
+        role: input.role ?? null,
+        sortOrder: input.sortOrder ?? null,
+      });
 
       return {
         status: "added" as const,
@@ -1080,7 +1277,8 @@ const playbookEnrollmentsRouter = router({
       const visibleEntityId = await resolveVisibleSubjectId(
         database,
         input.entityId,
-        playbook.workspaceId ?? ""
+        playbook.workspaceId,
+        ctx.userId
       );
       if (!visibleEntityId) {
         throw new TRPCError({
@@ -1260,74 +1458,55 @@ const playbookEnrollmentsRouter = router({
  */
 async function assertSubjectProfileResolves(
   db: Parameters<typeof assertKnownProfileSlug>[0],
-  subjectProfile: unknown
+  subjectProfile: unknown,
+  reader?: { userId: string }
 ): Promise<void> {
   if (!subjectProfile || typeof subjectProfile !== "object") return;
   const slug = (subjectProfile as { profileSlug?: unknown }).profileSlug;
   if (typeof slug !== "string" || slug.length === 0) return;
   // Throws TRPCError NOT_FOUND naming the slug and pointing at list_profiles.
   await assertKnownProfileSlug(db, slug);
-}
-
-/**
- * `subjectProfile.onEnd` names statuses of the subject's lifecycle: each value
- * must be an OPTION of the lifecycle its profile declares (the status door's
- * own normaliser: case and separator only), or the write is refused with the
- * options — a value no move could reach would only fail at every close.
- * Refused too: an `onEnd` with no subject kind, and one on a kind that
- * declares no lifecycle and names no `statusProperty` (nothing to move). A
- * kind with no declared lifecycle but a `statusProperty` keeps the legacy
- * plain-property path, whose values no declaration lists: not checked.
- *
- * On an update, only an `onEnd` this write CHANGES is checked (`previousOnEnd`
- * = the stored one): a patch that carries the stored one over unchanged is not
- * refused for a value it did not introduce.
- */
-async function assertOnEndOptionsDeclared(
-  subjectProfile: unknown,
-  workspaceId: string | null,
-  previousOnEnd: unknown
-): Promise<void> {
-  if (!subjectProfile || typeof subjectProfile !== "object") return;
-  const { onEnd, profileSlug, statusProperty } =
-    readSubjectLifecycle(subjectProfile);
-  const values = Object.entries(onEnd);
-  if (values.length === 0) return;
+  const dedicated = dedicatedSubjectId(subjectProfile);
+  if (!dedicated) return;
+  // An activator compiles per KIND, so on a playbook dedicated to one record
+  // it would fire on every record of the kind. Run it on its record instead.
+  const activators = (subjectProfile as { activators?: unknown }).activators;
   if (
-    previousOnEnd !== undefined &&
-    JSON.stringify(readSubjectLifecycle({ onEnd: previousOnEnd }).onEnd) ===
-      JSON.stringify(onEnd)
+    Array.isArray(activators) &&
+    activators.some((a) => (a as { on?: unknown } | null)?.on !== "manual")
   ) {
-    return;
-  }
-  if (!profileSlug) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message:
-        "subjectProfile.onEnd needs subjectProfile.profileSlug — an end move moves the subject's status",
+        "A playbook dedicated to one record (subjectProfile.entityId) takes no activator: an activator fires on every record of the kind. Remove the activators, or the dedicated record.",
     });
   }
-  const { readSubjectProfile } =
-    await import("../services/playbooks/playbook-activators.js");
-  const subject = await readSubjectProfile(profileSlug, workspaceId);
-  if (!subject.lifecycleOptions) {
-    if (statusProperty) return;
+  // The record is one the writer can read, of the playbook's kind. A
+  // revision of a pending proposal names no reader: its approval replays
+  // through `update`, which checks it then.
+  if (!reader) return;
+  const [row] = await db
+    .select({ kind: profiles.slug })
+    .from(entities)
+    .leftJoin(profiles, eq(profiles.id, entities.profileId))
+    .where(
+      and(
+        eq(entities.id, dedicated),
+        isNull(entities.deletedAt),
+        accessScopeWhere({
+          workspaceIdColumn: entities.workspaceId,
+          entityIdColumn: entities.id,
+          ownerColumn: entities.userId,
+          userId: reader.userId,
+        })
+      )
+    )
+    .limit(1);
+  if (row?.kind !== slug) {
     throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: `subjectProfile.onEnd: ${profileSlug} declares no lifecycle — declare one (or name the statusProperty the process moves) before saying what a session end moves it to`,
+      code: "NOT_FOUND",
+      message: `subjectProfile.entityId names no ${resolveObjectNoun(slug).toLowerCase()} you can read`,
     });
-  }
-  const options = subject.lifecycleOptions;
-  const decl = { options: options.map((key) => ({ key })) } as Parameters<
-    typeof canonicalLifecycleOptionKey
-  >[0];
-  for (const [status, value] of values) {
-    if (!options.includes(canonicalLifecycleOptionKey(decl, value))) {
-      throw new TRPCError({
-        code: "BAD_REQUEST",
-        message: `subjectProfile.onEnd.${status}: "${value}" is not a status of ${profileSlug} (${options.join(", ")})`,
-      });
-    }
   }
 }
 
@@ -1346,30 +1525,13 @@ async function assertOnEndOptionsDeclared(
  */
 export async function assertPlaybookDefinitionWritable(
   database: Parameters<typeof assertKnownProfileSlug>[0],
-  write: {
-    goalTemplate?: unknown;
-    params?: unknown;
-    subjectProfile?: unknown;
-    /** The space the playbook lives in (picks its profile of a slug). */
-    workspaceId?: string | null;
-  },
-  previous?: {
-    goalTemplate: unknown;
-    params: unknown;
-    subjectProfile?: unknown;
-    workspaceId?: string | null;
-  }
+  write: { goalTemplate?: unknown; params?: unknown; subjectProfile?: unknown },
+  previous?: { goalTemplate: unknown; params: unknown },
+  /** The writer, whose floor a dedicated record is read under. */
+  reader?: { userId: string }
 ): Promise<void> {
   if (write.subjectProfile !== undefined) {
-    await assertSubjectProfileResolves(database, write.subjectProfile);
-    await assertOnEndOptionsDeclared(
-      write.subjectProfile,
-      write.workspaceId ?? previous?.workspaceId ?? null,
-      previous
-        ? ((previous.subjectProfile as { onEnd?: unknown } | null)?.onEnd ??
-            null)
-        : undefined
-    );
+    await assertSubjectProfileResolves(database, write.subjectProfile, reader);
   }
   if (!previous) {
     assertGoalPlaceholdersDeclared({
@@ -1515,8 +1677,26 @@ export async function matchPlaybooks(
       (ent?.properties as Record<string, unknown> | null) ?? {};
   }
   const forStrip = input.purpose === "entity-actions";
+  // Usable in the entity's space: home or pod-wide, else a share (whose
+  // grants are read only for the rows homed elsewhere).
+  const space = input.workspaceId ?? null;
+  const homedElsewhere = forStrip
+    ? (rows as Playbook[]).filter(
+        (r) => !usableInSpace({ ...r, sharedWith: null }, space)
+      )
+    : [];
+  const sharedHere = new Set(
+    homedElsewhere.length
+      ? (await withSpaceGrants(database, "playbook", homedElsewhere))
+          .filter((r) => usableInSpace(r, space))
+          .map((r) => r.id)
+      : []
+  );
   const applicable = rows.filter((r) => {
     const row = r as Playbook;
+    // A playbook dedicated to one record is offered for that record only.
+    const dedicated = dedicatedSubjectId(row.subjectProfile);
+    if (dedicated && dedicated !== input.entityId?.toLowerCase()) return false;
     if (entityProperties) {
       const verdict = evaluateSubjectFilter(
         subjectFilterOf(row),
@@ -1528,7 +1708,8 @@ export async function matchPlaybooks(
     if (!forStrip) return true;
     const sp = row.subjectProfile as { profileSlug?: unknown } | null;
     return (
-      (row.workspaceId == null || row.workspaceId === input.workspaceId) &&
+      (usableInSpace({ ...row, sharedWith: null }, space) ||
+        sharedHere.has(row.id)) &&
       typeof sp?.profileSlug === "string" &&
       row.scope !== "project" &&
       (row.inputStrategy as { kind?: unknown } | null)?.kind !== "pinned"
@@ -1546,7 +1727,10 @@ export async function matchPlaybooks(
       kind: "playbook" as const,
       id: p.id,
       name: p.name,
-      text: [p.goalTemplate],
+      // The SAME words synap_find's playbook arm ranks (one definition).
+      text: playbookSearchText(p),
+      description: p.description,
+      triggers: playbookTriggers(p.metadata),
       subjectProfileSlug:
         (p.subjectProfile as { profileSlug?: string } | null)?.profileSlug ??
         null,
@@ -1571,7 +1755,13 @@ export async function matchPlaybooks(
       name: candidate.row.name,
       scope,
       templateKind,
+      // When to use it, in full: the agent door cuts it
+      // (`compactPlaybookMatches`), a UI strip may show it whole.
+      description: candidate.row.description ?? null,
       goalTemplate: candidate.row.goalTemplate,
+      // The phrases it is for, so a second ranking (the capture follow-up,
+      // `load-route-suggestions.ts`) admits a trigger-only match too.
+      triggers: candidate.triggers ?? [],
       subjectProfileSlug: candidate.subjectProfileSlug,
       // The workers it declares ("How often?" offers these; [] when none or
       // unreadable), read through the ONE process reader, and whether it
@@ -1778,10 +1968,10 @@ export const playbooksRouter = router({
             // Narrow-only: a specific workspace still includes pod-wide (NULL)
             // rows, mirroring `automations.listPage`.
             input?.workspaceId
-              ? or(
-                  isNull(playbooks.workspaceId),
-                  eq(playbooks.workspaceId, input.workspaceId)
-                )
+              ? usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+                  type: "playbook",
+                  id: playbooks.id,
+                })
               : undefined,
             input?.status !== undefined
               ? eq(playbooks.status, input.status)
@@ -1970,6 +2160,48 @@ export const playbooksRouter = router({
     }),
 
   /**
+   * ONE process, whole (Process wave plan 0adf8352, W2): the playbook seen as
+   * a Process — definition, what starts it, steps, checks, what it moves, its
+   * needs with coverage, its skills, its runs and health — composed by the ONE
+   * process read (`services/playbooks/process-read.ts`), the same read the Hub
+   * REST door and MCP `synap_list_playbooks({ playbookId })` return. A part
+   * that could not be read is named in `unavailable`, never answered empty.
+   * Contract: `@synap-core/types/processes` `ProcessRead`.
+   */
+  process: protectedProcedure
+    .input(z.object({ playbookId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const read = await readProcess(processReaderOf(ctx), input.playbookId);
+      if (!read) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Playbook ${input.playbookId} not found`,
+        });
+      }
+      return read;
+    }),
+
+  /**
+   * A space's process index (`ProcessIndex`): the cards (`ProcessSummary`)
+   * and the automations outside any process, or every visible one when no
+   * space is named (`null` = pod-wide only). User-floored. Archived
+   * playbooks and automations are left out.
+   */
+  processes: protectedProcedure
+    .input(
+      z
+        .object({ workspaceId: z.string().uuid().nullable().optional() })
+        .optional()
+    )
+    .query(async ({ ctx, input }) =>
+      listProcesses(processReaderOf(ctx), {
+        ...(input?.workspaceId !== undefined
+          ? { workspaceId: input.workspaceId }
+          : {}),
+      })
+    ),
+
+  /**
    * Create a new playbook. Governance-gated: AI callers (agentUserId set) route
    * through checkPermissionOrPropose; on "proposed" the row is NOT written.
    */
@@ -1983,13 +2215,65 @@ export const playbooksRouter = router({
       // INSIDE `subjectProfile` — folded ONCE, here, so the gate payload, the
       // approval replay and the insert all carry the same stored shape.
       input.subjectProfile = foldProcessDeclarationsOrRefuse(input);
+      if (input.schedule) {
+        refuseUnfoldableSchedule(input.schedule, input.subjectProfile ?? null);
+      }
+      await assertNoPlaybookLinkCycle({
+        id: input.proposedPlaybookId ?? null,
+        name: input.name,
+        workspaceId: ctx.workspaceId ?? null,
+        subjectProfile: input.subjectProfile,
+        stages: input.stages,
+      });
       // Dangling `subjectProfile` slugs and goal placeholders no run will
       // fill are refused here, before the gate.
-      await assertPlaybookDefinitionWritable(await getDb(), {
-        goalTemplate: input.goalTemplate,
-        params: input.params,
-        subjectProfile: input.subjectProfile,
+      await assertPlaybookDefinitionWritable(
+        await getDb(),
+        {
+          goalTemplate: input.goalTemplate,
+          params: input.params,
+          subjectProfile: input.subjectProfile,
+        },
+        undefined,
+        { userId: ctx.userId }
+      );
+      // The ONE tools list (plan 08e4fba7 decisions 3-4): the deprecated
+      // `requiredIntents` and stage `grants` fold into `tools` ONCE, here, so
+      // the gate payload, the approval replay and the insert carry the stored
+      // shape; a stage list outside the playbook's is refused.
+      {
+        const folded = foldPlaybookTools(input);
+        if (folded.outside.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: describeStageToolsOutside(folded.outside),
+          });
+        }
+        input.tools = folded.tools;
+        input.stages = folded.stages as typeof input.stages;
+        delete input.requiredIntents;
+      }
+      // A step naming a tool a run on this pod cannot use is SAVED, with a
+      // warning: its runs would refuse to start (`refuseRunMissingTools`).
+      const toolWarnings = await runToolsSaveWarnings({
+        playbook: {
+          name: input.name,
+          executor: input.executor ?? null,
+          tools: input.tools,
+          stages: input.stages,
+        },
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+      });
+      const warned = toolWarnings.length > 0 ? { warnings: toolWarnings } : {};
+      // A step that IS a playbook is checked and PINNED here, before the gate,
+      // so the proposal, its approval replay and the row carry the version.
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: input.proposedPlaybookId ?? null,
         workspaceId: ctx.workspaceId ?? null,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
       });
       // The id this playbook lands under, minted BEFORE the gate and handed to
       // it as `data.id`, so a proposal's `targetId` IS the playbook's id once it
@@ -2047,7 +2331,7 @@ export const playbooksRouter = router({
           expectedOutputs: input.expectedOutputs,
           stages: input.stages,
           criteria: input.criteria,
-          requiredIntents: input.requiredIntents,
+          tools: input.tools,
           guidance: input.guidance,
           subjectProfile: input.subjectProfile,
           schedule: input.schedule,
@@ -2055,6 +2339,8 @@ export const playbooksRouter = router({
           executor: input.executor,
           status: input.status,
           scope: input.scope,
+          runner: input.runner,
+          requires: input.requires,
           contextSkill: input.contextSkill,
         },
       };
@@ -2072,6 +2358,30 @@ export const playbooksRouter = router({
       // caller who may not write must never learn whether the playbook exists,
       // nor receive its row. Only a caller that would have been permitted (to
       // execute OR to propose) reaches the lookup.
+      // The person it is filed for owns it; the agent that wrote it (here, or
+      // the proposal an approval replays) is its actor.
+      const owner = await ownerAndActor(
+        await getDb(),
+        ctx.userId,
+        input.agentUserId ?? ctx.approvedAuthorAgentUserId
+      );
+      // An agent files for its person, never for the approver: a person who
+      // may not create playbooks here cannot have one filed in their name.
+      if (input.agentUserId && ctx.workspaceId) {
+        const allowed = await verifyPermission({
+          db: await getDb(),
+          userId: owner.ownerId,
+          workspace: { id: ctx.workspaceId },
+          requiredPermission: requiredPermissionFor("create"),
+        });
+        if (!allowed.allowed) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message:
+              "The person this agent works for cannot create playbooks in this space.",
+          });
+        }
+      }
       const isAiCaller =
         Boolean(input.agentUserId) ||
         input.source === "ai" ||
@@ -2141,6 +2451,7 @@ export const playbooksRouter = router({
             "Playbook creation proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...warned,
         };
       }
 
@@ -2154,35 +2465,46 @@ export const playbooksRouter = router({
       let created: Playbook;
       let reused = false;
       try {
-        const [row] = await database
-          .insert(playbooks)
-          .values({
-            id: playbookId,
-            workspaceId: ctx.workspaceId,
-            createdBy: input.agentUserId ?? ctx.userId,
-            name: input.name,
-            description: input.description ?? null,
-            goalTemplate: input.goalTemplate,
-            params: input.params ?? [],
-            inputStrategy: input.inputStrategy ?? { kind: "none" },
-            channelSpec: input.channelSpec ?? {},
-            expectedOutputs: input.expectedOutputs ?? [],
-            stages: input.stages ?? [],
-            criteria: input.criteria ?? [],
-            requiredIntents: input.requiredIntents ?? [],
-            guidance: input.guidance ?? [],
-            subjectProfile: input.subjectProfile ?? null,
-            schedule: input.schedule ?? null,
-            metadata: input.metadata ?? {},
-            executor: input.executor,
-            status: input.status,
-            // NULL, not a defaulted 'session': the column's documented reading
-            // is "NULL means session", and writing the default eagerly would
-            // make an unstated scope indistinguishable from a chosen one.
-            scope: input.scope ?? null,
-          })
-          .returning();
-        created = row as Playbook;
+        created = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(playbooks)
+            .values({
+              id: playbookId,
+              workspaceId: ctx.workspaceId,
+              createdBy: owner.ownerId,
+              agentUserId: owner.agentUserId,
+              name: input.name,
+              description: input.description ?? null,
+              goalTemplate: input.goalTemplate,
+              params: input.params ?? [],
+              inputStrategy: input.inputStrategy ?? { kind: "none" },
+              channelSpec: input.channelSpec ?? {},
+              expectedOutputs: input.expectedOutputs ?? [],
+              stages: input.stages ?? [],
+              criteria: input.criteria ?? [],
+              tools: input.tools ?? [],
+              guidance: input.guidance ?? [],
+              subjectProfile: input.subjectProfile ?? null,
+              schedule: input.schedule ?? null,
+              metadata: input.metadata ?? {},
+              executor: input.executor,
+              status: input.status ?? "draft",
+              // NULL, not a defaulted 'session': the column's documented reading
+              // is "NULL means session", and writing the default eagerly would
+              // make an unstated scope indistinguishable from a chosen one.
+              scope: input.scope ?? null,
+              runner: input.runner ?? null,
+              requires: input.requires ?? [],
+            })
+            .returning();
+          // Version 1 is kept with the row (0416): a step may pin it.
+          await recordPlaybookVersion(
+            tx,
+            row as Playbook,
+            input.agentUserId ?? ctx.userId
+          );
+          return row as Playbook;
+        });
       } catch (err) {
         if (!isUniqueViolation(err)) throw err;
         const winner = await findNonArchivedPlaybookByName(
@@ -2208,17 +2530,11 @@ export const playbooksRouter = router({
       if (!reused) {
         warnUnresolvedGoalReferences(created);
 
-        // Declared activators → governed rules (the ONE rule door), linked as
-        // `activator`. After the gate, like the cron automation below.
+        // Declared activators (a retired `schedule` folded into one) →
+        // governed rules (the ONE rule door), linked as `activator`.
         await convergeActivatorsAfterWrite(created.id, {
           userId: ctx.userId,
           agentUserId: input.agentUserId,
-        });
-
-        // S1: a scheduled playbook maintains ONE backing cron automation (stamped
-        // on flow_automation_id) that the existing automation-cron-scheduler fires.
-        await materializePlaybookCronAutomation(created, {
-          userId: input.agentUserId ?? ctx.userId,
         });
 
         // W6 Layer-2 context skill — persist the AI-generated "how to run this
@@ -2244,7 +2560,8 @@ export const playbooksRouter = router({
               body: input.contextSkill.body,
               scope: "workspace",
               workspaceId: ctx.workspaceId,
-              userId: input.agentUserId ?? ctx.userId,
+              userId: owner.ownerId,
+              agentUserId: owner.agentUserId,
               status: "active",
               // Born-approved only for a trusted human author (mirrors
               // insertSkillGoverned). An agent-authored body stays unapproved and
@@ -2283,6 +2600,7 @@ export const playbooksRouter = router({
           ? "Playbook already exists (idempotent create)"
           : "Playbook created",
         proposalId: null as string | null,
+        ...warned,
       };
     }),
 
@@ -2334,6 +2652,35 @@ export const playbooksRouter = router({
           humanOnlyStatuses: input.humanOnlyStatuses,
         }) as typeof input.subjectProfile;
       }
+      if (input.subjectProfile !== undefined) {
+        input.subjectProfile = keepDeclaredZones(
+          input.subjectProfile as Record<string, unknown> | null,
+          existing.subjectProfile
+        ) as typeof input.subjectProfile;
+      }
+      if (input.schedule) {
+        refuseUnfoldableSchedule(
+          input.schedule,
+          input.subjectProfile ?? existing.subjectProfile
+        );
+      }
+      // 2b'. A loop of links / steps is refused (the create door's rule):
+      // on a change of what it follows, its steps or its name, and when it
+      // becomes active again (an archived playbook was outside the walk).
+      if (
+        input.subjectProfile !== undefined ||
+        input.name !== undefined ||
+        input.stages !== undefined ||
+        (input.status === "active" && existing.status !== "active")
+      ) {
+        await assertNoPlaybookLinkCycle({
+          id: existing.id,
+          name: input.name ?? existing.name,
+          workspaceId: existing.workspaceId,
+          subjectProfile: input.subjectProfile ?? existing.subjectProfile,
+          stages: input.stages ?? existing.stages,
+        });
+      }
 
       // 2b. A patch that REPOINTS the subject must name a slug that resolves —
       // same guard and same reason as the create door. Only when the field is
@@ -2350,8 +2697,64 @@ export const playbooksRouter = router({
           params: input.params,
           subjectProfile: input.subjectProfile,
         },
-        existing
+        existing,
+        { userId: ctx.userId }
       );
+      // 2c'. A step that IS a playbook: checked and PINNED before the gate
+      // (same reason as the create door).
+      input.stages = await resolveStageUses({
+        stages: input.stages,
+        selfId: existing.id,
+        workspaceId: existing.workspaceId,
+        visibility: () =>
+          scopedDb(AccessContext.from(ctx)).predicate(playbooks),
+      });
+      // 2c''. The ONE tools list: fold the deprecated declarations, and refuse
+      // a stage list outside the playbook's (the patch's list, else the row's;
+      // the patch's stages, else the row's).
+      {
+        const folded = foldPlaybookTools(
+          {
+            tools: input.tools,
+            requiredIntents: input.requiredIntents,
+            stages:
+              input.stages ??
+              (input.tools !== undefined || input.requiredIntents !== undefined
+                ? (existing.stages as Array<Record<string, unknown>>)
+                : undefined),
+          },
+          existing.tools as string[] | null
+        );
+        if (folded.outside.length > 0) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: describeStageToolsOutside(folded.outside),
+          });
+        }
+        input.tools = folded.tools;
+        if (input.stages !== undefined) {
+          input.stages = folded.stages as typeof input.stages;
+        }
+        delete input.requiredIntents;
+      }
+      // Same warning as the create door, over the merged row, when the patch
+      // touches what decides it.
+      const toolWarnings =
+        input.tools !== undefined ||
+        input.stages !== undefined ||
+        input.executor !== undefined
+          ? await runToolsSaveWarnings({
+              playbook: {
+                name: input.name ?? existing.name,
+                executor: input.executor ?? existing.executor,
+                tools: input.tools ?? existing.tools,
+                stages: input.stages ?? existing.stages,
+              },
+              workspaceId: existing.workspaceId,
+              userId: ctx.userId,
+            })
+          : [];
+      const warned = toolWarnings.length > 0 ? { warnings: toolWarnings } : {};
 
       // 2d. A pin list is an ordered whitelist on metadata. The request's
       // strategy wins over the stored one: writing ids onto a playbook that
@@ -2435,9 +2838,7 @@ export const playbooksRouter = router({
             : {}),
           ...(input.stages !== undefined ? { stages: input.stages } : {}),
           ...(input.criteria !== undefined ? { criteria: input.criteria } : {}),
-          ...(input.requiredIntents !== undefined
-            ? { requiredIntents: input.requiredIntents }
-            : {}),
+          ...(input.tools !== undefined ? { tools: input.tools } : {}),
           ...(input.guidance !== undefined ? { guidance: input.guidance } : {}),
           ...(input.subjectProfile !== undefined
             ? { subjectProfile: input.subjectProfile }
@@ -2446,6 +2847,8 @@ export const playbooksRouter = router({
           ...(input.executor !== undefined ? { executor: input.executor } : {}),
           ...(input.status !== undefined ? { status: input.status } : {}),
           ...(input.scope !== undefined ? { scope: input.scope } : {}),
+          ...(input.runner !== undefined ? { runner: input.runner } : {}),
+          ...(input.requires !== undefined ? { requires: input.requires } : {}),
           ...(input.metadata !== undefined ? { metadata: input.metadata } : {}),
         },
       });
@@ -2462,6 +2865,7 @@ export const playbooksRouter = router({
             "Playbook update proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...warned,
         };
       }
 
@@ -2481,8 +2885,7 @@ export const playbooksRouter = router({
         set.expectedOutputs = input.expectedOutputs;
       if (input.stages !== undefined) set.stages = input.stages;
       if (input.criteria !== undefined) set.criteria = input.criteria;
-      if (input.requiredIntents !== undefined)
-        set.requiredIntents = input.requiredIntents;
+      if (input.tools !== undefined) set.tools = input.tools;
       if (input.guidance !== undefined) set.guidance = input.guidance;
       if (input.subjectProfile !== undefined)
         set.subjectProfile = input.subjectProfile;
@@ -2490,6 +2893,8 @@ export const playbooksRouter = router({
       if (input.executor !== undefined) set.executor = input.executor;
       if (input.status !== undefined) set.status = input.status;
       if (input.scope !== undefined) set.scope = input.scope;
+      if (input.runner !== undefined) set.runner = input.runner;
+      if (input.requires !== undefined) set.requires = input.requires;
       if (input.metadata !== undefined)
         set.metadata = {
           ...((existing.metadata as Record<string, unknown> | null) ?? {}),
@@ -2512,12 +2917,23 @@ export const playbooksRouter = router({
 
       let updated: Playbook;
       try {
-        const [row] = await database
-          .update(playbooks)
-          .set(set)
-          .where(eq(playbooks.id, input.id))
-          .returning();
-        updated = row as Playbook;
+        updated = await database.transaction(async (tx) => {
+          const [row] = await tx
+            .update(playbooks)
+            .set(set)
+            .where(eq(playbooks.id, input.id))
+            .returning();
+          // A new version is kept in the same transaction (0416): a step
+          // pinned at it can run it after the next edit.
+          if (set.version !== undefined) {
+            await recordPlaybookVersion(
+              tx,
+              row as Playbook,
+              input.agentUserId ?? ctx.userId
+            );
+          }
+          return row as Playbook;
+        });
       } catch (err) {
         // Name/status transition collided with another non-archived playbook
         // under playbooks_workspace_name_active_uq — surface as CONFLICT, not 500.
@@ -2532,36 +2948,12 @@ export const playbooksRouter = router({
 
       warnUnresolvedGoalReferences(updated);
 
-      // S1: re-reconcile the backing cron automation against the new schedule.
-      // Idempotent — re-points/updates the SAME row via flow_automation_id, or
-      // tears it down when the schedule was cleared/disabled.
-      //
-      // Only a schedule or status CHANGE may arm it. An adoption / metadata
-      // merge / text edit (the boot template reconcile, W7's edit in an
-      // archived space) must never flip a paused backing automation active.
-      // "Wants a live schedule" = enabled with a cron. A cron-only edit (or a
-      // template re-pointing the time) refreshes the trigger, never the state.
-      const wantsSchedule = (v: unknown): boolean => {
-        const sch = v as { enabled?: unknown; cron?: unknown } | null;
-        return (
-          sch?.enabled === true &&
-          typeof sch.cron === "string" &&
-          sch.cron.trim() !== ""
-        );
-      };
-      const armingChanged =
-        (input.schedule !== undefined &&
-          wantsSchedule(input.schedule) !== wantsSchedule(existing.schedule)) ||
-        (input.status !== undefined && input.status !== existing.status);
-      await materializePlaybookCronAutomation(updated, {
-        userId: input.agentUserId ?? ctx.userId,
-        preserveArming: !armingChanged,
-      });
-
       // Activators live in `subjectProfile`, their rule prose names the
-      // playbook, and only an ACTIVE playbook declares them — converge when
-      // any of the three moved (idempotent otherwise).
+      // playbook, only an ACTIVE playbook declares them, and a retired
+      // `schedule` is folded into one — converge when any of them moved
+      // (idempotent otherwise).
       if (
+        input.schedule !== undefined ||
         input.subjectProfile !== undefined ||
         input.name !== undefined ||
         (input.status !== undefined && input.status !== existing.status)
@@ -2577,13 +2969,14 @@ export const playbooksRouter = router({
         status: "updated" as const,
         message: "Playbook updated",
         proposalId: null as string | null,
+        ...warned,
       };
     }),
 
   /**
    * Archive a playbook (soft state transition → "archived"). Same write-gate +
-   * governance contract as update; "archive" is a destructive verb so it
-   * proposes in agent-owned workspaces.
+   * governance contract as update; "archive" is a destructive verb so an
+   * agent's archive proposes.
    */
   archive: protectedProcedure
     .input(
@@ -2652,15 +3045,8 @@ export const playbooksRouter = router({
         .where(eq(playbooks.id, input.id))
         .returning();
 
-      // S1: an archived playbook is not live, so neither is its schedule.
-      // Materialize reads `status` and takes the teardown branch — without this
-      // call the backing cron automation stayed `active` with a live nextRunAt
-      // and kept firing a playbook nothing else would surface.
-      await materializePlaybookCronAutomation(archived as Playbook, {
-        userId: input.agentUserId ?? ctx.userId,
-      });
-      // Same rule for what STARTS it: an archived playbook declares no live
-      // activator, so this pass retires its activator rules.
+      // An archived playbook is not live: it declares no live activator (its
+      // schedule included), so this pass retires its activator rules.
       await convergeActivatorsAfterWrite(archived!.id, {
         userId: ctx.userId,
         agentUserId: input.agentUserId,
@@ -2895,6 +3281,26 @@ export const playbooksRouter = router({
          */
         runOn: z.enum(["synap_ai"]).optional(),
         /**
+         * WHO runs this run, in the playbook's own runner grammar
+         * (`PlaybookRunner`: an agent, a role, an engine, Synap AI, or an
+         * ordered list of fallbacks). Mapped onto `handToAgentId` / `runOn`
+         * before anything else (`mapRunnerAtRun`): a role, engine or list is
+         * resolved now through the route and the wake marks; nobody it names
+         * can take it → refused, never swapped. Never with `handToAgentId` or
+         * `runOn`. It beats the playbook's runner and the remembered choice.
+         */
+        runner: playbookRunnerSchema.optional(),
+        /**
+         * WHO works each step of this run, by stage key, in the step runner
+         * grammar (`"self"`, an agent, a role, an engine, Synap AI, or a list
+         * of fallbacks). Kept on the run (`playbook_runs.input`); the stage
+         * runner reads it when the step is entered, before the step's own
+         * `runner` (`RunPlaybookInput.stageRunners`).
+         */
+        stageRunners: z
+          .record(z.string().trim().min(1).max(120), stageRunnerSchema)
+          .optional(),
+        /**
          * Remember this run's choice (`runOn` or `handToAgentId`) as the
          * person's for this playbook, so the next launch does not ask
          * (`setRunChoice`, the assignment edge). A PERSON's act: refused for
@@ -2911,9 +3317,25 @@ export const playbooksRouter = router({
          * `handToAgentId`.
          */
         trial: trialRunInputSchema.optional(),
+        /**
+         * ONE LIVE RUN PER OBJECT (founder, 2026-11-16): while the caller's
+         * person already has a live run of this playbook on `subjectId`, a
+         * run answers `status: "already_running"` with that run and starts
+         * nothing. `true` starts a second run anyway (the person's explicit
+         * "start another"); that run does not hold the object's live slot.
+         * Carried on the proposal `data` so an approved run keeps it.
+         */
+        startAnother: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.runner !== undefined && (input.handToAgentId || input.runOn)) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Choose who runs this run once: runner, or handToAgentId / runOn, not both.",
+        });
+      }
       if (input.trial) {
         if (input.agentUserId || ctx.agentUserId) {
           throw new TRPCError({
@@ -2923,11 +3345,11 @@ export const playbooksRouter = router({
             cause: { reasonCode: "PERSON_ONLY" },
           });
         }
-        if (input.remember || input.handToAgentId) {
+        if (input.remember || input.handToAgentId || input.runner) {
           throw new TRPCError({
             code: "BAD_REQUEST",
             message:
-              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId.",
+              "A trial runs once on Synap AI: it takes neither remember nor handToAgentId nor runner.",
           });
         }
       }
@@ -2944,6 +3366,28 @@ export const playbooksRouter = router({
           code: "NOT_FOUND",
           message: `Playbook ${input.playbookId} not found`,
         });
+      }
+      // A runner chosen for THIS run becomes the hand-off or Synap AI it
+      // names, ONCE, before the checks below read them (`mapRunnerAtRun`).
+      if (input.runner !== undefined) {
+        const mapped = await mapRunnerAtRun({
+          ownerId: ctx.userId,
+          runner: input.runner,
+          playbook,
+          // Before the run's space is resolved below: the explicit, the
+          // playbook's or the ambient one, for a `need:` entry of `requires`.
+          workspaceId:
+            input.workspaceId ??
+            playbook.workspaceId ??
+            ctx.workspaceId ??
+            null,
+        });
+        if (mapped.handToAgentId) input.handToAgentId = mapped.handToAgentId;
+        if (mapped.runOn) input.runOn = mapped.runOn;
+        if (mapped.agentType && !input.agentType) {
+          input.agentType = mapped.agentType;
+        }
+        input.runner = undefined;
       }
 
       const database = await getDb();
@@ -2982,6 +3426,21 @@ export const playbooksRouter = router({
         });
       }
 
+      // Usable here: refused at FILING by the run door's own rule
+      // (`playbookRunRefusal`, as `resolveRunnablePlaybook` applies it), so no
+      // proposal is filed that could only fail once approved.
+      const notRunnable = await playbookRunRefusal(
+        playbook,
+        runWorkspaceId,
+        database
+      );
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: notRunnable,
+        });
+      }
+
       // Membership + not-archived on the RESOLVED workspace — the same gate
       // `workspaceProcedure` applies, moved after resolution because the
       // workspace comes from the playbook, not the header.
@@ -2998,8 +3457,51 @@ export const playbooksRouter = router({
       const subjectId = await resolveVisibleSubjectId(
         database,
         input.subjectId,
-        runWorkspaceId
+        runWorkspaceId,
+        ctx.userId
       );
+
+      // ONE LIVE RUN PER OBJECT (founder, 2026-11-16, decisions 1–4): a
+      // person's run of this playbook on this subject, without "start
+      // another", holds the object's one live slot. While the person already
+      // has a live run of it there (an agent's draft waiting for them
+      // included), the answer is that run: before anything is checked,
+      // proposed or started, so a duplicate is never filed for review either.
+      // `runPlaybook` asks again (the approved replay comes back through
+      // here) and the 0427 index floors the race. Never for a trial.
+      const oneLivePerSubject =
+        !input.startAnother && !input.trial && !!subjectId;
+      if (oneLivePerSubject) {
+        const live = await findLiveRunOfSubject({
+          playbookId: playbook.id,
+          subjectId: subjectId!,
+          userId: ctx.userId,
+        });
+        if (live) {
+          // "Run it this way and remember" is the person's choice for the
+          // playbook, not for this click: it is kept although nothing starts
+          // (checked exactly as below; person-only, the write floor above
+          // already ran). Nothing else is checked or proposed.
+          const runChoiceArgs = {
+            input,
+            userId: ctx.userId,
+            playbook,
+          };
+          if (input.remember) {
+            await assertRunChoice({
+              ...runChoiceArgs,
+              ctxAgentUserId: ctx.agentUserId,
+              workspaceId: runWorkspaceId,
+            });
+          }
+          const runnerOffer = await rememberRunChoice(runChoiceArgs);
+          return {
+            ...alreadyRunningFields(playbook.name, live),
+            status: "already_running" as const,
+            ...(runnerOffer ? { runnerOffer } : {}),
+          };
+        }
+      }
 
       // D3 preflight — a playbook that depends on installed-but-not-enabled
       // skills says so BEFORE anything launches (and before a run proposal is
@@ -3089,36 +3591,35 @@ export const playbooksRouter = router({
         }
       }
 
-      // RUN CHOICE — refuse a choice this run cannot take (an agent nobody
-      // could hand it to, Synap AI on a playbook that runs only on agents, or
-      // both at once) BEFORE a proposal is filed (same placement as FILING
-      // above), with exactly the arguments `runPlaybook` resolves it with
-      // again when the run starts.
-      if (input.handToAgentId || input.runOn) {
-        await resolveRunChoice({
+      // RUN CHOICE — refused BEFORE a proposal is filed (same placement as
+      // FILING above).
+      await assertRunChoice({
+        input,
+        ctxAgentUserId: ctx.agentUserId,
+        userId: ctx.userId,
+        workspaceId: runWorkspaceId,
+        playbook,
+      });
+
+      // TOOLS — refuse a run whose tools lack what a step declares BEFORE a
+      // proposal is filed for a run that could never start (`runPlaybook`
+      // asks it again when the run starts, the approved replay included).
+      if (declaresStepTools(playbook)) {
+        const choice = await resolveRunChoice({
           userId: ctx.userId,
+          workspaceId: runWorkspaceId,
           agentUserId: input.agentUserId,
           handToAgentId: input.handToAgentId,
           runOn: input.runOn,
           playbook,
         });
-      }
-      if (input.remember) {
-        if (input.agentUserId || ctx.agentUserId) {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message:
-              "Only a person can choose who runs this from now on — an agent cannot.",
-            cause: { reasonCode: "PERSON_ONLY" },
-          });
-        }
-        if (!input.runOn && !input.handToAgentId) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              'Nothing to remember: pass runOn "synap_ai" or handToAgentId with remember.',
-          });
-        }
+        await refuseRunMissingTools({
+          playbook,
+          workspaceId: runWorkspaceId,
+          userId: ctx.userId,
+          handedToAgent: choice.handOff !== null,
+          executor: choice.runOn.executor,
+        });
       }
 
       const perm = await checkPermissionOrPropose({
@@ -3136,6 +3637,14 @@ export const playbooksRouter = router({
         // e3c39721 §5: the draft was unreachable). Floors and rules above the
         // default still propose. Not on a replay: its approval was the accept.
         ...(input.agentUserId && !approvedReplay ? { heldAsDraft: true } : {}),
+        // Pre-approval (founder, 10 Nov 2026): a rule a person made for THIS
+        // playbook at THIS version may lift that hold; the grant then says so
+        // (`preApprovedByRuleId`). A broad rule never does.
+        ruleSubject: {
+          id: playbook.id,
+          version: playbook.version,
+          forUserId: ctx.userId,
+        },
         ...(filedProjectId ? { projectId: filedProjectId } : {}),
         source: input.source,
         reasoning: input.reasoning,
@@ -3183,8 +3692,11 @@ export const playbooksRouter = router({
             ? { handToAgentId: input.handToAgentId }
             : {}),
           ...(input.runOn ? { runOn: input.runOn } : {}),
+          ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
           // A gated trial stays a trial once approved.
           ...(input.trial ? { trial: input.trial } : {}),
+          // A gated "start another" stays one once approved.
+          ...(input.startAnother ? { startAnother: true } : {}),
         },
       });
       if ("denied" in perm && perm.denied) {
@@ -3193,15 +3705,11 @@ export const playbooksRouter = router({
       // The person's choice is remembered once the run is allowed, before it
       // starts, so this run already follows it and the next launch does not
       // ask (`readPlaybookRunChoice`).
-      if (input.remember) {
-        await setRunChoice({
-          callerId: ctx.userId,
-          playbookId: playbook.id,
-          choice: input.handToAgentId
-            ? { executor: "external-agent", agentUserId: input.handToAgentId }
-            : { executor: "is-agent" },
-        });
-      }
+      const runnerOffer = await rememberRunChoice({
+        input,
+        userId: ctx.userId,
+        playbook,
+      });
       if ("proposalId" in perm) {
         return {
           run: null,
@@ -3212,6 +3720,7 @@ export const playbooksRouter = router({
             "Playbook run proposed for review"
           ),
           proposalId: perm.proposalId,
+          ...(runnerOffer ? { runnerOffer } : {}),
         };
       }
 
@@ -3249,14 +3758,54 @@ export const playbooksRouter = router({
         ...(input.agentType ? { agentType: input.agentType } : {}),
         ...(input.handToAgentId ? { handToAgentId: input.handToAgentId } : {}),
         ...(input.runOn ? { runOn: input.runOn } : {}),
+        ...(input.stageRunners ? { stageRunners: input.stageRunners } : {}),
         ...(input.trial ? { trial: input.trial } : {}),
+        ...(input.agentUserId && "preApprovedByRuleId" in perm
+          ? { preApprovedByRuleId: perm.preApprovedByRuleId }
+          : {}),
+        // One live run per object: this door's person run holds the slot
+        // (see `oneLivePerSubject` above). Only this door sets it.
+        ...(oneLivePerSubject ? { oneLivePerSubject: true } : {}),
       }).catch((err: unknown) => {
         if (err instanceof PlaybookParamsError) {
           throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
         }
         throw err;
       });
-      const { run, session, parentLink, skipped, held, handedTo } = started;
+      const { run, session, parentLink, skipped, held, heldBecause, handedTo } =
+        started;
+
+      // A live run was found by the spine (the read above raced it, or a
+      // concurrent start won the insert): nothing started, the live run is
+      // the answer — never "Playbook run started" with no run.
+      if (started.alreadyRunning) {
+        return {
+          ...alreadyRunningFields(playbook.name, {
+            session: started.session,
+            run: started.run,
+            reason: started.alreadyRunning.reason,
+          }),
+          status: "already_running" as const,
+          ...(runnerOffer ? { runnerOffer } : {}),
+        };
+      }
+
+      // ONE-SHOT (`executor: "generate"`): no session. The draft was filed as
+      // a proposal on the subject, answered here at once so the app shows it
+      // inline (approve, edit or reject) — `generated` names the proposal, its
+      // review link and the run that made it.
+      if (started.generated) {
+        return {
+          run,
+          session: null as FocusSession | null,
+          status: "generated" as const,
+          message: started.generated.reused
+            ? `A draft of "${started.generated.section}" already waits for review.`
+            : `Drafted "${started.generated.section}" for review.`,
+          proposalId: started.generated.proposalId as string | null,
+          generated: started.generated,
+        };
+      }
 
       if (skipped !== undefined || session === null) {
         return {
@@ -3281,10 +3830,12 @@ export const playbooksRouter = router({
           status: "draft" as const,
           message:
             "Playbook run created as a draft. It belongs to the person and does not start until they accept it in their sessions." +
+            (heldBecause ? ` ${PRE_APPROVAL_HELD_LINE[heldBecause]}` : "") +
             handedToLine(handedTo),
           proposalId: null as string | null,
           ...(parentLink ? { parentLink } : {}),
           ...(handedTo ? { handedTo } : {}),
+          ...(runnerOffer ? { runnerOffer } : {}),
         };
       }
 
@@ -3296,17 +3847,19 @@ export const playbooksRouter = router({
         proposalId: null as string | null,
         ...(parentLink ? { parentLink } : {}),
         ...(handedTo ? { handedTo } : {}),
+        ...(runnerOffer ? { runnerOffer } : {}),
       };
     }),
 
   /**
    * Get the flow graph for a playbook (Option-C model: playbook references an
-   * automation that owns the flow definition via `flow_automation_id`).
+   * automation that owns the flow definition: its driving automation, the
+   * `schedule`/`flow` row in `playbook_automations`, 0425).
    *
-   * If `flow_automation_id` is set → load that automation's flowDefinition.
+   * If it has one → load that automation's flowDefinition.
    * If NOT set → return a lazy starter graph (NOT persisted) seeded from the
    * playbook's name and goalTemplate. `automationId: null` signals the caller
-   * that no automation exists yet (saveFlow will create one on first save).
+   * that no automation exists yet.
    */
   /**
    * WHO RUNS IT, for the caller (slice 5a, plan v2 66d229dc): their
@@ -3373,11 +3926,13 @@ export const playbooksRouter = router({
         });
       }
 
-      // Existing automation → return its persisted flow.
-      if (playbook.flowAutomationId) {
-        const database = await getDb();
+      // Existing automation → return its persisted flow. The driving
+      // automation is the playbook's `schedule`/`flow` join row (0425).
+      const database = await getDb();
+      const driverId = await readDriverAutomationId(database, playbook.id);
+      if (driverId) {
         const automation = await database.query.automations.findFirst({
-          where: eq(automations.id, playbook.flowAutomationId),
+          where: eq(automations.id, driverId),
         });
         if (automation) {
           return {
@@ -3425,171 +3980,6 @@ export const playbooksRouter = router({
       return {
         flowDefinition: starterFlow,
         automationId: null as string | null,
-      };
-    }),
-
-  /**
-   * Save the flow graph for a playbook (Option-C model).
-   *
-   * If `flow_automation_id` is already set → update that automation's
-   * flowDefinition in-place.
-   * If NOT set → create a new "manual" draft automation, stamp
-   * `playbooks.flow_automation_id`, and write an `automation --activates-->
-   * playbook` link edge.
-   *
-   * Governance-gated (mirrors `update`): write-gate on the LOADED playbook's
-   * workspaceId + checkPermissionOrPropose. On "proposed" returns without
-   * writing.
-   */
-  saveFlow: protectedProcedure
-    .input(
-      z.object({
-        playbookId: z.string().uuid(),
-        flowDefinition: z.object({
-          nodes: z.array(z.unknown()),
-          edges: z.array(z.unknown()),
-        }),
-        agentUserId: z.string().uuid().optional(),
-        source: z.string().optional(),
-        reasoning: z.string().optional(),
-      })
-    )
-    .mutation(async ({ ctx, input }) => {
-      const database = await getDb();
-
-      // 1. Load by id ONLY — never trust a caller-supplied workspaceId.
-      const existing = await database.query.playbooks.findFirst({
-        where: eq(playbooks.id, input.playbookId),
-      });
-      if (!existing) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Playbook ${input.playbookId} not found`,
-        });
-      }
-
-      // 2. Write-gate on the LOADED row's workspaceId (never input.*).
-      await assertWorkspaceWrite(database, ctx.userId, {
-        workspaceId: existing.workspaceId,
-      });
-
-      // 2b. Node-contract validation — same gate as automations.create/update.
-      // saveFlow is the playbook-canvas author-time door that writes an
-      // automation's flowDefinition (update in-place or first-save insert), so a
-      // malformed flow must be rejected here too, not only via automations.*.
-      const flowError =
-        flowValidationErrorMessage(input.flowDefinition) ??
-        // An AI fan-out over an unfiltered query — the guardrail rule.
-        unfilteredAiFanoutError(input.flowDefinition);
-      if (flowError) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: flowError });
-      }
-
-      // 3. Governance membrane — same verb as update.
-      const perm = await checkPermissionOrPropose({
-        userId: ctx.userId,
-        agentUserId: input.agentUserId,
-        workspaceId: existing.workspaceId,
-        subjectType: "playbook",
-        action: "update",
-        source: input.source,
-        reasoning: input.reasoning,
-        data: { id: input.playbookId, name: existing.name },
-      });
-
-      if ("denied" in perm && perm.denied) {
-        throw new TRPCError({ code: "FORBIDDEN", message: perm.reason });
-      }
-      if ("proposalId" in perm) {
-        return {
-          automationId: null as string | null,
-          status: "proposed" as const,
-          message: proposedMessageFor(
-            perm.proposalType,
-            "Flow save proposed for review"
-          ),
-          proposalId: perm.proposalId,
-        };
-      }
-
-      const flowDef = input.flowDefinition as FlowDefinition;
-
-      // 4a. Existing automation → update its flowDefinition in-place.
-      if (existing.flowAutomationId) {
-        await database
-          .update(automations)
-          .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, existing.flowAutomationId));
-
-        return {
-          automationId: existing.flowAutomationId as string,
-          status: "updated" as const,
-          message: "Flow definition updated",
-          proposalId: null as string | null,
-        };
-      }
-
-      // 4b. No automation yet → create one, stamp playbook, write link edge.
-      // 23505 recovery against automations_workspace_name_active_uq (0230): a
-      // non-archived automation of this name may already exist (the playbook's
-      // backing row survived a flow_automation_id reset). Adopt it and persist
-      // THIS flow onto it — saveFlow's whole contract — rather than 500-ing or
-      // cloning. Case-insensitive identity handled by findNonArchivedAutomationByName.
-      let automationId: string;
-      try {
-        const [created] = await database
-          .insert(automations)
-          .values({
-            workspaceId: existing.workspaceId,
-            createdBy: input.agentUserId ?? ctx.userId,
-            name: existing.name,
-            description: existing.description ?? null,
-            triggerType: "manual",
-            triggerConfig: {},
-            flowDefinition: flowDef,
-            status: "draft",
-            metadata: { createdVia: "manual", playbookId: existing.id },
-          })
-          .returning({ id: automations.id });
-        automationId = (created as Pick<Automation, "id">).id;
-      } catch (err) {
-        if (!isUniqueViolation(err)) throw err;
-        const winner = await findNonArchivedAutomationByName(
-          database,
-          existing.workspaceId,
-          existing.name
-        );
-        if (!winner) throw err;
-        await database
-          .update(automations)
-          .set({ flowDefinition: flowDef, updatedAt: new Date() })
-          .where(eq(automations.id, winner.id));
-        automationId = winner.id;
-      }
-
-      // Stamp the playbook with the new automation id.
-      await database
-        .update(playbooks)
-        .set({ flowAutomationId: automationId, updatedAt: new Date() })
-        .where(eq(playbooks.id, existing.id));
-
-      // Write the `automation --activates--> playbook` link edge (idempotent).
-      await createLinks([
-        {
-          workspaceId: existing.workspaceId,
-          fromType: "automation",
-          fromId: automationId,
-          toType: "playbook",
-          toId: existing.id,
-          linkType: "activates",
-        },
-      ]);
-
-      return {
-        automationId: automationId as string,
-        status: "created" as const,
-        message: "Flow automation created and linked",
-        proposalId: null as string | null,
       };
     }),
 });

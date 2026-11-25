@@ -233,6 +233,35 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
     ).toMatch(/kind: "oauth_consent"/);
   });
 
+  it("presence.deviceLink.approve (nested, so the scan above cannot name it) gates in its service before it approves", () => {
+    // "Add this device" (founder decision of 9 Nov 2026): the approve door is
+    // `presenceRouter.deviceLink.approve`, indented one router deeper than
+    // `decisionProcedures` reads, so it is pinned here by name. Its body
+    // hands off to `approveDeviceLink`, which must call the gate for
+    // `device_link` BEFORE the write that marks the request approved.
+    const router = FILES.find((f) => f.path === "routers/presence.ts")!.src;
+    const approve = router.slice(
+      router.indexOf("    approve: protectedProcedure")
+    );
+    expect(router.indexOf("    approve: protectedProcedure")).toBeGreaterThan(
+      0
+    );
+    expect(approve.slice(0, approve.indexOf("    decline:"))).toMatch(
+      /\bapproveDeviceLink\(/
+    );
+    const service = FILES.find(
+      (f) => f.path === "services/presence/device-link.ts"
+    )!.src;
+    const body = service.slice(
+      service.indexOf("export async function approveDeviceLink(")
+    );
+    const gateAt = body.search(/\bassertPresenceForRequest\(\{/);
+    const approveAt = body.indexOf('status: "approved"');
+    expect(gateAt).toBeGreaterThan(0);
+    expect(body.slice(gateAt, gateAt + 200)).toMatch(/kind: "device_link"/);
+    expect(approveAt).toBeGreaterThan(gateAt);
+  });
+
   it("every request kind is gated by a door, and the skip hooks are held by their one door each", () => {
     // The account-recovery doors (new recovery codes) live in the server app.
     const appDoors = walk(APP_API_SRC);
@@ -252,6 +281,11 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
         .sort();
     expect(holders('presenceChecked: "oauth.consent",')).toEqual([
       "routers/oauth/consent.ts",
+    ]);
+    // The batch door asks the gate ONCE for the whole set, then hands each
+    // item to its own body: only it may say a proof was checked that way.
+    expect(holders('presenceChecked: "capabilityBatch",')).toEqual([
+      "services/capabilities/enable-many.ts",
     ]);
     expect(holders('presenceChecked: "applyProposalApproval",')).toEqual([
       "routers/proposals/executors/agent.ts",
@@ -669,6 +703,8 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
   const SENSITIVE_ROUTER_CALLERS: Record<string, string> = {
     "routers/hub-protocol/rest/vault.ts":
       "secretsVaultRouter.deleteSecret only (takes power away)",
+    "routers/proposals.ts":
+      "secretsVaultRouter.create only, in proposals.repair's setup arm (a person storing a key they hold; create is no SENSITIVE_ACTIONS path, and the arm refuses an agent or a key and asks a fresh sign-in itself, assertFreshAuthentication)",
   };
 
   it("a server-side caller of a sensitive router names the check it rests on (presenceChecked)", () => {
@@ -698,5 +734,54 @@ describe("TRIPWIRE: every approve door passes the proof-of-presence gate", () =>
       missing,
       'Pass presenceChecked: "applyProposalApproval" (only from an executor applyProposalApproval dispatched), or list the caller in SENSITIVE_ROUTER_CALLERS with the reason'
     ).toEqual([]);
+  });
+});
+
+describe("the grace window is decided in the gate and nowhere else (18 Nov 2026)", () => {
+  const callers = (name: string) =>
+    FILES.filter((f) => new RegExp(`\\b${name}\\(`).test(f.src))
+      .map((f) => f.path)
+      .sort();
+
+  it("only the gate stamps a window, and only the gate (and the status read) reads one", () => {
+    // The definitions live in grace.ts; a door that stamps or reads a window
+    // on its own would decide a grace the gate does not know about.
+    expect(callers("stampGrace")).toEqual([
+      "services/presence/gate.ts",
+      "services/presence/grace.ts",
+    ]);
+    expect(callers("readGrace")).toEqual([
+      "routers/presence.ts", // the caller's own seconds left, a read for the client
+      "services/presence/gate.ts",
+      "services/presence/grace.ts",
+    ]);
+  });
+
+  it("the batch door asks the gate once, before any item is turned on", () => {
+    const src = FILES.find(
+      (f) => f.path === "services/capabilities/enable-many.ts"
+    )!.src;
+    const gateAt = src.search(/\bassertPresenceForRequest\(\{/);
+    expect(gateAt).toBeGreaterThan(0);
+    expect(src.match(/\bassertPresenceForRequest\(/g)).toHaveLength(1);
+    expect(src.slice(gateAt, gateAt + 120)).toMatch(/kind: "capability_batch"/);
+    expect(src.indexOf("setSkillApproved({")).toBeGreaterThan(gateAt);
+    expect(src.indexOf("setToolApproved({")).toBeGreaterThan(gateAt);
+    // An acting agent is refused before the gate.
+    expect(src.search(/\brefuseAgentApprover\(/)).toBeLessThan(gateAt);
+  });
+
+  it("the grace check sits in checkPresence's no-proof branch, after the key and agent refusals", () => {
+    const src = FILES.find((f) => f.path === "services/presence/gate.ts")!.src;
+    const graceFn = src.slice(src.indexOf("async function graceFor("));
+    for (const guard of [
+      'args.reason !== "setup"',
+      "args.keyCaller",
+      "presenceGraceable(args.grace)",
+      "getActingAgentUserId()",
+      "browserPersonSessionKey()",
+    ]) {
+      expect(graceFn.slice(0, 900), `graceFor lost ${guard}`).toContain(guard);
+    }
   });
 });

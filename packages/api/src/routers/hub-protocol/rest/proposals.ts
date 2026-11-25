@@ -7,6 +7,7 @@ import {
   type PresenceProof,
 } from "@synap-core/types/presence";
 import { z } from "@hono/zod-openapi";
+import type { Context } from "hono";
 import { getConfinedWorkspace } from "../confine-workspace.js";
 
 import { ErrorSchema, uuidQueryParam } from "./_codecs/_openapi.js";
@@ -36,6 +37,7 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { createEventBackedProposal } from "../../../utils/event-backed-proposal.js";
+import { filingRefusalOf } from "../../../services/proposals/can-apply.js";
 import { getRequestGrant } from "@synap/database";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { fencedProposalVerdict } from "../../../access/fenced-proposal.js";
@@ -47,6 +49,7 @@ import {
   type DevApprovalType,
 } from "../../../services/proposals/dev-approval.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
+import { assertMayDecideProposal } from "../../proposals/review-authority.js";
 import { createHubProtocolCallerContext } from "../utils.js";
 import {
   PROPOSAL_IDS_FILTER_MAX,
@@ -57,6 +60,7 @@ import {
   identityResolutionByRefInput,
   identityResolutionInput,
 } from "../../proposals/executors/identity-resolution.js";
+import { ACCESS_DOORS } from "../../../services/proposals/proposal-class.js";
 
 /** Page size when the caller names none — matches the historical tRPC default,
  *  so an existing caller that sends no `limit` sees byte-identical membership. */
@@ -384,6 +388,63 @@ export function registerProposalsRoutes(app: HubHono): void {
       404: { description: "Proposal not found", schema: ErrorSchema },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  const itemDoorRequest = {
+    params: z.object({
+      id: z.string(),
+      itemRef: z
+        .string()
+        .describe(
+          "The item's ref in the proposal: `$opN` / an op `ref` for an entity, `$relN` for a relation, or an item pack's `items[].ref`."
+        ),
+    }),
+  };
+  const itemDoorResponses = {
+    200: {
+      description: "Item decision recorded",
+      schema: z.object({
+        success: z.boolean(),
+        proposalId: z.string(),
+        itemRef: z.string(),
+      }),
+    },
+    400: { description: "Bad request", schema: ErrorSchema },
+    403: { description: "Forbidden", schema: ErrorSchema },
+    404: { description: "Proposal not found", schema: ErrorSchema },
+    409: {
+      description: "The proposal is no longer pending, or names no such item",
+      schema: ErrorSchema,
+    },
+    500: { description: "Internal error", schema: ErrorSchema },
+  };
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/items/{itemRef}/reject",
+    tags: ["Proposals"],
+    summary: "Drop one item of a pending proposal",
+    description:
+      "Drops ONE item of a pending proposal (a candidate of a prospect list, one entity of a capture), at once and durably: the rest of the proposal stays pending, and approving it later leaves this item out. Delegates to the canonical `proposals.rejectItem` tRPC mutation (same review authority and key fences as rejecting the whole proposal).",
+    request: {
+      ...itemDoorRequest,
+      body: z.object({
+        reason: z.string().optional(),
+        reasonCode: z.enum(PROPOSAL_REJECTION_REASONS).optional(),
+      }),
+    },
+    responses: itemDoorResponses,
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/proposals/{id}/items/{itemRef}/restore",
+    tags: ["Proposals"],
+    summary: "Restore one dropped item of a pending proposal",
+    description:
+      "Undoes a drop: the item is part of the pending proposal again. Delegates to the canonical `proposals.restoreItem` tRPC mutation.",
+    request: itemDoorRequest,
+    responses: itemDoorResponses,
   });
 
   registerOpenApi(app, {
@@ -934,6 +995,108 @@ export function registerProposalsRoutes(app: HubHono): void {
     }
   });
 
+  /**
+   * POST /proposals/:id/items/:itemRef/reject and /restore
+   * Drop (and undo the drop of) ONE item of a pending proposal: how a pod app
+   * keeps or drops one candidate of a prospect list without deciding the
+   * whole batch. Delegates to the canonical `proposals.rejectItem` /
+   * `restoreItem` tRPC mutations, so the review authority (the person's
+   * review ladder, an agent key only on its own work) and the key's fences
+   * (`proposal.reject` on the proposal's own space or project) are the
+   * in-pod door's, unchanged.
+   */
+  const proposalItemDoor = async (
+    c: Context<any, any>,
+    act: "reject" | "restore"
+  ) => {
+    const proposalId = c.req.param("id")!;
+    const itemRef = c.req.param("itemRef")!;
+    let reason: string | undefined;
+    let reasonCode: string | undefined;
+    if (act === "reject") {
+      const jsonRead = await readJsonBody(c);
+      if (!jsonRead.ok) return jsonRead.res;
+      const body = (jsonRead.body ?? {}) as Record<string, unknown>;
+      reason = typeof body.reason === "string" ? body.reason : undefined;
+      reasonCode =
+        typeof body.reasonCode === "string" ? body.reasonCode : undefined;
+    }
+    try {
+      const userId = c.get("userId") as string;
+      const scopes = c.get("scopes") as string[];
+      const resolvedId = await resolveProposalId(userId, proposalId);
+      const ctx = await createHubProtocolCallerContext(userId, scopes);
+      const caller = mainProposalsRouter.createCaller(
+        ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
+      );
+      if (act === "reject") {
+        // reasonCode is checked against PROPOSAL_REJECTION_REASONS by the
+        // procedure's zod enum.
+        await caller.rejectItem({
+          proposalId: resolvedId,
+          itemRef,
+          reason,
+          reasonCode: reasonCode as
+            (typeof PROPOSAL_REJECTION_REASONS)[number] | undefined,
+        });
+      } else {
+        await caller.restoreItem({ proposalId: resolvedId, itemRef });
+      }
+      return c.json({ success: true, proposalId: resolvedId, itemRef }, 200);
+    } catch (err) {
+      logger.error(
+        { err, proposalId, itemRef, act },
+        "proposal item door failed"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  };
+
+  app.post("/proposals/:id/items/:itemRef/reject", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "reject");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
+    return proposalItemDoor(c, "reject");
+  });
+
+  app.post("/proposals/:id/items/:itemRef/restore", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    // The key's decision right first, before any read (as the in-pod door's
+    // first statement); the procedure then bounds it to the proposal's own
+    // space, project or object (assertCanReviewProposal).
+    try {
+      assertMayDecideProposal("reject", "restore");
+    } catch (err) {
+      return c.json(
+        { error: err instanceof Error ? err.message : "Forbidden" },
+        httpStatusForTrpcError(err)
+      );
+    }
+    return proposalItemDoor(c, "restore");
+  });
+
   // ── OpenAPI metadata for the typed dev-loop gate door ────────────────────
   registerOpenApi(app, {
     method: "post",
@@ -1089,6 +1252,25 @@ export function registerProposalsRoutes(app: HubHono): void {
         400
       );
     }
+    // A proposal whose approval changes WHO MAY ACT (a credential, a
+    // membership, a role, an exposure: `ACCESS_DOORS`) is never filed from
+    // caller data (review of #1197). Its executor applies what the row
+    // carries (`app/connect`'s access, `agent/connect`'s key and requests),
+    // so a row filed here could name one principal on its card and act on
+    // another, or skip the asking door's own rules (frozen ask, no nagging).
+    // Each is filed by its own door (`requestAccess`, the consent, the app's
+    // and the AI's ask, `requestWorkspaceJoin`, the membership and key
+    // routers), none of which comes through here.
+    if (ACCESS_DOORS.has(`${body.targetType}/${body.proposalType}`)) {
+      return c.json(
+        {
+          error:
+            "A change to who may act is asked through its own door, never filed as a proposal here.",
+          code: "CREDENTIAL_PROPOSAL_NOT_FILED_HERE",
+        },
+        403
+      );
+    }
     // Item 3 Part 3: confine a bound service key to its workspace before the write.
     let workspaceId = getConfinedWorkspace(c, body.workspaceId) ?? null;
     const ctxAgentUserId = c.get("agentUserId") as string | undefined;
@@ -1175,6 +1357,23 @@ export function registerProposalsRoutes(app: HubHono): void {
       });
       return c.json({ id: proposal.id, status: "pending" });
     } catch (err) {
+      // A proposal its approval would refuse (the one filing check): the
+      // caller's error, answered with its sentence and code, not a failure.
+      const refused = filingRefusalOf(err);
+      if (refused) {
+        logger.info(
+          {
+            reasonCode: refused.reasonCode,
+            targetType: body.targetType,
+            proposalType: body.proposalType,
+          },
+          "createProposal refused at filing: it cannot apply"
+        );
+        return c.json(
+          { error: refused.message, code: refused.reasonCode },
+          400
+        );
+      }
       logger.error({ err }, "createProposal failed");
       return c.json(
         { error: err instanceof Error ? err.message : "Unknown error" },

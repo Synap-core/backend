@@ -13,9 +13,10 @@
  * (`resolveRunChoiceViaLabel`, `SYNAP_AI_LABEL`); none re-derives them.
  */
 
-import type {
-  RUN_CHOICE_PROVIDER_KEY_LABELS,
-  RUN_CHOICE_VIA_LABELS,
+import {
+  humanizeToken,
+  type RUN_CHOICE_PROVIDER_KEY_LABELS,
+  type RUN_CHOICE_VIA_LABELS,
 } from "../vocabulary/index.js";
 import type { AgentWake, AgentWakeRefusal } from "./wake.js";
 
@@ -25,14 +26,17 @@ export type RunChoice =
   | { executor: "external-agent"; agentUserId: string };
 
 /**
- * How a run's runner was decided, first match wins:
+ * How a run's runner was decided, first match wins (founder via lead, 9 Nov
+ * 2026: the playbook's own runner beats the person's remembered choice):
  *   named    — chosen for THIS run (the launch's pick, or `handToAgentId`);
+ *   authored — the runner the playbook itself names (`playbooks.runner`, 0413);
  *   stored   — the person's remembered choice for the playbook;
  *   fallback — the remembered agent could not take it now, so Synap AI did;
  *   default  — nothing chosen: the playbook's own executor.
  */
 export const RUN_CHOICE_VIAS = [
   "named",
+  "authored",
   "stored",
   "fallback",
   "default",
@@ -54,6 +58,78 @@ export interface RunOn {
     name: string | null;
     why: AgentWakeRefusal | "not_awake" | "refused";
   } | null;
+  /**
+   * The computer the agent that took it runs on (`users.host_user_id`, the
+   * computer's principal), at the moment it was handed the run. Absent for
+   * Synap AI and for an agent on no known computer.
+   */
+  computerUserId?: string | null;
+  /** The agent preset the runner choice named (`{ agentId, preset }`). */
+  preset?: string | null;
+  /**
+   * The tools the playbook `requires`, as checked on the computer of the
+   * runner that took it (only when the playbook declares some).
+   */
+  requires?: Record<string, RunnerRequiresState> | null;
+  /**
+   * Only when the playbook names a `runner`: each choice of it that could
+   * not take this run, in order, and why — whether a later choice took it or
+   * the run fell to the next rung.
+   */
+  runnerPassedOver?: RunnerPassedOver[] | null;
+}
+
+/**
+ * Whether a tool a playbook needs is on the runner's computer:
+ *   installed  — it is (`installations.status = installed`);
+ *   missing    — it is not (absent, planned, failed, removing…);
+ *   unverified — nobody can tell: an agent on no known computer, or Synap AI
+ *                (never "missing": an empty read and a failed one differ).
+ */
+export const RUNNER_REQUIRES_STATES = [
+  "installed",
+  "missing",
+  "unverified",
+] as const;
+export type RunnerRequiresState = (typeof RUNNER_REQUIRES_STATES)[number];
+
+/**
+ * One choice of a playbook's `runner` that could not take a run, and why:
+ *   no_agent      — none of the person's agents fits it (role, engine,
+ *                   computer, or an agent id that is not theirs);
+ *   not_allowed   — Synap AI, on a playbook that runs only on agents;
+ *   refused       — the route refuses the agent (paused, not theirs…);
+ *   not_awake     — the agent is not awake now (`why` carries the wake
+ *                   refusal when it cannot wake);
+ *   missing_tools — awake, but an earlier awake choice had every tool, or it
+ *                   lacks some and a later choice has them all.
+ */
+export interface RunnerPassedOver {
+  /** Its position in the playbook's `runner` list (0 = first). */
+  choice: number;
+  agentUserId: string | null;
+  name: string | null;
+  why:
+    | AgentWakeRefusal
+    | "no_agent"
+    | "not_allowed"
+    | "refused"
+    | "not_awake"
+    | "missing_tools";
+}
+
+/**
+ * A runner that could not take a run, as the person reads it ("Cloud: Not
+ * awake"); a choice with no name is named by its place in the list.
+ */
+export function passedOverLine(p: {
+  name: string | null;
+  why: string;
+  choice?: number;
+}): string {
+  const who =
+    p.name ?? (p.choice !== undefined ? `Choice ${p.choice + 1}` : "Agent");
+  return `${who}: ${humanizeToken(p.why)}`;
 }
 
 /** One answer the person can pick, in the order the pod offers them. */

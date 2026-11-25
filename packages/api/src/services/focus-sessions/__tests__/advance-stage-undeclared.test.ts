@@ -67,9 +67,19 @@ vi.mock("../stage-subject-status.js", () => ({
     h.writes.push(input);
     return { status: "skipped", reason: "no_status_property" };
   },
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    h.writes.push(input);
+    return { entered: { status: "skipped", reason: "no_status_property" } };
+  },
 }));
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
+}));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
 }));
 
 import { advanceSessionStage } from "../advance-stage.js";

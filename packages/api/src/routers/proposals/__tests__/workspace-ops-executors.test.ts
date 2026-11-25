@@ -13,6 +13,7 @@
  *   entity/update     ({ id, toWorkspaceId }) → entitiesRouter.moveToWorkspace
  *                                          (before R8a an approved move moved nothing)
  *   profile/grant_access                 → profilesRouter.grantAccess
+ *   workspace/update  (move_in | share)  → applyMoveToSpace / applyShareWithSpace
  *
  * Routers are mocked at the module seam; the procedures themselves are pinned
  * in `workspaces.archive-governed.pglite.test.ts`.
@@ -28,6 +29,8 @@ const h = vi.hoisted(() => ({
   entUpdate: vi.fn(),
   grant: vi.fn(),
   materialize: vi.fn(),
+  applyMove: vi.fn(),
+  applyShare: vi.fn(),
   membership: { role: "owner" } as { role: string } | null,
   proposalStatus: "pending",
   updates: [] as unknown[],
@@ -58,6 +61,13 @@ vi.mock("../../profiles.js", () => ({
     },
   },
 }));
+vi.mock("../../../services/move-to-space.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../../services/move-to-space.js")
+  >()),
+  applyMoveToSpace: (...a: unknown[]) => h.applyMove(...a),
+  applyShareWithSpace: (...a: unknown[]) => h.applyShare(...a),
+}));
 vi.mock("../../../services/workspace-materialization-service.js", () => {
   class E extends Error {}
   return {
@@ -74,6 +84,11 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     getWorkspaceMembership: async () => h.membership,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       select: () => ({
         from: () => ({
           where: async () => [{ status: h.proposalStatus }],
@@ -151,6 +166,8 @@ beforeEach(() => {
     h.entUpdate,
     h.grant,
     h.materialize,
+    h.applyMove,
+    h.applyShare,
   ])
     fn.mockReset();
   h.ctxs = [];
@@ -284,4 +301,83 @@ describe("profile/grant_access", () => {
     ).rejects.toThrow(/No workspace access/);
     expect(h.updates).toHaveLength(0);
   });
+});
+
+describe("workspace/update — a move into the space, a share with it", () => {
+  const PLAYBOOK = "99999999-9999-4999-8999-999999999999";
+
+  it("move_in replays the move as the approver, into the proposal's space, then approves", async () => {
+    h.applyMove.mockResolvedValue({ status: "moved" });
+    const res = await run("workspace/update", {
+      id: WS,
+      operation: "move_in",
+      objectType: "playbook",
+      objectId: PLAYBOOK,
+    });
+    expect(h.applyMove).toHaveBeenCalledWith({
+      userId: APPROVER,
+      objectType: "playbook",
+      objectId: PLAYBOOK,
+      workspaceId: WS,
+    });
+    expect(res).toMatchObject({ success: true, primaryId: PLAYBOOK });
+    expect(h.updates).toHaveLength(1);
+  });
+
+  it("share (and its revoke) replays the share as the approver, then approves", async () => {
+    h.applyShare.mockResolvedValue({ status: "unshared" });
+    await run("workspace/update", {
+      id: WS,
+      operation: "share",
+      objectType: "skill",
+      objectId: PLAYBOOK,
+      revoke: true,
+    });
+    expect(h.applyShare).toHaveBeenCalledWith({
+      userId: APPROVER,
+      objectType: "skill",
+      objectId: PLAYBOOK,
+      workspaceId: WS,
+      revoke: true,
+    });
+    expect(h.updates).toHaveLength(1);
+  });
+
+  it("an approver the floor refuses (cannot write the source) leaves it pending", async () => {
+    h.applyMove.mockRejectedValue(
+      Object.assign(new Error("You cannot change the playbook"), {
+        code: "FORBIDDEN",
+      })
+    );
+    await expect(
+      run("workspace/update", {
+        id: WS,
+        operation: "move_in",
+        objectType: "playbook",
+        objectId: PLAYBOOK,
+      })
+    ).rejects.toThrow(/cannot change/);
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it.each([
+    ["move_in", "skill"],
+    ["share", "automation"],
+    ["move_in", undefined],
+  ] as const)(
+    "%s naming %s is refused, nothing applied or approved",
+    async (operation, objectType) => {
+      await expect(
+        run("workspace/update", {
+          id: WS,
+          operation,
+          objectType,
+          objectId: PLAYBOOK,
+        })
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(h.applyMove).not.toHaveBeenCalled();
+      expect(h.applyShare).not.toHaveBeenCalled();
+      expect(h.updates).toHaveLength(0);
+    }
+  );
 });

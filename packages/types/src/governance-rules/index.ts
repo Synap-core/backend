@@ -145,12 +145,33 @@ export function describeWritePattern(pattern: string): string {
   if (pattern.slice(0, dot) === "*") {
     return `Any ${resolveActionLabel(pattern.slice(dot + 1), "imperative").toLowerCase()} (${pattern})`;
   }
+  // `entity.<action>` names no kind: it covers every kind, so its object is
+  // "anything" ("Create anything"), never the bare verb (finding b0bb38d4:
+  // an approval on `entity.create` read "Create", saying nothing).
+  const everyKind = everyKindAction(pattern);
+  if (everyKind) return `${everyKind} ${EVERY_KIND_OBJECT} (${pattern})`;
   const title = buildObjectActionTitle({
     action: pattern.slice(dot + 1),
     objectKind: pattern.slice(0, dot),
     mood: "imperative",
   });
   return title ? `${title} (${pattern})` : pattern;
+}
+
+/** The object of a write on every kind (`entity.<action>`), in words. */
+const EVERY_KIND_OBJECT = "anything";
+
+/**
+ * The verb of `entity.<action>` (a write on every kind: the generic base
+ * kind names none), imperative: "Create" for `entity.create`. null for any
+ * other pattern.
+ */
+function everyKindAction(pattern: string): string | null {
+  const dot = pattern.lastIndexOf(".");
+  if (dot <= 0 || pattern.slice(0, dot).toLowerCase() !== "entity") return null;
+  const action = pattern.slice(dot + 1);
+  if (!action || action === "*") return null;
+  return resolveActionLabel(action, "imperative") || null;
 }
 
 /** The words for a write pattern, without the pattern echoed in brackets. */
@@ -171,18 +192,35 @@ export function governanceRuleTitle(rule: {
   targetKind: string;
   targetPattern: string;
   targetProfile?: string | null;
+  /** The one object it names (0420), by its name, and the version it holds for. */
+  targetSubjectLabel?: string | null;
+  targetSubjectVersion?: number | null;
 }): string | null {
   if (rule.targetKind !== "action") return null;
+  // A rule naming ONE object holds for that object at one version only, so
+  // both are its name: "Run playbook · Weekly review, version 3".
+  if (rule.targetSubjectLabel) {
+    const version =
+      rule.targetSubjectVersion != null
+        ? `, version ${rule.targetSubjectVersion}`
+        : "";
+    return `${writePatternTitle(rule.targetPattern)} · ${rule.targetSubjectLabel}${version}`;
+  }
   // The row a pod switch owns is titled with the switch's own words (S13), so
   // the list and the switch read as one rule.
   const podDefault = rule.targetProfile
     ? undefined
     : POD_DEFAULT_WORDS[rule.targetPattern];
   if (podDefault) return podDefault.label;
-  const title = writePatternTitle(rule.targetPattern);
-  return rule.targetProfile
-    ? `${title} · ${resolveObjectNounPlural(rule.targetProfile)}`
-    : title;
+  // A rule narrowed to one kind names that kind, so an every-kind write reads
+  // as its verb and the kind ("Update · Notes"), never "Update anything".
+  if (rule.targetProfile) {
+    const head =
+      everyKindAction(rule.targetPattern) ??
+      writePatternTitle(rule.targetPattern);
+    return `${head} · ${resolveObjectNounPlural(rule.targetProfile)}`;
+  }
+  return writePatternTitle(rule.targetPattern);
 }
 
 // ─── A rule row in words ────────────────────────────────────────────────
@@ -254,7 +292,11 @@ export interface HumanizeTargetOptions {
 type TargetRow = Pick<
   GovernanceRuleRowLike,
   "targetKind" | "targetPattern" | "targetProfile"
->;
+> & {
+  /** The one object it names (0420), by its name, and the version it holds for. */
+  targetSubjectLabel?: string | null;
+  targetSubjectVersion?: number | null;
+};
 
 /** What the rule matches, in words. */
 export function humanizeTarget(
@@ -270,6 +312,12 @@ export function humanizeTarget(
   }
   if (rule.targetKind === "profile") {
     return `Everything of type "${rule.targetProfile ?? "?"}"`;
+  }
+  // A rule naming ONE object reads by that object and its version, never as
+  // the whole action ("Run playbook · Weekly review, version 3").
+  if (rule.targetSubjectLabel) {
+    const title = governanceRuleTitle(rule);
+    if (title) return title;
   }
   // Every other action pattern (an exact key, a glob, the `@reversible` class)
   // is named by the ONE write-pattern derivation the proposal cards use: a raw
@@ -375,4 +423,110 @@ export function provenanceLabel(
 export function verdictLabel(verdict: string): string {
   if (verdict === "deny") return resolveGovernanceRungLabel("denied-by-rule");
   return verdict === "auto" ? "Auto-approve" : "Require proposal";
+}
+
+// ─── Letting agents run one playbook without asking (0420) ──────────────
+
+/** The governed write an agent's playbook launch is (`playbooks.run`). */
+export const PLAYBOOK_RUN_ACTION = "playbook.run";
+
+/**
+ * Why an agent's run is held although its person allowed the playbook (or an
+ * earlier version) for agents. All but `version_changed` also say why a
+ * playbook cannot be pre-approved at all (`governanceRules.forSubject`'s
+ * `preApproval.reason`): it uses tools beyond the pod's data, runs on another
+ * agent or computer, runs another playbook, or could not be checked.
+ */
+export const PRE_APPROVAL_HELD_REASONS = [
+  "version_changed",
+  "declares_tools",
+  "runs_elsewhere",
+  "runs_other_playbook",
+  "could_not_check",
+] as const;
+export type PreApprovalHeldReason = (typeof PRE_APPROVAL_HELD_REASONS)[number];
+/** Why a playbook cannot be pre-approved for agents, whatever its rules. */
+export type PreApprovalIneligibleReason = Exclude<
+  PreApprovalHeldReason,
+  "version_changed"
+>;
+
+/** Is this stored value a {@link PreApprovalHeldReason}? */
+export function isPreApprovalHeldReason(
+  value: unknown
+): value is PreApprovalHeldReason {
+  return (
+    typeof value === "string" &&
+    (PRE_APPROVAL_HELD_REASONS as readonly string[]).includes(value)
+  );
+}
+
+/**
+ * The `governanceRules.create` input that lets agents run ONE playbook at ONE
+ * version without asking (founder decision, 10 Nov 2026): any of the person's
+ * OWN agents (the create door records the person as the rule's
+ * `principalOwnerId`; another member's agent never matches), the playbook's
+ * own space (pod-wide for a pod-wide playbook), the
+ * exact action narrowed to that playbook. Any edit that bumps its version
+ * leaves the rule matching nothing, so the next launch asks again. Built here
+ * once, so no surface writes its own shape.
+ */
+export function playbookPreApprovalRule(playbook: {
+  id: string;
+  version: number;
+  workspaceId: string | null;
+}) {
+  return {
+    principalKind: "any" as const,
+    ...(playbook.workspaceId
+      ? { scopeKind: "workspace" as const, workspaceId: playbook.workspaceId }
+      : { scopeKind: "pod" as const }),
+    targetKind: "action" as const,
+    targetPattern: PLAYBOOK_RUN_ACTION,
+    targetSubjectId: playbook.id,
+    targetSubjectVersion: playbook.version,
+    verdict: "auto" as const,
+  };
+}
+
+/** Whether agents may run a playbook without asking, read from its rules. */
+export type PlaybookPreApprovalState =
+  | { state: "allowed"; ruleId: string; version: number }
+  /** Allowed for an earlier version: it changed since, so agents ask again. */
+  | { state: "outdated"; allowedVersion: number }
+  | { state: "none" };
+
+/**
+ * The state of a playbook's pre-approval from its ACTIVE rules
+ * (`governanceRules.forSubject`): an `auto` rule on `playbook.run` naming it
+ * at its current version allows it; one at another version is outdated. The
+ * resolver matches on the same three facts (`scoreRuleTarget`).
+ */
+export function playbookPreApprovalState(
+  rules: ReadonlyArray<{
+    id: string;
+    targetPattern: string;
+    verdict: string;
+    targetSubjectId?: string | null;
+    targetSubjectVersion?: number | null;
+  }>,
+  playbook: { id: string; version: number }
+): PlaybookPreApprovalState {
+  const named = rules.filter(
+    (r): r is typeof r & { targetSubjectVersion: number } =>
+      r.targetPattern === PLAYBOOK_RUN_ACTION &&
+      r.verdict === "auto" &&
+      r.targetSubjectId === playbook.id &&
+      r.targetSubjectVersion != null
+  );
+  const current = named.find(
+    (r) => r.targetSubjectVersion === playbook.version
+  );
+  if (current) {
+    return { state: "allowed", ruleId: current.id, version: playbook.version };
+  }
+  const earlier = named[0];
+  return earlier
+    ? { state: "outdated", allowedVersion: earlier.targetSubjectVersion }
+    : { state: "none" };
 }

@@ -480,3 +480,132 @@ describe("a failure is recorded, and resume is safe", () => {
     expect((await runRow(runId)).status).toBe("failed");
   });
 });
+
+/**
+ * AN APPROVED RUN OF AN ASYNC VERB (agent report 48dbf93b, 18 Nov 2026):
+ * approving a `fal_generate_image` run held the approve request for the whole
+ * billed generation; the request outlived the client's wait and the person saw
+ * an error for a run that had succeeded (proposal 81347e93, runResult.success
+ * true). A `capability.run` of a verb that DECLARES `executionMode: "async"` is
+ * now handed to the same job: the approve returns at once, the job runs the
+ * verb through its executor, and the run's real result lands on the proposal.
+ * The executor is a stub here (approve-executors is not registered in this
+ * file); its own run path is pinned by the capability executor's tests.
+ */
+describe("an approved run of an async verb does not hold the approve request", () => {
+  const runs: string[] = [];
+  let fail: string | null = null;
+
+  beforeAll(async () => {
+    const { registerProposalExecutor } =
+      await import("../execution-registry.js");
+    registerProposalExecutor({
+      key: "capability.run" as never,
+      async execute({ proposal }) {
+        runs.push(proposal.id);
+        if (fail) throw new Error(fail);
+        await client.query(
+          `update proposals set status = 'approved',
+             data = data || '{"runResult":{"success":true,"imageCount":2}}'::jsonb
+           where id = $1`,
+          [proposal.id]
+        );
+        return { success: true };
+      },
+    });
+  });
+  beforeEach(() => {
+    runs.length = 0;
+    fail = null;
+  });
+
+  async function insertRun(
+    executionMode: "async" | "sync"
+  ): Promise<ApplyArgs["proposal"]> {
+    const skillId = randomUUID();
+    await client.query(
+      `insert into skills (id, user_id, name, kind, execution_mode) values ($1, $2, $3, 'code', $4)`,
+      [skillId, APPROVER, `verb_${skillId.slice(0, 8)}`, executionMode]
+    );
+    const id = randomUUID();
+    await client.query(
+      `insert into proposals (id, workspace_id, target_type, target_id, proposal_type, data, status)
+       values ($1, null, 'capability', $2, 'capability.run', $3::jsonb, 'pending')`,
+      [
+        id,
+        skillId,
+        JSON.stringify({
+          skillId,
+          verbId: null,
+          parameters: { prompt: "a fox" },
+        }),
+      ]
+    );
+    const row = await (
+      holder.db as typeof import("@synap/database").db
+    ).query.proposals.findFirst({ where: (p, { eq }) => eq(p.id, id) });
+    return row!;
+  }
+
+  it("THE FILED CASE: approve returns queued at once; the job runs it and the result lands", async () => {
+    const proposal = await insertRun("async");
+    const result = await approve(proposal);
+    expect(result).toMatchObject({
+      success: true,
+      queued: true,
+      joined: false,
+    });
+    expect(result.approvalRun).toMatchObject({
+      kind: "run",
+      state: "queued",
+      total: 1,
+    });
+    // Nothing ran in the request.
+    expect(runs).toHaveLength(0);
+    expect(await proposalStatus(proposal.id)).toBe("pending");
+
+    expect(await runApprovalJob({ runId: result.approvalRun!.runId })).toEqual({
+      status: "succeeded",
+    });
+    expect(runs).toEqual([proposal.id]);
+    expect(await proposalStatus(proposal.id)).toBe("approved");
+    const { rows } = await client.query<{ data: { runResult?: unknown } }>(
+      `select data from proposals where id = $1`,
+      [proposal.id]
+    );
+    expect(rows[0]!.data.runResult).toEqual({ success: true, imageCount: 2 });
+    expect(await readLatestApprovalRun(proposal.id)).toMatchObject({
+      kind: "run",
+      state: "succeeded",
+    });
+  });
+
+  it("a failed run is recorded with its sentence; approving again runs it again", async () => {
+    const proposal = await insertRun("async");
+    const first = await approve(proposal);
+    fail = "callProvider failed: body.aspect_ratio: Input should be '16:9'";
+    expect(await runApprovalJob({ runId: first.approvalRun!.runId })).toEqual({
+      status: "failed",
+    });
+    const view = await readLatestApprovalRun(proposal.id);
+    expect(view).toMatchObject({ kind: "run", state: "failed" });
+    expect(view!.error).toBeTruthy();
+    fail = null;
+    const again = await approve(proposal);
+    expect(again).toMatchObject({ queued: true, joined: false });
+    expect(await runApprovalJob({ runId: again.approvalRun!.runId })).toEqual({
+      status: "succeeded",
+    });
+    expect(runs).toEqual([proposal.id, proposal.id]);
+  });
+
+  it("a sync verb's run keeps today's apply in the request", async () => {
+    const proposal = await insertRun("sync");
+    const result = await approve(proposal);
+    expect(result.queued).toBeUndefined();
+    expect(runs).toEqual([proposal.id]);
+    expect(
+      holder.sends.filter((s) => s.queue === "proposal-approve")
+    ).toHaveLength(0);
+  });
+});

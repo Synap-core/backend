@@ -14,7 +14,7 @@ Every automation has:
 | Type      | Config                       | Example                              |
 | --------- | ---------------------------- | ------------------------------------ |
 | `event`   | `{ eventPattern, filters? }` | Entity created with specific profile |
-| `cron`    | `{ expression }`             | Daily at 9am: `"0 9 * * *"`          |
+| `cron`    | `{ expression, timezone? }`  | Daily at 9am: `"0 9 * * *"`          |
 | `webhook` | `{ webhookSubscriptionId }`  | External service sends data          |
 | `manual`  | `{}`                         | User-triggered from UI               |
 
@@ -52,11 +52,15 @@ A status move (a kind's own lifecycle, or a role's) emits ONE event, `entity.tra
 
 Prefer it to `entity.update.completed` for any status. For a ROLE it is the only one: a role's status lives on its facet, so an update rule never sees it.
 
-**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to a governed rule like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
+Other subjects move through the same door and emit their own transition event, filtered the same way (`to`, `from`, `category`): `track.transition.completed` (a goal), `focus_session.transition.completed` (a session), `playbook_run.transition.completed` (a run, with `stopReason`), `proposal.transition.completed` (every move of a proposal: approved, rejected, expired, withdrawn, failed) and `slot.transition.completed` (an ask or a declared output). `proposal.approved.completed` and `proposal.rejected.completed` still fire for a proposal in a space; the transition also covers the rest.
+
+**The pod applies some automations itself.** An outcome met wherever it was filed, a run that stops early going to Needs you, a roll-up a relation declares: each shows in the same list as the person's automations (Built in, Declared on a link), applied by the pod after the move (`work-model`). Do not write an automation that repeats one.
+
+**A worker usually beats a hand-written rule.** "When a post enters Review, run the review" is an activator on the playbook (`on: enters_status`), and "once 5 leads wait in qualified" is `on: count` + `min`; both compile to an automation like the one above, fire once per thing per transition, and are throttled by `maxPendingApprovals`. Write the rule by hand only for work no method owns. Workers: `processes`.
 
 ### Cron Expressions
 
-Standard 5-field cron (minute hour day month weekday):
+Standard 5-field cron (minute hour day month weekday), read in `triggerConfig.timezone` (an IANA zone such as `"Europe/Paris"`). Without a zone it runs in UTC, so the person's 9am needs their zone; an unknown zone is refused.
 
 - `"0 9 * * *"` — daily at 9am
 - `"0 9 * * MON"` — every Monday at 9am
@@ -201,7 +205,7 @@ Only server-encrypted secrets can be resolved by the automation engine. The user
 2. **Name clearly** — Use descriptive labels: "When task created with high priority" not "Trigger 1".
 3. **One purpose** — Each automation should do one thing well. Compose multiple automations rather than building one complex flow.
 4. **Filter early** — Use trigger filters to avoid unnecessary execution. Don't use a condition step when a trigger filter suffices.
-5. **Test first** — Create automations as `draft` status. Let the user review the flow visualization before activating.
+5. **Review first** — An agent's create is a proposal: the person reviews the flow visualization, and approving it turns the automation on. Ask for `draft` only when they want to switch it on later themselves.
 
 ## Example: Auto-archive completed tasks
 

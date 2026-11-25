@@ -57,6 +57,10 @@ vi.mock("./record.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../../capabilities/execute-capability.js", () => ({
+  executeCapability: async () => ({ kind: "run", result: { passed: true } }),
+}));
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { focusSessions } from "@synap/database";
 import { evaluateSession } from "./evaluate.js";
@@ -147,8 +151,112 @@ describe("evaluateSession criterionKeys", () => {
   });
 });
 
+// db6a5e17: a judge run on a stage whose work does not exist yet spends one
+// of its 2 attempts for nothing.
+describe("evaluateSession is bounded to the stages the session has reached", () => {
+  const cap = (key: string, stageKey?: string) => ({
+    key,
+    statement: key,
+    check: { kind: "capability", capability: "check.verb" },
+    ...(stageKey ? { stageKey } : {}),
+  });
+  let staged = "";
+  beforeAll(async () => {
+    staged = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Stage it', 'active', 'board', $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        staged,
+        USER,
+        JSON.stringify([
+          { key: "open", name: "Open" },
+          { key: "board", name: "Board" },
+          { key: "act3", name: "Act 3" },
+        ]),
+        JSON.stringify([
+          cap("on-subject", "open"),
+          cap("board-drawn", "board"),
+          cap("act3-theme", "act3"),
+          cap("unstaged"),
+        ]),
+      ]
+    );
+  });
+
+  it("by default grades the current and earlier stages, and SKIPS a later one with why", async () => {
+    const r = await evaluateSession({ sessionId: staged, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "board-drawn",
+      "on-subject",
+      "unstaged",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    const later = r.results.find((x) => x.key === "act3-theme");
+    expect(later).toMatchObject({ status: "skipped" });
+    expect(later?.reason).toContain("not reached");
+  });
+
+  it("a session at a stage its process no longer lists grades everything (an unknown place skips nothing)", async () => {
+    const renamed = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Renamed', 'active', 'gone', $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        renamed,
+        USER,
+        JSON.stringify([
+          { key: "open", name: "Open" },
+          { key: "act3", name: "Act 3" },
+        ]),
+        JSON.stringify([cap("on-subject", "open"), cap("act3-theme", "act3")]),
+      ]
+    );
+    const r = await evaluateSession({ sessionId: renamed, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "act3-theme",
+      "on-subject",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    expect(r.results.some((x) => x.status === "skipped")).toBe(false);
+  });
+
+  it("a closed session in no stage grades its staged criteria (it enters no more stages)", async () => {
+    const closed = randomUUID();
+    await h.client!.query(
+      `insert into focus_sessions (id, user_id, goal, status, current_stage, stages, expected_outputs, criteria, agent_ids, metadata, created_at, updated_at, started_at)
+       values ($1, $2, 'Fixed main red', 'closed', null, $3::jsonb, '[]'::jsonb, $4::jsonb, '{}', '{}'::jsonb, now(), now(), now())`,
+      [
+        closed,
+        USER,
+        JSON.stringify([
+          { key: "claim", name: "Claim" },
+          { key: "fix", name: "Fix" },
+        ]),
+        JSON.stringify([cap("one-owner", "claim"), cap("pr-opened", "fix")]),
+      ]
+    );
+    const r = await evaluateSession({ sessionId: closed, userId: USER });
+    expect(h.recorded.map((x) => x.criterionKey).sort()).toEqual([
+      "one-owner",
+      "pr-opened",
+    ]);
+    if (r.status !== "evaluated") throw new Error(r.status);
+    expect(r.results.some((x) => x.status === "skipped")).toBe(false);
+  });
+
+  it("an explicit stageKey still grades that stage (the check gate, unchanged)", async () => {
+    await evaluateSession({
+      sessionId: staged,
+      userId: USER,
+      stageKey: "act3",
+    });
+    expect(h.recorded.map((x) => x.criterionKey)).toEqual(["act3-theme"]);
+  });
+});
+
 describe("outcomeParameter — what a capability check is told about the outcome", () => {
-  it("hands the slot with the criterion's key, ref included", async () => {
+  it("hands the slot the criterion names by outputKey, ref included", async () => {
     const { outcomeParameter } = await import("./evaluate.js");
     const slots = [
       { kind: "document", label: "Spec", key: "spec" },
@@ -159,7 +267,7 @@ describe("outcomeParameter — what a capability check is told about the outcome
         ref: { url: "https://github.com/Synap-core/backend/pull/255" },
       },
     ];
-    expect(outcomeParameter(slots, "pr-backend-255")).toEqual({
+    expect(outcomeParameter(slots, { outputKey: "pr-backend-255" })).toEqual({
       outcome: {
         key: "pr-backend-255",
         kind: "pull_request",
@@ -167,7 +275,9 @@ describe("outcomeParameter — what a capability check is told about the outcome
         ref: { url: "https://github.com/Synap-core/backend/pull/255" },
       },
     });
-    expect(outcomeParameter(slots, "nope")).toEqual({});
-    expect(outcomeParameter(null, "spec")).toEqual({});
+    expect(outcomeParameter(slots, { outputKey: "nope" })).toEqual({});
+    expect(outcomeParameter(null, { outputKey: "spec" })).toEqual({});
+    // Sharing the key pairs nothing: no outputKey, no outcome (W4).
+    expect(outcomeParameter(slots, {})).toEqual({});
   });
 });

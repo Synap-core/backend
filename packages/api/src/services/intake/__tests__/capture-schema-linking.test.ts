@@ -236,14 +236,25 @@ describe("the kind floor — live spaces, inside the request's grant", () => {
 
   it("a grant narrows only when every scope names its spaces", () => {
     expect(grantedWorkspaceIdsOf(undefined)).toBeNull();
+    // A scope with no space that also WRITES is unbounded: it lifts the narrowing.
     expect(
       grantedWorkspaceIdsOf({
         scopes: [
           { permissions: ["entity.read"], workspaceIds: [CONTENT] },
-          { permissions: ["entity.read"], workspaceIds: null },
+          { permissions: ["entity.read", "entity.create"], workspaceIds: null },
         ],
       })
     ).toBeNull();
+    // A scope with no space that only READS (every kind, since 2026-11-09 a pod-wide read) writes nothing, so it
+    // reaches no space for routing and does not lift it (`placeBeyondPodWideReads`).
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+          { permissions: ["entity.read"], workspaceIds: null },
+        ],
+      })!,
+    ]).toEqual([CONTENT]);
     expect([
       ...grantedWorkspaceIdsOf({
         scopes: [
@@ -269,5 +280,58 @@ describe("the kind floor — live spaces, inside the request's grant", () => {
         scopes: [{ permissions: ["entity.decision.read"], workspaceIds: null }],
       })
     ).toBeNull();
+  });
+
+  // W3a (decision 51ad8d1e F3): a project pin covers no whole space. Before,
+  // a scope pinned to projects with no space returned null (not narrowed):
+  // the capture routed into every space and the facet loaders read every
+  // role row the person reads.
+  it("a scope pinned to projects (or objects) with no space covers no space and never lifts the narrowing", () => {
+    // Alone: narrowed to NO space (null would be every space).
+    const alone = grantedWorkspaceIdsOf({
+      scopes: [
+        { permissions: ["entity.task.create"], projectIds: ["p"] },
+        { permissions: ["entity.read"], workspaceIds: null },
+      ],
+    });
+    expect(alone).not.toBeNull();
+    expect([...alone!]).toEqual([]);
+    expect(
+      kindsWithinFloor(CATALOG, {
+        archivedWorkspaceIds: new Set(),
+        grantedWorkspaceIds: alone,
+      }).map((k) => k.slug)
+    ).toEqual(["note", "person"]);
+    // Beside a space scope: that space only.
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [
+          { permissions: ["*"], projectIds: ["p"] },
+          { permissions: ["entity.read"], workspaceIds: [CONTENT] },
+        ],
+      })!,
+    ]).toEqual([CONTENT]);
+    // An object pin with no space, likewise.
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [{ permissions: ["*"], entityIds: ["e"] }],
+      })!,
+    ]).toEqual([]);
+    // A project pin beside a space keeps that space (it narrows inside it).
+    expect([
+      ...grantedWorkspaceIdsOf({
+        scopes: [
+          { permissions: ["*"], workspaceIds: [BUILDER], projectIds: ["p"] },
+        ],
+      })!,
+    ]).toEqual([BUILDER]);
+    // An empty project list, and the deny-all grant (`narrowKeyGrant`):
+    // narrowed to no space, never "anywhere".
+    for (const scope of [
+      { permissions: ["*"], projectIds: [] as string[] },
+      { permissions: [] as string[] },
+    ]) {
+      expect([...grantedWorkspaceIdsOf({ scopes: [scope] })!]).toEqual([]);
+    }
   });
 });

@@ -12,7 +12,8 @@
  *      (`@synap-core/types/vocabulary`): aligned (the registry label IS the user
  *      word), derived (template nouns), a destination or Inbox-filter word
  *      (`resolveDestinationLabel` / `resolveNeedsYouBucketLabel`, founder 2A/3A),
- *      or no-row (with the reason). The heading set is
+ *      a goal work-kind word (`resolveTrackWorkKindLabel`), or no-row (with
+ *      the reason). The heading set is
  *      DERIVED from the file, so a new concept joins by existing and fails until
  *      it is classified.
  *   2. The glossary reaches the doors: `_teaching.json` (alwaysOn — without an
@@ -43,6 +44,7 @@ import {
   resolveObjectNoun,
   resolveObjectNounPlural,
   resolveTemplateNoun,
+  resolveTrackWorkKindLabel,
 } from "@synap-core/types/vocabulary";
 import { describe, expect, it } from "vitest";
 
@@ -107,9 +109,20 @@ const INBOX_FILTER: Record<string, "question" | "routine" | "broken"> = {
   "Routine changes": "routine",
   Broken: "broken",
 };
+/**
+ * A goal's kind of work (`TRACK_WORK_KINDS`): the word IS
+ * `resolveTrackWorkKindLabel(key)`. Pathway (P6, 23 Nov 2026): a one-off long
+ * plan is a lens over a goal of this kind, its sessions and decisions, never
+ * an object kind of its own.
+ */
+const WORK_KIND: Record<string, string> = {
+  Pathway: "pathway",
+};
 /** No registry row carries this word, and why. */
 const NO_ROW: Record<string, string> = {
-  Template: "derived — resolveTemplateNoun(scope), checked below",
+  // D1 (founder, 2026-11-16): a playbook is a Process ("Template" now names
+  // only a space template).
+  Process: "derived — resolveTemplateNoun(scope), checked below",
   Work: "no noun by design; the action is 'Start work'",
   Approvals: "governance rules are not an object kind in the registry",
   "To review":
@@ -122,6 +135,11 @@ const NO_ROW: Record<string, string> = {
   Flow: "a read (`flow.of`) of a kind's lifecycle with the stages that own it — not an object kind",
   Blocker: "a slot declaration that marks a thing held up — not an object kind",
   Worker: "configuration (a playbook activator) — not an object kind",
+  // Goals / pillars / health (2026-11-12).
+  Pillar:
+    "a project's `uses` link to a space, with a purpose — a link, not an object kind",
+  Health:
+    "a derived read of a pillar or project (worst-of its goals) — never stored",
 };
 
 function glossaryHeadings(): string[] {
@@ -149,6 +167,7 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
       ...Object.keys(ALIGNED_PLURAL),
       ...Object.keys(DESTINATION),
       ...Object.keys(INBOX_FILTER),
+      ...Object.keys(WORK_KIND),
       ...Object.keys(NO_ROW),
     ]);
     expect(headings.filter((h) => !classified.has(h))).toEqual([]);
@@ -185,7 +204,13 @@ describe("tripwire: concepts.md is classified against the vocabulary", () => {
     }
   });
 
-  it("the template nouns the glossary names are the vocabulary's", () => {
+  it("work-kind words ARE the vocabulary's goal work-kind label", () => {
+    for (const [word, key] of Object.entries(WORK_KIND)) {
+      expect(resolveTrackWorkKindLabel(key), `${word} ↔ ${key}`).toBe(word);
+    }
+  });
+
+  it("the process nouns the glossary names are the vocabulary's", () => {
     const text = readFileSync(CONCEPTS, "utf8").toLowerCase();
     for (const scope of ["session", "project"] as const) {
       expect(text).toContain(resolveTemplateNoun(scope).toLowerCase());

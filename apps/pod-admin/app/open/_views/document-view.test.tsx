@@ -17,6 +17,8 @@ vi.mock("../../../lib/trpc", () => ({
     },
     workspaces: { list: { useQuery: () => ({ data: [] }) } },
     useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
   },
 }));
 

@@ -67,6 +67,11 @@ describe("failed-state sibling writers — redaction at write", () => {
     // call in stamp-materialized.ts turns this red.
     const sets: Array<Record<string, unknown>> = [];
     const fakeDb = {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       update: () => ({
         set: (v: Record<string, unknown>) => {
           sets.push(v);

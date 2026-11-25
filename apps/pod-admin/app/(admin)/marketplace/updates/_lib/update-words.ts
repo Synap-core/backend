@@ -5,10 +5,20 @@
  */
 
 import type { TFunction } from "@synap-core/types/i18n";
-import type { PackageFieldState, PackageUpdateSummary } from "./contract";
+import {
+  packageUpdateNeedsLabel,
+  resolveTemplateStepLabel,
+  type PackageFieldState,
+  type PackageUpdateSummary,
+} from "./contract";
 import { catalogKindLabel } from "../../_lib/catalog-model";
 import type { en } from "./copy";
-import { stateCounts, updateGroupOf, type UpdateGroup } from "./updates-model";
+import {
+  stateCounts,
+  updateGroupOf,
+  type UpdateGroup,
+  type UpdateHolds,
+} from "./updates-model";
 
 type T = TFunction<typeof en>;
 
@@ -63,6 +73,8 @@ export function groupMarkLabel(t: T, group: UpdateGroup | "current"): string {
       return t("mark.choice");
     case "consent":
       return t("mark.consent");
+    case "approval":
+      return resolveTemplateStepLabel("awaiting-approval");
     case "review":
       return t("mark.review");
     case "nothing":
@@ -75,8 +87,17 @@ export function groupMarkLabel(t: T, group: UpdateGroup | "current"): string {
 /** The group and the words of an update's mark, in one read. */
 export function summaryMark(
   t: T,
-  s: Pick<PackageUpdateSummary, "needs" | "counts">
+  s: Pick<PackageUpdateSummary, "needs" | "counts"> &
+    Partial<Pick<PackageUpdateSummary, "slug">>,
+  holds?: UpdateHolds
 ): { group: UpdateGroup | "current"; label: string } {
-  const group = updateGroupOf(s);
+  const group = updateGroupOf(s, holds);
   return { group, label: groupMarkLabel(t, group) };
+}
+
+/** A group's heading: the pod's words for what it needs, or the step's. */
+export function groupHeading(group: UpdateGroup): string {
+  return group === "approval"
+    ? resolveTemplateStepLabel("awaiting-approval")
+    : packageUpdateNeedsLabel(group);
 }

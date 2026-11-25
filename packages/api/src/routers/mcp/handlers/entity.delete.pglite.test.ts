@@ -247,11 +247,10 @@ describe("synap_delete_entity — the governed soft delete, as the agent", () =>
     const theirs = await seedEntity(OTHER, "Their note");
     h.gateAnswer = { proposalId: "should-not-exist" };
 
-    const outcome = await callDelete({ entityId: theirs }).catch(
-      (err: unknown) => err
-    );
+    const outcome = await callDelete({ entityId: theirs });
 
-    expect(String(outcome)).toMatch(/not found/i);
+    expect(outcome.result.isError).toBe(true);
+    expect(outcome.text).toMatch(/not found/i);
     expect(h.gateCalls).toHaveLength(0);
     expect(await deletedAt(theirs)).toBeNull();
   });
@@ -291,5 +290,41 @@ describe("synap_delete_entity — supersede instead of delete (D2)", () => {
     expect(
       (JSON.parse(text) as Record<string, unknown>).supersedeHint
     ).toBeUndefined();
+  });
+});
+
+/**
+ * An agent that hits a failure keeps retrying variants unless the error ends
+ * the loop (founder report 2026-11-09: 8 identical calls, then a runtime halt).
+ * Rows: a shortened id and a missing id are each a terminal isError result that
+ * says what to do instead — and neither reaches the governance gate.
+ */
+describe("synap_delete_entity — failures an agent can act on", () => {
+  it("a shortened id: names the full UUID, the length received and where to get it", async () => {
+    const id = await seedEntity(OWNER, "Short id target");
+    h.gateAnswer = { proposalId: "should-not-exist" };
+
+    const { result, text } = await callDelete({ entityId: id.slice(0, 8) });
+
+    expect(result.isError).toBe(true);
+    expect(text).toMatch(/full 36-character UUID/);
+    expect(text).toMatch(/you sent 8 characters/);
+    expect(text).toMatch(/synap_get_entity|synap_find/);
+    expect(text).not.toMatch(/invalid_format|"origin"/);
+    expect(h.gateCalls).toHaveLength(0);
+  });
+
+  it("an id that does not exist: says why it can fail and that a retry will not help", async () => {
+    h.gateAnswer = { proposalId: "should-not-exist" };
+
+    const { result, text } = await callDelete({ entityId: randomUUID() });
+
+    expect(result.isError).toBe(true);
+    expect(text).toMatch(/already deleted/i);
+    expect(text).toMatch(/not visible/i);
+    expect(text).toMatch(/fail the same way/i);
+    expect(text).toMatch(/synap_get_entity/);
+    expect(text).toMatch(/synap_list_proposals/);
+    expect(h.gateCalls).toHaveLength(0);
   });
 });

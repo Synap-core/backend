@@ -10,6 +10,7 @@ import { createElement } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { setAmbientCatalogLocale } from "@synap-core/types/i18n";
+import { resolveActionLabel } from "@synap-core/types/vocabulary";
 
 vi.mock("../../(admin)/components/side-nav-role", () => ({
   useConsoleRole: () => "admin",
@@ -78,6 +79,13 @@ vi.mock("../../../lib/trpc", async () => ({
           isPending: state.rejecting,
         }),
       },
+      revise: {
+        useMutation: () => ({
+          mutate() {},
+          mutateAsync: async () => ({}),
+          isPending: false,
+        }),
+      },
       approvalProgress: {
         useQuery: () => ({
           data: null,
@@ -101,12 +109,25 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
     signals: {
+      needsYou: {
+        // The request story's context read (`useRequestContext`): no row
+        // stands for this proposal, so its story has no Before or Next.
+        useQuery: () => ({
+          data: {
+            rows: { needs_you: [] },
+            context: { timelineItems: 4, sessions: {}, rows: {} },
+          },
+          isError: false,
+          refetch() {},
+        }),
+      },
       list: {
         useQuery: () => ({ data: undefined, isLoading: true, error: null }),
       },
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
       setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
@@ -114,6 +135,15 @@ vi.mock("../../../lib/trpc", async () => ({
 }));
 
 import { ProposalReview } from "./ProposalReview";
+import { alwaysEn, en as pageEn } from "./copy";
+import { approveInput } from "./use-proposal-decision";
+
+/** A proposal's one verb, reject (the vocabulary door), and the rule menu's trigger. */
+const REFUSE_TRIGGER = new RegExp(
+  `${resolveActionLabel("reject", "imperative")}…`
+);
+const NEVER = new RegExp(alwaysEn["never.trigger"].replace("…", ""));
+const ALWAYS = new RegExp(alwaysEn["always.trigger"].replace("…", ""));
 
 const AGENT = "55555555-5555-4555-8555-555555555555";
 const ID = "11111111-1111-4111-8111-111111111111";
@@ -179,9 +209,71 @@ const ENGLISH_OUTCOMES = [
   "matched an auto-approve rule",
   "You rejected this",
   "was undone after it was applied",
-  "Its moment passed",
-  "withdrew this",
+  "This request expired",
+  "This request was withdrawn",
+  "Nothing was applied",
 ];
+
+describe("an ended request: one line that names who, and its doors", () => {
+  const ended = (status: string, end: Record<string, unknown>, data = {}) => {
+    const base = request(status);
+    return {
+      ...base,
+      data: {
+        ...base.data,
+        ...data,
+        ended: { by: "agent", at: "2026-11-18T00:00:00Z", ...end },
+      },
+    };
+  };
+
+  it("an author's withdrawal names its author once, never 'whoever'", () => {
+    state.proposal = ended("withdrawn", { reason: "author" });
+    const seen = text(render());
+    expect(seen).toContain("Taken back by Claude-code");
+    expect(seen).toContain("Nothing was applied.");
+    expect(seen).not.toContain("whoever");
+    expect(seen).not.toContain("This request was withdrawn");
+  });
+
+  it("the record that already exists is a door", () => {
+    state.proposal = ended("expired", {
+      reason: "record_landed",
+      landedEntityId: "33333333-3333-4333-8333-333333333333",
+    });
+    const html = render();
+    expect(text(html)).toContain("The record already exists");
+    expect(text(html)).toContain("Open the record");
+    expect(html).toContain("33333333-3333-4333-8333-333333333333");
+  });
+
+  it("a plan that left items in place never says nothing was applied", () => {
+    state.proposal = ended(
+      "withdrawn",
+      { reason: "author" },
+      {
+        planFailure: {
+          compensation: {
+            notCompensated: [
+              {
+                kind: "entity",
+                id: "44444444-4444-4444-8444-444444444444",
+                reason: "x",
+              },
+              { kind: "relation", id: "r1", reason: "x" },
+            ],
+          },
+        },
+      }
+    );
+    const html = render();
+    expect(text(html)).toContain(
+      "Not applied; 2 items could not be rolled back"
+    );
+    expect(text(html)).not.toContain("Nothing was applied");
+    expect(html).toContain("44444444-4444-4444-8444-444444444444");
+  });
+});
 
 describe("in French", () => {
   it.each([
@@ -198,7 +290,7 @@ describe("in French", () => {
     for (const sentence of ENGLISH_OUTCOMES)
       expect(seen).not.toContain(sentence);
     expect(seen).toMatch(
-      /Vous avez|règle d’approbation|prévenue|annulé|délai|retiré/
+      /Vous avez|règle d’approbation|prévenue|annulé|Rien n’a été appliqué/
     );
   });
 
@@ -206,10 +298,11 @@ describe("in French", () => {
     setAmbientCatalogLocale("fr");
     state.proposal = request("approval_failed");
     const seen = text(render());
-    expect(seen).toContain("L’approbation a échoué.");
+    expect(seen).toContain("Aucune raison n’a été enregistrée.");
     expect(seen).toContain("Le type « widget » n’existe pas ici");
     for (const english of [
       "Approving this failed",
+      "No reason was recorded",
       "does not exist here",
       "Checking what to fix",
     ]) {
@@ -220,9 +313,12 @@ describe("in French", () => {
   it("the decision bar names no English verb", () => {
     setAmbientCatalogLocale("fr");
     state.proposal = request("pending");
-    const seen = text(render());
-    expect(seen).toContain("Approuver et toujours autoriser…");
-    expect(seen).not.toMatch(/\bApprove\b|\bReject\b/);
+    const html = render();
+    // The rule menu is Approve's chevron, named in French.
+    expect(html).toContain('aria-label="Toujours approuver…"');
+    expect(text(html)).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
+    for (const [, name] of html.matchAll(/aria-label="([^"]*)"/g))
+      expect(name).not.toMatch(/\bApprove\b|\bReject\b|\bRefuse\b/);
   });
 });
 
@@ -238,12 +334,7 @@ describe("one pending state for the whole bar", () => {
   it("nothing is held while nothing is deciding", () => {
     state.proposal = request("pending");
     const html = render();
-    for (const label of [
-      /Approve$/,
-      /Reject…/,
-      /Approve and always allow/,
-      /Reject and never allow/,
-    ]) {
+    for (const label of [/Approve$/, REFUSE_TRIGGER, ALWAYS, NEVER]) {
       expect(held(html, label), String(label)).toBe(false);
     }
   });
@@ -254,12 +345,7 @@ describe("one pending state for the whole bar", () => {
       state[which] = true;
       state.proposal = request("pending");
       const html = render();
-      for (const label of [
-        /Approve/,
-        /Reject…/,
-        /Approve and always allow/,
-        /Reject and never allow/,
-      ]) {
+      for (const label of [/Approve/, REFUSE_TRIGGER, ALWAYS, NEVER]) {
         expect(held(html, label), String(label)).toBe(true);
       }
     }
@@ -270,5 +356,43 @@ describe("one pending state for the whole bar", () => {
     render();
     expect(menuProps.always?.onRunningChange).toBeTypeOf("function");
     expect(menuProps.never?.onRunningChange).toBeTypeOf("function");
+  });
+});
+
+describe("allow without review: the person's tick on an AI-made verb's request", () => {
+  const TICK = pageEn["decide.allowWithoutReview"].split("“")[0]!.trim();
+
+  it("the pod's offer (proposals.get) draws the tick beside Approve, the action named in words", () => {
+    state.proposal = {
+      ...request("pending"),
+      allowWithoutReview: { verb: "fr_company_lookup" },
+    };
+    const html = render();
+    expect(html).toContain("data-allow-without-review");
+    const seen = text(html);
+    expect(seen).toContain(TICK);
+    expect(seen).not.toContain("fr_company_lookup");
+    expect(seen).toContain(
+      pageEn["decide.allowWithoutReviewHint"].slice(0, 30)
+    );
+  });
+
+  it("CONTROL: no offer from the pod, no tick", () => {
+    state.proposal = { ...request("pending"), allowWithoutReview: null };
+    const html = render();
+    expect(html).not.toContain("data-allow-without-review");
+    expect(text(html)).not.toContain(TICK);
+  });
+
+  it("a ticked approve sends allowWithoutReview; an unticked one does not", () => {
+    expect(approveInput(ID, { allowWithoutReview: true }, 0)).toEqual({
+      proposalId: ID,
+      expectedRevision: 0,
+      allowWithoutReview: true,
+    });
+    expect(approveInput(ID, {}, 0)).toEqual({
+      proposalId: ID,
+      expectedRevision: 0,
+    });
   });
 });

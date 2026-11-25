@@ -203,6 +203,7 @@ import {
   proposals,
   workspaces,
   workspaceMembers,
+  apiKeys,
   projectMembers,
   podMembers,
   users,
@@ -210,6 +211,7 @@ import {
   profileProperties,
   propertyDefs,
   type db as DatabaseHandle,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import type { Context } from "../../../context.js";
 import { updateEntities } from "../update-entities.js";
@@ -248,6 +250,7 @@ function ddlFor(table: PgTable): string {
 async function freshDb() {
   const client = new PGlite();
   for (const table of [
+    lifecycleTransitionOutbox,
     entities,
     relations,
     entityFacets,
@@ -255,6 +258,7 @@ async function freshDb() {
     proposals,
     workspaces,
     workspaceMembers,
+    apiKeys,
     projectMembers,
     podMembers,
     users,
@@ -273,6 +277,7 @@ async function freshDb() {
       proposals,
       workspaces,
       workspaceMembers,
+      apiKeys,
       profiles,
       profileProperties,
       propertyDefs,

@@ -91,19 +91,40 @@ export type RecoveryCodesState = "unknown" | "set" | "not_set";
  *  - `second-way`: approvals need the person and they hold one;
  *  - `codes`: no recovery codes (founder decision R3, 4 Oct 2026: the only
  *    way back in without email, Synap Cloud or the server);
+ *  - `this-device` ("Add this device", founder decision of 9 Nov 2026): the
+ *    person holds a way in, and THIS browser does not remember holding a
+ *    passkey for this pod (`device-link/this-device.ts`): set one up here,
+ *    so this device can approve too. An OFFER, not a warning: it never
+ *    lights the top bar's mark (`nudgeMarks`). Unknown (`thisDevice` null,
+ *    before the browser was read) asks for nothing;
  *  - null: nothing to ask. A failed or loading read asks for nothing: this is
  *    a nudge, not the door; the Security page shows the failure.
  */
-export type SecurityNudge = "first-way" | "second-way" | "codes" | null;
+export type SecurityNudge =
+  "first-way" | "second-way" | "codes" | "this-device" | null;
 
 export function securityNudge(
   state: WaysIn,
-  codes: RecoveryCodesState
+  codes: RecoveryCodesState,
+  /** This browser remembers holding a passkey for this pod; null = unknown. */
+  thisDevice: boolean | null = null
 ): SecurityNudge {
   if (state.kind === "ready" && state.enforce && !state.enough) {
     return state.count === 0 ? "first-way" : "second-way";
   }
-  return codes === "not_set" ? "codes" : null;
+  if (codes === "not_set") return "codes";
+  if (state.kind === "ready" && state.count >= 1 && thisDevice === false) {
+    return "this-device";
+  }
+  return null;
+}
+
+/**
+ * Does this ask light the top bar's ⚠ mark? Every ask that guards the person
+ * from being locked out does; the offer to set up this device does not.
+ */
+export function nudgeMarks(nudge: SecurityNudge): boolean {
+  return nudge !== null && nudge !== "this-device";
 }
 
 /**

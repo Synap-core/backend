@@ -15,18 +15,19 @@ import {
 } from "@synap-core/types/console";
 import { isSpaceManageRole } from "@synap-core/types/workspaces";
 import { TRPCError } from "@trpc/server";
-import { db, eq, and, inArray, isNull } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  inArray,
+  isNull,
+  getWorkspaceMembership,
+} from "@synap/database";
 import { workspaceMembers, workspaces } from "@synap/database/schema";
 
 /** The caller's role in a workspace, or undefined if not a member. */
 export async function getWorkspaceRole(userId: string, workspaceId: string) {
-  const membership = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.workspaceId, workspaceId),
-      eq(workspaceMembers.userId, userId)
-    ),
-    columns: { role: true },
-  });
+  const membership = await getWorkspaceMembership(db, workspaceId, userId);
   return membership?.role;
 }
 

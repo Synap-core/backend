@@ -107,6 +107,13 @@ vi.mock("../routers/hub-protocol/utils.js", () => ({
   createHubProtocolCallerContext: mockCreateHubCtx,
 }));
 
+// A capability dependency's presence check (pod-wide, or in the target
+// space). Nothing is installed in these scenarios; the `found` path is pinned
+// on PGlite by `capabilities/addon.lifecycle.pglite.test.ts`.
+vi.mock("./capabilities/container-address.js", () => ({
+  findContainerByAddress: vi.fn(async () => undefined),
+}));
+
 import { resolvePackageDependencies } from "./package-dependency-resolver.js";
 import { finishTemplateApply } from "./template-apply-finisher.js";
 

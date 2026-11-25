@@ -145,8 +145,6 @@ const CREDENTIAL_TABLES_UNWRITTEN: Record<string, string> = {
  * why. They stop the propagation to the doors that call them.
  */
 const EXEMPT_WRITERS: Record<string, string> = {
-  ensureAgentUser:
-    "the pod's own built-in agent joins the space a person talks to it in; it adds no person and no key, and is a no-op once the agent is a member",
   materializePodAdminsIntoWorkspace:
     "adds only the people who already administer the whole pod to a space they could already administer; it gives no one access they did not hold",
   ensureSynapAiKey:

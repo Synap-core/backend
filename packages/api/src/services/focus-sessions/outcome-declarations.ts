@@ -12,10 +12,14 @@
  *                           agent claims it, a produced object or its `ref`
  *                           proves it — `satisfyClaimsByEvidence`); by the
  *                           person when `owner: "human"`.
+ *                           `outputKey` names the output it checks (work-model
+ *                           W1: THE pairing of a criterion with an output),
+ *                           the same field and alphabet as the criteria alias.
  *   + `verify` judge/capability/human, or evidence with an `evidenceKey`, on a
- *     deliverable → ALSO a criterion under the SAME key. The projection folds a
- *     slot and a criterion sharing a key into ONE outcome (rule 7), and the
- *     evidence verdict then leaves the slot to that criterion's evaluator.
+ *     deliverable → ALSO a criterion under the same key that NAMES the slot
+ *     (`outputKey`). The projection folds a slot and the criteria naming it
+ *     into ONE outcome (rule 7), and the evidence verdict then leaves the slot
+ *     to that criterion's evaluator.
  *
  * `expectedOutputs` / `criteria` / `addOutput` / `completeOutput` stay as
  * DEPRECATED aliases over the same storage — every door keeps accepting them.
@@ -65,6 +69,24 @@ export const outcomeDeclarationSchema = z
         capability: z.string().min(1).max(200).optional(),
         evidenceKey: z.string().min(1).max(80).optional(),
         hint: z.string().max(1000).optional(),
+        /**
+         * kind=capability: the verb's arguments, carried onto the criterion's
+         * `check.params` and validated there (`sessionCriterionSchema`).
+         */
+        params: z.record(z.string(), z.unknown()).optional(),
+      })
+      .optional(),
+    /**
+     * kind "fact" only: the key of the output this criterion checks — THE
+     * pairing (`criteriaByOutput`, work-model W1/W4), stored on the criterion
+     * as the criteria alias stores it (`sessionCriterionSchema.outputKey`, the
+     * same alphabet). A deliverable's own criterion already names itself.
+     */
+    outputKey: z
+      .string()
+      .regex(DECLARED_SLOT_KEY_RE, {
+        message:
+          "outputKey must be an output key (a lowercase slug: a-z, 0-9, -)",
       })
       .optional(),
     required: z.boolean().optional(),
@@ -79,7 +101,22 @@ export const outcomeDeclarationSchema = z
     blockerKey: expectedOutputWireSchema.shape.blockerKey,
     clearedBy: expectedOutputWireSchema.shape.clearedBy,
   })
-  .strict();
+  .strict()
+  .superRefine((o, ctx) => {
+    // A deliverable checked beyond its evidence gets a criterion naming
+    // ITSELF; another output key there would pair it with something else.
+    if (
+      o.outputKey !== undefined &&
+      (o.kind ?? "").toLowerCase() !== FACT_OUTCOME_KIND
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'outputKey goes on a kind: "fact" outcome (the output a checked statement checks); a deliverable is checked as itself',
+        path: ["outputKey"],
+      });
+    }
+  });
 
 export type OutcomeDeclaration = z.infer<typeof outcomeDeclarationSchema>;
 
@@ -92,23 +129,40 @@ export function outcomeKeyOf(o: OutcomeDeclaration): string {
   return o.key ?? slotKeyBase(o.label);
 }
 
+/**
+ * Did the caller say how done is checked? Any outcome carrying a `verify` —
+ * a deliverable checked by its evidence included — is the "outcome with
+ * `verify`" that satisfies an agent's start (F11, `NO_CRITERIA`), whether or
+ * not it also becomes a criterion ({@link needsCriterion}).
+ */
+export function declaresVerify(
+  outcomes: readonly OutcomeDeclaration[] | undefined
+): boolean {
+  return (outcomes ?? []).some((o) => o.verify !== undefined);
+}
+
 /** Does a deliverable's `verify` name a check beyond its own evidence? */
 function needsCriterion(o: OutcomeDeclaration): boolean {
   if (!o.verify) return false;
   return o.verify.kind !== "evidence" || !!o.verify.evidenceKey;
 }
 
-function criterionOf(o: OutcomeDeclaration): SessionCriterion {
+function criterionOf(
+  o: OutcomeDeclaration,
+  checks?: { outputKey: string }
+): SessionCriterion {
   const verify = o.verify ?? { kind: "judge" as const };
   return {
     key: outcomeKeyOf(o),
     statement: o.label,
+    ...(checks ? { outputKey: checks.outputKey } : {}),
     ...(o.required !== undefined ? { required: o.required } : {}),
     check: {
       kind: verify.kind,
       ...(verify.capability ? { capability: verify.capability } : {}),
       ...(verify.evidenceKey ? { evidenceKey: verify.evidenceKey } : {}),
       ...(verify.hint ? { hint: verify.hint } : {}),
+      ...(verify.params ? { params: verify.params } : {}),
     },
   };
 }
@@ -142,6 +196,40 @@ function withDecisionAsk(slot: ExpectedOutput): ExpectedOutput {
   return ask ? { ...slot, ask } : slot;
 }
 
+/** Fields a `kind: "fact"` outcome cannot keep: they belong to a slot. */
+const SLOT_ONLY_FIELDS = [
+  "owner",
+  "blockedReason",
+  "why",
+  "unblocks",
+  "ask",
+  "ref",
+  "blocks",
+  "blockerKey",
+  "clearedBy",
+] as const satisfies ReadonlyArray<keyof OutcomeDeclaration>;
+
+/**
+ * A `kind: "fact"` outcome is stored as a CRITERION (`criterionOf`), which has
+ * no owner, ask or blocker: those fields are not kept. Said back to the
+ * caller (the update door's `warnings[]`), never dropped in silence (ticket
+ * c590b571). One sentence per outcome that sent any. Pure.
+ */
+export function factOutcomeWarnings(
+  outcomes: readonly OutcomeDeclaration[] | undefined
+): string[] {
+  const warnings: string[] = [];
+  for (const o of outcomes ?? []) {
+    if ((o.kind ?? "").toLowerCase() !== FACT_OUTCOME_KIND) continue;
+    const dropped = SLOT_ONLY_FIELDS.filter((f) => o[f] !== undefined);
+    if (dropped.length === 0) continue;
+    warnings.push(
+      `"${o.label}": ${dropped.map((f) => `\`${f}\``).join(", ")} not kept — a kind: "fact" outcome is a checked statement, so it has no owner, ask or blocker. For the person to grade it, use verify: { kind: "human" }; to hand them something to do or answer, declare a deliverable (any other kind) with owner: "human" + blockedReason + ask.`
+    );
+  }
+  return warnings;
+}
+
 /** Outcomes → the two stores they live in. Pure. */
 export function splitOutcomes(outcomes: readonly OutcomeDeclaration[]): {
   expectedOutputs: ExpectedOutput[];
@@ -163,11 +251,15 @@ function splitDeclared(outcomes: readonly OutcomeDeclaration[]): {
   const criteria: SessionCriterion[] = [];
   for (const o of outcomes) {
     if ((o.kind ?? "").toLowerCase() === FACT_OUTCOME_KIND) {
-      criteria.push(criterionOf(o));
+      criteria.push(
+        criterionOf(o, o.outputKey ? { outputKey: o.outputKey } : undefined)
+      );
       continue;
     }
     expectedOutputs.push(slotOf(o));
-    if (needsCriterion(o)) criteria.push(criterionOf(o));
+    if (needsCriterion(o)) {
+      criteria.push(criterionOf(o, { outputKey: outcomeKeyOf(o) }));
+    }
   }
   return { expectedOutputs, criteria };
 }

@@ -53,6 +53,7 @@ import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../client-pg.js";
 import { workspaceMembers, workspaces } from "../schema/workspaces.js";
 import { podReaderWhere } from "./pod-membership.js";
+import { membershipHolderIds } from "./owner-person.js";
 
 /**
  * The workspace lens, as a composable scope dimension:
@@ -107,7 +108,7 @@ export function memberWorkspaceIds(userId: string) {
   return db
     .select({ id: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, userId));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(userId)));
 }
 
 /**
@@ -262,13 +263,23 @@ export function workspaceLensWhere(
 export function ownerPrivateVisibleWhere(
   workspaceIdColumn: AnyPgColumn,
   ownerColumn: AnyPgColumn,
-  userId: string
+  userId: string,
+  options?: {
+    /** Narrows the workspace branch (`workspaceLensWhere`); personal rows stay. */
+    lens?: WorkspaceLens;
+    /** Pod-wide rows of OTHER owners this reader may also see. */
+    sharedPodWide?: SQL;
+  }
 ): SQL {
+  const own = eq(ownerColumn, userId);
   const floor = or(
-    and(isNull(workspaceIdColumn), eq(ownerColumn, userId)),
+    and(
+      isNull(workspaceIdColumn),
+      options?.sharedPodWide ? or(own, options.sharedPodWide) : own
+    ),
     and(
       isNotNull(workspaceIdColumn),
-      userVisibleWhere(workspaceIdColumn, userId)
+      workspaceLensWhere(workspaceIdColumn, userId, options?.lens)
     )
   )!;
   // W1 — the calling key's grant for this table (narrow-only).

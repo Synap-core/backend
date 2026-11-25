@@ -28,6 +28,7 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  apiKeys,
   profiles,
   type db as DatabaseHandle,
 } from "@synap/database";
@@ -99,6 +100,7 @@ beforeAll(async () => {
     projectMembers,
     workspaces,
     workspaceMembers,
+    apiKeys,
     profiles,
   ]) {
     await client.exec(ddlFor(t as unknown as PgTable));

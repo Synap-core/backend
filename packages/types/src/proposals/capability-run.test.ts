@@ -5,8 +5,12 @@ import {
   describeToolRun,
   describeVerbRun,
   describeVerbRunProposal,
+  findPodRegistrationCode,
   hasVerbRunHeading,
+  maskPodRegistrationCodes,
+  POD_REGISTRATION_CODE_MASK,
   toolRunActionLabel,
+  toolRunEdits,
 } from "./capability-run.js";
 
 const isSecretName = (key: string) => /key|token|secret|password/i.test(key);
@@ -146,6 +150,27 @@ describe("describeToolRun", () => {
     expect(JSON.stringify(run)).not.toContain("tok_live_123");
   });
 
+  it("never shows a pod registration code, wherever the agent put it (plan a640c5bb B1)", () => {
+    const code = "spr_" + "a2".repeat(20);
+    const run = describeToolRun({
+      verbId: "hetzner_create_server",
+      parameters: {
+        name: "alpha",
+        options: {
+          user_data: `#cloud-config\nSYNAP_REGISTER_TOKEN='${code}'\n`,
+          labels: [
+            `fetch https://api.synap.live/installer/user-data?token=${code}`,
+          ],
+        },
+      },
+      isSecretName,
+    });
+    expect(JSON.stringify(run)).not.toContain(code);
+    expect(JSON.stringify(run)).toContain(POD_REGISTRATION_CODE_MASK);
+    const byKey = new Map(run!.parameters.map((p) => [p.key, p]));
+    expect(byKey.get("name")?.value).toBe("alpha");
+  });
+
   it("leaves the agent's reasoning to the review's own line", () => {
     const run = describeToolRun({
       verbId: "x_create",
@@ -226,5 +251,124 @@ describe("describeVerbRun: a ship verb's heading", () => {
         data: { verbId: "github_merge_pr" },
       })
     ).toBeNull();
+  });
+});
+
+describe("toolRunEdits: what a person changed before approving", () => {
+  const entry = (
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+    at = "2026-11-17T10:00:00.000Z"
+  ) => ({
+    at,
+    by: "user-1",
+    before: { parameters: before },
+    patch: { parameters: after },
+  });
+  const proposed = { text: "Hello world", accountId: "acc-1", apiKey: "k-1" };
+
+  it("reads the proposed and the approved text, per argument", () => {
+    const edits = toolRunEdits(
+      [entry(proposed, { ...proposed, text: "Hello, LinkedIn" })],
+      { isSecretName }
+    );
+    expect(edits).toEqual([
+      {
+        key: "text",
+        before: "Hello world",
+        after: "Hello, LinkedIn",
+        at: "2026-11-17T10:00:00.000Z",
+        by: "user-1",
+      },
+    ]);
+  });
+
+  it("keeps the first proposal as `before` across several changes", () => {
+    const second = { ...proposed, text: "Second" };
+    const edits = toolRunEdits(
+      [
+        entry(proposed, second),
+        entry(
+          second,
+          { ...proposed, text: "Third" },
+          "2026-11-17T11:00:00.000Z"
+        ),
+      ],
+      { isSecretName }
+    );
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toMatchObject({ before: "Hello world", after: "Third" });
+  });
+
+  it("is not an edit when the text went back to what was proposed", () => {
+    const second = { ...proposed, text: "Second" };
+    expect(
+      toolRunEdits([entry(proposed, second), entry(second, proposed)], {
+        isSecretName,
+      })
+    ).toEqual([]);
+  });
+
+  it("never reads a credential argument, by name or by the run's flag", () => {
+    const edits = toolRunEdits(
+      [entry(proposed, { text: "x", accountId: "acc-2", apiKey: "k-2" })],
+      { isSecretName, secretKeys: new Set(["accountId"]) }
+    );
+    expect(edits.map((e) => e.key)).toEqual(["text"]);
+    expect(JSON.stringify(edits)).not.toMatch(/k-1|k-2|acc-2/);
+  });
+
+  it("ignores revisions that are not about parameters, and non-text values", () => {
+    expect(
+      toolRunEdits(
+        [
+          {
+            at: "t",
+            by: "u",
+            before: { _summary: "a" },
+            patch: { _summary: "b" },
+          },
+          entry({ n: 1 }, { n: 2 }),
+        ],
+        { isSecretName }
+      )
+    ).toEqual([]);
+    expect(toolRunEdits(null, { isSecretName })).toEqual([]);
+  });
+});
+
+describe("pod registration codes (plan a640c5bb B1)", () => {
+  const code = "spr_" + "q7".repeat(20);
+
+  it("finds a code anywhere in the arguments, and nothing else", () => {
+    expect(
+      findPodRegistrationCode({ a: 1, b: { c: [`x token=${code}&y`] } })
+    ).toBe(code);
+    expect(findPodRegistrationCode({ text: "spr_short", n: 3 })).toBeNull();
+    expect(findPodRegistrationCode(`xspr_${"a2".repeat(20)}`)).toBeNull();
+  });
+
+  it("masks every code and leaves the rest as it was", () => {
+    expect(
+      maskPodRegistrationCodes({ s: `A='${code}' B='${code}'`, n: 2 })
+    ).toEqual({
+      s: `A='${POD_REGISTRATION_CODE_MASK}' B='${POD_REGISTRATION_CODE_MASK}'`,
+      n: 2,
+    });
+  });
+
+  it("an edit to an argument carrying a code is read without the code", () => {
+    const edits = toolRunEdits(
+      [
+        {
+          at: "2026-11-18T10:00:00.000Z",
+          by: "user-1",
+          before: { parameters: { script: `T=${code}` } },
+          patch: { parameters: { script: `T=${code} # edited` } },
+        },
+      ],
+      { isSecretName }
+    );
+    expect(JSON.stringify(edits)).not.toContain(code);
   });
 });

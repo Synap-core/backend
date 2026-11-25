@@ -43,6 +43,32 @@ export const PROPOSAL_STATUSES = [
 ] as const;
 export type ProposalStatusValue = (typeof PROPOSAL_STATUSES)[number];
 
+/**
+ * The statuses nobody has decided yet: waiting for a review, or a review whose
+ * approval failed (it is retried, repaired or ended). THE one list: the
+ * database's end helpers re-assert it in their WHERE, and every surface asks
+ * {@link isProposalUndecided} rather than keep its own copy (plan 8032a127 D6:
+ * relay `isLiveStatus`, pod admin `isActionable`, web `isPending`, browser
+ * `TERMINAL_STATUSES` and backend literal lists were five).
+ */
+export const UNDECIDED_PROPOSAL_STATUSES = [
+  "pending",
+  "approval_failed",
+] as const satisfies readonly ProposalStatusValue[];
+export type UndecidedProposalStatus =
+  (typeof UNDECIDED_PROPOSAL_STATUSES)[number];
+
+/**
+ * Can someone still decide this proposal? Read case-insensitively, as the
+ * list door and older rows spell it; an unknown status is not undecided.
+ */
+export function isProposalUndecided(
+  status: string | null | undefined
+): boolean {
+  const key = (status ?? "").trim().toLowerCase();
+  return (UNDECIDED_PROPOSAL_STATUSES as readonly string[]).includes(key);
+}
+
 // ── Coverage floor ──────────────────────────────────────────────────────────
 // The list above must be EXACTLY the DB enum (`ProposalStatus` in
 // `@synap/database/schema/proposals.ts`). The database proves it, on its side

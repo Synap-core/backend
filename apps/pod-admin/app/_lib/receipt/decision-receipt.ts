@@ -111,6 +111,11 @@ export interface Receipt {
   tone: "success" | "default" | "danger";
   /** Offer Undo for `UNDO_WINDOW_MS`. */
   undo: boolean;
+  /**
+   * The receipt's one door (rule feedback-and-forms §1: at most one action),
+   * e.g. "Review" on a change sent for review. Never beside Undo.
+   */
+  action?: { label: string; href: string };
 }
 
 /**

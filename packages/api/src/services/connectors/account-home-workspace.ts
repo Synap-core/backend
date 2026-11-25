@@ -1,6 +1,6 @@
 /**
  * The workspace a NEW external channel from a messaging account is pinned to:
- * the account's own pin, else the owner's first workspace. ONE rule for every
+ * the account's own pin, else its user's first workspace. ONE rule for every
  * path that creates a person's channel (the webhook, the history import,
  * `openPersonChannel`), so a channel is never born pod-wide by accident: a
  * SHARED-type channel with no workspace is visible to every member of the pod
@@ -11,7 +11,10 @@ import {
   db,
   and,
   eq,
+  ne,
+  or,
   asc,
+  drizzleSql,
   messagingAccounts,
   workspaces,
 } from "@synap/database";
@@ -21,8 +24,19 @@ export async function accountHomeWorkspace(account: {
   userId: string;
 }): Promise<string | null> {
   if (account.workspaceId) return account.workspaceId;
+  // A person's first space, never an agent's space they own; an agent's own
+  // space (its person owns it) for the agent.
   const ws = await db.query.workspaces.findFirst({
-    where: eq(workspaces.ownerId, account.userId),
+    where: or(
+      and(
+        eq(workspaces.ownerId, account.userId),
+        ne(workspaces.workspaceType, "agent")
+      ),
+      and(
+        eq(workspaces.workspaceType, "agent"),
+        drizzleSql`${workspaces.settings}->>'linkedAgentId' = ${account.userId}`
+      )
+    ),
     columns: { id: true },
     orderBy: [asc(workspaces.createdAt)],
   });

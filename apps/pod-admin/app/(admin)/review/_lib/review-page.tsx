@@ -23,20 +23,20 @@
  * opens that row's decision (a row, its target, or any proposal id);
  * `?session=<id>` narrows every view to one session — the door a proposal's
  * review offers to "what else from this session waits for you". From
- * `lg` up the decision docks beside the list; below, it opens in a drawer.
+ * `lg` up the decision docks beside the list (the list at most 470 px, the
+ * request's story the rest, D7); below, it opens in a drawer.
  * An agent's question is answered in the same place (`ask-answer.tsx`);
  * once it is, the detail closes and focus moves to the next row. What waited
- * more than 7 days sits in a "Review later" fold under the list, out of the
- * counts (`review-rows.ts`).
+ * more than 7 days stays in the one list, counted and selectable
+ * (`review-rows.ts`).
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { TRPCClientError } from "@trpc/client";
 import { Alert, Button, Tab, Tabs, Textarea } from "@heroui/react";
-import { Check, ChevronRight, SlidersHorizontal, X } from "lucide-react";
+import { Check, SlidersHorizontal, X } from "lucide-react";
 import { navHref } from "../../../../lib/console-nav";
-import { FATE_COPY } from "@synap-core/types/proposals/fate";
 import { trpc } from "../../../../lib/trpc";
 import { useBatchApproveProposals } from "../../../_lib/presence/use-approve";
 import { needsPresence } from "../../../_lib/presence/presence-model";
@@ -99,6 +99,8 @@ import { handOffRuleFor } from "./hand-off-rule";
 import { ReviewOnboarding } from "./review-onboarding";
 import { showReviewOnboarding } from "./review-onboarding-model";
 import { HistoryList } from "../../history/_lib/history-list";
+import { useRequestContext } from "../../../_lib/request/use-request-context";
+import { reviewRowView, tileNoun } from "./review-row-view";
 import { SessionFilter } from "./review-session-filter";
 import { nextRowKey } from "./ask-detail";
 import { useT } from "../../../../lib/i18n/locale-provider";
@@ -195,16 +197,16 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     rows,
     sessionId ? null : (count.data ?? null)
   );
-  const view =
-    filter === "history"
-      ? { headline: [], reviewLater: [] }
-      : rowsInView(rows, filter);
-  const visible = view.headline;
-  const [laterOpen, setLaterOpen] = useState(false);
+  const visible = filter === "history" ? [] : rowsInView(rows, filter);
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // ── The drawer, and the `?focus=` receiver ────────────────────────────────
   const [open, setOpen] = useState<OpenReview | null>(null);
+  // Every request's story, read ONCE for the page and only once one is open.
+  const storyContext = useRequestContext({
+    sessionId,
+    enabled: open !== null,
+  });
   const docked = useMediaQuery(LG_UP);
   const handledFocus = useRef<string | null>(null);
   useEffect(() => {
@@ -212,7 +214,6 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       return;
     handledFocus.current = focusId;
     const row = focusedRow(rows, focusId);
-    if (row?.reviewLater) setLaterOpen(true);
     const opened = row ? openOf(row) : null;
     if (opened) {
       setOpen(opened);
@@ -237,9 +238,8 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     open?.detail.kind === "ask" ? liveAskSlot(rows, open.detail) : null;
   function askSettled() {
     const answered = open ? detailKey(open.detail) : null;
-    const shown = laterOpen ? [...visible, ...view.reviewLater] : visible;
-    const keys = shown.map((r) => r.key);
-    const at = shown.find(
+    const keys = visible.map((r) => r.key);
+    const at = visible.find(
       (r) =>
         r.detail && r.detail.kind !== "open" && detailKey(r.detail) === answered
     );
@@ -395,14 +395,15 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
     .find((e): e is Exit => !!e?.isDesktopLink);
   // The pod-wide count says nothing about one session's rows: narrowed, the
   // page says only that its read hit the limit.
-  // The headline rows the read carried (Review later is folded out of the count).
-  const headlineShown = reviewCounts(rows).all;
+  // Every row the read carried, Review later included (the chip's All).
+  const shown = reviewCounts(rows).all;
+  const waiting = count.data ? count.data.needsYou + count.data.reviewLater : 0;
   const shownOfTotal = sessionId
     ? rows.length >= NEEDS_YOU_PAGE_LIMIT
       ? `Showing the newest ${rows.length} from this session.`
       : null
-    : count.data && count.data.needsYou > headlineShown
-      ? `Showing the newest ${headlineShown} of ${count.data.truncated ? "more than " : ""}${count.data.needsYou}.`
+    : count.data && waiting > shown
+      ? `Showing the newest ${shown} of ${count.data.truncated ? "more than " : ""}${waiting}.`
       : null;
 
   const activeKey = open ? detailKey(open.detail) : null;
@@ -477,10 +478,13 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         }
       />
 
+      {/* A queue beside its detail (page-grammar, founder default D7): the
+          list at most 470 px, the request's story takes the rest of the width
+          — a timeline needs it. */}
       <div
         className={
           docked && open
-            ? "grid grid-cols-[minmax(0,1fr)_340px] items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]"
+            ? "grid grid-cols-[minmax(0,470px)_minmax(0,1fr)] items-start gap-6"
             : undefined
         }
       >
@@ -689,6 +693,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
                   return opened ? (
                     <ReviewInline
                       open={opened}
+                      storyContext={storyContext}
                       viewer={viewer}
                       onClose={refresh}
                       liveAsk={null}
@@ -718,78 +723,15 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
               ) : (
                 <ResourceRowEmpty
                   message={
-                    // "Nothing is waiting" would be false over a fold that
-                    // holds rows: nothing NEW is, the rest wait below.
-                    view.reviewLater.length > 0
-                      ? FATE_COPY.nothingNewWaiting
-                      : sessionId
-                        ? t("empty.session")
-                        : filter === "all"
-                          ? t("empty.all")
-                          : t("empty.filtered")
+                    sessionId
+                      ? t("empty.session")
+                      : filter === "all"
+                        ? t("empty.all")
+                        : t("empty.filtered")
                   }
                 />
               )}
             </section>
-          )}
-
-          {view.reviewLater.length > 0 && (
-            <div className="mt-3">
-              <Button
-                size="sm"
-                variant="light"
-                radius="md"
-                className="-ml-2 text-foreground/75"
-                aria-expanded={laterOpen}
-                aria-controls="review-later"
-                startContent={
-                  <ChevronRight
-                    className={`h-3.5 w-3.5 transition-transform duration-150 ${laterOpen ? "rotate-90" : ""}`}
-                    aria-hidden
-                  />
-                }
-                onPress={() => setLaterOpen((o) => !o)}
-              >
-                <span className="tabular-nums">
-                  {FATE_COPY.reviewLaterFold(view.reviewLater.length)}
-                </span>
-              </Button>
-              {laterOpen && (
-                <p className="mt-1 text-[12px] text-foreground/55">
-                  {FATE_COPY.reviewLaterCaption}
-                </p>
-              )}
-              {laterOpen && (
-                <section
-                  id="review-later"
-                  aria-label={FATE_COPY.reviewLaterPile}
-                  className="mt-1 divide-y divide-foreground/[0.05] rounded-lg bg-foreground/[0.02] ring-1 ring-inset ring-foreground/10"
-                >
-                  {view.reviewLater.map((row) => (
-                    <ReviewListRow
-                      key={row.key}
-                      // Never batched: "Approve N" is the headline's.
-                      row={{ ...row, batchIds: null }}
-                      active={
-                        activeKey !== null &&
-                        row.detail !== null &&
-                        row.detail.kind !== "open" &&
-                        detailKey(row.detail) === activeKey
-                      }
-                      selectable={selectable}
-                      selected={false}
-                      onToggle={() => undefined}
-                      onOpen={() => {
-                        const opened = openOf(row);
-                        if (opened) setOpen(opened);
-                      }}
-                      onApprove={() => void approveRows([row])}
-                      approving={busy}
-                    />
-                  ))}
-                </section>
-              )}
-            </div>
           )}
 
           {filter !== "history" && (desktopExit || shownOfTotal) && (
@@ -804,6 +746,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
         {docked && (
           <ReviewDock
             open={open}
+            storyContext={storyContext}
             viewer={viewer}
             onClose={closeDrawer}
             liveAsk={liveAsk}
@@ -815,6 +758,7 @@ export function ReviewPage({ viewer }: { viewer: ReviewViewer }) {
       {!docked && (
         <ReviewDrawer
           open={open}
+          storyContext={storyContext}
           viewer={viewer}
           onClose={closeDrawer}
           liveAsk={liveAsk}
@@ -866,11 +810,18 @@ function alwaysRuleOf(group: RowGroup) {
 function openOf(row: ReviewRow): OpenReview | null {
   const detail = row.detail;
   if (!detail || detail.kind === "open") return null;
+  const view = reviewRowView(row);
   return {
     detail,
     // An ask's row title is its question (`askCardView`), so the frame
     // names the question once and the detail does not repeat it.
     title: row.title,
+    lens: row.lens,
+    family: view.family,
+    noun: tileNoun(view),
+    // What it is for, in the agent's words: the ask's why, else what
+    // answering unblocks.
+    sentence: row.lens.detail?.trim() || row.lens.unblocks?.trim() || null,
   };
 }
 

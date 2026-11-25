@@ -7,12 +7,15 @@
  *     app-bases chips paint from), the words from the vocabulary
  *     (`resolveStatusLabel`);
  *   • an agent's mark (`AGENT_MARK_STATUS`, `@synap-core/types/agents`);
- *   • the pod's health roll-up (`HEALTH_PILL`, `diagnose.global`).
+ *   • the pod's health roll-up (`HEALTH_PILL`, `diagnose.global`);
+ *   • a shared unit tone (`unitTonePill`, `@synap-core/types/units`
+ *     `resolveUnitState`: a goal's mark, a process's health).
  *
  * Never a second status table — only the mapping onto the pill.
  */
 
 import type { AgentMarkTone } from "@synap-core/types/agents";
+import type { UnitTone } from "@synap-core/types/units";
 import { getEnumTone, type EnumTone } from "@synap-core/types/property-render";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import type { HealthStatus } from "../home/_lib/needs-you";
@@ -63,3 +66,30 @@ export const HEALTH_PILL: Record<
   attention: { kind: "stale", label: "Worth a look" },
   degraded: { kind: "down", label: "Act now" },
 };
+
+/**
+ * A unit tone as a console pill. The console has four pill kinds; a mark's
+ * tone is the shared unit tone. A quiet tone (closed as retired, dropped,
+ * never started) reads as `unknown` (grey), never as healthy.
+ *
+ * `primary` is the "your turn" tone (`resolveUnitState`: waiting on you, a
+ * check gate holding for a person, a process blocked by policy): it reads
+ * `stale`, the pill that means "awaiting a look", never the healthy one
+ * (Process wave W4: "Waiting on you" drawn green was a defect, on goals too).
+ * `ai` (running) stays `healthy`: the console has no kind of its own for
+ * work in motion, and "running" is its good state (`PILL_KIND` above).
+ */
+const PILL_FOR_UNIT_TONE: Record<UnitTone, StatusKind> = {
+  primary: "stale",
+  ai: "healthy",
+  info: "healthy",
+  success: "healthy",
+  warning: "stale",
+  error: "down",
+  textSecondary: "unknown",
+  textMuted: "unknown",
+};
+
+export function unitTonePill(tone: UnitTone): StatusKind {
+  return PILL_FOR_UNIT_TONE[tone] ?? "unknown";
+}

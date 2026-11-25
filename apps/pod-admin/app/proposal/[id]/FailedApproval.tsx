@@ -20,6 +20,10 @@
  * filed records as links, the item that failed with its reason (a missing
  * kind names the space and where the kind exists), and what was never tried.
  * Approve and Reject are unchanged.
+ *
+ * For a pod admin, a link to the exact cause the pod kept for this failure
+ * (`data.failure.errorId` → its server error page): a diagnostic door, the
+ * cause itself is never drawn here.
  */
 
 import { addToast, Button } from "@heroui/react";
@@ -28,6 +32,7 @@ import { trpc } from "../../../lib/trpc";
 import { useApproveProposal } from "../../_lib/presence/use-approve";
 import { openIn } from "../../../lib/open-in";
 import { proposalPageT } from "./copy";
+import { SetupHandOver } from "./SetupHandOver";
 import {
   kindMissingLine,
   stoppedGraphReport,
@@ -35,7 +40,9 @@ import {
   type StoppedGraphReport,
   type StoppedItem,
 } from "./stopped-graph-model";
+import { useConsoleRole } from "../../(admin)/components/side-nav-role";
 import {
+  failureCauseHref,
   pickAct,
   repairRows,
   type RepairAct,
@@ -142,7 +149,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       </p>
       {report.failed && (
         <div data-stopped-failed="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.failed")}
           </span>
           <span>
@@ -157,7 +164,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.landed.length > 0 && (
         <div data-stopped-landed="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.landed")}
           </span>
           <ul className="flex flex-col gap-0.5">
@@ -171,14 +178,14 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.skipped.length > 0 && (
         <div data-stopped-skipped="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.skipped")}
           </span>
           <ul className="flex flex-col gap-0.5">
             {report.skipped.map((item) => (
               <li key={item.key}>
                 <ItemLabel item={item} />
-                <span className="text-[12px] text-foreground/55">
+                <span className="text-[12px] text-foreground/70">
                   {" "}
                   · {item.reason}
                 </span>
@@ -189,7 +196,7 @@ export function StoppedGraph({ report }: { report: StoppedGraphReport }) {
       )}
       {report.notRun.length > 0 && (
         <div data-stopped-not-run="" className="flex flex-col gap-1">
-          <span className="text-[12px] text-foreground/55">
+          <span className="text-[12px] text-foreground/70">
             {t("stopped.notRun")}
           </span>
           <ul className="flex flex-col gap-0.5 text-foreground/65">
@@ -223,6 +230,9 @@ export function FailedApproval({
   graph?: unknown;
 }) {
   const stopped = stoppedGraphReport({ data, graph });
+  // The exact cause, kept for the pod's owner and admins (plan 8032a127 D5).
+  const role = useConsoleRole();
+  const causeHref = failureCauseHref(data, role);
   const utils = trpc.useUtils();
   const t = proposalPageT();
   const options = trpc.proposals.repairOptions.useQuery({ proposalId });
@@ -251,8 +261,12 @@ export function FailedApproval({
   });
   const busy = repair.isPending || approve.isPending;
 
+  // A proposal that needs an input (finding 91a3bfd3) hands it over in
+  // its setup rows: repair, reopened as pending, then approved with the
+  // revision the repair made — not just the sentence.
+  const needsInput = options.data?.setup !== undefined;
   const rows =
-    options.data?.repairable === true
+    options.data?.repairable === true && !needsInput
       ? repairRows(options.data.fields as RepairOptionsField[])
       : [];
 
@@ -269,6 +283,15 @@ export function FailedApproval({
         />
         <span>{reason ?? t("repair.default")}</span>
       </p>
+      {causeHref && (
+        <a
+          href={causeHref}
+          data-failure-cause=""
+          className="self-start text-[12px] text-foreground/65 underline decoration-foreground/25 underline-offset-2 hover:text-foreground hover:decoration-foreground/60"
+        >
+          {t("repair.cause")}
+        </a>
+      )}
       {stopped && <StoppedGraph report={stopped} />}
       {options.isError ? (
         <div className="flex items-center gap-2 text-[12px] text-foreground/65">
@@ -282,7 +305,16 @@ export function FailedApproval({
           </Button>
         </div>
       ) : options.isLoading ? (
-        <p className="text-[12px] text-foreground/55">{t("repair.checking")}</p>
+        <p className="text-[12px] text-foreground/70">{t("repair.checking")}</p>
+      ) : needsInput ? (
+        <SetupHandOver
+          proposalId={proposalId}
+          expectedRevision={expectedRevision}
+          approving={approve.isPending}
+          onHandedOver={(revision) =>
+            approve.mutate({ proposalId, expectedRevision: revision })
+          }
+        />
       ) : rows.length > 0 ? (
         <ul className="flex flex-col gap-3">
           {rows.map((row) => (

@@ -198,7 +198,11 @@ describe("synap_create_entity — the receipt names where the entity lives (d39e
   });
 
   it("a door that named no row keeps the old lens echo", async () => {
-    h.answer = { status: "proposed", proposalType: "join", workspaceId: SPACE };
+    h.answer = {
+      status: "proposed",
+      proposalType: "held_writes",
+      workspaceId: SPACE,
+    };
     const out = await create(
       { profileSlug: "note", title: "Call notes" },
       SPACE

@@ -67,11 +67,22 @@ import {
 import { SKILL_RUNTIME_VERSION } from "./skill-stdlib.js";
 import type { PodFileHandles } from "../capabilities/file-parameters.js";
 import { podFileBodyFor } from "./pod-file-body.js";
-import { visibleSkillsAnyWorkspaceWhere } from "./visibility.js";
+import { visibleSkillsWhere } from "./visibility.js";
 import type {
   RecordedEffect,
   SkillExecutionResult,
 } from "./execute-skill-via-is.js";
+import type { HeldSend } from "../channels/held-sends.js";
+
+/**
+ * P1: host-side carrier for a classified provider failure (see
+ * `runSkillInSandbox`), plus a LinkedIn hold (`TriggerProviderActionResult.held`).
+ */
+type ProviderFailureSink = {
+  errorClass?: FailureErrorClass;
+  providerRef?: string;
+  held?: HeldSend;
+};
 import {
   getSkillRunner,
   type SkillBridges,
@@ -213,7 +224,7 @@ async function providerHostApproved(
         eq(skills.status, "active"),
         eq(skills.approved, true),
         drizzleSql`${skills.providerSpec}->>'tool' = ${provider}`,
-        visibleSkillsAnyWorkspaceWhere(operatorUserId)
+        visibleSkillsWhere(operatorUserId, undefined, { allSpaces: true })
       )
     );
   return verbs.some(
@@ -271,10 +282,7 @@ export async function runSkillInSandbox(args: {
   // provider failure, and we read it here on the failure return. Consulted only
   // when the run fails; a skill that catches the provider error and succeeds
   // leaves it unused.
-  const providerFailure: {
-    errorClass?: FailureErrorClass;
-    providerRef?: string;
-  } = {};
+  const providerFailure: ProviderFailureSink = {};
 
   try {
     // Load the full skill row (the IS fetches it over Hub Protocol; in-process we
@@ -431,7 +439,7 @@ export interface SkillBridgeParams {
   caller: HubCaller;
   /** P1: written on a classified provider failure so the caller can attach the
    *  recovery classification to its failure envelope (see runSkillInSandbox). */
-  failureSink: { errorClass?: FailureErrorClass; providerRef?: string };
+  failureSink: ProviderFailureSink;
   /** This run's verb decision — scoped to THIS run's provider calls. */
   verbAct?: { skillId: string; toolIds: readonly string[] };
   /** This run's `:bytes` files — resolved by THIS run's `callProvider` only. */
@@ -784,6 +792,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       if (result.proposed) {
         failureSink.errorClass = undefined;
         failureSink.providerRef = undefined;
+        failureSink.held = undefined;
         return {
           proposed: true,
           proposalId: result.proposalId,
@@ -792,6 +801,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       if (result.success) {
         failureSink.errorClass = undefined;
         failureSink.providerRef = undefined;
+        failureSink.held = undefined;
         return {
           status: result.status,
           headers: result.headers ?? {},
@@ -803,6 +813,7 @@ export function buildSkillBridges(params: SkillBridgeParams): SkillBridges {
       // drop it); the caller reads it on its failure return.
       failureSink.errorClass = result.errorClass;
       failureSink.providerRef = result.providerRef;
+      failureSink.held = result.held;
       throw new Error(result.error ?? "Provider call failed");
     } catch (err) {
       throw new Error(

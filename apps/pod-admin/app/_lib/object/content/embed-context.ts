@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, type ReactNode } from "react";
+import type { EmbedAskRead } from "./ask-embed-model";
 import type {
   EmbedCellInstanceRead,
   EmbedCellRead,
@@ -32,7 +33,30 @@ export interface EmbedHost {
    * Without it a marker shows its label or its kind's noun, a bare id its text.
    */
   useObjectRef?: (id: string) => ObjectRefRead;
+  /**
+   * A hook: called once per `synap-ask` embed — the session's question, on
+   * the viewer's own floor. Without it the embed is a door to its session.
+   */
+  useAsk?: (sessionId: string, slot: string) => EmbedAskRead;
   openInApp?: ReactNode;
 }
 
 export const EmbedHostContext = createContext<EmbedHost | null>(null);
+
+/**
+ * What ONE body (a document, a prose field) lends the embeds drawn in it:
+ *   mayFrameEntity  whether this entity embed may run its card in a module
+ *                   frame (the body's cap, `entityFrameNodes`); the others
+ *                   draw their identity card
+ *   busy            a frame is loading: the body's single status region says
+ *                   so while any is (call on mount, the returned function on
+ *                   unmount), so skeletons never announce one by one
+ * Without it (an embed drawn alone) a card may frame and a skeleton is its
+ * own status region.
+ */
+export interface EmbedBody {
+  mayFrameEntity: (node: object) => boolean;
+  busy: () => () => void;
+}
+
+export const EmbedBodyContext = createContext<EmbedBody | null>(null);

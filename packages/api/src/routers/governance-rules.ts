@@ -5,8 +5,10 @@
  * see docs/decisions/agent-governance.md). This is the "always approve for X" door:
  * approving a proposal can additionally widen governance by inserting ONE
  * revocable, audited rule instead of hand-editing `workspaces.settings` or
- * `agentMetadata` JSONB. The resolver that *consumes* these rows (rung 2.8 in
- * `decideAgentPolicy`) is a separate wave — this router only stores/lists/revokes.
+ * `agentMetadata` JSONB. The resolver that *consumes* these rows
+ * (`resolveGovernanceRule`, rung 2.8 of `decideAgentPolicy`, and the
+ * capability gate) is wired; this router stores, lists and revokes them. For
+ * a tool run a capability row is the ONLY "runs without asking" (decision D2).
  *
  * The five "always approve for X" granularities the UI offers map to `create`
  * inputs as:
@@ -40,12 +42,17 @@ import { TRPCError } from "@trpc/server";
 import {
   db,
   eq,
+  inArray,
   and,
   or,
   isNotNull,
+  isNull,
+  ne,
   desc,
   ProposalStatus,
   authoredCreatedBy,
+  getRequestGrant,
+  isFullAccessGrant,
   readReversibleDefault,
   setReversibleDefault,
   readOwnOrganiseDefault,
@@ -59,17 +66,22 @@ import {
   users,
   proposals,
   secrets,
+  playbooks,
 } from "@synap/database/schema";
 import {
   GOVERNANCE_PRINCIPAL_KINDS,
+  PLAYBOOK_RUN_ACTION,
   type GovernancePrincipalKind,
 } from "@synap-core/types/governance-rules";
+import { isAgentCaller } from "../services/library/agent-door.js";
+import { preApprovalEligibility } from "../services/playbooks/pre-approved-run.js";
 import {
   mayCarryHostSeed,
   revokeHostSeeds,
   seedHostRules,
 } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../access/index.js";
 import {
   NEXT_RUNG_BATCH_MAX,
   fileNextRung,
@@ -83,7 +95,9 @@ import { authoredByUser } from "../services/agent-identity-service.js";
 import { appAgentGovernanceDenial } from "../services/app-agent-floor.js";
 import { readAgentMatrix } from "../services/governance/agent-matrix.js";
 import {
+  ACTION_ALWAYS_ASKS,
   ACTION_MODES_BATCH_MAX,
+  actionsMayRunOnTheirOwn,
   assertPersonSetsActionMode,
   readActionModes,
   writeActionMode,
@@ -205,6 +219,102 @@ export async function assertCanManageRule(
   }
 }
 
+/** `revoked_reason` of a rule naming an object that a newer approval replaced. */
+export const SUBJECT_RULE_REPLACED = "replaced_by_newer_approval";
+
+/**
+ * A newer approval of one object replaces the same person's older ones for the
+ * same principal and place (they name a version that no longer runs), and their
+ * host seeds with them. Another person's approvals are left alone. A helper, not
+ * inline in `create`: the read-scoping tripwire slices a procedure to the next
+ * builder it knows (`credentialProcedure` is none), so a `.where(` written in
+ * `create` reads as part of `ownOrganiseDefault`, a query.
+ */
+async function revokeReplacedSubjectRules(
+  rule: typeof governanceRules.$inferSelect,
+  ownerUserId: string
+): Promise<void> {
+  if (!rule.targetSubjectId) return;
+  const replaced = await db
+    .update(governanceRules)
+    .set({ revokedAt: new Date(), revokedReason: SUBJECT_RULE_REPLACED })
+    .where(
+      and(
+        activeRulePredicate(),
+        eq(governanceRules.targetSubjectId, rule.targetSubjectId),
+        eq(governanceRules.targetPattern, rule.targetPattern),
+        eq(governanceRules.principalKind, rule.principalKind),
+        eq(governanceRules.principalOwnerId, ownerUserId),
+        eq(governanceRules.scopeKind, rule.scopeKind),
+        rule.workspaceId
+          ? eq(governanceRules.workspaceId, rule.workspaceId)
+          : isNull(governanceRules.workspaceId),
+        rule.agentUserId
+          ? eq(governanceRules.agentUserId, rule.agentUserId)
+          : isNull(governanceRules.agentUserId),
+        ne(governanceRules.id, rule.id)
+      )
+    )
+    .returning({ id: governanceRules.id });
+  await revokeHostSeeds(
+    db,
+    replaced.map((r) => r.id)
+  );
+}
+
+/**
+ * Letting agents run a playbook without asking is the PERSON's act (founder
+ * decision, 10 Nov 2026): an agent credential may ask for it, never grant it.
+ * The rule holds for the version the person saw, so a playbook edited since
+ * is refused with its current version, and the rule lives where the playbook
+ * does (its space, or pod-wide for a pod-wide playbook).
+ */
+async function assertPersonAllowsPlaybook(
+  ctx: { agentUserId?: string | null; keyType?: string | null },
+  p: {
+    playbookId: string;
+    version: number;
+    scopeKind: "workspace" | "pod";
+    workspaceId: string | null;
+  }
+): Promise<void> {
+  // A scoped key (an app's sign-in) is refused too, as for an action's mode
+  // (`assertPersonSetsActionMode`): only a person's full-access sign-in.
+  const grant = isAgentCaller(ctx) ? null : getRequestGrant();
+  if (isAgentCaller(ctx) || (!!grant && !isFullAccessGrant(grant))) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Only a person can let agents run a playbook without asking: an agent or an app cannot.",
+      cause: { reasonCode: "PERSON_ONLY" },
+    });
+  }
+  const playbook = await db.query.playbooks.findFirst({
+    where: eq(playbooks.id, p.playbookId),
+    columns: { version: true, workspaceId: true },
+  });
+  if (!playbook) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Playbook not found" });
+  }
+  if (playbook.version !== p.version) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `This playbook changed since you looked at it: it is now version ${playbook.version}. Look at it again, then allow that version.`,
+      cause: { reasonCode: "SUBJECT_VERSION_CHANGED" },
+    });
+  }
+  const sameHome = playbook.workspaceId
+    ? p.scopeKind === "workspace" && p.workspaceId === playbook.workspaceId
+    : p.scopeKind === "pod";
+  if (!sameHome) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "A rule for one playbook lives where the playbook does: its space, or pod-wide for a pod-wide playbook.",
+    });
+  }
+}
+
 /**
  * A connection rule widens (or narrows) what a connection may write without
  * review — only the connection's owner gives or withdraws that consent, so
@@ -267,7 +377,30 @@ const CreateInputSchema = z
     verdict: z.enum(["auto", "propose", "deny"]),
     sourceProposalId: z.string().uuid().optional(),
     expiresAt: z.coerce.date().optional(),
+    /**
+     * ONE object the rule names, at the version the person saw (0420). Today
+     * only a playbook, for `playbook.run`: "let agents run this without
+     * asking". Built by `playbookPreApprovalRule` (@synap-core/types).
+     */
+    targetSubjectId: z.string().uuid().optional(),
+    targetSubjectVersion: z.number().int().positive().optional(),
   })
+  .refine((v) => !!v.targetSubjectId === (v.targetSubjectVersion != null), {
+    message:
+      "targetSubjectId and targetSubjectVersion go together: a rule naming an object holds for one version of it",
+    path: ["targetSubjectVersion"],
+  })
+  .refine(
+    (v) =>
+      !v.targetSubjectId ||
+      (v.targetKind === "action" &&
+        v.targetPattern === PLAYBOOK_RUN_ACTION &&
+        v.principalKind !== "class"),
+    {
+      message: `a rule naming an object is an exact "${PLAYBOOK_RUN_ACTION}" action rule for an agent or any agent`,
+      path: ["targetSubjectId"],
+    }
+  )
   .refine((v) => v.principalKind !== "agent" || !!v.agentUserId, {
     message: "agentUserId is required when principalKind is 'agent'",
     path: ["agentUserId"],
@@ -297,6 +430,63 @@ const CreateInputSchema = z
     message: "a connection rule is 'auto' or 'propose', never 'deny'",
     path: ["verdict"],
   });
+
+type StoredRule = typeof governanceRules.$inferSelect;
+
+/** May this caller take this rule back? The one gate of `revoke` (and of a replace). */
+async function assertMayRevokeRule(
+  ctx: { userId: string; agentUserId?: string | null; keyType?: string | null },
+  existing: StoredRule
+): Promise<void> {
+  await assertCanManageRule(ctx.userId, existing);
+  await assertNotAgentOnAppAgent(existing.agentUserId, ctx);
+  if (existing.targetKind === "connection") {
+    await assertOwnsConnection(ctx.userId, existing.targetPattern);
+  }
+}
+
+/**
+ * The still-active rules a `create` replaces, each gated as `revoke` gates
+ * it. One that does not exist is refused (NOT_FOUND); one already revoked is
+ * left out (taking it back again changes nothing).
+ */
+async function readRevocableRules(
+  ctx: { userId: string; agentUserId?: string | null; keyType?: string | null },
+  ids: readonly string[]
+): Promise<StoredRule[]> {
+  const wanted = [...new Set(ids)];
+  if (wanted.length === 0) return [];
+  const rows = await db.query.governanceRules.findMany({
+    where: inArray(governanceRules.id, wanted),
+  });
+  if (rows.length !== wanted.length) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
+  }
+  const live = rows.filter((r) => !r.revokedAt);
+  for (const row of live) await assertMayRevokeRule(ctx, row);
+  return live;
+}
+
+/**
+ * Revoke these rules (soft, `revokedAt`) and the host seeds that copy them,
+ * on the handle given: inside the caller's transaction when it has one.
+ * Returns the revoked rows as the update returned them.
+ */
+async function revokeRulesIn(
+  handle: Pick<typeof db, "select" | "insert" | "update">,
+  rules: readonly StoredRule[]
+): Promise<StoredRule[]> {
+  if (rules.length === 0) return [];
+  const ids = rules.map((r) => r.id);
+  const rows = await handle
+    .update(governanceRules)
+    .set({ revokedAt: new Date() })
+    .where(inArray(governanceRules.id, ids))
+    .returning();
+  const seeded = rules.filter(mayCarryHostSeed).map((r) => r.id);
+  if (seeded.length > 0) await revokeHostSeeds(handle, seeded);
+  return rows;
+}
 
 export const governanceRulesRouter = router({
   /**
@@ -694,10 +884,21 @@ export const governanceRulesRouter = router({
   /**
    * Create one rule — the "always approve for X" door. See file header for
    * how the five granularities map to inputs.
+   *
+   * REPLACING (`replacesRuleIds`): the rows this one takes the place of are
+   * revoked in the SAME transaction as the insert, so a reader never sees both
+   * or neither (a tool's page changing every AI's verdict, lane W3). Each is
+   * gated exactly as `revoke` gates it; the person's proof names them, since
+   * they are part of this call's input.
    */
   create: credentialProcedure
     .input(presenceInput)
     .input(CreateInputSchema)
+    .input(
+      z.object({
+        replacesRuleIds: z.array(z.string().uuid()).max(20).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       // A rule that can never fire is refused, not stored (B3). An exact action
       // key behind a non-widenable floor resolves ABOVE the rule store (rung
@@ -712,6 +913,28 @@ export const governanceRulesRouter = router({
           });
         }
       }
+      // The same for a capability the gate never widens (a public post, a
+      // verb declaring `metadata.proposeOnly`): the one derivation it reads.
+      if (
+        input.verdict === "auto" &&
+        input.targetKind === "capability" &&
+        !(await actionsMayRunOnTheirOwn([input.targetPattern])).get(
+          input.targetPattern
+        )
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `"${input.targetPattern}" publishes in public or cannot be undone: it always asks you first.`,
+          cause: { reasonCode: ACTION_ALWAYS_ASKS },
+        });
+      }
+      // A tool action that runs without asking is the PERSON's to allow
+      // (founder, 21 Nov 2026, answer 11): an AI's credential or an app's
+      // sign-in never writes it, here or through `setActionMode`, or an agent
+      // could let its own verb run without review.
+      if (input.verdict === "auto" && input.targetKind === "capability") {
+        assertPersonSetsActionMode(ctx);
+      }
 
       await assertCanManageRule(ctx.userId, input);
       await assertNotAgentOnAppAgent(
@@ -721,38 +944,119 @@ export const governanceRulesRouter = router({
       if (input.targetKind === "connection") {
         await assertOwnsConnection(ctx.userId, input.targetPattern);
       }
-
-      const [rule] = await db
-        .insert(governanceRules)
-        .values({
-          principalKind: input.principalKind,
-          agentUserId:
-            input.principalKind === "agent" ? input.agentUserId : null,
-          principalClass:
-            input.principalKind === "class" ? input.principalClass : null,
+      if (input.targetSubjectId && input.targetSubjectVersion != null) {
+        await assertPersonAllowsPlaybook(ctx, {
+          playbookId: input.targetSubjectId,
+          version: input.targetSubjectVersion,
           scopeKind: input.scopeKind,
-          workspaceId:
-            input.scopeKind === "workspace" ? input.workspaceId : null,
-          targetKind: input.targetKind,
-          targetPattern: input.targetPattern,
-          targetProfile:
-            input.targetKind === "profile" ? input.targetProfile : null,
-          verdict: input.verdict,
-          sourceProposalId: input.sourceProposalId ?? null,
-          // PROVENANCE (display only, never an enforcement input): this is the
-          // ONLY door where a HUMAN authors a rule directly, so it is the only
-          // one allowed to stamp the `user:` namespace. The settings mirror
-          // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>`, so a
-          // machine-minted grant never reads as deliberately authored.
-          createdBy: authoredCreatedBy(ctx.userId),
-          expiresAt: input.expiresAt ?? null,
-        })
-        .returning();
+          workspaceId: input.workspaceId ?? null,
+        });
+      }
+      // The rows it replaces, each gated as `revoke` gates it, BEFORE anything
+      // is written: one the caller may not take back refuses the whole call.
+      const replaced = await readRevocableRules(
+        ctx,
+        input.replacesRuleIds ?? []
+      );
+
+      const insertRule = (handle: Pick<typeof db, "insert">) =>
+        handle
+          .insert(governanceRules)
+          .values({
+            principalKind: input.principalKind,
+            agentUserId:
+              input.principalKind === "agent" ? input.agentUserId : null,
+            principalClass:
+              input.principalKind === "class" ? input.principalClass : null,
+            scopeKind: input.scopeKind,
+            workspaceId:
+              input.scopeKind === "workspace" ? input.workspaceId : null,
+            targetKind: input.targetKind,
+            targetPattern: input.targetPattern,
+            targetProfile:
+              input.targetKind === "profile" ? input.targetProfile : null,
+            targetSubjectId: input.targetSubjectId ?? null,
+            targetSubjectVersion: input.targetSubjectVersion ?? null,
+            // The person whose agents a rule naming one object covers.
+            principalOwnerId: input.targetSubjectId ? ctx.userId : null,
+            verdict: input.verdict,
+            sourceProposalId: input.sourceProposalId ?? null,
+            // PROVENANCE (display only, never an enforcement input): this is the
+            // ONLY door where a HUMAN authors a rule directly, so it is the only
+            // one allowed to stamp the `user:` namespace. The settings mirror
+            // (`syncAutoApproveRules`) stamps `system:settings-mirror:<id>`, so a
+            // machine-minted grant never reads as deliberately authored.
+            createdBy: authoredCreatedBy(ctx.userId),
+            expiresAt: input.expiresAt ?? null,
+          })
+          .returning();
+      const [rule] =
+        replaced.length === 0
+          ? await insertRule(db)
+          : await db.transaction(async (tx) => {
+              const rows = await insertRule(tx);
+              await revokeRulesIn(tx, replaced);
+              return rows;
+            });
+      // A newer approval of the same object by the same person, for the same
+      // principal and place, replaces their older ones (they name a version
+      // that no longer runs), with the seeds copied from them; before this
+      // rule is seeded, so its own seed is never caught. Another person's
+      // approvals are left alone.
+      if (rule?.targetSubjectId) {
+        await revokeReplacedSubjectRules(rule, ctx.userId);
+      }
       // The same rule for the agent's box, when the box is the agent's
       // (host-seed.ts). A seed that fails leaves the box asking: stricter.
       if (rule) await seedHostRules(db, [rule]);
 
       return { rule };
+    }),
+
+  /**
+   * The caller's own active rules naming ONE object (0420), e.g. whether their
+   * agents may run a playbook without asking (`playbookPreApprovalState`), and
+   * for a playbook whether a run of it can start on such an approval at all
+   * (`preApproval`, the run's own derivation: `preApprovalEligibility`). Same
+   * visibility as `listAll`: pod rules and the caller's visible spaces only.
+   * `preApproval` is null when the subject is no playbook the caller can read.
+   */
+  forSubject: protectedProcedure
+    .input(z.object({ subjectId: z.string().uuid() }))
+    .query(async ({ ctx, input }) => {
+      const [rows, playbook] = await Promise.all([
+        db.query.governanceRules.findMany({
+          where: and(
+            activeRulePredicate(),
+            eq(governanceRules.targetSubjectId, input.subjectId),
+            eq(governanceRules.principalOwnerId, ctx.userId),
+            userVisibleWhere(governanceRules.workspaceId, ctx.userId)
+          ),
+          orderBy: [desc(governanceRules.createdAt)],
+        }),
+        scopedDb(AccessContext.from(ctx)).findFirst<
+          Pick<
+            typeof playbooks.$inferSelect,
+            "id" | "version" | "executor" | "runner" | "stages" | "tools"
+          >
+        >(playbooks, {
+          where: eq(playbooks.id, input.subjectId),
+          columns: {
+            id: true,
+            version: true,
+            executor: true,
+            runner: true,
+            stages: true,
+            tools: true,
+          },
+        }),
+      ]);
+      return {
+        rules: await mapRulesWithAgentLabels(rows),
+        preApproval: playbook
+          ? await preApprovalEligibility({ playbook, userId: ctx.userId })
+          : null,
+      };
     }),
 
   /**
@@ -932,10 +1236,17 @@ export const governanceRulesRouter = router({
     }),
   /**
    * Revoke a rule (soft — sets revokedAt). Gated identically to `create`:
-   * whoever could have created this rule may undo it.
+   * whoever could have created this rule may undo it. `moreIds`: other rules
+   * taken back in the SAME transaction, each gated the same way (a slot whose
+   * rows tie, cleared by one call from a tool's page; lane W3).
    */
   revoke: protectedProcedure
-    .input(z.object({ id: z.string().uuid() }))
+    .input(
+      z.object({
+        id: z.string().uuid(),
+        moreIds: z.array(z.string().uuid()).max(20).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       const existing = await db.query.governanceRules.findFirst({
         where: eq(governanceRules.id, input.id),
@@ -944,33 +1255,31 @@ export const governanceRulesRouter = router({
       if (!existing) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Rule not found" });
       }
-      if (existing.revokedAt) {
+      const more = await readRevocableRules(
+        ctx,
+        (input.moreIds ?? []).filter((id) => id !== input.id)
+      );
+      if (existing.revokedAt && more.length === 0) {
         return { rule: existing };
       }
 
-      await assertCanManageRule(ctx.userId, existing);
-      await assertNotAgentOnAppAgent(existing.agentUserId, ctx);
-      if (existing.targetKind === "connection") {
-        await assertOwnsConnection(ctx.userId, existing.targetPattern);
-      }
+      if (!existing.revokedAt) await assertMayRevokeRule(ctx, existing);
+      const rules = [...(existing.revokedAt ? [] : [existing]), ...more];
 
-      const revoke = (handle: Pick<typeof db, "update">) =>
-        handle
-          .update(governanceRules)
-          .set({ revokedAt: new Date() })
-          .where(eq(governanceRules.id, input.id))
-          .returning();
       // An agent's approval seeded on its box goes with it (host-seed.ts), in
       // the same transaction: a rule revoked while its seed stays would leave
-      // the box allowed, and a retry stops at `revokedAt` above. A rule that
-      // cannot carry a seed is revoked alone.
-      const [rule] = mayCarryHostSeed(existing)
-        ? await db.transaction(async (tx) => {
-            const rows = await revoke(tx);
-            await revokeHostSeeds(tx, [input.id]);
-            return rows;
-          })
-        : await revoke(db);
+      // the box allowed, and a retry stops at `revokedAt` above. Several rules,
+      // or one that carries a seed, go in one transaction; one that cannot
+      // carry a seed is revoked alone.
+      const revoked =
+        rules.length > 1 || rules.some(mayCarryHostSeed)
+          ? await db.transaction((tx) => revokeRulesIn(tx, rules))
+          : await revokeRulesIn(db, rules);
+      // One rule: the row the update returned, as before; several: this id's.
+      const rule =
+        (rules.length === 1
+          ? revoked[0]
+          : revoked.find((r) => r.id === input.id)) ?? existing;
 
       return { rule };
     }),

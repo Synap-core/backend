@@ -25,6 +25,11 @@ export interface CompositionLike {
   description: string | null;
   workspaceId?: string | null;
   workspaceName?: string | null;
+  /**
+   * ADD-ON (founder decision D6): the base tool it extends; null when it is
+   * not an add-on (or its base is not visible), absent from an older pod.
+   */
+  extends?: { id: string; name: string } | null;
   /** Its parts: tools, skills (its actions), playbooks, automations. */
   members: ReadonlyArray<{
     kind: string;

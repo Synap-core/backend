@@ -18,7 +18,17 @@
  *     with a non-empty string `decisionId` AND an answer object whose
  *     `askSnapshot.mode` is confirm / choose, never on a criterion's grade
  *     slot. Each half missing is a row: a NULL in the SQL test must keep the
- *     slot owed, never drop it.
+ *     slot owed, never drop it. A REFUSED decision (`answer.value.type`
+ *     `declined`) is never decided, even with a `decisionId` (an ask opened
+ *     for a decision carries one before anyone answers).
+ *
+ * The third block is a GRADE read in its session (work-model W5): a
+ * criterion's grade slot naming the output it checks (`outputKey`) is owed
+ * only once a slot of the same list with that stored `key` is delivered
+ * (`isOwedByYouIn`): delivered, or claimed by the agent, and a retired or
+ * optional output never hides its grade; an output not declared yet is not
+ * made. Each row is a whole `expected_outputs` list in which only
+ * the grade can be owed, so "the list owes the person" IS the grade's answer.
  *
  * The SQL and the TypeScript rule cannot be one declaration (Postgres runs
  * the one, Node the other), which is why this parity test exists at all.
@@ -39,8 +49,16 @@ import { join, relative } from "node:path";
 import { PGlite } from "@electric-sql/pglite";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql } from "drizzle-orm";
-import { OWED_SLOT_CLAUSES, owedSlotExistsIn } from "./owed-slot-predicate.js";
-import { deliverableOwedBy } from "@synap-core/types/units";
+import {
+  OWED_SLOT_CLAUSES,
+  owedSlotExistsIn,
+  owedSlotWhere,
+} from "./owed-slot-predicate.js";
+import { deliverableOwedBy, isOwedByYouIn } from "@synap-core/types/units";
+import {
+  SESSION_STATUSES,
+  isPlannedSessionStatus,
+} from "@synap-core/types/focus-sessions";
 
 const STAMP = "2026-09-08T13:00:00.000Z";
 /** An answer as the answer door stores it (trimmed to what the rule reads). */
@@ -51,6 +69,12 @@ const DECIDED_CHOOSE = {
 const DECIDED_CONFIRM = {
   text: "Yes",
   askSnapshot: { mode: "confirm", chosenKey: "yes" },
+};
+/** The person REFUSED the choose: an answer, never a decision. */
+const REFUSED_CHOOSE = {
+  text: "Refused: not this quarter",
+  value: { type: "declined", reason: "not this quarter" },
+  askSnapshot: { mode: "choose", chosenKey: null },
 };
 
 const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
@@ -114,6 +138,29 @@ const ROWS: ReadonlyArray<{ rulesOut: string; slot: Record<string, unknown> }> =
     {
       rulesOut: "an answered confirm with its decision filed read as owed",
       slot: { owner: "human", decisionId: "d-1", answer: DECIDED_CONFIRM },
+    },
+    {
+      rulesOut: "a refused choose with a decisionId read as decided",
+      slot: { owner: "human", decisionId: "d-1", answer: REFUSED_CHOOSE },
+    },
+    {
+      rulesOut: "a refused confirm with a decisionId read as decided",
+      slot: {
+        owner: "human",
+        decisionId: "d-1",
+        answer: {
+          ...REFUSED_CHOOSE,
+          askSnapshot: { mode: "confirm", chosenKey: null },
+        },
+      },
+    },
+    {
+      rulesOut: "a value of another type read as a refusal",
+      slot: {
+        owner: "human",
+        decisionId: "d-1",
+        answer: { ...DECIDED_CHOOSE, value: { type: "chip" } },
+      },
     },
     {
       rulesOut: "a decisionId alone read as decided (the ask is still open)",
@@ -216,12 +263,204 @@ describe("owed-slot SQL === deliverableOwedBy(slot) === 'you'", () => {
     expect(await sqlOwed({ owner: "agent" })).toBe(false);
   });
 
+  it("a refused decision stays owed in the SQL itself, not only in parity", async () => {
+    // Parity alone proves sameness: both sides reverted together would agree
+    // on "decided". This pins the right answer on the SQL side.
+    expect(
+      await sqlOwed({
+        owner: "human",
+        decisionId: "d-1",
+        answer: REFUSED_CHOOSE,
+      })
+    ).toBe(true);
+    // …and a real decision still is not owed (the clause did not swallow it).
+    expect(
+      await sqlOwed({
+        owner: "human",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      })
+    ).toBe(false);
+  });
+
   it("agrees on every discriminating row", async () => {
     for (const { rulesOut, slot } of ROWS) {
       expect({ rulesOut, slot, owed: await sqlOwed(slot) }).toEqual({
         rulesOut,
         slot,
         owed: deliverableOwedBy(slot as never) === "you",
+      });
+    }
+  });
+});
+
+/** A grade slot as `fileCriterionSlot` files it, naming its output. */
+const GRADE = {
+  kind: "criterion",
+  label: "Check: the copy reads well",
+  criterionKey: "copy-reads-well",
+  owner: "human",
+  status: "pending",
+  outputKey: "landing-copy",
+};
+/** The output it grades, the agent's, not yet delivered. */
+const COPY = { key: "landing-copy", label: "Landing copy", owner: "agent" };
+
+const GRADE_ROWS: ReadonlyArray<{
+  rulesOut: string;
+  slots: Array<Record<string, unknown>>;
+}> = [
+  {
+    rulesOut: "a grade owed before its output is delivered",
+    slots: [GRADE, COPY],
+  },
+  {
+    rulesOut: "a grade kept waiting once its output is done",
+    slots: [GRADE, { ...COPY, status: "done" }],
+  },
+  {
+    rulesOut: "an output decided by the person's answer read as undelivered",
+    slots: [
+      GRADE,
+      {
+        ...COPY,
+        owner: "human",
+        decisionId: "d-1",
+        answer: DECIDED_CHOOSE,
+      },
+    ],
+  },
+  {
+    rulesOut: "an output with a REFUSED answer read as delivered",
+    slots: [GRADE, { ...COPY, decisionId: "d-1", answer: REFUSED_CHOOSE }],
+  },
+  {
+    rulesOut: "a grade with no outputKey held back (old data)",
+    slots: [{ ...GRADE, outputKey: undefined }, COPY],
+  },
+  {
+    rulesOut: "an empty outputKey read as naming an output",
+    slots: [{ ...GRADE, outputKey: "" }, COPY],
+  },
+  {
+    rulesOut: "a non-string outputKey matched as text",
+    slots: [
+      { ...GRADE, outputKey: 7 },
+      { ...COPY, key: "7" },
+    ],
+  },
+  {
+    rulesOut: "a numeric output key matched as text",
+    slots: [
+      { ...GRADE, outputKey: "7" },
+      { ...COPY, key: 7 },
+    ],
+  },
+  {
+    rulesOut:
+      "an output nobody declared yet read as made (a later stage brings it)",
+    slots: [{ ...GRADE, outputKey: "missing" }, COPY],
+  },
+  {
+    rulesOut: "an output matched by its label instead of its stored key",
+    slots: [GRADE, { label: "landing-copy", owner: "agent" }],
+  },
+  {
+    rulesOut: "a grade waiting on another grade",
+    slots: [GRADE, { ...GRADE, key: "landing-copy", owner: "agent" }],
+  },
+  {
+    rulesOut: "a non-grade slot held back by an outputKey",
+    slots: [{ ...GRADE, kind: "text", criterionKey: undefined }, COPY],
+  },
+  {
+    rulesOut: "a retired output hides its grade forever",
+    slots: [GRADE, { ...COPY, retiredAt: STAMP }],
+  },
+  {
+    rulesOut: "a JSON null retiredAt read as retired (the grade still waits)",
+    slots: [GRADE, { ...COPY, retiredAt: null }],
+  },
+  {
+    rulesOut: "an output the agent CLAIMED keeps its grade hidden",
+    slots: [GRADE, { ...COPY, claimedDone: true }],
+  },
+  {
+    rulesOut: 'a string "true" claim read as a claim',
+    slots: [GRADE, { ...COPY, claimedDone: "true" }],
+  },
+  {
+    rulesOut: "an unfilled optional output hides its grade forever",
+    slots: [GRADE, { ...COPY, optional: true }],
+  },
+  {
+    rulesOut: 'a string "true" optional read as optional',
+    slots: [GRADE, { ...COPY, optional: "true" }],
+  },
+  {
+    rulesOut: "a done grade owed",
+    slots: [
+      { ...GRADE, status: "done" },
+      { ...COPY, status: "done" },
+    ],
+  },
+  {
+    rulesOut: "a scalar in the list breaks the read",
+    slots: [GRADE, "landing-copy", { ...COPY, status: "done" }],
+  },
+];
+
+async function sqlListOwed(slots: unknown[]): Promise<boolean> {
+  const q = dialect.sqlToQuery(
+    owedSlotExistsIn(drizzleSql`${JSON.stringify(slots)}::jsonb`)
+  );
+  const res = await client.query<{ owed: boolean }>(
+    `select ${q.sql} as owed`,
+    q.params as unknown[]
+  );
+  return res.rows[0]!.owed;
+}
+
+const tsListOwed = (slots: unknown[]): boolean =>
+  slots.some(
+    (s) => !!s && typeof s === "object" && isOwedByYouIn(s as never, slots)
+  );
+
+describe("a criterion's grade is owed once its output is delivered", () => {
+  it("SQL: not owed while the output is pending, owed once it is done or claimed", async () => {
+    // Pins the right answer on the SQL side, not only sameness.
+    expect(await sqlListOwed([GRADE, COPY])).toBe(false);
+    expect(await sqlListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    // An output a required criterion checks never reaches `done` by evidence:
+    // the agent's claim is what makes the grade due (W5 review, item 1).
+    expect(await sqlListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(
+      true
+    );
+    // An output a later stage declares: not made yet, so the grade waits
+    // (W5 review B).
+    expect(await sqlListOwed([GRADE])).toBe(false);
+    // Old data: a grade naming no output is owed as before.
+    expect(await sqlListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(
+      true
+    );
+  });
+
+  it("TS: the same answers", () => {
+    expect(tsListOwed([GRADE, COPY])).toBe(false);
+    expect(tsListOwed([GRADE])).toBe(false);
+    expect(tsListOwed([GRADE, { ...COPY, status: "done" }])).toBe(true);
+    expect(tsListOwed([GRADE, { ...COPY, claimedDone: true }])).toBe(true);
+    expect(tsListOwed([{ ...GRADE, outputKey: undefined }, COPY])).toBe(true);
+  });
+
+  it("agrees on every discriminating list", async () => {
+    const answers = GRADE_ROWS.map((r) => tsListOwed(r.slots));
+    expect(answers.filter(Boolean).length).toBeGreaterThanOrEqual(3);
+    expect(answers.filter((a) => !a).length).toBeGreaterThanOrEqual(3);
+    for (const { rulesOut, slots } of GRADE_ROWS) {
+      expect({ rulesOut, owed: await sqlListOwed(slots) }).toEqual({
+        rulesOut,
+        owed: tsListOwed(slots),
       });
     }
   });
@@ -246,5 +485,49 @@ describe("no second copy of the owed-slot clauses in pod source", () => {
       .filter((f) => /slot->>?'retiredAt'/.test(readFileSync(f, "utf8")))
       .map((f) => relative(PACKAGES, f));
     expect(hits).toEqual(["database/src/utils/owed-slot-predicate.ts"]);
+  });
+});
+
+/**
+ * THE SESSION CLAUSE (founder P2, 21 Nov 2026): a PLANNED step (`forming`)
+ * owes nothing until it starts. `owedSlotWhere` (every count and the
+ * needs-you read) runs on a real `focus_sessions` row for every stored
+ * status; its TypeScript twin is "not planned AND the slot rule"
+ * (`projectOwedSlots` in api, `classifyOwedAsk` in types).
+ */
+describe("owedSlotWhere: a planned step owes nothing (P2)", () => {
+  beforeAll(async () => {
+    await client.exec(
+      `create table focus_sessions (id text primary key, status text, expected_outputs jsonb)`
+    );
+  });
+
+  it("agrees with the rule for every stored status, owed slot or not", async () => {
+    expect(SESSION_STATUSES).toContain("forming");
+    const where = dialect.sqlToQuery(owedSlotWhere());
+    let owedRows = 0;
+    for (const status of SESSION_STATUSES) {
+      for (const slot of [{ owner: "human" }, { owner: "agent" }]) {
+        const id = `${status}:${slot.owner}`;
+        await client.query(
+          `insert into focus_sessions (id, status, expected_outputs) values ($1, $2, $3::jsonb)`,
+          [id, status, JSON.stringify([slot])]
+        );
+        const res = await client.query<{ id: string }>(
+          `select id from focus_sessions where id = $${where.params.length + 1} and ${where.sql}`,
+          [...(where.params as unknown[]), id]
+        );
+        const expected =
+          !isPlannedSessionStatus(status) &&
+          deliverableOwedBy(slot as never) === "you";
+        if (expected) owedRows += 1;
+        expect({ id, owed: res.rows.length === 1 }).toEqual({
+          id,
+          owed: expected,
+        });
+      }
+    }
+    // Non-vacuity: every other status still owes its human slot.
+    expect(owedRows).toBe(SESSION_STATUSES.length - 1);
   });
 });

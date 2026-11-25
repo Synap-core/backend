@@ -181,14 +181,16 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   relationDefs,
-  profileWorkspaceAccess,
+  spaceAccess,
   db,
   ProfileRepository,
   readProfileRetirement,
   resolveProfileForApply,
   podMembers,
   projectMembers,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   proposeProfileRetire,
@@ -368,6 +370,7 @@ async function approve(proposalId: string, approver: string) {
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     profiles,
     entities,
@@ -380,8 +383,9 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     relationDefs,
-    profileWorkspaceAccess,
+    spaceAccess,
     podMembers,
     projectMembers,
   ]) {
@@ -405,7 +409,7 @@ beforeEach(async () => {
     "workspaces",
     "workspace_members",
     "relation_defs",
-    "profile_workspace_access",
+    "space_access",
   ]) {
     await q(`delete from ${t}`);
   }

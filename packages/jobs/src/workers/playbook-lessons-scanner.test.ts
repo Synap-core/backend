@@ -11,7 +11,9 @@
  *   - two failing criteria on two different stages ⇒ still ONE proposal;
  *   - an EXISTING lesson the IS drops ⇒ the proposal carries the IS's list,
  *     which is what distinguishes replace from append;
- *   - a criterion belonging to NO stage ⇒ no revision (documented gap);
+ *   - a criterion belonging to NO stage ⇒ the PLAYBOOK's lessons;
+ *   - 3 successful runs that used a tool in 3, a skill in 2 and another tool
+ *     in 1 ⇒ what worked lists the first two; 2 successful runs ⇒ nothing;
  *   - only 2 graded runs ⇒ nothing, whatever the failures say.
  */
 
@@ -80,6 +82,7 @@ const PLAYBOOK: LessonsScanPlaybook = {
   name: "Verified Wave",
   workspaceId: "ws1",
   stages: STAGES,
+  metadata: {},
   userId: USER_ID,
 };
 
@@ -153,6 +156,7 @@ function makeDeps(
       evaluations: over.evaluations ?? [],
     }),
     hasOpenRevision: async () => false,
+    loadUsedParts: async (ids) => new Map(ids.map((id) => [id, []])),
     reviseLessons,
     fileProposal: async (playbook, data) => {
       filed.push({ playbook, data });
@@ -288,13 +292,118 @@ describe("one proposal per playbook", () => {
     expect(filed[0].data.sourceSessionIds).toEqual(["s1", "s2", "s3"]);
   });
 
-  it("a criterion belonging to no stage teaches nothing (documented gap)", async () => {
+  it("a criterion belonging to no stage teaches the PLAYBOOK (metadata.lessons), never a stage", async () => {
     const orphan = {
       ...PLAYBOOK,
       // Same criteria on the sessions, but the stages declare none of them.
       stages: [{ key: "ship", name: "Ship", category: "execute" }],
+      metadata: { lessons: ["Old playbook lesson"], keep: "me" },
     };
-    const { deps } = makeDeps({ ...history("tsc", 3), playbook: orphan });
+    const { deps, filed, reviseLessons } = makeDeps({
+      ...history("tsc", 3),
+      playbook: orphan,
+    });
+    expect(await runPlaybookLessonsScan(deps)).toEqual(["prop-1"]);
+    const data = filed[0].data;
+    expect(data.data.stages).toBeUndefined();
+    // Only the keys it revises: the update door merges them over the bag.
+    expect(data.data.metadata).toEqual({
+      lessons: ["ALWAYS run tsc before closing"],
+    });
+    expect(data.evidence.playbook).toMatchObject({
+      before: ["Old playbook lesson"],
+      after: ["ALWAYS run tsc before closing"],
+    });
+    expect(reviseLessons).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stage: { name: "Verified Wave" },
+        existingLessons: ["Old playbook lesson"],
+      })
+    );
+  });
+
+  it("covers a playbook with NO stages", async () => {
+    const stageless = { ...PLAYBOOK, stages: [] };
+    const { deps, filed } = makeDeps({
+      ...history("tsc", 2),
+      playbook: stageless,
+    });
+    expect(await runPlaybookLessonsScan(deps)).toEqual(["prop-1"]);
+    expect(filed[0].data.data.metadata?.lessons).toEqual([
+      "ALWAYS run tsc before closing",
+    ]);
+  });
+});
+
+describe("what worked: the tools and skills of the successful runs", () => {
+  const part = (kind: "tool" | "skill", id: string) => ({
+    kind,
+    id,
+    name: `${kind}-${id}`,
+  });
+  const USED = new Map([
+    ["s1", [part("tool", "t1"), part("skill", "k1"), part("tool", "t2")]],
+    ["s2", [part("tool", "t1"), part("skill", "k1")]],
+    ["s3", [part("tool", "t1")]],
+  ]);
+
+  it("proposes the parts most successful runs used, with the runs as evidence, and asks the IS nothing", async () => {
+    const { deps, filed, reviseLessons } = makeDeps({
+      ...history("tsc", 0),
+      loadUsedParts: async (ids) =>
+        new Map(ids.map((id) => [id, USED.get(id) ?? []])),
+    });
+    expect(await runPlaybookLessonsScan(deps)).toEqual(["prop-1"]);
+    expect(reviseLessons).not.toHaveBeenCalled();
+    const data = filed[0].data;
+    const worked = {
+      runs: 3,
+      parts: [
+        { kind: "tool", name: "tool-t1", runs: 3 },
+        { kind: "skill", name: "skill-k1", runs: 2 },
+      ],
+    };
+    expect(data.data).toEqual({
+      id: PLAYBOOK_ID,
+      metadata: { whatWorked: worked },
+    });
+    expect(data.evidence.whatWorked).toEqual({ before: null, after: worked });
+    expect(data.sourceSessionIds).toEqual(["s1", "s2", "s3"]);
+  });
+
+  it("NEGATIVE: a failed run's tools are not what worked, and what they used is not even read", async () => {
+    const loadUsedParts = vi.fn(
+      async (ids: string[]) =>
+        new Map(ids.map((id) => [id, USED.get(id) ?? []]))
+    );
+    const { deps } = makeDeps({
+      // s1 fails its required criterion: 2 successful runs, under the floor.
+      ...history("tsc", 1),
+      loadUsedParts,
+    });
+    expect(await runPlaybookLessonsScan(deps)).toEqual([]);
+    expect(loadUsedParts).not.toHaveBeenCalled();
+  });
+
+  it("files nothing when the same tools and skills already stand, whatever the run counts", async () => {
+    const { deps } = makeDeps({
+      ...history("tsc", 0),
+      playbook: {
+        ...PLAYBOOK,
+        metadata: {
+          // Counted on an earlier pass: other numbers, the same parts.
+          whatWorked: {
+            runs: 7,
+            parts: [
+              { kind: "skill", name: "skill-k1", runs: 4 },
+              { kind: "tool", name: "tool-t1", runs: 6 },
+            ],
+          },
+        },
+      },
+      loadUsedParts: async (ids) =>
+        new Map(ids.map((id) => [id, USED.get(id) ?? []])),
+    });
     expect(await runPlaybookLessonsScan(deps)).toEqual([]);
   });
 });
@@ -526,6 +635,7 @@ describe("IS call budget", () => {
             ],
           },
         ],
+        metadata: {},
         userId: USER_ID,
       });
       const sessions = ["a", "b", "c"].map((sfx) => ({

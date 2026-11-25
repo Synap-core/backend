@@ -64,6 +64,7 @@ import {
 } from "../repositories/profile-repository.js";
 import { type ProfileScope } from "../schema/profiles.js";
 import { resolveProfileForApply } from "./resolve-profile-for-apply.js";
+import { ownerAndActor } from "./owner-person.js";
 import { normalizeProfileScope } from "./normalize-profile-scope.js";
 import {
   buildStoredConstraints,
@@ -75,6 +76,7 @@ import {
   declareLifecycle,
   withLifecycleOptions,
 } from "../services/lifecycle/declare-lifecycle.js";
+import { setLifecycleInitialStatus } from "../services/lifecycle/lifecycle-def-guard.js";
 import type {
   PropertyDef,
   PropertyValueType,
@@ -108,7 +110,7 @@ import {
 import { createLogger } from "@synap-core/core";
 import { writeTemplateState } from "./template-state.js";
 import { projectTemplateIntent } from "./workspace-intent.js";
-import { isUniqueViolation } from "./pg-errors.js";
+import { insertAutomation } from "./insert-automation.js";
 import {
   installTemplateDocuments,
   resolveDocumentSidebarItem,
@@ -281,6 +283,8 @@ export interface ReconcileReport {
     lifecycles?: {
       declared: Array<{ profile: string; property: string }>;
       refused: Array<{ profile: string; reason: string }>;
+      /** The template's `initialStatus`, filled on a lifecycle that had none. */
+      initial?: Array<{ profile: string; status: string }>;
     };
     /** Template type differs from the live type — NOT changed; needs a decision. */
     conflicts: Array<{
@@ -775,7 +779,7 @@ export async function reconcileWorkspaceFromDefinition(
         });
         if (resolution.createScope === "shared")
           await profileRepo
-            .grantAccess(resolved.id, workspaceId)
+            .grantAccess(resolved.id, workspaceId, userId)
             .catch(() => {});
       } else {
         // dry-run: we can't resolve an id; still report property diffs below as
@@ -1012,6 +1016,31 @@ export async function reconcileWorkspaceFromDefinition(
           profile: profile.slug,
           property: profile.lifecycle.property,
         });
+      }
+      // The status new things start in, through the lifecycle door (the link
+      // default every birth door reads). Fill-only: an initial a person set
+      // since, or another door, is kept.
+      const initialStatus = profile.lifecycle.initialStatus;
+      if (
+        initialStatus &&
+        (declared.status === "declared" || declared.status === "unchanged")
+      ) {
+        const initial = await setLifecycleInitialStatus(dbConn, {
+          propertyDefId: declared.propertyDefId,
+          initialStatus,
+          onlyWhenUnset: true,
+        });
+        if (initial.status === "refused") {
+          report.properties.lifecycles!.refused.push({
+            profile: profile.slug,
+            reason: `initialStatus: ${initial.reason}`,
+          });
+        } else if (initial.status === "changed") {
+          (report.properties.lifecycles!.initial ??= []).push({
+            profile: profile.slug,
+            status: initialStatus,
+          });
+        }
       }
     }
   }
@@ -1652,30 +1681,27 @@ export async function reconcileWorkspaceFromDefinition(
           triggerType: auto.triggerType,
           triggerConfig: auto.triggerConfig ?? {},
         });
-        try {
-          await dbConn.insert(automations).values({
+        const inserted = await insertAutomation(dbConn, {
+          values: {
             workspaceId,
-            createdBy: userId,
             name: auto.name,
             description: auto.description,
             triggerType: auto.triggerType,
             triggerConfig,
             flowDefinition,
-            // `active` so the trigger door will actually run it (matches
-            // ensureReportAutomation); a manual automation with no schedule costs
-            // nothing until a human runs it. Honor a declared status if present.
-            status: auto.status ?? "active",
-            metadata: { seedVersion: defHash },
-          });
-        } catch (e) {
-          // Case-insensitive 0230 index — a case-variant already exists (a lost
-          // race, or an active pre-0230 dup). Reconcile's job is "ensure it
-          // exists", so treat as present rather than aborting the reconcile.
-          if (isUniqueViolation(e)) {
-            report.automations.skipped.push(auto.name);
-            continue;
-          }
-          throw e;
+            metadata: { createdVia: "template", seedVersion: defHash },
+          },
+          requested: auto.status,
+          // A template is installed by a person's approval (or the pod's own
+          // boot convergence): its automations start as it declares, active
+          // when it declares nothing.
+          personApproved: true,
+          owner: await ownerAndActor(dbConn, userId),
+        });
+        // A case-variant already exists (0230's index, a lost race): present.
+        if (inserted && !inserted.created) {
+          report.automations.skipped.push(auto.name);
+          continue;
         }
       }
       report.automations.created.push(auto.name);
@@ -1692,7 +1718,7 @@ export async function reconcileWorkspaceFromDefinition(
     // Drift (or a legacy int `seedVersion`) → overwrite flow + description,
     // MERGE-stamp the new hash (NEVER clobber the rest of the metadata bag —
     // `tags`/`createdVia`/`averageExecutionTime` live there; see
-    // ensure-report-automation.ts:1738), and bump the monotonic `version` so a
+    // the retired ensure-report-automation), and bump the monotonic `version` so a
     // run's `definitionSnapshot` reports the right number.
     report.automations.updated.push(auto.name);
     if (!dryRun) {

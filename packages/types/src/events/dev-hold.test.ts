@@ -6,7 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import { DEV_LOOP_EVENT_TYPES as T } from "./dev-loop.js";
-import { holdDevFactOf, holdDevRefMet, holdDevRefNamed } from "./dev-hold.js";
+import {
+  aiHoldMet,
+  holdDevFactOf,
+  holdDevRefMet,
+  holdDevRefNamed,
+} from "./dev-hold.js";
 import type { DevLoopEventRowLike } from "./pr-state.js";
 
 const SINCE = "2026-10-30T12:00:00.000Z";
@@ -135,10 +140,39 @@ describe("holdDevRefNamed", () => {
       label: "job kit-h",
       url: null,
     });
+    expect(holdDevRefNamed("ai:available")).toEqual({
+      ref: { kind: "ai" },
+      label: "AI availability",
+      url: null,
+    });
   });
 
   it("names nothing that is not a dev fact", () => {
     expect(holdDevRefNamed("focus_session:abc")).toBeNull();
     expect(holdDevRefNamed("pr:not a repo#1")).toBeNull();
+  });
+});
+
+describe("aiHoldMet", () => {
+  const read = (availableMin: number | null, checkedMin: number) => ({
+    availableSince: availableMin === null ? null : at(availableMin),
+    checkedAt: at(checkedMin),
+  });
+  it("met while the latest pull reads available, checked after the pause began", () => {
+    expect(aiHoldMet(SINCE, read(5, 6))).toBe(true);
+    // Available since BEFORE the pause, checked after it: still met. The
+    // transition may have been seen before the regrade could pass.
+    expect(aiHoldMet(SINCE, read(-30, 6))).toBe(true);
+    // An answer computed before (or at) the pause says nothing about it.
+    expect(aiHoldMet(SINCE, read(-30, -5))).toBe(false);
+    expect(aiHoldMet(SINCE, read(-30, 0))).toBe(false);
+    // Not available now, never pulled, or a stamp that does not parse.
+    expect(aiHoldMet(SINCE, read(null, 6))).toBe(false);
+    expect(aiHoldMet(SINCE, null)).toBe(false);
+    expect(aiHoldMet(SINCE, undefined)).toBe(false);
+    expect(
+      aiHoldMet(SINCE, { availableSince: at(5), checkedAt: "not a date" })
+    ).toBe(false);
+    expect(aiHoldMet("not a date", read(5, 6))).toBe(false);
   });
 });

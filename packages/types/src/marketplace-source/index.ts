@@ -16,6 +16,9 @@
  */
 
 import { z } from "zod";
+// Type only: the literal is checked against it, and this module stays free of
+// the frame contract's runtime (its SDK source).
+import type { RENDERER_BUNDLE_KIND } from "../renderables/renderer-bundle.js";
 
 /** The built-in source: Synap's own catalog. It can be disabled, never removed. */
 export const OFFICIAL_SOURCE_ID = "synap";
@@ -81,6 +84,15 @@ export const MARKETPLACE_PACKAGE_KINDS = [
 export type MarketplacePackageKind = (typeof MARKETPLACE_PACKAGE_KINDS)[number];
 
 /**
+ * Every kind Synap's signed index carries a digest for: the catalog kinds,
+ * and the renderer bundle, listed DIGEST ONLY under the index's top-level
+ * `rendererBundles` (`officialRendererBundleDigestSchema`). Mirrors
+ * control-plane-api `OfficialDigestKind` (`catalog-signing/content-digest.ts`).
+ */
+export type OfficialDigestKind =
+  MarketplacePackageKind | typeof RENDERER_BUNDLE_KIND;
+
+/**
  * The Control Plane's category names, accepted as aliases so a publisher who
  * knows those words is not refused: `workspace` is a template, `workflow` an
  * automation.
@@ -91,6 +103,24 @@ export const MARKETPLACE_KIND_ALIASES: Readonly<
   workspace: "template",
   workflow: "automation",
 };
+
+/**
+ * A kind as a caller may name it: the pod's token, or the Control Plane's
+ * category name for it (`workflow` → `automation`). Every door that takes a
+ * kind wraps the kinds it accepts here, so the two vocabularies never split
+ * again.
+ */
+export function withMarketplaceKindAliases<T extends z.ZodType>(kinds: T) {
+  return z.preprocess(
+    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
+    kinds
+  );
+}
+
+/** A catalog kind, its Control Plane names accepted. */
+export const marketplacePackageKindSchema = withMarketplaceKindAliases(
+  z.enum(MARKETPLACE_PACKAGE_KINDS)
+);
 
 /** An https URL — never `http:`, `javascript:` or `data:`; it may be shown as a link. */
 export const httpsUrlSchema = z
@@ -123,10 +153,7 @@ const ed25519KeySchema = z
 /** The fields every listing carries, whoever serves the index. */
 const indexPackageShape = {
   slug: z.string(),
-  kind: z.preprocess(
-    (k) => (typeof k === "string" ? (MARKETPLACE_KIND_ALIASES[k] ?? k) : k),
-    z.enum(MARKETPLACE_PACKAGE_KINDS)
-  ),
+  kind: marketplacePackageKindSchema,
   version: z.string().min(1).max(100),
   displayName: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
@@ -276,6 +303,39 @@ export const officialIndexSchema = z
   .superRefine(checkNoDuplicates);
 export type OfficialIndex = z.infer<typeof officialIndexSchema>;
 
+/** A signed index lists at most this many renderer bundles (the CP's cap). */
+export const OFFICIAL_INDEX_MAX_RENDERER_BUNDLES = 100;
+
+/**
+ * One official renderer bundle in Synap's signed index: DIGEST ONLY. It sits
+ * in the index's top-level `rendererBundles` array, never in `packages`
+ * (whose closed kind list and required `definitionUrl` would make an older
+ * pod refuse the whole index), and carries no definition URL: the bytes
+ * reach only a managed pod, through `GET {CP}/internal/renderer-bundles`,
+ * and that pod checks them against `contentHash`
+ * (`officialContentHash("renderer-bundle", …)`). `version` is the Control
+ * Plane row's version, the `package.version` that route serves. Strict, as
+ * the CP's own (control-plane-api `officialRendererBundleDigestSchema`,
+ * `catalog-signing/formats.ts`).
+ *
+ * `officialIndexSchema` does not name the key (it is dropped on parse), so
+ * the catalog sync reads it from the verified index's own JSON: the
+ * signature covers those exact bytes.
+ */
+export const officialRendererBundleDigestSchema = z
+  .object({
+    kind: z.literal(
+      "renderer-bundle" as const satisfies typeof RENDERER_BUNDLE_KIND
+    ),
+    slug: z.string().regex(MARKETPLACE_SLUG_PATTERN),
+    version: z.string().min(1).max(100),
+    contentHash: SHA256_HEX,
+  })
+  .strict();
+export type OfficialRendererBundleDigest = z.infer<
+  typeof officialRendererBundleDigestSchema
+>;
+
 /**
  * `synap-catalog-keys.json`, signed by one of the root keys compiled into
  * the pod: which online keys may sign the index, each until `notAfter`.
@@ -351,7 +411,7 @@ function sortKeysDeep(value: unknown): unknown {
  * so its first 12 hex are the package's `h-` version.
  */
 export function canonicalDefinitionJson(
-  kind: MarketplacePackageKind,
+  kind: OfficialDigestKind,
   definition: Record<string, unknown>
 ): string {
   const content: Record<string, unknown> = { ...definition };

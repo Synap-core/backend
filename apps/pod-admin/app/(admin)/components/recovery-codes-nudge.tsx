@@ -8,9 +8,14 @@
  * R3, 2026-10-04). Skippable, with a persistent ⚠ until done.
  *
  *   - `SecurityNudge` — the card on Home. "Skip for now" hides the CARD for
- *     that ask on this browser only.
+ *     that ask on this browser only. The lowest ask, `this-device` ("Add
+ *     this device", founder decision of 9 Nov 2026), is an offer, drawn
+ *     quietly: "Set up" opens the "Add this device" panel in a dialog (it
+ *     asks a device the person already uses, or adds the passkey straight
+ *     away when the person holds no factor).
  *   - `useSecurityNudge` — feeds the top bar's ⚠ mark, which stays until the
- *     ask is met (it is never dismissible).
+ *     ask is met (it is never dismissible). The `this-device` offer never
+ *     lights it (`nudgeMarks`).
  *   - `useRecoveryCodesState` — the recovery codes' cached status.
  *
  * A failed read shows nothing here: this is a nudge, not the door. The door
@@ -18,13 +23,21 @@
  */
 
 import { useEffect, useState } from "react";
-import { Button } from "@heroui/react";
-import { ShieldAlert } from "lucide-react";
+import {
+  Button,
+  Modal,
+  ModalBody,
+  ModalContent,
+  ModalHeader,
+} from "@heroui/react";
+import { KeyRound, ShieldAlert } from "lucide-react";
 import { CREATE_RECOVERY_CODES_LABEL } from "@synap-core/types/account-recovery";
 import { recoveryApi } from "../../../lib/account-recovery";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "../../_lib/presence/ways-in/copy";
 import { useWaysIn } from "../../_lib/presence/ways-in/use-ways-in";
+import { DeviceLinkPanel } from "../../_lib/presence/device-link/DeviceLinkPanel";
+import { useThisDevicePasskey } from "../../_lib/presence/device-link/use-this-device";
 import {
   securityNudge,
   type RecoveryCodesState,
@@ -114,7 +127,8 @@ export function useRecoveryCodesState(): RecoveryCodesState {
 export function useSecurityNudge(): SecurityNudgeKind {
   const codes = useRecoveryCodesState();
   const { state } = useWaysIn();
-  return securityNudge(state, codes);
+  const thisDevice = useThisDevicePasskey();
+  return securityNudge(state, codes, thisDevice);
 }
 
 function skipped(kind: NonNullable<SecurityNudgeKind>): boolean {
@@ -127,14 +141,79 @@ function skipped(kind: NonNullable<SecurityNudgeKind>): boolean {
 
 export function SecurityNudge() {
   const t = useT(CATALOGS);
-  const kind = useSecurityNudge();
+  const asked = useSecurityNudge();
   // Hidden until mounted: localStorage is a browser read.
   const [mounted, setMounted] = useState(false);
   const [skippedNow, setSkippedNow] = useState<string[]>([]);
+  // The "Add this device" dialog is open: the card stays until it closes,
+  // even once this device holds its passkey (the panel says so first).
+  const [settingUp, setSettingUp] = useState(false);
   useEffect(() => setMounted(true), []);
+  const kind: SecurityNudgeKind = settingUp ? "this-device" : asked;
 
   if (!mounted || !kind || skippedNow.includes(kind) || skipped(kind)) {
     return null;
+  }
+
+  const skip = () => {
+    try {
+      window.localStorage.setItem(skipKey(kind), "1");
+    } catch {
+      /* private window: the card just comes back next visit */
+    }
+    setSkippedNow([...skippedNow, kind]);
+  };
+
+  if (kind === "this-device") {
+    // An offer, not a warning: the quiet card, no warning colour.
+    return (
+      <div
+        className="mb-5 flex flex-col gap-3 rounded-large bg-content2/40 p-4 ring-1 ring-inset ring-foreground/[0.06] sm:flex-row sm:items-center"
+        data-security-nudge="this-device"
+      >
+        <KeyRound
+          aria-hidden
+          className="h-5 w-5 shrink-0 text-foreground/55"
+          strokeWidth={2}
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="text-[13.5px] font-medium text-foreground">
+            {t("nudge.this-device.title")}
+          </p>
+          <p className="text-[12.5px] text-foreground/65">
+            {t("nudge.this-device.line")}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="light" size="sm" radius="md" onPress={skip}>
+            {t("nudge.skip")}
+          </Button>
+          <Button
+            color="primary"
+            size="sm"
+            radius="md"
+            onPress={() => setSettingUp(true)}
+          >
+            {t("nudge.this-device.action")}
+          </Button>
+        </div>
+        <Modal isOpen={settingUp} onClose={() => setSettingUp(false)} size="md">
+          <ModalContent>
+            <ModalHeader className="text-[15px] font-semibold">
+              {t("nudge.this-device.title")}
+            </ModalHeader>
+            <ModalBody className="pb-6">
+              {settingUp ? (
+                <DeviceLinkPanel
+                  onDone={() => setSettingUp(false)}
+                  onCancel={() => setSettingUp(false)}
+                />
+              ) : null}
+            </ModalBody>
+          </ModalContent>
+        </Modal>
+      </div>
+    );
   }
 
   return (
@@ -152,19 +231,7 @@ export function SecurityNudge() {
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <Button
-          variant="light"
-          size="sm"
-          radius="md"
-          onPress={() => {
-            try {
-              window.localStorage.setItem(skipKey(kind), "1");
-            } catch {
-              /* private window: the card just comes back next visit */
-            }
-            setSkippedNow([...skippedNow, kind]);
-          }}
-        >
+        <Button variant="light" size="sm" radius="md" onPress={skip}>
           {t("nudge.skip")}
         </Button>
         <Button

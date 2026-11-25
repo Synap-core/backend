@@ -1,5 +1,5 @@
 /**
- * pr-latency.mjs measures the founder's target (a PR's 4 required checks
+ * pr-latency.mjs measures the founder's target (a PR's 5 required checks
  * green in 8-10 min). A run counts only when all 4 concluded `success`; a
  * skipped, red or missing one is not a time to green. Pinned on hand-built
  * job lists (GitHub's jobs API shape); the gh calls are not exercised here.
@@ -40,6 +40,7 @@ const green = () => [
   job("Full suite", 9.6, 9.8),
   job("API e2e", 1, 5),
   job("Reference docs are current", 1, 2.5),
+  job("Dependent repos typecheck", 1, 7),
 ];
 
 describe("pr-latency: what a time to green is", () => {

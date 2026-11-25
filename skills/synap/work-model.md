@@ -2,26 +2,33 @@
 
 Load this before you plan, start or run work, or author a process. The long form is the pod document "The Synap work model" (36878a70-6cbb-4122-8bfa-288fdbd65218); the words are in `concepts`.
 
+### Direction (18 Nov 2026)
+
+Work is one chain. A **project** serves a **goal** and uses **spaces**; each space is a **pillar** of it. A pillar holds the **kinds** it produces. Each produced kind has a **playbook**: "when / if … do …". A playbook works through **runs**, one thing (or a batch) at a time. A run's **outputs** carry the **criteria**: the session is done when its outputs pass. **Needs you** holds only a grade or an action only the person can do; everything else is a receipt. Runs teach the playbook: a run that found a wrong or missing step proposes the change. On the Synap team pod: living document b60c4f03-ca82-4226-b16e-cc7ad6ab9420, end-state page 83bdbe65-7cab-4c02-af3e-4ee39803ce9a, plan 8daa514b-db0e-4316-8fde-723b51ececa8.
+
 ### Why
 
 A process is the life of a **thing**, not a script. A lead, a post or a feature has ONE status. Boards, workers, sessions, goals and history read that status or move it through ONE door. So "when a post enters Review, run the review" is one rule, "how many leads reached Qualified this month" is a count, and a person and an agent can work the same thing without overwriting each other. Before, each playbook kept its own stages and status field, and the same fact lived in three places.
 
 ### The nouns
 
-| Noun                | What it is                                                                                                            | Not                                 |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| **Project**         | a commitment, and a lens across spaces                                                                                | a method, a domain                  |
-| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict | a list of stages                    |
-| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                        | a second entity for a hat           |
-| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                              | a "run" because it follows a method |
+| Noun                | What it is                                                                                                             | Not                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| **Project**         | a commitment, and a lens across spaces                                                                                 | a method, a domain                           |
+| **Pillar**          | a space the project uses (the project-to-space link) with a purpose; its health is read from the goals that advance it | an entity kind; the Content OS `pillar` kind |
+| **Goal** (optional) | in one project (a _track_ in tools): direction, criteria, the workers it turns on; its judge closes it with a verdict  | a list of stages                             |
+| **Thing**           | any entity: one kind, maybe roles, one status per kind or role                                                         | a second entity for a hat                    |
+| **Session**         | the unit of work that closes: goal, criteria, room; one thing or a batch                                               | a "run" because it follows a method          |
 
 Not nouns (nobody manages them as objects): a **pipeline** is a view of a lifecycle; a **worker** is configuration (a method + a trigger + a size); a **method** is a playbook a session may follow; a **check** is a recurring verification.
+
+A **pathway**, a one-off long plan (lived once: steps that wait on each other, choices on the way), is not a noun either: it is a goal (`workKind: "pathway"`), a root session, child sessions linked by `blocked_by` and born planned, and `decision` entities for the choices. How to lay one out: `from-intent` §2d.
 
 How they relate: a project files things; each kind or role declares one **lifecycle** (its status list); its **pipeline** is computed (columns = the options in order) and `flow.of` reads it with the stage that owns each status; a status change fires **workers**, which start **sessions** carrying the project, the goal and their **targets**; a session moves each thing's status through the door. **Hand-off is a role:** a won deal makes the party a client (attach the role); nothing is copied.
 
 ### Three tenses of a thing
 
-- **Past = history.** Every status change is one transition event: from, to, who, which session, why.
+- **Past = history.** Every status change is one transition event: from, to, who, which session, why, and, when an automation of the pod made it, the move that caused it (`cause`).
 - **Present = status.** One value per kind or role, in its own column.
 - **Future = agenda.** Tasks and events linked to the thing, with an owner. _(Planned, wave 4.)_
 
@@ -38,6 +45,18 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 - A refusal naming the valid options means the value is not in the declared lifecycle: pick one of them.
   Never invent a status, never keep your own stage field.
 
+Things are not the only subjects of the door. A goal, a session, a playbook run, a proposal and an owed slot (an ask or a declared output) move through their own door the same way, and each move is one transition event (`track.…`, `focus_session.…`, `playbook_run.…`, `proposal.…`, `slot.transition.completed`). A hold may wait on any of them moving.
+
+### Automations the pod applies: moves that follow other moves
+
+Some moves follow another move on their own. Each is an **automation** the pod applies ("rule" or "reaction" in code), listed with the person's own automations, marked Built in or Declared on a link, and each can be paused for the whole pod.
+
+- **An outcome is met wherever it was filed** (built in). When a proposal is approved (by a person, or let through by a rule), every open outcome whose `ref` names what it approved is met, in every session of its owner, not only the one it was filed under. A merged pull request does the same for every outcome whose `ref` is that PR.
+- **A run that stops early goes to Needs you** (built in). A run that stops with stages left asks the person "Continue at <stage>?"; its session pauses, held on the person, and resumes when they answer. A run a worker started fails with its reason instead.
+- **A roll-up** (declared on a link). The relation between two kinds may declare `{kind: "rollup", to?, parent?, terminal?, chains?}` (`profile_relations.metadata.reactions`): once every part that is not lost is done, and at least one is, the parent moves to `to`, else to its next status. The thing's page shows the progress ("3 of 5").
+
+Every one acts as the system, on the person's own declaration; it is not the AI. It moves the target through the target's own door from the status it read, so a person's move always wins. A move into done or lost is a proposal unless it says `terminal: "apply"` (the outcome one does: the approval was already the person's call). The target's history names the move that caused it. A move one made sets off others only when it `chains`, never more than 3 deep. One that skips a move logs why. Read the ones around a thing with `statusOf` `include: ["reactions"]`.
+
 ### Where a kind stands: the flow read and the blocker
 
 **`flow.of` is the one read of a kind's flow.** tRPC `flow.of`, Hub `GET /api/hub/flow`, MCP `synap_get_flow`: one function, three doors. Input: `profileSlug` (a kind, or a role, which reads its kinds together), `workspaceId`, optional `projectId`, `trackId`, `firstN` (cards per state, default 10), `window` (days of done and lost, default 30), `properties`. A key bounded by a grant names the space. It returns:
@@ -49,7 +68,7 @@ Every status change — your call, a board drag, a method's step, a sync — goe
 | `flows`  | the playbooks working the kind: stages and the status each owns, open runs, runs on an older version, `undeclaredStatuses`                                                                |
 | the rest | `unclassified` things, the space's `primaryOutput`, totals, `withheld` (what a grant does not reach)                                                                                      |
 
-An app that draws a kind (a board, a thing's page) reads this. It does not rebuild columns from `lifecycle.get` plus a playbook list, and it keeps no stage list of its own. Each card's `blocker` is reserved: card blocker: coming.
+An app that draws a kind (a board, a thing's page) reads this. It does not rebuild columns from `lifecycle.get` plus a playbook list, and it keeps no stage list of its own. Each card carries its `blocker`: the same value `statusOf` returns for the thing, read for the whole board at once; `{status: "unavailable"}` when that read failed, never "not blocked".
 
 **A blocker is a slot, not a status.** A slot that declares `blocks {entityId?, to?}` (with `blockerKey` and `clearedBy`, see `focus-sessions` and `asks`) holds a thing up. One pure function, `deriveThingBlocker`, says how: `{blocked, count, why, ball (whose move), unlocks (the status clearing it lets the thing reach), clearedBy, ref}`. The thing stays in its status; a hold (a paused status) never blocks, because the hold is the status itself. Defaults: an agent's slot blocks only when it declares `blocks` and its session is open and accepted; an undeclared target is the thing's next status. Where it shows today: `statusOf` (`GET /api/hub/orient?statusOf=<id>`) returns `blocker`, and a needs-you row carries `blocks {thing, statusNow, statusNext}`, so the answer is given with its consequence in view.
 
@@ -59,14 +78,14 @@ An app that draws a kind (a board, a thing's page) reads this. It does not rebui
 
 - **Per thing** when each item needs its own thinking: a post, a feature, a deal in negotiation.
 - **Per batch** when items are interchangeable: one session for "find 10 leads today" or "today's follow-ups".
-- A session's **step is its subject's status**, both ways: move the thing and the step follows; set a stage that owns a status and the thing moves (through the same door). A stage with no `subjectStatus` leaves the thing where it is.
+- A session's **step is its subject's status**, both ways: move the thing and the step follows; set a stage that owns a status and the thing moves (through the same door). A stage with no `subjectStatus` leaves the thing where it is; a stage's `onApproved` is the status its APPROVED work reaches (the step then stands at the next stage).
 - **Set the subject.** A session about one thing names it: `subjectEntityId` on `start_session`, or on `update_session` the moment the thing exists (a batch names its things as targets). A session on no thing shows on the homes as "No thing yet · attach one", outside every pipeline.
 - Following a method does not turn your session into a run; it stays your work and still shows in the method's runs.
 - **Targets get a result each**: a worker session holds its things as targets. Your own move of a target marks it `done`; someone else's move marks it `skipped`; targets left at close are `skipped`. Put the outcome on each thing, not only in a summary.
 
 ### Workers
 
-A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into a governed rule the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. Authoring: `processes`.
+A worker is a playbook **activator**, declared on the method and owned by the lifecycle: `on` = `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min`: once N things wait) · `schedule` (+ `cron`, `timezone`: default the owner's zone) · `manual`; `size` = `per_thing` · `per_moment` (a count or schedule is always per batch); `mode` = `propose` (default) · `run`; `maxPendingApprovals` throttles it. It compiles into an automation the owner can pause; it fires once per thing per transition. A goal or project **turns it on** for its scope; installs turn it on space-wide. It may also be turned on for one open session (scope `session`: `synap_enable_worker` with `scopeSessionId` instead of `trackId`): its runs start as that session's children, and it files nothing once the session ends. Authoring: `processes`.
 
 ### Agents and their templates
 
@@ -74,7 +93,9 @@ An agent is one connected AI program (its `agent_type` = which program). Its **a
 
 ### Goals (tracks)
 
-A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why; every move sends `expectedStatus`, the status you read). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Legacy: `start_stage_session` and `add_track_stage` serve old goals started from a method; never `advance_track` without the user.
+A goal is a _track_ in every tool and field name (`start_track`, `trackId`) — say "goal" to the person; a session's one-line `goal` is its **Aim**. A goal holds an owner, a direction, instructions, the workers it turns on, and what done means (criteria, or a number measured as transitions into `done`). It has no stages. A goal can stay open as long as it matters, or finish: a person closes it with a verdict once its criteria are met (`set_track_status` `completed` + `verdict`; dropped = `archived`, with a `verdict` saying why; every move sends `expectedStatus`, the status you read). Your close is a proposal; a closed goal comes back only as a new version. Pause it while nobody should work on it. Work in it = `start_session` + `trackId`. A thing may count for two goals. Solo users may never need one: workers can run space-wide. Goals have no stages: `start_stage_session` and `add_track_stage` only serve legacy goals started from a method, never start a new one that way; never `advance_track` without the user.
+
+**Where a goal goes** (load `goals/where-work-goes`): a project has ONE main goal (`update_project` `mainGoalId`, a live goal of that project; the person's call). Every other goal names the goal it serves (`parentGoalId` on `start_track` / `update_track`, a goal of the SAME project; the first parent is its main one) and the pillar(s) it advances (`pillars: [{workspaceId, primary?}]`: spaces the project already uses; one primary: the one you mark, else the first; on `update_track` the list is the goal's WHOLE set and replaces the old one). A goal counts fully toward its main pillar only; in the others it is listed. A pillar's health is DERIVED from its goals (worst-of, with counts); never type one in.
 
 **Keep the pod current (every agent, every session)** — three rules, so the next agent picks your step up from the pod alone:
 
@@ -101,7 +122,7 @@ Read them to answer "what is going on" before you list sessions one by one.
 
 ### A kind's dashboard
 
-A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. An app outside the frame draws the same kind from `flow.of` (above); the cell bridge reads `lifecycle.board`, the board lens `flow.of` is built on.
+A kind with a lifecycle has its own page: the board, Needs you, the sessions on its things. To give it a custom Dashboard ("make this my Posts dashboard"), `create_cell` a frame over the bridge's intent reads (`lifecycle.board`, `lifecycle.throughput`, `attention.needsYou`, `attention.count`, `sessions.list`), then `promote_cell_to_renderer` with `slot: "dashboard"` (the `entity-profile` content kind). Recipe: `synap-ui`; params and shapes: `viewframe-cells`. A board drawn from a playbook reads `flow.of` (above), in a frame through the bridge (`flow.of` op) or outside it through its own doors.
 
 ### Rules of thumb
 

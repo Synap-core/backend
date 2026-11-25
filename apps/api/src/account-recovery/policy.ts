@@ -26,6 +26,8 @@ export interface KratosAuthenticationMethod {
 }
 
 export interface KratosSessionLike {
+  /** The Kratos session id: what a passkey grant is bound to (`presenceSessionKey`). */
+  id?: string;
   active?: boolean;
   authenticated_at?: string;
   authentication_methods?: KratosAuthenticationMethod[] | null;

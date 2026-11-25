@@ -63,6 +63,7 @@ import {
   configSettings,
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
 } from "@synap/database/schema";
 import { guidelinesRouter } from "./guidelines.js";
@@ -180,6 +181,7 @@ describe("guidelines.recordCorrection — make a correction a rule", () => {
       configSettings,
       workspaces,
       workspaceMembers,
+      apiKeys,
       users,
     ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));

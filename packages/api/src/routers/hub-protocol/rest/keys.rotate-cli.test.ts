@@ -70,7 +70,8 @@ vi.mock("@synap/database", async (importOriginal) => ({
   }),
 }));
 
-vi.mock("@synap/database/schema", () => ({
+vi.mock("@synap/database/schema", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@synap/database/schema")>()),
   apiKeys: { id: "id" },
 }));
 

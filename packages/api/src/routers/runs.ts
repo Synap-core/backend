@@ -21,6 +21,7 @@ import {
   listRunsPage,
 } from "../services/runs/index.js";
 import { listRecentRunsByFlows } from "../services/runs/recent-by-flows.js";
+import { RUN_STATUSES } from "../services/runs/types.js";
 import { resolveToolSkillIds } from "../services/runs/tool-lens.js";
 import { stopBoxRun } from "../services/box-runs/box-runs.js";
 import { rosterReadFor } from "../access/session-visibility.js";
@@ -47,14 +48,8 @@ const flowType = z.enum([
   "chat",
   "agent_write",
 ]);
-const runStatus = z.enum([
-  "running",
-  "completed",
-  "failed",
-  "proposed",
-  "cancelled",
-  "skipped",
-]);
+/** The run feed's statuses, from THE list (`RUN_STATUSES`), never a copy. */
+const runStatus = z.enum(RUN_STATUSES);
 
 export const runsRouter = router({
   /** Newest-first run feed across flows (or one flow via `flowType`/`flowId`).

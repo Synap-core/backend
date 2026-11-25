@@ -46,6 +46,7 @@ import {
   type ComputerFilter,
   type ComputerLike,
 } from "./computer-model";
+import { computersT } from "./copy";
 
 /** The list's filter lives in `?status=`; All is the bare URL. */
 const FILTER_PARAM = "status";
@@ -73,6 +74,7 @@ export function ComputerList({
   showOwner,
   viewerId,
 }: ComputerListProps) {
+  const t = computersT();
   const params = useSearchParams();
   const filter = computerFilterOf(params.get(FILTER_PARAM));
   useFocusRow({ ready: !isLoading && !!computers });
@@ -88,7 +90,7 @@ export function ComputerList({
       <FilterRow
         filters={
           <FilterChip<Exclude<ComputerFilter, "all">>
-            label="Key"
+            label={t("list.key")}
             allLabel="All computers"
             param={FILTER_PARAM}
             value={filter === "all" ? null : filter}
@@ -120,7 +122,7 @@ export function ComputerList({
                 scroll={false}
                 className="rounded-sm text-[12.5px] font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
               >
-                Show them
+                {t("list.showThem")}
               </Link>
             )}
           </div>
@@ -138,15 +140,11 @@ export function ComputerList({
         {isLoading ? (
           <ResourceRowSkeleton count={3} />
         ) : isError ? (
-          <ResourceRowError
-            message="Couldn't load computers."
-            onRetry={onRetry}
-          />
+          <ResourceRowError message={t("list.loadFailed")} onRetry={onRetry} />
         ) : all.length === 0 ? (
           <div className="flex flex-col items-center gap-2 px-3 py-8 text-center">
             <p className="text-[12.5px] text-foreground/65">
-              A computer appears here the first time an agent connects from it.
-              To add one, run this on that machine:
+              {t("list.empty")}
             </p>
             <CommandLine command={CONNECT_COMMAND} />
           </div>
@@ -267,7 +265,9 @@ function columns(
                 .slice(AGENT_CHIPS)
                 .map((a) => a.name)
                 .join(", ")}
-              aria-label={`${c.agents.length - AGENT_CHIPS} more agent${c.agents.length - AGENT_CHIPS === 1 ? "" : "s"}`}
+              aria-label={computersT()("list.moreAgents", {
+                n: c.agents.length - AGENT_CHIPS,
+              })}
               className="text-[11.5px] text-foreground/65"
             >
               +{c.agents.length - AGENT_CHIPS}

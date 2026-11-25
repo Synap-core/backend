@@ -52,6 +52,7 @@ import {
   proposals,
   relations,
   relationDefs,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { linkSatisfiedOutputsToSubject } from "../subject-edge.js";
 import { satisfyExpectedOutputs } from "../satisfy-expected-output.js";
@@ -88,6 +89,7 @@ function ddlFor(table: PgTable): string {
 async function fresh(slots: unknown[]) {
   const client = new PGlite();
   for (const t of [
+    lifecycleTransitionOutbox,
     entities,
     focusSessions,
     proposals,

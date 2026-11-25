@@ -31,6 +31,13 @@
  * running <agent>", ball: the person) belongs to the status-first lanes; when
  * it lands, that one row of the mapping moves to it.
  *
+ * WHERE IT RUNS: `runner` names the process the holder's agent runs in, from
+ * the runners the derivation already read (no query of its own): the live
+ * runner its word came from, else that agent's most recently seen runner
+ * (`live: false`), else none. "Claude Code on devbox, opus, busy" on a card.
+ * A subagent's runner (`*-subagent` harness) is never read here: it shares
+ * its lead's agent user and runs inside its process (`isSubagentHarness`).
+ *
  * EMPTY vs FAILED: any read the holder needs that failed makes the whole
  * answer `unavailable`, never "nobody".
  */
@@ -108,6 +115,26 @@ export type HolderSource =
   | { from: "waiting_on" }
   | { from: "roster" };
 
+/**
+ * The process the holder's agent runs in (`session_runners`, see the header):
+ * which harness, which model, which computer, in what state. Each `null` =
+ * its client named none (unknown), never a default.
+ */
+export interface HolderRunner {
+  harness: string | null;
+  model: string | null;
+  provider: SessionRunner["provider"];
+  /** The computer hosting the agent (a `machine` agent user); its name is `agent.computer`. */
+  machineUserId: string | null;
+  /** The host the process named itself on. */
+  processHost: string | null;
+  state: SessionRunner["state"];
+  stateSince: string | null;
+  lastSeenAt: string | null;
+  /** Stamped recently and not ended: it is running now. */
+  live: boolean;
+}
+
 export interface SessionHolder {
   /** Whose move: the ball of `waitKind` (`agent` → agent, `me` → person); nobody when none. */
   kind: "agent" | "person" | "nobody";
@@ -117,6 +144,8 @@ export interface SessionHolder {
   since: string | null;
   /** The agent on it — for a person, the one that handed it back; `null` = none. */
   agent: HolderAgent | null;
+  /** Where that agent runs (see the header); `null` = no runner of it was ever seen. */
+  runner: HolderRunner | null;
   source: HolderSource;
   /** Nobody only: the session ended, or no agent is on it. */
   reason?: "ended" | "no_agent";
@@ -137,15 +166,46 @@ export interface SessionHolderFacts {
     updatedAt?: Date | string | null;
   };
   externalAgent: SessionExternalAgent | null;
-  runners: ReadonlyArray<
-    Pick<
-      SessionRunner,
-      "agentUserId" | "live" | "state" | "stateSince" | "lastSeenAt"
-    >
-  >;
+  runners: ReadonlyArray<HolderFactRunner>;
   live: SessionActivityLive;
   waitingOn: readonly WaitingOnMark[];
   now: number;
+}
+
+/** A runner as the derivation reads it: what decides, plus where it runs. */
+export type HolderFactRunner = Pick<
+  SessionRunner,
+  "agentUserId" | "live" | "state" | "stateSince" | "lastSeenAt"
+> &
+  Partial<
+    Pick<
+      SessionRunner,
+      "harness" | "model" | "provider" | "machineUserId" | "processHost"
+    >
+  >;
+
+/** The {@link HolderRunner} of one runner row. */
+function holderRunnerOf(r: HolderFactRunner): HolderRunner {
+  return {
+    harness: r.harness ?? null,
+    model: r.model ?? null,
+    provider: r.provider ?? null,
+    machineUserId: r.machineUserId ?? null,
+    processHost: r.processHost ?? null,
+    state: r.state,
+    stateSince: r.stateSince ?? null,
+    lastSeenAt: r.lastSeenAt ?? null,
+    live: r.live,
+  };
+}
+
+/**
+ * A subagent's runner row (`<harness>-subagent`, e.g. `claude-code-subagent`,
+ * synap-bridge#2): it runs inside its lead's process under the lead's agent
+ * user, so it never says who holds the session nor where it runs.
+ */
+export function isSubagentHarness(harness: string | null | undefined): boolean {
+  return typeof harness === "string" && harness.endsWith("-subagent");
 }
 
 /** The holder before its agent is named: the agent is an id. */
@@ -172,7 +232,9 @@ function owedSince(expectedOutputs: unknown): string | null {
     : [];
   let first: string | null = null;
   for (const slot of slots) {
-    if (!slot || typeof slot !== "object" || !isOwedSlot(slot)) continue;
+    if (!slot || typeof slot !== "object" || !isOwedSlot(slot, slots)) {
+      continue;
+    }
     const at = iso((slot as { owedSince?: string }).owedSince ?? null);
     if (at && (!first || at < first)) first = at;
   }
@@ -186,6 +248,24 @@ function owedSince(expectedOutputs: unknown): string | null {
 export function deriveSessionHolder(
   f: SessionHolderFacts
 ): SessionHolderVerdict {
+  // A subagent's process runs INSIDE its lead's and shares its agent user:
+  // never the holder's word or its runner (it stays a runner elsewhere).
+  const runners = f.runners.filter((r) => !isSubagentHarness(r.harness));
+  const { runner: from, ...verdict } = deriveHolderWord({ ...f, runners });
+  // Where it runs: the runner the word came from, else the agent's newest
+  // (the runners are read most recently seen first).
+  const runner =
+    from ??
+    (verdict.agentUserId
+      ? runners.find((r) => r.agentUserId === verdict.agentUserId)
+      : undefined);
+  return { ...verdict, runner: runner ? holderRunnerOf(runner) : null };
+}
+
+/** The verdict's word, and the runner it came from when it did. */
+function deriveHolderWord(
+  f: SessionHolderFacts
+): Omit<SessionHolderVerdict, "runner"> & { runner?: HolderFactRunner } {
   const category = sessionStatusCategory(f.session.status);
   if (category === "done" || category === "lost") {
     return {
@@ -219,6 +299,7 @@ export function deriveSessionHolder(
     waitKind: WaitKind;
     since: string | null;
     source: HolderSource;
+    runner?: HolderFactRunner;
   } | null = null;
 
   const roster = (f.session.agentIds ?? []).filter(Boolean);
@@ -252,11 +333,13 @@ export function deriveSessionHolder(
             waitKind: said,
             since: iso(runner.stateSince ?? runner.lastSeenAt),
             source: { from: "runner", state: runner.state },
+            runner,
           }
         : {
             agentUserId: runner.agentUserId,
             ...byLiveRule,
             source: { from: "live", working },
+            runner,
           };
     } else if (roster.length > 0) {
       // The last hand-off is the last id on the roster (the starter is first).
@@ -285,6 +368,7 @@ export function deriveSessionHolder(
       since: lead === "approval" ? null : owedSince(f.session.expectedOutputs),
       agentUserId: candidate?.agentUserId ?? null,
       source: { from: "waiting_on" },
+      ...(candidate?.runner ? { runner: candidate.runner } : {}),
     };
   }
   if (candidate) return { kind: "agent", ...candidate };

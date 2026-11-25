@@ -14,6 +14,7 @@
 
 export type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { noteLimitClamped } from "../call-notices.js";
 import { hubProtocolRouter } from "../../hub-protocol/index.js";
 import { resolveConfinedWorkspace } from "../../hub-protocol/confine-workspace.js";
 import {
@@ -30,6 +31,7 @@ import {
   db,
   entities,
   focusSessions,
+  workspaces,
   eq,
   and,
   isNull,
@@ -100,8 +102,7 @@ export async function createHubProtocolCaller(
     // AMBIENT governance lens (the MCP URL's `?workspaceId=`). Hub write procs
     // read `ctx.workspaceId` as the caller's ambient workspace; when it is null
     // they fall back to the user's most-recently-updated membership — a random
-    // governance lens the acting agent may not even belong to (which is what
-    // turned entity proposals into `workspace.join` proposals). NEVER an
+    // governance lens the acting agent may not work in. NEVER an
     // explicit placement pin: pod-scope kinds must still land pod-wide.
     workspaceId: confinedWorkspaceId ?? null,
     scopes: hubScopes,
@@ -238,6 +239,14 @@ function fenceUntrustedReplacer(_key: string, value: unknown): unknown {
     : value;
 }
 
+/**
+ * The text `ok()` writes for `data`'s own fields (fenced, compact) — what a
+ * handler measures when it fits a reply under the cap (`fit-reply.ts`).
+ */
+export function replyJson(data: unknown): string {
+  return JSON.stringify(data, fenceUntrustedReplacer) ?? "";
+}
+
 export function ok(data: unknown): CallToolResult {
   // Best-effort: inject the canonical clickable `link` (`${PUBLIC_URL}/open/<id>`)
   // whenever the result carries a primary object id (see primaryObjectId). The
@@ -341,23 +350,38 @@ export async function entityHomeWorkspaceId(
  * given no explicit `workspaceId`: the entity's OWN workspace is the right
  * lens (not an arbitrary member workspace), so a "no results" answer
  * reflects the entity's real home instead of whichever workspace happened to
- * sort first. Falls back to the first member workspace — and says so via
- * `autoPicked`/`memberCount` — only when the entity's workspace can't be
- * resolved (missing entityId, deleted, pod-global/no workspaceId, or not
- * visible to this caller). Used by `synap_match_playbooks`, whose read needs
- * SOME workspace. `synap_get_relations` does not use the fallback: a read with
- * no lens has a user floor there (`listRelationsPodWide`), so it never picks.
+ * sort first. Falls back to the first ACTIVE member workspace — and says so
+ * via `autoPicked`/`memberCount` — only when the entity's workspace can't be
+ * resolved (missing entityId, deleted, pod-global/no workspaceId, not visible
+ * to this caller, or archived). Used by `synap_match_playbooks`, whose read
+ * needs SOME workspace. `synap_get_relations` does not use the fallback: a
+ * read with no lens has a user floor there (`listRelationsPodWide`), so it
+ * never picks.
+ *
+ * Never an ARCHIVED space, home or fallback: every workspace-scoped read
+ * refuses one ("This workspace has been archived.", `assertWorkspaceUsable`),
+ * so picking it turned a call that named no space into an error (finding
+ * 63198108).
  */
 export async function resolveEntityWorkspaceId(
   userId: string,
   entityId: string | undefined
 ): Promise<EntityWorkspaceResolution> {
   const home = await entityHomeWorkspaceId(entityId);
-  if (home) {
+  if (home && !(await isWorkspaceArchived(home))) {
     return { workspaceId: home, autoPicked: false, memberCount: 0 };
   }
-  const ids = await getUserMemberWorkspaceIds(userId);
+  const ids = await getUserMemberWorkspaceIds(userId, { activeOnly: true });
   return { workspaceId: ids[0], autoPicked: true, memberCount: ids.length };
+}
+
+/** The space is archived (a missing row is not: the read decides access). */
+async function isWorkspaceArchived(workspaceId: string): Promise<boolean> {
+  const row = await db.query.workspaces.findFirst({
+    columns: { archivedAt: true },
+    where: eq(workspaces.id, workspaceId),
+  });
+  return row?.archivedAt != null;
 }
 
 export function requireScope(
@@ -489,7 +513,7 @@ export async function isReadOnlyTool(toolName: string): Promise<boolean> {
 // (`services/focus-sessions/session-statuses.ts`) so services can import it
 // without pulling this file's hub-protocol router in. Re-exported here so every
 // existing importer is unchanged — one declaration, two names for it.
-import { OPEN_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
+import { IN_FLIGHT_SESSION_STATUSES } from "../../../services/focus-sessions/session-statuses.js";
 import { ambientWorkWhere } from "../../../services/focus-sessions/session-kind.js";
 import {
   resolveWorkSession,
@@ -497,6 +521,10 @@ import {
   type WorkSessionResolution,
 } from "../../../services/focus-sessions/resolve-work-session.js";
 import { resolveRoomSession } from "../../../services/messaging/room-session.js";
+import {
+  attachConversationToNamedSession,
+  SESSION_ACTED_ON_TOOLS,
+} from "../../../services/focus-sessions/session-client-binding.js";
 export {
   OPEN_SESSION_STATUSES,
   SESSION_STATUSES,
@@ -534,10 +562,7 @@ export async function listOpenFocusSessions(
           // `startedAt`, so the column default stamps the cron's materialisation
           // time, and ordering by `startedAt desc` would pick it over the
           // person's real current work.
-          inArray(
-            focusSessions.status,
-            OPEN_SESSION_STATUSES.filter((s) => s !== "scheduled")
-          ),
+          inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
           // The session the PERSON is in. This resolver decides which session
           // an agent's write is FILED UNDER. An open automation run or a
           // receipt is newer than the person's work most mornings (the 08:00
@@ -622,16 +647,23 @@ export interface SessionAttributionReport {
    */
   via?: "client" | "unclaimed";
   /**
-   * Several unclaimed work sessions were open, so NONE was guessed — the write
-   * is grouped under this client's own (auto-opened) session instead.
+   * Several sessions could answer, so NONE was guessed — the write is grouped
+   * under this client's own (auto-opened) session instead. Either several
+   * unclaimed work sessions, or (with `candidates`) several this client started.
    */
   ambiguous: boolean;
   /**
-   * Unclaimed open work sessions counted while resolving. `null` = NOT counted
-   * — an explicit handle or a client-bound session answered first, or the read
-   * failed (a failed read is not zero).
+   * Unclaimed open work sessions counted while resolving; with `candidates`,
+   * the open sessions this client started. `null` = NOT counted — an explicit
+   * handle or a client-bound session answered first, or the read failed (a
+   * failed read is not zero).
    */
   openCount: number | null;
+  /**
+   * The open sessions THIS client started when there were several (newest
+   * first, at most `CLIENT_OPEN_SESSIONS_LISTED`) — pass one as `sessionId`.
+   */
+  candidates?: Array<{ id: string; title: string; startedAt: string | null }>;
   /**
    * The explicit `sessionId` the caller sent and the resolver DROPPED. The call
    * then carries no session at all (no ambient fallback), which the caller must
@@ -641,6 +673,12 @@ export interface SessionAttributionReport {
     sessionId: string;
     reason: "not-owned" | "ownership-check-failed";
   };
+  /**
+   * `explicit` only: this conversation had no session of its own and named
+   * this one, so it is now attached to it: its later unaddressed writes are
+   * filed there (`attachConversationToNamedSession`, founder's answer 6).
+   */
+  attached?: true;
 }
 
 export interface SessionResolution {
@@ -674,6 +712,10 @@ export async function resolveSessionHandle(
     typeof args.sessionId === "string" && args.sessionId.trim() !== ""
       ? args.sessionId
       : undefined;
+  // Named as the caller's OWN session (attach on naming): a `sessionId` the
+  // write is filed under, or a coordination post's `fromSessionId`. Never a
+  // session the tool acts on, nor a room the caller posts into.
+  let namedAsOwn = !!explicit && !SESSION_ACTED_ON_TOOLS.has(toolName);
   // A COORDINATION POST (`intent` / `toSessionId`) is written FROM the
   // caller's session INTO another session's room: the room names the TARGET,
   // so it must never become this call's session — that filed "A wrote to B"
@@ -689,6 +731,7 @@ export async function resolveSessionHandle(
     args.fromSessionId.trim() !== ""
   ) {
     explicit = args.fromSessionId;
+    namedAsOwn = true;
   }
   // A post into a session's OWN room names that session: the channel identifies
   // it as surely as a `sessionId` would. Without this, a post to the room the
@@ -704,15 +747,28 @@ export async function resolveSessionHandle(
     const room = await resolveRoomSession(args.channelId);
     if (room && room.userId === userId) explicit = room.id;
   }
+  const clientKey = requestClientKey(agentUserId);
   const r = await resolveWorkSession({
     userId,
     explicitSessionId: explicit,
-    clientKey: requestClientKey(agentUserId),
+    clientKey,
   });
   if (r.source === "explicit" && r.sessionId) {
+    const attached =
+      namedAsOwn &&
+      (await attachConversationToNamedSession({
+        userId,
+        clientKey,
+        sessionId: r.sessionId,
+      }));
     return {
       session: { sessionId: r.sessionId, attribution: "explicit" },
-      attribution: { session: "explicit", ambiguous: false, openCount: null },
+      attribution: {
+        session: "explicit",
+        ambiguous: false,
+        openCount: null,
+        ...(attached ? { attached: true as const } : {}),
+      },
     };
   }
   if ((r.source === "client" || r.source === "unclaimed") && r.sessionId) {
@@ -729,6 +785,17 @@ export async function resolveSessionHandle(
         via: r.source,
         ambiguous: false,
         openCount: r.unclaimedOpenCount,
+      },
+    };
+  }
+  if (r.clientSessions) {
+    return {
+      session: undefined,
+      attribution: {
+        session: "none",
+        ambiguous: true,
+        openCount: r.clientSessions.count,
+        candidates: r.clientSessions.sessions,
       },
     };
   }
@@ -880,7 +947,14 @@ export function pageLimit(raw: unknown, fallback: number, max: number): number {
     typeof raw === "number" && Number.isFinite(raw)
       ? Math.trunc(raw)
       : fallback;
-  return Math.min(Math.max(n, 1), max);
+  const used = Math.min(Math.max(n, 1), max);
+  // A caller's own `limit` that was not honoured is said on the reply
+  // (`limitClamped`, call-notices.ts): 50 rows for `limit: 100` otherwise
+  // reads as "there are only 50" (ticket 1ef84d45).
+  if (typeof raw === "number" && Number.isFinite(raw) && used !== n) {
+    noteLimitClamped(raw, used);
+  }
+  return used;
 }
 
 export function pageOffset(raw: unknown): number {
@@ -920,6 +994,27 @@ export function pageSlice<T>(
 /** Default and max page for the unbounded list doors. */
 export const LIST_PAGE_DEFAULT = 50;
 export const LIST_PAGE_MAX = 200;
+
+/**
+ * Default pages of the heavier list doors, sized so one default page fits the
+ * 16,000-char reply cap at the row size measured on the founder's pod
+ * (digest rows: profile ~270 chars, view ~230, automation ~480, playbook
+ * ~480, widget ~1,100, capability ~600): a caller that sends no `limit` gets a
+ * page that arrives whole, with `nextOffset` (or `nextCursor`) to continue.
+ */
+export const PROFILES_PAGE_DEFAULT = 40;
+export const VIEWS_PAGE_DEFAULT = 50;
+export const AUTOMATIONS_PAGE_DEFAULT = 25;
+export const PLAYBOOKS_PAGE_DEFAULT = 25;
+export const WIDGETS_PAGE_DEFAULT = 15;
+export const CAPABILITIES_PAGE_DEFAULT = 20;
+/**
+ * One playbook's stages, paged (`synap_list_playbooks {playbookId, limit,
+ * offset}`): a stage measured ~1,800 chars on the founder's pod (14 stages,
+ * 25 KB), so a default page of 6 fits the cap.
+ */
+export const PLAYBOOK_STAGES_PAGE_DEFAULT = 6;
+export const PLAYBOOK_STAGES_PAGE_MAX = 100;
 
 export const REASONING_MAX_CHARS = 2000;
 

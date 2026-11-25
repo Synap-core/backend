@@ -5,10 +5,13 @@
  *   states   the declared lifecycle (key, label, category, tone, humanOnly,
  *            order), each with the stage(s) that OWN it and its things;
  *   flows    the active playbooks working the profile in that space, each
- *            stage with the status it owns (`stageForSubjectStatus`, the
- *            runtime's own stage ↔ status rule), its gate, the flow's
- *            executor and enabled workers, and its open runs, marked when
- *            they run a frozen copy older than the live flow;
+ *            stage with the statuses it owns (`subjectStatusOwner`, the
+ *            runtime's own stage ↔ status rule: the status it ENTERS and the
+ *            one its approved work REACHES, decision D2), its gate, the flow's
+ *            executor and enabled workers, its open runs, marked when
+ *            they run a frozen copy older than the live flow, and the
+ *            playbooks whose run end starts it (`startsAfter`, its live
+ *            links: `readPlaybookLinksInto`), so a chain reads as edges;
  *   cards    the things by state with who works them (`readBoard`, the
  *            board door's own body: same lens, grouping, windows, stuck rule,
  *            unclassified column, `workedBy`) and each card's next step
@@ -23,7 +26,10 @@
  * and companies in one board (each card names its own kind); a stage naming
  * a status the lifecycle does not declare is listed on its flow.
  *
- * Each card carries `blocker: null`: the blocker derivation (S3) fills it.
+ * Each card carries its `blocker`: the SAME value `statusOf` returns for the
+ * thing (`deriveThingBlocker`), read for every card of the board in ONE batch
+ * (`readThingBlockers`); `{status: "unavailable"}` when that read failed,
+ * never "not blocked".
  * Doors: tRPC `flow.of`, Hub `GET /flow`, MCP `synap_get_flow`. A key bounded by
  * a grant passes `readProfileUnderGrant` (the `GET /lifecycle` narrowing);
  * its rows are bounded by the access seams; what no seam bounds (workers) or
@@ -38,18 +44,18 @@ import {
   eq,
   getRequestGrant,
   inArray,
-  isNull,
   liveRunStatusWhere,
-  or,
   playbookRuns,
   playbooks,
+  readStoredIntent,
   workspaces,
+  usableInSpaceWhere,
 } from "@synap/database";
 import {
   resolveStageCategory,
   resolveStageGate,
-  stageForSubjectStatus,
-  type PlaybookStageCategory,
+  stageOnApproved,
+  subjectStatusOwner,
 } from "@synap/playbooks";
 import {
   isTerminalLifecycleCategory,
@@ -66,7 +72,9 @@ import {
   listEnabledWorkers,
   type EnabledWorker,
 } from "../playbooks/workers.js";
+import { readPlaybookLinksInto } from "../playbooks/playbook-links.js";
 import { nextPathStep } from "../status/next-move.js";
+import { readThingBlockers } from "../status/thing-blockers.js";
 import { boardLensInput, readBoard, type BoardReader } from "./board.js";
 import { resolveBoardLens } from "./board-lens.js";
 import { readProfileUnderGrant } from "./fenced-profile-read.js";
@@ -85,134 +93,27 @@ export const flowOfInput = z.object({
 
 export type FlowOfInput = z.output<typeof flowOfInput>;
 
-/** A stage that owns a status: where a flow moves a thing into it. */
-export interface FlowStageRef {
-  playbookId: string;
-  playbookName: string;
-  stageKey: string;
-  stageName: string;
-  category: PlaybookStageCategory;
-  /** The stage's entry gate (`resolveStageGate`); null = none. */
-  gate: "human" | "check" | "awaits" | null;
-  /** Who runs the flow (`playbooks.executor`). */
-  executor: string;
-}
-
-export interface FlowStage {
-  key: string;
-  name: string;
-  category: PlaybookStageCategory;
-  /** The status this stage writes / follows; null = not tied to the lifecycle. */
-  subjectStatus: string | null;
-  gate: FlowStageRef["gate"];
-}
-
-export interface FlowWorker {
-  ruleId: string;
-  activatorKey: string;
-  mode: "run" | "propose";
-  scope: EnabledWorker["scope"];
-  projectId: string | null;
-  state: EnabledWorker["state"];
-}
-
-export interface FlowOfFlow {
-  id: string;
-  name: string;
-  /** Null = pod-wide. */
-  workspaceId: string | null;
-  /** The live definition's version; runs snapshot theirs. */
-  version: number;
-  executor: string;
-  stages: FlowStage[];
-  /** Declared states a stage of this flow owns, in stage order. */
-  owns: string[];
-  /** Stage statuses the lifecycle does not declare (a renamed state). */
-  undeclaredStatuses: string[];
-  /** Open runs, and how many run a frozen copy older than `version`. */
-  runs: { open: number; onOlderVersion: number };
-  /** Its enabled workers (empty when `workers` is withheld). */
-  workers: FlowWorker[];
-}
-
-export interface FlowNextStep {
-  /** The state a move targets. */
-  to: string;
-  label: string;
-  /** Only a person may move it there. */
-  humanOnly: boolean;
-  /** The stage(s) that own that state; [] = no flow moves it there. */
-  owners: FlowStageRef[];
-}
-
-export interface FlowCard {
-  id: string;
-  /** A role's facet (what a role move targets); null on a kind. */
-  facetId: string | null;
-  name: string | null;
-  /** The thing's own kind (a role holds people and companies). */
-  profileSlug: string | null;
-  status: string | null;
-  since: string;
-  enteredAt: string | null;
-  stuck: boolean;
-  workedBy: Array<{
-    sessionId: string;
-    kind: "session" | "worker";
-    live: boolean;
-  }>;
-  /** On `properties: true` only. */
-  properties?: Record<string, unknown>;
-  /**
-   * Its next main-path step; null when it has ended, is paused or lost, or
-   * stands in a status the lifecycle does not declare.
-   */
-  next: FlowNextStep | null;
-  /** What stands between it and its next status (filled by S3); null now. */
-  blocker: null;
-}
-
-export interface FlowState {
-  key: string;
-  label: string;
-  category: string;
-  tone: string;
-  humanOnly: boolean;
-  /** Declared order, from 0. */
-  order: number;
-  owners: FlowStageRef[];
-  count: number;
-  /** Things past its stuck rule; null = it declares none. */
-  stuck: number | null;
-  /** done/lost count only what entered within the window. */
-  windowed: boolean;
-  cards: FlowCard[];
-}
-
-export interface FlowOf {
-  profileSlug: string;
-  profileKind: "kind" | "role";
-  property: string;
-  /** The space lens; null = pod-wide only; undefined lens reads as null. */
-  workspaceId: string | null;
-  states: FlowState[];
-  /** Things in no declared state (never dropped); null when none. */
-  unclassified: { count: number; unset: number; cards: FlowCard[] } | null;
-  flows: FlowOfFlow[];
-  /** The space's declared outputs; null without a space lens. */
-  space: { primaryOutput: string | null; produces: string[] } | null;
-  totals: {
-    total: number;
-    live: number;
-    doneWindowed: number;
-    lostWindowed: number;
-  };
-  window: { days: number; since: string };
-  /** A live worker covers this read; null when `workers` is withheld. */
-  hasWorker: boolean | null;
-  /** Parts this caller's grant does not reach: not read, never "none". */
-  withheld: Array<"flows" | "workers">;
-}
+export type {
+  FlowCard,
+  FlowCardBlocker,
+  FlowNextStep,
+  FlowOf,
+  FlowOfFlow,
+  FlowStage,
+  FlowStageRef,
+  FlowState,
+  FlowWorker,
+} from "./flow-schema.js";
+import type {
+  FlowCard,
+  FlowCardBlocker,
+  FlowNextStep,
+  FlowOf,
+  FlowOfFlow,
+  FlowStage,
+  FlowStageRef,
+  FlowState,
+} from "./flow-schema.js";
 
 type FlowReader = BoardReader;
 
@@ -231,27 +132,35 @@ function stageRefOf(
   };
 }
 
-/** The space's declared outputs, read leniently (`settings.intent`). */
-async function readSpaceOutputs(
+/**
+ * The space's declared outputs, read leniently (`settings.intent`). Also read
+ * by the pillar health read (`services/projects/pillar-health.ts`), which
+ * lists a declared output's kind in a pillar's indicator even when the
+ * project has none of it yet.
+ */
+export async function readSpaceOutputs(
   userId: string,
   workspaceId: string
-): Promise<{ primaryOutput: string | null; produces: string[] }> {
+): Promise<{
+  primaryOutput: string | null;
+  produces: string[];
+  /** Kinds of `produces` the template marks helpers (worked, not an output). */
+  helpers: string[];
+}> {
   const visible = await getUserWorkspaceIds(userId);
   if (!visible.includes(workspaceId))
-    return { primaryOutput: null, produces: [] };
+    return { primaryOutput: null, produces: [], helpers: [] };
   const [row] = await db
     .select({ settings: workspaces.settings })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
     .limit(1);
-  const intent = (row?.settings as { intent?: unknown } | null)?.intent as
-    { primary?: unknown; produces?: unknown } | null | undefined;
-  const raw = intent?.primary;
-  const primary = typeof raw === "string" && raw.trim() ? raw.trim() : null;
-  const produces = Array.isArray(intent?.produces)
-    ? intent.produces.filter((s): s is string => typeof s === "string")
-    : [];
-  return { primaryOutput: primary, produces };
+  const intent = readStoredIntent(row?.settings);
+  return {
+    primaryOutput: intent?.primary ?? null,
+    produces: intent?.produces ?? [],
+    helpers: intent?.helpers ?? [],
+  };
 }
 
 export async function readFlowOf(
@@ -278,14 +187,12 @@ export async function readFlowOf(
   // The space's flows and the pod-wide ones; no lens = every flow the
   // caller sees; `null` = pod-wide only.
   const flowSpace =
-    typeof lensWorkspaceId === "string"
-      ? or(
-          isNull(playbooks.workspaceId),
-          eq(playbooks.workspaceId, lensWorkspaceId)
-        )
-      : lensWorkspaceId === null
-        ? isNull(playbooks.workspaceId)
-        : undefined;
+    lensWorkspaceId === undefined
+      ? undefined
+      : usableInSpaceWhere(playbooks.workspaceId, lensWorkspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        });
 
   const [board, pbRows, workers, space] = await Promise.all([
     readBoard(
@@ -337,6 +244,12 @@ export async function readFlowOf(
     lensWorkspaceId ? readSpaceOutputs(ctx.userId, lensWorkspaceId) : null,
   ]);
 
+  // Each flow's live links in: the playbooks whose run end starts it.
+  const linksInto = await readPlaybookLinksInto(
+    pbRows.map((p) => p.id),
+    scopedDb(AccessContext.from(ctx)).predicate(playbooks)
+  );
+
   // Open runs per flow, and those on a frozen copy older than the live one.
   const runsBy = new Map<string, { open: number; onOlderVersion: number }>();
   if (pbRows.length > 0) {
@@ -382,13 +295,15 @@ export async function readFlowOf(
         typeof (s as { key?: unknown }).key === "string"
     );
     const owns: string[] = [];
-    // The runtime's own rule: the stage a status corresponds to.
+    // The runtime's own rule: the stage that declares a status, and whether
+    // it ENTERS it (`subjectStatus`) or its approved work REACHES it
+    // (`onApproved`) — both kinds are owners.
     for (const o of lifecycle.options) {
-      const stageKey = stageForSubjectStatus(stages, o.key);
-      if (!stageKey) continue;
-      const stage = stages.find((s) => s.key === stageKey)!;
+      const owner = subjectStatusOwner(stages, o.key);
+      if (!owner) continue;
+      const stage = stages.find((s) => s.key === owner.ownerKey)!;
       owns.push(o.key);
-      ownersOf.get(o.key)!.push(stageRefOf(pb, stage));
+      ownersOf.get(o.key)!.push({ ...stageRefOf(pb, stage), via: owner.via });
     }
     const undeclared = new Set<string>();
     const shaped: FlowStage[] = stages.map((s) => {
@@ -396,13 +311,16 @@ export async function readFlowOf(
         typeof s.subjectStatus === "string" && s.subjectStatus.trim()
           ? s.subjectStatus.trim()
           : null;
-      if (subjectStatus && !declared.has(subjectStatus))
-        undeclared.add(subjectStatus);
+      const onApproved = stageOnApproved(s);
+      for (const v of [subjectStatus, onApproved]) {
+        if (v && !declared.has(v)) undeclared.add(v);
+      }
       return {
         key: String(s.key),
         name: typeof s.name === "string" ? s.name : String(s.key),
         category: resolveStageCategory(s),
         subjectStatus,
+        onApproved,
         gate: resolveStageGate(s)?.kind ?? null,
       };
     });
@@ -416,6 +334,7 @@ export async function readFlowOf(
       owns,
       undeclaredStatuses: [...undeclared],
       runs: runsBy.get(pb.id) ?? { open: 0, onOlderVersion: 0 },
+      startsAfter: linksInto.get(pb.id) ?? [],
       workers: workers
         .filter((w) => w.playbookId === pb.id)
         .map((w) => ({
@@ -428,6 +347,26 @@ export async function readFlowOf(
         })),
     };
   });
+
+  // ONE blockers read for every card on the board (the states' and the
+  // unclassified column's), floored on the reader like statusOf's. A failed
+  // read marks each card `unavailable`; it never reads as "not blocked".
+  const stray = board.columns.find((c) => c.key === UNCLASSIFIED_STATUS);
+  const blockers: Awaited<ReturnType<typeof readThingBlockers>> | null =
+    await readThingBlockers(
+      { userId: ctx.userId },
+      board.columns.flatMap((c) =>
+        c.items.map((i) => ({
+          id: i.id,
+          // A role board's card: its step is the facet's (a lead's wait).
+          facetId: i.facetId ?? null,
+          status: i.status,
+          lifecycle,
+        }))
+      )
+    ).catch(() => null);
+  const blockerOf = (id: string): FlowCardBlocker =>
+    blockers?.get(id) ?? { status: "unavailable" };
 
   const optionByKey = new Map(lifecycle.options.map((o) => [o.key, o]));
   const cardOf = (
@@ -462,7 +401,7 @@ export async function readFlowOf(
       workedBy: item.workedBy ?? [],
       ...(input.properties ? { properties: item.card?.properties ?? {} } : {}),
       next,
-      blocker: null,
+      blocker: blockerOf(item.id),
     };
   };
 
@@ -482,8 +421,6 @@ export async function readFlowOf(
       cards: (col?.items ?? []).map(cardOf),
     };
   });
-  const stray = board.columns.find((c) => c.key === UNCLASSIFIED_STATUS);
-
   return {
     profileSlug: input.profileSlug,
     profileKind: lifecycle.profileKind,

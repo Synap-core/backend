@@ -15,9 +15,11 @@
  * slot echoed verbatim so its receipts survive. A slot is never removed on
  * leaving a stage: what a stage owed stays owed.
  *
- * Two entry points, one rule ({@link stageSlotsToAdd}): the run's birth seeds
- * its first stage (`playbook-lifecycle.ts`), and every advance goes through
- * `advanceSessionStage`, which calls {@link mergeEnteredStageSlots}.
+ * Three entry points, one rule ({@link stageSlotsToAdd}): the run's birth seeds
+ * its first stage (`playbook-lifecycle.ts`), every advance goes through
+ * `advanceSessionStage`, which calls {@link mergeEnteredStageSlots}, and a
+ * live session that FOLLOWS a playbook into a stage owes every stage up to it
+ * ({@link stageSlotsThrough}, `follow-playbook.ts`), as if it had advanced there.
  */
 
 import { db, focusSessions, eq } from "@synap/database";
@@ -25,25 +27,11 @@ import type { ExpectedOutput } from "@synap/playbooks";
 import { normalizeExpectedLabel } from "./expected-label.js";
 import { notifySessionNeedsYou } from "./notify-needs-you.js";
 import { deriveSlotKeys } from "./slot-keys.js";
+import { declaredStageOutputs } from "./stage-outputs-approved.js";
 import {
   mergeExpectedOutputs,
   sanitizeDeclaredOutputs,
 } from "./update-session.js";
-
-/** The declared outputs of stage `stageKey`, or [] (unknown stage, none declared). */
-function declaredStageOutputs(
-  stages: unknown,
-  stageKey: string | null
-): ExpectedOutput[] {
-  if (!stageKey || !Array.isArray(stages)) return [];
-  const stage = stages.find(
-    (s) =>
-      !!s && typeof s === "object" && (s as { key?: unknown }).key === stageKey
-  ) as { expectedOutputs?: unknown } | undefined;
-  return Array.isArray(stage?.expectedOutputs)
-    ? (stage.expectedOutputs as ExpectedOutput[])
-    : [];
-}
 
 /**
  * The entered stage's slots the session does not carry yet — sanitized, ready
@@ -71,6 +59,30 @@ export function stageSlotsToAdd(
     fresh.push(o);
   }
   return sanitizeDeclaredOutputs(fresh);
+}
+
+/**
+ * What a session that walked from the first stage to `stageKey` would owe and
+ * `current` does not carry yet: {@link stageSlotsToAdd} for each stage in
+ * order, up to and including `stageKey` (a slot is never removed on leaving a
+ * stage). [] when `stageKey` is null or not a stage of `stages`.
+ */
+export function stageSlotsThrough(
+  stages: unknown,
+  stageKey: string | null,
+  current: readonly ExpectedOutput[]
+): ExpectedOutput[] {
+  if (!stageKey || !Array.isArray(stages)) return [];
+  const keys = stages
+    .map((s) => (s as { key?: unknown } | null)?.key)
+    .filter((k): k is string => typeof k === "string");
+  if (!keys.includes(stageKey)) return [];
+  const added: ExpectedOutput[] = [];
+  for (const key of keys) {
+    added.push(...stageSlotsToAdd(stages, key, [...current, ...added]));
+    if (key === stageKey) break;
+  }
+  return added;
 }
 
 /**
@@ -111,10 +123,19 @@ export async function mergeEnteredStageSlots(input: {
     return { before: current, after: next, added: added.map((o) => o.label) };
   });
   if (!merged) return { added: [] };
+  // GRADES DECLARED UP FRONT (W5): the stage's outputs are in, so its grade
+  // slots are kept in step with them (never throws); the push reads the list
+  // as the reconcile left it.
+  const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+  const grades = await fileDeclaredGradeSlots(input.sessionId);
   await notifySessionNeedsYou({
     sessionId: input.sessionId,
     byAgent: input.byAgent,
-    reason: { kind: "slots", before: merged.before, after: merged.after },
+    reason: {
+      kind: "slots",
+      before: merged.before,
+      after: grades.outputs ?? merged.after,
+    },
   });
   return { added: merged.added };
 }

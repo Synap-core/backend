@@ -45,6 +45,7 @@ vi.mock("../utils/permission-check.js", () => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
+    ...(await import("../__tests__/no-users-db.js")).NO_USERS,
     insert: mockDbInsert,
   },
   eq: vi.fn((a, b) => ({ field: a, value: b })),

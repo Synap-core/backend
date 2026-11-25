@@ -6,12 +6,24 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const inserted: Array<Record<string, unknown>> = [];
+const keptVersions: Array<Record<string, unknown>> = [];
 
 const mockGetDb = vi.hoisted(() => vi.fn());
 
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, getDb: mockGetDb };
+  return {
+    ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
+    getDb: mockGetDb,
+  };
 });
 
 vi.mock("../links/links-service.js", () => ({
@@ -37,7 +49,7 @@ vi.mock("@synap/events", () => ({
   emitSideEffects: vi.fn(async () => undefined),
 }));
 
-import { playbooks } from "@synap/database";
+import { playbooks, playbookVersions } from "@synap/database";
 import { promoteSessionToPlaybook } from "./playbook-lifecycle.js";
 
 const WS = "00000000-0000-4000-8000-000000000010";
@@ -48,7 +60,9 @@ function makeDb(opts: {
   session: Record<string, unknown> | undefined;
   entity?: { type: string } | undefined;
 }) {
-  return {
+  const db = {
+    // The insert and its kept version (0416) share one transaction.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(db),
     query: {
       focusSessions: {
         findFirst: vi.fn(async () => opts.session),
@@ -62,18 +76,22 @@ function makeDb(opts: {
         values(values: Record<string, unknown>) {
           const row = { id: "pb-1", ...values };
           if (table === playbooks) inserted.push(values);
+          if (table === playbookVersions) keptVersions.push(values);
           return {
             returning: async () => [row],
+            onConflictDoNothing: async () => undefined,
           };
         },
       };
     },
   };
+  return db;
 }
 
 describe("promoteSessionToPlaybook subjectProfile", () => {
   beforeEach(() => {
     inserted.length = 0;
+    keptVersions.length = 0;
     vi.clearAllMocks();
   });
 
@@ -101,6 +119,12 @@ describe("promoteSessionToPlaybook subjectProfile", () => {
     expect(result.status).toBe("promoted");
     expect(inserted).toHaveLength(1);
     expect(inserted[0]!.subjectProfile).toEqual({ profileSlug: "post" });
+    // The new playbook's version is kept with it (0416): a step may pin it.
+    expect(keptVersions).toHaveLength(1);
+    expect(keptVersions[0]).toMatchObject({
+      playbookId: "pb-1",
+      createdBy: "user-1",
+    });
   });
 
   it("leaves subjectProfile null when the session has no subject entity", async () => {

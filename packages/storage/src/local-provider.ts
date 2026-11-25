@@ -24,6 +24,7 @@ import type {
   FileMetadata,
   UploadOptions,
   FileInfo,
+  SignedGetObject,
   SignedUploadOptions,
   DownloadStream,
   DownloadStreamOptions,
@@ -147,7 +148,8 @@ export class LocalStorageProvider implements IFileStorage {
       return await fs.readFile(absPath);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error(`File not found: ${storagePath}`);
+        // Same message as before; the class lets a reader tell "missing".
+        throw new StorageObjectNotFoundError(storagePath);
       }
       throw err;
     }
@@ -231,7 +233,8 @@ export class LocalStorageProvider implements IFileStorage {
    */
   async getSignedUrl(
     storagePath: string,
-    _expiresIn?: number
+    _expiresIn: number,
+    _object: SignedGetObject
   ): Promise<string> {
     const absPath = this.resolve(storagePath);
     return `file://${absPath}`;

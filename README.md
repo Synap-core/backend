@@ -4,8 +4,10 @@ A Synap pod is a personal data server with a governed agent runtime on it. It
 stores your records in your own PostgreSQL database, lets AI agents work on
 them under rules you set, and records every change on an append-only event
 chain. This repository is the pod: its API, workers, realtime server, operator
-console, and the files and CLI that deploy and operate it. It is open source
-(MIT) and self-hostable.
+console, and the files and CLI that deploy and operate it. It is source-available
+(PolyForm Noncommercial 1.0.0; commercial use needs a license) and self-hostable. The
+SDK and contract packages (`@synap-core/sdk`, types, API types, markdown core, hub
+protocol and REST client) remain MIT.
 
 - **You own the data.** A pod is a PostgreSQL database you can export with
   `pg_dump`, self-host, or have hosted for you.
@@ -42,9 +44,16 @@ clone. You need Docker with Compose v2.
 ```bash
 git clone https://github.com/synap-core/backend.git
 cd backend
-./synap install --domain localhost      # builds the images from source
+./synap install --domain localhost      # pulls the published images (ghcr.io); add --from-source to build them
 ./synap setup admin --email you@example.com --magic-link
 ```
+
+The install needs ghcr.io reachable (it pins third-party images by digest and
+pulls the published ones); offline, use `--from-source`. With no terminal on
+stdin (a pipe, CI, an agent shell) the install runs as `--non-interactive`:
+every prompt takes its default or a flag (`--domain`, `--email`,
+`--admin-email`, `--admin-password`, `--intelligence-key`).
+Pass `--non-interactive` explicitly to skip the questions in a terminal too.
 
 The API answers on <http://localhost:4000> and Pod Admin on
 <http://localhost:4040>. Details: [Install from a clone](deploy/README.md#install-from-a-clone).
@@ -141,4 +150,7 @@ described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE): free for personal and non-commercial use;
+commercial use needs a license. The SDK and contract packages
+(`@synap-core/types`, `api-types`, `markdown-core`, `hub-protocol`,
+`hub-rest-client`) are MIT, each with its own `LICENSE` file.

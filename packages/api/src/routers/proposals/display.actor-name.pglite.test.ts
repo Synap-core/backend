@@ -64,6 +64,8 @@ const COMPUTER = "computer-user";
 const ON_COMPUTER = "agent-on-computer";
 const NO_COMPUTER = "agent-on-no-computer";
 const UNNAMED = "agent-with-no-name";
+// An agent registered with its type token as its name (`claude-code`).
+const SLUG_NAMED = "agent-named-by-slug";
 // B7: one agent user, three keys — two computers that named themselves and a
 // key minted before the CLI sent a name.
 const KEY_MAC = randomUUID();
@@ -134,8 +136,9 @@ beforeAll(async () => {
       ($2,'Claude Code','a@x','agent','claude-code','{"agentType":"claude-code"}'::jsonb,$4,$1),
       ($3,'Claude Code','b@x','agent','claude-code','{"agentType":"claude-code"}'::jsonb,$4,null),
       ($4,'Owner','o@x','human',null,null,null,null),
-      ($5,null,'u@x','agent','orchestrator','{"agentType":"orchestrator"}'::jsonb,$4,null)`,
-    [COMPUTER, ON_COMPUTER, NO_COMPUTER, VIEWER, UNNAMED]
+      ($5,null,'u@x','agent','orchestrator','{"agentType":"orchestrator"}'::jsonb,$4,null),
+      ($6,'claude-code','s@x','agent','claude-code','{"agentType":"claude-code"}'::jsonb,$4,$1)`,
+    [COMPUTER, ON_COMPUTER, NO_COMPUTER, VIEWER, UNNAMED, SLUG_NAMED]
   );
   await q(
     `insert into api_keys (id, user_id, instance_label) values
@@ -161,6 +164,12 @@ describe("enrichProposalsForDisplay — the asking agent's name", () => {
     const row = await enrichAs(UNNAMED);
     expect(row.agentActorName).toBe("Orchestrator");
     expect(row.authorName).toBe("Orchestrator");
+  });
+
+  it("an agent whose name is its type token is named at the source, never the slug", async () => {
+    const row = await enrichAs(SLUG_NAMED);
+    expect(row.agentActorName).toBe("Claude Code on devbox");
+    expect(row.authorName).toBe("Claude Code on devbox");
   });
 
   it("B7: with no computer of its own, the filing KEY says where it was last seen — never 'on'", async () => {

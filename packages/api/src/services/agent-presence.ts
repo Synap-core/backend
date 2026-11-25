@@ -18,16 +18,23 @@
  * A failed read throws — "never seen" and "could not tell" are different facts.
  */
 
-import { apiKeys, db, and, eq, inArray, isNull } from "@synap/database";
+import {
+  apiKeys,
+  db,
+  and,
+  eq,
+  inArray,
+  isNull,
+  PULL_LIVE_WINDOW_MS,
+} from "@synap/database";
 import type { AgentReach } from "@synap-core/types/agents";
 
 /**
- * A pulling agent counts as LIVE when it called the pod within this window.
- * `synap worker` polls every 30s and key use is stamped at most once a minute
- * (`apiKeyService.recordKeyUse`); its back-off on failed reads caps at 10
- * minutes. 15 minutes covers a worker that is polling, slowly or not.
+ * A pulling agent counts as LIVE when it called the pod within
+ * `PULL_LIVE_WINDOW_MS` (15 minutes; defined in @synap/database next to the
+ * reapers' read of the same rule, `stageRunAgentLiveWhere`).
  */
-export const PULL_LIVE_WINDOW_MS = 15 * 60_000;
+export { PULL_LIVE_WINDOW_MS };
 
 /**
  * THE "nobody runs this agent" rule (plan v2 S2), read by the hand-off roster
@@ -151,7 +158,9 @@ export async function loadAgentPresence(
  * (`api_keys.linked_user_id`). That link is what makes the agent's calls run
  * AS the viewer — so it is exactly the set whose orient can see the viewer's
  * sessions. Another person's agent is visible on a shared roster but never
- * reads your work. A failed read throws.
+ * reads your work. A failed read throws. Not `agentsActingFor`
+ * (@synap/database): that one also counts revoked keys and app/computer PATs,
+ * so a removal cannot be undone by re-minting; this one asks who may act NOW.
  */
 export async function agentsOperatedBy(
   viewerId: string,

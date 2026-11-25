@@ -6,6 +6,7 @@ import { HUB_WRITE_SOURCES } from "@synap-core/types/proposals";
 import {
   deriveWorkspacePlacementView,
   type CapturePlacement,
+  type IsFailureAction,
 } from "@synap-core/types";
 import { pendingSwitchFromPlacement } from "../../../lib/workspace-decision.js";
 import { z } from "zod";
@@ -25,12 +26,15 @@ import { resolveCaptureActorUserId } from "../../../services/capture-agent/resol
 import { buildCaptureNarrativeSummary } from "../../../services/capture-agent/capture-narrative.js";
 import { loadRouteSuggestions } from "../../../services/routing/load-route-suggestions.js";
 import { captureStatusForReceiptState } from "../../../services/capture-agent/capture-receipt-state.js";
-import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import {
+  CAPTURE_PLAN_KEYS,
+  captureSkillStepProblems,
+} from "../../../services/capture-agent/capture-plan.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../../../services/capture-agent/capture-degraded-guidance.js";
+import type { AiFailureClass } from "../../../utils/ai-failure.js";
 import {
   submitCaptureGraph,
   CaptureGraphValidationError,
@@ -166,7 +170,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     tags: ["Capture"],
     summary: "AI-structure raw input into entity proposals",
     description:
-      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result) or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). The latter are configuration states, not outages; do not tell a user to retry.",
+      "Sends free-form text (and optional URL/HTML/context) to the AI capture pipeline. Returns proposed entities ready for /capture/execute. A human caller (no agent key) instead gets the result of filing the plan as a pending composite proposal: status, proposalId, reviewUrl, summary, entityCount, relationCount, bindingCount, applied, writeReceipt, plus (only when non-empty) duplicateCheck, relationsFailed, unmodeledProperties and project. Fields degraded, degradedReason and extraction report a degraded extraction. degradedReason is a pod reason (is_auth_error | is_invalid_response | is_empty_result), an Intelligence Service refusal code for an AI availability state (credits_empty, account_quota_exceeded, llm_budget_exceeded, …), or an Intelligence Service configuration state (vision_provider_not_configured, pdf_scanned_needs_ocr, transcription_provider_not_configured, unsupported_type). Refusals and configuration states are not outages; do not tell a user to retry.",
     request: {
       body: CaptureStructureRequestSchema,
     },
@@ -787,8 +791,6 @@ export function registerCaptureRoutes(app: HubHono): void {
           sessionId: graph.scope.sessionId,
           ...(graph.deduped ? { deduped: true } : {}),
           ...(graph.dedupedAs ? { dedupedAs: graph.dedupedAs } : {}),
-          // Kept whole on a workspace join (finding 590ca76a): nothing landed.
-          ...(graph.joinGate ? { joinGate: graph.joinGate } : {}),
           ...((result as { intake?: unknown }).intake
             ? { intake: (result as { intake?: unknown }).intake }
             : {}),
@@ -876,6 +878,17 @@ export function registerCaptureRoutes(app: HubHono): void {
         const reason =
           typeof degradedReason === "string" ? degradedReason : undefined;
         const salvage = (result as { proposals?: unknown }).proposals;
+        const words = describeDegradedCapture(
+          reason,
+          (
+            result as {
+              degradedDetail?: {
+                failureClass?: AiFailureClass;
+                action?: IsFailureAction;
+              };
+            }
+          ).degradedDetail
+        );
         return c.json({
           ...(result as unknown as Record<string, unknown>),
           // NOT a receipt status: no graph was submitted, so there is no
@@ -884,8 +897,8 @@ export function registerCaptureRoutes(app: HubHono): void {
           // never happened. Mirrors the sibling `needs_input` literal, which is
           // a caller-state word for the same reason.
           status: "not_structured",
-          degradedMessage: describeDegradedForAgent(reason),
-          degradedRetryable: isDegradedReasonRetryable(reason),
+          degradedMessage: words.message,
+          degradedRetryable: words.retryable,
           // Echoed under an explicit name so the agent does not have to know
           // that a degraded `proposals` is a fallback rather than a real plan.
           // Already `/capture/execute`-shaped (tempId/profileSlug/title/…) —
@@ -1511,41 +1524,19 @@ export function registerCaptureRoutes(app: HubHono): void {
         branchPurpose?: "client-comms" | "team";
         title?: string;
       }>;
-      // CONNECTED PLAN steps — refs share the entity ref namespace; validated
-      // in full (refs, cycles, limits, ownership, evidence) by the core.
-      sessions?: unknown[];
-      documents?: unknown[];
-      projects?: unknown[];
-      links?: unknown[];
-      // RULE LOOP config steps — same ref namespace, same proposal. Carried
-      // here too so this door and `synap_capture` accept the SAME call: a
-      // capability one door can express and the other cannot is the fork this
-      // codebase keeps re-discovering.
-      skills?: unknown[];
-      automations?: unknown[];
-      rules?: unknown[];
       summary?: string;
     } | null;
 
-    const planArrays = body
-      ? {
-          sessions: Array.isArray(body.sessions) ? body.sessions : [],
-          documents: Array.isArray(body.documents) ? body.documents : [],
-          projects: Array.isArray(body.projects) ? body.projects : [],
-          links: Array.isArray(body.links) ? body.links : [],
-          skills: Array.isArray(body.skills) ? body.skills : [],
-          automations: Array.isArray(body.automations) ? body.automations : [],
-          rules: Array.isArray(body.rules) ? body.rules : [],
-        }
-      : {
-          sessions: [],
-          documents: [],
-          projects: [],
-          links: [],
-          skills: [],
-          automations: [],
-          rules: [],
-        };
+    // Every plan step array (`CAPTURE_PLAN_KEYS`, the list `synap_capture`
+    // reads too): a step one door can express and the other cannot is the
+    // fork this codebase keeps re-discovering. Refs share the entity ref
+    // namespace; validated in full by the core.
+    const planArrays = Object.fromEntries(
+      CAPTURE_PLAN_KEYS.map((key) => {
+        const items = (body as Record<string, unknown> | null)?.[key];
+        return [key, Array.isArray(items) ? items : []];
+      })
+    ) as Record<(typeof CAPTURE_PLAN_KEYS)[number], unknown[]>;
     const planStepCount = Object.values(planArrays).reduce(
       (n, items) => n + items.length,
       0
@@ -1557,8 +1548,7 @@ export function registerCaptureRoutes(app: HubHono): void {
     ) {
       return c.json(
         {
-          error:
-            "entities[] is required (at least one), unless the call carries a plan step (sessions[] / documents[] / projects[] / links[] / skills[] / automations[] / rules[])",
+          error: `entities[] is required (at least one), unless the call carries a plan step (${CAPTURE_PLAN_KEYS.map((k) => `${k}[]`).join(" / ")})`,
         },
         400
       );

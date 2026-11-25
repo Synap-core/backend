@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 /**
  * TRIPWIRE — MCP tool TITLES (what the Claude connector UI shows a person)
- * speak the user words: Space, Template, Rule, Tool (`@synap-core/types`
- * vocabulary `object-kinds.ts`, founder N1/D1/D2). Tool NAMES keep the DB-kind
+ * speak the user words: Space, Process, Rule, Tool (`@synap-core/types`
+ * vocabulary `object-kinds.ts`, founder N1/D1/D2; Process: D1 of 16 Nov 2026). Tool NAMES keep the DB-kind
  * stems (`synap_list_workspaces`) — renaming a name breaks every connected
  * client, so only titles are held here (RV2 S5 / RV1 S16: "Run playbook" etc.
  * survived the Space decision, including on tools written after it).
@@ -23,7 +23,7 @@ const RETIRED = /\b(workspaces?|playbooks?|automations?|capabilit(y|ies))\b/i;
 describe("tripwire: MCP titles use the user words", () => {
   it("self-check", () => {
     expect(RETIRED.test("Run playbook")).toBe(true);
-    expect(RETIRED.test("Run template")).toBe(false);
+    expect(RETIRED.test("Run process")).toBe(false);
   });
 
   it("no title uses a retired concept word", () => {

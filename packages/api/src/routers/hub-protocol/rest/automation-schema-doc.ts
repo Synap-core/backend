@@ -387,6 +387,8 @@ export const AUTOMATION_SCHEMA = {
       fields: {
         expression:
           "string — standard cron expression. E.g. '0 9 * * MON' (Mon 9am), '*/30 * * * *' (every 30min), '0 8 * * *' (daily 8am)",
+        timezone:
+          "string — the IANA time zone the expression is read in, e.g. 'Europe/Paris'. Optional: absent = UTC. An unknown zone is refused.",
       },
     },
     webhook: {

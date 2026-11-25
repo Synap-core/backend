@@ -25,7 +25,9 @@
 import type { UnitGlyph, UnitTone } from "../units/index.js";
 import {
   isWaitKind,
+  resolveStatusTone,
   trackStatusCategory,
+  type PillarHealthState,
   type GoalCriterionMark,
   type WaitKind,
   type TrackCommitmentState,
@@ -119,6 +121,21 @@ const CATEGORY_GLYPH: Record<LifecycleCategory, GoalGlyph> = {
 };
 
 /**
+ * The mark of a lifecycle CATEGORY on its own: the category's tone
+ * (`LIFECYCLE_CATEGORY_TONE`) and glyph. What a status move wears where no
+ * goal verdict applies (a job's Activity line, `@synap-core/types/work-view`).
+ */
+export function lifecycleCategoryMark(category: LifecycleCategory): {
+  tone: UnitTone;
+  glyph: GoalGlyph;
+} {
+  return {
+    tone: LIFECYCLE_CATEGORY_TONE[category],
+    glyph: CATEGORY_GLYPH[category],
+  };
+}
+
+/**
  * How a goal ENDED outranks its category for the mark: "Closed · Not met" in
  * the done category's success tone would read as a win. Keyed by every
  * verdict, so a new verdict stops the build until it has a mark.
@@ -171,9 +188,34 @@ export function goalStatusMark(goal: {
   }
   return {
     state: goal.status,
-    tone: LIFECYCLE_CATEGORY_TONE[category],
-    glyph: CATEGORY_GLYPH[category],
+    ...lifecycleCategoryMark(category),
     label: statusWord,
+  };
+}
+
+// ── a project pillar's health ──────────────────────────────────────────────
+
+/** The glyph of each pillar health state; the tone is the status word's. */
+const PILLAR_HEALTH_GLYPH: Record<PillarHealthState, GoalGlyph> = {
+  moving: "circle-dot",
+  needs_attention: "alert",
+  unproven: "lightbulb",
+  stalled: "pause",
+  no_active_goal: "dashed-circle",
+};
+
+/**
+ * THE mark of a project pillar's (or the project root's) derived health
+ * (`units/pillar-health.ts`): the state's words and tone from the vocabulary
+ * and status-tone doors, one glyph per state. Never green unless `moving`;
+ * `no_active_goal` is an absence (muted), not a failure.
+ */
+export function pillarHealthMark(state: PillarHealthState): GoalMarkView {
+  return {
+    state,
+    tone: resolveStatusTone(state),
+    glyph: PILLAR_HEALTH_GLYPH[state],
+    label: resolveStatusLabel(state),
   };
 }
 
@@ -300,7 +342,7 @@ const HOLD_SUBJECT_NOUN: Readonly<Record<string, string>> = {
   entity: "entity",
 };
 
-/** What resumes a hold on a dev fact (`pr:` / `main:` / `job:`), or null when `moves` names none. */
+/** What resumes a hold on a dev fact (`pr:` / `main:` / `job:` / `ai:`), or null when `moves` names none. */
 function devHoldResumes(
   moves: string,
   to: string | null | undefined
@@ -322,6 +364,8 @@ function devHoldResumes(
         : to === "failed"
           ? "resumes when the tests fail"
           : "resumes when the tests finish";
+    case "ai":
+      return "resumes when AI is available again";
   }
 }
 

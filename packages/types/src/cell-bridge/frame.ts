@@ -4,7 +4,9 @@
  */
 
 import { CELL_BRIDGE_SDK } from "./sdk.js";
+import { CELL_FRAME_LINK_DOOR } from "./frame-links.js";
 import { frameExternalOrigins } from "./external-origins.js";
+import { frameTokensWithBrand } from "./surface-context.js";
 
 /**
  * The iframe `sandbox` value, exactly. Scripts run; nothing else is granted:
@@ -14,8 +16,7 @@ import { frameExternalOrigins } from "./external-origins.js";
  */
 export const CELL_FRAME_SANDBOX = "allow-scripts";
 
-/** The largest page a host runs: 2 MB (the desktop's `SANDBOXED_PREVIEW_MAX_BYTES`). */
-export const CELL_FRAME_MAX_BYTES = 2 * 1024 * 1024;
+export { CELL_FRAME_MAX_BYTES, htmlByteLength } from "./frame-size.js";
 
 /**
  * THE frame policy (decision R3, 3 Nov 2026: one policy everywhere, the
@@ -79,12 +80,108 @@ export function buildCellModuleFrameCsp(
   }).join("; ");
 }
 
+/**
+ * What a host may ask of the frame beyond the shared policy. OFF by default,
+ * so a host that does not handle the message keeps its frame as it was.
+ */
+export interface CellFrameOptions {
+  /**
+   * Hand a clicked link to the host (`synap:navigate`, `frame-links.ts`)
+   * instead of letting it navigate the frame itself. Only a host that listens
+   * for the message may ask for this: otherwise its links go nowhere.
+   */
+  links?: boolean;
+  /**
+   * The host's design tokens, as CSS (`frameTokensCss`): written as the
+   * frame's first `<style>`, so a page draws with `var(--synap-…)` in the
+   * reader's theme and its own styles still win. The policy names no style
+   * host (decision R3), so a page cannot link a stylesheet: the host hands
+   * the tokens in.
+   */
+  tokens?: string;
+  /**
+   * The project's brand, as CSS (`SurfaceContext.brand.css`, built by the pod
+   * with `brandFrameCss`): written right after the host's tokens in the same
+   * `<style>` (`frameTokensWithBrand`), so the brand's values win where it
+   * sets one and the host's stay everywhere else.
+   */
+  brand?: string | null;
+}
+
 /** The block injected ahead of everything the author wrote. */
-export function cellFrameHeadBlock(): string {
+export function cellFrameHeadBlock(options: CellFrameOptions = {}): string {
+  // `<\/` is the same text to CSS, and cannot end the element.
+  const tokens = frameTokensWithBrand(options.tokens ?? "", options.brand);
   return (
     `<meta http-equiv="Content-Security-Policy" content="${buildCellFrameCsp()}">` +
-    `<script>${CELL_BRIDGE_SDK}</script>`
+    (tokens ? `<style data-synap-tokens>${tokens}</style>` : "") +
+    `<script>${CELL_BRIDGE_SDK}</script>` +
+    (options.links ? `<script>${CELL_FRAME_LINK_DOOR}</script>` : "")
   );
+}
+
+/** The token names a frame receives: the design tokens' own prefix. */
+export const FRAME_TOKEN_PREFIX = "--synap-";
+
+/**
+ * The slice of a CSS rule read here: a style rule (`style`, the names it
+ * declares) or a group of rules (`cssRules`: a media, supports or layer
+ * block). Any other rule has neither and is passed over.
+ */
+interface FrameTokenRule {
+  readonly style?: ArrayLike<string>;
+  readonly cssRules?: ArrayLike<unknown>;
+}
+
+/** The slice of a stylesheet read here (a `CSSStyleSheet`). */
+interface FrameTokenSheet {
+  readonly cssRules: ArrayLike<unknown>;
+}
+
+/**
+ * The host's design tokens as CSS for a frame (`CellFrameOptions.tokens`):
+ * every `--synap-*` custom property the host's stylesheets declare, with the
+ * value the host computes for it NOW (`computed`, the host element's computed
+ * style). So a page gets the reader's theme (light, dark, a theme overlay)
+ * with no copy of the token files: the values are the ones the host draws
+ * with. Empty when the host declares none.
+ *
+ * A stylesheet the host cannot read (another origin's) declares no token of
+ * ours and is passed over.
+ */
+export function frameTokensCss(
+  sheets: ArrayLike<FrameTokenSheet>,
+  computed: { getPropertyValue(name: string): string }
+): string {
+  const names = new Set<string>();
+  const walk = (rules: ArrayLike<unknown>) => {
+    for (let i = 0; i < rules.length; i += 1) {
+      const rule = rules[i] as FrameTokenRule | null | undefined;
+      if (!rule) continue;
+      if (rule.style) {
+        for (let j = 0; j < rule.style.length; j += 1) {
+          const name = rule.style[j]!;
+          if (name.startsWith(FRAME_TOKEN_PREFIX)) names.add(name);
+        }
+      }
+      if (rule.cssRules) walk(rule.cssRules);
+    }
+  };
+  for (let i = 0; i < sheets.length; i += 1) {
+    let rules: ArrayLike<unknown>;
+    try {
+      rules = sheets[i]!.cssRules;
+    } catch {
+      continue;
+    }
+    walk(rules);
+  }
+  const declarations: string[] = [];
+  for (const name of names) {
+    const value = computed.getPropertyValue(name).trim();
+    if (value) declarations.push(`${name}:${value}`);
+  }
+  return declarations.length > 0 ? `:root{${declarations.join(";")}}` : "";
 }
 
 const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;
@@ -106,25 +203,13 @@ const LEADING_DOCTYPE = /^(\uFEFF?\s*<!doctype[^>]*>)/i;
  * enforced IN ADDITION (both must allow), and removing our `<meta>` from the
  * DOM does not lift a policy already in force.
  */
-export function wrapHtmlForFrame(html: string): string {
+export function wrapHtmlForFrame(
+  html: string,
+  options: CellFrameOptions = {}
+): string {
   const doctype = LEADING_DOCTYPE.exec(html);
-  const head = cellFrameHeadBlock();
+  const head = cellFrameHeadBlock(options);
   if (!doctype) return head + html;
   const lead = doctype[1]!;
   return lead + head + html.slice(lead.length);
-}
-
-/** The page's size in bytes, as the cap measures it (UTF-8). */
-export function htmlByteLength(html: string): number {
-  let bytes = 0;
-  for (let i = 0; i < html.length; i += 1) {
-    const code = html.charCodeAt(i);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code <= 0xdbff) {
-      bytes += 4;
-      i += 1;
-    } else bytes += 3;
-  }
-  return bytes;
 }

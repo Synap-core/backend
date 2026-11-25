@@ -30,7 +30,7 @@ import {
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import { db } from "../client-pg.js";
 import { entityFacets } from "../schema/entity-facets.js";
-import { profiles, profileWorkspaceAccess } from "../schema/profiles.js";
+import { profiles, spaceAccess } from "../schema/profiles.js";
 import { podMemberWhere } from "./pod-membership.js";
 import { memberWorkspaceIds, ownedWorkspaceIds } from "./user-visible-where.js";
 
@@ -45,7 +45,7 @@ import { memberWorkspaceIds, ownedWorkspaceIds } from "./user-visible-where.js";
 // DECISION B: a pod-wide facet shares its row — and the pod-wide entity wearing
 // it, and that entity's document — ONLY with a pod member who belongs to (is a
 // member of, or owns) a SPACE THE ROLE IS GRANTED TO. "Granted to" is the role's
-// own workspace grants: a `profile_workspace_access` row, or the role's owning
+// own workspace grants: a `space_access` row, or the role's owning
 // workspace (`profiles.workspace_id`). There is NO implicit all-spaces grant for
 // a `system` role — a system role shares only where it is explicitly granted
 // (the one seeded system role, `team-member`, keeps its per-workspace lens and
@@ -83,7 +83,7 @@ function inAnySpace(column: AnyPgColumn, spaces: readonly SpaceIds[]): SQL {
 }
 
 /**
- * Role (profile) ids granted to one of `spaces`: a `profile_workspace_access`
+ * Role (profile) ids granted to one of `spaces`: a `space_access`
  * grant, or the role's own owning workspace.
  */
 export function grantedRoleIdsForSpaces(...spaces: SpaceIds[]) {
@@ -95,9 +95,14 @@ export function grantedRoleIdsForSpaces(...spaces: SpaceIds[]) {
         inArray(
           profiles.id,
           db
-            .select({ id: profileWorkspaceAccess.profileId })
-            .from(profileWorkspaceAccess)
-            .where(inAnySpace(profileWorkspaceAccess.workspaceId, spaces))
+            .select({ id: spaceAccess.objectId })
+            .from(spaceAccess)
+            .where(
+              and(
+                eq(spaceAccess.objectType, "profile"),
+                inAnySpace(spaceAccess.workspaceId, spaces)
+              )
+            )
         ),
         ...spaces.map((s) => inArray(profiles.workspaceId, s))
       )
@@ -106,7 +111,7 @@ export function grantedRoleIdsForSpaces(...spaces: SpaceIds[]) {
 
 /**
  * Role (profile) ids granted to a space `userId` belongs to (member or owner):
- * a `profile_workspace_access` grant, or the role's own owning workspace.
+ * a `space_access` grant, or the role's own owning workspace.
  */
 export function grantedRoleIdsFor(userId: string) {
   return grantedRoleIdsForSpaces(

@@ -241,6 +241,8 @@ export async function runSessionRecap(
         agentUserId: service.agentUserId,
         workspaceId: workspaceId ?? undefined,
         projectId: session.projectId ?? undefined,
+        // The session's own project, read from its row (rung 0's place).
+        grantProjectIdIsStored: true,
         sessionId,
         subjectType: "proactive",
         action: "recap",

@@ -110,12 +110,13 @@ async function session(p: {
   humanPostAt?: string;
   turnRunning?: boolean;
   agentEventAt?: string;
+  status?: string;
 }): Promise<string> {
   const id = randomUUID();
   const channel = randomUUID();
   await q(
     `insert into focus_sessions (id, user_id, goal, status, expected_outputs, metadata, channel_id, started_at, created_at, updated_at)
-     values ($1, $2, 'Work', 'active', $3::jsonb, '{}'::jsonb, $4, $5, $5, $6)`,
+     values ($1, $2, 'Work', $7, $3::jsonb, '{}'::jsonb, $4, $5, $5, $6)`,
     [
       id,
       OWNER,
@@ -123,6 +124,7 @@ async function session(p: {
       channel,
       ago(20 * DAY),
       NOW.toISOString(),
+      p.status ?? "active",
     ]
   );
   if (p.agentPostAt)
@@ -202,6 +204,13 @@ describe("listNeedsYouOwed + countNeedsYou: THE rule through the reader", () => 
           askCause: { kind: "gate" },
         }),
       ],
+      agentPostAt: ago(hour),
+    });
+    // P2: a PLANNED step (forming) owes nothing until it starts — even a
+    // live agent's ask and a gate (a commitment) on it are in no list.
+    ids.planned = await session({
+      status: "forming",
+      slots: [ask(), ask({ askedBy: undefined, askCause: { kind: "gate" } })],
       agentPostAt: ago(hour),
     });
   }, 120_000);
@@ -295,6 +304,7 @@ describe("listNeedsYouOwed + countNeedsYou: THE rule through the reader", () => 
       grade: [1, 0],
       old: [0, 0],
       deploy: [1, 0],
+      planned: [0, 0],
     });
 
     // One number, one source: the same pod through the signals count.

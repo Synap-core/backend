@@ -50,6 +50,7 @@ import {
   type MarketSource,
 } from "../capabilities/market-source.js";
 import {
+  foldPlaybookTools,
   packagePlaybookDefinitionSchema,
   type PackagePlaybookDefinition,
 } from "../../schemas/playbook-definition.js";
@@ -65,17 +66,15 @@ export const PLAYBOOK_MANAGED_FIELDS = [
   "expectedOutputs",
   "stages",
   "criteria",
-  // MANAGED, deliberately. A template declares what its playbooks NEED the pod
-  // to be able to do, so a change to that declaration must REACH an installed
-  // pod — the same reason `stages`/`criteria` are managed. Leaving it out is
-  // precisely the defect backend-rules.md records: a field the applier writes
-  // but the reconcile never compares reaches ZERO pods, silently and forever,
-  // because the baseline is stamped from the same projection that skipped it.
-  //
-  // Reconciling the DECLARATION is not gating SATISFIABILITY: the reconcile
-  // diffs what a template declares against what a pod has, and a gap is
-  // reported (see `matchRequiredIntents`), never refused.
-  "requiredIntents",
+  // MANAGED, deliberately. What a run of a template's playbook may use
+  // ("only these", 0419) must REACH an installed pod when the template
+  // changes it — the same reason `stages`/`criteria` are managed. Leaving it
+  // out is precisely the defect backend-rules.md records: a field the applier
+  // writes but the reconcile never compares reaches ZERO pods, silently and
+  // forever, because the baseline is stamped from the same projection that
+  // skipped it. The deprecated `requiredIntents` / `grants` a package may
+  // still send are folded into it first (`projectPlaybookDefinition`).
+  "tools",
   // MANAGED for the same reason: a template that changes the rules its
   // playbook follows (a ref added, a filter narrowed) must reach installed
   // pods. Refs, never ids, so the declaration is the same on every pod.
@@ -84,6 +83,12 @@ export const PLAYBOOK_MANAGED_FIELDS = [
   "schedule",
   "executor",
   "scope",
+  // The tools it needs (0416) are part of what the step IS: a template
+  // change must reach installed pods like `stages` does.
+  "requires",
+  // Who runs it (0416) is projected (an install carries the template's
+  // runner) but POD-OWNED on every later pass: see `POD_OWNED_RUNNER` below.
+  "runner",
 ] as const satisfies ReadonlyArray<keyof PackagePlaybookDefinition>;
 
 /**
@@ -93,7 +98,10 @@ export const PLAYBOOK_MANAGED_FIELDS = [
  *                 default must never re-activate a playbook the owner paused.
  *  - `metadata` — the owner's bag, and it CARRIES `marketSource` itself.
  *  - `grants`   — link edges, not row fields; re-ensured idempotently on every
- *                 apply by `grantPlaybookLinks`.
+ *                 apply by `grantPlaybookLinks`. As run tools they are
+ *                 folded into `tools` (managed).
+ *  - `requiredIntents` — deprecated input with no column since 0419: folded
+ *                 into `tools` (managed) by {@link projectPlaybookDefinition}.
  *  - `activators` / `humanOnlyStatuses` — NOT unreconciled: they have no
  *                 column and are FOLDED into `subjectProfile` (managed) by
  *                 {@link projectPlaybookDefinition} through the one fold
@@ -106,6 +114,7 @@ export const PLAYBOOK_UNMANAGED_FIELDS = [
   "status",
   "metadata",
   "grants",
+  "requiredIntents",
   "activators",
   "humanOnlyStatuses",
 ] as const satisfies ReadonlyArray<keyof PackagePlaybookDefinition>;
@@ -144,6 +153,21 @@ export function projectPlaybookDefinition<
     def as Parameters<typeof foldProcessIntoSubjectProfile>[0]
   );
   if (folded !== undefined) out.subjectProfile = folded;
+  // The ONE tools list: a package's deprecated `requiredIntents`, its
+  // `grants` names and its stages' `grants` fold into `tools`, so the create,
+  // the stamped baseline and the reconcile's `desired` carry one field.
+  const d = def as {
+    tools?: string[];
+    requiredIntents?: string[];
+    grants?: string[];
+    stages?: Array<Record<string, unknown>>;
+  };
+  const tools = foldPlaybookTools(d);
+  // ALWAYS projected, `[]` when the template declares none: a baseline
+  // stamped from this projection then always has `tools`, so a baseline
+  // WITHOUT it is one stamped before 0419 (see planPlaybookReconcile).
+  out.tools = tools.tools ?? [];
+  if (tools.stages !== undefined) out.stages = tools.stages;
   return out as Pick<T, PlaybookManagedField & keyof T>;
 }
 
@@ -189,6 +213,153 @@ export interface PlaybookReconcilePlan {
   applied: string[];
   /** Fields the owner edited — left alone, reported. */
   ownerOwned: string[];
+  /**
+   * POD-OWNED changes the template made that this pass did NOT apply: the
+   * playbook's `runner` (`"runner"`) or a step's (`"stages.<key>.runner"`).
+   * Each is a keep-or-drop line for a person (apply it with
+   * `playbooks.update`); it stays listed until they do or the template
+   * reverts it.
+   */
+  held: string[];
+}
+
+/**
+ * WHO RUNS IT is the pod's (founder via the lead, 9 Nov 2026: a template says
+ * what to do; which person, agent or computer does it on this pod is the pod's
+ * choice — "Claude Code on my Mac" for a step must survive a catalog update).
+ * So a playbook's `runner` and every stage's `runner` are installed from the
+ * template once, then never written by a reconcile: a template that changes
+ * one is reported `held` (a keep-or-drop line), the row keeps its value and
+ * the baseline keeps the template's old value, so the line stays offered. A
+ * stage the template adds takes the template's runner (there is nothing of
+ * the pod's to keep). The merge reads `stages` WITHOUT runners, like lessons,
+ * so a pod's runner never freezes the template's other stage changes.
+ */
+const POD_OWNED_RUNNER = "runner";
+
+function stagesWithoutRunners(stages: unknown): unknown {
+  if (!Array.isArray(stages)) return stages;
+  return stages.map((stage) => {
+    if (!stage || typeof stage !== "object" || !("runner" in stage)) {
+      return stage;
+    }
+    const { runner: _runner, ...rest } = stage as Record<string, unknown>;
+    return rest;
+  });
+}
+
+/** key → the stage's runner (absent key = the stage names none). */
+function stageRunners(stages: unknown): Map<string, unknown> {
+  const out = new Map<string, unknown>();
+  if (!Array.isArray(stages)) return out;
+  for (const stage of stages) {
+    if (!stage || typeof stage !== "object") continue;
+    const { key, runner } = stage as { key?: unknown; runner?: unknown };
+    if (typeof key === "string" && runner !== undefined) out.set(key, runner);
+  }
+  return out;
+}
+
+function stageKeys(stages: unknown): Set<string> {
+  const out = new Set<string>();
+  if (!Array.isArray(stages)) return out;
+  for (const stage of stages) {
+    const key = (stage as { key?: unknown } | null)?.key;
+    if (typeof key === "string") out.add(key);
+  }
+  return out;
+}
+
+/** `stages` with each stage's runner set from `runners` (absent = none). */
+function withStageRunners(
+  stages: unknown,
+  runnerOf: (key: string, stage: Record<string, unknown>) => unknown
+): unknown {
+  if (!Array.isArray(stages)) return stages;
+  return stages.map((stage) => {
+    if (!stage || typeof stage !== "object") return stage;
+    const s = stage as Record<string, unknown>;
+    if (typeof s.key !== "string") return stage;
+    const { runner: _drop, ...rest } = s;
+    const runner = runnerOf(s.key, s);
+    return runner === undefined ? rest : { ...rest, runner };
+  });
+}
+
+/**
+ * The pod-owned runners of one pass: which template runner changes are held,
+ * the runners the row keeps, and the baseline's runners afterwards (the old
+ * template value where held, so the line stays offered).
+ */
+function planPodOwnedRunners(p: {
+  live: Record<string, unknown>;
+  /** The template's previous values; `null` on adoption (no baseline yet). */
+  baseline: Record<string, unknown> | null;
+  desired: Record<string, unknown>;
+}): {
+  held: string[];
+  /** The top-level runner to write (adoption of an empty one), if any. */
+  adoptRunner: { value: unknown } | null;
+  baselineRunner: unknown;
+  liveStageRunner: (key: string) => unknown;
+  baselineStageRunner: (key: string, desiredRunner: unknown) => unknown;
+} {
+  const held: string[] = [];
+  const changed = (d: unknown, b: unknown, l: unknown) =>
+    p.baseline === null
+      ? !deepEqual(d, l) && !isEmptyRunner(l)
+      : !deepEqual(d, b) && !deepEqual(d, l);
+  // The playbook's runner.
+  const dTop = p.desired[POD_OWNED_RUNNER];
+  const bTop = p.baseline?.[POD_OWNED_RUNNER];
+  const lTop = p.live[POD_OWNED_RUNNER];
+  let adoptRunner: { value: unknown } | null = null;
+  let baselineRunner: unknown = dTop;
+  if (dTop !== undefined) {
+    if (p.baseline === null && isEmptyRunner(lTop) && !isEmptyRunner(dTop)) {
+      adoptRunner = { value: dTop };
+    } else if (changed(dTop, bTop, lTop)) {
+      held.push(POD_OWNED_RUNNER);
+      baselineRunner = p.baseline === null ? lTop : bTop;
+    }
+  }
+  // Each stage's runner.
+  const dStages = stageRunners(p.desired.stages);
+  const bStages = stageRunners(p.baseline?.stages);
+  const lStages = stageRunners(p.live.stages);
+  const liveKeys = stageKeys(p.live.stages);
+  const heldStages = new Set<string>();
+  for (const key of stageKeys(p.desired.stages)) {
+    if (!liveKeys.has(key)) continue; // a new step: the template's runner
+    const d = dStages.get(key);
+    const l = lStages.get(key);
+    const b = bStages.get(key);
+    const differs =
+      p.baseline === null
+        ? !deepEqual(d, l)
+        : !deepEqual(d, b) && !deepEqual(d, l);
+    if (differs) {
+      heldStages.add(key);
+      held.push(`stages.${key}.${POD_OWNED_RUNNER}`);
+    }
+  }
+  return {
+    held,
+    adoptRunner,
+    baselineRunner,
+    liveStageRunner: (key) =>
+      liveKeys.has(key) ? lStages.get(key) : dStages.get(key),
+    baselineStageRunner: (key, desiredRunner) =>
+      heldStages.has(key)
+        ? p.baseline === null
+          ? lStages.get(key)
+          : bStages.get(key)
+        : desiredRunner,
+  };
+}
+
+function isEmptyRunner(v: unknown): boolean {
+  return v === null || v === undefined;
 }
 
 /**
@@ -266,23 +437,66 @@ export function planPlaybookReconcile(args: {
     metadata: null,
     applied: [],
     ownerOwned: [],
+    held: [],
   };
   if (source && source.packageSlug !== packageSlug) {
     return { ...none, kind: "foreign" };
   }
 
   const parsed = packagePlaybookDefinitionSchema.parse(args.templateElement);
-  const desired = projectPlaybookDefinition(parsed) as Record<string, unknown>;
-  const live: Record<string, unknown> = {};
-  for (const k of PLAYBOOK_MANAGED_FIELDS) live[k] = row[k];
+  const desiredFull = projectPlaybookDefinition(parsed) as Record<
+    string,
+    unknown
+  >;
+  const liveFull: Record<string, unknown> = {};
+  for (const k of PLAYBOOK_MANAGED_FIELDS) liveFull[k] = row[k];
   // Learned lessons are the pod's, never an owner edit (see stagesWithoutLessons).
-  live.stages = stagesWithoutLessons(row.stages);
+  liveFull.stages = stagesWithoutLessons(row.stages);
+  // Who runs it is the pod's (see POD_OWNED_RUNNER): the merge never sees it.
+  const withoutRunners = (v: Record<string, unknown>) => {
+    const { [POD_OWNED_RUNNER]: _r, ...rest } = v;
+    return "stages" in rest
+      ? { ...rest, stages: stagesWithoutRunners(rest.stages) }
+      : rest;
+  };
+  const desired = withoutRunners(desiredFull);
+  const live = withoutRunners(liveFull);
+  const managedForMerge = PLAYBOOK_MANAGED_FIELDS.filter(
+    (k) => k !== POD_OWNED_RUNNER
+  );
+  /** The written stages keep the pod's runners (a new step takes the template's). */
+  const runnersOnto = (
+    stages: unknown,
+    runners: ReturnType<typeof planPodOwnedRunners>
+  ) => withStageRunners(stages, (key) => runners.liveStageRunner(key));
+  /** The baseline keeps the template's runners, the old value where held. */
+  const baselineWithRunners = (
+    next: Record<string, unknown>,
+    runners: ReturnType<typeof planPodOwnedRunners>
+  ): Record<string, unknown> => {
+    const dStages = stageRunners(desiredFull.stages);
+    const out: Record<string, unknown> = { ...next };
+    if (POD_OWNED_RUNNER in desiredFull) {
+      out[POD_OWNED_RUNNER] = runners.baselineRunner;
+    }
+    if (out.stages !== undefined) {
+      out.stages = withStageRunners(out.stages, (key) =>
+        runners.baselineStageRunner(key, dStages.get(key))
+      );
+    }
+    return out;
+  };
 
   if (!source) {
     const patch: Record<string, unknown> = {};
     const applied: string[] = [];
     const ownerOwned: string[] = [];
-    for (const k of PLAYBOOK_MANAGED_FIELDS) {
+    const runners = planPodOwnedRunners({
+      live: liveFull,
+      baseline: null,
+      desired: desiredFull,
+    });
+    for (const k of managedForMerge) {
       if (!(k in desired)) continue;
       if (deepEqual(live[k], desired[k])) continue;
       if (isEmptyDefault(k, live[k])) {
@@ -293,19 +507,26 @@ export function planPlaybookReconcile(args: {
       }
     }
     if (patch.stages !== undefined) {
-      patch.stages = graftStageLessons(patch.stages, row.stages);
+      patch.stages = graftStageLessons(
+        runnersOnto(patch.stages, runners),
+        row.stages
+      );
     }
-    const stamp: MarketSource = buildMarketSource(desired, {
-      packageSlug,
-      packageVersion,
-      installedAt,
-    });
+    if (runners.adoptRunner) {
+      patch[POD_OWNED_RUNNER] = runners.adoptRunner.value;
+      applied.push(POD_OWNED_RUNNER);
+    }
+    const stamp: MarketSource = buildMarketSource(
+      baselineWithRunners(desired, runners),
+      { packageSlug, packageVersion, installedAt }
+    );
     return {
       kind: "adopted",
       patch,
       metadata: stampMarketSource(metadata, stamp),
       applied,
       ownerOwned,
+      held: runners.held,
     };
   }
 
@@ -319,20 +540,45 @@ export function planPlaybookReconcile(args: {
   // absent so the newly-managed branch adopts the template value instead of
   // mistaking the default for an owner edit.
   const mergeLive: Record<string, unknown> = { ...live };
-  for (const k of PLAYBOOK_MANAGED_FIELDS) {
+  for (const k of managedForMerge) {
     if (!(k in source.baseline) && isEmptyDefault(k, live[k])) {
       mergeLive[k] = undefined;
     }
   }
-  const r = threeWayMergeFields(mergeLive, source.baseline, desired);
+  const baseline = source.baseline as Record<string, unknown>;
+  const runners = planPodOwnedRunners({
+    live: liveFull,
+    baseline,
+    desired: desiredFull,
+  });
+  const mergeBase = withoutRunners(baseline);
+  // A BASELINE STAMPED BEFORE 0419 has no `tools`: on that row `tools` was
+  // written by migration 0419 (from the old declarations, plus a short run's
+  // writes), never by its owner, since the field did not exist. So it is not
+  // an owner edit: present it as absent and the template's own list is
+  // adopted. Same for each stage 0419 rewrote (its `grants` became `tools`):
+  // the baseline's stage is read the way 0419 rewrote the live one, so the
+  // stage is not mistaken for an owner edit either. Every other field merges
+  // as before, so a real owner edit is kept.
+  if (!("tools" in baseline)) {
+    if ("tools" in desired) mergeLive.tools = undefined;
+    if (Array.isArray(mergeBase.stages) && Array.isArray(mergeLive.stages)) {
+      mergeBase.stages = readPre0419Stages(mergeBase.stages, mergeLive.stages);
+    }
+  }
+  const r = threeWayMergeFields(mergeLive, mergeBase, desired);
   const patch: Record<string, unknown> = {};
   for (const k of r.applied) patch[k] = r.merged[k];
   if (patch.stages !== undefined) {
-    patch.stages = graftStageLessons(patch.stages, row.stages);
+    patch.stages = graftStageLessons(
+      runnersOnto(patch.stages, runners),
+      row.stages
+    );
   }
-  const baselineMoved = !deepEqual(r.nextBaseline, source.baseline);
+  const nextBaseline = baselineWithRunners(r.nextBaseline, runners);
+  const baselineMoved = !deepEqual(nextBaseline, source.baseline);
   if (!r.changed && !baselineMoved) {
-    return { ...none, ownerOwned: r.ownerOwned };
+    return { ...none, ownerOwned: r.ownerOwned, held: runners.held };
   }
   return {
     kind: r.changed ? "updated" : "up-to-date",
@@ -342,10 +588,48 @@ export function planPlaybookReconcile(args: {
       marketSource: {
         ...source,
         packageVersion: packageVersion ?? source.packageVersion,
-        baseline: r.nextBaseline,
+        baseline: nextBaseline,
       },
     },
     applied: r.applied,
     ownerOwned: r.ownerOwned,
+    held: runners.held,
   };
+}
+
+/**
+ * A pre-0419 baseline's stages, read the way migration 0419 rewrote the live
+ * ones: a baseline stage whose only difference from the live stage of the
+ * same key is 0419's rewrite (its `grants` gone, a `tools` list added) reads
+ * as that live stage. Any other difference stays, so a real owner edit of a
+ * stage is still seen. PURE.
+ */
+function readPre0419Stages(
+  baseline: readonly unknown[],
+  live: readonly unknown[]
+): unknown[] {
+  const without = (s: unknown, ...keys: string[]) => {
+    if (!s || typeof s !== "object") return s;
+    const out: Record<string, unknown> = { ...(s as Record<string, unknown>) };
+    for (const k of keys) delete out[k];
+    return out;
+  };
+  const liveByKey = new Map<unknown, unknown>(
+    live.map((s) => [
+      s && typeof s === "object" ? (s as { key?: unknown }).key : undefined,
+      s,
+    ])
+  );
+  return baseline.map((b) => {
+    if (!b || typeof b !== "object") return b;
+    const l = liveByKey.get((b as { key?: unknown }).key);
+    if (
+      l !== undefined &&
+      "grants" in (b as Record<string, unknown>) &&
+      deepEqual(without(b, "grants", "tools"), without(l, "grants", "tools"))
+    ) {
+      return l;
+    }
+    return b;
+  });
 }

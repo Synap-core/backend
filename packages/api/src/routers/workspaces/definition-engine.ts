@@ -42,7 +42,10 @@ import { resolveWorkspaceExtends } from "../../services/workspace-composition.js
 import type { LayerTwoBody } from "../../services/template-apply/index.js";
 import { applyDefinitionSeeds } from "../../services/definition-seeds.js";
 import { workspacePrimarySurfaceSchema } from "../../schemas/workspace-primary-surface.js";
-import { playbookDefinitionSchema } from "../../schemas/playbook-definition.js";
+import {
+  playbookDefinitionSchema,
+  refusePodLocalPlaybookRefs,
+} from "../../schemas/playbook-definition.js";
 import { templateDocumentsSchema } from "../../schemas/template-document.js";
 import {
   buildPostWorkspaceBodyFromDefinition,
@@ -533,29 +536,32 @@ export const definitionEngineProcedures = {
              */
             playbooks: z
               .array(
-                playbookDefinitionSchema.extend({
-                  /**
-                   * Workspace templates author grants as BARE NAMES
-                   * (`grants: [exa_search, entity.create]`) — the same form the
-                   * Hub door already accepts (`PackagePostWorkspaceBody
-                   * .playbooks[].grants: string[]`). Requiring only the
-                   * `{kind, ref}` object form made this door REJECT the whole
-                   * mutation for any template carrying playbook grants, so a
-                   * browser install 400'd outright. Accept both shapes here;
-                   * `buildPostWorkspaceBodyFromDefinition` narrows them.
-                   */
-                  grants: z
-                    .array(
-                      z.union([
-                        z.string(),
-                        z.object({
-                          kind: z.enum(["tool", "skill", "command"]),
-                          ref: z.string(),
-                        }),
-                      ])
-                    )
-                    .optional(),
-                })
+                playbookDefinitionSchema
+                  .extend({
+                    /**
+                     * Workspace templates author grants as BARE NAMES
+                     * (`grants: [exa_search, entity.create]`) — the same form the
+                     * Hub door already accepts (`PackagePostWorkspaceBody
+                     * .playbooks[].grants: string[]`). Requiring only the
+                     * `{kind, ref}` object form made this door REJECT the whole
+                     * mutation for any template carrying playbook grants, so a
+                     * browser install 400'd outright. Accept both shapes here;
+                     * `buildPostWorkspaceBodyFromDefinition` narrows them.
+                     */
+                    grants: z
+                      .array(
+                        z.union([
+                          z.string(),
+                          z.object({
+                            kind: z.enum(["tool", "skill", "command"]),
+                            ref: z.string(),
+                          }),
+                        ])
+                      )
+                      .optional(),
+                  })
+                  // A package names kinds and relations, never this pod's ids.
+                  .superRefine(refusePodLocalPlaybookRefs)
               )
               .optional(),
             /** Automation templates (event/cron/manual triggers for playbook runs) */
@@ -1455,7 +1461,11 @@ export const definitionEngineProcedures = {
             // never granted): reuse it, as `resolveProfileForApply` does —
             // never a twin.
             if (isProfileKindTwinError(err)) {
-              await profileRepo.grantAccess(err.holder.id, input.workspaceId);
+              await profileRepo.grantAccess(
+                err.holder.id,
+                input.workspaceId,
+                ctx.userId
+              );
               profileCache.set(e.profileSlug, err.holder.id);
               continue;
             }

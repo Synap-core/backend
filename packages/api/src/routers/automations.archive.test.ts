@@ -13,6 +13,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const h = vi.hoisted(() => ({
   updates: [] as Array<Record<string, unknown>>,
+  /** The status door finds no row in the read status (a concurrent move). */
+  moved: true,
   gateCalls: [] as Array<Record<string, unknown>>,
   runCounts: new Map<string, number>(),
   runCountReads: 0,
@@ -27,8 +29,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: { automations: { findFirst: async () => h.automation } },
       update: () => ({
         set: (v: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             h.updates.push(v);
+            const rows = Promise.resolve([{ id: "row" }]) as Promise<
+              unknown[]
+            > & { returning: () => Promise<unknown[]> };
+            rows.returning = async () => (h.moved ? [{ id: "row" }] : []);
+            return rows;
           },
         }),
       }),
@@ -99,10 +107,12 @@ beforeEach(() => {
   h.gateCalls.length = 0;
   h.runCounts = new Map();
   h.runCountReads = 0;
+  // An agent-authored automation: the person owns it, the agent is its actor.
   h.automation = {
     id: ID,
     workspaceId: WS,
-    createdBy: AGENT,
+    createdBy: PERSON,
+    agentUserId: AGENT,
     status: "draft",
   };
 });
@@ -110,30 +120,59 @@ beforeEach(() => {
 describe("agentArchivesDirectly — the own-and-never-ran rule", () => {
   it("own and never ran → direct", () => {
     expect(
-      agentArchivesDirectly({ createdBy: AGENT, agentUserId: AGENT, runs: 0 })
+      agentArchivesDirectly({
+        actorAgentUserId: AGENT,
+        agentUserId: AGENT,
+        runs: 0,
+      })
     ).toBe(true);
   });
 
   it("own but ran once → proposes", () => {
     expect(
-      agentArchivesDirectly({ createdBy: AGENT, agentUserId: AGENT, runs: 1 })
+      agentArchivesDirectly({
+        actorAgentUserId: AGENT,
+        agentUserId: AGENT,
+        runs: 1,
+      })
     ).toBe(false);
   });
 
   it("a person's, or another agent's → proposes", () => {
     expect(
-      agentArchivesDirectly({ createdBy: PERSON, agentUserId: AGENT, runs: 0 })
-    ).toBe(false);
-    expect(
       agentArchivesDirectly({
-        createdBy: OTHER_AGENT,
+        actorAgentUserId: null,
         agentUserId: AGENT,
         runs: 0,
       })
     ).toBe(false);
     expect(
-      agentArchivesDirectly({ createdBy: null, agentUserId: AGENT, runs: 0 })
+      agentArchivesDirectly({
+        actorAgentUserId: OTHER_AGENT,
+        agentUserId: AGENT,
+        runs: 0,
+      })
     ).toBe(false);
+    expect(
+      agentArchivesDirectly({
+        actorAgentUserId: null,
+        agentUserId: AGENT,
+        runs: 0,
+      })
+    ).toBe(false);
+  });
+});
+
+describe("a concurrent move", () => {
+  it("archive answers CONFLICT when the row left the status it was read in", async () => {
+    h.moved = false;
+    try {
+      await expect(caller().archive({ id: ID })).rejects.toThrow(
+        /no longer draft/
+      );
+    } finally {
+      h.moved = true;
+    }
   });
 });
 
@@ -168,7 +207,7 @@ describe("an acting agent", () => {
   });
 
   it("proposes for a person's automation, even one that never ran", async () => {
-    h.automation.createdBy = PERSON;
+    h.automation.agentUserId = null;
     h.automation.status = "active";
     const result = await runWithActingAgent(AGENT, () =>
       caller().archive({ id: ID })
@@ -179,7 +218,7 @@ describe("an acting agent", () => {
   });
 
   it("proposes for another agent's never-run automation", async () => {
-    h.automation.createdBy = OTHER_AGENT;
+    h.automation.agentUserId = OTHER_AGENT;
     const result = await runWithActingAgent(AGENT, () =>
       caller().archive({ id: ID })
     );
@@ -190,7 +229,7 @@ describe("an acting agent", () => {
 
 describe("a person archives directly", () => {
   it("any automation, ungated, without reading the ledger", async () => {
-    h.automation.createdBy = PERSON;
+    h.automation.agentUserId = null;
     h.automation.status = "active";
     const result = await caller().archive({ id: ID });
     expect(result).toEqual({ status: "archived", previousStatus: "active" });
@@ -218,7 +257,7 @@ describe("a key is bounded by its grant", () => {
   });
 
   it("archives when the grant names the verb", async () => {
-    h.automation.createdBy = PERSON;
+    h.automation.agentUserId = null;
     await runWithGrant(grantOf(["automation.archive"]), () =>
       caller().archive({ id: ID })
     );

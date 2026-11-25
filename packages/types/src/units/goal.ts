@@ -31,6 +31,7 @@ import type {
   PullRequestChecks,
   PullRequestState,
 } from "../events/pr-state.js";
+import type { AiAvailabilityKind } from "../ai-availability/index.js";
 import type { HoldDevRef, HoldOn } from "../lifecycle/hold.js";
 import type {
   ThingBlockerBlocks,
@@ -50,6 +51,11 @@ import {
  * The KIND of work a goal is (decision 4). Proposed by the AI, confirmed by a
  * person (`kindConfirmedBy/At` on the track). Stored as `project_tracks.work_kind`
  * (the CHECK constraint spells the same set — migration 0345).
+ *
+ * `pathway` (P6, pathways plan 368179d7): a person's growth, or a one-off
+ * long plan lived once (fund to seed, move the office): the goal is the lens
+ * over a root session, its child steps (`blocked_by`, born planned) and the
+ * decisions on the way. Taught in skill `from-intent` §2d.
  */
 export const TRACK_WORK_KINDS = [
   "project",
@@ -457,10 +463,14 @@ export interface GoalCriterionView {
     capability?: string;
     evidenceKey?: string;
     hint?: string;
+    /** kind=capability: the verb's arguments (a measure: op, params, threshold, comparator). */
+    params?: Record<string, unknown>;
   };
   stageKey?: string;
   checkKind?: CriterionCheckMeaning;
   about?: CriterionAbout;
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
   /** The judge's stored decision — `null` until one is made. */
   acceptance: GoalCriterionAcceptance | null;
   mark: GoalCriterionMark | null;
@@ -856,13 +866,33 @@ export type WaitingOnSource = (
       /** What clears it, as declared (`SlotClearedBy`). */
       clearedBy?: ThingBlockerClearedBy | null;
     }
-  | { kind: "pending_proposal" }
+  | {
+      kind: "pending_proposal";
+      /**
+       * A stable name for what holds the thing (a blocker key, as an owed
+       * slot's): the proposal's type (`messaging.external.send`: approve the
+       * draft), or, for a held send, why it cannot go yet (`not_connected`).
+       */
+      blockerKey?: string | null;
+      /**
+       * A send filed but HELD (`proposals.data.held`): it goes out once THEY
+       * act (accept the invitation). Approving it sends nothing, so it waits
+       * on them, not on a review.
+       */
+      held?: boolean;
+    }
   | { kind: "blocked_by" }
   | {
       kind: "hold";
       on: HoldOn;
       /** The dev fact its `until.moves` names (`parseHoldDevRef`), if any. */
       devRef?: HoldDevRef["kind"] | null;
+      /**
+       * An `ai:` hold: the pod's AI availability now (its owner's view), which
+       * says whose move it is (`WAIT_KIND_FROM.ai`). Absent or `ok` = unknown
+       * to the pod: the AI service holds it.
+       */
+      aiKind?: AiAvailabilityKind | null;
     }
   | { kind: "work_unit"; state: PullRequestState; checks?: PullRequestChecks }
   | { kind: "child_session" }
@@ -876,6 +906,20 @@ export type WaitingOnSource = (
       on: HoldOn;
       waitKind?: WaitKind;
     }
+  | {
+      /**
+       * The thing stands in a step that REQUIRES something it lacks
+       * (`requires` on its lifecycle option: a lead in outreach needs a
+       * contact). Derived live from the thing's links and properties, never
+       * a stored flag. Whose move: the requirement's `owner`.
+       */
+      kind: "requirement";
+      owner: "you" | "agent";
+      /** The requirement's domain name (`no_contact`), as declared. */
+      blockerKey: string;
+      /** What clears it, as declared. */
+      clearedBy?: ThingBlockerClearedBy | null;
+    }
 ) & { ref?: WaitingOnRef };
 
 /** THE mapping from one source to its reason; `null` = it makes no mark. */
@@ -884,7 +928,7 @@ export function waitingOnReasonOf(
 ): WaitingOnReason | null {
   switch (source.kind) {
     case "pending_proposal":
-      return "approval";
+      return source.held ? "external" : "approval";
     case "blocked_by":
     case "child_session":
       return "another_work";
@@ -895,6 +939,9 @@ export function waitingOnReasonOf(
         : null;
     case "work_unit":
       return pullRequestWaitingOn(source);
+    case "requirement":
+      // A missing fact is an input the person owes; an agent's is its work.
+      return source.owner === "agent" ? "another_work" : "input";
     case "owed_slot": {
       // An agent's runnable blocker: other work holds the thing, not a person.
       if (source.owner === "agent") return "another_work";
@@ -915,7 +962,9 @@ export function waitingOnReasonOf(
 export function waitKindOf(source: WaitingOnSource): WaitKind {
   switch (source.kind) {
     case "pending_proposal":
-      return WAIT_KIND_FROM.source.pending_proposal;
+      return source.held
+        ? WAIT_KIND_FROM.source.held_send
+        : WAIT_KIND_FROM.source.pending_proposal;
     case "blocked_by":
       return WAIT_KIND_FROM.source.blocked_by;
     case "child_session":
@@ -925,6 +974,15 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
         ? WAIT_KIND_FROM.source.work_unit_green
         : WAIT_KIND_FROM.source.work_unit_checks;
     case "hold":
+      if (
+        source.devRef === "ai" &&
+        source.aiKind &&
+        Object.hasOwn(WAIT_KIND_FROM.ai, source.aiKind)
+      ) {
+        return WAIT_KIND_FROM.ai[
+          source.aiKind as keyof typeof WAIT_KIND_FROM.ai
+        ];
+      }
       if (source.devRef && Object.hasOwn(WAIT_KIND_FROM.dev, source.devRef)) {
         return WAIT_KIND_FROM.dev[source.devRef];
       }
@@ -937,6 +995,10 @@ export function waitKindOf(source: WaitingOnSource): WaitKind {
       return Object.hasOwn(WAIT_KIND_FROM.hold, source.on)
         ? WAIT_KIND_FROM.hold[source.on]
         : WAIT_KIND_FROM.hold.unspecified;
+    case "requirement":
+      return source.owner === "agent"
+        ? WAIT_KIND_FROM.source.requirement_agent
+        : WAIT_KIND_FROM.source.requirement;
     case "owed_slot": {
       if (source.owner === "agent") return WAIT_KIND_FROM.source.agent_blocker;
       const r = source.blockedReason?.trim().toLowerCase();

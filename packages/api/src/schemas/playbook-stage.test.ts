@@ -206,7 +206,7 @@ describe("playbookStageSchema — stage.domain (W2a)", () => {
   });
 });
 
-describe("playbookStageSchema — stage.tier (advisory model tier)", () => {
+describe("playbookStageSchema — stage.tier (model tier)", () => {
   it("accepts deep, standard and quick, and keeps absent absent", () => {
     for (const tier of ["deep", "standard", "quick"]) {
       const r = playbookStageSchema.safeParse({ ...validStage, tier });

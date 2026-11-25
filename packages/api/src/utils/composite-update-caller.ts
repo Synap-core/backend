@@ -164,9 +164,11 @@ export function buildCompositeUpdateCaller(
             before.metadata as Record<string, unknown> | null
           );
           if (!existing) {
+            // A prose rule (decision D1) has no `metadata.rule` either: its
+            // words are its skill body, changed by an `update_skill` part.
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
-              message: `update_rule: ${op.ruleId} is not a rule`,
+              message: `update_rule: ${op.ruleId} is not a rule-loop rule (a prose rule's words are its skill body: change them with update_skill)`,
             });
           }
           const { updateRuleGoverned } =

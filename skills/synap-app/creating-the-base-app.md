@@ -9,10 +9,10 @@ mock mode — all pre-wired. You add your screens; the plumbing is done.
 
 ## Scaffold it
 
-> **Not published yet.** `@synap-core/create-synap-app` is not on npm and the
-> base template is not public, so this does not work today. Until a release
-> exists, build on the SDK directly (`using-the-sdk.md`). The rest of this page
-> describes the template as it will ship.
+> **Never published, and retired.** `@synap-core/create-synap-app` is not on npm
+> and the base template is not public, so this does not work and will not. Build
+> on the SDK directly (`using-the-sdk.md`). The rest of this page describes an
+> existing base-app project.
 
 ```bash
 npx @synap-core/create-synap-app my-app

@@ -7,7 +7,7 @@
  * Pinned:
  *  - before the apply, nobody reading through the space reaches the person
  *    who wears the system role (no implicit all-spaces grant: the gap);
- *  - the apply writes the `profile_workspace_access` grant, and then a
+ *  - the apply writes the `space_access` grant, and then a
  *    space-pinned key (`podSharedEntityIdsForSpaces`, what grant-read.ts
  *    `spaceReach` composes) and a MEMBER of the space
  *    (`podSharedEntityIdsFor`) both reach that pod-wide person;
@@ -129,15 +129,15 @@ beforeAll(async () => {
   await h.client!.exec(`
     create unique index if not exists profile_properties_pk
       on profile_properties (profile_id, property_def_id);
-    create unique index if not exists profile_workspace_access_pk
-      on profile_workspace_access (profile_id, workspace_id);
+    create unique index if not exists space_access_pk
+      on space_access (object_type, object_id, workspace_id);
   `);
 }, 120_000);
 
 beforeEach(async () => {
   await h.client!.exec(
     `delete from entity_facets; delete from entities; delete from profile_properties;
-     delete from property_defs; delete from profile_workspace_access; delete from profiles;
+     delete from property_defs; delete from space_access; delete from profiles;
      delete from workspace_members; delete from pod_members; delete from workspaces;`
   );
   for (const [id, name] of [
@@ -199,7 +199,7 @@ const reach = async (query: PromiseLike<{ id: string }[]>) =>
 
 const grantsOf = (profileId: string) =>
   q<{ workspace_id: string }>(
-    `select workspace_id from profile_workspace_access where profile_id = $1`,
+    `select workspace_id from space_access where object_type = 'profile' and object_id = $1`,
     [profileId]
   );
 

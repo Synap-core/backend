@@ -25,9 +25,19 @@
  *     PR shares (two PRs from one branch) is left alone;
  *   - it is not this workflow's own run.
  *
+ * ── NEGCTL CLEANUP (--delete-negctl) ─────────────────────────────────────────
+ * A negative control rides the branch `negctl/<positive-branch>`: expected
+ * red, never a PR, and deleted the moment the positive PR lands
+ * (rules/github-ci). Left to hand, 58 of 72 `negctl/*` branches on origin had
+ * no positive twin. `negctlRefToDelete` names the ONE ref this may delete:
+ * exactly `negctl/<head_ref>` of the closed PR, from this repository (never a
+ * fork), never when the PR's own head is a negctl/protected branch, and not
+ * while an open PR still has it as its head. An absent branch is success.
+ *
  * Usage (.github/workflows/cancel-closed-pr-runs.yml):
- *   env GITHUB_TOKEN (actions: write), GITHUB_REPOSITORY, GITHUB_EVENT_PATH,
- *   GITHUB_RUN_ID. `--dry-run` lists without cancelling.
+ *   env GITHUB_TOKEN (actions: write; `--delete-negctl` needs contents:
+ *   write), GITHUB_REPOSITORY, GITHUB_EVENT_PATH, GITHUB_RUN_ID. `--dry-run`
+ *   lists without cancelling or deleting.
  * Self-contained (node: builtins + global fetch): no install.
  */
 import { readFileSync } from "node:fs";
@@ -79,6 +89,59 @@ export function selectRunsToCancel({ pr, runs, selfRunId }) {
   return out;
 }
 
+/**
+ * The negative-control ref (`negctl/<head>`) a closed PR leaves behind, or
+ * null when none may be deleted. Pure.
+ * @param {{ headRef?: string, headRepo?: string }} pr
+ * @param {string} repo this repository, `owner/name`
+ * @returns {string | null}
+ */
+export function negctlRefToDelete(pr, repo) {
+  if (!pr?.headRef || !repo || pr.headRepo !== repo) return null;
+  if (PROTECTED_BRANCH.test(pr.headRef) || pr.headRef.startsWith("negctl/"))
+    return null;
+  return `negctl/${pr.headRef}`;
+}
+
+async function deleteNegctl({ api, pr, repo, dryRun, merged }) {
+  const branch = negctlRefToDelete(pr, repo);
+  if (!branch) {
+    console.log(
+      `#${pr.number}: no negctl branch to delete (fork or protected)`
+    );
+    return;
+  }
+  const owner = repo.split("/")[0];
+  const open = await api(
+    `/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`
+  );
+  if (!open.ok) {
+    console.log(
+      `::warning::could not check open PRs of ${branch} (HTTP ${open.status}); not deleted`
+    );
+    return;
+  }
+  if ((await open.json()).length) {
+    console.log(`${branch} is the head of an open PR: left alone`);
+    return;
+  }
+  if (dryRun) {
+    console.log(`would delete ${branch}`);
+    return;
+  }
+  const ref = branch.split("/").map(encodeURIComponent).join("/");
+  const res = await api(`/git/refs/heads/${ref}`, { method: "DELETE" });
+  // 404/422: already gone (idempotent).
+  if (res.ok)
+    console.log(
+      `deleted ${branch} (#${pr.number} ${merged ? "merged" : "closed"})`
+    );
+  else if (res.status === 404 || res.status === 422)
+    console.log(`${branch} is already gone`);
+  else
+    console.log(`::warning::could not delete ${branch} (HTTP ${res.status})`);
+}
+
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
   const repo = process.env.GITHUB_REPOSITORY;
@@ -106,6 +169,10 @@ async function main() {
     });
     return res;
   };
+  if (process.argv.includes("--delete-negctl")) {
+    await deleteNegctl({ api, pr, repo, dryRun, merged: p.merged });
+    return;
+  }
   const list = await api(
     `/actions/runs?branch=${encodeURIComponent(pr.headRef)}&event=pull_request&per_page=100`
   );

@@ -14,6 +14,7 @@ import { ShieldOff, LogOut } from "lucide-react";
 import Link from "next/link";
 import { consolePath } from "@synap-core/types/console";
 import { publicPodUrl } from "../../lib/public-pod-url";
+import { clearPersistedQueryCache } from "../../lib/query-persist";
 import { forbiddenT } from "./copy";
 
 const POD_URL = publicPodUrl();
@@ -21,6 +22,8 @@ const POD_URL = publicPodUrl();
 export default function ForbiddenPage() {
   const t = forbiddenT();
   const handleSignOut = async () => {
+    // What this browser kept of the pod leaves with the session.
+    await clearPersistedQueryCache();
     // Initiate Kratos browser logout. Kratos returns a logout URL we
     // navigate to — that endpoint clears the session cookie and redirects.
     try {

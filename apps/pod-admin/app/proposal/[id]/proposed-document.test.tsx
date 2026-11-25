@@ -40,12 +40,19 @@ vi.mock("../../_lib/object/content/content-block", async () => {
   };
 });
 
-const { state, presses, approveCalls, ids } = vi.hoisted(() => ({
+const { state, presses, approveCalls, docQueries, ids } = vi.hoisted(() => ({
   state: {
     proposal: null as unknown,
     defs: [] as unknown[],
     role: "admin" as "admin" | "member",
+    /** What `documents.get` answers (the live document a page update reads). */
+    document: (() => ({
+      data: undefined,
+      isLoading: false,
+      error: null,
+    })) as () => unknown,
   },
+  docQueries: [] as { input: unknown; enabled: boolean | undefined }[],
   presses: new Map<string, () => void>(),
   approveCalls: [] as unknown[],
   ids: {
@@ -55,6 +62,7 @@ const { state, presses, approveCalls, ids } = vi.hoisted(() => ({
     TWIN: "33333333-3333-4333-8333-333333333333",
     TWIN_2: "44444444-4444-4444-8444-444444444444",
     AGENT: "55555555-5555-4555-8555-555555555555",
+    DOC: "66666666-6666-4666-8666-666666666666",
   },
 }));
 
@@ -80,6 +88,8 @@ vi.mock("../../../lib/trpc", async () => ({
       await import("../../_lib/presence/__tests__/trpc-double")
     ).presenceTrpcDouble(),
     useUtils: () => ({}),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     useQueries: () => [],
     proposals: {
       get: {
@@ -105,6 +115,7 @@ vi.mock("../../../lib/trpc", async () => ({
         }),
       },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      revise: { useMutation: () => ({ mutate() {}, isPending: false }) },
       // Nothing is applying in the background (`approval-progress`).
       approvalProgress: {
         useQuery: () => ({
@@ -123,9 +134,31 @@ vi.mock("../../../lib/trpc", async () => ({
       },
     },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
+    documents: {
+      get: {
+        useQuery: (input: unknown, opts?: { enabled?: boolean }) => {
+          docQueries.push({ input, enabled: opts?.enabled });
+          return opts?.enabled === false
+            ? { data: undefined, isLoading: false, error: null }
+            : state.document();
+        },
+      },
+    },
     // A decided (or expired) proposal's page offers the next door from
     // Review's rows: nothing waits here.
     signals: {
+      needsYou: {
+        // The request story's context read (`useRequestContext`): no row
+        // stands for this proposal, so its story has no Before or Next.
+        useQuery: () => ({
+          data: {
+            rows: { needs_you: [] },
+            context: { timelineItems: 4, sessions: {}, rows: {} },
+          },
+          isError: false,
+          refetch() {},
+        }),
+      },
       list: {
         useQuery: () => ({
           data: { signals: [{ id: "next-row" }] },
@@ -136,6 +169,7 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
       setActionMode: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
@@ -144,6 +178,7 @@ vi.mock("../../../lib/trpc", async () => ({
 
 import { ProposalReview } from "./ProposalReview";
 import { ProposedDocumentBody } from "./ProposedDocumentBody";
+import { UpdatedDoor } from "./UpdatedDoor";
 import { READS_WIDE_ATTR } from "../../_lib/receiver-shell";
 
 const text = (html: string) =>
@@ -220,8 +255,10 @@ const render = () =>
 beforeEach(() => {
   presses.clear();
   approveCalls.length = 0;
+  docQueries.length = 0;
   state.defs = [];
   state.role = "admin";
+  state.document = () => ({ data: undefined, isLoading: false, error: null });
 });
 
 describe("a Create document request, pending", () => {
@@ -277,32 +314,309 @@ describe("ProposedDocumentBody — the whole document is readable", () => {
   });
 });
 
+/** What the read row carries once the create applied (`landed`). */
+function approvedCreate() {
+  return {
+    ...documentCreate("approved", "# Note\n\nBody."),
+    landed: [
+      {
+        id: ids.NEW,
+        kind: "document",
+        name: "Launch plan",
+        role: "created",
+        next: null,
+      },
+    ],
+  };
+}
+
 describe("an approved Create document", () => {
-  it("names what was created and links to the document page", () => {
-    state.proposal = documentCreate("approved", "# Note\n\nBody.");
+  it("names what was created in its Made row and links to the document page", () => {
+    state.proposal = approvedCreate();
     const html = render();
-    const door = html.slice(html.indexOf("data-created-object"));
-    expect(text(door)).toMatch(/Created · Launch plan/);
-    expect(door).toContain(`href="/open/document/${ids.NEW}"`);
-    expect(text(door)).toContain("Open document");
+    const row = html.slice(html.indexOf("data-made-object"));
+    expect(text(row)).toMatch(/Launch plan\s*Created/);
+    expect(row).toContain(`href="/open/document/${ids.NEW}"`);
   });
 
   it("labels the next proposal as the queue's, apart from this one", () => {
-    state.proposal = documentCreate("approved", "# Note\n\nBody.");
+    state.proposal = approvedCreate();
     const html = render();
     const queue = html.slice(html.indexOf("data-review-queue"));
     expect(text(queue)).toContain("Next in your queue");
     expect(queue).toContain(`href="/proposal/${ids.NEXT}"`);
     expect(text(queue)).toContain("Edit section in Document Roadmap");
     expect(text(html)).not.toContain("Next: ");
-    // The created document's door comes first, the queue after it.
-    expect(html.indexOf("data-created-object")).toBeLessThan(
+    // The created document's row comes first, the queue after it.
+    expect(html.indexOf("data-made-object")).toBeLessThan(
       html.indexOf("data-review-queue")
     );
   });
 
-  it("a pending one has no Open document yet", () => {
+  it("a pending one has made nothing yet", () => {
     state.proposal = documentCreate("pending", "# Note\n\nBody.");
-    expect(render()).not.toContain("data-created-object");
+    expect(render()).not.toContain("data-made-object");
+  });
+});
+
+/* ── A document UPDATE: the pages, and the way into the object ────────────────
+   Shaped like the real proposal (19780cd3, 14 Nov 2026): the op replaces the
+   whole body with the COMPLETE page, while `preview` holds cut regions that
+   begin inside the stylesheet (the head is missing), which is what the old
+   text reading drew as struck-through source. */
+const HEAD = "<!doctype html><html><head><style>:root{--a:1}</style></head>";
+const PAGE_BEFORE = `${HEAD}<body><h1>OLD-HEADLINE</h1><p>shared</p></body></html>`;
+const PAGE_AFTER = `${HEAD}<body><h1>NEW-HEADLINE</h1><p>shared</p></body></html>`;
+const cut = (page: string) => page.slice(HEAD.length - 1);
+
+function documentUpdate(
+  status: string,
+  over: {
+    ops?: unknown[];
+    stamped?: boolean;
+    targetType?: string;
+    action?: string;
+  } = {}
+) {
+  const data = {
+    id: ids.DOC,
+    title: "Lean report",
+    documentId: ids.DOC,
+    ops: over.ops ?? [{ op: "replace_all", content: PAGE_AFTER }],
+    preview: [
+      {
+        sectionId: null,
+        title: null,
+        before: cut(PAGE_BEFORE),
+        after: cut(PAGE_AFTER),
+      },
+    ],
+    baseVersion: 1,
+  };
+  const action = over.action ?? "update";
+  const targetType = over.targetType ?? "document";
+  return {
+    id: ids.PROPOSAL,
+    workspaceId: null,
+    targetType,
+    targetId: ids.DOC,
+    targetName: "Lean report",
+    proposalType: action,
+    status,
+    agentUserId: ids.AGENT,
+    governanceReason: null,
+    createdAt: new Date(Date.now() - 3 * 3_600_000),
+    authorName: "Claude-code",
+    agentActorName: "Claude-code",
+    principal: { kind: "delegated", name: "Grace Hopper" },
+    revertable: true,
+    data: {
+      data,
+      changeType: action,
+      targetType,
+      ...(over.stamped
+        ? {
+            materialized: {
+              documentEdit: {
+                documentId: ids.DOC,
+                granularity: "body",
+                changes: [
+                  {
+                    before: PAGE_BEFORE,
+                    after: PAGE_AFTER,
+                    title: null,
+                    sectionId: null,
+                  },
+                ],
+              },
+            },
+          }
+        : {}),
+    },
+    request: { targetType, targetId: ids.DOC, changeType: action, data },
+    review: { changes: [{ path: "ops", label: "Ops", operation: "update" }] },
+  };
+}
+
+/** The live document as the viewer reads it. */
+const liveDocument = (type: string, content: string) => () => ({
+  data: { document: { type, workspaceId: null }, content },
+  isLoading: false,
+  error: null,
+});
+
+const iframes = (html: string) => html.match(/<iframe\b[^>]*>/g) ?? [];
+
+describe("an Update document request whose document is an HTML page", () => {
+  it("draws the new page, whole, not its struck-through source", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("html", PAGE_BEFORE);
+    const html = render();
+    const panel = html.slice(html.indexOf("data-html-update"));
+    expect(iframes(panel)).toHaveLength(1);
+    expect(iframes(panel)[0]).toContain('sandbox="allow-scripts"');
+    // The NEW page, and the head the cut preview never had: it is the whole page.
+    expect(panel).toContain("NEW-HEADLINE");
+    expect(panel).toContain(":root{--a:1}");
+    expect(panel).not.toContain("OLD-HEADLINE");
+    // The old reading is not drawn for an HTML page.
+    expect(html).not.toContain("data-text-diff");
+  });
+
+  it("offers Result, Before | After and Lines, opening on the result", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("html", PAGE_BEFORE);
+    const out = text(render());
+    expect(out).toContain("Result");
+    expect(out).toContain("Before | After");
+    expect(out).toContain("Lines");
+  });
+
+  it("reads the document by its id, in its raw form", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("html", PAGE_BEFORE);
+    render();
+    expect(docQueries).toContainEqual({
+      input: { documentId: ids.DOC, format: "raw" },
+      enabled: true,
+    });
+  });
+
+  it("an approved change with a stamped edit knows the page as it was", () => {
+    state.proposal = documentUpdate("approved", { stamped: true });
+    // The document is now the AFTER: it must not be taken for the "before".
+    state.document = liveDocument("html", PAGE_AFTER);
+    const out = text(render());
+    expect(out).toContain("Before | After");
+    expect(out).not.toContain("only the result is shown");
+  });
+
+  it("an approved change with nothing stamped shows the result and says why not more", () => {
+    state.proposal = documentUpdate("approved");
+    state.document = liveDocument("html", PAGE_AFTER);
+    const html = render();
+    const out = text(html);
+    expect(out).toContain("only the result is shown");
+    expect(out).not.toContain("Before | After");
+    expect(iframes(html.slice(html.indexOf("data-html-update")))).toHaveLength(
+      1
+    );
+  });
+});
+
+describe("an Update document request that is not an HTML page", () => {
+  it("a Markdown document keeps its text reading and draws no frame", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("markdown", "# Old");
+    const html = render();
+    expect(html).toContain("data-text-diff");
+    expect(html).not.toContain("data-html-update");
+    expect(iframes(html)).toHaveLength(0);
+  });
+
+  it("a patch (not a whole-body replacement) is never drawn as a page, and reads nothing", () => {
+    state.proposal = documentUpdate("pending", {
+      ops: [{ op: "replace_section", sectionId: "s1", content: "<p>x</p>" }],
+    });
+    state.document = liveDocument("html", PAGE_BEFORE);
+    const html = render();
+    expect(html).toContain("data-text-diff");
+    expect(html).not.toContain("data-html-update");
+    expect(docQueries.every((q) => q.enabled === false)).toBe(true);
+  });
+
+  it("while the document is read, says so and draws neither reading", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = () => ({ data: undefined, isLoading: true, error: null });
+    const html = render();
+    expect(text(html)).toContain("Reading the page…");
+    expect(html).not.toContain("data-text-diff");
+    expect(iframes(html)).toHaveLength(0);
+  });
+
+  it("a failed read is said, and the change stays readable as text", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = () => ({
+      data: undefined,
+      isLoading: false,
+      error: new Error("boom"),
+    });
+    const html = render();
+    expect(text(html)).toContain("couldn’t be read");
+    expect(html).toContain("data-text-diff");
+    expect(iframes(html)).toHaveLength(0);
+    expect(html).not.toContain("boom");
+  });
+});
+
+describe("the door to the object an update changes", () => {
+  /** The door alone: from its mark to the span that closes it. */
+  const doorOf = (html: string) => {
+    const at = html.indexOf("data-updated-object");
+    return html.slice(at, html.indexOf("</span>", at));
+  };
+
+  it("a pending update is a door to the document's page, named by what it is", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("html", PAGE_BEFORE);
+    const door = doorOf(render());
+    expect(door).toContain(`href="/open/document/${ids.DOC}"`);
+    expect(text(door)).toContain("Open document");
+    // The change's title is the heading's, said once there — not here.
+    expect(text(door)).not.toContain("Lean report");
+  });
+
+  it("an approved one opens the document from its Made row", () => {
+    state.proposal = {
+      ...documentUpdate("approved", { stamped: true }),
+      landed: [
+        {
+          id: ids.DOC,
+          kind: "document",
+          name: "Lean report",
+          role: "updated",
+          next: null,
+        },
+      ],
+    };
+    state.document = liveDocument("html", PAGE_AFTER);
+    const html = render();
+    expect(html).not.toContain("data-updated-object");
+    const row = html.slice(html.indexOf("data-made-object"));
+    expect(row).toContain(`href="/open/document/${ids.DOC}"`);
+  });
+
+  it("an entity update is named by its profile's noun, never its table", () => {
+    const door = renderToStaticMarkup(
+      createElement(UpdatedDoor, {
+        updated: { kind: "entity", id: ids.DOC },
+        kind: "finding",
+      })
+    );
+    expect(text(door)).toContain("Open finding");
+    expect(text(door)).not.toMatch(/Open entity/);
+    // The door still opens the object where the pod hosts it.
+    expect(door).toContain(`href="/open/entity/${ids.DOC}"`);
+  });
+
+  it("comes before the change it is about", () => {
+    state.proposal = documentUpdate("pending");
+    state.document = liveDocument("html", PAGE_BEFORE);
+    const html = render();
+    expect(html.indexOf("data-updated-object")).toBeLessThan(
+      html.indexOf("data-html-update")
+    );
+  });
+
+  it("a create has no object yet: no update door", () => {
+    state.proposal = documentCreate("pending", "# Note\n\nBody.");
+    expect(render()).not.toContain("data-updated-object");
+  });
+
+  it("a pending delete opens what it would remove; an applied one names nothing", () => {
+    state.proposal = documentUpdate("pending", { action: "delete" });
+    expect(doorOf(render())).toContain(`href="/open/document/${ids.DOC}"`);
+    state.proposal = documentUpdate("approved", { action: "delete" });
+    expect(render()).not.toContain("data-updated-object");
   });
 });

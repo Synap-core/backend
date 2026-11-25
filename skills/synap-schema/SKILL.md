@@ -118,7 +118,7 @@ GET /api/hub/profiles?workspaceId={workspaceId}
 Read the response:
 
 - `entityScope: "pod"` — visible across all workspaces
-- `entityScope: "workspace"` — scoped to this workspace only (custom types, CRM profiles, template-seeded types)
+- `entityScope: "workspace"` — scoped to this workspace only (process kinds such as CRM deals; a custom kind defaults to pod)
 - `parentSlug` — inheritance chain (e.g. `contact` extends `person`)
 
 ### Commonly seeded profiles (verify before using)
@@ -378,7 +378,7 @@ Search for this chapter by the field you are holding, not by the word "intent":
 | `intent`          | a **skill** in a capability definition; a `ToolVerb` catalog entry | what ONE verb does                                                              |
 | `provides`        | a **capability template**                                          | every intent the whole PACK serves — must equal the `intent` its skills declare |
 | `taskIntents`     | a **workspace template**                                           | what the SPACE needs the pod to be able to do                                   |
-| `requiredIntents` | a **playbook**                                                     | what the PROCESS needs the pod to be able to do                                 |
+| `tools`         | a **playbook**                                                     | what a RUN may use, "only these" (intents, run tools, capabilities; `requiredIntents` is folded into it)|
 
 All four are validated against this ONE vocabulary, so a workspace and a playbook
 cannot be spelled from two different lists.
@@ -409,9 +409,13 @@ a package that consumes nothing would go stale in the one direction that is invi
    Post-seed rows today: `publish_post` (0284, write), `delegate_agent_task`
    (0314, act — every verb of an external-agent binding, `tools.config.agentBinding`:
    start / send / status / cancel), `read_webpage` (0329, read), `search_web`
-   (0360, read) and `edit_video` (0370, act — sends the person's video to an
+   (0360, read), `edit_video` (0370, act — sends the person's video to an
    outside service; its one input, `{ video }`, is seeded on `input_schema` in
-   the same file).
+   the same file), `transcribe_media` and `download_media` (0413, act — media
+   work on the person's computer; no app input yet), `provision_compute` and
+   `release_compute` (0429, act — a cloud machine started for a required time
+   to live and spend maximum, and stopped or destroyed; the contract is
+   `services/compute/compute-contract.ts`).
 3. **Add it to mirror 2** — the same two lists in the control plane's
    `capability-intent-vocabulary.ts`.
 4. **Update the arity floors** — `SEED_SLUG_ARITY` / `EXTRA_SLUG_ARITY` in

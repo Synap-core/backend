@@ -18,7 +18,13 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { db as defaultDb, eq, and, inArray } from "@synap/database";
+import {
+  db as defaultDb,
+  eq,
+  and,
+  inArray,
+  membershipHolderIds,
+} from "@synap/database";
 import {
   focusSessions,
   proposals,
@@ -99,7 +105,7 @@ export async function assertProposalVisibleTo(
     const membership = await database.query.workspaceMembers.findFirst({
       where: and(
         eq(workspaceMembers.workspaceId, proposal.workspaceId),
-        eq(workspaceMembers.userId, userId)
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
       ),
     });
     if (
@@ -196,7 +202,7 @@ export async function visibleProposalIds(
       .where(
         and(
           inArray(workspaceMembers.workspaceId, workspaceIds),
-          eq(workspaceMembers.userId, userId)
+          inArray(workspaceMembers.userId, membershipHolderIds(userId))
         )
       );
     for (const m of memberships) {

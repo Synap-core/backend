@@ -31,6 +31,15 @@
  * subject, each action says whether it can reach them (`reach`) and the list
  * is ranked: reachable first, then the channel last used with them, then the
  * order the pod lists tools in.
+ *
+ * UNAVAILABLE (plan 498b6be3 S1, founder D5 "show all reasons", D-D one entry
+ * per tool and account, 13 Nov 2026). Every verb that declares the intent but
+ * is not offered is listed in `unavailable` with WHY (a stable key, never
+ * renamed: {@link IntentUnavailableWhy}), the pod's own sentence, and the fix
+ * (`CapabilityNextAction`, with `update` for a held update). An empty
+ * `actions` therefore never stands for "the pod could not tell": a read that
+ * failed (a tool's accounts or connections) is an entry with
+ * `retryable: true`, never an empty list.
  */
 import { createHash } from "node:crypto";
 import { db, skills, and, inArray } from "@synap/database";
@@ -40,7 +49,17 @@ import { createLogger } from "@synap-core/core";
 import type { ConnectionSelector } from "../../connectors/external-dispatch.js";
 import { listCapabilities } from "./capability-registry.js";
 import { foldVerbsByIntent } from "./capability-intent-index.js";
-import { projectWithSource } from "./action-projection.js";
+import {
+  projectWithSource,
+  withheldWithSource,
+  type WithheldVerb,
+} from "./action-projection.js";
+import {
+  capabilityNextAction,
+  capabilityUpdateAction,
+  resolveCapabilityBlock,
+  type CapabilityNextAction,
+} from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import { checkVerbParameters } from "./validate-verb-parameters.js";
 import { listCredentials } from "./capability-connections.js";
@@ -90,6 +109,54 @@ export interface IntentActionView {
   reach?: { ok: boolean; why?: string };
 }
 
+/**
+ * Why a verb that declares the intent is not offered. A public contract, like
+ * an AIP-193 `reason`: a key is never renamed or reused; a new cause gets a
+ * new key. An app branches on it and never shows it; it shows `label`.
+ *  - `no_input_schema`: this pod has no input shape for the intent, so no app
+ *    can ask for it yet (no tool named);
+ *  - `not_enabled`: the tool, or this action of it, is not turned on;
+ *  - `not_connected`: the tool needs an account connection it does not have;
+ *  - `not_launchable`: the pod cannot run it for an app (catalog only,
+ *    inactive, or no runnable backing skill); nothing in the pod fixes it;
+ *  - `update_waiting`: the tool's installed version does not offer this and
+ *    its update, which does, waits for the person;
+ *  - `intent_not_declared`: the tool's installed version does not offer this
+ *    (no update known);
+ *  - `no_input_map`: the tool offers this but says nothing of how an app's
+ *    input fills it (no update known);
+ *  - `no_account`: the tool lists no account to act from;
+ *  - `connection_expired`: one of the tool's accounts must be reconnected;
+ *  - `accounts_unreadable`: the pod could not read the tool's accounts or
+ *    connections (`retryable` says whether asking again may help).
+ */
+export type IntentUnavailableWhy =
+  | "no_input_schema"
+  | "not_enabled"
+  | "not_connected"
+  | "not_launchable"
+  | "update_waiting"
+  | "intent_not_declared"
+  | "no_input_map"
+  | "no_account"
+  | "connection_expired"
+  | "accounts_unreadable";
+
+/** One withheld tool (or account of it), as a pod app reads it. */
+export interface IntentUnavailable {
+  why: IntentUnavailableWhy;
+  /** The pod's own sentence, safe to show the person. */
+  label: string;
+  /** The tool's name; null when no tool is concerned (`no_input_schema`). */
+  tool: string | null;
+  /** The provider and the account concerned, when the cause names one. */
+  connection: { provider: string | null; account: string | null } | null;
+  /** True only when the same request may succeed later (a failed read). */
+  retryable: boolean;
+  /** What unblocks it and where; null when nothing in the pod does. */
+  fix: CapabilityNextAction | null;
+}
+
 /** An action and what running it needs (server side only). */
 export interface ResolvedIntentAction {
   view: IntentActionView;
@@ -136,67 +203,247 @@ function recordsOf(result: unknown): unknown[] {
  * The accounts an account source lists, run as any other read of the tool
  * (`executeCapability`, pinned to the tool row; a declared read runs without
  * review). `observability: "mirror"`: listing accounts is the pod's own
- * bookkeeping, never a fact to recall. Anything but a run lists none.
+ * bookkeeping, never a fact to recall. Anything but a run is a failed read,
+ * never "no account": `ok: false` carries what the run door said (its fix,
+ * and whether asking again may help).
  */
 async function listSourceAccounts(
   ctx: IntentActionsContext,
   map: SkillInputMap,
   toolId: string | null
-): Promise<IntentAccount[]> {
+): Promise<
+  | { ok: true; accounts: IntentAccount[] }
+  | {
+      ok: false;
+      why: "not_enabled" | "not_connected" | "accounts_unreadable";
+      retryable: boolean;
+      fix: CapabilityNextAction | null;
+    }
+> {
   const source = map.accounts!;
-  const outcome = await executeCapability({
-    verbId: source.verb,
-    parameters: {},
-    workspaceId: ctx.workspaceId,
-    userId: ctx.userId,
-    agentUserId: ctx.agentUserId,
-    ...(toolId ? { toolId } : {}),
-    observability: "mirror",
-  });
-  if (outcome.kind !== "run") {
+  let outcome: Awaited<ReturnType<typeof executeCapability>>;
+  try {
+    outcome = await executeCapability({
+      verbId: source.verb,
+      parameters: {},
+      workspaceId: ctx.workspaceId,
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId,
+      ...(toolId ? { toolId } : {}),
+      observability: "mirror",
+    });
+  } catch (err) {
     logger.warn(
-      { verb: source.verb, outcome: outcome.kind },
-      "intent actions: the account source did not run; its tool offers no account"
+      { err, verb: source.verb },
+      "intent actions: the account source threw"
     );
-    return [];
+    return {
+      ok: false,
+      why: "accounts_unreadable",
+      retryable: true,
+      fix: null,
+    };
   }
-  return accountsFromRecords(source, recordsOf(outcome.result));
+  if (outcome.kind === "run")
+    return {
+      ok: true,
+      accounts: accountsFromRecords(source, recordsOf(outcome.result)),
+    };
+  logger.warn(
+    { verb: source.verb, outcome: outcome.kind },
+    "intent actions: the account source did not run"
+  );
+  // The run door's own fix, when it named one: a refusal (`deny`) is an
+  // approval problem (`enable`), a failed run with `enable` is a dead
+  // connection (`connect`). A failed run with none may pass next time.
+  const fix =
+    (outcome.kind === "deny" || outcome.kind === "error") && outcome.enable
+      ? outcome.enable
+      : null;
+  if (fix?.kind === "enable")
+    return { ok: false, why: "not_enabled", retryable: false, fix };
+  if (fix?.kind === "connect")
+    return { ok: false, why: "not_connected", retryable: false, fix };
+  return {
+    ok: false,
+    why: "accounts_unreadable",
+    retryable: outcome.kind === "error",
+    fix,
+  };
 }
 
-/** A tool's pod connections, when it reaches several (one action each). */
+/**
+ * A tool's pod connections: the live ones (one action each when several) and
+ * the ones that must be reconnected. A failed read is `ok: false`, never an
+ * empty list.
+ */
 async function listConnections(
   ctx: IntentActionsContext,
   toolId: string
-): Promise<Array<{ id: string; label: string; provider: string | null }>> {
+): Promise<
+  | {
+      ok: true;
+      connected: Array<{ id: string; label: string; provider: string | null }>;
+      expired: Array<{ label: string; provider: string | null }>;
+    }
+  | { ok: false }
+> {
+  let creds: Awaited<ReturnType<typeof listCredentials>>;
   try {
-    const creds = await listCredentials(toolId, ctx.userId);
-    return creds
-      .filter((c) => c.persisted && c.health === "connected")
+    creds = await listCredentials(toolId, ctx.userId);
+  } catch (err) {
+    logger.warn({ err, toolId }, "intent actions: connections unreadable");
+    return { ok: false };
+  }
+  const persisted = creds.filter((c) => c.persisted);
+  return {
+    ok: true,
+    connected: persisted
+      .filter((c) => c.health === "connected")
       .map((c) => ({
         id: c.id,
         label: c.accountHint ?? c.label,
         provider: c.provider,
-      }));
-  } catch (err) {
-    logger.warn({ err, toolId }, "intent actions: connections unreadable");
-    return [];
+      })),
+    expired: persisted
+      .filter((c) => c.health !== "connected")
+      .map((c) => ({ label: c.accountHint ?? c.label, provider: c.provider })),
+  };
+}
+
+/** The tool's name as an action shows it: the tool row's, or the skill's container's. */
+function toolNameOf(source: { kind: string; name: string }): string {
+  return source.kind !== "skill"
+    ? humanizeToken(source.name)
+    : ((source as { containerName?: string | null }).containerName ??
+        humanizeToken(source.name));
+}
+
+/** The registry row's container (its card), when it has one. */
+const containerIdOf = (source: unknown): string | null =>
+  (source as { containerId?: string | null }).containerId ?? null;
+
+/** The pod's sentence for each cause. Names the tool; never a verb id. */
+function unavailableLabel(
+  why: IntentUnavailableWhy,
+  tool: string | null,
+  account: string | null,
+  intent: string
+): string {
+  const t = tool ?? "This tool";
+  switch (why) {
+    case "no_input_schema":
+      return `Apps cannot ask for "${humanizeToken(intent)}" on this pod yet.`;
+    case "not_enabled":
+      return `${t} is installed, but this action of it is turned off.`;
+    case "not_connected":
+      return `${t} is not connected to an account.`;
+    case "not_launchable":
+      return `${t} cannot run this for an app.`;
+    case "update_waiting":
+      return `${t} has an update waiting for you that adds this.`;
+    case "intent_not_declared":
+      return `The version of ${t} on this pod does not offer this.`;
+    case "no_input_map":
+      return `The version of ${t} on this pod cannot take this from an app yet.`;
+    case "no_account":
+      return `${t} has no account to act from.`;
+    case "connection_expired":
+      return account
+        ? `The account ${account} in ${t} must be reconnected.`
+        : `An account in ${t} must be reconnected.`;
+    case "accounts_unreadable":
+      return `The pod could not read the accounts of ${t}.`;
   }
 }
 
 /**
- * Every action this intent offers the caller in this space, or null when the
- * intent is unknown. An intent with no input shape offers none. With a
- * `subject` (a recipient the caller may read), each action carries its
- * `reach` and the list is ranked for that person.
+ * One withheld verb's causes, as the door names them: catalog-only, inactive
+ * and unlaunchable read alike (`not_launchable`: nothing in the pod fixes
+ * them). Each cause carries its own fix, from the SAME resolver the
+ * registry's `blocked` uses (`resolveCapabilityBlock`): `not_connected` from
+ * the row's connection (folded as the registry folds it), `not_enabled` from
+ * the verb's own enable door when the registry stamped one, else the row's.
+ */
+function withheldCauses(
+  w: WithheldVerb
+): Array<{ why: IntentUnavailableWhy; fix: CapabilityNextAction | null }> {
+  const causes: Array<{
+    why: IntentUnavailableWhy;
+    fix: CapabilityNextAction | null;
+  }> = [];
+  const name = w.source.name;
+  const containerId = containerIdOf(w.source);
+  for (const reason of w.reasons) {
+    if (reason === "not_connected") {
+      const c = w.source.connection!;
+      causes.push({
+        why: "not_connected",
+        fix:
+          resolveCapabilityBlock({
+            name,
+            containerId,
+            connection: {
+              required: true,
+              kind: "provider",
+              provider: c.provider,
+              state: "missing",
+            },
+            enabled: true,
+          }) ?? null,
+      });
+    } else if (reason === "not_enabled") {
+      causes.push({
+        why: "not_enabled",
+        fix:
+          w.enable ??
+          resolveCapabilityBlock({ name, containerId, enabled: false }) ??
+          null,
+      });
+    } else if (!causes.some((c) => c.why === "not_launchable")) {
+      causes.push({ why: "not_launchable", fix: null });
+    }
+  }
+  return causes;
+}
+
+/** What the door lists for one intent: what runs, and what does not and why. */
+export interface IntentActionsListing {
+  row: IntentInputRow;
+  actions: ResolvedIntentAction[];
+  unavailable: IntentUnavailable[];
+}
+
+/**
+ * Every action this intent offers the caller in this space, and every verb
+ * declaring it that is not offered (`unavailable`, with why), or null when
+ * the intent is unknown. An intent with no input shape offers none (one
+ * `no_input_schema` entry). With a `subject` (a recipient the caller may
+ * read), each action carries its `reach` and the list is ranked for that
+ * person.
  */
 export async function listIntentActions(
   ctx: IntentActionsContext,
   intent: string,
   opts: { subject?: IntentRecipient } = {}
-): Promise<{ row: IntentInputRow; actions: ResolvedIntentAction[] } | null> {
+): Promise<IntentActionsListing | null> {
   const listed = await listUnranked(ctx, intent);
   if (!listed || !opts.subject) return listed;
-  return { row: listed.row, actions: rankFor(opts.subject, listed.actions) };
+  return { ...listed, actions: rankFor(opts.subject, listed.actions) };
+}
+
+/**
+ * The containers whose catalog template moved past the version they hold
+ * (`containersWithChangedTemplates`, the reconcile's own read of the stamps
+ * against the official cache): an installed version that lacks what the
+ * template now declares is then an update waiting, not a dead end. Imported
+ * on demand: the reconcile module reaches the whole applier and its routers,
+ * and this door needs it only when an answering skill falls short.
+ */
+async function containersWithUpdate(): Promise<Set<string>> {
+  const { containersWithChangedTemplates } =
+    await import("./reconcile-capabilities-to-templates.js");
+  return new Set((await containersWithChangedTemplates()).map((c) => c.id));
 }
 
 /**
@@ -233,26 +480,76 @@ function rankFor(
 async function listUnranked(
   ctx: IntentActionsContext,
   intent: string
-): Promise<{ row: IntentInputRow; actions: ResolvedIntentAction[] } | null> {
+): Promise<IntentActionsListing | null> {
   const row = await loadIntentInput(intent);
   if (!row) return null;
-  if (!row.inputSchema) return { row, actions: [] };
+  const unavailable: IntentUnavailable[] = [];
+  // One entry per tool and account and cause (D-D): two verbs of one tool
+  // withheld for one cause say it once.
+  const seen = new Set<string>();
+  const withhold = (
+    why: IntentUnavailableWhy,
+    tool: string | null,
+    connection: IntentUnavailable["connection"],
+    fix: CapabilityNextAction | null,
+    retryable = false
+  ) => {
+    const key = JSON.stringify([why, tool, connection?.account ?? null]);
+    if (seen.has(key)) return;
+    seen.add(key);
+    unavailable.push({
+      why,
+      label: unavailableLabel(why, tool, connection?.account ?? null, intent),
+      tool,
+      connection,
+      retryable,
+      fix,
+    });
+  };
+  if (!row.inputSchema) {
+    withhold("no_input_schema", null, null, null);
+    return { row, actions: [], unavailable };
+  }
 
   const capabilities = await listCapabilities({
     workspaceId: ctx.workspaceId,
     userId: ctx.userId,
   });
-  const matched = new Set(
-    (foldVerbsByIntent(capabilities).get(intent) ?? []).map((m) => m.verbId)
-  );
+  const matches = foldVerbsByIntent(capabilities).get(intent) ?? [];
+  const matched = new Set(matches.map((m) => m.verbId));
   const projected = projectWithSource(capabilities).filter(
     ({ action }) => !!action.verbId && matched.has(action.verbId)
   );
-  if (projected.length === 0) return { row, actions: [] };
+
+  // The verbs declaring the intent that no row projects, each read off the
+  // row the shared fold chose for it (a tool row before its skill or a
+  // container copy), with every reason the projection withheld it for.
+  const offered = new Set(projected.map(({ action }) => action.verbId!));
+  const chosenRow = new Map(matches.map((m) => [m.verbId, m.capabilityId]));
+  const withheldByVerb = new Map<string, WithheldVerb>();
+  for (const w of withheldWithSource(capabilities)) {
+    if (!matched.has(w.verbId) || offered.has(w.verbId)) continue;
+    const prior = withheldByVerb.get(w.verbId);
+    if (!prior || w.source.id === chosenRow.get(w.verbId))
+      withheldByVerb.set(w.verbId, w);
+  }
+  for (const w of withheldByVerb.values()) {
+    const provider = w.source.connection?.required
+      ? w.source.connection.provider
+      : null;
+    for (const cause of withheldCauses(w))
+      withhold(
+        cause.why,
+        toolNameOf(w.source),
+        provider ? { provider, account: null } : null,
+        cause.fix
+      );
+  }
+  if (projected.length === 0) return { row, actions: [], unavailable };
 
   // Each verb's answering skill, by the run door's rule: the first row per
   // name in its order. It must DECLARE this intent and carry a map.
-  const names = [...new Set(projected.map(({ action }) => action.verbId!))];
+  const names = [...offered];
   const rows = await db
     .select({
       id: skills.id,
@@ -274,20 +571,64 @@ async function listUnranked(
   for (const r of rows)
     if (!skillByName.has(r.name)) skillByName.set(r.name, r);
 
+  // An installed skill that falls short of the intent: an update waiting
+  // when its container's template moved on (read once, only when needed).
+  let updates: Promise<Set<string> | null> | null = null;
+  const shortOf = async (
+    source: (typeof projected)[number]["source"],
+    why: "intent_not_declared" | "no_input_map" | "not_launchable"
+  ) => {
+    const containerId = containerIdOf(source);
+    // No container, no template: nothing can be waiting for it.
+    if (!containerId) {
+      withhold(why, toolNameOf(source), null, null);
+      return;
+    }
+    const pending = (updates ??= containersWithUpdate().catch(
+      (err: unknown) => {
+        logger.warn(
+          { err },
+          "intent actions: could not read which capabilities have an update"
+        );
+        return null;
+      }
+    ));
+    const withUpdate = await pending;
+    if (withUpdate?.has(containerId)) {
+      withhold(
+        "update_waiting",
+        toolNameOf(source),
+        null,
+        capabilityUpdateAction(containerId)
+      );
+      return;
+    }
+    // No update known: what is installed falls short. When the update read
+    // itself failed, that is still true, and asking again may find one.
+    withhold(why, toolNameOf(source), null, null, withUpdate === null);
+  };
+
   const actions: ResolvedIntentAction[] = [];
   for (const { action, source } of projected) {
     const skill = skillByName.get(action.verbId!);
-    if (!skill || skill.intent !== intent) continue;
+    if (!skill) {
+      await shortOf(source, "not_launchable");
+      continue;
+    }
+    if (skill.intent !== intent) {
+      await shortOf(source, "intent_not_declared");
+      continue;
+    }
     const map = readInputMap(skill.inputMap);
-    if (!map) continue;
+    if (!map) {
+      await shortOf(source, "no_input_map");
+      continue;
+    }
 
     const check = checkVerbParameters(skill, {});
     const required = check.status === "invalid" ? check.repair.missing : [];
     const isToolRow = source.kind !== "skill";
-    const toolName = isToolRow
-      ? humanizeToken(source.name)
-      : ((source as { containerName?: string | null }).containerName ??
-        humanizeToken(source.name));
+    const toolName = toolNameOf(source);
     const base = {
       label:
         action.label && action.label !== action.verbId
@@ -314,12 +655,18 @@ async function listUnranked(
     });
 
     if (map.accounts) {
-      const accounts = await listSourceAccounts(
+      const listed = await listSourceAccounts(
         ctx,
         map,
         isToolRow ? source.id : null
       );
-      for (const account of accounts)
+      if (!listed.ok) {
+        withhold(listed.why, toolName, null, listed.fix, listed.retryable);
+        continue;
+      }
+      if (listed.accounts.length === 0)
+        withhold("no_account", toolName, null, null);
+      for (const account of listed.accounts)
         actions.push(
           resolved(`a:${account.id}`, account, null, {
             provider: account.provider,
@@ -329,27 +676,57 @@ async function listUnranked(
       continue;
     }
     const provider = action.connection?.provider ?? null;
-    const connections =
-      isToolRow && action.connection?.required
-        ? await listConnections(ctx, source.id)
-        : [];
-    if (connections.length > 1) {
-      for (const c of connections)
-        actions.push(
-          resolved(
-            `c:${c.id}`,
-            { id: c.id, label: c.label, provider: c.provider ?? provider },
-            { connectionId: c.id },
-            { provider: c.provider ?? provider, account: c.label }
+    if (isToolRow && action.connection?.required) {
+      const connections = await listConnections(ctx, source.id);
+      if (!connections.ok) {
+        // Which account it would act from is unknown: no action is offered
+        // on a guess, and the failed read is said, never an empty list.
+        withhold(
+          "accounts_unreadable",
+          toolName,
+          provider ? { provider, account: null } : null,
+          null,
+          true
+        );
+        continue;
+      }
+      for (const c of connections.expired) {
+        const p = c.provider ?? provider;
+        withhold(
+          "connection_expired",
+          toolName,
+          { provider: p, account: c.label },
+          capabilityNextAction(
+            "needs_connection",
+            source.name,
+            {
+              required: true,
+              kind: "provider",
+              ...(p ? { provider: p } : {}),
+              state: "expired",
+            },
+            containerIdOf(source)
           )
         );
-      continue;
+      }
+      if (connections.connected.length > 1) {
+        for (const c of connections.connected)
+          actions.push(
+            resolved(
+              `c:${c.id}`,
+              { id: c.id, label: c.label, provider: c.provider ?? provider },
+              { connectionId: c.id },
+              { provider: c.provider ?? provider, account: c.label }
+            )
+          );
+        continue;
+      }
     }
     actions.push(
       resolved("", null, null, provider ? { provider, account: null } : null)
     );
   }
-  return { row, actions };
+  return { row, actions, unavailable };
 }
 
 /** What `POST /capabilities/execute` runs for an app's intent action. */

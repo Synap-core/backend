@@ -28,6 +28,11 @@ vi.mock("@synap-core/core", async (importOriginal) => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   db: {
+    // The proposal door's one statement (`WITH … UPDATE`).
+    $with: () => ({ as: () => ({}) }),
+    with() {
+      return this;
+    },
     update: () => ({
       set: () => ({
         where: () => ({ returning: async () => [{ id: "p1" }] }),
@@ -74,7 +79,7 @@ describe("view/create approval normalises legacy proposal filters", () => {
       filters: [
         { field: "properties.n", operator: "between", value: [1, 5] },
         { field: "properties.s", operator: "in", value: "open" },
-        { field: "status", operator: "eq", value: "open" }, // unrepairable
+        { field: "priority", operator: "eq", value: "open" }, // unrepairable
       ],
       limit: 50,
     });

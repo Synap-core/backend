@@ -50,7 +50,7 @@
     "config",
     "logging"
   ],
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "description": "Core utilities for Synap (config, logging, telemetry)",
   "repository": {
     "type": "git",

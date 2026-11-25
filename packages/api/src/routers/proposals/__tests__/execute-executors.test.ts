@@ -209,11 +209,12 @@ describe("(b) automation/execute executor re-enters automations.trigger", () => 
   });
 
   it("surfaces failure instead of swallowing it (no try/catch around the run)", () => {
-    // The dispatch site in proposals.ts records APPROVAL_FAILED + re-throws, so
-    // an executor must let the error propagate.
+    // The dispatch site (applyProposalApproval, which both approve doors of
+    // proposals.ts call) records APPROVAL_FAILED + re-throws, so an executor
+    // must let the error propagate.
     expect(AUTOMATION_EXEC_BLOCK).not.toContain("catch");
-    const proposalsSrc = readSrc("routers/proposals.ts");
-    expect(proposalsSrc).toContain("ProposalStatus.APPROVAL_FAILED");
+    const dispatchSrc = readSrc("routers/proposals/apply-approval.ts");
+    expect(dispatchSrc).toContain("ProposalStatus.APPROVAL_FAILED");
   });
 });
 
@@ -350,11 +351,20 @@ describe("(d) idempotency follows the prevailing already-APPROVED guard", () => 
 describe("automation/create approval preserves governed provenance", () => {
   it("re-enters the canonical create door as an AI-authored create", () => {
     expect(AUTOMATION_CREATE_BLOCK).toContain('source: "ai" as const');
-    expect(AUTOMATION_CREATE_BLOCK).toContain("materializeApprovedAutomation");
     expect(AUTOMATION_CREATE_BLOCK).toContain(
-      "agentUserId: automationAuthorId"
+      "materializeAutomationForPrincipal"
     );
+    expect(AUTOMATION_CREATE_BLOCK).toMatch(
+      /ownerOfProposal\(\s*db,\s*proposal,\s*userId\s*\)/
+    );
+    expect(AUTOMATION_CREATE_BLOCK).toContain("agentUserId: owner.agentUserId");
     expect(AUTOMATION_CREATE_BLOCK).toContain("stableId: proposal.targetId");
+    // The status is the door's decision (an approval activates): the
+    // executor passes who approved, never a default of its own.
+    expect(AUTOMATION_CREATE_BLOCK).toContain(
+      "personApproved: await personIsApproving(ctx, userId)"
+    );
+    expect(AUTOMATION_CREATE_BLOCK).not.toMatch(/\?\? "(active|draft)"/);
     expect(AUTOMATION_CREATE_BLOCK).toContain(
       "metadata: innerData.metadata as Record<string, unknown> | undefined"
     );

@@ -10,7 +10,11 @@ import {
 // The frame reads the console's client only inside an effect (never on a
 // static render); the hook just has to exist.
 vi.mock("../../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
+  },
 }));
 
 import { DocumentContentSection } from "./content-block";
@@ -109,6 +113,27 @@ describe("a stored HTML page on its document page", () => {
     // The toggle is there, on Page.
     expect(out).toContain("Page");
     expect(out).toContain("Source");
+  });
+
+  it("hands a clicked link to this host: the link door sits after the SDK and before the page, and the sandbox is unchanged", () => {
+    const out = html(
+      <DocumentContentSection
+        title="Content"
+        content={documentContent(null, answer)}
+      />
+    );
+    const frame = iframes(out)[0]!;
+    const srcdoc = unescape(attr(frame, "srcdoc")!);
+    expect(srcdoc).toContain("synap:navigate");
+    expect(srcdoc.indexOf("window.synap = Object.freeze")).toBeLessThan(
+      srcdoc.indexOf("synap:navigate")
+    );
+    expect(srcdoc.indexOf("synap:navigate")).toBeLessThan(
+      srcdoc.indexOf("entities.list',{profileSlug")
+    );
+    // Handing a link up is NOT a looser sandbox: the page still cannot open
+    // windows or navigate the console.
+    expect(attr(frame, "sandbox")).toBe("allow-scripts");
   });
 
   it("Source is the escaped text, and nothing runs", () => {

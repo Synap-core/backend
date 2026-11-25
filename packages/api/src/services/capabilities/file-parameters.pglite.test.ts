@@ -544,6 +544,8 @@ describe("after approval: the file is read again and the URL minted then", () =>
       metadata: r.metadata,
       parameters: r.parameters,
       executionMode: r.execution_mode,
+      intent: null,
+      inputMap: null,
     };
   };
   /** Replays an approved proposal the way the capability.run executor does. */
@@ -633,6 +635,8 @@ describe("files as bytes only reach a code verb", () => {
         metadata: {},
         parameters: { media: "file[]:bytes" },
         executionMode: "sync",
+        intent: null,
+        inputMap: null,
       },
       { media: [ID.photo] },
       { userId: OWNER, workspaceId: null }

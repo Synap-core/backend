@@ -71,6 +71,19 @@ export interface SafePublicFetchDeps {
    * either way.
    */
   allowedPorts?: ReadonlySet<number> | "any";
+  /**
+   * Refuse any hop that is not `https:` — the first URL AND every redirect.
+   * For a door that stores what it fetches (a file from a URL): bytes read
+   * over plain http could have been swapped on the way.
+   */
+  httpsOnly?: boolean;
+  /**
+   * Which hostnames a hop may name — the first URL AND every redirect. For a
+   * door limited to hosts a person allowed by name (`http.get_json`): a
+   * redirect from an allowed host to any other host is refused before it is
+   * resolved. Absent: any public host.
+   */
+  isAllowedHost?: (hostname: string) => boolean;
 }
 
 const systemResolver: AddressResolver = async (hostname) => {
@@ -246,6 +259,20 @@ export async function safePublicFetch(
   for (let hop = 0; hop <= maxRedirects; hop++) {
     const check = validateExternalUrl(currentUrl, { allowedPorts: ports });
     if (!check.valid) throw blocked(check.reason);
+    if (deps.httpsOnly && check.url.protocol !== "https:") {
+      throw blocked(
+        hop === 0
+          ? "only https URLs are allowed"
+          : "a redirect left https, which is not allowed"
+      );
+    }
+    if (deps.isAllowedHost && !deps.isAllowedHost(check.url.hostname)) {
+      throw blocked(
+        hop === 0
+          ? `'${check.url.hostname}' is not an allowed host`
+          : `a redirect went to '${check.url.hostname}', which is not an allowed host`
+      );
+    }
     const pin = await vetHost(
       check.url.hostname,
       resolve,

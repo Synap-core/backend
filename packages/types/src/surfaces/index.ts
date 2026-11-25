@@ -62,15 +62,10 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
     replacedBy: "Inbox; Settings › AI & agents",
     decisionDoc: V1_PLAN_DOC,
   },
-  {
-    id: "processors",
-    surface: "browser",
-    since: SINCE,
-    reason:
-      "Operations app deprecated: folds into Work › Activity plus the new health mark. Builder mode keeps a door to it.",
-    replacedBy: "Work › Activity",
-    decisionDoc: V1_PLAN_DOC,
-  },
+  // `processors` (Operations) left this registry: it was DELETED from the
+  // browser (Process wave plan 0adf8352 W4), its id aliased to Processes. A
+  // retired app is not a deprecated one (the browser tripwire requires every
+  // id here to keep a manifest entry).
   {
     id: "activity",
     surface: "browser",
@@ -180,6 +175,22 @@ export const DEPRECATED_SURFACES: readonly DeprecatedSurface[] = [
       "The gallery PATH is superseded by the Library tab (Things); the route stays only as a redirect for installed widgets and deep links.",
     replacedBy: "Library › Things on the phone, and the desktop Library",
     decisionDoc: V1_PLAN_DOC,
+  },
+  {
+    // Wave "one timeline for Work" (founder yes, 16 Nov 2026; 4 Nov surface
+    // rule: on the phone, goals only behind details). The tab id stays `work`
+    // because people's stored tab settings and space layouts name it; the
+    // route `/work` redirects to the Goals collection `/goals`, where the
+    // Monday desk moved, and a stored `work` tab id reads as Home
+    // (`RETIRED_TAB_IDS`, relay `src/lib/shell-mode.ts`).
+    id: "work",
+    surface: "relay",
+    since: "2026-11-16",
+    reason:
+      "The Goals tab (tab id `work`) left the bar: on the phone goals sit behind details. `/work` redirects to the Goals collection, which holds the Monday desk and the same attention groups.",
+    replacedBy: "Goals (`/goals`), reached from Home",
+    decisionDoc:
+      "Synap doc 5207fbb6 — one timeline for Work (founder, 16 Nov 2026)",
   },
   // `pipeline` (relay classic-shell kanban) left this registry on 2026-10-14:
   // its route, tab id and template slot were DELETED (projects as places), so

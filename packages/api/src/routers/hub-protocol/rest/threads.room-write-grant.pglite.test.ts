@@ -7,8 +7,8 @@
  *
  * Driven end to end on PGlite through the REAL doors, keys minted the real
  * way: consent (`decideOAuthAuthorization` → `connectOAuthApp`) → `POST /token`
- * (`oauthApp` → `mintAppOAuthAccessKey` → the person-token door for a Synap
- * app, the app's own agent key for any other) → the token presented to the
+ * (`oauthApp` → `mintAppOAuthAccessKey` → the person-token door, for every
+ * pod app since 12 Nov 2026) → the token presented to the
  * REAL Hub auth door (`hubAuthMiddleware`: lookup, `resolveKeyIdentity`, W1
  * fence, `runWithGrant`) → the REAL threads routes and the REAL answer loop
  * (`recordOwnerRoomReply`).
@@ -17,7 +17,7 @@
  *   STUDIO  content-studio.synap.live  person   channel.read + session.update
  *   CRM     crm.synap.live             person   channel.read + entity.deal.update
  *   HUB     hub.synap.live             person   channel.read + message.create
- *   OTHER   studio.example.com         agent    channel.read + session.update
+ *   OTHER   studio.example.com         person   channel.read + session.update
  * and the owner's own AI (Claude Code): an agent key minted by
  * `createNamedAgent`, the "AI — read & propose" preset (no `message.create`).
  *
@@ -27,8 +27,13 @@
  *   - the person's official app (session.update) refused in its run's room,
  *     or its post stored as anything but the person's words, or not
  *     answering the open question;
- *   - an agent-acting app's post stored as the person's;
+ *   - an agent's post (the owner's own AI) stored as the person's, or an app
+ *     that is not a Synap app posting as anything but the person;
  *   - a room in a space the grant does not tick written;
+ *   - the room of a PROJECT-ONLY session (no space of its own) refused to an
+ *     app granted a space its project uses, or written for a project that
+ *     uses only another space, or for a session with neither space nor
+ *     project (founder, 18 Nov 2026: `access/session-counted-spaces.ts`);
  *   - a channel that is no session's room written without `message.create`;
  *   - the owner's own AI (`synap session post`) refused in a session's room;
  *   - the owner's FREE message (no open question) in a running session not
@@ -174,6 +179,7 @@ import "../../../access/grant-read.js";
 import { hubAuthMiddleware } from "../_middleware/auth.js";
 import type { HubHono, HubVariables } from "./_shared.js";
 import { registerThreadsRoutes } from "./threads.js";
+import { registerFocusSessionsRoutes } from "./focus-sessions.js";
 import { oauthApp } from "../../oauth/routes.js";
 import {
   decideOAuthAuthorization,
@@ -209,6 +215,19 @@ const SESSION = randomUUID();
 /** A run's room in Finance (no connection ticks Finance). */
 const FINANCE_ROOM = randomUUID();
 const FINANCE_SESSION = randomUUID();
+/**
+ * Project-only sessions (no space of their own) and their pod-wide rooms:
+ * one in a project that USES Content OS, one in a project that uses only
+ * Finance, one in no project at all.
+ */
+const PROJECT_USES_CONTENT = randomUUID();
+const PROJECT_USES_FINANCE = randomUUID();
+const IN_CONTENT_PROJECT = { room: randomUUID(), session: randomUUID() };
+const IN_FINANCE_PROJECT = { room: randomUUID(), session: randomUUID() };
+const NO_PLACE = { room: randomUUID(), session: randomUUID() };
+/** Project-only sessions with NO room yet: `POST /focus-sessions/:id/channel` mints it. */
+const ROOMLESS_IN_CONTENT_PROJECT = randomUUID();
+const ROOMLESS_IN_FINANCE_PROJECT = randomUUID();
 /** A plain conversation in Content OS: no session's room. */
 const THREAD = randomUUID();
 /** An agent the pod runs (no key of its own, no dispatch binding). */
@@ -265,17 +284,17 @@ const q = <T = Record<string, unknown>>(sql: string, params?: unknown[]) =>
 async function seedRun(
   room: string,
   session: string,
-  workspaceId: string,
-  opts: { status?: string; agentIds?: string[] } = {}
+  workspaceId: string | null,
+  opts: { status?: string; agentIds?: string[]; projectId?: string } = {}
 ) {
   await q(
     `insert into channels (id, user_id, workspace_id, channel_type, scope, status, title, context_object_type, context_object_id, metadata)
-     values ($1,$2,$3,'group','workspace','active','Run','focus_session',$4,'{}'::jsonb)`,
-    [room, OWNER, workspaceId, session]
+     values ($1,$2,$3,'group',$5,'active','Run','focus_session',$4,'{}'::jsonb)`,
+    [room, OWNER, workspaceId, session, workspaceId ? "workspace" : "pod"]
   );
   await q(
-    `insert into focus_sessions (id, user_id, workspace_id, channel_id, goal, status, agent_ids, expected_outputs, metadata)
-     values ($1,$2,$3,$4,'Make a carousel',$5,$6,'[]'::jsonb,'{}'::jsonb)`,
+    `insert into focus_sessions (id, user_id, workspace_id, project_id, channel_id, goal, status, agent_ids, expected_outputs, metadata)
+     values ($1,$2,$3,$7,$4,'Make a carousel',$5,$6,'[]'::jsonb,'{}'::jsonb)`,
     [
       session,
       OWNER,
@@ -283,6 +302,7 @@ async function seedRun(
       room,
       opts.status ?? "active",
       opts.agentIds ?? [],
+      opts.projectId ?? null,
     ]
   );
 }
@@ -296,6 +316,10 @@ beforeAll(async () => {
   // The arbiter `runPlaybook`'s session → playbook link conflicts on.
   await h.client!.exec(
     `create unique index on links (from_type, from_id, to_type, to_id, link_type)`
+  );
+  // The arbiter the room mint's roster insert conflicts on (`enrollRoomMember`).
+  await h.client!.exec(
+    `create unique index on channel_members (channel_id, member_id)`
   );
   // Not a proof-of-presence suite: this pod CHOSE `report`, so the consent
   // applies without a proof (presence.pglite.test.ts owns the gate).
@@ -329,13 +353,52 @@ beforeAll(async () => {
   for (const clientId of [STUDIO, CRM, HUB, OTHER]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Room app', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callbackOf(clientId)], DECLARED]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Room app', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      // The document's hash: an app that is not a Synap app acts as the
+      // person only while it is the one consented to (`consentedDocumentHolds`).
+      [
+        clientId,
+        [callbackOf(clientId)],
+        DECLARED,
+        createHash("sha256").update(clientId).digest("hex"),
+      ]
     );
   }
   await seedRun(ROOM, SESSION, CONTENT);
   await seedRun(FINANCE_ROOM, FINANCE_SESSION, FINANCE);
+  // Two pod-personal projects, each using one space (`project_use_workspace`).
+  for (const [project, ws] of [
+    [PROJECT_USES_CONTENT, CONTENT],
+    [PROJECT_USES_FINANCE, FINANCE],
+  ] as const) {
+    await q(
+      `insert into projects (id, user_id, workspace_id, name) values ($1,$2,null,'Launch')`,
+      [project, OWNER]
+    );
+    await q(
+      `insert into links (id, workspace_id, from_type, from_id, to_type, to_id, link_type, metadata)
+       values ($1,$2,'project',$3,'workspace',$4,'uses','{}'::jsonb)`,
+      [randomUUID(), ws, project, ws]
+    );
+  }
+  await seedRun(IN_CONTENT_PROJECT.room, IN_CONTENT_PROJECT.session, null, {
+    projectId: PROJECT_USES_CONTENT,
+  });
+  await seedRun(IN_FINANCE_PROJECT.room, IN_FINANCE_PROJECT.session, null, {
+    projectId: PROJECT_USES_FINANCE,
+  });
+  await seedRun(NO_PLACE.room, NO_PLACE.session, null);
+  for (const [session, project] of [
+    [ROOMLESS_IN_CONTENT_PROJECT, PROJECT_USES_CONTENT],
+    [ROOMLESS_IN_FINANCE_PROJECT, PROJECT_USES_FINANCE],
+  ] as const) {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, goal, status, agent_ids, expected_outputs, metadata)
+       values ($1,$2,null,$3,'Plan the launch','active','{}','[]'::jsonb,'{}'::jsonb)`,
+      [session, OWNER, project]
+    );
+  }
   await q(
     `insert into users (id, email, name, user_type, agent_type) values ($1,'meta@x','Meta','agent','meta')`,
     [POD_AGENT]
@@ -431,6 +494,7 @@ function hubApp() {
   const hub: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
   hub.use("/*", hubAuthMiddleware as never);
   registerThreadsRoutes(hub);
+  registerFocusSessionsRoutes(hub);
   const root = new Hono();
   root.route("/api/hub", hub);
   return root;
@@ -447,6 +511,42 @@ async function post(bearer: string, channelId: string, body: unknown) {
   });
   return { status: res.status, body: (await res.json()) as any };
 }
+
+async function patchSession(bearer: string, sessionId: string, body: unknown) {
+  const res = await hubApp().request(`/api/hub/focus-sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: {
+      authorization: `Bearer ${bearer}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+async function mintRoom(bearer: string, sessionId: string) {
+  const res = await hubApp().request(
+    `/api/hub/focus-sessions/${sessionId}/channel`,
+    { method: "POST", headers: { authorization: `Bearer ${bearer}` } }
+  );
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+const roomOf = async (sessionId: string) =>
+  (
+    await q<{ channel_id: string | null }>(
+      `select channel_id from focus_sessions where id = $1`,
+      [sessionId]
+    )
+  ).rows[0]!.channel_id;
+
+const progressOf = async (sessionId: string) =>
+  (
+    await q<{ progress: number | null }>(
+      `select progress from focus_sessions where id = $1`,
+      [sessionId]
+    )
+  ).rows[0]!.progress;
 
 async function postBatch(bearer: string, channelId: string, items: unknown[]) {
   const res = await hubApp().request(
@@ -505,21 +605,20 @@ describe("a post in a room needs a write grant, not only a read", () => {
     });
   }, 120_000);
 
-  it("the keys are what production mints: the person's for a Synap app, the app's agent's for any other", async () => {
-    for (const clientId of [STUDIO, CRM, HUB]) {
+  it("the keys are what production mints: the person's, for every pod app", async () => {
+    for (const clientId of [STUDIO, CRM, HUB, OTHER]) {
       const row = await keyRow(token[clientId]!);
       expect(row).toMatchObject({ user_id: OWNER, key_type: "app_person" });
       // Every one may write SOMETHING: a refusal below is the grant's verdict
       // on the room, never the key's missing `hub-protocol.write` scope.
       expect(row.scope).toContain("hub-protocol.write");
     }
-    const other = await keyRow(token[OTHER]!);
-    expect(other.key_type).toBe("hub_inbound");
-    expect(other.user_id).toBe(await appAgentOf(OTHER));
+    // No agent was made for the app that is not a Synap app either.
+    expect(await appAgentOf(OTHER)).toBeNull();
   });
 
-  it("the agent-acting app asks in the run's room: stored as its agent, never as the person", async () => {
-    const res = await post(token[OTHER]!, ROOM, {
+  it("the owner's own AI asks in the run's room: stored as its agent, never as the person", async () => {
+    const res = await post(claude.apiKey, ROOM, {
       role: "assistant",
       content: "Which pillar is this carousel for?",
       userId: OWNER,
@@ -532,7 +631,7 @@ describe("a post in a room needs a write grant, not only a read", () => {
     expect(row).toMatchObject({
       user_id: OWNER,
       author_type: "ai_agent",
-      routed_teammate_id: await appAgentOf(OTHER),
+      routed_teammate_id: claude.agentUserId,
     });
   });
 
@@ -554,6 +653,23 @@ describe("a post in a room needs a write grant, not only a read", () => {
     expect(question.metadata?.roomPost?.answer).toMatchObject({
       messageId: mine.id,
       answeredBy: OWNER,
+    });
+  });
+
+  it("an app that is not a Synap app writes in its run's room as the person too, never as an agent", async () => {
+    const res = await post(token[OTHER]!, ROOM, {
+      role: "user",
+      content: "And a slide on the method.",
+      userId: OWNER,
+    });
+    expect(res.status).toBe(200);
+    const [row] = (await messagesIn(ROOM)).filter(
+      (m) => m.id === res.body.messageId
+    );
+    expect(row).toMatchObject({
+      user_id: OWNER,
+      author_type: "human",
+      routed_teammate_id: null,
     });
   });
 
@@ -582,6 +698,86 @@ describe("a post in a room needs a write grant, not only a read", () => {
     });
     expect(res.status).toBe(403);
     expect(await messagesIn(FINANCE_ROOM)).toHaveLength(0);
+  });
+
+  // ── a project-only session counts in its project's spaces (18 Nov 2026) ──
+
+  it("the official app writes in a PROJECT-ONLY session's room when its project uses the granted space, as the person", async () => {
+    const res = await post(token[STUDIO]!, IN_CONTENT_PROJECT.room, {
+      role: "user",
+      content: "Ship the launch post Tuesday.",
+      userId: OWNER,
+    });
+    expect(res.status).toBe(200);
+    const [row] = (await messagesIn(IN_CONTENT_PROJECT.room)).filter(
+      (m) => m.id === res.body.messageId
+    );
+    expect(row).toMatchObject({
+      user_id: OWNER,
+      author_type: "human",
+      routed_teammate_id: null,
+    });
+  });
+
+  it("a key that may only READ there still cannot write in that room", async () => {
+    const before = (await messagesIn(IN_CONTENT_PROJECT.room)).length;
+    const res = await post(token[CRM]!, IN_CONTENT_PROJECT.room, {
+      role: "user",
+      content: "Also a pricing slide.",
+      userId: OWNER,
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/grant does not allow "session\.update"/);
+    expect(await messagesIn(IN_CONTENT_PROJECT.room)).toHaveLength(before);
+  });
+
+  it("NOT the room of a project-only session whose project uses only another space, nor of one with neither space nor project", async () => {
+    for (const run of [IN_FINANCE_PROJECT, NO_PLACE]) {
+      const res = await post(token[STUDIO]!, run.room, {
+        role: "user",
+        content: "Hello",
+        userId: OWNER,
+      });
+      expect(res.status).toBe(403);
+      expect(await messagesIn(run.room)).toHaveLength(0);
+    }
+  });
+
+  it("the official app updates a project-only session through the session door too (applied: it acts as the person), and not one whose project uses another space", async () => {
+    const res = await patchSession(token[STUDIO]!, IN_CONTENT_PROJECT.session, {
+      progress: 40,
+    });
+    expect(res.status).toBe(200);
+    expect(await progressOf(IN_CONTENT_PROJECT.session)).toBe(40);
+    const refused = await patchSession(
+      token[STUDIO]!,
+      IN_FINANCE_PROJECT.session,
+      { progress: 40 }
+    );
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toMatch(
+      /grant does not allow "session\.update"/
+    );
+    expect(await progressOf(IN_FINANCE_PROJECT.session)).toBeNull();
+  });
+
+  it("the official app mints the room of a project-only session its grant may update (no longer refused as an unclassified write), and not one whose project uses another space", async () => {
+    const res = await mintRoom(token[STUDIO]!, ROOMLESS_IN_CONTENT_PROJECT);
+    expect(res.status).toBe(200);
+    expect(res.body.channelId).toBeTruthy();
+    expect(await roomOf(ROOMLESS_IN_CONTENT_PROJECT)).toBe(res.body.channelId);
+    const refused = await mintRoom(token[STUDIO]!, ROOMLESS_IN_FINANCE_PROJECT);
+    expect(refused.status).toBe(403);
+    expect(refused.body.error).toMatch(
+      /grant does not allow "session\.update"/
+    );
+    expect(await roomOf(ROOMLESS_IN_FINANCE_PROJECT)).toBeNull();
+    // A key that only reads where the session counts is refused there too.
+    const readOnly = await mintRoom(token[CRM]!, ROOMLESS_IN_CONTENT_PROJECT);
+    expect(readOnly.status).toBe(403);
+    expect(readOnly.body.error).toMatch(
+      /grant does not allow "session\.update"/
+    );
   });
 
   it("a channel that is no session's room needs message.create on its space", async () => {
@@ -694,7 +890,8 @@ describe("a post in a room needs a write grant, not only a read", () => {
   });
 
   it("an agent key's message wakes nobody; the person's next one does", async () => {
-    const byAgent = await post(token[OTHER]!, BY_AGENT.room, {
+    // The owner's own AI: an agent key (a pod app's token is the person's).
+    const byAgent = await post(claude.apiKey, BY_AGENT.room, {
       role: "user",
       content: "Status?",
       userId: OWNER,
@@ -767,7 +964,7 @@ describe("a post in a room needs a write grant, not only a read", () => {
           [sessionId]
         )
       ).rows
-    ).toEqual([{ executor: "is-agent", status: "running" }]);
+    ).toEqual([{ executor: "is-agent", status: "queued" }]);
     const kickoff = turnsOf(sessionId).length;
     expect(kickoff).toBe(1);
 

@@ -9,9 +9,10 @@
  * reads as the run param. This reactor listens for that answer's side effect
  * (`focus_session` / `slot_answered`) and dispatches again.
  *
- * IDEMPOTENT: the run is CLAIMED `failed → running` (WHERE status = 'failed'
- * AND external_agent IS NULL) before the executor runs — a second delivery of
- * the event, or a second answer, finds nothing to claim.
+ * IDEMPOTENT: the run is taken back `failed → queued` (WHERE status =
+ * 'failed' AND external_agent IS NULL) before the executor runs — a second
+ * delivery of the event, or a second answer, finds nothing to take. It is
+ * `running` once the chosen agent's provider starts the task.
  */
 
 import { createLogger } from "@synap-core/core";
@@ -24,12 +25,20 @@ import {
   entities,
   focusSessions,
   playbookRuns,
+  runHolder,
+  setRunStatus,
 } from "@synap/database";
 import { registerReactor, type Reactor } from "@synap/events";
-import type { PlaybookStage, RunResult } from "@synap/playbooks";
+import type { ExecutorRef, PlaybookStage, RunResult } from "@synap/playbooks";
+import type { Playbook, PlaybookRun } from "@synap/database/schema";
 import { PARAM_SLOT_KIND } from "@synap-core/types/focus-sessions";
+import { isDeclinedValue } from "@synap-core/types/ask";
 import { resolveExecutor } from "../playbooks/executors/registry.js";
-import { recordExecutorResult } from "../playbooks/run-playbook.js";
+import {
+  recordExecutorResult,
+  resolveRunChoice,
+  runWorkOfSession,
+} from "../playbooks/run-playbook.js";
 import { runPromptFor } from "../playbooks/playbook-lifecycle.js";
 import {
   getLinksFor,
@@ -64,29 +73,51 @@ export async function redispatchAfterAgentChoice(
     .limit(1);
   if (!failed) return { status: "nothing_to_redispatch" };
 
-  // CLAIM — only the claimer dispatches.
-  const [run] = await db
-    .update(playbookRuns)
-    .set({ status: "running", error: null, completedAt: null })
-    .where(
-      and(
-        eq(playbookRuns.id, failed.id),
-        eq(playbookRuns.status, "failed"),
-        drizzleSql`${playbookRuns.externalAgent} IS NULL`
-      )
-    )
-    .returning();
-  if (!run) return { status: "nothing_to_redispatch" };
-
-  const session = await db.query.focusSessions.findFirst({
-    where: eq(focusSessions.id, sessionId),
+  // Only the one that takes it back dispatches.
+  const {
+    rows: [run],
+  } = await setRunStatus(db, {
+    runId: failed.id,
+    where: drizzleSql`${playbookRuns.externalAgent} IS NULL`,
+    from: "failed",
+    to: "queued",
+    actor: { kind: "system" },
+    reason: "The person chose an agent: dispatched again.",
+    set: {
+      error: null,
+      completedAt: null,
+      holder: runHolder("agent", null),
+    },
   });
+  if (!run) return { status: "nothing_to_redispatch" };
+  return {
+    status: "redispatched",
+    runId: run.id,
+    runStatus: await redispatchRun(run, "external-agent"),
+  };
+}
+
+/**
+ * Dispatch a run the caller already took back (`queued`) through `executor`
+ * again, on the SAME row and session, and record what the executor says
+ * (`recordExecutorResult`). Shared by "Choose an agent" answered and a
+ * blocked run the person starts again (`run-blocked-ask.ts`).
+ */
+export async function redispatchRun(
+  run: PlaybookRun,
+  executor: ExecutorRef
+): Promise<RunResult["status"]> {
+  const session = run.sessionId
+    ? await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, run.sessionId),
+      })
+    : undefined;
   if (!session) {
     await recordExecutorResult(run.id, {
       status: "failed",
       error: "re-dispatch: the session no longer exists",
     });
-    return { status: "redispatched", runId: run.id, runStatus: "failed" };
+    return "failed";
   }
   let subjectName: string | undefined;
   let subjectProfile: string | undefined;
@@ -108,10 +139,32 @@ export async function redispatchAfterAgentChoice(
     fromType: "playbook",
   });
   const snapshot = asRecord(run.definitionSnapshot);
+  // An agent's run names its agent before the executor runs: the one on its
+  // input, else the run choice over the session as it is now (its frozen
+  // runner, the stored choice, the person's answer, then the last rungs).
+  let input: Record<string, unknown> = {
+    ...asRecord(run.input),
+    runId: run.id,
+  };
+  if (executor === "external-agent" && !input.agentUserId) {
+    const { handOff, runOn } = await resolveRunChoice({
+      userId: session.userId,
+      workspaceId: run.workspaceId ?? session.workspaceId,
+      playbook: {
+        id: run.playbookId,
+        executor: "external-agent",
+        runner: (snapshot.runner ?? null) as Playbook["runner"],
+        requires: (snapshot.requires ?? []) as Playbook["requires"],
+      },
+      work: runWorkOfSession(session),
+    });
+    const agentUserId = handOff?.agentUserId ?? runOn.agentUserId;
+    if (agentUserId) input = { ...input, agentUserId };
+  }
 
   let result: RunResult;
   try {
-    result = await resolveExecutor("external-agent").run({
+    result = await resolveExecutor(executor).run({
       workspaceId: run.workspaceId ?? session.workspaceId ?? "",
       userId: run.createdBy,
       playbookId: run.playbookId,
@@ -125,7 +178,7 @@ export async function redispatchAfterAgentChoice(
         ? (snapshot.stages as PlaybookStage[])
         : [],
       currentStage: session.currentStage,
-      input: { ...asRecord(run.input), runId: run.id },
+      input,
       capabilities,
     });
   } catch (err) {
@@ -135,7 +188,7 @@ export async function redispatchAfterAgentChoice(
     };
   }
   await recordExecutorResult(run.id, result);
-  return { status: "redispatched", runId: run.id, runStatus: result.status };
+  return result.status;
 }
 
 /**
@@ -202,6 +255,8 @@ export const agentChoiceRedispatchReactor: Reactor = {
     payload.subjectType === "focus_session" &&
     payload.action === "slot_answered" &&
     payload.data?.kind === PARAM_SLOT_KIND &&
+    // A refusal names no agent: re-dispatching would fail and ask again.
+    !isDeclinedValue(payload.data?.value) &&
     normalizeExpectedLabel(
       payload.data?.expectedLabel as string | undefined
     ) === normalizeExpectedLabel(CHOOSE_AGENT_SLOT_LABEL),

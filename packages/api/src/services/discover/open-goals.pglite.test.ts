@@ -48,6 +48,7 @@ import {
   projectMembers,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   users,
 } from "@synap/database";
@@ -111,6 +112,7 @@ beforeAll(async () => {
     projectMembers,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     users,
   ]) {

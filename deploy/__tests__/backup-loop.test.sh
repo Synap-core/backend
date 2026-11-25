@@ -95,6 +95,7 @@ suspects() { ls -1d "$T/backups/"*-SUSPECT 2>/dev/null | wc -l | tr -d ' '; }
 echo "── first dumps / rotation"
 run 5 100; [ "$(dailies)" = 1 ] && [ -e "$T/state/postgres-initialized" ] && ok "first dump published, pod marked initialized" || { bad "first dump: dailies=$(dailies) marker=$(ls "$T/state")"; cat "$T/out"; }
 fp="$(cat "$(ls -1d "$T/backups/"*-auto | tail -1)/fingerprint")"; [ "$fp" = "5|100|1" ] && ok "fingerprint recorded ($fp)" || bad "fingerprint=$fp"
+fb="$(cat "$(ls -1d "$T/backups/"*-auto | tail -1)/fingerprint.before" 2>/dev/null)"; [ "$fb" = "5|100|1" ] && ok "the count read before the dump is kept beside it (fingerprint.before)" || bad "fingerprint.before=$fb"
 grep -q "'backup', 'ok'" "$RUNS_LOG" && grep -q "5|100|1" "$RUNS_LOG" && ok "run recorded in backup_runs (ok, fingerprint)" || bad "no backup_runs row: $(cat "$RUNS_LOG")"
 # A legacy `-daily` dump (pre-extraction name) rotates with the new ones.
 mkdir -p "$T/backups/20000101T000000Z-daily"; echo "5|90" > "$T/backups/20000101T000000Z-daily/fingerprint"

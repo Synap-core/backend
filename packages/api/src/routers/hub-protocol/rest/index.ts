@@ -18,6 +18,7 @@ export { registerWorkspaceOpsRoutes } from "./workspace-ops.js";
 // else, so folding the helpers below into this one would make the file read as
 // an orphaned route.
 export { registerInstalledRoutes } from "./installed.js";
+export { registerNeedsRoutes } from "./needs.js";
 export {
   packageSlugFromCellTypeKey,
   INSTALLED_KINDS,
@@ -40,6 +41,7 @@ export { registerSkillsRoutes } from "./skills.js";
 export { registerSkillsCrudRoutes } from "./skills-crud.js";
 export { registerRulesRoutes } from "./rules.js";
 export { registerBriefsRoutes } from "./briefs.js";
+export { registerDesignsRoutes } from "./designs.js";
 export { registerChatRoutes } from "./chat.js";
 export { registerLibraryRoutes } from "./library.js";
 export { registerToolsRoutes } from "./tools.js";
@@ -51,6 +53,7 @@ export { registerCapabilityConnectionsRoutes } from "./capability-connections.js
 export { registerLoopsRoutes } from "./loops.js";
 export { registerMemoryRoutes } from "./memory.js";
 export { registerKnowledgeRoutes } from "./knowledge.js";
+export { registerFindRoutes } from "./find.js";
 export { registerCommandsRoutes } from "./commands.js";
 export { registerAgentUsersRoutes } from "./agent-users.js";
 export { registerAgentConfigsRoutes } from "./agent-configs.js";
@@ -73,8 +76,10 @@ export { registerSessionsRoutes } from "./sessions.js";
 export { registerPlaybooksRoutes } from "./playbooks.js";
 export { registerWidgetDefinitionsRoutes } from "./widget-definitions.js";
 export { registerCellsRoutes } from "./cells.js";
+export { registerRenderersRoutes } from "./renderers.js";
 export { registerCellInstancesRoutes } from "./cell-instances.js";
 export { registerWhiteboardsRoutes } from "./whiteboards.js";
+export { registerRealtimeRoutes } from "./realtime.js";
 export { registerMcpServersRoutes } from "./mcp-servers.js";
 export { registerAutomationsRoutes } from "./automations.js";
 export { registerVaultRoutes } from "./vault.js";
@@ -104,10 +109,12 @@ export { registerPodAdoptRoutes } from "./pod-adopt.js";
 export { registerFederationRoutes } from "./federation.js";
 export { registerKeysRoutes } from "./keys.js";
 export { registerAiProvidersRoutes } from "./ai-providers.js";
+export { registerAiProvidersAvailableRoute } from "./ai-providers-available.js";
 export { registerFocusSessionsRoutes } from "./focus-sessions.js";
 export { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
 export { registerGuidelinesRoutes } from "./guidelines.js";
 export { registerBrandRoutes } from "./brand.js";
+export { registerSurfaceContextRoutes } from "./surface-context.js";
 export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";
 export { registerArtifactsRoutes } from "./artifacts.js";

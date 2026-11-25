@@ -21,6 +21,7 @@ import { filesRouter } from "./routers/files.js";
 import { inboxRouter } from "./routers/inbox.js";
 import { intelligenceRegistryRouter } from "./routers/intelligence-registry.js";
 import { capabilitiesRouter } from "./routers/capabilities.js";
+import { needsRouter } from "./routers/needs.js";
 import { relationsRouter } from "./routers/relations.js";
 import { graphRouter } from "./routers/graph.js";
 import {
@@ -40,6 +41,7 @@ import { messageLinksRouter } from "./routers/message-links.js";
 import { commentsRouter } from "./routers/comments.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { surfacesRouter } from "./routers/surfaces.js";
+import { surfaceContextRouter } from "./routers/surface-context.js";
 import { propertyDefsRouter } from "./routers/property-defs.js";
 import { profilePropertiesRouter } from "./routers/profile-properties.js";
 import { relationDefsRouter } from "./routers/relation-defs.js";
@@ -57,6 +59,7 @@ import { mcpServersRouter } from "./routers/mcp-servers.js";
 import { agentConfigsRouter } from "./routers/agent-configs.js";
 import { widgetDefinitionsRouter } from "./routers/widget-definitions.js";
 import { cellsRouter } from "./routers/cells.js";
+import { renderersRouter } from "./routers/renderers.js";
 import { cellInstancesRouter } from "./routers/cell-instances.js";
 import { channelGatewayRouter } from "./routers/channel-gateway.js";
 import { importRouter } from "./routers/import.js";
@@ -98,6 +101,7 @@ import { automationsRouter } from "./routers/automations.js";
 import { knowledgeRouter } from "./routers/knowledge.js";
 import { onboardingRouter } from "./routers/onboarding.js";
 import { onboardingMilestonesRouter } from "./routers/onboarding-milestones.js";
+import { aiAvailabilityRouter } from "./routers/ai-availability.js";
 // Previously mounted ONLY via the dynamic `registerRouter` registry (so they
 // were served but invisible to codegen). Folded into coreRouter so root.ts is
 // the SINGLE source of truth for the served + typed API surface.
@@ -141,6 +145,8 @@ export const coreRouter = router({
   intelligence: intelligenceRouter,
   knowledge: knowledgeRouter,
   capabilities: capabilitiesRouter,
+  // A space's needs, each filled once by one provider (0426).
+  needs: needsRouter,
   relations: relationsRouter,
   graph: graphRouter,
   // Merge the workspace CATALOG procedures (browse + slug-install the
@@ -163,8 +169,9 @@ export const coreRouter = router({
   comments: commentsRouter,
   // Dynamic Schema System
   profiles: profilesRouter,
-  // Surfaces plane — renderer usage-health (how each record type is displayed)
-  surfaces: surfacesRouter,
+  // Surfaces plane — renderer usage-health (how each record type is displayed),
+  // and `surfaces.context`: what a frame is about and its brand (contract v3).
+  surfaces: mergeRouters(surfacesRouter, surfaceContextRouter),
   propertyDefs: propertyDefsRouter,
   profileProperties: profilePropertiesRouter,
   relationDefs: relationDefsRouter,
@@ -184,6 +191,8 @@ export const coreRouter = router({
   agents: agentsRouter,
   widgetDefinitions: widgetDefinitionsRouter,
   cells: cellsRouter,
+  // Renderer bundles: the host modules and the cells a host draws with.
+  renderers: renderersRouter,
   cellInstances: cellInstancesRouter,
   channelGateway: channelGatewayRouter,
   import: importRouter,
@@ -226,6 +235,9 @@ export const coreRouter = router({
   onboarding: onboardingRouter,
   // Settings › Privacy: share setup milestones with the CP (plan §5, OQ3).
   onboardingMilestones: onboardingMilestonesRouter,
+  // This pod's AI availability for the caller, and the re-check an app
+  // calls after a top-up (W3 C4).
+  aiAvailability: aiAvailabilityRouter,
   diagnose: diagnoseRouter,
   signal: signalRouter,
   signals: signalsRouter,

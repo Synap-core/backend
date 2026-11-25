@@ -94,6 +94,10 @@ export const en = {
   "again.code":
     "That code didn’t confirm it’s you, or it was already used. Type the code your app shows now, or another recovery code.",
   usePasskey: "Use your passkey instead",
+  // "Add this device" (founder, 9 Nov 2026): a device the person already
+  // uses approves this one, which then creates its own passkey.
+  setUp: "Set up this device",
+  "setUp.done": "This device is set up. Confirm with its new passkey.",
 };
 
 const fr: Catalog<typeof en> = {
@@ -175,6 +179,9 @@ const fr: Catalog<typeof en> = {
   "again.code":
     "Ce code n’a pas confirmé que c’est vous, ou il a déjà servi. Saisissez le code affiché maintenant par votre app, ou un autre code de récupération.",
   usePasskey: "Utiliser plutôt votre clé d’accès",
+  setUp: "Configurer cet appareil",
+  "setUp.done":
+    "Cet appareil est configuré. Confirmez avec sa nouvelle clé d’accès.",
 };
 
 /** The presence dialog's translator, in the ambient catalog locale. */

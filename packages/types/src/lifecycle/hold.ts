@@ -42,7 +42,8 @@ export type HoldOn = (typeof HOLD_ON)[number];
  * `focus_session:…`), optionally only when it reaches `to` (a status key, or a
  * category such as `done`). `moves` may also name a DEV FACT
  * ({@link HoldDevRef}: `pr:<owner/name>#<n>`, `main:<owner/name>`,
- * `job:<name>`): the hold then resumes when a producer posts that fact.
+ * `job:<name>`, `ai:available`): the hold then resumes when a producer posts
+ * that fact.
  */
 export type HoldUntil = { date: string } | { moves: string; to?: string };
 
@@ -73,7 +74,7 @@ export interface RecordedHold extends Hold {
  * shape, so the agent can fix the call in one try.
  */
 export const HOLD_REQUIRED_MESSAGE =
-  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session>:<id>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" } or { "moves": "answer:<session id>/<slot key or label>" | "proposal:<proposal id>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
+  'A pause must say what it waits on: pass `hold` with the move, e.g. { "on": "person" | "agent" | "external" | "thing" | "decision" | "date" | "nobody", "ref": "<who or what>", "reason": "<why>", "until": { "date": "<ISO date>" } or { "moves": "<entity|track|focus_session|playbook_run>:<id>" | "slot:<session id>/<slot key>", "to": "<status>" } or { "moves": "pr:<owner/name>#<n>" | "main:<owner/name>" | "job:<devbox job name>" | "ai:available" } or { "moves": "answer:<session id>/<slot key or label>" | "proposal:<proposal id>" } }. An agent cannot pause without one. Retry the same move with `hold` added.';
 
 /**
  * The dev-fact forms of `until.moves`, in one line: what an agent reads in a
@@ -85,6 +86,15 @@ export const HOLD_REQUIRED_MESSAGE =
  */
 export const HOLD_DEV_MOVES_HELP =
   "'pr:<owner/name>#<n>' resumes when that pull request merges (to: 'closed' = when it is closed without merging); 'main:<owner/name>' when that repo's main is green again; 'job:<devbox job name>' when that devbox job finishes (to: 'passed' | 'failed' = only that verdict)";
+
+/**
+ * The AI form of `until.moves`, said only when a pause is refused (and in
+ * `HOLD_REQUIRED_MESSAGE`), never in the tool descriptions: the pod's check
+ * gate writes it, an agent rarely does, and every tool definition carries the
+ * dev help above (the MCP token budget).
+ */
+const HOLD_AI_MOVES_HELP =
+  "'ai:available' when this pod's AI is back (the person acts, never you)";
 
 /**
  * The wait forms of `until.moves` (plan 07f8a997 "Agents wait on anything",
@@ -131,10 +141,18 @@ export const OCCURRED_AT_MAX_PAST_DAYS = 30;
 
 const DAY_MS = 86_400_000;
 
+/**
+ * The subjects `until.moves` may name. A proposal is NOT one: `proposal:<id>`
+ * is the WAIT form (`parseHoldWaitRef`: "no longer pending", owner-floored,
+ * checked by the hold-resume worker whenever the proposal moves), so a second,
+ * unfloored spelling of the same wait is not offered.
+ */
 const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
   "entity",
   "track",
   "focus_session",
+  "playbook_run",
+  "slot",
 ];
 
 /**
@@ -147,24 +165,37 @@ const MOVES_SUBJECTS: readonly TransitionSubjectType[] = [
  *  - `job:<name>`: the devbox job ended — its `ci.finished` (workflow
  *    `devbox <name>`) after the pause began; with `to: "passed" | "failed"`
  *    only that verdict.
- * Whether the fact is in is decided by `holdDevRefMet` (`events/dev-hold.ts`).
+ *  - `ai:available`: this pod's AI is available — the pod's latest pull of
+ *    its AI availability from the Control Plane reads it available, checked
+ *    after the pause began (`aiHoldMet`). The one spelling: AI has
+ *    no name and no verdict. A check gate whose AI judge could not run for a
+ *    payer state writes it; its resume re-grades the gate, never only
+ *    un-pauses it.
+ * Whether the fact is in is decided by `holdDevRefMet` (pr / main / job,
+ * over dev events) and `aiHoldMet` (ai, over the pod's availability), both
+ * in `events/dev-hold.ts`.
  */
 export type HoldDevRef =
   | { kind: "pr"; repo: string; number: number }
   | { kind: "main"; repo: string }
-  | { kind: "job"; name: string };
+  | { kind: "job"; name: string }
+  | { kind: "ai" };
+
+/** The one `until.moves` an AI hold is written with. */
+export const HOLD_AI_MOVES = "ai:available";
 
 /** The `until.to` each dev fact accepts; absent = the first (pr) or any (job). */
 export const HOLD_DEV_TO = {
   pr: ["merged", "closed"],
   main: [],
   job: ["passed", "failed"],
+  ai: [],
 } as const satisfies Record<HoldDevRef["kind"], readonly string[]>;
 
 const DEV_REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 const DEV_JOB_RE = /^[A-Za-z0-9_.-]{1,200}$/;
 
-/** `pr:<owner/name>#<n>` / `main:<owner/name>` / `job:<name>` → its parts, else null. */
+/** `pr:<owner/name>#<n>` / `main:<owner/name>` / `job:<name>` / `ai:available` → its parts, else null. */
 export function parseHoldDevRef(ref: string): HoldDevRef | null {
   const i = ref.indexOf(":");
   if (i <= 0) return null;
@@ -185,6 +216,7 @@ export function parseHoldDevRef(ref: string): HoldDevRef | null {
     return DEV_REPO_RE.test(rest) ? { kind, repo: rest } : null;
   if (kind === "job")
     return DEV_JOB_RE.test(rest) ? { kind, name: rest } : null;
+  if (kind === "ai") return rest === "available" ? { kind } : null;
   return null;
 }
 
@@ -201,12 +233,14 @@ export function holdDevMovesRef(ref: HoldDevRef): string {
       return `main:${ref.repo.toLowerCase()}`;
     case "job":
       return `job:${ref.name}`;
+    case "ai":
+      return HOLD_AI_MOVES;
   }
 }
 
 /**
  * THE name of a dev fact, as a person reads it: `backend#539`, `backend main`,
- * `job kit-h` (the repo's name without its owner). Every reader that names
+ * `job kit-h` (the repo's name without its owner), `AI availability`. Every reader that names
  * what a dev hold waits on says these words: the hold line (`holdLine`,
  * `goal/marks.ts`), the waiting-on ref (`holdWaitingOnRef`, api) and the
  * watcher's dev signals.
@@ -219,6 +253,8 @@ export function holdDevRefLabel(ref: HoldDevRef): string {
       return `${repoName(ref.repo)} main`;
     case "job":
       return `job ${ref.name}`;
+    case "ai":
+      return "AI availability";
   }
 }
 
@@ -343,7 +379,7 @@ export function holdProblem(
           : `hold.until.to does not apply to "${dev.kind}:": remove it.`;
       }
     } else if (!parseHoldMovesRef(until.moves)) {
-      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>", a dev fact: ${HOLD_DEV_MOVES_HELP}, or a wait: ${HOLD_WAIT_MOVES_HELP}.`;
+      return `hold.until.moves must be "<${MOVES_SUBJECTS.join("|")}>:<id>", a dev fact: ${HOLD_DEV_MOVES_HELP}; ${HOLD_AI_MOVES_HELP}, or a wait: ${HOLD_WAIT_MOVES_HELP}.`;
     }
   }
   const review = isoTime(hold.reviewBy);

@@ -32,7 +32,10 @@ import { Button, Input, addToast } from "@heroui/react";
 import { Check, X } from "lucide-react";
 import { ASK_COPY, classifyAskRefusal } from "@synap-core/types/ask";
 import Link from "next/link";
-import { resolveStatusLabel } from "@synap-core/types/vocabulary";
+import {
+  resolveActionLabel,
+  resolveStatusLabel,
+} from "@synap-core/types/vocabulary";
 import {
   CRITERION_SLOT_KIND,
   isCriterionGradeAsk,
@@ -60,12 +63,14 @@ import {
   type ReviewRow,
 } from "../../../(admin)/review/_lib/review-rows";
 import { proposalHeading } from "../../../proposal/[id]/proposal-heading";
-import { proposalRequester } from "../../../proposal/[id]/proposal-requester";
+import { proposalRequester } from "@synap-core/types/proposals";
 import { proposalSubjectKind } from "../../../proposal/[id]/proposal-subject-kind";
 import { objectPage } from "../content/markdown-model";
 import { kindIcon, kindLabel } from "../kind-icon";
 import { OpenInAppLink } from "../open-in-app-link";
 import { useReauthOnUnauthorized } from "../use-reauth";
+import { RequestRowLines } from "../../request/request-row-lines";
+import { reviewRowView } from "../../../(admin)/review/_lib/review-row-view";
 
 /** The most rows one needs-you read returns (Review's page size). */
 const NEEDS_YOU_LIMIT = 100;
@@ -78,6 +83,8 @@ const PROPOSALS_SHOWN = 5;
 
 /** Where a row pod admin cannot act on is acted on (decision 94cd8636). */
 const ACT_ELSEWHERE = "Act on it in Relay or the Synap app.";
+/** Lines under a request row start where its text does: past the 28px kind tile and its gap. */
+const UNDER_TILE = "pl-10";
 
 const DOOR =
   "rounded-sm text-[12.5px] text-foreground/70 underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
@@ -361,46 +368,60 @@ function CriterionVerdictButtons({
  * 869b2cd6: keep the panel, explain the rows it cannot act on).
  */
 function OwedRow({ row, sessionId }: { row: ReviewRow; sessionId: string }) {
-  const Icon = kindIcon(row.nounKind);
+  // The ONE request row Review draws (D4): its lines, doors and marks.
+  const view = reviewRowView(row);
   const door = row.detail?.kind === "open" ? row.detail.door : null;
   const here = door?.kind === "session" && door.id === sessionId;
   return (
-    <div className="flex items-start gap-3 pb-4">
-      <Icon
-        aria-hidden
-        className="mt-0.5 h-4 w-4 shrink-0 text-foreground/55"
-      />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <p className="break-words text-[13px] font-medium text-foreground">
-          {row.title}
-        </p>
-        {(row.reason || row.occurredAt) && (
-          <p className="text-[12px] text-foreground/65">
-            {[row.reason, formatRelative(row.occurredAt, { empty: "" })]
-              .filter(Boolean)
-              .join(" · ")}
-          </p>
+    <div className="flex flex-col gap-1.5 pb-4">
+      <RequestRowLines
+        family={view.family}
+        what={view.what}
+        holds={view.holds}
+        // Its own session is where the reader already is: no door back to it.
+        who={view.who.filter(
+          (p) =>
+            !(
+              p.kind === "door" &&
+              p.door?.kind === "session" &&
+              p.door.id === sessionId
+            )
         )}
-        {door &&
-          (here ? (
-            <div
-              data-acted-elsewhere=""
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-1"
-            >
-              <span className="text-[12px] text-foreground/65">
-                {ACT_ELSEWHERE}
-              </span>
-              <OpenInAppLink type="session" id={sessionId} />
-            </div>
-          ) : (
-            <ExitLink exit={exitOf({ kind: "open", door })} label="Open" />
-          ))}
-      </div>
+      />
+      {door &&
+        (here ? (
+          <div
+            data-acted-elsewhere=""
+            className={`flex flex-wrap items-baseline gap-x-2 gap-y-1 ${UNDER_TILE}`}
+          >
+            <span className="text-[12px] text-foreground/70">
+              {ACT_ELSEWHERE}
+            </span>
+            <OpenInAppLink type="session" id={sessionId} />
+          </div>
+        ) : (
+          <div className={UNDER_TILE}>
+            <ExitLink
+              exit={exitOf({ kind: "open", door })}
+              label={resolveActionLabel("open", "imperative")}
+            />
+          </div>
+        ))}
     </div>
   );
 }
 
-export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
+export function ProposedChangesSection({
+  sessionId,
+  drawnAbove,
+}: {
+  sessionId: string;
+  /**
+   * Proposals the page already draws as their own card (a stage gate in
+   * "Where it stands", decided there): listed once, never twice.
+   */
+  drawnAbove?: ReadonlySet<string> | "pending";
+}) {
   const list = trpc.proposals.list.useQuery(
     { sessionId, status: "pending", limit: PROPOSALS_LIMIT },
     { staleTime: 15_000, retry: false }
@@ -408,14 +429,15 @@ export function ProposedChangesSection({ sessionId }: { sessionId: string }) {
   const [all, setAll] = useState(false);
   useReauthOnUnauthorized(list.error);
 
-  if (list.isLoading) return null;
+  // Waits for the work read too, so a gate it draws never flashes here first.
+  if (list.isLoading || drawnAbove === "pending") return null;
   const failure = list.error ? (
     <ResourceRowError
       message="The changes this session proposed couldn’t be read."
       onRetry={() => void list.refetch()}
     />
   ) : null;
-  const items = list.data?.items ?? [];
+  const items = (list.data?.items ?? []).filter((p) => !drawnAbove?.has(p.id));
   if (items.length === 0) {
     return failure ? (
       <SectionCard variant="flat" title="Proposed changes">

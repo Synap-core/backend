@@ -29,6 +29,7 @@
 import { z } from "zod";
 import {
   db,
+  entities,
   focusSessions,
   playbooks,
   playbookRuns,
@@ -42,7 +43,13 @@ import {
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import type { Hold } from "@synap-core/types/lifecycle";
+import { HOLD_AI_MOVES, type Hold } from "@synap-core/types/lifecycle";
+import { resolveAiAvailability } from "@synap-core/types/ai-availability";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
+import { buildObjectActionTitle } from "@synap-core/types/vocabulary";
 import {
   readCriteria,
   resolveStageGate,
@@ -59,7 +66,13 @@ import {
   CHECK_GATE_METADATA_KEY,
   CHECK_GATE_UNEVALUATED,
 } from "@synap-core/types/focus-sessions";
+import { loadSessionProcess } from "@synap/jobs/utils/session-process.js";
 import { createEventBackedProposal } from "../../utils/event-backed-proposal.js";
+import {
+  owedOutputHint,
+  readStageOutcomes,
+  type StageOutcomesInput,
+} from "../focus-sessions/stage-outputs-approved.js";
 import { trackRepository } from "../tracks/track-repo.js";
 
 const logger = createLogger({ module: "stage-gate" });
@@ -93,15 +106,37 @@ export const StageGatePayloadSchema = z
     /** The `playbook_runs` row this session is executing, when there is one. */
     playbookRunId: z.string().uuid().optional(),
     fromStage: z.string().max(120).nullable().optional(),
+    /**
+     * The gate's display name: the stage and, for a session about a thing,
+     * that thing ("Send proposal for EU data residency deal"). The key a
+     * session proposal names itself by (`extractProposalName`), withheld from
+     * a viewer who may not read the session (`session-content-redaction.ts`).
+     */
+    targetName: z.string().min(1).max(600).optional(),
   })
   .refine((p) => !!p.sessionId !== !!p.trackId, {
     message: "A stage gate names exactly one subject: sessionId or trackId",
   });
 export type StageGatePayload = z.infer<typeof StageGatePayloadSchema>;
 
-/** One-line human summary — what the push notification and the feed row say. */
+/**
+ * One-line human summary — what the push notification and the feed row say —
+ * through the title door: "Approve stage: Send proposal for EU deal".
+ */
 export function summarizeStageGate(payload: StageGatePayload): string {
-  return `Approve entry into "${payload.stageName}"`;
+  return buildObjectActionTitle({
+    action: "stage_gate",
+    objectName: payload.targetName ?? payload.stageName,
+  });
+}
+
+/** The gate's name: the stage, and the thing the run is about when it has one. */
+export function stageGateName(
+  stageName: string,
+  thingName: string | null | undefined
+): string {
+  const thing = thingName?.trim();
+  return thing ? `${stageName} for ${thing}` : stageName;
 }
 
 /**
@@ -218,6 +253,12 @@ export interface StageGateSubject {
    * `[CHECK_GATE_UNEVALUATED]` — unmeasured is not passed.
    */
   checkFailing(fromStage: string): Promise<CheckMeasure>;
+  /**
+   * The name of the thing the subject works on, when it has one (a session's
+   * subject entity): the human gate's title names it. Null when there is
+   * none.
+   */
+  thingName?(): Promise<string | null>;
   /** Where the human-gate proposal points. */
   proposal: {
     targetType: string;
@@ -234,7 +275,35 @@ export interface StageGateSubject {
 export interface CheckMeasure {
   failing: string[];
   reason?: string;
+  /**
+   * Every miss is a criterion the AI judge could not grade (the call failed):
+   * nothing was judged, so the gate HOLDS and never sends the run back to its
+   * `onFail` stage. The owner's grade, or a later evaluation, resumes it.
+   */
+  notJudged?: boolean;
+  /**
+   * With `notJudged`: what kept the judge from running, read through the one
+   * classification (`resolveAiAvailability` over each failure's wire code).
+   *   - `payer`: every failure is an AI availability state a payer ends
+   *     (credits, plan, payment). The pod's pull sees it end, so the hold
+   *     waits on `ai:available`.
+   *   - `service`: every failure is an availability state, at least one the
+   *     AI service's own (budget, provider, service). The pull cannot see it
+   *     end, so the hold retries on a date.
+   *   - absent: another fault. The hold retries on a date too (and the
+   *     owner may grade it meanwhile, founder decision 8).
+   * Either way the gate is graded again when its hold comes due
+   * (`ai-held-gate.ts`).
+   */
+  judgeOut?: "payer" | "service";
 }
+
+/**
+ * How long a check gate whose judge could not run waits before it is graded
+ * again, when nothing the pod sees can wake it sooner: the hourly hold sweep
+ * runs it.
+ */
+export const JUDGE_RETRY_AFTER_MS = 60 * 60_000;
 
 export interface StageGateAdvance {
   /** Owner of the subject — the human who reviews. */
@@ -264,6 +333,8 @@ export interface CheckGateResult {
   paused: boolean;
   /** Why it held, in words — when the subject can say (a track does). */
   reason?: string;
+  /** It held only because the AI judge could not run ({@link CheckMeasure}). */
+  notJudged?: boolean;
 }
 
 export type StageGateOutcome =
@@ -294,6 +365,10 @@ async function openStageGate(
       : {}),
     ...(playbookRunId ? { playbookRunId } : {}),
     fromStage: input.fromStage ?? null,
+    targetName: stageGateName(
+      stage.name,
+      subject.thingName ? await subject.thingName() : null
+    ),
   });
 
   const paused = await subject.pause({
@@ -361,27 +436,13 @@ async function applyCheckGate(
       paused: false,
     };
   }
-  const { failing, reason } = await subject.checkFailing(fromStage);
+  const measure = await subject.checkFailing(fromStage);
+  const { failing, reason, notJudged } = measure;
   if (failing.length === 0) {
     return { kind: "check", stageKey, passed: true, failing, paused: false };
   }
-  const paused = await subject.pause(
-    {
-      on: "thing",
-      ref: `check:${stageKey}`,
-      reason:
-        reason ??
-        `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
-    },
-    {
-      [CHECK_GATE_METADATA_KEY]: {
-        stageKey,
-        fromStage,
-        failing,
-        ...(reason ? { reason } : {}),
-      },
-    }
-  );
+  const { hold, metadataPatch } = checkGatePause(stageKey, fromStage, measure);
+  const paused = await subject.pause(hold, metadataPatch);
   return {
     kind: "check",
     stageKey,
@@ -389,6 +450,52 @@ async function applyCheckGate(
     failing,
     paused,
     ...(reason ? { reason } : {}),
+    ...(notJudged ? { notJudged } : {}),
+  };
+}
+
+/**
+ * The hold a check gate that did not pass records, and its `checkGate`
+ * record: waiting on the check itself (`check:<stage>`, the ref
+ * `heldByCheckGate` recognises). When the judge could not run, the hold also
+ * says when to grade again (`CheckMeasure.judgeOut`): when AI is back for a
+ * payer state (`until: ai:available`), else on a date
+ * (`JUDGE_RETRY_AFTER_MS`). A real fail has no `until`: its next move is the
+ * stage's `onFail` or the owner's.
+ */
+export function checkGatePause(
+  stageKey: string,
+  fromStage: string,
+  measure: CheckMeasure,
+  now: Date = new Date()
+): { hold: Hold; metadataPatch: Record<string, unknown> } {
+  const { failing, reason } = measure;
+  const judgeOut = measure.notJudged === true ? measure.judgeOut : undefined;
+  const until =
+    measure.notJudged !== true
+      ? null
+      : judgeOut === "payer"
+        ? { moves: HOLD_AI_MOVES }
+        : {
+            date: new Date(now.getTime() + JUDGE_RETRY_AFTER_MS).toISOString(),
+          };
+  return {
+    hold: {
+      on: judgeOut ? "external" : "thing",
+      ref: `check:${stageKey}`,
+      reason:
+        reason ??
+        `The check of "${fromStage}" did not pass: ${failing.join(", ")}.`,
+      ...(until ? { until } : {}),
+    },
+    metadataPatch: {
+      [CHECK_GATE_METADATA_KEY]: {
+        stageKey,
+        fromStage,
+        failing,
+        ...(reason ? { reason } : {}),
+      },
+    },
   };
 }
 
@@ -425,25 +532,72 @@ export async function applyStageGate(
   return { kind: "human", ...opened };
 }
 
-/** Pure: the required criteria of `fromStage` whose current verdict is not pass. */
+/**
+ * Pure: what holds the stage LEFT — its required outcomes not met
+ * (`readStageOutcomes`, the one reading of a stage's work; the goal gate's
+ * {@link measureTrackStage} reads the same projection). A stage with no
+ * outcome holds nothing.
+ */
 export function checkGateFailing(
-  summary: {
-    criteria: Array<{ key: string; required?: boolean; stageKey?: string }>;
-    evaluations: Array<{ criterionKey: string; verdict: string }>;
-  },
+  input: StageOutcomesInput & { stages: unknown },
   fromStage: string
 ): string[] {
-  const current = new Map(
-    summary.evaluations.map((e) => [e.criterionKey, e.verdict])
-  );
-  return summary.criteria
-    .filter(
-      (c) =>
-        c.stageKey === fromStage &&
-        c.required !== false &&
-        current.get(c.key) !== "pass"
-    )
-    .map((c) => c.key);
+  return checkGateHold(input, fromStage).failing;
+}
+
+/**
+ * {@link checkGateFailing}, with the hold's `reason` when the stage left owes
+ * an OUTPUT: the gate's pause carries it (`metadata.checkGate.reason`, the
+ * hold), and the session's nudge repeats it, so the agent reads which slot to
+ * deliver and how (`owedOutputHint`). Pure.
+ */
+export function checkGateHold(
+  input: StageOutcomesInput & { stages: unknown },
+  fromStage: string,
+  notJudged?: ReadonlyMap<string, string>
+): CheckMeasure {
+  const stage = readStageOutcomes(input.stages, fromStage, input);
+  // The judge could not run on criteria this check needed. When those are
+  // the ONLY misses, the work was never graded: the gate holds with the
+  // failure in words and the owner's way out, and is not a failed check.
+  if (notJudged && notJudged.size > 0 && stage.unmet.length > 0) {
+    // An unmet outcome is unjudged when every criterion still open on it is
+    // one the judge could not grade: a real verdict among them, or a declared
+    // output nothing judges, is a miss and keeps today's path (`onFail`).
+    const unjudged = (key: string): string[] | null => {
+      const outcome = stage.outcomes.find((o) => o.key === key);
+      if (!outcome) return null;
+      const open =
+        outcome.source === "criterion"
+          ? [outcome.key]
+          : (outcome.criteria ?? []).filter((c) => !c.met).map((c) => c.key);
+      return open.length > 0 && open.every((k) => notJudged.has(k))
+        ? open
+        : null;
+    };
+    const blocked = stage.unmet.map(unjudged);
+    if (blocked.every((keys): keys is string[] => keys !== null)) {
+      const criteria = [...new Set(blocked.flat())];
+      const why = [...new Set(criteria.flatMap((k) => notJudged.get(k) ?? []))];
+      return {
+        failing: stage.unmet,
+        notJudged: true,
+        reason: [
+          ...why,
+          `The check of "${fromStage}" holds here instead of failing: the owner can grade ${criteria.map((k) => `"${k}"`).join(", ")} by hand to move on.`,
+          ...stage.unmetOutputs.map(owedOutputHint),
+        ].join(" "),
+      };
+    }
+  }
+  if (stage.unmetOutputs.length === 0) return { failing: stage.unmet };
+  return {
+    failing: stage.unmet,
+    reason: [
+      `The check of "${fromStage}" did not pass: ${stage.unmet.join(", ")}.`,
+      ...stage.unmetOutputs.map(owedOutputHint),
+    ].join(" "),
+  };
 }
 
 // The gate's two stored literals live in `@synap-core/types/focus-sessions`,
@@ -465,6 +619,8 @@ export interface SessionStageGateParams {
   projectId?: string | null;
   channelId?: string | null;
   playbookId?: string | null;
+  /** The thing the session is about, when it has one: the gate names it. */
+  subjectEntityId?: string | null;
   toStage: string;
   fromStage?: string | null;
 }
@@ -496,24 +652,16 @@ export function sessionGateSubject(
         : null;
     },
     async pause(hold, metadataPatch) {
-      // The gate's own hold: the system's move (guarded `active → paused`).
-      const { rows } = await setSessionStatus(db, {
-        sessionId: params.sessionId,
-        from: "active",
-        to: "paused",
-        actor: { kind: "system", userId: params.userId },
-        reason: "Its stage gate is holding it.",
-        hold,
-        set: {
-          updatedAt: new Date(),
-          ...(metadataPatch
-            ? {
-                metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`,
-              }
-            : {}),
-        },
-      });
-      return rows.length > 0;
+      return pauseSessionAtGate(db, params, hold, metadataPatch);
+    },
+    async thingName() {
+      if (!params.subjectEntityId) return null;
+      const [row] = await db
+        .select({ title: entities.title })
+        .from(entities)
+        .where(eq(entities.id, params.subjectEntityId))
+        .limit(1);
+      return row?.title ?? null;
     },
     async checkFailing(fromStage) {
       const { evaluateSession } =
@@ -523,18 +671,47 @@ export function sessionGateSubject(
         userId: params.userId,
         agentUserId: params.agentUserId ?? null,
         stageKey: fromStage,
+        asGateCheck: true,
       });
       // An evaluation that did not RUN is not a clean gate. `evaluateSession`
       // answers `not_found` when the session cannot be loaded for this caller
       // (a race with a close, the wrong userId) — reading that as "nothing
       // failing" would advance the run ungated on the one path the gate exists
       // to hold. Unmeasured is not passed.
-      return {
-        failing:
-          result.status === "evaluated"
-            ? checkGateFailing(result, fromStage)
-            : [CHECK_GATE_UNEVALUATED],
-      };
+      if (result.status !== "evaluated") {
+        return { failing: [CHECK_GATE_UNEVALUATED] };
+      }
+      const [row] = await db
+        .select({ expectedOutputs: focusSessions.expectedOutputs })
+        .from(focusSessions)
+        .where(eq(focusSessions.id, params.sessionId))
+        .limit(1);
+      const proc = await loadSessionProcess({
+        sessionId: params.sessionId,
+        playbookId: params.playbookId ?? null,
+      });
+      // The judge criteria this evaluation could not grade because the AI
+      // call failed, with that failure in words (`evaluate.ts`).
+      const couldNotRun = result.results.flatMap((r) =>
+        r.status === "skipped" && r.failureClass && r.reason
+          ? [{ key: r.key, reason: r.reason, failureClass: r.failureClass }]
+          : []
+      );
+      const notJudged = new Map(couldNotRun.map((r) => [r.key, r.reason]));
+      const measure = checkGateHold(
+        {
+          stages: proc?.stages ?? [],
+          expectedOutputs: row?.expectedOutputs ?? [],
+          criteria: result.criteria,
+          evaluations: result.evaluations,
+        },
+        fromStage,
+        notJudged
+      );
+      const judgeOut = measure.notJudged
+        ? judgeOutOf(couldNotRun.map((r) => r.failureClass))
+        : undefined;
+      return judgeOut ? { ...measure, judgeOut } : measure;
     },
     proposal: {
       targetType: STAGE_GATE_TARGET_TYPE,
@@ -545,6 +722,53 @@ export function sessionGateSubject(
       playbookId: params.playbookId ?? null,
     },
   };
+}
+
+/**
+ * A session's gate pause: the system's move, guarded `active → paused`, with
+ * the gate's record merged into the session's metadata. On `executor` so a
+ * re-grade replaces a hold in one transaction (`ai-held-gate.ts`).
+ */
+export async function pauseSessionAtGate(
+  executor: Parameters<typeof setSessionStatus>[0],
+  params: { sessionId: string; userId: string },
+  hold: Hold,
+  metadataPatch?: Record<string, unknown>
+): Promise<boolean> {
+  const { rows } = await setSessionStatus(executor, {
+    sessionId: params.sessionId,
+    from: "active",
+    to: "paused",
+    actor: { kind: "system", userId: params.userId },
+    reason: "Its stage gate is holding it.",
+    hold,
+    set: {
+      updatedAt: new Date(),
+      ...(metadataPatch
+        ? {
+            metadata: drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(metadataPatch)}::jsonb`,
+          }
+        : {}),
+    },
+  });
+  return rows.length > 0;
+}
+
+/**
+ * Who ends what kept the judge from running ({@link CheckMeasure.judgeOut}),
+ * read through the one classification: each failure class's wire code,
+ * resolved as an availability state (`resolveAiAvailability`), never a list
+ * here. `undefined` = at least one failure is not an availability state.
+ */
+function judgeOutOf(
+  failureClasses: readonly AiFailureClass[]
+): "payer" | "service" | undefined {
+  const actors = failureClasses.map(
+    (c) =>
+      resolveAiAvailability({ failureCode: describeAiFailure(c).code }).actor
+  );
+  if (actors.length === 0 || actors.some((a) => a === null)) return undefined;
+  return actors.every((a) => a === "payer") ? "payer" : "service";
 }
 
 /**

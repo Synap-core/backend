@@ -32,25 +32,36 @@
 
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import {
+  PLANNED_SESSION_STATUS,
+  UNDERWAY_SESSION_STATUSES,
+} from "@synap-core/types/focus-sessions";
 import { focusSessions } from "../schema/focus-sessions.js";
 
 /**
  * NOT a decision the person answered (`isDecidedByAnswer`,
  * `@synap-core/types/units`): delivered when the slot names a non-empty
  * string `decisionId`, its answer is an object whose `askSnapshot.mode` is
- * confirm / choose, and it is not a criterion's grade slot. The whole test
+ * confirm / choose, its answer is not a REFUSAL (`answer.value.type` is not
+ * `declined`: a refused decision decides nothing), and it is not a
+ * criterion's grade slot. The whole test
  * sits in `coalesce(…, false)`: a missing field reads NULL, and a NULL here
  * would drop the row instead of keeping it owed.
  */
-const DECIDED_BY_ANSWER_CLAUSE = `NOT coalesce(${[
-  "jsonb_typeof(slot->'decisionId') = 'string'",
-  "slot->>'decisionId' <> ''",
-  "slot->>'kind' IS DISTINCT FROM 'criterion'",
-  "NOT coalesce(jsonb_typeof(slot->'criterionKey') = 'string' AND slot->>'criterionKey' <> '', false)",
-  "jsonb_typeof(slot->'answer') = 'object'",
-  "jsonb_typeof(slot->'answer'->'askSnapshot') = 'object'",
-  "slot->'answer'->'askSnapshot'->>'mode' IN ('confirm', 'choose')",
-].join(" AND ")}, false)`;
+function decidedByAnswerClause(alias: string): string {
+  return `NOT coalesce(${[
+    `jsonb_typeof(${alias}->'decisionId') = 'string'`,
+    `${alias}->>'decisionId' <> ''`,
+    `${alias}->>'kind' IS DISTINCT FROM 'criterion'`,
+    `NOT coalesce(jsonb_typeof(${alias}->'criterionKey') = 'string' AND ${alias}->>'criterionKey' <> '', false)`,
+    `jsonb_typeof(${alias}->'answer') = 'object'`,
+    `jsonb_typeof(${alias}->'answer'->'askSnapshot') = 'object'`,
+    `${alias}->'answer'->'askSnapshot'->>'mode' IN ('confirm', 'choose')`,
+    `${alias}->'answer'->'value'->>'type' IS DISTINCT FROM 'declined'`,
+  ].join(" AND ")}, false)`;
+}
+
+const DECIDED_BY_ANSWER_CLAUSE = decidedByAnswerClause("slot");
 
 /**
  * The clause SET, as data — a WHERE and an ORDER BY composing the same value
@@ -69,38 +80,91 @@ export const OWED_SLOT_CLAUSES = [
   DECIDED_BY_ANSWER_CLAUSE,
 ] as const;
 
-/** The clauses as ONE fragment, over a row aliased `slot`. */
-export const owedSlotPredicateSql = drizzleSql.raw(
-  OWED_SLOT_CLAUSES.join("\n      AND ")
-);
+/** The slot-only clauses as ONE fragment, over a row aliased `slot`. */
+const SLOT_CLAUSES_SQL = OWED_SLOT_CLAUSES.join("\n      AND ");
+
+/** The `expected_outputs` value as an array, `[]` for anything else. */
+function slotArray(expectedOutputs: AnyPgColumn | SQL): SQL {
+  return drizzleSql`CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
+           THEN ${expectedOutputs}
+           ELSE '[]'::jsonb END`;
+}
+
+/**
+ * SQL boolean over `slot`: a declared grade slot waiting on the output its
+ * criterion checks — `isGradeAwaitingOutput` (`@synap-core/types/units`). The
+ * slot is a `criterion` slot naming a non-empty string `outputKey`, and no slot
+ * of the same `expected_outputs` (not a grade slot) carrying that string `key`
+ * is MADE: delivered (`done`, or decided by the person's answer), claimed
+ * (`claimedDone` JSON `true`), retired, or optional (JSON `true`). An output
+ * not declared yet is not made. Never NULL: a missing field on the grade reads
+ * "not waiting", so it stays owed.
+ */
+export function gradeAwaitsOutputSql(expectedOutputs: AnyPgColumn | SQL): SQL {
+  return drizzleSql`coalesce(slot->>'kind' = 'criterion'
+      AND jsonb_typeof(slot->'outputKey') = 'string'
+      AND slot->>'outputKey' <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(${slotArray(expectedOutputs)}) AS graded
+        WHERE jsonb_typeof(graded) = 'object'
+          AND jsonb_typeof(graded->'key') = 'string'
+          AND graded->>'key' = slot->>'outputKey'
+          AND graded->>'kind' IS DISTINCT FROM 'criterion'
+          AND (graded->>'status' = 'done'
+            OR NOT ${drizzleSql.raw(decidedByAnswerClause("graded"))}
+            OR graded->'claimedDone' = 'true'::jsonb
+            OR graded->>'retiredAt' IS NOT NULL
+            OR graded->'optional' = 'true'::jsonb)
+      ), false)`;
+}
+
+/**
+ * THE owed-slot predicate over a row aliased `slot` of `expectedOutputs`:
+ * the slot-only clauses ({@link OWED_SLOT_CLAUSES}) and, read in its session,
+ * not a grade waiting on its output ({@link gradeAwaitsOutputSql}). The twin
+ * of `isOwedByYouIn(slot, outputs)`. `expectedOutputs` is the same value the
+ * caller unnests into `slot`.
+ */
+export function owedSlotPredicateIn(expectedOutputs: AnyPgColumn | SQL): SQL {
+  return drizzleSql`${drizzleSql.raw(SLOT_CLAUSES_SQL)}
+      AND NOT ${gradeAwaitsOutputSql(expectedOutputs)}`;
+}
 
 /** SQL: the given `expected_outputs` value holds at least one owed slot. */
 export function owedSlotExistsIn(expectedOutputs: AnyPgColumn | SQL): SQL {
   return drizzleSql`EXISTS (
-    SELECT 1 FROM jsonb_array_elements(
-      CASE WHEN jsonb_typeof(${expectedOutputs}) = 'array'
-           THEN ${expectedOutputs}
-           ELSE '[]'::jsonb END
-    ) AS slot
-    WHERE ${owedSlotPredicateSql}
+    SELECT 1 FROM jsonb_array_elements(${slotArray(expectedOutputs)}) AS slot
+    WHERE ${owedSlotPredicateIn(expectedOutputs)}
   )`;
+}
+
+/**
+ * SQL: the session behind `status` has STARTED owing: it is not a PLANNED
+ * step (`forming`, founder P2, 21 Nov 2026). A step that has not started
+ * owes nothing yet, whatever slots it declares; they become owed when it
+ * wakes. THE session clause of the owed predicate: its TypeScript twin is
+ * `projectOwedSlots` (api) and the needs-you rule's (`classifyOwedAsk`),
+ * held to it by `owed-slot-predicate.parity.pglite.test.ts`.
+ */
+export function sessionOwesWhere(status: AnyPgColumn | SQL): SQL {
+  return drizzleSql`${status} IS DISTINCT FROM ${PLANNED_SESSION_STATUS}`;
 }
 
 /** SQL: this `focus_sessions` row owes the person at least one slot. */
 export function owedSlotWhere(): SQL {
-  return owedSlotExistsIn(focusSessions.expectedOutputs);
+  return drizzleSql`(${sessionOwesWhere(focusSessions.status)} AND ${owedSlotExistsIn(focusSessions.expectedOutputs)})`;
 }
 
 /**
- * The session statuses in which an owed slot can still PARK a run. A closed,
- * failed or cancelled session with a leftover owed slot still counts in the
- * needs-you tray (the slot is owed), but it must not hold a run in
- * `waiting_on_you` forever: nothing will ever resume that session's run.
+ * The session statuses in which an owed slot can still PARK a run: started
+ * and not ended (`UNDERWAY_SESSION_STATUSES`, read off the session
+ * declaration). A closed, failed or cancelled session with a leftover owed
+ * slot still counts in the needs-you tray (the slot is owed), but it must not
+ * hold a run in `waiting_on_you` forever: nothing will ever resume that
+ * session's run.
  */
-export const OPEN_SESSION_STATUSES = ["active", "paused", "stale"] as const;
-
 const OPEN_SESSION_SQL_LIST = drizzleSql.raw(
-  OPEN_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
+  UNDERWAY_SESSION_STATUSES.map((s) => `'${s}'`).join(", ")
 );
 
 /**

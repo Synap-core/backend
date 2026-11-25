@@ -5,6 +5,8 @@
  *   key + owning user, used by Eve CLI and similar operators to introspect
  *   their credential ("which key am I sending? does it have the scopes I
  *   think it does? when does it expire?").
+ * - `OwnGrantSchema` — response from `GET /auth/grant`: the calling
+ *   credential's grant by place (pod-wide, spaces, anywhere).
  * - `AuthErrorEnvelopeSchema` — closed-set 401 envelope. Source-of-truth
  *   shape lives in `utils/auth-error.ts`; this is the OpenAPI mirror so the
  *   `/openapi.json` doc references a named schema.
@@ -68,6 +70,47 @@ export const AuthStatusSchema = z
       .nullable(),
   })
   .openapi("AuthStatus");
+
+/**
+ * Wire shape of `GET /api/hub/auth/grant` — what the calling credential holds,
+ * by place (`describeOwnGrant`, services/key-grant.ts): what an app reads to
+ * explain itself ("this app can see notes in Brand, and playbooks everywhere
+ * in your pod"). Only ever the caller's own grant.
+ */
+export const OwnGrantSchema = z
+  .object({
+    holder: z
+      .enum(["app", "key"])
+      .describe(
+        "`app`: an app's token (its grant names the app); `key`: any other key."
+      ),
+    clientId: z
+      .string()
+      .nullable()
+      .describe("The app the credential acts as, or null."),
+    isFullAccess: z
+      .boolean()
+      .describe("True only for unrestricted full access (`*`, no limit)."),
+    summary: z
+      .string()
+      .describe("The limit in words, as `/auth/status` prints it."),
+    parts: z.array(
+      z.object({
+        permissions: z.array(z.string()),
+        place: z
+          .enum(["pod", "spaces", "anywhere"])
+          .describe(
+            "`pod`: reads everywhere in the pod (an app's pod-wide reads); `spaces`: only in `spaces` (none = nowhere); `anywhere`: not limited to spaces."
+          ),
+        spaces: z.array(
+          z.object({ id: z.string(), name: z.string().nullable() })
+        ),
+        projectIds: z.array(z.string()).nullable(),
+        entityIds: z.array(z.string()).nullable(),
+      })
+    ),
+  })
+  .openapi("OwnGrant");
 
 /** OpenAPI mirror of the standardized 401 envelope from `auth-error.ts`. */
 export const AuthErrorEnvelopeSchema = z

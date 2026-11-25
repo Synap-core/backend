@@ -142,12 +142,100 @@ describe("deriveThingBlocker", () => {
     expect(b.clearedBy).toBeNull();
   });
 
+  it("a proposal carries its blocker key; a held send waits on THEM, not your review", () => {
+    const draft = deriveThingBlocker(
+      [{ kind: "pending_proposal", blockerKey: "messaging.external.send" }],
+      LEAD,
+      "researching"
+    );
+    expect(draft).toMatchObject({
+      ball: "me",
+      why: {
+        reason: "approval",
+        waitKind: "approval",
+        blockerKey: "messaging.external.send",
+      },
+    });
+    const held = deriveThingBlocker(
+      [{ kind: "pending_proposal", blockerKey: "not_connected", held: true }],
+      LEAD,
+      "researching"
+    );
+    expect(held).toMatchObject({
+      ball: "them",
+      why: {
+        reason: "external",
+        waitKind: "their_reply",
+        blockerKey: "not_connected",
+      },
+      clearedBy: null,
+    });
+    // Beside a ready draft, the ready one leads: your ball comes first.
+    const both = deriveThingBlocker(
+      [
+        { kind: "pending_proposal", blockerKey: "not_connected", held: true },
+        { kind: "pending_proposal", blockerKey: "messaging.external.send" },
+      ],
+      LEAD,
+      "researching"
+    );
+    expect(both.ball).toBe("me");
+    expect(both.count).toBe(2);
+  });
+
   it("no lifecycle, an off-path status or no step left: blocked, nothing to unlock", () => {
     const owed: WaitingOnSource[] = [{ kind: "owed_slot" }];
     expect(deriveThingBlocker(owed, null, "researching").unlocks).toBeNull();
     expect(deriveThingBlocker(owed, LEAD, "lost").unlocks).toBeNull();
     expect(deriveThingBlocker(owed, LEAD, "won").unlocks).toBeNull();
     expect(deriveThingBlocker(owed, LEAD, "won").blocked).toBe(true);
+  });
+
+  it("an unmet step requirement blocks: its owner's ball, its key and door, the next status", () => {
+    const ref = { kind: "thing" as const, label: "A contact at the company" };
+    const mine = deriveThingBlocker(
+      [
+        {
+          kind: "owed_slot",
+          owner: "agent",
+          blocks: {},
+          blockerKey: "needs_intro",
+        },
+        {
+          kind: "requirement",
+          owner: "you",
+          blockerKey: "no_contact",
+          clearedBy: { playbookId: "find-right-contact" },
+          ref,
+        },
+      ],
+      LEAD,
+      "researching"
+    );
+    expect(mine).toEqual({
+      blocked: true,
+      count: 2,
+      why: {
+        reason: "input",
+        waitKind: "answer",
+        blockedReason: null,
+        blockerKey: "no_contact",
+      },
+      ball: "me",
+      unlocks: { to: "contacted", label: "Contacted" },
+      clearedBy: { playbookId: "find-right-contact" },
+      ref,
+    });
+    const agents = deriveThingBlocker(
+      [{ kind: "requirement", owner: "agent", blockerKey: "no_linkedin" }],
+      LEAD,
+      "researching"
+    );
+    expect(agents.ball).toBe("agent");
+    expect(agents.why?.reason).toBe("another_work");
+    expect(agents.why?.blockerKey).toBe("no_linkedin");
+    // No declared door: none is guessed (never "their answer").
+    expect(agents.clearedBy).toBeNull();
   });
 
   it("a hold beside a real wait: blocked by the wait, the hold not counted", () => {

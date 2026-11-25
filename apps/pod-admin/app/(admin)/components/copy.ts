@@ -12,7 +12,11 @@
  * English words equal `lib/console-nav.ts`'s labels, pinned by
  * `shell-copy.test.ts`.
  */
-import type { Catalog } from "@synap-core/types/i18n";
+import {
+  ambientCatalogLocale,
+  createT,
+  type Catalog,
+} from "@synap-core/types/i18n";
 
 export const en = {
   "nav.home": "Home",
@@ -35,6 +39,8 @@ export const en = {
   "user.menu.codes": "Account menu: recovery codes not saved",
   "user.menu.first-way": "Account menu: no way to confirm it’s you yet",
   "user.menu.second-way": "Account menu: only one way to confirm it’s you",
+  "user.menu.this-device":
+    "Account menu: you can set up a passkey on this device",
   "user.signedIn": "Signed in",
   "role.admin": "Administrator",
   "role.member": "Member",
@@ -42,6 +48,7 @@ export const en = {
   "user.mark.codes": "Save recovery codes",
   "user.mark.first-way": "Add a way in",
   "user.mark.second-way": "Add a second way in",
+  "user.mark.this-device": "Set up this device",
   "user.connections": "My connections",
   "user.computers": "My computers",
   "user.notifications": "My notifications",
@@ -52,7 +59,11 @@ export const en = {
   "user.docs": "Documentation",
   "user.signOut": "Sign out",
   retry: "Retry",
-  "listSearch.rules": "Search rules…",
+  "listSearch.rules": "Search automations…",
+  "rules.anyProcess": "In a process or not",
+  "rules.outside": "Outside a process",
+  "rules.outsideFailed":
+    "Which automations belong to no process couldn’t be read.",
   "listSearch.templates": "Search templates…",
   "listSearch.members": "Search members…",
   "listSearch.agents": "Search agents…",
@@ -60,7 +71,12 @@ export const en = {
   "listSearch.partial.templates":
     "Searching the {n, plural, one {# template} other {# templates}} loaded so far. Load more to search further.",
   "listSearch.partial.rules":
-    "Searching the {n, plural, one {# rule} other {# rules}} loaded (the 2,000 most recent at most).",
+    "Searching the {n, plural, one {# automation} other {# automations}} loaded (the 2,000 most recent at most).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Previous page",
+  "list.next": "Next page",
+  "list.loadMore": "Load more",
+  "filter.clear": "Clear {label}",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -87,6 +103,8 @@ export const fr: Catalog<typeof en> = {
     "Menu du compte : aucun moyen de confirmer que c’est vous",
   "user.menu.second-way":
     "Menu du compte : un seul moyen de confirmer que c’est vous",
+  "user.menu.this-device":
+    "Menu du compte : vous pouvez configurer une clé d’accès sur cet appareil",
   "user.signedIn": "Compte connecté",
   "role.admin": "Administrateur",
   "role.member": "Membre",
@@ -94,6 +112,7 @@ export const fr: Catalog<typeof en> = {
   "user.mark.codes": "Enregistrez vos codes de secours",
   "user.mark.first-way": "Ajoutez un moyen",
   "user.mark.second-way": "Ajoutez un deuxième moyen",
+  "user.mark.this-device": "Configurer cet appareil",
   "user.connections": "Mes connexions",
   "user.computers": "Mes ordinateurs",
   "user.notifications": "Mes notifications",
@@ -104,7 +123,11 @@ export const fr: Catalog<typeof en> = {
   "user.docs": "Documentation",
   "user.signOut": "Se déconnecter",
   retry: "Réessayer",
-  "listSearch.rules": "Rechercher une règle…",
+  "listSearch.rules": "Rechercher une automatisation…",
+  "rules.anyProcess": "Dans un processus ou non",
+  "rules.outside": "Hors de tout processus",
+  "rules.outsideFailed":
+    "Impossible de lire quelles automatisations n’appartiennent à aucun processus.",
   "listSearch.templates": "Rechercher un modèle…",
   "listSearch.members": "Rechercher un membre…",
   "listSearch.agents": "Rechercher un agent…",
@@ -112,5 +135,15 @@ export const fr: Catalog<typeof en> = {
   "listSearch.partial.templates":
     "Recherche parmi {n, plural, one {# modèle chargé} other {# modèles chargés}} pour l’instant. Chargez-en plus pour chercher plus loin.",
   "listSearch.partial.rules":
-    "Recherche parmi {n, plural, one {# règle chargée} other {# règles chargées}} (2 000 au plus, les plus récentes).",
+    "Recherche parmi {n, plural, one {# automatisation chargée} other {# automatisations chargées}} (2 000 au plus, les plus récentes).",
+  "list.page": "Page {page} / {count}",
+  "list.prev": "Page précédente",
+  "list.next": "Page suivante",
+  "list.loadMore": "Charger plus",
+  "filter.clear": "Effacer {label}",
 };
+
+/** The words' translator, in the ambient catalog locale. */
+export function shellT() {
+  return createT(ambientCatalogLocale(), { en, fr });
+}

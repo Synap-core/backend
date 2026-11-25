@@ -28,9 +28,9 @@
  * A pod app (CIMD client, spec 17) walks 5–7 too, and its /token answer adds a
  * rotating refresh token (`grant_type=refresh_token`, refresh.ts). An MCP
  * (DCR) client never gets one: its key lives 90 days. A pod app's token is
- * its own ask-first agent's — unless the app is a SYNAP app (`isSynapApp`,
- * founder 2026-10-22): then it is HELD BY THE PERSON who consented
- * (`synap_acts_as: "person"`, services/app-person-token.ts). An MCP client may
+ * HELD BY THE PERSON who consented (`synap_acts_as: "person"`,
+ * services/app-person-token.ts; founder 12 Nov 2026: an app is not an AI
+ * agent, connecting is the approval). An MCP client may
  * name a metadata document instead of registering (one that declares no
  * `synap_requests`, `isMcpClient`): it is an MCP client in every respect.
  *
@@ -49,7 +49,13 @@
  */
 
 import { cleanLoginHint } from "@synap-core/types/sign-in";
-import { withAppRequestScope } from "@synap-core/types/grants";
+import {
+  AppAccessAskSyntaxError,
+  formatSynapAsk,
+  parseRequestPlace,
+  parseSynapAsk,
+  withAppRequestScope,
+} from "@synap-core/types/grants";
 import { randomUUID } from "crypto";
 import { Hono } from "hono";
 import { createLogger } from "@synap-core/core";
@@ -298,6 +304,46 @@ oauthApp.post("/register", async (c) => {
   return c.json(buildDcrResponse(clientId, metadata, createdAt), 201);
 });
 
+/**
+ * A pod app's `synap_ask` (`<permission>@<space id or template> …`): it asks
+ * for ONE MORE thing, and the consent screen shows only that. Each permission
+ * must be one its document declares; a value that is not the grammar, sent
+ * by any other client, or naming an undeclared permission is
+ * `invalid_request` (the app's mistake, sent back to it). Absent → null.
+ */
+function authorizeSynapAsk(
+  client: Pick<StoredClient, "clientKind" | "requestedPermissions">,
+  raw: string | undefined
+): string | null {
+  if (raw === undefined) return null;
+  if (client.clientKind !== "cimd" || isMcpClient(client)) {
+    throw new OAuthError(
+      "invalid_request",
+      "synap_ask is for a pod app that declares what it asks for"
+    );
+  }
+  let pairs;
+  try {
+    pairs = parseSynapAsk(raw);
+  } catch (err) {
+    if (err instanceof AppAccessAskSyntaxError)
+      throw new OAuthError("invalid_request", `synap_ask: ${err.message}`);
+    throw err;
+  }
+  const undeclared = pairs.filter(
+    (p) => !client.requestedPermissions.includes(p.permission)
+  );
+  if (undeclared.length > 0) {
+    throw new OAuthError(
+      "invalid_request",
+      `synap_ask names what this app does not declare: ${[
+        ...new Set(undeclared.map((p) => p.permission)),
+      ].join(", ")}`
+    );
+  }
+  return formatSynapAsk(pairs);
+}
+
 // ─── /authorize ──────────────────────────────────────────────────────────────
 //
 // Validates the request, then hands the browser to pod-admin's consent screen.
@@ -324,6 +370,11 @@ oauthApp.get("/authorize", async (c) => {
     codeChallenge: q.code_challenge,
     codeChallengeMethod: q.code_challenge_method,
     resource: resources[0],
+    // Read by phase 1 only, to know when a pod app's cached document must
+    // be read again (`consentRereadIf`): `prompt=consent`, or a `scope` /
+    // `synap_ask` naming what the copy does not declare.
+    prompt: q.prompt,
+    synapAsk: q.synap_ask,
   };
 
   // ── Phase 1: client + redirect_uri. RFC 6749 §4.1.2.1 — errors here are shown
@@ -355,6 +406,7 @@ oauthApp.get("/authorize", async (c) => {
   // ── Phase 2: everything else redirects the error back to the client, with
   // `iss` like every authorization response (RFC 9207).
   let validated;
+  let synapAsk: string | null = null;
   try {
     if (resources.length > 1) {
       // RFC 8707 allows several; a token from this AS is for one pod resource.
@@ -365,6 +417,7 @@ oauthApp.get("/authorize", async (c) => {
       params.resource = resources.join(" ");
     }
     validated = validateAuthorizeRequest(client, redirectUri, params);
+    synapAsk = authorizeSynapAsk(client, q.synap_ask);
     if (validated.ignoredResource !== null) {
       // The value claude.ai (or any DCR client) really sends — the evidence
       // the lenient rule waits on. Public request data, no secret.
@@ -420,6 +473,9 @@ oauthApp.get("/authorize", async (c) => {
   if (validated.resource) {
     target.searchParams.set("resource", validated.resource);
   }
+  // The short consent (plan 647ebfd4 option C): what the app asks for one
+  // more of, normalized. The consent re-resolves it server-side.
+  if (synapAsk) target.searchParams.set("synap_ask", synapAsk);
   // The launch's space (spec 17 §6.4, review S6/A8): the Synap browser and
   // the SDK send `synap_space_hint`; the consent screen pre-ticks it only if
   // the person can give the app that space. It is not an authorize parameter
@@ -541,7 +597,19 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
     // so the app can say "Connected as …" without another call.
     // Each pair carries its explicit place (`scope`, access model B) beside
     // `workspaceId`; an SDK that reads only `workspaceId` keeps working.
-    synap_grant: minted.grant.map(withAppRequestScope),
+    // Additive since app permissions W2: `projectId` (null: no pair names a
+    // project yet; an app's projects are its v2 access) and `place`, the
+    // pair's parsed `Place` ({kind:"spaces", ids} | {kind:"pod"} |
+    // {kind:"projects", ids}), so an SDK reads one shape for every place.
+    synap_grant: minted.grant.map((r) => ({
+      ...withAppRequestScope(r),
+      projectId: null,
+      place: parseRequestPlace(r, "app"),
+    })),
+    // Additive since W3d: what the token reaches as an AppAccess v2, with
+    // names (`NamedAppAccess`), its projects included, which no pair can
+    // say. null for a connection that keeps its pairs until it re-consents.
+    synap_access: minted.access,
     synap_user: minted.user,
     // Which app this connection is on the pod, and the pod-admin page where
     // the person narrows or revokes it (null: no valid POD_ADMIN_URL).
@@ -549,9 +617,9 @@ function appTokenResponse(minted: AppOAuthAccessKey, refreshToken: string) {
       id: minted.publicId,
       manageUrl: appManageUrl(minted.publicId),
     },
-    // Who the token acts as (`podAppActsAs`): "person" — a Synap app, the
-    // token is the person's own, their clicks write as them, directly;
-    // "agent" — the app's own agent, its writes become proposals.
+    // Who the token acts as (`podAppActsAs`): "person" — every pod app; the
+    // token is the person's own, their clicks write as them, directly, "via
+    // <app>". An older pod may still answer "agent" (the SDK reads both).
     synap_acts_as: minted.actsAs,
   };
 }
@@ -975,10 +1043,10 @@ oauthApp.post("/token", async (c) => {
     }
 
     // A pod app (CIMD client) is NEVER minted the shared `claude-web*` agent
-    // (spec 17 I3): its key belongs to the app's OWN agent for this person,
-    // carrying exactly what the person approved at consent, for 1 h — or,
-    // for a SYNAP app only, to the PERSON (`mintAppOAuthAccessKey` routes by
-    // `podAppActsAs`; the one person-token door states the threat model). A
+    // (spec 17 I3): its key belongs to the PERSON who consented, carrying
+    // exactly what they approved at consent ∩ their reach, for 1 h
+    // (`mintAppOAuthAccessKey`; the one person-token door states the threat
+    // model). A
     // code that names an approved connection is always a pod app's, even if
     // the document has since dropped its `synap_requests`. Only a code naming
     // none, for a document that declares none, is an MCP client's (A1): it

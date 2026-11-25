@@ -339,7 +339,7 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
     expect(everywhere.rows[0]!.n).toBe(0);
   });
 
-  it("the actor: agent, form:<id>, exactly [entity.create], system-made, no key, ONE editor membership", async () => {
+  it("the actor: agent, form:<id>, exactly [entity.create], system-made, no key, no seat (it acts through the person who made it)", async () => {
     const [actor] = (
       await q<Record<string, unknown>>(`select * from users where id=$1`, [
         actorId,
@@ -359,7 +359,7 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
       `select workspace_id, role from workspace_members where user_id=$1`,
       [actorId]
     );
-    expect(members.rows).toEqual([{ workspace_id: W, role: "editor" }]);
+    expect(members.rows).toEqual([]);
     const keys = await q<{ n: number }>(
       `select count(*)::int as n from api_keys where user_id=$1`,
       [actorId]
@@ -431,14 +431,16 @@ describe("the owner door mints a least-privilege, per-form actor", () => {
 
 describe("the generic tools doors refuse form rows", () => {
   it("tools.update / delete / setApproved / setAuthBinding refuse; tools.create refuses metadata.form", async () => {
-    for (const p of [
-      tools(A).update({ id: formId, metadata: { form: { hijacked: true } } }),
-      tools(A).update({ id: formId, name: "renamed" }),
-      tools(A).delete({ id: formId }),
-      tools(A).setApproved({ id: formId, approved: true }),
-      tools(A).setAuthBinding({ id: formId, authBinding: "per_user" }),
+    // One call at a time: a rejection created before its turn is unhandled.
+    for (const call of [
+      () =>
+        tools(A).update({ id: formId, metadata: { form: { hijacked: true } } }),
+      () => tools(A).update({ id: formId, name: "renamed" }),
+      () => tools(A).delete({ id: formId }),
+      () => tools(A).setApproved({ id: formId, approved: true }),
+      () => tools(A).setAuthBinding({ id: formId, authBinding: "per_user" }),
     ]) {
-      expect((await errOf(p))?.code).toBe("FORBIDDEN");
+      expect((await errOf(call()))?.code).toBe("FORBIDDEN");
     }
     expect(
       (
@@ -990,12 +992,12 @@ describe("the actor floor: a dropped or widened actor is REFUSED, never granted"
     }
   });
 
-  it("actor without its workspace membership ⇒ refused (no join-proposal spam)", async () => {
+  it("an actor whose owner left the space ⇒ refused (it holds no seat of its own)", async () => {
     const out = await withActor(
       `update workspace_members set workspace_id=$2 where user_id=$1`,
-      [actorId, randomUUID()],
+      [A, randomUUID()],
       `update workspace_members set workspace_id=$2 where user_id=$1`,
-      [actorId, W]
+      [A, W]
     );
     expect(out).toBe("actor_refused");
   });

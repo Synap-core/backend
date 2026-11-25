@@ -62,3 +62,4 @@ export {
   type TemplateDataChange,
   type DataChangeConsent,
 } from "./data-changes.js";
+export { runConversionsCli } from "./cli.js";

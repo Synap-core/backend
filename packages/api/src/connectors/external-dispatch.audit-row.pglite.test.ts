@@ -111,6 +111,9 @@ beforeAll(async () => {
   // its run (the guidance stamp).
   await h.client!.exec(ddlFor(schema.focusSessions as unknown as PgTable));
   await h.client!.exec(ddlFor(schema.playbookRuns as unknown as PgTable));
+  // A LinkedIn account counts its sends (linkedin-account-limits.ts): the
+  // thread send reads the account it sends from.
+  await h.client!.exec(ddlFor(schema.messagingAccounts as unknown as PgTable));
 });
 
 describe("a completed external send writes its audit row", () => {

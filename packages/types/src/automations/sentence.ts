@@ -30,6 +30,7 @@
 import { resolveActionLabel, resolveObjectNoun } from "../vocabulary/index.js";
 import { readPlaybookRunMode } from "./rule-run-policy.js";
 import type { PlaybookRunNodeDef } from "./flow.js";
+import type { WorkerActivatorMode } from "../workers/index.js";
 
 // ── Value-model ───────────────────────────────────────────────────────────────
 
@@ -157,6 +158,10 @@ export type ActionVerb =
   // event of the moveStatus door, `entity.transition.completed`. Kinds AND
   // roles: a role's status lives on its facet, which no "updated" sees.
   | "transitioned"
+  // A focus session ENDED (closed, cancelled or failed; `status` says which)
+  // — the close door's one event, `focus_session.closed.completed`. A
+  // playbook link (`run_ended` activator) compiles onto it.
+  | "closed"
   | "received"
   | "completed"
   | "approved"
@@ -770,12 +775,26 @@ const PLAYBOOK_GOAL_KEY = "__goal";
 const PLAYBOOK_PROJECT_KEY = "__projectId";
 const PLAYBOOK_TRACK_KEY = "__trackId";
 /**
+ * PARENT SESSION — the session a worker enabled FOR A SESSION files its runs
+ * under (`spawned_from`). Bookkeeping (kept out of `paramsMapping`); lands on
+ * the node as `data.parentSessionId`, which `executePlaybookRun` forwards to
+ * `runPlaybook`. Without this key a re-save through the sentence grammar would
+ * silently turn a session's worker into a free-standing one.
+ */
+const PLAYBOOK_PARENT_SESSION_KEY = "__parentSessionId";
+/**
  * STAGE WORKER — the node's `worker` spec (`PlaybookRunWorkerSpec`,
  * @synap/database): an enabled worker's size, status, threshold and backlog
  * limit (work model L4). Bookkeeping, so it never leaks into `paramsMapping`;
  * lands on the node as `data.worker`, forwarded WHOLE to `runPlaybook`.
  */
 const PLAYBOOK_WORKER_KEY = "__worker";
+/**
+ * HAND-OFF — the agent each run is handed to (`data.handToAgentId`, a
+ * schedule activator's `handToAgentId`). Bookkeeping, kept out of
+ * `paramsMapping`.
+ */
+const PLAYBOOK_HAND_TO_KEY = "__handToAgentId";
 /**
  * MODE — what the `playbook_run` node materializes (`run` | `appointment` |
  * `propose`, `readPlaybookRunMode` in `./rule-run-policy`). The rule editor
@@ -843,6 +862,8 @@ export const BOOKKEEPING_KEYS: readonly string[] = [
   PLAYBOOK_TRACK_KEY,
   PLAYBOOK_RUN_MODE_KEY,
   PLAYBOOK_WORKER_KEY,
+  PLAYBOOK_PARENT_SESSION_KEY,
+  PLAYBOOK_HAND_TO_KEY,
 ];
 
 /**
@@ -875,6 +896,8 @@ export function proposePlaybookOnKindSentence(input: {
  *                     created on its own, and the entity's create event
  *                     names its kind.
  *   `enters_status` — WHEN the subject (a kind OR a role) ENTERS `status`.
+ *   `run_ended`     — WHEN a run of another playbook ENDS (a link): the
+ *                     session close event, on that playbook and outcome.
  *
  * `enters_status` follows the event that actually fires for the property:
  *
@@ -914,10 +937,26 @@ export type PlaybookActivatorTrigger =
       lifecycle: "declared" | "undeclared";
     }
   | {
-      /** A cron rule (UTC). The cron must be one the grammar can spell —
-       *  {@link isSentenceCron}; the worker spec carries the set. */
+      /** A cron rule, read in `timezone` (absent = UTC). The cron must be one
+       *  the grammar can spell — {@link isSentenceCron}; the worker spec
+       *  carries the set. */
       on: "schedule";
       cron: string;
+      timezone?: string;
+    }
+  | {
+      /**
+       * A LINK: a run of `afterPlaybookId` ended — the session close event
+       * (`focus_session.closed.completed`), filtered on its data: the
+       * session's `playbookId`, its owner (`userId`: the rule owner's own
+       * runs only), not a session merely `attached` to the playbook, and for
+       * an `outcome` its `closedAs` (`done` / `not_done`). The new run works
+       * on the ended session's subject (`run-subject.ts`).
+       */
+      on: "run_ended";
+      afterPlaybookId: string;
+      ownerUserId: string;
+      outcome?: "done" | "not_done";
     };
 
 /**
@@ -938,8 +977,13 @@ export function playbookActivatorSentence(
   input: {
     playbookId: string;
     profileSlug: string;
-    /** `run` starts the run; `propose` files one proposal per (rule, subject). */
-    mode: "run" | "propose";
+    /**
+     * `run` starts the run; `propose` files one proposal per (rule, subject);
+     * `appointment` opens a session that waits for the person.
+     */
+    mode: WorkerActivatorMode;
+    /** The agent each run is handed to (run mode). Omitted when absent. */
+    handToAgentId?: string;
     /**
      * An ENABLED worker's node spec (work model L4) + its filing. Each is
      * OMITTED when absent, so an activator compiled before workers existed
@@ -948,6 +992,11 @@ export function playbookActivatorSentence(
     worker?: PlaybookRunNodeDef["data"]["worker"];
     projectId?: string;
     trackId?: string;
+    /**
+     * A SESSION enablement: the session its runs are children of
+     * (`spawned_from`). Omitted when absent, like the filing.
+     */
+    parentSessionId?: string;
   } & PlaybookActivatorTrigger
 ): RuleSentenceValue {
   const trigger =
@@ -960,20 +1009,27 @@ export function playbookActivatorSentence(
         ? {
             triggerType: "cron",
             ...parseCron(input.cron.trim().split(/\s+/).join(" ")),
-            cronTimezone: "UTC",
+            cronTimezone: input.timezone ?? "UTC",
           }
-        : {
-            triggerType: "event",
-            subjectCategory: "entity",
-            profileSlug: input.profileSlug,
-            actionVerb: trigger.actionVerb,
-            // Only a role says so: a kind's sentence stays byte-identical to the
-            // one every activator compiled before roles could be subjects (so its
-            // seed hash does not move and no installed rule is rewritten).
-            ...(input.on === "created" && input.profileKind === "role"
-              ? { profileKind: "role" as const }
-              : {}),
-          },
+        : input.on === "run_ended"
+          ? {
+              // A session's event: no kind filter (the subject rides on it).
+              triggerType: "event",
+              subjectCategory: "focus_session",
+              actionVerb: trigger.actionVerb,
+            }
+          : {
+              triggerType: "event",
+              subjectCategory: "entity",
+              profileSlug: input.profileSlug,
+              actionVerb: trigger.actionVerb,
+              // Only a role says so: a kind's sentence stays byte-identical to the
+              // one every activator compiled before roles could be subjects (so its
+              // seed hash does not move and no installed rule is rewritten).
+              ...(input.on === "created" && input.profileKind === "role"
+                ? { profileKind: "role" as const }
+                : {}),
+            },
     conditions: trigger.conditions,
     actions: [
       {
@@ -983,13 +1039,19 @@ export function playbookActivatorSentence(
           [PLAYBOOK_ID_KEY]: input.playbookId,
           // `run` is the node default and is OMITTED, so a run-mode activator
           // compiles to the byte-identical node any other run rule has.
-          ...(input.mode === "propose"
-            ? { [PLAYBOOK_RUN_MODE_KEY]: "propose" }
+          ...(input.mode !== "run"
+            ? { [PLAYBOOK_RUN_MODE_KEY]: input.mode }
+            : {}),
+          ...(input.handToAgentId
+            ? { [PLAYBOOK_HAND_TO_KEY]: input.handToAgentId }
             : {}),
           ...(input.projectId
             ? { [PLAYBOOK_PROJECT_KEY]: input.projectId }
             : {}),
           ...(input.trackId ? { [PLAYBOOK_TRACK_KEY]: input.trackId } : {}),
+          ...(input.parentSessionId
+            ? { [PLAYBOOK_PARENT_SESSION_KEY]: input.parentSessionId }
+            : {}),
           ...(input.worker ? { [PLAYBOOK_WORKER_KEY]: input.worker } : {}),
           [CAPABILITY_ACTION_KEY]: `playbook:${input.playbookId}`,
         },
@@ -1005,6 +1067,41 @@ function activatorTriggerShape(
   conditions: ConditionRow[];
 } {
   if (t.on === "created") return { actionVerb: "created", conditions: [] };
+  if (t.on === "run_ended") {
+    return {
+      actionVerb: "closed",
+      conditions: [
+        {
+          id: "link-playbook",
+          key: "playbookId",
+          operator: "is",
+          value: t.afterPlaybookId,
+        },
+        {
+          id: "link-owner",
+          key: "userId",
+          operator: "is",
+          value: t.ownerUserId,
+        },
+        {
+          id: "link-attached",
+          key: "attached",
+          operator: "is_false",
+          value: "",
+        },
+        ...(t.outcome
+          ? [
+              {
+                id: "link-outcome",
+                key: "closedAs",
+                operator: "is" as const,
+                value: t.outcome,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
   if (t.lifecycle === "declared") {
     return {
       actionVerb: "transitioned",
@@ -1239,6 +1336,10 @@ function actionToFlowNode(
       data.projectId = cfg[PLAYBOOK_PROJECT_KEY];
     if (nonEmptyStr(cfg[PLAYBOOK_TRACK_KEY]))
       data.trackId = cfg[PLAYBOOK_TRACK_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_PARENT_SESSION_KEY]))
+      data.parentSessionId = cfg[PLAYBOOK_PARENT_SESSION_KEY];
+    if (nonEmptyStr(cfg[PLAYBOOK_HAND_TO_KEY]))
+      data.handToAgentId = cfg[PLAYBOOK_HAND_TO_KEY];
     const worker = cfg[PLAYBOOK_WORKER_KEY];
     if (worker && typeof worker === "object" && !Array.isArray(worker))
       data.worker = worker;
@@ -1523,6 +1624,8 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
       goalOverride?: string;
       projectId?: string;
       trackId?: string;
+      parentSessionId?: string;
+      handToAgentId?: string;
       mode?: unknown;
       worker?: unknown;
       paramsMapping?: Record<string, unknown>;
@@ -1543,6 +1646,10 @@ function flowNodeToSentenceAction(actionNode: RuleFlowNode): SentenceAction {
     if (nonEmptyStr(pdata.projectId))
       config[PLAYBOOK_PROJECT_KEY] = pdata.projectId;
     if (nonEmptyStr(pdata.trackId)) config[PLAYBOOK_TRACK_KEY] = pdata.trackId;
+    if (nonEmptyStr(pdata.parentSessionId))
+      config[PLAYBOOK_PARENT_SESSION_KEY] = pdata.parentSessionId;
+    if (nonEmptyStr(pdata.handToAgentId))
+      config[PLAYBOOK_HAND_TO_KEY] = pdata.handToAgentId;
     if (
       pdata.worker &&
       typeof pdata.worker === "object" &&

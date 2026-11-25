@@ -42,11 +42,27 @@ const h = vi.hoisted(() => ({
   confineError: null as string | null,
 }));
 
+// Who approved is read from the review ladder (users table); a person here.
+vi.mock(
+  "../../../services/capabilities/skill-born-approved.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../../../services/capabilities/skill-born-approved.js")
+    >()),
+    personIsApproving: async () => true,
+  })
+);
+
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       query: {
         skills: {
           findFirst: async () => {
@@ -67,10 +83,18 @@ vi.mock("@synap/database", async (importOriginal) => {
       }),
       update: (table: unknown) => ({
         set: (values: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             if (table === actual.skills) h.skillWrites.push(values);
             else if (table === actual.proposals) h.proposalWrites.push(values);
             else h.automationWrites.push(values);
+            const done = Promise.resolve([] as unknown[]) as Promise<
+              unknown[]
+            > & {
+              returning: () => Promise<unknown[]>;
+            };
+            done.returning = async () => [];
+            return done;
           },
         }),
       }),

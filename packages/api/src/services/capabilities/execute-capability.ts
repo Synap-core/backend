@@ -47,6 +47,7 @@ import {
 } from "@synap/database";
 import { randomUUID } from "crypto";
 import {
+  humanizeToken,
   isKnownToolName,
   nounInSentence,
   resolveGovernanceRungLabel,
@@ -139,7 +140,9 @@ import {
   DE_ESCALATION_BUILTIN_VERBS,
   READ_ONLY_BUILTIN_VERBS,
 } from "./builtin-verbs.js";
+import { filingRefusalOf } from "../proposals/can-apply.js";
 import { declaredReadOnly } from "./capability-drift.js";
+import { declaredProposeOnly } from "@synap-core/types/proposals";
 import { meterCapabilityRun } from "./capability-metering.js";
 import {
   checkVerbParameters,
@@ -161,6 +164,7 @@ import {
 } from "./capability-enable-link.js";
 import { answeringSkillOrder, answeringSkillsWhere } from "./verb-skill.js";
 import type { IntentRequestRecord } from "./intent-actions.js";
+import type { HeldSend } from "../channels/held-sends.js";
 import { describeIntentRun } from "./intent-input.js";
 import { resolveEntityVerbRunSubject } from "./capability-run-subject.js";
 import {
@@ -169,6 +173,7 @@ import {
 } from "./propose-capability-enable.js";
 import { CAPABILITY_RUN_PROPOSAL_TYPE } from "../proposals/proposal-class.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import { isQueuedHostVerbResult } from "../host-jobs/hosted-verbs.js";
 import { capErrorMessage } from "../connection-health/notify-connector-unhealthy.js";
 import type { WriteAckState } from "../../utils/write-door-idempotency.js";
 import {
@@ -178,6 +183,18 @@ import {
   resolvePodFilesAtRun,
   verbToolLabel,
 } from "./file-parameters.js";
+import { refuseFlaggedCapabilityRecipient } from "./send-recipient-consent.js";
+import { isVerbRefusal } from "./verb-refusal.js";
+import {
+  describeComputeStart,
+  readComputeRun,
+} from "../compute/compute-contract.js";
+import {
+  closeComputeLeaseOnRelease,
+  openComputeLease,
+  resolveReleaseVerb,
+  settleComputeLease,
+} from "../compute/compute-leases.js";
 
 const logger = createLogger({ module: "execute-capability" });
 
@@ -211,6 +228,9 @@ export type ExecuteCapabilityResult =
        * A typed refusal the caller can branch on: `DENIED_BY_RULE` = a
        * person's stored "Never" on this capability for this agent (0381).
        * Such a refusal carries no `enable`: enabling would not fix it.
+       * A recipe run refused when filed carries its run's own code
+       * (`UNKNOWN_RECIPE`, `BAD_PARAMS`; `recipeRunRefusalAtFiling`), and the
+       * sentence names the fix.
        */
       reasonCode?: string;
       /**
@@ -479,6 +499,8 @@ export async function executeCapability(input: {
   agentUserId?: string | null;
   /** Runtime 1-of-N connection selector (Wave 4) — passed to a provider verb. */
   connectionSelector?: ConnectionSelector | null;
+  /** WHY this run — the agent's own reason, shown on the proposal it files. */
+  reasoning?: string;
   /**
    * Resolve `verbId` by PROVENANCE: only a skill whose `requires` edge points at
    * this tool row can answer. A verb NAME is not an identity — a pod that went
@@ -608,8 +630,10 @@ export async function executeCapability(input: {
       parameters: skills.parameters,
       // Sync or async: how long a pod file's URL lives (`file-parameters.ts`).
       executionMode: skills.executionMode,
-      // The intent the verb serves: the gate's app outward floor reads it.
+      // The intent the verb serves: the gate's app outward floor reads it,
+      // and a send intent's recipient is read through its input map (below).
       intent: skills.intent,
+      inputMap: skills.inputMap,
     })
     .from(skills)
     .where(
@@ -697,6 +721,42 @@ export async function executeCapability(input: {
     };
   }
 
+  // DO NOT CONTACT (founder, 2026-11-09): a verb whose intent reaches a
+  // person is refused when that person is flagged, whoever asks, BEFORE the
+  // gate, so nothing is filed for review. The post-gate runner checks again
+  // (an approved run whose person was flagged after it was filed).
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skillRow,
+    parameters,
+    {
+      userId,
+      agentUserId: input.agentUserId ?? null,
+      recipientId: input.intentRequest?.recipient?.id ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
+
+  // THE COMPUTE CONTRACT (plan a640c5bb B3): a compute start without its time
+  // to live and spend maximum, or whose release verb could not end it, is
+  // refused BEFORE the gate, so nothing is filed for review.
+  const compute = readComputeRun(skillRow, parameters);
+  if (compute.kind === "refused") {
+    return { kind: "error", message: compute.message };
+  }
+  if (compute.kind === "start") {
+    const release = await resolveReleaseVerb(
+      userId,
+      workspaceId,
+      compute.releaseVerb
+    );
+    if (!release.ok) {
+      return {
+        kind: "error",
+        message: `${release.message} Nothing was started.`,
+      };
+    }
+  }
+
   const decision = await gateCapabilityExecution({
     capabilityKind: "skill",
     capabilityId: skillRow.id,
@@ -713,6 +773,8 @@ export async function executeCapability(input: {
     // asked (an app or an agent drafting for the person).
     intentRun: !!input.intentRequest,
     carriesPodFiles: podFiles.files.length > 0,
+    // A compute start's maximum, for the compute spend ceiling (0430).
+    computeSpendCents: compute.kind === "start" ? compute.maxSpendCents : null,
   });
 
   // A person's "Never" (0381) is not an approval problem: enabling would not
@@ -878,91 +940,133 @@ export async function executeCapability(input: {
         ...(enable ? { enable } : {}),
       };
     }
-    const proposal = await createPendingProposal({
-      userId,
-      workspaceId,
-      // Attribute the proposal to the acting agent so its OWNER can approve it
-      // (computeCanReviewApproval resolves agentUserId -> users.createdByUserId).
-      // Without this the row stored agentUserId:null and only admins could review.
-      agentUserId: input.agentUserId ?? undefined,
-      targetType: "capability",
-      targetId: skillRow.id,
-      proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
-      // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
-      // index. NULL when the caller had no session, by design.
-      sessionId: input.sessionId ?? null,
-      data: {
-        skillId: skillRow.id,
-        verbId: verbId ?? null,
-        parameters: parameters ?? {},
+    // CAN IT APPLY? Asked by `createPendingProposal` itself (the ONE check,
+    // `can-apply.ts`): a recipe run its approval would refuse (a recipe the
+    // computer's APPROVED version does not have, a value that does not fill
+    // it) throws there, with the run's own sentence and code, and nothing is
+    // filed. It reaches the caller as this door's denial.
+    let proposal: Awaited<ReturnType<typeof createPendingProposal>>;
+    try {
+      proposal = await createPendingProposal({
+        userId,
         workspaceId,
-        // WHAT this run will do, in the reviewer's words.
-        //
-        // Every OTHER proposal type carries a `data.summary` and the review
-        // queue renders it; a capability run carried none, so an agent's
-        // marketplace install arrived as a bare row reading only
-        // "capability.run proposal on capability is pending" — the reviewer
-        // could see that SOMETHING was proposed but not WHAT, and had to open
-        // the payload to find `parameters.slug`. That is the review-theatre
-        // failure this repo has already logged for rules (approving what you
-        // cannot read), and it lands squarely on the marketplace's central
-        // promise: an installed package proposes, and you approve.
-        //
-        // Built from the payload that is already here — nothing new is stored
-        // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
-        // A pod app's intent run reads as what the app asked, by name: the
-        // action, the recipient, the account ("Send message to Marie Dupont
-        // from Antoine Servant on LinkedIn"), never the verb's raw ids.
-        //
-        // A run that sends pod files says so first, whoever asked: which
-        // files, how big, to which tool (the app's own request still rides in
-        // `intentRequest` for the approval screen). The ids stay in
-        // `parameters`; `files` names them for the review card. No URL is
-        // stored: it is minted after approval.
-        summary:
-          podFiles.files.length > 0
-            ? describePodFileSend(
-                podFiles.files,
-                await verbToolLabel(skillRow.id)
-              )
-            : input.intentRequest
-              ? describeIntentRun(input.intentRequest)
-              : describeCapabilityRun(
-                  verbId ?? null,
-                  parameters ?? {},
-                  await resolveEntityVerbRunSubject(
-                    entityVerbRunTarget(verbId ?? null, parameters ?? {}),
-                    userId
+        // Attribute the proposal to the acting agent so its OWNER can approve it
+        // (computeCanReviewApproval resolves agentUserId -> users.createdByUserId).
+        // Without this the row stored agentUserId:null and only admins could review.
+        agentUserId: input.agentUserId ?? undefined,
+        targetType: "capability",
+        targetId: skillRow.id,
+        proposalType: CAPABILITY_RUN_PROPOSAL_TYPE,
+        // Provenance COLUMN (not `data`) — `proposals.session_id`, soft FK +
+        // index. NULL when the caller had no session, by design.
+        sessionId: input.sessionId ?? null,
+        data: {
+          skillId: skillRow.id,
+          verbId: verbId ?? null,
+          parameters: parameters ?? {},
+          workspaceId,
+          // WHAT this run will do, in the reviewer's words.
+          //
+          // Every OTHER proposal type carries a `data.summary` and the review
+          // queue renders it; a capability run carried none, so an agent's
+          // marketplace install arrived as a bare row reading only
+          // "capability.run proposal on capability is pending" — the reviewer
+          // could see that SOMETHING was proposed but not WHAT, and had to open
+          // the payload to find `parameters.slug`. That is the review-theatre
+          // failure this repo has already logged for rules (approving what you
+          // cannot read), and it lands squarely on the marketplace's central
+          // promise: an installed package proposes, and you approve.
+          //
+          // Built from the payload that is already here — nothing new is stored
+          // and `summary` is in VOLATILE_DEDUP_KEYS, so dedup is unaffected.
+          // A pod app's intent run reads as what the app asked, by name: the
+          // action, the recipient, the account ("Send message to Marie Dupont
+          // from Antoine Servant on LinkedIn"), never the verb's raw ids.
+          //
+          // A run that sends pod files says so first, whoever asked: which
+          // files, how big, to which tool (the app's own request still rides in
+          // `intentRequest` for the approval screen). The ids stay in
+          // `parameters`; `files` names them for the review card. No URL is
+          // stored: it is minted after approval.
+          summary:
+            podFiles.files.length > 0
+              ? describePodFileSend(
+                  podFiles.files,
+                  await verbToolLabel(skillRow.id)
+                )
+              : compute.kind === "start"
+                ? describeComputeStart(
+                    (await verbToolLabel(skillRow.id)) ??
+                      humanizeToken(skillRow.name),
+                    compute
                   )
-                ),
-        ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
-        // WHY — the run door has no top-level `reasoning`, so an agent's reason
-        // rides in `parameters`; hoisted to where the review card reads it
-        // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
-        // never splits identical runs.
-        ...(capabilityRunReasoning(parameters)
-          ? { reasoning: capabilityRunReasoning(parameters) }
-          : {}),
-        // Carry the 1-of-N connection selector so an APPROVED run resolves the
-        // same connection the original call intended (see runResolvedSkill).
-        connectionSelector: input.connectionSelector ?? null,
-        // C1: correlate an approved run + any retry to one logical invocation.
-        ...(input.idempotencyKey
-          ? { idempotencyKey: input.idempotencyKey }
-          : {}),
-        // What a pod app asked, for the approval screen (intent actions).
-        ...(input.intentRequest ? { intentRequest: input.intentRequest } : {}),
-      },
-      // WHY this needs a human, persisted onto `proposals.governance_reason`.
-      // Previously never passed here: `createPendingProposal` has forwarded
-      // this field all along and the dominant producer simply never populated
-      // it, so 620 of 680 pending rows carried no cause (measured 2026-09-01).
-      // It matters most inside a cluster — the fingerprint keys on the
-      // capability id, so without this an UNTRUSTED_ORIGIN run is
-      // indistinguishable from a routine one among 400 siblings.
-      governanceReason: decision.reasonCode ?? null,
-      notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
-    });
+                : input.intentRequest
+                  ? describeIntentRun(input.intentRequest)
+                  : describeCapabilityRun(
+                      verbId ?? null,
+                      parameters ?? {},
+                      await resolveEntityVerbRunSubject(
+                        entityVerbRunTarget(verbId ?? null, parameters ?? {}),
+                        userId
+                      )
+                    ),
+          ...(podFiles.files.length > 0 ? { files: podFiles.files } : {}),
+          // A compute start's terms, for the review card: approving it
+          // approves the destroy at its time to live (founder, 18 Nov 2026).
+          ...(compute.kind === "start"
+            ? {
+                computeStart: {
+                  ttlMinutes: compute.ttlMinutes,
+                  maxSpendCents: compute.maxSpendCents,
+                  releaseVerb: compute.releaseVerb,
+                  // A new pod's server: kept once it registers (plan B1).
+                  ...(compute.podRegistrationCodeHash
+                    ? { podServer: true }
+                    : {}),
+                },
+              }
+            : {}),
+          // WHY — the run door has no top-level `reasoning`, so an agent's reason
+          // rides in `parameters`; hoisted to where the review card reads it
+          // (`request.reasoning`). `reasoning` is a volatile dedup key, so this
+          // never splits identical runs.
+          ...((input.reasoning ?? capabilityRunReasoning(parameters))
+            ? {
+                reasoning:
+                  input.reasoning ?? capabilityRunReasoning(parameters),
+              }
+            : {}),
+          // Carry the 1-of-N connection selector so an APPROVED run resolves the
+          // same connection the original call intended (see runResolvedSkill).
+          connectionSelector: input.connectionSelector ?? null,
+          // C1: correlate an approved run + any retry to one logical invocation.
+          ...(input.idempotencyKey
+            ? { idempotencyKey: input.idempotencyKey }
+            : {}),
+          // What a pod app asked, for the approval screen (intent actions).
+          ...(input.intentRequest
+            ? { intentRequest: input.intentRequest }
+            : {}),
+        },
+        // WHY this needs a human, persisted onto `proposals.governance_reason`.
+        // Previously never passed here: `createPendingProposal` has forwarded
+        // this field all along and the dominant producer simply never populated
+        // it, so 620 of 680 pending rows carried no cause (measured 2026-09-01).
+        // It matters most inside a cluster — the fingerprint keys on the
+        // capability id, so without this an UNTRUSTED_ORIGIN run is
+        // indistinguishable from a routine one among 400 siblings.
+        governanceReason: decision.reasonCode ?? null,
+        notificationDescription: `Run capability ${verbId ?? skillRow.id}`,
+      });
+    } catch (err) {
+      const refused = filingRefusalOf(err);
+      if (!refused) throw err;
+      return {
+        kind: "deny",
+        reason: refused.message,
+        reasonCode: refused.reasonCode,
+      };
+    }
     // Every other governed write hands the caller a clickable review link —
     // this door must too (IS/MCP tools surface it to the user).
     return {
@@ -1088,6 +1192,25 @@ export async function executeCapability(input: {
  *   nothing. A capability.run proposal would not show in the channel, and on
  *   approval would have replayed the verb as the approver — an owner send.
  *
+ *   market.install → `runMarketInstall`: with `mustPropose` it files a
+ *   `capability.install` proposal (the one whose setup form asks the person
+ *   for the key, with the manifest's steps) and installs nothing. A
+ *   capability.run proposal replayed as the approver installed directly and
+ *   failed with "Needs setup", with no form to give the key (finding
+ *   91a3bfd3, proposal 118d24bd).
+ *
+ *   inbound_source.connect → `proposeInboundSourceConnect`: files a
+ *   `webhook/inbound_source.connect` proposal under EVERY verdict and acts on
+ *   nothing; its approval mints the source and hands the secret to the host.
+ *   A capability.run proposal would have stored the call's parameters and
+ *   its approval written the run result to recall (decision abaaa696).
+ *
+ *   design.apply → `applyDesign` (services/designs): writes the design through
+ *   the governed entity door, told `forcePropose`, so the review is ONE
+ *   entity proposal carrying the design's diff (plan 0fc746f4 §2.6). A
+ *   capability.run proposal would have been a second gate in front of it,
+ *   showing the ops instead of the design, and replayed as the approver.
+ *
  * Tighten-only: only a `propose` verdict is handed down (a deny stays a deny,
  * a dry-run a dry-run, an unattended run with no review surface is refused
  * as before), and the handler's grant check still runs before anything. A
@@ -1097,6 +1220,9 @@ export async function executeCapability(input: {
  */
 export const SELF_GATED_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   "messaging.send",
+  "market.install",
+  "inbound_source.connect",
+  "design.apply",
 ]);
 
 function isSelfGatedBuiltin(skill: { kind: string; name: string }): boolean {
@@ -1178,7 +1304,13 @@ export interface DeclaredReadOnlyBearing {
  * a comment saying so.
  */
 export function verbDeclaresReadOnly(skill: DeclaredReadOnlyBearing): boolean {
-  return declaredReadOnly(skill.metadata) === true;
+  // A verb that ALSO declares `proposeOnly` is not run as a read: the
+  // tighter declaration wins, so the gate's read-only short-circuit never
+  // skips the propose-only floor (`capabilityVerbAllowsRuleWiden`).
+  return (
+    declaredReadOnly(skill.metadata) === true &&
+    declaredProposeOnly(skill.metadata) !== true
+  );
 }
 
 /**
@@ -1694,6 +1826,14 @@ export interface ResolvedSkillRow {
   parameters: unknown;
   /** Sync or async: the lifetime of a pod file's signed URL. */
   executionMode: string | null;
+  /**
+   * REQUIRED, both, for the same reason: a verb whose intent reaches a person
+   * is refused for a flagged recipient, read through its input map
+   * (`send-recipient-consent.ts`); a loader that forgot either column would
+   * let the send through unchecked.
+   */
+  intent: string | null;
+  inputMap: unknown;
 }
 
 /**
@@ -1755,8 +1895,13 @@ export async function markSkillProven(skillId: string): Promise<void> {
  */
 function outcomeDidTheWork(result: unknown): boolean {
   // A box run is QUEUED here, not performed: its finish stamps `proven_at`
-  // (box-runs.ts) once the script really exited 0.
-  return !isProposedEnvelope(result) && !isQueuedBoxRunResult(result);
+  // (box-runs.ts) once the script really exited 0. A hosted verb run
+  // (`computer.run_recipe`) is queued the same way: its host job is the run.
+  return (
+    !isProposedEnvelope(result) &&
+    !isQueuedBoxRunResult(result) &&
+    !isQueuedHostVerbResult(result)
+  );
 }
 
 /**
@@ -1776,7 +1921,84 @@ export async function runResolvedSkill(
   parameters: Record<string, unknown> | undefined,
   ctx: Parameters<typeof runResolvedSkillInner>[2]
 ): Promise<Awaited<ReturnType<typeof runResolvedSkillInner>>> {
-  const outcome = await runResolvedSkillInner(skill, parameters, ctx);
+  // THE COMPUTE CONTRACT (plan a640c5bb B3): every run reaches this runner (a
+  // direct run, an approved proposal), so a compute start is checked here
+  // again and its lease is written BEFORE the provider is called: no lease,
+  // no start, and the TTL sweeper releases what it records.
+  const compute = readComputeRun(skill, parameters);
+  if (compute.kind === "refused") {
+    return { kind: "error", message: compute.message };
+  }
+  let lease: { id: string; expiresAt: Date } | null = null;
+  if (compute.kind === "start") {
+    const release = await resolveReleaseVerb(
+      ctx.userId,
+      ctx.workspaceId,
+      compute.releaseVerb
+    );
+    if (!release.ok) {
+      return {
+        kind: "error",
+        message: `${release.message} Nothing was started.`,
+      };
+    }
+    try {
+      lease = await openComputeLease({
+        skill,
+        start: compute,
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+        proposalId: ctx.provenance?.proposalId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        connectionSelector: ctx.connectionSelector ?? null,
+      });
+    } catch (err) {
+      logger.error({ err, skillId: skill.id }, "compute lease not written");
+      return {
+        kind: "error",
+        message:
+          "The pod could not record this compute start's time to live, so nothing was started. Try again.",
+      };
+    }
+  }
+
+  let outcome: Awaited<ReturnType<typeof runResolvedSkillInner>>;
+  try {
+    outcome = await runResolvedSkillInner(skill, parameters, ctx);
+  } catch (err) {
+    // Ambiguous: the provider may have started the machine. The lease says
+    // so (`unknown`) instead of claiming it never started.
+    if (lease) {
+      await settleComputeLease(lease, {
+        ran: true,
+        delivered: false,
+        result: null,
+      }).catch(() => undefined);
+    }
+    throw err;
+  }
+
+  const extras: Record<string, unknown> = {};
+  if (lease) {
+    extras.computeLease = await settleComputeLease(
+      lease,
+      outcome.kind === "run"
+        ? {
+            ran: true,
+            delivered: outcomeDidTheWork(outcome.result),
+            result: outcome.result,
+          }
+        : { ran: false }
+    ).catch((err: unknown) => {
+      logger.error(
+        { err, leaseId: lease!.id },
+        "compute lease not settled after the start"
+      );
+      return null;
+    });
+  }
+
   if (outcome.kind === "run" && outcomeDidTheWork(outcome.result)) {
     await markSkillProven(skill.id);
     // Same one place, same reason: both doors (direct run, approved proposal)
@@ -1797,9 +2019,30 @@ export async function runResolvedSkill(
         reason: err instanceof Error ? err.message : String(err),
       };
     });
-    if (writeBack && outcome.result && typeof outcome.result === "object") {
-      return { ...outcome, result: { ...outcome.result, writeBack } };
+    if (writeBack) extras.writeBack = writeBack;
+    // A destroy ends the lease of the machine it names, whoever ran it.
+    if (compute.kind === "release" && compute.mode === "destroy") {
+      await closeComputeLeaseOnRelease({
+        userId: ctx.userId,
+        releaseVerb: skill.name,
+        resourceId: compute.resourceId,
+        result: outcome.result,
+      }).catch((err: unknown) => {
+        logger.error(
+          { err, skillId: skill.id },
+          "compute lease not closed after a destroy"
+        );
+        return 0;
+      });
     }
+  }
+  if (
+    outcome.kind === "run" &&
+    Object.keys(extras).length > 0 &&
+    outcome.result &&
+    typeof outcome.result === "object"
+  ) {
+    return { ...outcome, result: { ...outcome.result, ...extras } };
   }
   return outcome;
 }
@@ -1849,6 +2092,8 @@ async function runResolvedSkillInner(
       message: string;
       errorClass?: FailureErrorClass;
       providerRef?: string;
+      /** Not sent and waiting: a LinkedIn action its account may not make today. */
+      held?: HeldSend;
     }
   | { kind: "not_found"; message: string }
   | {
@@ -1867,6 +2112,20 @@ async function runResolvedSkillInner(
       enable?: CapabilityNextAction;
     }
 > {
+  // DO NOT CONTACT (founder, 2026-11-09): every run reaches this runner (a
+  // direct run, an approved proposal, a self-gated builtin), so a verb whose
+  // intent reaches a person sends nothing to a flagged one, first, before
+  // any file is minted or any tier runs. A definite not-delivered.
+  const doNotContact = await refuseFlaggedCapabilityRecipient(
+    skill,
+    parameters,
+    {
+      userId: ctx.userId,
+      agentUserId: ctx.agentUserId ?? ctx.provenance?.agentUserId ?? null,
+    }
+  );
+  if (doNotContact) return doNotContact;
+
   // A run-time connection pick can't reach a code skill's sandbox (`runSkill`
   // takes no selector). Rather than SILENTLY running against the capability's
   // default credential — the wrong account, with no signal — refuse explicitly.
@@ -1919,25 +2178,41 @@ async function runResolvedSkillInner(
         message: `No builtin handler registered for verb "${skill.name}".`,
       };
     }
-    const result = await handler(runParameters ?? {}, {
-      userId: ctx.userId,
-      workspaceId: ctx.workspaceId,
-      agentUserId: ctx.agentUserId ?? null,
-      sessionId: ctx.sessionId ?? null,
-      ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
-      ...(ctx.selfGate
-        ? {
-            mustPropose: true,
-            governanceReason: ctx.selfGate.governanceReason,
-            intentRequest: ctx.selfGate.intentRequest,
-          }
-        : {}),
-      // The verb identity is known HERE and was previously dropped at the
-      // handler boundary. Handlers that create durable objects need it to stamp
-      // provenance (channel origin), so it is threaded rather than re-derived.
-      verbId: skill.id,
-      verbName: skill.name,
-    });
+    let result: unknown;
+    try {
+      result = await handler(runParameters ?? {}, {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId: ctx.agentUserId ?? null,
+        sessionId: ctx.sessionId ?? null,
+        ...(ctx.automationRun ? { automationRun: ctx.automationRun } : {}),
+        ...(ctx.selfGate
+          ? {
+              mustPropose: true,
+              governanceReason: ctx.selfGate.governanceReason,
+              intentRequest: ctx.selfGate.intentRequest,
+            }
+          : {}),
+        // The verb identity is known HERE and was previously dropped at the
+        // handler boundary. Handlers that create durable objects need it to stamp
+        // provenance (channel origin), so it is threaded rather than re-derived.
+        verbId: skill.id,
+        verbName: skill.name,
+      });
+    } catch (err) {
+      // A handler's REFUSAL (`verb-refusal.ts`) is a definite not-run with its
+      // own sentence and class: the error outcome, as a provider verb's refusal
+      // is. An approval then records the sentence and releases its claim.
+      // Any other throw is a crash and stays one.
+      if (isVerbRefusal(err)) {
+        return {
+          kind: "error",
+          message: err.message,
+          errorClass: err.errorClass,
+        };
+      }
+      throw err;
+    }
     return { kind: "run", skillId: skill.id, result };
   }
 
@@ -1978,12 +2253,14 @@ async function runResolvedSkillInner(
         const env = (result ?? {}) as {
           errorClass?: FailureErrorClass;
           providerRef?: string;
+          held?: HeldSend;
         };
         return {
           kind: "error",
           message: errMessage,
           errorClass: env.errorClass,
           providerRef: env.providerRef,
+          ...(env.held ? { held: env.held } : {}),
         };
       }
     }
@@ -2031,6 +2308,7 @@ async function runResolvedSkillInner(
       // in-process sandbox (dispatch result); undefined for a non-provider failure.
       errorClass: envelope.errorClass,
       providerRef: envelope.providerRef,
+      ...(envelope.held ? { held: envelope.held } : {}),
     };
   }
   return { kind: "run", skillId: skill.id, result: envelope.result };

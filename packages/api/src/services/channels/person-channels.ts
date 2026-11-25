@@ -30,6 +30,7 @@ import {
   eq,
   gt,
   inArray,
+  UNDECIDED_PROPOSAL_STATUSES,
   isNull,
   drizzleSql,
 } from "@synap/database";
@@ -58,6 +59,8 @@ export interface PodChannelLastMessage {
   content: string;
   at: string;
   direction: "inbound" | "outbound" | null;
+  /** The provider's own id for this message; null when it has none. */
+  externalMessageId: string | null;
 }
 
 /** One conversation with a person (design §6 `PodChannel`). */
@@ -120,7 +123,7 @@ function proposedOnChannelWhere(
   return and(
     eq(proposals.proposalType, PROPOSED_MESSAGE_TYPE),
     withFailed
-      ? inArray(proposals.status, ["pending", "approval_failed"])
+      ? inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
       : eq(proposals.status, "pending"),
     drizzleSql`(${proposals.data} ->> 'channelId') = ${channelId}`,
     proposalUserFloor(userId)
@@ -159,17 +162,24 @@ async function lastMessage(
     content: string;
     timestamp: Date;
     direction: "inbound" | "outbound" | null;
+    externalMessageId: string | null;
   }>(database, {
     channelId,
     order: "desc",
     limit: 1,
-    columns: { content: true, timestamp: true, direction: true },
+    columns: {
+      content: true,
+      timestamp: true,
+      direction: true,
+      externalMessageId: true,
+    },
   });
   if (!m) return null;
   return {
     content: m.content.slice(0, LAST_MESSAGE_CHARS),
     at: iso(m.timestamp),
     direction: m.direction ?? null,
+    externalMessageId: m.externalMessageId ?? null,
   };
 }
 

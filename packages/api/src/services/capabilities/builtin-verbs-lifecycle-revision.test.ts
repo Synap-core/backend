@@ -107,6 +107,8 @@ vi.mock("../../routers/profiles.js", () => ({
 
 import { BUILTIN_VERBS, READ_ONLY_BUILTIN_VERBS } from "./builtin-verbs.js";
 import { stripComments } from "../../../../../scripts/strip-comments.mjs";
+import { DESIGN_VERBS } from "@synap-core/types/design-board";
+import { STORYBOOK_VERBS } from "@synap-core/types/storybook";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const AGENT = "22222222-2222-4222-8222-222222222222";
@@ -353,6 +355,18 @@ describe("profile.propose_retire", () => {
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 /**
+ * Builtins a MARKET capability ships, not Synap Core: their package (in the
+ * one catalog home, app-bases) advertises them, so their skill rows exist only
+ * where it is installed. Each set is the contract the package exports as data
+ * (the catalog-coherence tripwire reads it as their catalog). Never in the
+ * core catalog.
+ */
+const MARKET_SHIPPED_BUILTINS: ReadonlySet<string> = new Set([
+  ...DESIGN_VERBS,
+  ...STORYBOOK_VERBS,
+]);
+
+/**
  * Brace-walk the `export const <name>: ... = { ... }` object literal and return
  * its top-level quoted keys. DELIBERATELY NOT a regex over the whole file: this
  * module is 3.5k lines of handlers full of quoted string literals, and a loose
@@ -455,8 +469,18 @@ describe("SEVERANCE FLOOR: BUILTIN_VERBS ≡ the seeded synap-core catalog", () 
     const inHandlers = new Set(handlers);
     const inCatalog = new Set(catalog);
     expect(
-      handlers.filter((v) => !inCatalog.has(v)),
+      handlers.filter(
+        (v) => !inCatalog.has(v) && !MARKET_SHIPPED_BUILTINS.has(v)
+      ),
       "verbs with a handler but NO catalog entry — undiscoverable on every door"
+    ).toEqual([]);
+    expect(
+      catalog.filter((v) => MARKET_SHIPPED_BUILTINS.has(v)),
+      "a market-shipped builtin advertised by Synap Core too"
+    ).toEqual([]);
+    expect(
+      [...MARKET_SHIPPED_BUILTINS].filter((v) => !inHandlers.has(v)),
+      "a market-shipped builtin with NO handler"
     ).toEqual([]);
     expect(
       catalog.filter((v) => !inHandlers.has(v)),

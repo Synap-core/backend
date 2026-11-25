@@ -1,7 +1,7 @@
 /**
  * IS THE DEV FACT IN? — whether the fact a hold waits on has been posted: a
- * pause whose `until.moves` names a dev fact (`pr:` / `main:` / `job:`,
- * `HoldDevRef` in `lifecycle/hold.ts`) resumes when this says yes.
+ * pause whose `until.moves` names a dev fact (`pr:` / `main:` / `job:` /
+ * `ai:`, `HoldDevRef` in `lifecycle/hold.ts`) resumes when this says yes.
  *
  * PURE: the hold-resume worker reads the rows (`@synap/jobs`
  * `workers/hold-resume.ts`), this file decides what they say, with the ONE PR
@@ -17,6 +17,8 @@
  *            `devbox <name>`, what the devbox producer posts) that ended after
  *            the pause began; with `to`, only that verdict. Job names are
  *            reused, so an earlier run of the same name says nothing.
+ *  - `ai:`   no dev event: the pod's own pull of its AI availability
+ *            (`aiHoldMet`) reads AI available, checked after the pause began.
  */
 
 import {
@@ -66,11 +68,11 @@ export function holdDevFactOf(type: string, data: unknown): string | null {
 }
 
 /**
- * What a hold on a dev fact NAMES (`until.moves` = `pr:` / `main:` / `job:`):
- * its words (`holdDevRefLabel`: `backend#539`, `backend main`, `job kit-h`)
- * and, for a PR, its page on GitHub. A repo's main and a devbox job have no
- * page the pod knows, so they are named only. `null` when `moves` names no
- * dev fact.
+ * What a hold on a dev fact NAMES (`until.moves` = `pr:` / `main:` / `job:` /
+ * `ai:`): its words (`holdDevRefLabel`: `backend#539`, `backend main`,
+ * `job kit-h`, `AI availability`) and, for a PR, its page on GitHub. A repo's
+ * main, a devbox job and the AI have no page the pod knows, so they are named
+ * only. `null` when `moves` names no dev fact.
  */
 export function holdDevRefNamed(
   moves: string
@@ -104,8 +106,11 @@ function newest(
   return best;
 }
 
+/** The dev facts a producer posts as events: every `HoldDevRef` but `ai`. */
+export type HoldDevEventRef = Exclude<HoldDevRef, { kind: "ai" }>;
+
 export function holdDevRefMet(
-  ref: HoldDevRef,
+  ref: HoldDevEventRef,
   until: { to?: string | null },
   /** When the pause began (`RecordedHold.since`). */
   since: string,
@@ -152,4 +157,25 @@ export function holdDevRefMet(
       return until.to == null || verdict === until.to;
     }
   }
+}
+
+/**
+ * Is AI available again for a hold on `ai:available`? Yes while the pod's
+ * LATEST pull reads available (`availableSince` set) and the Control Plane
+ * computed that answer AFTER the pause began (`checkedAt`). Met while true,
+ * not only on the transition: a pull that saw AI come back before a regrade
+ * could run (the AI service's entitlement cache still refusing) must not
+ * strand the hold. Only payer states hold on `ai:available` (the pull sees
+ * them); the AI service's own states retry on a date instead.
+ */
+export function aiHoldMet(
+  /** When the pause began (`RecordedHold.since`). */
+  since: string,
+  latest:
+    { availableSince: string | null; checkedAt: string } | null | undefined
+): boolean {
+  if (!latest?.availableSince) return false;
+  const checked = Date.parse(latest.checkedAt);
+  const from = Date.parse(since);
+  return Number.isFinite(checked) && Number.isFinite(from) && checked > from;
 }

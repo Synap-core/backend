@@ -193,6 +193,15 @@ export const DEFAULT_RELATION_DEFS = [
     isDirectional: false,
     uiHints: { category: "social" },
   },
+  // A file a pod verb MADE from another (PDF tools W1: an OCR'd, compressed,
+  // merged… copy). new file --derived_from--> source; the source is unchanged.
+  {
+    slug: "derived_from",
+    displayName: "Derived from",
+    description: "Made from another file (a converted, OCR'd or edited copy)",
+    isDirectional: true,
+    uiHints: { category: "reference", inverseLabel: "Source of" },
+  },
 ] as const satisfies readonly DefaultRelationDef[];
 
 /**

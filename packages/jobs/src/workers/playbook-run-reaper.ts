@@ -20,7 +20,9 @@
  * orphaned and force-failed; a genuinely long external-agent run that keeps its
  * session warm is EXEMPT. The threshold is generous (24h) precisely because an
  * external agent turn is legitimately long — a false-fail would abandon live
- * work, so we err toward waiting.
+ * work, so we err toward waiting. A run held by the pod's own AI (the IS) is
+ * judged after 2 hours instead (`IS_RUN_REAPER_QUIET_HOURS`): its turns last
+ * minutes and report their end, failed included.
  *
  * The capture-back / session-finalize doors both UPDATE ... WHERE the status is
  * LIVE, so a late report against a reaped (now 'failed') run cleanly no-ops
@@ -35,29 +37,142 @@
  * marked `stale` with its session (not terminal: no `completedAt`, no parent
  * settle, the session stays open), and the next write attributed to that
  * session revives both (`reviveStaleSession`, api).
+ *
+ * A RUN NOBODY CLAIMED is `blocked`, never failed. A run is born `queued`
+ * with its holder and is `running` only once that holder claims it. Past its
+ * holder's window — Synap AI {@link WORK_CLOCK}.live, anyone else
+ * {@link WORK_CLOCK}.quiet, counted from when the holder was named — it moves
+ * to `blocked` with the reason and who was passed over, and the person is
+ * asked (`run-blocked-ask.ts`, api). The clock does not run while its session
+ * waits on the person (a hand-off waiting for approval included), nor while
+ * its Synap AI turn still waits in pg-boss for a worker.
  */
 
 import {
   db,
   and,
+  or,
   eq,
   inArray,
   drizzleSql,
   playbookRuns,
   focusSessions,
+  users,
   sessionWaitsOnPersonWhere,
+  stageRunWaitsWhere,
+  stageRunAgentLiveWhere,
+  setRunStatus,
   setSessionStatus,
 } from "@synap/database";
 import { createLogger } from "@synap-core/core";
-import { workClockIn } from "@synap-core/types/work-clock";
+import { WORK_CLOCK, workClockIn } from "@synap-core/types/work-clock";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
+import type { RunHolder } from "@synap-core/types/units";
+import { passedOverLine, type RunOn } from "@synap-core/types/agents";
+import { a2aiTurnPendingIn } from "./a2ai-response-trigger.js";
 import { closeSessionViaDoor } from "../utils/session-close.js";
 import { settleParentAutomationRunFromChild } from "../utils/automation-parent-settle.js";
 
 const logger = createLogger({ module: "playbook-run-reaper" });
 
 export const PLAYBOOK_RUN_REAPER_QUEUE = "playbook-run-reaper";
-/** Every 30min — playbook runs are long-lived; no need for the 5min automation cadence. */
-export const PLAYBOOK_RUN_REAPER_CRON = "*/30 * * * *";
+/** Every 5 min: an unclaimed Synap AI run is blocked after {@link WORK_CLOCK}.live. */
+export const PLAYBOOK_RUN_REAPER_CRON = "*/5 * * * *";
+
+/** How long a holder has to claim a run, by who it is. */
+export function claimWindowMinutes(kind: RunHolder["kind"]): number {
+  return workClockIn(kind === "synap_ai" ? "live" : "quiet", "minutes");
+}
+
+/**
+ * The run's session is a PLANNED step (`forming`, founder P1/P4): it has not
+ * started, so its run is not late, unclaimed or orphaned — it waits for the
+ * pod to wake the step (api `planned-wake.ts`). Every sweep below leaves it.
+ */
+export const RUN_SESSION_NOT_PLANNED = drizzleSql`NOT EXISTS (
+  SELECT 1 FROM focus_sessions fs
+  WHERE fs.id = ${playbookRuns.sessionId}
+    AND fs.status = ${PLANNED_SESSION_STATUS}
+)`;
+
+/**
+ * A `queued` run past its holder's claim window, whose session does not wait
+ * on the person and has no A2AI turn still waiting for a worker. A run with
+ * no `holder` is judged from its start, as Synap AI's.
+ */
+export const RUN_UNCLAIMED = and(
+  eq(playbookRuns.status, "queued"),
+  drizzleSql`coalesce((${playbookRuns.holder} ->> 'assignedAt')::timestamptz, ${playbookRuns.startedAt})
+    < now() - (CASE WHEN coalesce(${playbookRuns.holder} ->> 'kind', 'synap_ai') = 'synap_ai'
+                    THEN ${claimWindowMinutes("synap_ai")}::int
+                    ELSE ${claimWindowMinutes("agent")}::int END * interval '1 minute')`,
+  drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
+  drizzleSql`NOT ${a2aiTurnPendingIn(playbookRuns.sessionId)}`,
+  RUN_SESSION_NOT_PLANNED
+)!;
+
+/**
+ * Mark each unclaimed run `blocked`, one move per run so each carries its own
+ * reason: who was waited for, how long, and who was passed over. The move
+ * records a hold on the person; `run-blocked-ask.ts` (api) asks them.
+ */
+async function blockUnclaimedRuns(): Promise<number> {
+  const rows = await db
+    .select({
+      id: playbookRuns.id,
+      holder: playbookRuns.holder,
+      runOn: playbookRuns.runOn,
+    })
+    .from(playbookRuns)
+    .where(RUN_UNCLAIMED);
+  if (rows.length === 0) return 0;
+  const holderIds = [
+    ...new Set(
+      rows
+        .map((r) => (r.holder as RunHolder | null)?.id)
+        .filter((v): v is string => !!v)
+    ),
+  ];
+  const names = new Map(
+    (holderIds.length
+      ? await db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, holderIds))
+      : []
+    ).map((u) => [u.id, u.name])
+  );
+  let blocked = 0;
+  for (const r of rows) {
+    const holder = (r.holder as RunHolder | null) ?? null;
+    const kind = holder?.kind ?? "synap_ai";
+    const who =
+      kind === "synap_ai"
+        ? "Synap AI"
+        : kind === "none"
+          ? "nobody"
+          : ((holder?.id ? names.get(holder.id) : null) ?? "its agent");
+    const runOn = (r.runOn as RunOn | null) ?? null;
+    const passed = [
+      ...(runOn?.passedOver ? [runOn.passedOver] : []),
+      ...(runOn?.runnerPassedOver ?? []),
+    ].map(passedOverLine);
+    const reason =
+      `Nobody started this run: ${who} did not pick it up within ${claimWindowMinutes(kind)} minutes.` +
+      (passed.length > 0 ? ` Passed over: ${passed.join("; ")}.` : "");
+    const { rows: moved } = await setRunStatus(db, {
+      runId: r.id,
+      where: RUN_UNCLAIMED,
+      from: "queued",
+      to: "blocked",
+      actor: { kind: "system" },
+      reason,
+      defaultHold: { on: "person", reason },
+    });
+    blocked += moved.length;
+  }
+  return blocked;
+}
 
 /**
  * A 'running' playbook run older than this whose session shows no recent
@@ -78,12 +193,50 @@ const STALE_RUN_ERROR_MESSAGE =
  * reapable. Interval arithmetic in SQL (no bound Date param — postgres.js 3.4.8
  * crashes on Date binds on the pod image, same as automation-run-reaper).
  */
-export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
+function sessionQuietFor(hours: number) {
+  return drizzleSql`NOT EXISTS (
   SELECT 1 FROM focus_sessions fs
   WHERE fs.id = ${playbookRuns.sessionId}
     AND fs.status IN ('active', 'paused')
-    AND fs.updated_at > now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')
+    AND fs.updated_at > now() - (${hours}::int * interval '1 hour')
 )`;
+}
+
+/**
+ * A run one of whose steps WAITS — on a child run or on tools being installed
+ * (its open `session_stage_runs` row, 0422) — is waiting, not idle: a parent
+ * paused on a child for days must not be reaped (runner engine spec 7111934d,
+ * risk 3). Never stale-marked, never failed, whatever its holder's window.
+ */
+export const RUN_STAGE_NOT_WAITING = drizzleSql`NOT ${stageRunWaitsWhere(playbookRuns.sessionId)}`;
+
+/**
+ * A run one of whose steps is HANDED to an agent on a computer that shows as
+ * LIVE (a hub key of it used within 15 minutes, the hand-off roster's `live`:
+ * `stageRunAgentLiveWhere`) is being worked, however long the agent goes
+ * without writing to the session (founder, finding 58b10b9a). It is exempt
+ * from every window; once the agent is silent that long, the window applies.
+ */
+export const RUN_STAGE_AGENT_NOT_LIVE = drizzleSql`NOT ${stageRunAgentLiveWhere(playbookRuns.sessionId)}`;
+
+/**
+ * A running run started more than `hours` ago whose session went quiet and
+ * none of whose steps waits or is worked by a live agent.
+ */
+function runQuietFor(hours: number) {
+  return and(
+    eq(playbookRuns.status, "running"),
+    drizzleSql`${playbookRuns.startedAt} < now() - (${hours}::int * interval '1 hour')`,
+    sessionQuietFor(hours),
+    RUN_STAGE_NOT_WAITING,
+    RUN_STAGE_AGENT_NOT_LIVE,
+    RUN_SESSION_NOT_PLANNED
+  )!;
+}
+
+export const RUN_SESSION_NOT_ACTIVE = sessionQuietFor(
+  PLAYBOOK_RUN_REAPER_STALE_HOURS
+);
 
 /**
  * The run is held by an EXTERNAL agent, not by a worker the pod launched:
@@ -104,15 +257,17 @@ export const RUN_SESSION_NOT_ACTIVE = drizzleSql`NOT EXISTS (
  * revival, and only an open session can be written to again. A run under a
  * closed or missing session has nothing to come back to — it fails as before.
  */
-export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
-  (
-    ${playbookRuns.executor} = 'external-agent'
-    OR EXISTS (
-      SELECT 1 FROM focus_sessions fs
-      WHERE fs.id = ${playbookRuns.sessionId}
-        AND fs.metadata ->> 'clientKey' LIKE 'key:%'
-    )
+const RUN_EXTERNAL_HOLDER = drizzleSql`(
+  ${playbookRuns.executor} = 'external-agent'
+  OR EXISTS (
+    SELECT 1 FROM focus_sessions fs
+    WHERE fs.id = ${playbookRuns.sessionId}
+      AND fs.metadata ->> 'clientKey' LIKE 'key:%'
   )
+)`;
+
+export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
+  ${RUN_EXTERNAL_HOLDER}
   AND EXISTS (
     SELECT 1 FROM focus_sessions fs
     WHERE fs.id = ${playbookRuns.sessionId}
@@ -121,29 +276,56 @@ export const RUN_HELD_BY_EXTERNAL_AGENT = drizzleSql`(
 )`;
 
 /** A running run past the window whose session shows no recent activity. */
-const RUN_IS_STALE = and(
-  eq(playbookRuns.status, "running"),
-  drizzleSql`${playbookRuns.startedAt} < now() - (${PLAYBOOK_RUN_REAPER_STALE_HOURS}::int * interval '1 hour')`,
-  RUN_SESSION_NOT_ACTIVE
+const RUN_IS_STALE = runQuietFor(PLAYBOOK_RUN_REAPER_STALE_HOURS);
+
+/**
+ * A run the pod handed to its OWN AI (the IS) is quiet much sooner: an IS turn
+ * lasts minutes and reports its end, so a run nobody moved for 2 hours is a
+ * dead worker (finding db27cac2: outage runs stayed active for a day). An
+ * external agent works on its own clock and keeps the 24-hour window. Not a
+ * work-clock rung: the run reaper's own clock.
+ */
+export const IS_RUN_REAPER_QUIET_HOURS = 2;
+
+/** An IS-held running run past its 2-hour window whose session went quiet. */
+const IS_RUN_IS_QUIET = and(
+  runQuietFor(IS_RUN_REAPER_QUIET_HOURS),
+  drizzleSql`NOT ${RUN_EXTERNAL_HOLDER}`
 );
 
-/** Called by the cron scheduler every ~30 minutes. */
+/** A run the sweeps below judge: past its holder's window, session quiet. */
+const RUN_IS_REAPABLE = or(RUN_IS_STALE, IS_RUN_IS_QUIET)!;
+
+/** Called by the cron scheduler every 5 minutes. */
 export async function handlePlaybookRunReaper(): Promise<void> {
   try {
-    // 00. UNPARK: a waiting run whose session no longer owes the person
+    // 1. UNCLAIMED: a run its holder never took is blocked on the person.
+    //    Its own failure never stops the sweeps below.
+    try {
+      const blocked = await blockUnclaimedRuns();
+      if (blocked > 0) {
+        logger.info(
+          { blocked },
+          "Playbook run reaper blocked runs nobody claimed"
+        );
+      }
+    } catch (err) {
+      logger.error({ err }, "Playbook run reaper: the unclaimed sweep failed");
+    }
+
+    // 2. UNPARK: a waiting run whose session no longer owes the person
     //     (answered, closed, gone) goes back to `running`, so the sweeps
     //     below judge it like any other run. The completing doors finish a
     //     live run directly (`LIVE_RUN_STATUSES`); this catches the rest.
-    const unparked = await db
-      .update(playbookRuns)
-      .set({ status: "running" })
-      .where(
-        and(
-          eq(playbookRuns.status, "waiting_on_you"),
-          drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`
-        )
-      )
-      .returning({ id: playbookRuns.id });
+    // Every sweep moves through the ONE run door (`setRunStatus`): one
+    // transition per row, owed in the sweep's own transaction.
+    const { rows: unparked } = await setRunStatus(db, {
+      where: drizzleSql`NOT ${sessionWaitsOnPersonWhere(playbookRuns.sessionId)}`,
+      from: "waiting_on_you",
+      to: "running",
+      actor: { kind: "system" },
+      reason: "Its session no longer waits on the person.",
+    });
     if (unparked.length > 0) {
       logger.info(
         { unparked: unparked.length },
@@ -151,7 +333,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0. A quiet run whose session waits on the person (an owed slot, or an
+    // 3. A quiet run whose session waits on the person (an owed slot, or an
     //    agent question in its room still unanswered — an external agent
     //    asks and STOPS until the answer starts its next run) is WAITING ON
     //    YOU, not
@@ -159,13 +341,17 @@ export async function handlePlaybookRunReaper(): Promise<void> {
     //    definition, so `RUN_SESSION_NOT_ACTIVE` alone read it as dead. Marked
     //    first so the fail sweep (status = 'running') can never reach it; its
     //    session is left open. No `completedAt`: it did not finish.
-    const waiting = await db
-      .update(playbookRuns)
-      .set({ status: "waiting_on_you" })
-      .where(
-        and(RUN_IS_STALE, sessionWaitsOnPersonWhere(playbookRuns.sessionId))
-      )
-      .returning({ id: playbookRuns.id });
+    const { rows: waiting } = await setRunStatus(db, {
+      where: and(
+        RUN_IS_REAPABLE,
+        sessionWaitsOnPersonWhere(playbookRuns.sessionId)
+      ),
+      from: "running",
+      to: "waiting_on_you",
+      actor: { kind: "system" },
+      reason: "Its session waits on the person.",
+      defaultHold: { on: "person", reason: "Its session waits on the person." },
+    });
     if (waiting.length > 0) {
       logger.info(
         { waiting: waiting.length },
@@ -173,17 +359,20 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 0b. A quiet run an EXTERNAL agent holds is STALE, never failed: the
+    // 4. A quiet run an EXTERNAL agent holds is STALE, never failed: the
     //     agent works on its own clock and may still deliver. Marked before
     //     the fail sweep so it can never reach it. No `completedAt` (it did not
     //     finish) and no parent settle (stale is not terminal). Its session is
     //     marked stale too — open, reopenable — instead of closed, so the
     //     agent's next write revives it rather than landing in a closed room.
-    const staled = await db
-      .update(playbookRuns)
-      .set({ status: "stale" })
-      .where(and(RUN_IS_STALE, RUN_HELD_BY_EXTERNAL_AGENT))
-      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    const { rows: staled } = await setRunStatus(db, {
+      where: and(RUN_IS_STALE, RUN_HELD_BY_EXTERNAL_AGENT),
+      from: "running",
+      to: "stale",
+      actor: { kind: "system" },
+      reason: "Its external agent went quiet.",
+      defaultHold: { on: "agent", reason: "Its external agent went quiet." },
+    });
     if (staled.length > 0) {
       const staleSessionIds = staled
         .map((r) => r.sessionId)
@@ -210,23 +399,22 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       );
     }
 
-    // 1. Force-fail stale running runs whose session is no longer active.
-    const reaped = await db
-      .update(playbookRuns)
-      .set({
-        status: "failed",
-        error: STALE_RUN_ERROR_MESSAGE,
-        completedAt: new Date(),
-      })
-      .where(RUN_IS_STALE)
-      .returning({ id: playbookRuns.id, sessionId: playbookRuns.sessionId });
+    // 5. Force-fail stale running runs whose session is no longer active.
+    const { rows: reaped } = await setRunStatus(db, {
+      where: RUN_IS_REAPABLE,
+      from: "running",
+      to: "failed",
+      actor: { kind: "system" },
+      reason: "The run never finalized: auto-failed by the run reaper.",
+      set: { error: STALE_RUN_ERROR_MESSAGE, completedAt: new Date() },
+    });
 
     if (reaped.length === 0) {
       logger.debug("No stale playbook runs to reap");
       return;
     }
 
-    // 1b. A reaped run that an automation started is a FAILED CHILD: settle
+    // 5b. A reaped run that an automation started is a FAILED CHILD: settle
     //     its parent run from it, so the rule's breakers see the failure
     //     (the incident's runs all died here, and the parent read "completed").
     //     Never throws; one parent read per reaped run.
@@ -234,7 +422,7 @@ export async function handlePlaybookRunReaper(): Promise<void> {
       await settleParentAutomationRunFromChild({ playbookRunId: id });
     }
 
-    // 2. Close each reaped run's orphaned session through the ONE door.
+    // 6. Close each reaped run's orphaned session through the ONE door.
     //
     //    This used to be a raw `.update(focusSessions).set({status:'closed'})`,
     //    which is the dual-path defect named in @synap-core/types/focus-sessions:

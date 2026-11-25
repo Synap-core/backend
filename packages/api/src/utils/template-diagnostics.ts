@@ -30,6 +30,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { TemplateMissKind } from "@synap-core/types/text-template";
 
 /**
  * Why a reference produced nothing.
@@ -45,8 +46,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  *    Left EXACTLY as written and delivered to the model as literal text. This
  *    is the failure mode that shipped in all 12 live playbooks.
  */
-export type TemplateMissKind =
-  "unknown-arg" | "unresolved-context" | "unresolved-entity" | "literal-brace";
+export type { TemplateMissKind };
 
 export interface TemplateMiss {
   /** The reference as the author wrote it, e.g. `competitor` or `context:url`. */

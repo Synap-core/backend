@@ -43,6 +43,8 @@ import {
   type QueryUnderstanding,
 } from "../retrieval/understand-query.js";
 import type { RetrievalVerdict } from "../retrieval/grade.js";
+import type { RecallWindow } from "../retrieval/recall-window.js";
+import { projectIdsForAsk, readProjectsForAsk } from "./project-lane.js";
 import { classifySubstrates, type SubstrateKind } from "./classify.js";
 import {
   COMMON_STOPWORDS,
@@ -61,6 +63,7 @@ import type { AskDetail } from "./synthesize.js";
 import { searchLibraryForAsk } from "../library/ask-lane.js";
 import type { AskSpacesHint } from "../discover/space-catalog.js";
 import { isQueueQuestion, type AskQueueBlock } from "./queue-question.js";
+import { withoutEpisodicNoise } from "./episodic-noise.js";
 import {
   describeAppliedLens,
   type AppliedLens,
@@ -77,7 +80,10 @@ import {
  * be missing).
  */
 export type DegradedTag =
-  SubstrateKind | "semantic:vector-down" | "library:text-down";
+  | SubstrateKind
+  | "semantic:vector-down"
+  | "library:text-down"
+  | "catalog:partial";
 
 export interface AskParams {
   query: string;
@@ -120,6 +126,12 @@ export interface AskParams {
    * `sources` keep the complete set.
    */
   detail?: AskDetail;
+  /**
+   * A time window on `updatedAt` (`synap_ask` `since` / `until`, ticket
+   * a9888512): a FILTER on the entity lanes' candidate fetch (semantic and
+   * structured), applied before ranking. The door that takes it echoes it.
+   */
+  window?: RecallWindow | null;
 }
 
 export interface AskAnswer {
@@ -295,6 +307,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
     catalog,
     limit,
     compare,
+    window: params.window ?? null,
   });
   // knowledge_keys has no user column; scope to the user's namespace (workspaceId
   // slot), matching GET /knowledge/search — `undefined` would read UNFILTERED
@@ -342,6 +355,24 @@ export async function ask(params: AskParams): Promise<AskResult> {
           })
       : Promise.resolve(null);
 
+  // CATALOG — the pod's own HOW (skills, rules, playbooks) through the find
+  // door, for a how-to / which-tool question only (`classifySubstrates`). The
+  // find door owns the floors and the ranking; this lane only flattens its two
+  // blocks into answer items. Both blocks failing is `status:"error"`; one
+  // failing keeps the other's items and tags `catalog:partial`.
+  const catalogP: Promise<(Settled & { partial?: boolean }) | null> =
+    substrates.includes("catalog")
+      ? searchCatalogForAsk({
+          query,
+          userId,
+          workspaceId: workspaceId ?? null,
+          limit: Math.min(limit, CATALOG_LANE_LIMIT),
+        }).catch((err): Settled => {
+          console.error("[ask] catalog lane failed:", err);
+          return { status: "error", items: [] };
+        })
+      : Promise.resolve(null);
+
   // PENDING lane — always runs (the review queue is invisible to every
   // substrate, so no substrate cue could route to it). Best-effort: a scan
   // hiccup degrades to "no pending block", NEVER fails recall — mirrors the
@@ -377,6 +408,24 @@ export async function ask(params: AskParams): Promise<AskResult> {
     semanticStatus = "error";
   }
 
+  // PROJECT source (ticket 8e2c7018): the `projects` row is the truth; a twin
+  // entity (same id, left by migration 0151) is dropped. Read for the project
+  // lens and for every semantic hit that IS a project.
+  const askedProjects = projectIdsForAsk(projectId, semantic.entities);
+  const project: Settled | null =
+    askedProjects.length > 0
+      ? await settle(readProjectsForAsk({ userId, projectIds: askedProjects }))
+      : null;
+  if (project && project.status === "ok" && project.items.length > 0) {
+    const answered = new Set(project.items.map((p) => p.id));
+    semantic = {
+      ...semantic,
+      entities: semantic.entities.filter(
+        (e) => !answered.has((e as { id?: string }).id)
+      ),
+    };
+  }
+
   // STRUCTURED substrate — an enumerative, typed listing dispatched through the
   // SAME scoped door entities.list uses. The catalog-resolved profile slug comes
   // from the semantic engine's own type inference (the top inferred profile), so
@@ -399,6 +448,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
             // sanity ceiling, not a relevance cut. A `brief` ask promises a
             // short answer instead, so it reads the caller's limit (B1-b).
             limit: params.detail === "brief" ? limit : Math.max(limit, 200),
+            window: params.window ?? null,
           })
         )
       : { status: "ok", items: [] };
@@ -443,7 +493,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
         })
     : Promise.resolve(undefined);
 
-  const [procedural, episodic, library, pendingMatches, spaces, queue] =
+  const [procedural, episodic, library, pendingMatches, spaces, queue, cat] =
     await Promise.all([
       proceduralP,
       episodicP,
@@ -451,6 +501,7 @@ export async function ask(params: AskParams): Promise<AskResult> {
       pendingP,
       spacesP,
       queueP,
+      catalogP,
     ]);
 
   const answers: AskAnswer[] = [
@@ -463,6 +514,14 @@ export async function ask(params: AskParams): Promise<AskResult> {
   // whole-substrate error — surfaced so a caller knows recall was weakened.
   if (semanticStatus === "ok" && semantic.vectorDown)
     degraded.push("semantic:vector-down");
+  if (project) {
+    answers.push({
+      substrate: "project",
+      items: project.items,
+      status: project.status,
+    });
+    if (project.status === "error") degraded.push("project");
+  }
   if (structured) {
     answers.push({
       substrate: "structured",
@@ -482,7 +541,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
   if (episodic) {
     answers.push({
       substrate: "episodic",
-      items: episodic.items,
+      // Repeated lines and empty tool runs are not sources (episodic-noise).
+      items: withoutEpisodicNoise(episodic.items),
       status: episodic.status,
     });
     if (episodic.status === "error") degraded.push("episodic");
@@ -496,20 +556,38 @@ export async function ask(params: AskParams): Promise<AskResult> {
     if (library.status === "error") degraded.push("library");
     else if (library.textDown) degraded.push("library:text-down");
   }
+  if (cat) {
+    answers.push({
+      substrate: "catalog",
+      items: cat.items,
+      status: cat.status,
+    });
+    if (cat.status === "error") degraded.push("catalog");
+    else if (cat.partial) degraded.push("catalog:partial");
+  }
   // EFFECTIVE primary = the substrate that actually answered (never one that
   // came back empty). Prefer the cued `intent`; if it's empty, fall back to
   // whatever did answer (procedural → episodic → semantic). Caught by dogfood:
   // "how to deploy" cues procedural, but the deploy runbook is an entity, so
   // procedural was empty and semantic held the answer — primary must say so.
+  // `catalog` comes right after `procedural`: a how-to whose runbooks came back
+  // empty is answered by the skill or playbook before stale notes.
+  const FALLBACK_ORDER = [
+    "project",
+    "structured",
+    "procedural",
+    "catalog",
+    "episodic",
+    "semantic",
+    "library",
+  ] as const;
   const answered = (s: SubstrateKind): boolean =>
     answers.some(
       (a) => a.substrate === s && a.status === "ok" && a.items.length > 0
     );
   const primary: SubstrateKind = answered(intent)
     ? intent
-    : ((
-        ["structured", "procedural", "episodic", "semantic", "library"] as const
-      ).find(answered) ?? intent);
+    : (FALLBACK_ORDER.find(answered) ?? intent);
 
   // Surface the most-relevant substrate first. Total-order comparator
   // (primary → 0, others → 1); stable sort preserves the natural
@@ -521,7 +599,8 @@ export async function ask(params: AskParams): Promise<AskResult> {
 
   return {
     query,
-    routedTo: substrates,
+    // The project source ran (it is not routed by cues): say so.
+    routedTo: project ? [...substrates, "project"] : substrates,
     intent,
     primary,
     answers,
@@ -537,5 +616,78 @@ export async function ask(params: AskParams): Promise<AskResult> {
       : {}),
     ...(spaces ? { spaces } : {}),
     ...(queue ? { queue } : {}),
+  };
+}
+
+/** How many skill/rule and playbook rows the catalog lane carries, each. */
+const CATALOG_LANE_LIMIT = 5;
+
+/**
+ * The catalog lane: `findByIntent` over `skills` + `playbooks`, flattened into
+ * answer items (`{ id, kind, name, description, ref?, open }` — `name` is what
+ * synthesis titles a source by). Skills first (their block is the find door's
+ * own order), then playbooks.
+ */
+async function searchCatalogForAsk(args: {
+  query: string;
+  userId: string;
+  workspaceId: string | null;
+  limit: number;
+}): Promise<Settled & { partial?: boolean }> {
+  const { findByIntent } = await import("../capabilities/find-intent.js");
+  const { openLink } = await import("../../utils/deep-links.js");
+  // Each arm on its own: find lets a playbooks read throw, and that must not
+  // take the skills block down with it.
+  const [skills, playbooks] = await Promise.all([
+    findByIntent({
+      intent: args.query,
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      catalogs: ["skills"],
+      limit: args.limit,
+    })
+      .then((r) => r.skills ?? { error: "skills catalog not searched" })
+      .catch((err: unknown) => ({ error: String(err) })),
+    findByIntent({
+      intent: args.query,
+      userId: args.userId,
+      workspaceId: args.workspaceId,
+      catalogs: ["playbooks"],
+      limit: args.limit,
+    })
+      .then((r) => r.playbooks ?? null)
+      .catch(() => null),
+  ]);
+
+  const items: Record<string, unknown>[] = [];
+  const skillsOk = "matches" in skills;
+  if (skillsOk) {
+    for (const m of skills.matches) {
+      items.push({
+        id: m.id,
+        kind: m.kind,
+        name: m.title,
+        ...(m.why ? { description: m.why } : {}),
+        ...(m.ref ? { ref: m.ref } : {}),
+        open: m.open,
+      });
+    }
+  }
+  if (playbooks) {
+    for (const c of playbooks.candidates) {
+      items.push({
+        id: c.id,
+        kind: "playbook",
+        name: c.name,
+        description: c.reason,
+        open: openLink(c.id),
+      });
+    }
+  }
+  if (!skillsOk && !playbooks) return { status: "error", items: [] };
+  return {
+    status: "ok",
+    items,
+    ...(!skillsOk || !playbooks ? { partial: true } : {}),
   };
 }

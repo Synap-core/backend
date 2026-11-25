@@ -60,7 +60,6 @@ vi.mock("../../utils/permission-check.js", async (importOriginal) => ({
   checkPermissionOrPropose: vi.fn(async () => ({ allowed: true })),
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),
-  isJoinGate: vi.fn(() => false),
 }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("../../utils/split-brain-service.js", () => ({
@@ -320,7 +319,10 @@ describe("a capture graph that stops part-way records what it filed", () => {
       "p1->p2:relates_to",
     ]);
     expect(m.skipped).toEqual([]);
-    // The existing reader's field is kept.
-    expect(row.data.materializationError).toBe("Profile not found: trend");
+    // The existing reader's field is kept: its prefix, then where the kind
+    // lives and the fix (83d494dd).
+    expect(row.data.materializationError).toMatch(
+      /^Profile not found: trend\. The kind "Trend" lives in another space .*change_kind_scope.* It exists in "Ecosystem"/
+    );
   });
 });

@@ -43,7 +43,15 @@
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const h = vi.hoisted(() => ({
   client: null as null | {
@@ -343,6 +351,14 @@ const KEYS = {
     principal: AGENT,
     person: OWNER,
   },
+  /** The same app connected to ANOTHER space only (OTHER), never CRM. */
+  otherSpace: {
+    id: randomUUID(),
+    permissions: CRM_APP,
+    workspaceIds: [OTHER],
+    principal: AGENT,
+    person: OWNER,
+  },
   /** The CRM app with no role write at all. */
   crmReadOnly: {
     id: randomUUID(),
@@ -444,7 +460,7 @@ beforeAll(async () => {
     [ROLE_PARTNER, ROLE_ORPHAN]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2),($3,$2),($3,$4)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2),('profile',$3,$2),('profile',$3,$4)`,
     [ROLE_CLIENT, CRM, ROLE_PARTNER, BRAND]
   );
   // `deal`: shared, homed nowhere, granted to CRM, with its own lifecycle.
@@ -454,7 +470,7 @@ beforeAll(async () => {
     [ROLE_DEAL]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE_DEAL, CRM]
   );
   // The lead's ONE lifecycle, `leadStage` (work model wave 0).
@@ -1347,6 +1363,324 @@ describe("a pod-wide lead's LinkedIn profile: proposed in the role's space, neve
       expect(await proposalCount()).toBe(count);
       expect(await coreOf(REACH_P)).toEqual(before);
     }
+  });
+});
+
+// ─── Do not contact: an opt-out the app records holds at once ─────────────
+//
+// CNIL (session 6ade1f9d; a default the founder may override): the CRM app
+// limited to CRM SETS a person's do-not-contact flag on a pod-wide person
+// wearing a role in CRM, through the same reach as the LinkedIn profile above,
+// and the gate APPLIES it (a de-escalation: it only restricts sending), in
+// agent mode too. The send door's reads (`readRecipientDoNotContact`, every
+// channel; `refuseFlaggedCapabilityRecipient`, an email send verb and a
+// LinkedIn invite) then refuse that person. Clearing it is the person's: the
+// app cannot (pod-wide: refused; stored in CRM: proposed, nothing written).
+// Rules out: the set being proposed or riding another field, a key of another
+// space or a person outside CRM's reach being set, and the app lifting it.
+
+describe("do not contact: the CRM app sets the flag at once; only the person lifts it", () => {
+  const DNC_A = randomUUID(); // pod-wide person, lead-ish contact in CRM (agent mode)
+  const DNC_B = randomUUID(); // pod-wide person, contact in CRM (person mode)
+  const DNC_OTHER = randomUUID(); // pod-wide person, contact in OTHER only
+  const DNC_STORED = randomUUID(); // person STORED in CRM, already flagged
+  const DNC_ACME = randomUUID(); // pod-wide company, contact in CRM
+  const OPT_OUT = {
+    doNotContact: true,
+    doNotContactReason: "asked to stop",
+    doNotContactSince: "2026-11-17",
+  };
+
+  beforeAll(async () => {
+    for (const [id, ws, kind, kindId, props] of [
+      [DNC_A, null, "person", PERSON_KIND, { email: "a@example.test" }],
+      [DNC_B, null, "person", PERSON_KIND, { email: "b@example.test" }],
+      [DNC_OTHER, null, "person", PERSON_KIND, { email: "o@example.test" }],
+      [DNC_STORED, CRM, "person", PERSON_KIND, { ...OPT_OUT }],
+      [DNC_ACME, null, "company", COMPANY_KIND, {}],
+    ] as const) {
+      await q(
+        `insert into entities (id, user_id, workspace_id, profile_id, type, title, properties, system_data)
+         values ($1,$2,$3,$4,$5,'Grace',$6::jsonb,'{}'::jsonb)`,
+        [id, OWNER, ws, kindId, kind, JSON.stringify(props)]
+      );
+    }
+    for (const [entityId, ws] of [
+      [DNC_A, CRM],
+      [DNC_B, CRM],
+      [DNC_OTHER, OTHER],
+      [DNC_ACME, CRM],
+    ] as const) {
+      await q(
+        `insert into entity_facets (id, entity_id, profile_id, user_id, workspace_id, status, properties)
+         values ($1,$2,$3,$4,$5,null,'{}'::jsonb)`,
+        [randomUUID(), entityId, ROLE_CONTACT, OWNER, ws]
+      );
+    }
+  });
+
+  afterAll(async () => {});
+
+  const patch = (key: KeyName, id: string, body: unknown) =>
+    send(key, "PATCH", `/entities/${id}`, body);
+  const flagOf = async (id: string) =>
+    ((await coreOf(id))!.properties as Record<string, unknown>).doNotContact;
+
+  /** The send door's reads, as each send path calls them. */
+  async function sendDoorRefuses(personId: string) {
+    const { readRecipientDoNotContact } =
+      await import("../../../services/channels/do-not-contact.js");
+    const { refuseFlaggedCapabilityRecipient } =
+      await import("../../../services/capabilities/send-recipient-consent.js");
+    // A message on any channel bound to the person (LinkedIn, email, ...).
+    const channel = await readRecipientDoNotContact({
+      contextObjectType: "entity",
+      contextObjectId: personId,
+    });
+    // A send verb (an email) and a LinkedIn invite, naming the person.
+    const verbs = await Promise.all(
+      (["send_message", "request_connection"] as const).map((intent) =>
+        refuseFlaggedCapabilityRecipient(
+          { intent, inputMap: null },
+          {},
+          { userId: OWNER, agentUserId: AGENT, recipientId: personId }
+        )
+      )
+    );
+    return {
+      channel: channel !== null,
+      email: verbs[0]?.errorClass === "do_not_contact",
+      linkedin: verbs[1]?.errorClass === "do_not_contact",
+    };
+  }
+
+  it("agent mode: the opt-out on a pod-wide person wearing a role in CRM is APPLIED, nothing proposed, and the send door then refuses them", async () => {
+    expect(await sendDoorRefuses(DNC_A)).toEqual({
+      channel: false,
+      email: false,
+      linkedin: false,
+    });
+    const res = await patch("crm", DNC_A, { metadata: OPT_OUT });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(body.status).not.toBe("proposed");
+    const after = await coreOf(DNC_A);
+    expect(after!.workspace_id).toBeNull();
+    expect(after!.properties).toMatchObject({
+      ...OPT_OUT,
+      email: "a@example.test",
+    });
+    // Nothing waits on the person for it.
+    expect(
+      (
+        await q(
+          `select id from proposals where target_id = $1 and status = 'pending'`,
+          [DNC_A]
+        )
+      ).rows
+    ).toEqual([]);
+    expect(await sendDoorRefuses(DNC_A)).toEqual({
+      channel: true,
+      email: true,
+      linkedin: true,
+    });
+  });
+
+  it("person mode: the person's own token through the app applies the flag alone too", async () => {
+    const res = await patch("crmPerson", DNC_B, {
+      metadata: { doNotContact: true },
+    });
+    const body = await json(res);
+    expect(res.status, JSON.stringify(body)).toBe(200);
+    expect(await flagOf(DNC_B)).toBe(true);
+  });
+
+  it("a key of another space, or a person outside CRM's reach: not set (404), nothing filed", async () => {
+    for (const [key, id] of [
+      ["otherSpace", DNC_B],
+      ["otherSpace", DNC_A],
+      ["crm", DNC_OTHER],
+    ] as const) {
+      const before = await coreOf(id);
+      const count = await proposalCount();
+      const res = await patch(key, id, { metadata: { doNotContact: true } });
+      expect([403, 404], `${key} ${id}`).toContain(res.status);
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(id)).toEqual(before);
+    }
+    expect(await flagOf(DNC_OTHER)).toBeUndefined();
+  });
+
+  it("the opt-out cannot ride another field, and a company is not a person: refused whole (403)", async () => {
+    for (const [id, body] of [
+      [DNC_B, { title: "Renamed", metadata: { doNotContact: true } }],
+      [DNC_B, { metadata: { doNotContact: true, email: "x@example.test" } }],
+      [DNC_ACME, { metadata: { doNotContact: true } }],
+    ] as const) {
+      const before = await coreOf(id);
+      const count = await proposalCount();
+      const res = await patch("crm", id, body);
+      expect(res.status, JSON.stringify(body)).toBe(403);
+      expect(await proposalCount()).toBe(count);
+      expect(await coreOf(id)).toEqual(before);
+    }
+  });
+
+  it("the app cannot lift it on a pod-wide person: clearing, or removing it, is refused (403) in both modes", async () => {
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of [
+        { metadata: { doNotContact: false } },
+        { deleteProperties: ["doNotContact"] },
+      ]) {
+        const count = await proposalCount();
+        const res = await patch(key, DNC_A, body);
+        expect(res.status, `${key} ${JSON.stringify(body)}`).toBe(403);
+        expect(await proposalCount()).toBe(count);
+        expect(await flagOf(DNC_A)).toBe(true);
+      }
+    }
+    expect((await sendDoorRefuses(DNC_A)).linkedin).toBe(true);
+  });
+
+  it("on a person stored in CRM, the app's clear is PROPOSED in both modes, never applied: the person decides", async () => {
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of [
+        { metadata: { doNotContact: false } },
+        { deleteProperties: ["doNotContact", "doNotContactReason"] },
+      ]) {
+        const res = await patch(key, DNC_STORED, body);
+        const out = await json(res);
+        expect(res.status, `${key} ${JSON.stringify(out)}`).toBe(202);
+        expect(out.status).toBe("proposed");
+        expect(await flagOf(DNC_STORED)).toBe(true);
+      }
+    }
+    expect((await sendDoorRefuses(DNC_STORED)).email).toBe(true);
+  });
+
+  // Ticket 85a8f115 (Promise Keeper 2026-11-18): re-setting the flag with an
+  // empty reason or date was read as "sets the flag only" and APPLIED, which
+  // erased the CNIL evidence of why and since when the person opted out.
+  const ERASE_EVIDENCE = [
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: null,
+        doNotContactSince: null,
+      },
+    },
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: "",
+        doNotContactSince: "1970-01-01",
+      },
+    },
+  ];
+  const evidenceOf = async (id: string) => {
+    const p = (await coreOf(id))!.properties as Record<string, unknown>;
+    return {
+      flag: p.doNotContact,
+      reason: p.doNotContactReason,
+      since: p.doNotContactSince,
+    };
+  };
+
+  it("re-setting the flag with an empty reason or date on a pod-wide person is not applied (403): the reason and date stay", async () => {
+    const kept = await evidenceOf(DNC_A);
+    expect(kept).toEqual({
+      flag: true,
+      reason: OPT_OUT.doNotContactReason,
+      since: OPT_OUT.doNotContactSince,
+    });
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of ERASE_EVIDENCE) {
+        const count = await proposalCount();
+        const res = await patch(key, DNC_A, body);
+        expect(res.status, `${key} ${JSON.stringify(body)}`).toBe(403);
+        expect(await proposalCount()).toBe(count);
+        expect(await evidenceOf(DNC_A)).toEqual(kept);
+      }
+    }
+  });
+
+  it("on a person stored in CRM, the same write is PROPOSED in both modes, never applied: the reason and date stay", async () => {
+    const kept = await evidenceOf(DNC_STORED);
+    expect(kept.reason).toBe(OPT_OUT.doNotContactReason);
+    for (const key of ["crm", "crmPerson"] as const) {
+      for (const body of ERASE_EVIDENCE) {
+        const res = await patch(key, DNC_STORED, body);
+        const out = await json(res);
+        expect(res.status, `${key} ${JSON.stringify(out)}`).toBe(202);
+        expect(out.status).toBe("proposed");
+        expect(await evidenceOf(DNC_STORED)).toEqual(kept);
+      }
+    }
+  });
+
+  // Finding 6d7af9b9 (founder, 21 Nov 2026): an app MAY replace the reason or
+  // date of an opt-out in force, but only through the person's approval.
+  // Before, a non-empty new reason or date read as "sets the flag only" and
+  // was APPLIED over the recorded evidence.
+  const REPLACE_EVIDENCE = [
+    {
+      metadata: {
+        doNotContact: true,
+        doNotContactReason: "x",
+        doNotContactSince: "1970-01-01",
+      },
+    },
+    { metadata: { doNotContact: true, doNotContactSince: "2020-01-01" } },
+    { metadata: { doNotContactReason: "changed my mind" } },
+  ];
+
+  it("an opt-out in force: the app replacing its reason or date is PROPOSED in both modes, never applied", async () => {
+    for (const id of [DNC_A, DNC_STORED]) {
+      const kept = await evidenceOf(id);
+      expect(kept).toEqual({
+        flag: true,
+        reason: OPT_OUT.doNotContactReason,
+        since: OPT_OUT.doNotContactSince,
+      });
+      for (const key of ["crm", "crmPerson"] as const) {
+        for (const body of REPLACE_EVIDENCE.slice(0, 2)) {
+          const res = await patch(key, id, body);
+          const out = await json(res);
+          expect(res.status, `${key} ${id} ${JSON.stringify(out)}`).toBe(202);
+          expect(out.status).toBe("proposed");
+          expect(await evidenceOf(id)).toEqual(kept);
+        }
+      }
+    }
+    // A reason alone, on the record the app stores: proposed too.
+    const res = await patch("crmPerson", DNC_STORED, REPLACE_EVIDENCE[2]);
+    const out = await json(res);
+    expect(res.status, JSON.stringify(out)).toBe(202);
+    expect(out.status).toBe("proposed");
+    expect((await evidenceOf(DNC_STORED)).reason).toBe(
+      OPT_OUT.doNotContactReason
+    );
+  });
+
+  it("CONTROL: the same reason and date again, or a reason set the first time, still apply at once", async () => {
+    const same = await patch("crm", DNC_A, { metadata: OPT_OUT });
+    const sameBody = await json(same);
+    expect(same.status, JSON.stringify(sameBody)).toBe(200);
+    expect(sameBody.status).not.toBe("proposed");
+
+    // DNC_B was flagged with no reason (person mode, above).
+    expect((await evidenceOf(DNC_B)).reason).toBeUndefined();
+    const first = await patch("crm", DNC_B, {
+      metadata: { doNotContact: true, doNotContactReason: "asked by email" },
+    });
+    const firstBody = await json(first);
+    expect(first.status, JSON.stringify(firstBody)).toBe(200);
+    expect(firstBody.status).not.toBe("proposed");
+    expect(await evidenceOf(DNC_B)).toEqual({
+      flag: true,
+      reason: "asked by email",
+      since: undefined,
+    });
   });
 });
 

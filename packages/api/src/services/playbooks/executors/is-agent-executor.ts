@@ -9,8 +9,9 @@
  *
  * The IS works ASYNCHRONOUSLY in the channel after the kickoff; completion and
  * capture-back happen out-of-band via the Hub `POST /runs/:id/capture` route.
- * So this executor returns `{ status: "running" }` — it does not block on the
- * agent finishing.
+ * So this executor returns `{ status: "queued" }`: the turn is enqueued, and
+ * the run becomes `running` when the turn starts (the A2AI worker claims
+ * it). It does not block on the agent finishing.
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx (§4.4).
  */
@@ -80,9 +81,8 @@ export class IsAgentExecutor implements Executor {
     // WHICH phase it is in and what's expected of it. Additive: when the run is
     // stageless (currentStage null/absent) or no declared stage matches, the
     // section is omitted.
-    // NOTE: stage-scoped-grant ENFORCEMENT (intersecting stage.grants into the
-    // resolved capability set) is a deliberate follow-up — here the stage's grant
-    // ids are listed ADVISORY only.
+    // A stage's `tools` are ENFORCED by the run's tool profile (a stage list
+    // narrows the playbook's, `activeToolsList`); here they are only named.
     const stage = ctx.currentStage
       ? ctx.stages?.find((s) => s.key === ctx.currentStage)
       : undefined;
@@ -95,18 +95,21 @@ export class IsAgentExecutor implements Executor {
     // section).
     // A TRIAL run (the rule lab) renders its drafts in place, read from its
     // own session's stamp, and its kickoff says to answer with the draft.
-    const { contextSkill, guidance, trial } = await loadRunMethodParts({
-      playbookId: ctx.playbookId,
-      userId: ctx.userId,
-      runId: runIdOf(ctx.input),
-      sessionId: ctx.sessionId,
-      warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
-    });
+    const { contextSkill, guidance, learned, trial } = await loadRunMethodParts(
+      {
+        playbookId: ctx.playbookId,
+        userId: ctx.userId,
+        runId: runIdOf(ctx.input),
+        sessionId: ctx.sessionId,
+        warn: (obj, msg) => logger.warn(obj, `is-agent: ${msg}`),
+      }
+    );
 
     // THE method renderer, shared with the MCP binding doors.
     const kickoff = renderPlaybookMethod({
       contextSkill,
       guidance,
+      learned,
       body: trial ? `${base}\n\n${TRIAL_KICKOFF_NOTE}` : base,
       stage,
     });
@@ -138,11 +141,10 @@ export class IsAgentExecutor implements Executor {
       };
     }
 
-    // The run's declared tools (founder, 2026-11-05): the IS gives this turn
-    // the run core tools plus only the capabilities the playbook grants (its
-    // `grants`, the active stage's) and those serving what it and its space
-    // declare. Never throws: a failed read comes back `capabilitiesRead:
-    // "failed"`, and the IS tells the agent so.
+    // The run's tools (plan 08e4fba7 decision 3): the IS gives this turn the
+    // floor of the playbook's class plus its ONE `tools` list, and nothing
+    // else. Never throws: a failed read comes back `capabilitiesRead:
+    // "failed"` with the floor only, and the IS tells the agent so.
     const run = ctx.playbookId
       ? await resolveRunToolProfile({
           playbookId: ctx.playbookId,
@@ -154,8 +156,8 @@ export class IsAgentExecutor implements Executor {
 
     // CANONICAL IS kickoff — the SAME pg-boss A2AI_TRIGGER path the threads REST
     // route uses (resolveIntelligenceService + getBoss().send), NOT a side-channel
-    // websocket broadcast (which would never enqueue the IS → the run would hang
-    // in "running" forever). Only THREAD / AGENT_COLLAB channels are IS-eligible.
+    // websocket broadcast (which would never enqueue the IS → the run would
+    // never be claimed). Only THREAD / AGENT_COLLAB channels are IS-eligible.
     const triggered = await triggerAutoRespond({
       channelId: ctx.channelId,
       userMessageId: messageId,
@@ -181,6 +183,6 @@ export class IsAgentExecutor implements Executor {
       };
     }
 
-    return { status: "running", summary: "dispatched to IS in channel" };
+    return { status: "queued", summary: "dispatched to IS in channel" };
   }
 }

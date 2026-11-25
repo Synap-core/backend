@@ -11,6 +11,8 @@ export const en = {
   "lens.window": "Opens on the last {days} days, the window Security counts.",
   "lens.clear": "Show the whole audit log",
   "lens.empty": "Nothing went through without a proof in these dates.",
+  showAll: "{n, plural, one {Show # event} other {Show all # events}}",
+  podWide: "Pod-wide",
 } as const;
 
 export const fr: Catalog<typeof en> = {
@@ -20,6 +22,9 @@ export const fr: Catalog<typeof en> = {
     "S’ouvre sur les {days} derniers jours, la période que compte Sécurité.",
   "lens.clear": "Afficher tout le journal d’audit",
   "lens.empty": "Rien n’est passé sans preuve de présence sur ces dates.",
+  showAll:
+    "{n, plural, one {Afficher l’événement} other {Afficher les # événements}}",
+  podWide: "Tout le pod",
 };
 
 export const CATALOGS = { en, fr };

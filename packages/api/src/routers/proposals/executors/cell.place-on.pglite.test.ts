@@ -40,7 +40,8 @@ vi.mock("@synap/database", async (importOriginal) => {
   const db = drizzle(client, { schema });
   return { ...actual, db, getDb: async () => db };
 });
-vi.mock("../execution-registry.js", () => ({
+vi.mock("../execution-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../execution-registry.js")>()),
   registerProposalExecutor: (e: {
     key: string;
     execute: (a: unknown) => Promise<unknown>;

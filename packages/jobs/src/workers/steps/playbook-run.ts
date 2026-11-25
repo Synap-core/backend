@@ -9,6 +9,7 @@ import {
   isNull,
   entities,
   events,
+  focusSessions,
   countWorkerPendingApprovals,
   WORKER_HELD_OUTPUT_KEY,
   type PlaybookRunWorkerSpec,
@@ -17,6 +18,8 @@ import {
   DEFAULT_WORKER_MAX_PENDING_APPROVALS,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
+  isLinkActivatorKey,
+  isScheduleActivatorKey,
   skippedByOnly,
   skippedByUnless,
 } from "@synap-core/types/workers";
@@ -35,8 +38,13 @@ import {
   readPlaybookRunMode,
   type PlaybookRunMode,
 } from "@synap-core/types/automations";
+import { isTerminalSessionStatus } from "@synap-core/types/focus-sessions";
 import { resolveInputMapping, resolveTemplate } from "../template-resolve.js";
+import { findInFlightRunSession } from "../../utils/run-in-flight.js";
+import { linkWouldLoop } from "../../utils/link-lineage.js";
 import { logger } from "../automation-executor-logger.js";
+import { runEntityVisibilityWhere } from "../entity-query-scope.js";
+import { isUuid } from "@synap-core/types/property-render";
 import type {
   StepContext,
   ExecutionPayload,
@@ -140,6 +148,15 @@ export async function executePlaybookRun(
      */
     handToAgentId?: string;
     /**
+     * PARENT SESSION — the session this node's runs are children of (a
+     * SESSION-scoped worker). Forwarded to the spine, which writes the
+     * `spawned_from` edge (owner floor on the parent); a parent that is no
+     * longer open makes this step start and file nothing (`session_closed`,
+     * checked below, before every mode). Declared on
+     * `PlaybookRunNodeDef.data`. Absent ⇒ unchanged.
+     */
+    parentSessionId?: string;
+    /**
      * WHAT this node materializes at its slot.
      *
      * - absent / `"run"` — an unattended RUN: session + channel + `playbook_runs`
@@ -156,9 +173,8 @@ export async function executePlaybookRun(
      *   subject): a repeat returns `{ status: "skipped", reason:
      *   "already_proposed" }`.
      *
-     * Set by `buildPlaybookRunFlowDefinition` from the playbook's
-     * `schedule.mode` (run | appointment) and by the rule grammar's `__mode`
-     * (propose). Read through `readPlaybookRunMode` — the ONE place that
+     * Set by the rule grammar's `__mode` (a schedule activator's
+     * `appointment`, a rule's `propose`). Read through `readPlaybookRunMode` — the ONE place that
      * decides what an absent/unknown mode means (`run`).
      */
     mode?: PlaybookRunMode;
@@ -196,6 +212,37 @@ export async function executePlaybookRun(
     throw new Error(
       `playbook_run: handToAgentId hands a RUN to an agent, but this node's mode is "${mode}" — refusing to drop the hand-off`
     );
+  }
+
+  // The scheduler door has no parent input: an appointment cannot be a
+  // session's child. Fail by name rather than drop the lineage the node asked
+  // for (no producer writes this pair today: a session worker runs or proposes).
+  if (data.parentSessionId?.trim() && mode === "appointment") {
+    throw new Error(
+      "playbook_run: parentSessionId files a run as a session's child, but this node's mode is \"appointment\" — refusing to drop the parent"
+    );
+  }
+
+  // A SESSION's worker stops with its session: a parent that is no longer
+  // open (closed, cancelled, failed, or gone) gets no more children — no run,
+  // no appointment, no proposal. Nothing on the session is moved (a session
+  // end moves nothing, decision 5e377b06); the rule simply files nothing.
+  // Before every mode, so propose and run agree.
+  const parentSessionId = data.parentSessionId?.trim() || undefined;
+  if (parentSessionId) {
+    const parent = isUuid(parentSessionId)
+      ? await db.query.focusSessions.findFirst({
+          columns: { status: true },
+          where: eq(focusSessions.id, parentSessionId),
+        })
+      : undefined;
+    if (!parent || isTerminalSessionStatus(parent.status)) {
+      return {
+        status: "skipped",
+        reason: AUTOMATION_SKIP_REASONS.sessionClosed,
+        parentSessionId,
+      };
+    }
   }
 
   // The confused-deputy guard protects an UNGOVERNED launch: an agent-produced
@@ -241,21 +288,22 @@ export async function executePlaybookRun(
     (context.trigger.payload.subjectId as string | undefined) ??
     null;
 
-  // Bind the subject ONLY if it's an entity the run can legitimately see — its
-  // own workspace OR a pod-wide (workspaceId NULL) entity. A crafted
-  // paramsMapping / trigger payload must not bind a session to an entity in
-  // another workspace (write-side IDOR guard; the column has no FK).
+  // Bind the subject ONLY if the run's owner can read it in the run's space
+  // (a run's entity floor, `runEntityVisibilityWhere`: this space's records
+  // and the owner's pod-wide ones). A crafted paramsMapping or
+  // trigger payload must not bind a session to an entity of another space or
+  // person (write-side IDOR guard; the column has no FK).
   let resolvedSubjectId: string | undefined;
   let subjectProperties: Record<string, unknown> | null = null;
   if (candidateSubjectId) {
     const subj = await db.query.entities.findFirst({
-      columns: { id: true, workspaceId: true, properties: true },
-      where: eq(entities.id, candidateSubjectId),
+      columns: { id: true, properties: true },
+      where: and(
+        eq(entities.id, candidateSubjectId),
+        runEntityVisibilityWhere(workspaceId, ownerId)
+      ),
     });
-    if (
-      subj &&
-      (subj.workspaceId === workspaceId || subj.workspaceId === null)
-    ) {
+    if (subj) {
       resolvedSubjectId = subj.id;
       subjectProperties =
         (subj.properties as Record<string, unknown> | null) ?? null;
@@ -267,10 +315,16 @@ export async function executePlaybookRun(
     }
   }
 
+  // A schedule tick has no thing yet: the spine reads `unless` / `only` off
+  // each thing of its set.
+  const tickOverSet =
+    !resolvedSubjectId && isScheduleActivatorKey(data.worker?.key);
+
   // ── UNLESS: the worker leaves this thing out (its activator's `unless`). ────
   // Before the proposal and before the run, so a left-out thing files nothing
   // and starts nothing (Content OS's Repurpose: a post sent for another one).
   if (
+    !tickOverSet &&
     data.worker?.unless &&
     skippedByUnless(data.worker.unless, subjectProperties)
   ) {
@@ -284,11 +338,40 @@ export async function executePlaybookRun(
   // ── ONLY: the worker keeps this thing only for one of its values. ──────────
   // Same place as unless: a thing whose value is not listed files nothing and
   // starts nothing (Content OS: Produce a video only for a video post).
-  if (data.worker?.only && skippedByOnly(data.worker.only, subjectProperties)) {
+  if (
+    !tickOverSet &&
+    data.worker?.only &&
+    skippedByOnly(data.worker.only, subjectProperties)
+  ) {
     return {
       status: "skipped",
       reason: WORKER_SKIP_REASONS.onlyValues,
       property: data.worker.only.property,
+    };
+  }
+
+  // ── A LINK (`run_ended`): never start a playbook already in its chain. ─────
+  // The run-time loop guard (`utils/link-lineage.ts`): a loop the write door
+  // could not see (a rename, an install) files nothing and starts nothing.
+  // Before every mode, like `unless` / `only`.
+  const isLink = isLinkActivatorKey(data.worker?.key);
+  const endedSessionId = (
+    context.trigger.payload.data as { sessionId?: unknown } | undefined
+  )?.sessionId;
+  if (
+    isLink &&
+    isUuid(data.playbookId ?? "") &&
+    typeof endedSessionId === "string" &&
+    (await linkWouldLoop({ endedSessionId, playbookId: data.playbookId! }))
+  ) {
+    logger.warn(
+      { playbookId: data.playbookId, endedSessionId },
+      "playbook_run: a link would start a playbook already in its chain — skipped"
+    );
+    return {
+      status: "skipped",
+      reason: WORKER_SKIP_REASONS.linkLoop,
+      endedSessionId,
     };
   }
 
@@ -303,6 +386,25 @@ export async function executePlaybookRun(
       throw new Error(
         "playbook_run in propose mode needs the automation that owns it (no automationContext) — refusing to file an unattributable proposal"
       );
+    }
+    // ONE run per (playbook, subject) at a time — the rule the run spine's
+    // subject reuse applies to a run-mode node, applied before anything is
+    // filed. A run still working on this subject answers the activator: a
+    // second proposal could only start a duplicate run (see run-in-flight.ts).
+    // A name-only node (no id) is resolved at approval, where the replay
+    // checks the same thing.
+    if (resolvedSubjectId && isUuid(data.playbookId ?? "")) {
+      const inFlight = await findInFlightRunSession({
+        playbookId: data.playbookId!,
+        subjectId: resolvedSubjectId,
+      });
+      if (inFlight) {
+        return {
+          status: "skipped",
+          reason: AUTOMATION_SKIP_REASONS.runInFlight,
+          sessionId: inFlight.id,
+        };
+      }
     }
     // A worker's backlog holds its proposals too: past `maxPendingApprovals`
     // waiting on a person, it files no more (the spine's own gate for runs).
@@ -343,6 +445,7 @@ export async function executePlaybookRun(
     if (!readiness.ready) throw new Error(readiness.message);
     const proposed = await proposeRulePlaybookRun({
       ownerId,
+      actorAgentUserId: automationContext.actorAgentUserId,
       workspaceId,
       automationId: automationContext.automationId,
       automationRunId: automationContext.automationRunId,
@@ -362,6 +465,9 @@ export async function executePlaybookRun(
       ...(data.agentType ? { agentType: data.agentType } : {}),
       ...(data.projectId ? { projectId: data.projectId } : {}),
       ...(data.trackId ? { trackId: data.trackId } : {}),
+      // A session's worker: the approved run is a child of that session
+      // (the `playbook/run` replay reads `parentSessionId`).
+      ...(parentSessionId ? { parentSessionId } : {}),
       sessionId: automationContext.focusSessionId,
       stepRunId: attribution?.stepRunId,
       nodeId: attribution?.nodeId,
@@ -421,7 +527,13 @@ export async function executePlaybookRun(
     ? {
         automationRunId: automationContext.automationRunId,
         automationId: automationContext.automationId,
-        chainDepth: automationContext.chainDepth ?? 0,
+        // A link hop does not deepen the chain: a run a link starts carries
+        // the depth of the run that ended, so a chain of playbooks is bounded
+        // by the link guard above (`LINK_CHAIN_MAX`), not cut at the generic
+        // depth floor (MAX_CHAIN_DEPTH, 3). Any other hop still counts.
+        chainDepth: isLink
+          ? Math.max((automationContext.chainDepth ?? 0) - 1, 0)
+          : (automationContext.chainDepth ?? 0),
         rootRunId:
           automationContext.rootRunId ?? automationContext.automationRunId,
         chainAutomationIds: automationContext.chainAutomationIds ?? [],
@@ -536,6 +648,10 @@ export async function executePlaybookRun(
     // exists, puts it on the roster and skips the playbook's executor.
     // Omitted when absent so an ordinary node is byte-identical to before.
     ...(handToAgentId ? { handToAgentId } : {}),
+    // A session's worker: the run is spawned FROM that session (the spine's
+    // `recordSessionSpawn`). Omitted when absent so an ordinary node is
+    // byte-identical to before.
+    ...(parentSessionId ? { parentSessionId } : {}),
     // A worker node: the spine gates the fire and sizes the run. Its
     // automation is what the backlog / in-flight / ceiling counts key on.
     ...(data.worker
@@ -564,6 +680,20 @@ export async function executePlaybookRun(
     // supposed to supply, and never `""` substituted into the instruction.
     onMissingRequired: "refuse",
   });
+
+  // A ONE-SHOT run (`executor: "generate"`) made its draft in this call and
+  // filed it as a proposal on the subject: there is no session to stamp. The
+  // step output names the run and the proposal (a reuse: the earlier run's
+  // still-pending proposal).
+  if (result.generated) {
+    return {
+      runId: result.generated.runId,
+      status: result.generated.reused ? "reused" : "proposed",
+      proposalId: result.generated.proposalId,
+      reviewUrl: result.generated.reviewUrl,
+      ...(result.generated.reused ? { reused: true } : {}),
+    };
+  }
 
   // Nobody was eligible. Do not throw — an empty list is a quiet week, not a
   // failed automation — and do not stamp a session onto the firing event,

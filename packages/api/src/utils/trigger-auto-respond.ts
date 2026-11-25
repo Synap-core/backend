@@ -16,7 +16,8 @@
  * RUN channels are live process narration (capture, automation, …): system posts
  * progress; a user free-text flip must still enqueue a real agent turn.
  * Best-effort: the triggering message is already persisted; a failed trigger is
- * logged and swallowed. Returns true iff the job was enqueued.
+ * logged and swallowed. Returns true iff a job for this message is queued:
+ * a send pg-boss deduplicated (`null`) still is, by the earlier send.
  */
 
 import { db, eq, and } from "@synap/database";
@@ -60,8 +61,8 @@ export async function triggerAutoRespond(params: {
   /**
    * Set ONLY by the doors that dispatch a playbook run's turn (the is-agent
    * kickoff and the automatic continuation): the run's declared tools, from
-   * `resolveRunToolProfile`. The IS then sends the run core tools plus these
-   * verbs only (founder, 2026-11-05). A person chatting in the run room is
+   * `resolveRunToolProfile`. The IS then gives the turn exactly `run.tools`
+   * plus these verbs (plan 08e4fba7 decision 3). A person chatting in the run room is
    * not a run turn and gets the normal agent.
    */
   run?: RunToolProfile;
@@ -164,7 +165,7 @@ export async function triggerAutoRespond(params: {
       workspaceId: channel.workspaceId ?? undefined,
       capability: "chat",
     });
-    await getBoss().send(
+    const jobId = await getBoss().send(
       A2AI_TRIGGER_QUEUE,
       {
         channelId: params.channelId,
@@ -192,6 +193,12 @@ export async function triggerAutoRespond(params: {
         singletonKey: params.userMessageId,
       }
     );
+    if (jobId === null) {
+      logger.info(
+        { channelId: params.channelId, userMessageId: params.userMessageId },
+        "triggerAutoRespond: a job for this message was already queued"
+      );
+    }
     return true;
   } catch (err) {
     // Same invisibility as the eligibility skip above, but a different cause:

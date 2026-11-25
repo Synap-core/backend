@@ -48,6 +48,9 @@ const SUBJECT_OF: Record<TransitionSubjectType, StatusEventSubjectType> = {
   entity: "entity",
   track: "goal",
   focus_session: "session",
+  playbook_run: "run",
+  proposal: "proposal",
+  slot: "slot",
 };
 
 /** `<subject>.transition.completed` → its subject type (the log row's type). */

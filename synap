@@ -372,6 +372,23 @@ sync_git_before_build() {
     GIT_SHA=$(cd "$repo_root" && git rev-parse HEAD 2>/dev/null || echo "")
 }
 
+# The ONE guard for every interactive prompt. With no terminal on stdin (a pipe,
+# CI, an agent shell) a bare `read` hits EOF and, under `set -e`, the script
+# exits 1 with no message. Say what to do instead. `install` never gets here
+# without a TTY (it switches itself to --non-interactive); this covers the rest.
+_synap_prompt_read() {
+    # Read first: an answer piped on stdin is a real answer (scripts and tests
+    # pipe "yes" or the pod domain). Only EOF with nothing read is "no answer".
+    # The last argument is the variable `read` fills; a final line without a
+    # newline sets it and still returns non-zero, so check it.
+    if read "$@"; then return 0; fi
+    local __var="${!#}"
+    if [ -n "${!__var:-}" ]; then return 0; fi
+    echo -e "${RED:-}No answer on stdin: this step asks a question and nothing answered it.${NC:-}" >&2
+    echo "Re-run from a terminal, or for install pass --non-interactive (every prompt then takes its default or a flag: --domain, --email, --admin-email, --admin-password, --intelligence-key ...)." >&2
+    exit 1
+}
+
 # Used by destructive / confirm flows when automation must not block (e.g. Eve -y)
 synap_assume_yes() {
     [ "${SYNAP_ASSUME_YES:-}" = "1" ] || [ "${SYNAP_YES:-}" = "1" ] || [ "${SYNAP_NON_INTERACTIVE:-}" = "1" ]
@@ -713,6 +730,28 @@ split_workers_converge() { # after the backend is up: start or remove backend-wo
         echo -e "${BLUE}  SYNAP_SPLIT_WORKERS is off: removing backend-worker (backend runs the jobs again)${NC}"
         docker compose --profile workers rm -sf backend-worker >/dev/null
     fi
+}
+
+# ── the PDF tools engine (pod session 8d23e259) ───────────────────────────────
+# ONE switch, SYNAP_PDF_ENGINE in deploy/.env, read by compose and here with
+# the same rule as SYNAP_SPLIT_WORKERS: any non-empty value is on. Compose
+# points the backend's STIRLING_URL at the service; `synap` (install, update,
+# apply) starts it, or removes a leftover one when off (its 2.5 GB come back).
+# `up -d` also moves it to the digest the compose file pins after an update.
+# Never fatal: an engine that cannot start costs PDF tools, never the pod
+# (the pdf.* verbs then say the engine is down).
+pdf_engine_enabled() { [ -n "$(_pod_agent_setting SYNAP_PDF_ENGINE)" ]; }
+
+pdf_engine_converge() {
+    if pdf_engine_enabled; then
+        docker compose --profile pdf up -d --no-deps stirling-pdf \
+            || echo -e "${YELLOW}⚠️  the PDF engine did not start (SYNAP_PDF_ENGINE is on): docker compose --profile pdf logs stirling-pdf${NC}"
+    elif [ -n "$(docker compose --profile pdf ps -a -q stirling-pdf 2>/dev/null)" ]; then
+        echo -e "${BLUE}  SYNAP_PDF_ENGINE is off: removing stirling-pdf${NC}"
+        docker compose --profile pdf rm -sf stirling-pdf >/dev/null \
+            || echo -e "${YELLOW}⚠️  could not remove stirling-pdf: docker compose --profile pdf rm -sf stirling-pdf${NC}"
+    fi
+    return 0
 }
 
 _is_canonical_https_url() {
@@ -2027,6 +2066,17 @@ _reg_nonce() { _reg_sha256_hex "synap-registration:$1"; }
 _reg_valid_name()  { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
 # The CP mints spr_ + lowercase base32 (≥160 bits); same pattern the CP validates.
 _reg_valid_token() { [[ "$1" =~ ^spr_[a-z2-7]{32,80}$ ]]; }
+# Is <domain> a Synap address (a tenant zone, current or legacy, or under one)?
+# Its DNS is the Control Plane's to create, at registration only.
+_reg_in_synap_zone() {
+    local d z
+    d="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"; d="${d%.}"
+    while read -r z; do
+        [ "$d" = "$z" ] && return 0
+        [[ "$d" == *."$z" ]] && return 0
+    done < <(synap_tenant_zones; synap_legacy_tenant_zones)
+    return 1
+}
 # https only; plain http is accepted for a loopback CP (local dev / tests).
 _reg_valid_cp_url() {
     [[ "$1" =~ ^https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~/-]*)?$ ]] \
@@ -2821,8 +2871,97 @@ EOF
 
     # ── Unattended contract (PODPROV-CONTRACT §3): validate every flag BEFORE
     # anything changes; in non-interactive mode no later step may prompt.
+    # No terminal on stdin and no explicit flag: nothing can answer a prompt, and a
+    # bare `read` at EOF would exit 1 silently under `set -e`. Behave as --non-interactive.
+    if [ "$INTERACTIVE" = true ] && [ ! -t 0 ]; then
+        INTERACTIVE=false
+        echo -e "${BLUE}ℹ️  No terminal on stdin: running as --non-interactive (prompts take their defaults or your flags).${NC}"
+    fi
     if [ "$INTERACTIVE" = false ]; then
         export SYNAP_NON_INTERACTIVE=1
+    fi
+    # A pod already installed here (a re-run) keeps its .env answers: no onboarding,
+    # and a Synap-zone address it already holds is not re-checked for a code.
+    local EXISTING_DEPLOY_DIR="" EXISTING_INSTALL=false
+    EXISTING_DEPLOY_DIR="$(get_deploy_dir)"
+    if [ -n "$EXISTING_DEPLOY_DIR" ] && { [ -f "$EXISTING_DEPLOY_DIR/.env" ] || [ -f "$EXISTING_DEPLOY_DIR/state/registration.json" ]; }; then
+        EXISTING_INSTALL=true
+    fi
+    # ── Onboarding: a person at a terminal with nothing decided yet (no code, no
+    # name, no domain) chooses how the pod runs. Linked = a registration code from
+    # their Synap account (sign-in with that account, the plan's AI, the catalog,
+    # the pod listed in the account, its <name>.pod.synap.live address); standalone
+    # = a domain they own and nothing shared with Synap. The answers fill the same
+    # variables the flags fill, so every check below applies to them unchanged.
+    # The work questions (what to run first, access, defaults) are pod admin's
+    # /start, never asked here.
+    if [ "$INTERACTIVE" = true ] && [ "$EXISTING_INSTALL" = false ] \
+        && [ -z "$REGISTER_TOKEN" ] && [ -z "$POD_NAME" ] && [ -z "$DOMAIN" ]; then
+        local ONBOARD_CHOICE="" ONBOARD_TRIES=0 ONBOARD_DOMAIN=""
+        echo ""
+        echo -e "${BLUE}🔗 How should this pod run?${NC}"
+        echo "  1) Linked to your Synap account (recommended)"
+        echo "     You sign in with your Synap account; the AI in your plan, the catalog"
+        echo "     and your pod's place in your account come with it. Needs a code from"
+        echo "     https://synap.live/account/pod/connect (valid 2 hours)."
+        echo "  2) Standalone, on a domain you own"
+        echo "     Nothing is shared with Synap. You create the owner account below."
+        echo "     You can link it later only by reinstalling with a code."
+        echo ""
+        _synap_prompt_read -r -p "Choice [1/2] (1): " ONBOARD_CHOICE
+        case "${ONBOARD_CHOICE:-1}" in
+            1)
+                while [ -z "$REGISTER_TOKEN" ]; do
+                    _synap_prompt_read -r -s -p "Registration code (spr_…, hidden): " REGISTER_TOKEN
+                    echo ""
+                    REGISTER_TOKEN="$(printf '%s' "$REGISTER_TOKEN" | tr -d '[:space:]')"
+                    if ! _reg_valid_token "$REGISTER_TOKEN"; then
+                        REGISTER_TOKEN=""
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: that is not a registration code (spr_…). Mint one at https://synap.live/account/pod/connect${NC}"; exit 1; }
+                        echo -e "${YELLOW}  That is not a registration code: it starts with spr_. Paste it again.${NC}"
+                    fi
+                done
+                ONBOARD_TRIES=0
+                while [ -z "$POD_NAME" ]; do
+                    _synap_prompt_read -r -p "Pod name the code was minted for: " POD_NAME
+                    POD_NAME="$(printf '%s' "$POD_NAME" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                    if ! _reg_valid_name "$POD_NAME"; then
+                        POD_NAME=""
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: a pod name is a-z, 0-9 and -, as shown on the page that gave you the code.${NC}"; exit 1; }
+                        echo -e "${YELLOW}  A pod name is a-z, 0-9 and - (as on the page that gave you the code).${NC}"
+                    fi
+                done
+                echo "  Address: ${POD_NAME}.${SYNAP_POD_ZONE} (Synap creates its DNS when the pod registers)."
+                _synap_prompt_read -r -p "  Press Enter to keep it, or type a domain you own (its DNS must point here first): " ONBOARD_DOMAIN
+                ONBOARD_DOMAIN="$(printf '%s' "$ONBOARD_DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                if [ -n "$ONBOARD_DOMAIN" ]; then
+                    DOMAIN="$ONBOARD_DOMAIN"
+                else
+                    # Let's Encrypt needs a contact; a Synap-zone pod uses Synap's (as unattended).
+                    EMAIL="${EMAIL:-$SYNAP_ACME_EMAIL_DEFAULT}"
+                fi
+                ;;
+            2)
+                while [ -z "$DOMAIN" ]; do
+                    _synap_prompt_read -r -p "Domain you own for this pod (its DNS must already point at this server; 'localhost' to try it): " DOMAIN
+                    DOMAIN="$(printf '%s' "$DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+                    if [ -n "$DOMAIN" ] && _reg_in_synap_zone "$DOMAIN"; then
+                        echo -e "${YELLOW}  ${DOMAIN} is a Synap address: it exists only for a linked pod. Use a domain you own, or re-run and choose 1.${NC}"
+                        DOMAIN=""
+                    fi
+                    if [ -z "$DOMAIN" ]; then
+                        ONBOARD_TRIES=$((ONBOARD_TRIES + 1))
+                        [ "$ONBOARD_TRIES" -lt 3 ] || { echo -e "${RED}Error: a standalone pod needs a domain you own (--domain).${NC}"; exit 1; }
+                    fi
+                done
+                ;;
+            *)
+                echo -e "${RED}Error: choose 1 (linked) or 2 (standalone).${NC}"
+                exit 1
+                ;;
+        esac
     fi
     if [ -n "$POD_NAME" ] && ! _reg_valid_name "$POD_NAME"; then
         echo -e "${RED}Error: --name must be a DNS label (a-z, 0-9, -; 1-63 chars, no leading/trailing -): '${POD_NAME}'${NC}"
@@ -2881,6 +3020,18 @@ EOF
         exit 1
     fi
 
+    # A Synap-zone address has DNS only once the Control Plane registers the pod
+    # (register-pod.ts step 2 creates <name>.pod + *.<name>.pod): installed without
+    # a code it resolves nowhere, Caddy gets no certificate, and the pod is
+    # unreachable. Refused before anything changes; a pod already installed here
+    # keeps the address it holds.
+    if [ -z "$REGISTER_TOKEN" ] && [ "$EXISTING_INSTALL" = false ] && [ -n "$DOMAIN" ] && _reg_in_synap_zone "$DOMAIN"; then
+        echo -e "${RED}Error: ${DOMAIN} exists only for a pod linked to a Synap account: Synap creates its DNS when the pod registers.${NC}"
+        echo "  Linked:     add --register-token spr_… (mint one at https://synap.live/account/pod/connect)"
+        echo "  Standalone: use --domain <a domain you own> instead of --name"
+        exit 1
+    fi
+
     # Determine if we need to clone (no .git and no existing deploy/ tree in cwd → clone under pwd/synap-backend)
     local NEEDS_CLONE=false
     if [ "$IN_GIT_REPO" = true ]; then
@@ -2901,9 +3052,9 @@ EOF
             # Propose to change if interactive
             if [ "$INTERACTIVE" = true ]; then
                 echo -e "${BLUE}📁 Installation directory: ${INSTALL_DIR}${NC}"
-                read -p "Change installation directory? (y/N): " CHANGE_DIR
+                _synap_prompt_read -p "Change installation directory? (y/N): " CHANGE_DIR
                 if [ "$CHANGE_DIR" = "y" ] || [ "$CHANGE_DIR" = "Y" ]; then
-                    read -p "Enter installation directory: " INSTALL_DIR
+                    _synap_prompt_read -p "Enter installation directory: " INSTALL_DIR
                     INSTALL_DIR=${INSTALL_DIR:-$(pwd)/synap-backend}
                 fi
             fi
@@ -2973,7 +3124,7 @@ EOF
             else
                 prompt="$prompt: "
             fi
-            read -p "$prompt" DOMAIN
+            _synap_prompt_read -p "$prompt" DOMAIN
             DOMAIN=${DOMAIN:-${DEFAULT_DOMAIN:-localhost}}
         fi
         
@@ -2984,7 +3135,7 @@ EOF
             else
                 prompt="$prompt: "
             fi
-            read -p "$prompt" EMAIL
+            _synap_prompt_read -p "$prompt" EMAIL
             EMAIL=${EMAIL:-$DEFAULT_EMAIL}
         fi
         
@@ -2996,7 +3147,7 @@ EOF
             echo "  1) Pre-seed first admin via CLI/script (recommended for operators)"
             echo "  2) Set up in the browser after install (one-hour link from './synap setup admin --magic-link')"
             echo ""
-            read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
+            _synap_prompt_read -p "Choice [1/2] (${mode_default}): " ADMIN_BOOTSTRAP_CHOICE
             if [ "$ADMIN_BOOTSTRAP_CHOICE" = "2" ] || [ "$mode_default" = "token" -a -z "$ADMIN_BOOTSTRAP_CHOICE" ]; then
                 ADMIN_BOOTSTRAP_MODE="token"
             else
@@ -3012,7 +3163,7 @@ EOF
                 else
                     prompt="$prompt: "
                 fi
-                read -p "$prompt" ADMIN_EMAIL
+                _synap_prompt_read -p "$prompt" ADMIN_EMAIL
                 ADMIN_EMAIL=${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}
             fi
 
@@ -3026,9 +3177,9 @@ EOF
                 local pw1=""
                 local pw2=""
                 while true; do
-                    read -s -p "Password: " pw1
+                    _synap_prompt_read -s -p "Password: " pw1
                     echo ""
-                    read -s -p "Confirm:  " pw2
+                    _synap_prompt_read -s -p "Confirm:  " pw2
                     echo ""
                     if [ -z "$pw1" ] && [ -z "$pw2" ]; then
                         ADMIN_PASSWORD=$(openssl rand -hex 16)
@@ -3050,7 +3201,12 @@ EOF
             fi
         fi
         
-        # Intelligence Service Configuration (optional)
+        # Intelligence Service Configuration (optional). A linked pod gets its AI
+        # service from the registration (the plan's), so nothing is asked.
+        if [ -n "$REGISTER_TOKEN" ]; then
+            echo ""
+            echo -e "${BLUE}🧠 AI${NC}: comes with your Synap plan when the pod registers."
+        else
         echo ""
         echo -e "${BLUE}🧠 Intelligence Service Configuration${NC}"
         echo "The Intelligence Service powers AI features (chat, search, analysis)."
@@ -3061,14 +3217,14 @@ EOF
         echo ""
 
         if [ -z "$INTELLIGENCE_URL" ]; then
-            read -p "Choice [1/2/3]: " INTEL_CHOICE
+            _synap_prompt_read -p "Choice [1/2/3]: " INTEL_CHOICE
             INTEL_CHOICE=${INTEL_CHOICE:-3}
 
             case "$INTEL_CHOICE" in
                 1)
                     INTELLIGENCE_URL="https://intelligence.synap.live"
                     echo -e "${YELLOW}  Using Synap hosted service. Enter your API key from app.synap.live/settings/developer${NC}"
-                    read -p "  API Key (or press Enter to skip): " INTELLIGENCE_KEY
+                    _synap_prompt_read -p "  API Key (or press Enter to skip): " INTELLIGENCE_KEY
                     INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
                     ;;
                 2)
@@ -3078,7 +3234,7 @@ EOF
                         LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
                     fi
                     local SUGGESTION=${DEFAULT_INTEL_URL:-"http://${LOCAL_IP:-localhost}:3001"}
-                    read -p "  Intelligence Service URL [${SUGGESTION}]: " INTELLIGENCE_URL
+                    _synap_prompt_read -p "  Intelligence Service URL [${SUGGESTION}]: " INTELLIGENCE_URL
                     INTELLIGENCE_URL=${INTELLIGENCE_URL:-$SUGGESTION}
 
                     if [ -z "$INTELLIGENCE_KEY" ]; then
@@ -3088,7 +3244,7 @@ EOF
                         else
                             key_prompt="$key_prompt: "
                         fi
-                        read -p "$key_prompt" INTELLIGENCE_KEY
+                        _synap_prompt_read -p "$key_prompt" INTELLIGENCE_KEY
                         INTELLIGENCE_KEY=${INTELLIGENCE_KEY:-$DEFAULT_INTEL_KEY}
                     fi
                     ;;
@@ -3104,6 +3260,7 @@ EOF
         echo -e "${BLUE}🤖 Intelligence Service${NC}"
         echo "Provider API keys (OpenAI/Anthropic/Google) are not prompted here."
         echo "Configure AI routing through Intelligence Service now or later."
+        fi
     fi
 
     # Non-interactive: every value a prompt would have asked for gets an explicit
@@ -3182,7 +3339,7 @@ EOF
                         echo "  1) Reset directory and clone fresh (destructive)"
                         echo "  2) Choose a different install directory"
                         echo "  3) Cancel"
-                        read -p "Choice [1/2/3] (3): " DIR_CHOICE
+                        _synap_prompt_read -p "Choice [1/2/3] (3): " DIR_CHOICE
                         DIR_CHOICE=${DIR_CHOICE:-3}
                         case "$DIR_CHOICE" in
                             1)
@@ -3196,7 +3353,7 @@ EOF
                                 fi
                                 ;;
                             2)
-                                read -p "Enter new installation directory: " NEW_INSTALL_DIR
+                                _synap_prompt_read -p "Enter new installation directory: " NEW_INSTALL_DIR
                                 if [ -z "$NEW_INSTALL_DIR" ]; then
                                     echo -e "${RED}No directory entered. Installation cancelled.${NC}"
                                     exit 1
@@ -3251,7 +3408,7 @@ EOF
     if [ -f .env ]; then
         echo -e "${YELLOW}⚠️  .env file already exists${NC}"
         if [ "$INTERACTIVE" = true ]; then
-            read -p "Overwrite .env? (y/N): " OVERWRITE
+            _synap_prompt_read -p "Overwrite .env? (y/N): " OVERWRITE
             if [ "$OVERWRITE" != "y" ] && [ "$OVERWRITE" != "Y" ]; then
                 echo -e "${BLUE}ℹ️  Using existing .env file, updating values...${NC}"
                 # Just update domain/email/keys if needed
@@ -3423,6 +3580,7 @@ EOF
         echo -e "${RED}❌ backend-worker did not start (SYNAP_SPLIT_WORKERS is on): docker compose --profile workers logs backend-worker${NC}"
         exit 1
     }
+    pdf_engine_converge
 
     # Reapply auth schema. On a brand-new volume this is a no-op (compose's
     # depends_on already ran kratos-migrate to completion).
@@ -3454,7 +3612,7 @@ EOF
             echo -e "${RED}Aborting in non-interactive mode — investigate and re-run${NC}"
             exit 1
         fi
-        read -p "Continue anyway? (y/N): " CONTINUE
+        _synap_prompt_read -p "Continue anyway? (y/N): " CONTINUE
         if [ "$CONTINUE" != "y" ] && [ "$CONTINUE" != "Y" ]; then
             echo "Install cancelled"
             exit 1
@@ -3818,7 +3976,7 @@ EOF
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -4002,6 +4160,15 @@ _ue_cosign_via() {
 # (beside the manifest) and only that is mounted: mounting the manifest's own
 # directory depends on its mode and the host's umask, and install.sh's root-only
 # mktemp dir refused every fresh-host install (CP ticket 2e10228f).
+# The line of docker's output that says what went wrong: the first error line
+# (pull/denied/Error/Unable), not the trailing generic usage hint.
+_ue_docker_err_line() {
+    local l
+    l="$(printf '%s' "$1" | grep -iE 'error|denied|unable|failed|pull|no such|not found|timeout' | head -n 1)"
+    [ -n "$l" ] || l="$(printf '%s' "$1" | head -n 1)"
+    printf '%s' "$l"
+}
+
 _ue_cosign_verify() {
     local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
                 --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
@@ -4043,7 +4210,7 @@ _ue_verify_manifest_sig() { # <fast|stable|release-id> <manifest> — non-zero o
             _ue_ok "release manifest signature verified (Synap CI, keyless)"
             return 0
         elif [ "$via" = docker ] && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
-            why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+            why="could not run the signature check (docker exited ${rc}: $(_ue_docker_err_line "$out"); the cosign image ${SYNAP_COSIGN_IMAGE} must be pullable, so ghcr.io must be reachable)"
         else
             why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
         fi
@@ -4799,12 +4966,17 @@ _ue_verify() { # <manifest> <services...>
 # project (an exited one keeps its last health, so it is not judged here — the
 # "is running" check covers it); health is Docker's own verdict
 # (.State.Health.Status), `none` without a healthcheck.
+# The start period goes through `json` ON PURPOSE: the field is a Go
+# time.Duration, which a template prints as "30m0s", and the integer test in
+# _ue_services_healthy then fails silently — postgres-backup (30m start period)
+# was judged "still starting" and the 12 Nov 2026 update rolled back for it.
+# `json` prints the nanoseconds.
 _ue_health_states() {
     local ids
     ids="$(docker compose ps -q 2>/dev/null)"
     [ -n "$ids" ] || return 0
     # shellcheck disable=SC2086 # one id per word
-    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{if .Config.Healthcheck}}{{.Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' $ids 2>/dev/null || true
+    docker inspect -f '{{index .Config.Labels "com.docker.compose.service"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} {{if .Config.Healthcheck}}{{json .Config.Healthcheck.StartPeriod}}{{else}}0{{end}}' $ids 2>/dev/null || true
 }
 
 # Every service with a healthcheck must reach `healthy` (Docker restarts only on
@@ -5001,6 +5173,7 @@ _ue_bring_up_rest() { # every non-backend service; never stops half-way
     # SYNAP_SPLIT_WORKERS off: a backend-worker left from when it was on would
     # keep working jobs on the previous release. (On, UE_SERVICES started it.)
     split_workers_enabled || split_workers_converge || failed=1
+    pdf_engine_converge
     return "$failed"
 }
 
@@ -5591,7 +5764,7 @@ cmd_restart() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -5815,7 +5988,7 @@ cmd_stop() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -5947,14 +6120,14 @@ cmd_restore() {
             pwfile=${4:-}
             [ -s "$pwfile" ] || { echo -e "${RED}Password file not found or empty: ${pwfile}${NC}"; exit 1; }
         elif [ ! -s "$deploy_dir/state/backup/restic-password" ]; then
-            read -r -s -p "Repository password (from your recovery kit): " _kit_pw; echo
+            _synap_prompt_read -r -s -p "Repository password (from your recovery kit): " _kit_pw; echo
             [ -n "$_kit_pw" ] || { echo -e "${RED}No password given${NC}"; exit 1; }
             tmp_pw="$(umask 077 && mktemp)"
             printf '%s' "$_kit_pw" > "$tmp_pw"; unset _kit_pw
             pwfile="$tmp_pw"
         fi
         echo -e "${YELLOW}⚠️  WARNING: This replaces .env, every database and the stored files with snapshot ${snap}${NC}"
-        read -p "Continue? (yes/no): " CONFIRM
+        _synap_prompt_read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { [ -n "$tmp_pw" ] && rm -f "$tmp_pw"; echo "Restore cancelled"; exit 0; }
         local rc=0
         [ -n "$pwfile" ] && export BACKUP_PASSWORD_FILE="$pwfile"
@@ -5974,7 +6147,7 @@ cmd_restore() {
     # A directory is a `synap backup` / postgres-backup dump set (<db>.dump each).
     if [ -d "$target" ]; then
         echo -e "${YELLOW}⚠️  WARNING: This replaces every database with the contents of ${target}${NC}"
-        read -p "Continue? (yes/no): " CONFIRM
+        _synap_prompt_read -p "Continue? (yes/no): " CONFIRM
         [ "$CONFIRM" = "yes" ] || { echo "Restore cancelled"; exit 0; }
         SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" pgdata_restore "$target" || exit 1
         # The fingerprint recorded with the dump is the second, independent
@@ -5983,7 +6156,7 @@ cmd_restore() {
         want="$(cat "$target/fingerprint" 2>/dev/null)"
         if [ -n "$want" ]; then
             got="$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_fingerprint "$(SYNAP_DEPLOY_DIR="$deploy_dir" COMPOSE_CMD="command docker compose" _pgs_container)")"
-            if [ "$got" != "$want" ]; then
+            if ! _pgs_fp_accepts "$target" "$got"; then
                 echo -e "${RED}❌ Restoring ${target} did not bring the data back: the dump recorded users|entities|api_keys=${want}, the database now has ${got:-<unreadable>}. The stack was NOT restarted — inspect before starting it.${NC}"
                 exit 1
             fi
@@ -6172,6 +6345,8 @@ cmd_apply() {
             echo -e "${RED}❌ apply: backend-worker did not start — docker compose --profile workers logs backend-worker${NC}" >&2
             exit 1
         }
+        # SYNAP_PDF_ENGINE: the engine follows the switch too (never fatal).
+        pdf_engine_converge
     fi
     # kratos.yml is a bind-mounted FILE: compose cannot see its content change.
     if [ "$kratos_before" != "$kratos_after" ] && printf '%s\n' "${running[@]}" | grep -qx kratos; then
@@ -6595,7 +6770,7 @@ cmd_rebuild() {
         echo -e "  ${BLUE}[a]${NC} All services"
         echo -e "  ${BLUE}[q]${NC} Quit"
         echo ""
-        read -p "Select service (number/a/q): " choice
+        _synap_prompt_read -p "Select service (number/a/q): " choice
         
         case "$choice" in
             [0-9]*)
@@ -6778,7 +6953,7 @@ cmd_clean() {
         echo "  ${GREEN}[5]${NC} Remove build cache"
         echo "  ${GREEN}[q]${NC} Quit"
         echo ""
-        read -p "Select option (number/q): " choice
+        _synap_prompt_read -p "Select option (number/q): " choice
         
         case "$choice" in
             1)
@@ -6792,7 +6967,7 @@ cmd_clean() {
                 ;;
             4)
                 echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
-                read -p "Continue? (y/N): " CONFIRM
+                _synap_prompt_read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
                     docker compose rm -f; _clean_images; _clean_networks
                 fi
@@ -6824,7 +6999,7 @@ cmd_clean() {
                 ;;
             all)
                 echo -e "${YELLOW}⚠️  This removes this pod's stopped containers, old release images and unused networks (volumes are kept)${NC}"
-                read -p "Continue? (y/N): " CONFIRM
+                _synap_prompt_read -p "Continue? (y/N): " CONFIRM
                 if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
                     docker compose rm -f; _clean_images; _clean_networks
                 fi
@@ -8438,7 +8613,7 @@ cmd_users() {
             fi
             if [ "$assume_yes" != "true" ] && ! synap_assume_yes; then
                 echo -e "${YELLOW}⚠️  This deletes the user identity for ${email}.${NC}"
-                read -p "Continue? (y/N): " confirm
+                _synap_prompt_read -p "Continue? (y/N): " confirm
                 if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
                     echo "Cancelled."
                     exit 0

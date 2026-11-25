@@ -242,6 +242,8 @@ const LEAF_OUTSIDE_FILES: Readonly<Record<string, string>> = {
   // define-time check reads instead of its own regexes (cell-source-checks).
   "../cell-bridge/network-loads.js": "../cell-bridge/network-loads.ts",
   "../cell-bridge/external-origins.js": "../cell-bridge/external-origins.ts",
+  // The frame's size cap, which the renderer-bundle check applies to cells.
+  "../cell-bridge/frame-size.js": "../cell-bridge/frame-size.ts",
 };
 const IMPORT_FROM = /^\s*(?:import|export)[^;]*?from\s+"([^"]+)"/gm;
 
@@ -287,10 +289,14 @@ describe("leaf subpath", () => {
 });
 
 describe("composite create_view types", () => {
-  it("every type a create_view op may ask for is a structured view", async () => {
-    const { COMPOSITE_VIEW_TYPES, STRUCTURED_VIEW_TYPES } =
+  it("every type a create_view op may ask for is a structured view or a playbook UI view", async () => {
+    const { COMPOSITE_VIEW_TYPES, STRUCTURED_VIEW_TYPES, VIEW_BY_KEY } =
       await import("./views.js");
     for (const t of COMPOSITE_VIEW_TYPES) {
+      if (t === "pipeline" || t === "bento") {
+        expect(VIEW_BY_KEY[t]?.implemented, t).toBe(true);
+        continue;
+      }
       expect(STRUCTURED_VIEW_TYPES, t).toContain(t);
     }
   });

@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Governance rules panel — makes good on the "Revocable in Governance rules"
- * promise every "always approve" toast makes (`AlwaysApproveMenu.tsx`,
+ * The space's approvals (it was "Governance rules"; the word is Approvals,
+ * decision b387ca45) — makes good on the "Revocable" promise every "always approve" toast makes (`AlwaysApproveMenu.tsx`,
  * synap-app's `GovernanceMenu.tsx`). Until this existed, `governanceRules.list`
  * and `.revoke` had zero consumers and the only way to undo a standing rule
  * was raw SQL (docs/decisions/agent-governance.md, phase 2 D2).
@@ -24,8 +24,11 @@ import {
   useDisclosure,
 } from "@heroui/react";
 import { Ban, ShieldCheck } from "lucide-react";
+import Link from "next/link";
+import { APPROVALS_TITLE } from "@synap-core/types/governance-rules";
 import { useMemo, useState } from "react";
 import { trpc } from "../../../../../lib/trpc";
+import { navHref } from "../../../../../lib/console-nav";
 import { SectionCard } from "../../../components/section-card";
 import {
   ResourceRowEmpty,
@@ -80,12 +83,12 @@ export function GovernanceRulesPanel({
   const revokeMutation = trpc.governanceRules.revoke.useMutation({
     onSuccess: () => {
       void utils.governanceRules.list.invalidate({ workspaceId });
-      addToast({ title: "Rule revoked", color: "default" });
+      addToast({ title: "Approval taken back", color: "default" });
       setRevokeTarget(null);
     },
     onError: (err) => {
       addToast({
-        title: "Revoke failed",
+        title: "Couldn’t take it back",
         description: err.message,
         color: "danger",
       });
@@ -94,18 +97,29 @@ export function GovernanceRulesPanel({
 
   return (
     <SectionCard
-      title="Governance rules"
-      hint="Standing always-approve / require-proposal rules, from Settings or from approving a proposal."
+      title={APPROVALS_TITLE}
+      hint="What AI work runs here without asking, asks first, or never runs. Every approval, with where it came from, is on Approvals."
+      actions={
+        <Button
+          as={Link}
+          href={navHref("approvals", { space: workspaceId })}
+          size="sm"
+          variant="light"
+          radius="md"
+        >
+          Open in Approvals
+        </Button>
+      }
     >
       {rulesQuery.isLoading ? (
         <ResourceRowSkeleton count={3} />
       ) : rulesQuery.isError ? (
         <ResourceRowError
-          message="Couldn't load governance rules."
+          message="Couldn’t load the approvals."
           onRetry={() => void rulesQuery.refetch()}
         />
       ) : rules.length === 0 ? (
-        <ResourceRowEmpty message="No standing rules yet." />
+        <ResourceRowEmpty message="No approvals here yet." />
       ) : (
         <div className="flex flex-col divide-y divide-foreground/[0.05] pt-1">
           {rules.map((rule) => (
@@ -194,7 +208,7 @@ function RuleRow({
         size="sm"
         variant="light"
         radius="full"
-        aria-label="Revoke rule"
+        aria-label="Take back this approval"
         className="shrink-0 min-h-10 min-w-10 text-foreground/40 hover:text-status-down"
         onPress={onRevoke}
       >
@@ -239,7 +253,9 @@ function RevokeRuleModal({
           >
             <Ban className="h-3.5 w-3.5 text-foreground/85" />
           </span>
-          <span className="text-[15px] font-medium">Revoke rule</span>
+          <span className="text-[15px] font-medium">
+            Take back this approval
+          </span>
         </ModalHeader>
         <ModalBody className="gap-3 px-6 py-4">
           <p className="text-[12.5px] text-foreground/85">
@@ -265,7 +281,7 @@ function RevokeRuleModal({
             isLoading={isPending}
             onPress={onConfirm}
           >
-            Revoke
+            Take back
           </Button>
         </ModalFooter>
       </ModalContent>

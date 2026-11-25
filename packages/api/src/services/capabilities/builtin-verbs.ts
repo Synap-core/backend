@@ -21,6 +21,19 @@
 
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
+import { CATALOG_DETAILS } from "@synap-core/types/design-board";
+import { STORYBOOK_CHANGED_MAX } from "@synap-core/types/storybook";
+import { withMarketplaceKindAliases } from "@synap-core/types/marketplace-source";
+import {
+  renderText,
+  type TextTemplateMiss,
+} from "@synap-core/types/text-template";
+import {
+  describeParamTypeError,
+  isAbsentParamValue,
+  readPlaybookParams,
+  validatePlaybookParams,
+} from "@synap/playbooks";
 import { playbookParamsInputSchema } from "../../schemas/playbook-definition.js";
 import { TRPCError } from "@trpc/server";
 // Static, NOT part of the dynamic `submit-capture-graph` import below: it is a
@@ -29,8 +42,7 @@ import { TRPCError } from "@trpc/server";
 import { captureStatusForReceiptState } from "../capture-agent/capture-receipt-state.js";
 import {
   buildDegradedNextStep,
-  describeDegradedForAgent,
-  isDegradedReasonRetryable,
+  describeDegradedCapture,
 } from "../capture-agent/capture-degraded-guidance.js";
 import {
   db,
@@ -53,12 +65,16 @@ import {
   profilesByRoleCategory,
   MessageRole,
   MessageAuthorType,
+  MessageDirection,
   getActingAgentUserId,
   messagingAccounts,
   profiles,
+  users,
 } from "@synap/database";
 import type { SQL } from "drizzle-orm";
 import type { Context } from "../../context.js";
+import { measureCheckParams } from "./measure-check.js";
+import { runMeasureCheck } from "./measure-check-read.js";
 // Type-only imports (erased at runtime). The heavy access layer + the channel
 // util are LAZY-imported inside the read/write handlers (mirroring how
 // channelCreateHandler lazy-imports channelsRouter), so this module's load graph
@@ -77,6 +93,9 @@ import {
   ArtboardDeckSlideSchema,
   BoardPlacementOptionsSchema,
 } from "./place-artboard-deck.js";
+import { VerbRefusal } from "./verb-refusal.js";
+import type { FailureErrorClass } from "@synap-core/types/failures";
+import type { QueueRecipeRunInput } from "../host-jobs/hosted-verbs.js";
 import { triageEmails } from "../mail-feed/triage.js";
 import { freezeChartEmbeds } from "../document-charts/freeze-chart-embeds.js";
 import { liveChartReader } from "../document-charts/freeze-charts-verb.js";
@@ -97,6 +116,16 @@ import {
   buildPackageSkeleton,
   SCAFFOLDABLE_CATEGORIES,
 } from "./market-scaffold.js";
+import {
+  pdfCompressParams,
+  pdfInfoParams,
+  pdfMergeParams,
+  pdfOcrParams,
+  pdfRedactParams,
+  pdfSplitParams,
+  pdfToMarkdownParams,
+  pdfToPdfParams,
+} from "../pdf/params.js";
 // marketplace-install.ts pulls in the full router graph (create-from-definition.ts
 // imports playbooksRouter/automationsRouter/toolsRouter/skillsRouter at top
 // level) — it and catalog-cache-query.ts are lazy-imported inside the two
@@ -777,6 +806,7 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
       reason === "degraded" && Array.isArray(structured?.entities)
         ? (structured.entities as Array<Record<string, unknown>>)
         : undefined;
+    const degradedWords = describeDegradedCapture(degradedReason);
 
     return {
       status: "no_proposal",
@@ -792,8 +822,8 @@ const messageInterpretHandler: BuiltinVerbHandler = async (params, ctx) => {
         ? {
             degraded: true as const,
             ...(degradedReason ? { degradedReason } : {}),
-            degradedMessage: describeDegradedForAgent(degradedReason),
-            degradedRetryable: isDegradedReasonRetryable(degradedReason),
+            degradedMessage: degradedWords.message,
+            degradedRetryable: degradedWords.retryable,
           }
         : {}),
       ...(salvagedEntities?.length
@@ -1758,6 +1788,12 @@ const documentUpdateHandler: BuiltinVerbHandler = async (params, ctx) => {
     ops: ops as Parameters<typeof applyDocumentPatch>[0]["ops"],
     allowRemovingEmbeds: input.allowRemovingEmbeds,
     provenanceSessionId: sessionId,
+    // A question written in the document is filed only on the run's OWN session
+    // (set by the executor, never a client field). `ctx.sessionId` may be named
+    // in a REST body, so it is provenance here, not a verified session. The
+    // run's session is the person's own open session, not necessarily this
+    // agent's (`ownsFocusSession` is by user).
+    ambientSessionId: ctx.automationRun?.sessionId ?? null,
   });
 };
 
@@ -1899,6 +1935,19 @@ const lensPageHandler: BuiltinVerbHandler = async (params, ctx) => {
   } as unknown as Context);
   return caller.list(lensPageListInput(input));
 };
+
+/**
+ * measure.check — a criterion's KPI, MEASURED: one existing cell-bridge read
+ * op (`entities.list`, `lifecycle.board`, `lifecycle.throughput`,
+ * `attention.count`) read as the caller in the run's space, its one number
+ * compared with a bar. Returns `{ passed, detail: { value, threshold,
+ * comparator, op } }`, which the evaluator records as the grade and its
+ * evidence. The read and the procedures it reuses: `measure-check-read.ts`;
+ * the arguments, the number per op and the comparison: `measure-check.ts`.
+ * Read-only.
+ */
+const measureCheckHandler: BuiltinVerbHandler = (params, ctx) =>
+  runMeasureCheck(params, ctx);
 
 // ── Kind + Facets (roles) ─────────────────────────────────────────────────────
 //
@@ -2272,7 +2321,6 @@ const marketSearchParams = z.object({
       "cell",
       "skill",
       "view",
-    "renderer-bundle",
       // Alias of cache kind `template` (CP category `workspace`). Mapped in
       // queryCatalogCache; agents should still send `kind:template`.
       "workspace",
@@ -2373,18 +2421,24 @@ const marketSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
 
 const marketInstallParams = z.object({
   slug: z.string().min(1).max(200),
-  kind: z.enum([
-    "capability",
-    "automation",
-    "template",
-    "cell",
-    "skill",
-    "view",
-    "renderer-bundle",
-    // An agent template (`runMarketInstall` case "agent", one write:
-    // `installAgentTemplate`). The browser routes an `agent` package here.
-    "agent",
-  ]),
+  // The Control Plane's names are accepted too: `workflow` is an automation,
+  // as `synap market --type` lists it (237175b5).
+  kind: withMarketplaceKindAliases(
+    z.enum([
+      "capability",
+      "automation",
+      "template",
+      "cell",
+      "skill",
+      "view",
+      // An agent template (`runMarketInstall` case "agent", one write:
+      // `installAgentTemplate`). The browser routes an `agent` package here.
+      "agent",
+      // Synap's renderer bundle (`applyMarketInstall` → `installOfficialRendererBundle`):
+      // fetched from this pod's control plane, managed pods only.
+      "renderer-bundle",
+    ])
+  ),
   version: z.string().max(100).optional(),
   params: z.record(z.string(), z.unknown()).optional(),
   /**
@@ -2445,6 +2499,117 @@ const toolRequestHandler: BuiltinVerbHandler = async (params, ctx) => {
   });
 };
 
+/**
+ * computer.run_recipe — run a recipe of a tool INSTALLED on one of the
+ * person's computers, there, with nobody at the keyboard (hosted verbs, plan
+ * b647769e §3.2, plan 64072312 U8). POST-gate: the outer capability gate
+ * decided this run (an agent's ask is reviewed unless granted). The ONE door
+ * is `queueRecipeRun`: the computer is one where the tool is installed and
+ * checked, the recipe and its values come from the approved manifest, each
+ * input file is one the person can read. It QUEUES a host job and answers
+ * `{status: "queued", hostJobId}`; the run's files come back on that job and in
+ * the asking session's room. A refusal throws its sentence (the next step).
+ */
+const runRecipeParams = z
+  .object({
+    capability: z.string().trim().min(1).max(200),
+    recipe: z.string().trim().min(1).max(100),
+    params: z.record(z.string(), z.unknown()).default({}),
+    computer: z.string().trim().min(1).max(200).optional(),
+  })
+  .strict();
+
+/** The run a `computer.run_recipe` call asks for, read the same way when it is filed and when it runs. */
+function recipeRunInput(
+  input: z.infer<typeof runRecipeParams>,
+  ctx: BuiltinVerbContext
+): QueueRecipeRunInput {
+  return {
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.automationRun?.sessionId ?? ctx.sessionId ?? null,
+    workspaceId: ctx.workspaceId,
+    skillId: ctx.verbId ?? null,
+    capabilityKey: input.capability,
+    recipe: input.recipe,
+    values: input.params,
+    computer: input.computer ?? null,
+  };
+}
+
+const runRecipeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = runRecipeParams.parse(params);
+  const { queueRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const out = await queueRecipeRun(recipeRunInput(input, ctx));
+  // A refusal is a definite not-run with the next step (`verb-refusal.ts`):
+  // an approval records its sentence and can be retried.
+  if (!out.ok)
+    throw new VerbRefusal(
+      out.error,
+      RECIPE_REFUSAL_CLASS[out.code] ?? "validation",
+      out.code
+    );
+  return out.result;
+};
+
+/**
+ * Each refusal's failure class (the approval's recovery affordance): what is
+ * missing on the person's computers, what is in a state that stops it now,
+ * and what was asked wrong.
+ */
+const RECIPE_REFUSAL_CLASS: Record<string, FailureErrorClass> = {
+  NOT_INSTALLED: "target_missing",
+  COMPUTER_NOT_FOUND: "target_missing",
+  UNKNOWN_RECIPE: "target_missing",
+  FILE_NOT_READABLE: "target_missing",
+  NOT_RUNNABLE: "conflict",
+  COMPUTER_AMBIGUOUS: "validation",
+  BAD_PARAMS: "validation",
+  NO_SPACE: "validation",
+};
+
+/**
+ * The refusals an agent's recipe run gets when it is FILED, before it becomes
+ * a proposal: what the APPROVED manifests say, which no approval can change
+ * and the agent can act on (pick a recipe it has, ask for the update, fix a
+ * value). With no computer named, only when no computer the approval could
+ * choose has the recipe with these values (`fitsAnotherComputer`).
+ *
+ * Every other refusal files as before: a computer offline or whose check
+ * failed, a tool not installed yet, a file not readable now, can all change
+ * before the person approves, and only the approval's run decides them.
+ */
+const RECIPE_REFUSED_AT_FILING: ReadonlySet<string> = new Set([
+  "UNKNOWN_RECIPE",
+  "BAD_PARAMS",
+]);
+
+/**
+ * The filing check of `computer.run_recipe`: the SAME plan the run makes
+ * (`planRecipeRun`, which `queueRecipeRun` runs on approval), read-only.
+ * `null` = file it; a refusal = refuse it to the caller, nothing filed. A
+ * read that fails THROWS: the filing door files as before, never refusing on
+ * a fact it did not read.
+ */
+export async function recipeRunRefusalAtFiling(
+  params: Record<string, unknown>,
+  ctx: BuiltinVerbContext
+): Promise<{ reasonCode: string; message: string } | null> {
+  // A call the handler's schema refuses is the parameter check's to answer
+  // (`checkVerbParameters`); this one reads the computer, not the call shape.
+  const parsed = runRecipeParams.safeParse(params);
+  if (!parsed.success) return null;
+  const { planRecipeRun } = await import("../host-jobs/hosted-verbs.js");
+  const planned = await planRecipeRun(recipeRunInput(parsed.data, ctx));
+  if (
+    planned.ok ||
+    !RECIPE_REFUSED_AT_FILING.has(planned.code) ||
+    planned.fitsAnotherComputer
+  )
+    return null;
+  return { reasonCode: planned.code, message: planned.error };
+}
+
 const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
   const input = marketInstallParams.parse(params);
   const { runMarketInstall } = await import("./marketplace-install.js");
@@ -2487,8 +2652,76 @@ const marketInstallHandler: BuiltinVerbHandler = async (params, ctx) => {
     userId: ctx.userId,
     workspaceId: ctx.workspaceId,
     agentUserId: ctx.agentUserId ?? null,
+    // Self-gated (`SELF_GATED_BUILTIN_VERBS`): the outer gate asked for review,
+    // so the install files its own `capability.install` and installs nothing.
+    mustPropose: ctx.mustPropose === true,
     projectId: input.projectId,
     projectName: input.projectName,
+  });
+};
+
+/**
+ * inbound_source.connect — wire a space's inbound webhook source into the
+ * site that posts to it (decision abaaa696): the pod mints the source and
+ * sets its URL and secret in the host's environment, so no person pastes the
+ * secret and no agent ever holds it. The handler NEVER acts: whatever the
+ * caller and the verdict, it files the direct proposal
+ * `webhook/inbound_source.connect` after a preflight, and the person's
+ * console approval does the work (`executors/webhook.ts`). Self-gated
+ * (`SELF_GATED_BUILTIN_VERBS`) so a propose verdict reaches it instead of a
+ * generic capability run, whose approval would store the secret's value.
+ */
+const ENV_KEY = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/;
+const inboundSourceConnectParams = z
+  .object({
+    /** The space the source belongs to (defaults to the run's space). */
+    workspaceId: z.string().uuid().optional(),
+    /** The source name the space's automations declare. */
+    name: z.string().trim().min(1).max(200),
+    host: z.enum(["vercel"]).default("vercel"),
+    /** The host project, by id or name. */
+    project: z.string().trim().min(1).max(200),
+    teamId: z.string().trim().min(1).max(200).optional(),
+    urlEnvKey: z.string().regex(ENV_KEY),
+    secretEnvKey: z.string().regex(ENV_KEY),
+    target: z
+      .enum(["production", "preview", "development"])
+      .default("production"),
+    redeploy: z.boolean().default(true),
+    replaceExistingSecret: z.boolean().default(false),
+    /** Why, in the agent's words, for the card. */
+    reasoning: z.string().max(2000).optional(),
+  })
+  .strict();
+
+const inboundSourceConnectHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { reasoning, workspaceId, ...rest } =
+    inboundSourceConnectParams.parse(params);
+  const space = workspaceId ?? ctx.workspaceId;
+  if (!space) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "inbound_source.connect needs the space the source belongs to (workspaceId).",
+    });
+  }
+  // An automation step has no one to show the card to at run time, and this
+  // approval is a console act: refused, never filed unattended.
+  if (ctx.automationRun) {
+    return {
+      success: false,
+      error:
+        "An automation cannot connect an inbound source: a person files it from a session and approves it on the console.",
+    };
+  }
+  const { proposeInboundSourceConnect } =
+    await import("../webhooks/connect-inbound-source.js");
+  return proposeInboundSourceConnect({
+    request: { ...rest, workspaceId: space },
+    userId: ctx.userId,
+    agentUserId: ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+    ...(reasoning ? { reasoning } : {}),
   });
 };
 
@@ -2637,7 +2870,7 @@ const marketScaffoldHandler: BuiltinVerbHandler = async (params, ctx) => {
     return {
       status: proposedView.status,
       // Allocated at propose-time so the caller can reference it before
-      // approval; absent on a join gate, where no id was ever allocated.
+      // approval.
       entityId: proposedView.proposedEntityId ?? null,
       proposalId: proposedView.proposalId,
       // The door already built the review link — never rebuild it here.
@@ -2966,6 +3199,8 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
     participantExternalId?: string;
     sentAt?: string;
     outbound?: boolean;
+    /** The provider's native message id (never the content-key fallback). */
+    messageId?: string;
   }) =>
     recordInboundMessage({
       provider: input.provider,
@@ -2989,6 +3224,21 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
       ...(args.outbound
         ? { authorType: MessageAuthorType.HUMAN, role: MessageRole.ASSISTANT }
         : {}),
+      // The direction is stated, never left to the recorder's INBOUND default:
+      // our own send read back from the provider is OUTBOUND, and a row that
+      // says INBOUND next to the real outbound one is a twin. Single-message
+      // mode passes no `outbound` → omitted → the recorder's default holds.
+      ...(args.outbound !== undefined
+        ? {
+            direction: args.outbound
+              ? MessageDirection.OUTBOUND
+              : MessageDirection.INBOUND,
+          }
+        : {}),
+      // The provider's own id: keys the (channel_id, external_message_id)
+      // unique index and the legacy merge, so a message already stored by the
+      // send door (same provider id) is no second row.
+      ...(args.messageId ? { messageId: args.messageId } : {}),
       // Threaded from the top-level param: a historical backfill suppresses the
       // per-message event fan-out. Omitted (undefined) → recorder default false.
       ...(input.suppressSideEffects !== undefined
@@ -3063,6 +3313,11 @@ const channelIngestHandler: BuiltinVerbHandler = async (params, ctx) => {
           : {}),
         ...(typeof sentRaw === "string" ? { sentAt: sentRaw } : {}),
         outbound,
+        // Only a real provider id; the content-key fallback is a dedup seed,
+        // not a message id.
+        ...(idRaw !== undefined && idRaw !== null && String(idRaw).length > 0
+          ? { messageId: String(idRaw) }
+          : {}),
       });
       channelId = result.channelId;
       contextObjectId = result.contextObjectId;
@@ -3657,9 +3912,8 @@ const automationRecommendHealthHandler: BuiltinVerbHandler = async (
 // The substrate could BUILD config (playbook.create / automation.create) but
 // never REVISE it: a live playbook whose `subjectProfile` pointed at a kind
 // that no longer exists could not be repaired from any agent surface, and an
-// agent-authored automation — which ALWAYS lands `draft`
-// (`insertAutomationAfterGovernance`'s `forceDraft`) — could never be switched
-// on. These four verbs close that, each delegating to the EXISTING governed
+// agent-authored automation no person approved — born `draft`
+// (`automationStatusAtCreate`) — could never be switched on. These four verbs close that, each delegating to the EXISTING governed
 // tRPC procedure exactly like `entity.update` does. No logic is re-implemented
 // here, and every return is surfaced VERBATIM so a `{ status: "proposed" }`
 // outcome is reported as the success it is.
@@ -3704,7 +3958,9 @@ const playbookUpdateParams = z
     /** REPLACES the criteria list. Shape validated by `sessionCriteriaSchema`. */
     criteria: z.array(z.record(z.string(), z.unknown())).optional(),
     status: z.enum(["draft", "active", "paused", "archived"]).optional(),
-    executor: z.enum(["is-agent", "external-agent", "hybrid"]).optional(),
+    executor: z
+      .enum(["is-agent", "external-agent", "hybrid", "generate"])
+      .optional(),
     /** Shown to the reviewer when the write lands as a proposal. */
     reasoning: z.string().max(2000).optional(),
     // STRICT, like `tool.request`: an unknown key is REFUSED, never accepted and
@@ -4392,6 +4648,69 @@ const webReadHandler: BuiltinVerbHandler = async (params, ctx) => {
   );
 };
 
+// ── Read a public JSON API ("http.get_json") ───────────────────────────────────
+//
+// Keyless public data (agent report 25a60263; founder answer 12, 21 Nov 2026):
+// a GET to a host on the pod's allow-list, through the guarded https fetch,
+// parsed JSON back (`http-get-json.ts`). Read-only (READ_ONLY_BUILTIN_VERBS):
+// it mutates nothing in the pod, and the host list bounds where it may reach.
+// `http.allow_host` is the ONE door onto that list: declared `proposeOnly`
+// (no rule runs it for an agent: an agent's ask is a proposal the person
+// approves) and, run directly, only by a pod admin.
+
+const httpGetJsonParams = z.object({
+  /** The https URL to GET. Its host must be on the pod's allow-list. */
+  url: z.string().trim().min(1).max(4096),
+  /** Query parameters, added to the URL. */
+  query: z
+    .record(z.string(), z.union([z.string(), z.number(), z.boolean()]))
+    .optional(),
+  /** Accept and Accept-Language only. */
+  headers: z.record(z.string(), z.string().max(500)).optional(),
+});
+
+const httpGetJsonHandler: BuiltinVerbHandler = async (params) => {
+  const input = httpGetJsonParams.parse(params);
+  const { httpGetJson } = await import("./http-get-json.js");
+  return httpGetJson(input);
+};
+
+const httpAllowHostParams = z.object({
+  /** The host to allow, e.g. "recherche-entreprises.api.gouv.fr". */
+  host: z.string().trim().min(1).max(253),
+  /** Why it is needed: shown on the proposal the person reviews. */
+  reason: z.string().trim().max(1000).optional(),
+});
+
+const httpAllowHostHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = httpAllowHostParams.parse(params);
+  const { allowHost, normalizeHost } = await import("./http-get-json.js");
+  // The gate proposes every agent run of this verb (`proposeOnly`); an
+  // approved proposal re-runs it as the person who approved it. An agent
+  // reaching here directly is refused, whatever let it through.
+  if (ctx.agentUserId) {
+    throw new VerbRefusal(
+      "An agent cannot add a host itself: http.allow_host files a proposal the person approves.",
+      "permission"
+    );
+  }
+  const { isPodAdmin } = await import("../../utils/workspace-role.js");
+  if (!(await isPodAdmin(ctx.userId))) {
+    throw new VerbRefusal(
+      "Only a pod admin can add a host to the pod's allow-list.",
+      "permission"
+    );
+  }
+  const host = normalizeHost(input.host);
+  if (!host) {
+    throw new VerbRefusal(
+      `"${input.host}" is not a public host name (give the name only, e.g. "api.example.org": no scheme, port or path).`,
+      "validation"
+    );
+  }
+  return { status: "allowed", ...(await allowHost(host, ctx.userId)) };
+};
+
 // ── Search the web ("web.search") ─────────────────────────────────────────────
 //
 // The agent's door onto `searchWeb` (web-search.ts): runs an installed search
@@ -4420,6 +4739,428 @@ const webSearchHandler: BuiltinVerbHandler = async (params, ctx) => {
     },
     input.query,
     input.provider !== undefined ? { provider: input.provider } : {}
+  );
+};
+
+/**
+ * snippet.render: render a stored snippet (text with variables) once and
+ * return `{ text, misses }`. READ-ONLY: it mutates nothing, so it is in
+ * READ_ONLY_BUILTIN_VERBS; sending the text stays governed (`messaging.send`).
+ *
+ * The snippet is an entity of kind `snippet` read through the caller's access
+ * floor (`scoped.findFirst`), so a snippet the caller cannot read does not
+ * exist for them. Properties: `body` (the text) and `variables` (PlaybookParam
+ * shape, with its optional `from: "subject.<field>"`). A snippet whose
+ * lifecycle status is `retired` is refused. Whether only `current` snippets
+ * reach a playbook run is the guidance's rule (`kind:snippet`), not this
+ * verb's: a direct call renders a draft too.
+ *
+ * Values: explicit `values` win; else a variable's `from: "subject.<field>"`
+ * fills from `subjectEntityId` (`title`, `preview` or a property), read
+ * through the SAME access floor, never around it: a subject the caller cannot
+ * read fills nothing and is recorded as a miss; else the declared default.
+ * A required variable with no value blocks the render and is named.
+ *
+ * The grammar and the miss policy are `renderText`
+ * (`@synap-core/types/text-template`), the one implementation.
+ */
+const snippetRenderParams = z.object({
+  snippetId: z.string().uuid(),
+  /** Variable values by name. */
+  values: z.record(z.string(), z.unknown()).optional(),
+  /** The entity the `from: "subject.<field>"` variables read from. */
+  subjectEntityId: z.string().uuid().optional(),
+  /** Optional workspace lens; omit for the caller's full floor. */
+  workspaceId: z.string().uuid().optional(),
+});
+
+const SNIPPET_KIND = "snippet";
+const SNIPPET_RETIRED = "retired";
+
+/** `variables` is a json property: an array, or a JSON string of one. */
+function readSnippetVariables(raw: unknown): unknown {
+  if (typeof raw !== "string") return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return [];
+  }
+}
+
+/** The field of a `from: "subject.<field>"` param, else null. */
+function subjectFieldOf(p: { from?: string }): string | null {
+  return p.from?.startsWith("subject.") && p.from.length > "subject.".length
+    ? p.from.slice("subject.".length)
+    : null;
+}
+
+const snippetRenderHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = snippetRenderParams.parse(params);
+  const lens = input.workspaceId ?? ctx.workspaceId ?? undefined;
+  const scoped = await getReadScope(ctx.userId, lens);
+
+  // The kind is read through the polymorphic door (kind branch OR role-facet
+  // EXISTS), never a bare match on the entity's primary type: a snippet worn
+  // as a role by another kind is a snippet too. An unknown `snippet` kind
+  // fails closed.
+  const snippetRows = await assertKnownProfileSlug(db, SNIPPET_KIND);
+  const snippetScope = profileSlugScopeConditionFromRows(
+    db,
+    SNIPPET_KIND,
+    snippetRows,
+    await resolveFacetVisibilityScope(ctx.userId, lens)
+  );
+
+  const snippet = await scoped.findFirst<{
+    id: string;
+    status: string | null;
+    properties: Record<string, unknown> | null;
+  }>(entities, {
+    where: and(eq(entities.id, input.snippetId), snippetScope),
+    columns: { id: true, status: true, properties: true },
+  });
+  if (!snippet) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Snippet not found." });
+  }
+  if (snippet.status === SNIPPET_RETIRED) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet is retired and can no longer be used.",
+    });
+  }
+  const props = snippet.properties ?? {};
+  const body = props.body;
+  if (typeof body !== "string" || body === "") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This snippet has no body to render.",
+    });
+  }
+
+  const declared = readPlaybookParams(readSnippetVariables(props.variables));
+  const supplied: Record<string, unknown> = { ...(input.values ?? {}) };
+
+  // Subject fill: only for variables the caller left blank (the param
+  // validator's own blank rule), through the floor.
+  const subjectMisses: TextTemplateMiss[] = [];
+  const wanted = declared.filter(
+    (p) =>
+      subjectFieldOf(p) !== null &&
+      isAbsentParamValue(
+        Object.prototype.hasOwnProperty.call(supplied, p.name)
+          ? supplied[p.name]
+          : undefined
+      )
+  );
+  if (wanted.length > 0) {
+    const subject = input.subjectEntityId
+      ? await scoped.findFirst<{
+          title: string | null;
+          preview: string | null;
+          properties: Record<string, unknown> | null;
+        }>(entities, {
+          where: eq(entities.id, input.subjectEntityId),
+          columns: { title: true, preview: true, properties: true },
+        })
+      : undefined;
+    for (const p of wanted) {
+      const field = subjectFieldOf(p)!;
+      const raw =
+        field === "title"
+          ? subject?.title
+          : field === "preview"
+            ? subject?.preview
+            : (subject?.properties ?? {})[field];
+      const filled =
+        typeof raw === "string"
+          ? raw
+          : typeof raw === "number" || typeof raw === "boolean"
+            ? String(raw)
+            : "";
+      if (isAbsentParamValue(filled)) {
+        // Unreadable subject, no subject, or an empty field: fills nothing.
+        subjectMisses.push({
+          name: `subject.${field}`,
+          kind: "unresolved-context",
+          count: 1,
+        });
+      } else {
+        supplied[p.name] = filled;
+      }
+    }
+  }
+
+  // Defaults, coercion and type errors: the ONE param validator.
+  const resolution = validatePlaybookParams(declared, supplied);
+  if (resolution.typeErrors.length > 0) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: resolution.typeErrors.map(describeParamTypeError).join(" "),
+    });
+  }
+  const values: Record<string, string> = {};
+  for (const p of declared) {
+    if (Object.prototype.hasOwnProperty.call(resolution.values, p.name)) {
+      values[p.name] = String(resolution.values[p.name]);
+    }
+  }
+
+  const [me] = await db
+    .select({ name: users.name })
+    .from(users)
+    .where(eq(users.id, ctx.userId))
+    .limit(1);
+  const now = new Date();
+  const rendered = renderText(body, {
+    variables: declared.map((p) => ({
+      name: p.name,
+      ...(p.required ? { required: true } : {}),
+    })),
+    values,
+    builtins: {
+      today: now.toISOString().slice(0, 10),
+      now: now.toISOString(),
+      ...(me?.name ? { me: me.name } : {}),
+    },
+  });
+  if (!rendered.ok) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Missing required variable${rendered.missing.length > 1 ? "s" : ""}: ${rendered.missing.join(", ")}.`,
+    });
+  }
+  return {
+    text: rendered.text,
+    misses: [...rendered.misses, ...subjectMisses],
+  };
+};
+
+// ── PDF tools (W1) — pod PDFs in, a NEW pod file out ──────────────────────────
+//
+// First-party verbs over the pod's internal PDF engine (Stirling PDF, reached
+// only at the operator's `STIRLING_URL`). The ONE runner is
+// `services/pdf/run-pdf-verb.ts`: engine check first, the read floor per
+// source, the engine call, the GOVERNED file door for the output, and one
+// `derived_from` edge per source. Each handler builds the governed
+// `relations.create` caller here and hands it to the runner, so the re-entry is
+// visible to `synap-core-risky-verbs-reenter-a-governed-door.test.ts` (which
+// follows the caller one hop into the runner). The acting agent rides the
+// caller context: `relations.create` gates on `ctx.agentUserId`, and an agent's
+// edge must be judged as the agent's. `pdf.info` reads only
+// (READ_ONLY_BUILTIN_VERBS). Engine + runner are lazy-imported, like every
+// other heavy dependency of this module.
+
+/** The governed relations caller context for a PDF verb's `derived_from` edges. */
+function pdfLinkCallerContext(ctx: BuiltinVerbContext): Context {
+  return {
+    db,
+    authenticated: true as const,
+    userId: ctx.userId,
+    workspaceId: ctx.workspaceId,
+    agentUserId: getActingAgentUserId() ?? ctx.agentUserId ?? null,
+    sessionId: ctx.sessionId ?? null,
+  } as unknown as Context;
+}
+
+const pdfOcrHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.ocr", params, ctx, { caller });
+};
+
+const pdfCompressHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.compress", params, ctx, { caller });
+};
+
+const pdfMergeHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.merge", params, ctx, { caller });
+};
+
+const pdfSplitHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.split", params, ctx, { caller });
+};
+
+const pdfRedactHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.redact", params, ctx, { caller });
+};
+
+const pdfToPdfHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.to_pdf", params, ctx, { caller });
+};
+
+const pdfToMarkdownHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { relationsRouter } = await import("../../routers/relations.js");
+  const { runPdfVerb } = await import("../pdf/run-pdf-verb.js");
+  const caller = relationsRouter.createCaller(pdfLinkCallerContext(ctx));
+  return runPdfVerb("pdf.to_markdown", params, ctx, { caller });
+};
+
+const pdfInfoHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const { runPdfInfo } = await import("../pdf/run-pdf-verb.js");
+  return runPdfInfo(params, ctx);
+};
+
+// ── The design door (plan 0fc746f4 §2.6) ─────────────────────────────────────
+//
+// Shipped by the market `design` capability, not Synap Core: the skill rows
+// exist (and so the verbs run) only where that package is installed. Each
+// handler hands off to `services/designs/design-door.ts`, which validates
+// against the installed catalog snapshot with the one board parser
+// (`@synap-core/types/design-board`) and writes through the governed entity
+// door as the acting agent. Their param contract is
+// `DESIGN_VERB_PARAMETERS` (the package carries it verbatim; the
+// catalog-coherence tripwire reads it).
+//
+//   design.read     READ-ONLY: a design, its board, an outline per frame,
+//                   whether it may be edited, what the catalog cannot place.
+//   design.catalog  READ-ONLY: the kit (Synap's, or `appId`'s own), its props,
+//                   the canvas blocks, the grid, the frame presets.
+//   design.apply    WRITE, SELF-GATED (`SELF_GATED_BUILTIN_VERBS`): the entity
+//                   door is the one gate, so one proposal carries the entity
+//                   diff; under `mustPropose` it is told `forcePropose`.
+// A refused batch (an op the catalog refuses) and a design changed since it
+// was read are ANSWERS, returned as the result (`status: "refused"` with the
+// op index, the reasons and the catalog hash; `status: "conflict"` with the
+// design's current `updatedAt`): the caller fixes the op or reads again. As a
+// thrown refusal they reached a REST caller as a redacted 500 and lost the
+// op index. What the door cannot do at all (no catalog installed, no such
+// design, a grant that does not allow it) is a `VerbRefusal`.
+
+const designReadParams = z.object({ designId: z.string().uuid() });
+const designCatalogParams = z.object({
+  appId: z.string().uuid().optional(),
+  detail: z.enum(CATALOG_DETAILS).optional(),
+  components: z.array(z.string().min(1)).min(1).max(100).optional(),
+});
+const designApplyParams = z.object({
+  designId: z.string().uuid().optional(),
+  baseUpdatedAt: z.string().min(1).optional(),
+  ops: z.array(z.record(z.string(), z.unknown())).min(1).max(200),
+  acceptDrops: z.boolean().optional(),
+});
+
+// ── The storybook door (plan 48854969 §9) ────────────────────────────────────
+//
+// Shipped by the market `storybook` capability, not Synap Core (same as the
+// design door): its param contract is `STORYBOOK_VERB_PARAMETERS`
+// (`@synap-core/types/storybook`; the package carries it verbatim and the
+// catalog-coherence tripwire reads it). Handlers in
+// `services/event-sync/storybook-door.ts`.
+//
+//   storybook.sync     WRITE, through the full outer gate: records the
+//                      Storybook as a source connection (no secret) and runs
+//                      connection sync on it, whose own first run is ONE
+//                      import proposal the person approves.
+//   storybook.changed  READ-ONLY: ui-components changed since their review.
+
+const storybookSyncParams = z.object({
+  bundleFileId: z.string().uuid().optional(),
+  url: z.string().trim().url().max(2048).optional(),
+  appId: z.string().uuid().optional(),
+  brandIdentityId: z.string().uuid().optional(),
+});
+const storybookChangedParams = z.object({
+  limit: z.number().int().min(1).max(STORYBOOK_CHANGED_MAX).optional(),
+  appId: z.string().uuid().optional(),
+});
+
+const storybookSyncHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = storybookSyncParams.parse(params);
+  const { syncStorybook } = await import("../event-sync/storybook-door.js");
+  return syncStorybook(
+    { userId: ctx.userId, workspaceId: ctx.workspaceId },
+    input
+  );
+};
+
+const storybookChangedHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = storybookChangedParams.parse(params);
+  const { changedStorybookComponents } =
+    await import("../event-sync/storybook-door.js");
+  return changedStorybookComponents(ctx.userId, input);
+};
+
+/** The design door's TRPC refusals, as a verb's refusal (a definite not-run, classed). */
+async function designDoorRefusals<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (err) {
+    if (err instanceof TRPCError) {
+      const errorClass =
+        err.code === "NOT_FOUND"
+          ? "target_missing"
+          : err.code === "FORBIDDEN" || err.code === "UNAUTHORIZED"
+            ? "permission"
+            : err.code === "CONFLICT"
+              ? "conflict"
+              : err.code === "BAD_REQUEST" ||
+                  err.code === "PRECONDITION_FAILED" ||
+                  err.code === "UNPROCESSABLE_CONTENT"
+                ? "validation"
+                : null;
+      if (errorClass) throw new VerbRefusal(err.message, errorClass);
+    }
+    throw err;
+  }
+}
+
+const designReadHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designReadParams.parse(params);
+  const { readDesign } = await import("../designs/design-door.js");
+  return designDoorRefusals(() =>
+    readDesign(
+      { userId: ctx.userId, workspaceId: ctx.workspaceId },
+      input.designId
+    )
+  );
+};
+
+const designCatalogHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designCatalogParams.parse(params);
+  const { designCatalog } = await import("../designs/design-door.js");
+  return designDoorRefusals(() =>
+    designCatalog(ctx.userId, input.appId ?? null, {
+      // An agent reads the summary first: the whole catalog in full is more
+      // than an MCP door returns in one reply.
+      detail: input.detail ?? "summary",
+      ...(input.components ? { components: input.components } : {}),
+    })
+  );
+};
+
+const designApplyHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = designApplyParams.parse(params);
+  const { applyDesign } = await import("../designs/design-door.js");
+  // Same as entity.update: the entity door keys its AI ladder on the agent,
+  // so an unforwarded actor would be judged on the operator path.
+  const agentUserId = getActingAgentUserId() ?? ctx.agentUserId ?? null;
+  return designDoorRefusals(() =>
+    applyDesign(
+      {
+        userId: ctx.userId,
+        workspaceId: ctx.workspaceId,
+        agentUserId,
+        sessionId: ctx.sessionId ?? null,
+        mustPropose: ctx.mustPropose === true,
+      },
+      input
+    )
   );
 };
 
@@ -4459,6 +5200,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "document.stamp_diagnostics": documentStampDiagnosticsHandler,
   // D4 — a refresher's grounding read: the lens page, as the widgets read it.
   "lens.page": lensPageHandler,
+  "measure.check": measureCheckHandler,
   // Kind + Facets — role attach/update/detach/list over the one facet door.
   "entity_facet.attach": entityFacetAttachHandler,
   "entity_facet.update": entityFacetUpdateHandler,
@@ -4467,11 +5209,15 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   // Marketplace (Wave 3b) — search/install over cp_catalog_cache.
   "market.search": marketSearchHandler,
   "market.install": marketInstallHandler,
+  // Wire a space's inbound source into its host: always a proposal.
+  "inbound_source.connect": inboundSourceConnectHandler,
   // Marketplace AUTHORING — generate a package skeleton and persist it on the
   // pod as a draft document (the CLI writes it to disk; an agent door cannot).
   "market.scaffold": marketScaffoldHandler,
   // Tool demand — a tool the user needs that Synap cannot connect yet.
   "tool.request": toolRequestHandler,
+  // Hosted verbs — a recipe of a tool installed on the person's computer.
+  "computer.run_recipe": runRecipeHandler,
   // Connection health — probe a connector + nudge the operator if it's dead, so
   // a config feed doesn't go silently dead on an expired token.
   "connector.health_check": connectorHealthCheckHandler,
@@ -4508,7 +5254,7 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "automation.recommend_health": automationRecommendHealthHandler,
   // Config REVISION (see the section above): the substrate could build a
   // playbook/automation but never revise one, and an agent-authored automation
-  // always lands `draft` with no door to switch it on.
+  // no person approved is born `draft` with no door to switch it on.
   "playbook.update": playbookUpdateHandler,
   "automation.update": automationUpdateHandler,
   "automation.activate": automationActivateHandler,
@@ -4527,8 +5273,29 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "property_def.propose_retire": propertyDefProposeRetireHandler,
   // Read one link through the one url-reader door (built-in or installed reader).
   "web.read": webReadHandler,
+  // Read a public JSON API on a host the pod allows; add a host (proposed).
+  "http.get_json": httpGetJsonHandler,
+  "http.allow_host": httpAllowHostHandler,
   // Search the web through a named installed provider (its own gate + meter).
   "web.search": webSearchHandler,
+  // Render a stored snippet (text with variables) once: { text, misses }.
+  "snippet.render": snippetRenderHandler,
+  // PDF tools (W1): pod PDFs in, a new governed pod file out (+ derived_from).
+  "pdf.ocr": pdfOcrHandler,
+  "pdf.compress": pdfCompressHandler,
+  "pdf.merge": pdfMergeHandler,
+  "pdf.split": pdfSplitHandler,
+  "pdf.redact": pdfRedactHandler,
+  "pdf.to_pdf": pdfToPdfHandler,
+  "pdf.to_markdown": pdfToMarkdownHandler,
+  "pdf.info": pdfInfoHandler,
+  // The design door: shipped by the market `design` capability (see above).
+  "design.read": designReadHandler,
+  "design.catalog": designCatalogHandler,
+  "design.apply": designApplyHandler,
+  // The storybook door: shipped by the market `storybook` capability.
+  "storybook.sync": storybookSyncHandler,
+  "storybook.changed": storybookChangedHandler,
 };
 
 /**
@@ -4567,14 +5334,17 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "document.freeze_charts": documentFreezeChartsParams,
   "document.stamp_diagnostics": documentStampDiagnosticsParams,
   "lens.page": lensPageParams,
+  "measure.check": measureCheckParams,
   "entity_facet.attach": entityFacetAttachParams,
   "entity_facet.update": entityFacetUpdateParams,
   "entity_facet.detach": entityFacetDetachParams,
   "entity_facet.list": entityFacetListParams,
   "market.search": marketSearchParams,
   "market.install": marketInstallParams,
+  "inbound_source.connect": inboundSourceConnectParams,
   "market.scaffold": marketScaffoldParams,
   "tool.request": toolRequestParams,
+  "computer.run_recipe": runRecipeParams,
   "connector.health_check": connectorHealthCheckParams,
   "capability.rotate_key": capabilityRotateKeyParams,
   "channel.ingest": channelIngestParams,
@@ -4601,7 +5371,23 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "profile.propose_retire": profileProposeRetireParams,
   "property_def.propose_retire": propertyDefProposeRetireParams,
   "web.read": webReadParams,
+  "http.get_json": httpGetJsonParams,
+  "http.allow_host": httpAllowHostParams,
   "web.search": webSearchParams,
+  "snippet.render": snippetRenderParams,
+  "pdf.ocr": pdfOcrParams,
+  "pdf.compress": pdfCompressParams,
+  "pdf.merge": pdfMergeParams,
+  "pdf.split": pdfSplitParams,
+  "pdf.redact": pdfRedactParams,
+  "pdf.to_pdf": pdfToPdfParams,
+  "pdf.to_markdown": pdfToMarkdownParams,
+  "pdf.info": pdfInfoParams,
+  "design.read": designReadParams,
+  "design.catalog": designCatalogParams,
+  "design.apply": designApplyParams,
+  "storybook.sync": storybookSyncParams,
+  "storybook.changed": storybookChangedParams,
 };
 
 /**
@@ -4659,6 +5445,12 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // nothing. Must auto-run inside a refresher flow (a propose verdict would
   // stall it before the document.update it grounds).
   "lens.page",
+  // measure.check — one cell-bridge read op (entities.list, lifecycle.board,
+  // lifecycle.throughput, attention.count) under the caller's floor, compared
+  // with a bar; writes nothing. Must auto-run: the evaluator runs it for a
+  // capability criterion with suppressProposal, and a propose verdict would
+  // leave the criterion unmeasured.
+  "measure.check",
   // entity_facet.list — floor-scoped facet read (see handler doc above).
   "entity_facet.list",
   // market.search — cache-only read (see handler doc above). market.install is
@@ -4697,10 +5489,29 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // web.search — runs a search provider through ITS own gate (the same
   // shape as web.read naming a reader). Mutates nothing in the pod.
   "web.search",
+  // http.get_json — a GET to a host on the pod's allow-list, parsed JSON
+  // back. Mutates nothing in the pod. Adding a host (http.allow_host) is a
+  // write and stays gated.
+  "http.get_json",
   // messaging.accounts — the person's connected accounts (labels and ids);
   // the intent actions door runs it to list send_message's accounts.
   "messaging.accounts",
   // channel.history — a person's channels' messages and proposed messages,
   // read through the channel floor and the proposal floor. Writes nothing.
   "channel.history",
+  // snippet.render — reads a snippet (and a subject's fields) through the
+  // caller's floor and RETURNS text; it writes nothing. Sending is governed
+  // separately (messaging.send).
+  "snippet.render",
+  // pdf.info — reads one PDF the caller may read (readableFileEntity, the
+  // caller's floor) and RETURNS the pod's own engine's report on it. Creates
+  // nothing; the bytes go only to the pod's internal engine, never outward.
+  "pdf.info",
+  // design.read — one design through the caller's entity read floor, parsed;
+  // design.catalog — the installed package's catalog snapshot. Write nothing.
+  "design.read",
+  "design.catalog",
+  // storybook.changed — ui-components through the caller's entity read floor.
+  // Writes nothing.
+  "storybook.changed",
 ]);

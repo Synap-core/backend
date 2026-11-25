@@ -20,6 +20,41 @@ export async function listIntentSlugs(): Promise<string[]> {
   return [...new Set<string>([...ABSTRACT_VERBS, ...rows.map((r) => r.slug)])];
 }
 
+/** One intent with the words a person may use for it (its row's own text). */
+export interface IntentRow {
+  slug: string;
+  /** What the intent does, one sentence. `""` for a seed slug with no row. */
+  statement: string;
+  /** Other ways to say it ("remove background", "youtube"). */
+  synonyms: string[];
+}
+
+/**
+ * Every known intent WITH its statement and synonyms, for a ranker that must
+ * match a person's words ("remove my background") and not only the slug's
+ * (`edit_video`). Same set as {@link listIntentSlugs}: the seed first, then
+ * every row; a seed slug whose row is missing still comes back, with no words.
+ */
+export async function listIntentRows(): Promise<IntentRow[]> {
+  const rows = await db
+    .select({
+      slug: capabilityIntents.slug,
+      statement: capabilityIntents.statement,
+      synonyms: capabilityIntents.synonyms,
+    })
+    .from(capabilityIntents);
+  const bySlug = new Map(rows.map((r) => [r.slug, r]));
+  const slugs = [...new Set<string>([...ABSTRACT_VERBS, ...bySlug.keys()])];
+  return slugs.map((slug) => {
+    const row = bySlug.get(slug);
+    return {
+      slug,
+      statement: row?.statement ?? "",
+      synonyms: row?.synonyms ?? [],
+    };
+  });
+}
+
 /** Seed member, or a row in the registry. Anything else is unknown. */
 export async function isKnownIntent(value: unknown): Promise<boolean> {
   if (isAbstractVerb(value)) return true;

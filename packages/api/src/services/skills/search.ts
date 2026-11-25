@@ -51,6 +51,14 @@ export interface InstructionSkillSearchInput {
   tag?: string;
   /** Only the seeded `system/*` namespace (the IS skill-loader overlay). */
   system?: boolean;
+  /**
+   * With no `workspaceId`: read every skill the user can see in ANY workspace
+   * they can see (`visibleSkillsWhere` with `allSpaces`), not only pod and user
+   * skills. `visibleSkillsWhere` without a workspace drops every
+   * `scope:"workspace"` skill and rule, which is right for a lensed catalog and
+   * wrong for a pod-wide search (`synap_find`). Ignored when a workspace is set.
+   */
+  anyWorkspace?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -93,7 +101,9 @@ export async function searchInstructionSkills(
   const conditions: SQL[] = [
     // Three-tier visibility AND rule expiry (enforced by default — this is an
     // agent-facing catalog, so it must never waive `includeExpired`).
-    visibleSkillsWhere(input.userId, input.workspaceId || undefined),
+    !input.workspaceId && input.anyWorkspace
+      ? visibleSkillsWhere(input.userId, undefined, { allSpaces: true })
+      : visibleSkillsWhere(input.userId, input.workspaceId || undefined),
     eq(skills.kind, "instruction"),
     eq(skills.status, "active"),
     eq(skills.approved, true),

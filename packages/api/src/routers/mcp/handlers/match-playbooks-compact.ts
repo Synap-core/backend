@@ -11,8 +11,12 @@ export const MATCH_GOAL_TEMPLATE_CAP = 200;
 /** An intent-only row must reach this share of the best score to be kept. */
 export const MATCH_RELATIVE_SCORE_FLOOR = 0.3;
 
+import { playbookDescriptionPreview } from "../../../services/playbooks/playbook-search-text.js";
+
 interface MatchRow {
   score: number;
+  triggers?: ReadonlyArray<string>;
+  description?: string | null;
   goalTemplate?: string | null;
   signals: ReadonlyArray<{ type: string }>;
 }
@@ -40,12 +44,16 @@ export function compactPlaybookMatches<T extends MatchRow>(
         r.score >= best * MATCH_RELATIVE_SCORE_FLOOR
     )
     .slice(0, limit)
-    .map((r) =>
-      r.goalTemplate && r.goalTemplate.length > MATCH_GOAL_TEMPLATE_CAP
-        ? {
-            ...r,
-            goalTemplate: `${r.goalTemplate.slice(0, MATCH_GOAL_TEMPLATE_CAP)}…`,
-          }
-        : r
-    );
+    .map((r) => {
+      const out: T = { ...r };
+      const cut = out as MatchRow;
+      // What ranked the row, not what the agent reads.
+      delete cut.triggers;
+      // The SAME cut synap_find's playbook rows carry (one preview rule).
+      if ("description" in r)
+        cut.description = playbookDescriptionPreview(r.description) ?? null;
+      if (r.goalTemplate && r.goalTemplate.length > MATCH_GOAL_TEMPLATE_CAP)
+        cut.goalTemplate = `${r.goalTemplate.slice(0, MATCH_GOAL_TEMPLATE_CAP)}…`;
+      return out;
+    });
 }

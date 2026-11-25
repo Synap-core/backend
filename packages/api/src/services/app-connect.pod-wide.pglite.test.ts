@@ -14,8 +14,10 @@
  * every-kind read with no space. Rows that rule out a wrong rule:
  *  - a decision in FINANCE and a pod-wide one are READ (no pod-wide scope, or
  *    one pinned to SALES, drops them);
- *  - a task in FINANCE or pod-wide is NOT read (an every-kind read with no
- *    space, kept from the forged row, reads them);
+ *  - a task in FINANCE or pod-wide is NOT read (an every-kind read SPELLED
+ *    `entity.*.read` with no space, kept from the forged row, reads them;
+ *    the plain `entity.read` is a legitimate pod-wide read since 2026-11-09,
+ *    covered by the subjects block below);
  *  - updating or deleting a decision anywhere is grant-DENIED (a write kept
  *    pod-wide permits it), while creating a task in SALES is NOT (a "deny
  *    every write" fix passes the first and fails this one);
@@ -79,6 +81,12 @@ const DECISION_POD = randomUUID();
 const TASK_FINANCE = randomUUID();
 const TASK_POD = randomUUID();
 const TASK_SALES = randomUUID();
+// The reach of a pod-wide read of a SUBJECT (2026-11-09): playbooks, kept pod-wide (no space) or in a space.
+const KEY_SUBJECTS = randomUUID();
+const KEY_SPACE_ONLY = randomUUID();
+const PLAYBOOK_POD = randomUUID();
+const PLAYBOOK_FINANCE = randomUUID();
+const PLAYBOOK_SALES = randomUUID();
 
 const BASIC =
   /^(text|uuid|jsonb|json|boolean|integer|bigint|real|numeric|timestamp|date|varchar|double precision|smallint)/;
@@ -101,6 +109,8 @@ function ddlFor(table: PgTable): string {
 }
 
 let keyGrant: KeyGrant;
+let subjectsGrant: KeyGrant;
+let spaceOnlyGrant: KeyGrant;
 
 beforeAll(async () => {
   for (const value of Object.values(schema)) {
@@ -132,13 +142,60 @@ beforeAll(async () => {
       // What only a forged or stale row holds: never kept pod-wide.
       { permission: "entity.decision.update", workspaceId: null },
       { permission: "entity.decision", workspaceId: null },
-      { permission: "entity.read", workspaceId: null },
+      { permission: "entity.*.read", workspaceId: null },
     ]),
     expiresAt: null,
     createdBy: "human-1",
     clientId: "app_test",
   });
   keyGrant = (await new GrantRepository(h.db as never).resolveForKey(KEY))!;
+
+  await h.client!.query(
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template) values
+       ($1, null, 'human-1', 'Pod template', 'g'), ($2, $4, 'human-1', 'Finance playbook', 'g'),
+       ($3, $5, 'human-1', 'Sales playbook', 'g')`,
+    [PLAYBOOK_POD, PLAYBOOK_FINANCE, PLAYBOOK_SALES, FINANCE, SALES]
+  );
+  // What the chat app is approved for: reads of subjects pod-wide, an act and a write per space, plus the rows only a
+  // forged or stale approval holds (never kept pod-wide).
+  await attachGrantsOrRevoke({
+    apiKeyId: KEY_SUBJECTS,
+    principalUserId: "human-1",
+    onBehalfOf: "human-1",
+    grants: grantsForApprovedRequests([
+      { permission: "playbook.read", workspaceId: null },
+      { permission: "session.read", workspaceId: null },
+      { permission: "entity.read", workspaceId: null },
+      { permission: "playbook.run", workspaceId: SALES },
+      { permission: "playbook.run", workspaceId: null },
+      { permission: "chat.stream", workspaceId: null },
+      { permission: "view.create", workspaceId: null },
+      { permission: "playbook", workspaceId: null },
+      { permission: "agent.read", workspaceId: null },
+      { permission: "*", workspaceId: null },
+    ]),
+    expiresAt: null,
+    createdBy: "human-1",
+    clientId: "app_test_subjects",
+  });
+  subjectsGrant = (await new GrantRepository(h.db as never).resolveForKey(
+    KEY_SUBJECTS
+  ))!;
+  // The same read asked in a space only (how the chat app was approved until now).
+  await attachGrantsOrRevoke({
+    apiKeyId: KEY_SPACE_ONLY,
+    principalUserId: "human-1",
+    onBehalfOf: "human-1",
+    grants: grantsForApprovedRequests([
+      { permission: "playbook.read", workspaceId: SALES },
+    ]),
+    expiresAt: null,
+    createdBy: "human-1",
+    clientId: "app_test_space_only",
+  });
+  spaceOnlyGrant = (await new GrantRepository(h.db as never).resolveForKey(
+    KEY_SPACE_ONLY
+  ))!;
 });
 
 const readable = async () => {
@@ -334,5 +391,58 @@ describe("the owner's sign-in names the pod-wide reads it carries", () => {
     expect(d.cannot).toContain(
       "see anything outside what a member of these spaces sees"
     );
+  });
+});
+
+// A pod-wide read of a SUBJECT (founder, 2026-11-09). Rules out the reported defect: an app limited to spaces matched
+// `workspace_id IN (spaces)`, which a pod-wide playbook (workspace NULL) never satisfies, so the Chat app's Playbooks
+// page said "No playbooks yet" while the pod had playbooks. Positive control: the space-only key IS that defect.
+describe("a pod-wide read of a subject (playbooks, runs, …)", () => {
+  const playbooksRead = async (grant: KeyGrant) => {
+    const clause = keyGrantReadClause(schema.playbooks, grant);
+    const rows = await (h.db as any)
+      .select({ id: schema.playbooks.id })
+      .from(schema.playbooks)
+      .where(clause);
+    return rows.map((r: { id: string }) => r.id).sort();
+  };
+
+  it("reads a pod-wide playbook and one in a space the app was never given", async () => {
+    const seen = await playbooksRead(subjectsGrant);
+    expect(seen).toContain(PLAYBOOK_POD);
+    expect(seen).toContain(PLAYBOOK_FINANCE);
+    expect(seen).toEqual(
+      [PLAYBOOK_POD, PLAYBOOK_FINANCE, PLAYBOOK_SALES].sort()
+    );
+  });
+
+  it("control: the same read asked in one space sees only that space (the 'No playbooks yet' defect)", async () => {
+    expect(await playbooksRead(spaceOnlyGrant)).toEqual([PLAYBOOK_SALES]);
+  });
+
+  it("holds ONE unpinned scope of exactly the pod-wide reads, and keeps the act per space", () => {
+    const pod = subjectsGrant.scopes.find((s) => !s.workspaceIds);
+    expect([...(pod?.permissions ?? [])].sort()).toEqual(
+      ["entity.read", "playbook.read", "session.read"].sort()
+    );
+    expect(isPodWideReadScope(pod!)).toBe(true);
+    const sales = subjectsGrant.scopes.find((s) => s.workspaceIds);
+    expect(sales?.workspaceIds).toEqual([SALES]);
+    expect(sales?.permissions).toEqual(["playbook.run"]);
+  });
+
+  it("drops what only a forged row holds: a run, an act, a write, a whole subject, another subject, full access", () => {
+    const all = subjectsGrant.scopes.flatMap((s) =>
+      s.workspaceIds ? [] : s.permissions
+    );
+    for (const forged of [
+      "playbook.run",
+      "chat.stream",
+      "view.create",
+      "playbook",
+      "agent.read",
+      "*",
+    ])
+      expect(all, forged).not.toContain(forged);
   });
 });

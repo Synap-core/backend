@@ -15,6 +15,7 @@ import { toAutomationDigest, AUTOMATIONS_DIGEST_NOTE } from "./read-lean.js";
 import {
   repeatedBaseSegmentWarning,
   validateCreateVerbInput,
+  createdVerbMetadata,
 } from "../validate-create-verb.js";
 import {
   wireCreatedVerb,
@@ -22,10 +23,16 @@ import {
   parentToolMissingMessage,
   buildProviderVerbSpec,
 } from "../../../services/capabilities/create-declarative-verb.js";
-import { db, tools as toolsTable } from "@synap/database";
+import {
+  db,
+  tools as toolsTable,
+  ProfileResolutionService,
+  ownerAndActor,
+} from "@synap/database";
 import { defineProfile } from "../../hub-protocol/define-profile.js";
 import { proposePropertyDefRetire } from "../../../services/pod-hygiene/retire-property-def.js";
 import { proposeKindLifecycle } from "../../../services/lifecycle/declare-kind-lifecycle.js";
+import { proposeLifecycleOptionsChange } from "../../../services/lifecycle/change-lifecycle-options.js";
 import {
   ok,
   requireScope,
@@ -33,6 +40,10 @@ import {
   type McpToolContext,
   type CallToolResult,
   type McpHandlerMap,
+  pageLimit,
+  pageOffset,
+  AUTOMATIONS_PAGE_DEFAULT,
+  CAPABILITIES_PAGE_DEFAULT,
 } from "./shared.js";
 import { AccessContext, scopedDb } from "../../../access/index.js";
 
@@ -85,6 +96,66 @@ export const capabilityHandlers: McpHandlerMap = {
           ...(typeof args.initialStatus === "string"
             ? { initialStatus: args.initialStatus }
             : {}),
+        },
+        reason: readReasoning(args),
+      })
+    );
+  },
+  // Relabel, reorder or retire a kind's lifecycle options
+  // (`services/lifecycle/change-lifecycle-options.ts`, fd146324): the person's
+  // lifecycle door (tRPC `propertyDefs.changeLifecycleOptions`) filed as an
+  // always-pending proposal, or a refusal in that door's own words.
+  synap_change_lifecycle_options: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const profileId = args.profileId;
+    if (typeof profileId !== "string" || !profileId) {
+      return ok({ error: "profileId is required" });
+    }
+    if (!Array.isArray(args.options)) {
+      return ok({
+        error:
+          "options is required: the complete new list, each { key, category, label? }",
+      });
+    }
+    const lifecycle = await new ProfileResolutionService(
+      db
+    ).getEffectiveLifecycle(profileId);
+    if (!lifecycle) {
+      return ok({
+        status: "refused",
+        reasons: [
+          "This kind declares no lifecycle: declare one with synap_declare_lifecycle.",
+        ],
+      });
+    }
+    const remap =
+      args.remap && typeof args.remap === "object" && !Array.isArray(args.remap)
+        ? Object.fromEntries(
+            Object.entries(args.remap as Record<string, unknown>).filter(
+              (e): e is [string, string] => typeof e[1] === "string"
+            )
+          )
+        : undefined;
+    return ok(
+      await proposeLifecycleOptionsChange({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: {
+          propertyDefId: lifecycle.propertyDefId,
+          // A kept key starts from its stored option: a field the caller
+          // leaves out (a category, a wait, a date binding) keeps its value
+          // instead of being dropped by a relabel.
+          options: (args.options as unknown[]).map((o) => {
+            const key = (o as { key?: unknown } | null)?.key;
+            const stored = lifecycle.options.find((s) => s.key === key);
+            return stored && o && typeof o === "object"
+              ? { ...stored, ...(o as Record<string, unknown>) }
+              : o;
+          }),
+          ...(remap ? { remap } : {}),
         },
         reason: readReasoning(args),
       })
@@ -308,6 +379,7 @@ export const capabilityHandlers: McpHandlerMap = {
         : undefined;
     const kind = typeof args.kind === "string" ? args.kind : undefined;
     const limit = typeof args.limit === "number" ? args.limit : undefined;
+    const offset = pageOffset(args.offset);
     const containerId =
       typeof args.containerId === "string" && args.containerId.trim()
         ? args.containerId.trim()
@@ -479,9 +551,45 @@ export const capabilityHandlers: McpHandlerMap = {
     const cappedInput = askedForBuiltins
       ? capabilities
       : capabilities.filter((c) => c.kind !== "builtin-tool");
+    // PAGE: a browse (no query) is one default page, so it arrives whole under
+    // the reply cap (measured 45,095 chars unpaged on the founder's pod); the
+    // zero-hit rescue stays unbounded unless the caller set a `limit`.
+    const pageLimitEff =
+      limit ??
+      (query
+        ? zeroHitNote
+          ? undefined
+          : DEFAULT_QUERY_LIMIT
+        : CAPABILITIES_PAGE_DEFAULT);
     const sections = sectionCapabilities(cappedInput, {
-      limit: limit ?? (query && !zeroHitNote ? DEFAULT_QUERY_LIMIT : undefined),
+      limit: pageLimitEff,
+      offset,
     });
+    const countRows = (x: {
+      integrations: unknown[];
+      skills: unknown[];
+      commands: unknown[];
+      builtins: unknown[];
+    }) =>
+      x.integrations.length +
+      x.skills.length +
+      x.commands.length +
+      x.builtins.length;
+    const rowsTotal =
+      pageLimitEff === undefined
+        ? 0
+        : countRows(sectionCapabilities(cappedInput));
+    const rowsShown = countRows(sections);
+    const paging =
+      pageLimitEff === undefined
+        ? {}
+        : {
+            total: rowsTotal,
+            offset,
+            ...(offset + rowsShown < rowsTotal
+              ? { nextOffset: offset + rowsShown }
+              : {}),
+          };
     const fullSections = sectionCapabilities(capabilities);
 
     // Teaching docs never land in ANY section (`sectionCapabilities` folds
@@ -499,7 +607,7 @@ export const capabilityHandlers: McpHandlerMap = {
         ]
       : [];
     const teachingDocs = allTeachingDocs
-      .slice(0, limit ?? allTeachingDocs.length)
+      .slice(offset, offset + (limit ?? allTeachingDocs.length))
       .map((c) => ({
         id: c.id,
         // What `synap_load_skill` takes. `null` only for a legacy row with no
@@ -515,6 +623,7 @@ export const capabilityHandlers: McpHandlerMap = {
       skills: sections.skills,
       commands: sections.commands,
       ...(askedForBuiltins ? { builtins: sections.builtins } : {}),
+      ...paging,
       ...(askedForTeachingDocs ? { teachingDocs } : {}),
       ...(builtInPack ? { builtInPack } : {}),
       // Honest, not hidden: these were folded out of the actionable view.
@@ -604,6 +713,7 @@ export const capabilityHandlers: McpHandlerMap = {
       // the SAME source synap_create_verb reads). Lands on the resulting
       // `capability.run` proposal's session_id column; null outside a session.
       sessionId: sessionId ?? null,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     // Surface the same discriminated outcome the hub door returns, in a shape
     // the agent reads naturally (proposed is NOT an error). A `kind:"error"`
@@ -701,11 +811,13 @@ export const capabilityHandlers: McpHandlerMap = {
       description: input.description,
       providerSpec: providerSpec as unknown as Record<string, unknown>,
       parameters: input.parameters,
+      metadata: createdVerbMetadata(input),
       // Fixed alongside this tool: skills.create's own checkPermissionOrPropose
       // call was missing agentUserId entirely (no input field for it existed),
       // so an agent-initiated create was evaluated as if the human owner did
       // it directly. Now threaded through, mirroring entities.ts's pattern.
       agentUserId: agentUserId ?? undefined,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
 
     // WIRING — the MCP door used to write NONE of the edges the tRPC door
@@ -755,20 +867,34 @@ export const capabilityHandlers: McpHandlerMap = {
     // Same door the IS/UI use (hubAutomationsRouter.listAutomations →
     // automationsRouter.list): access-layer visibility floor + pod-wide globals,
     // narrowed by the workspace lens when present. No lens → all accessible.
+    const autoLimit = pageLimit(args.limit, AUTOMATIONS_PAGE_DEFAULT, 99);
+    const autoOffset = pageOffset(args.offset);
     const result = await caller.automations.listAutomations({
       userId,
       workspaceId: requestedWorkspaceId ?? null,
       status: args.status as
         "draft" | "active" | "paused" | "error" | undefined,
-      limit: typeof args.limit === "number" ? args.limit : undefined,
+      // One row past the page tells whether another page exists.
+      limit: autoLimit + 1,
+      offset: autoOffset,
     });
-    if (args.detail === "full") return ok(result);
-    const rows = (result as { automations?: Array<Record<string, unknown>> })
+    const rows0 = (result as { automations?: Array<Record<string, unknown>> })
       .automations;
-    if (!Array.isArray(rows)) return ok(result);
+    if (!Array.isArray(rows0)) return ok(result);
+    const paging = {
+      offset: autoOffset,
+      ...(rows0.length > autoLimit
+        ? { nextOffset: autoOffset + autoLimit }
+        : {}),
+    };
+    const rows = rows0.slice(0, autoLimit);
+    if (args.detail === "full") {
+      return ok({ ...result, automations: rows, ...paging });
+    }
     return ok({
       ...result,
       automations: rows.map(toAutomationDigest),
+      ...paging,
       note: AUTOMATIONS_DIGEST_NOTE,
     });
   },
@@ -865,16 +991,13 @@ export const capabilityHandlers: McpHandlerMap = {
         loadIndex: async () => {
           const { listCapabilities } =
             await import("../../../services/capabilities/capability-registry.js");
+          // Validate against what the RUN will resolve: the owner
+          // `automations.create` stamps (the person), whose lens also holds
+          // the skills its agent made (they are the person's).
+          const owner = await ownerAndActor(db, userId, agentUserId);
           const caps = await listCapabilities({
             workspaceId: requestedWorkspaceId ?? null,
-            // The EXECUTION identity, not the bearer. `automations.create` sets
-            // `createdBy = agentUserId ?? ctx.userId`, and at run time a
-            // capability node resolves under that owner — `visibleSkillsWhere`
-            // has a per-user tier, so validating as the human would both
-            // FALSE-REJECT an agent-owned user-scoped skill and FALSE-ACCEPT a
-            // human-owned one that then throws "not found" mid-run. Keep this
-            // expression identical to the `createdBy` one below.
-            userId: agentUserId ?? userId,
+            userId: owner.ownerId,
           });
           const verbIds = new Set<string>();
           const capabilityIds = new Set<string>();
@@ -1006,6 +1129,7 @@ export const capabilityHandlers: McpHandlerMap = {
         (args.status as "draft" | "active" | "paused" | "error" | undefined) ??
         "active",
       metadata,
+      ...(readReasoning(args) ? { reasoning: readReasoning(args) } : {}),
     });
     return ok(result);
   },
@@ -1032,30 +1156,27 @@ export const capabilityHandlers: McpHandlerMap = {
       typeof args.workspaceId === "string" && args.workspaceId.trim()
         ? args.workspaceId
         : null;
-    // READ FLOOR — a lens still has to be a space you read (the access door).
-    // `listCapabilities`' own contract says a non-null workspaceId is "a LENS,
-    // not an authorization" (`capability-registry.ts:78`), and its tools
-    // predicate is `isNull(workspaceId) OR eq(workspaceId, …)` with NO
-    // membership check. So the CALLER must supply the floor, exactly as the
-    // sibling handler above does. Without it, passing a workspace id you
-    // cannot read enumerates that workspace's tool rows and verb labels.
-    // (The skills arm is owner-floored downstream; tools/commands are not.)
-    if (wsId && !(await canRead(userPrincipal(userId), { workspace: wsId }))) {
-      return ok({ error: `Forbidden: no access to workspace ${wsId}` });
-    }
-    const { findByIntent } =
+    // READ FLOOR + the search itself: the ONE entry every find door uses
+    // (`findForCaller`), so this door and tRPC `knowledge.find` cannot
+    // disagree about whose lens is readable.
+    const { findForCaller } =
       await import("../../../services/capabilities/find-intent.js");
-    return ok(
-      await findByIntent({
-        intent,
-        workspaceId: wsId,
-        userId,
-        ...(agentUserId ? { agentUserId } : {}),
-        // Unknown names are dropped by the service, and a list that ends up
-        // empty falls back to all of them — never "searched nothing, no match".
-        ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
-        ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
-      })
-    );
+    const found = await findForCaller({
+      intent,
+      workspaceId: wsId,
+      userId,
+      ...(agentUserId ? { agentUserId } : {}),
+      // Unknown names are dropped by the service, and a list that ends up
+      // empty falls back to all of them — never "searched nothing, no match".
+      ...(Array.isArray(args.catalogs) ? { catalogs: args.catalogs } : {}),
+      ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+      ...(args.explain === true ? { explain: true } : {}),
+    });
+    if (!found.ok) {
+      return ok({
+        error: `Forbidden: no access to workspace ${found.forbidden}`,
+      });
+    }
+    return ok(found.result);
   },
 };

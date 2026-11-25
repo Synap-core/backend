@@ -43,6 +43,8 @@ interface OAuthConsentPageProps {
     auth_req?: string;
     /** The launch's space (`/authorize` forwards `synap_space_hint`). */
     space_hint?: string;
+    /** A pod app's ask for one more thing (`/authorize` forwards `synap_ask`). */
+    synap_ask?: string;
   }>;
 }
 
@@ -79,6 +81,7 @@ export default async function OAuthConsentPage({
         maxAge: sp.max_age,
         prompt: sp.prompt,
         authRequest: sp.auth_req,
+        synapAsk: sp.synap_ask,
       }}
     />
   );

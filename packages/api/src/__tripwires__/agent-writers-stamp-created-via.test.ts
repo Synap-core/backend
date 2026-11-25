@@ -61,9 +61,21 @@ export function enclosingObject(src: string, at: number): string {
 
 const AGENT_ROW = /userType:\s*"agent"/g;
 
+/**
+ * Agent-user writers that live OUTSIDE the walked roots. The person's personal
+ * AI (`ensurePersonalAgentUser`) moved to @synap/database so the routing
+ * package shares it (decision 6b45c6c3); it is still a writer.
+ */
+const EXTRA_FILES = ["packages/database/src/utils/personal-agent-user.ts"].map(
+  (f) => join(REPO, f)
+);
+
 const writers: Array<{ file: string; object: string }> = [];
 for (const root of ROOTS) {
-  for (const file of walk(root)) {
+  for (const file of [
+    ...walk(root),
+    ...(root === ROOTS[0] ? EXTRA_FILES : []),
+  ]) {
     const src = readFileSync(file, "utf8");
     for (const m of src.matchAll(AGENT_ROW)) {
       writers.push({

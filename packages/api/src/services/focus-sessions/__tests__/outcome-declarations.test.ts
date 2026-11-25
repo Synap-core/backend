@@ -6,8 +6,11 @@ import {
   splitOutcomes,
   upsertOutcomes,
   mergeOutcomesForStart,
+  declaresVerify,
+  factOutcomeWarnings,
 } from "../outcome-declarations.js";
 import { mergeExpectedOutputs } from "../update-session.js";
+import { sessionCriteriaSchema } from "../../../schemas/session-criteria.js";
 
 /**
  * `outcomes[]` (A4) is an ALIAS over today's storage. The test that matters
@@ -39,15 +42,15 @@ describe("outcomes → storage → projection (round trip)", () => {
   ]);
   const { expectedOutputs, criteria } = splitOutcomes(declared);
 
-  it("a fact is a criterion only; a deliverable is a slot; verify beyond evidence adds a criterion under the SAME key", () => {
+  it("a fact is a criterion only; a deliverable is a slot; verify beyond evidence adds a criterion NAMING the slot (outputKey)", () => {
     expect(expectedOutputs.map((s) => s.key)).toEqual([
       "audit",
       "plan",
       "founder-approval",
     ]);
-    expect(criteria.map((c) => [c.key, c.check.kind])).toEqual([
-      ["typecheck-passes", "capability"],
-      ["plan", "judge"],
+    expect(criteria.map((c) => [c.key, c.check.kind, c.outputKey])).toEqual([
+      ["typecheck-passes", "capability", undefined],
+      ["plan", "judge", "plan"],
     ]);
   });
 
@@ -124,6 +127,43 @@ describe("update: outcomes UPSERT by key", () => {
     expect(out).not.toHaveProperty("criteria");
   });
 
+  // P8 (pathways): a fact the pod measures keeps its measure on the way to
+  // the criterion; the criteria door then checks it.
+  it("a fact's verify.params become its criterion's check.params", () => {
+    const measure = {
+      op: "lifecycle.board",
+      params: { profileSlug: "deal", column: "won" },
+      threshold: 3,
+      comparator: "gte",
+    };
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse([
+        {
+          key: "three-won",
+          label: "Three deals won",
+          kind: "fact",
+          verify: {
+            kind: "capability",
+            capability: "measure.check",
+            params: measure,
+          },
+        },
+      ])
+    );
+    expect(criteria).toEqual([
+      {
+        key: "three-won",
+        statement: "Three deals won",
+        check: {
+          kind: "capability",
+          capability: "measure.check",
+          params: measure,
+        },
+      },
+    ]);
+    expect(sessionCriteriaSchema.safeParse(criteria).success).toBe(true);
+  });
+
   it("refuses a malformed key and an unknown field (strict)", () => {
     expect(
       outcomeDeclarationsSchema.safeParse([{ label: "X", key: "Not A Slug" }])
@@ -133,5 +173,141 @@ describe("update: outcomes UPSERT by key", () => {
       outcomeDeclarationsSchema.safeParse([{ label: "X", status: "done" }])
         .success
     ).toBe(false);
+  });
+});
+
+describe("a fact outcome's slot-only fields (ticket c590b571)", () => {
+  it("names each field a fact outcome cannot keep, instead of dropping it in silence", () => {
+    const outcomes = outcomeDeclarationsSchema.parse([
+      {
+        key: "spec-approved",
+        kind: "fact",
+        label: "The founder approved the spec",
+        owner: "human",
+        blockedReason: "decision",
+        ask: { mode: "confirm", prompt: "Approve the spec?" },
+      },
+      { key: "deck", kind: "document", label: "Deck", owner: "human" },
+      { key: "tests", kind: "fact", label: "Tests pass" },
+    ]);
+    // The criterion really has no owner or ask: what the warning says.
+    const { criteria } = splitOutcomes(outcomes);
+    expect(criteria[0]).not.toHaveProperty("owner");
+    expect(criteria[0]).not.toHaveProperty("ask");
+    const warnings = factOutcomeWarnings(outcomes);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('"The founder approved the spec"');
+    for (const f of ["owner", "blockedReason", "ask"]) {
+      expect(warnings[0]).toContain(`\`${f}\``);
+    }
+    expect(warnings[0]).toContain('verify: { kind: "human" }');
+  });
+
+  it("says nothing for a plain fact or any deliverable", () => {
+    expect(factOutcomeWarnings(undefined)).toEqual([]);
+    expect(
+      factOutcomeWarnings(
+        outcomeDeclarationsSchema.parse([
+          { kind: "fact", label: "Tests pass", verify: { kind: "evidence" } },
+          { kind: "decision", label: "Pick", owner: "human" },
+        ])
+      )
+    ).toEqual([]);
+  });
+});
+
+describe("declaresVerify — an outcome with `verify` says what done means (ticket d24c5897)", () => {
+  it("counts a deliverable checked by its own evidence, which makes no criterion", () => {
+    const outcomes = outcomeDeclarationsSchema.parse([
+      { kind: "pull_request", label: "The PR", verify: { kind: "evidence" } },
+    ]);
+    expect(splitOutcomes(outcomes).criteria).toEqual([]);
+    expect(declaresVerify(outcomes)).toBe(true);
+  });
+
+  it("does not count an outcome with no verify", () => {
+    expect(declaresVerify(undefined)).toBe(false);
+    expect(
+      declaresVerify(
+        outcomeDeclarationsSchema.parse([{ kind: "document", label: "Deck" }])
+      )
+    ).toBe(false);
+  });
+});
+
+describe("a fact outcome names the output it checks: outputKey (finding 09ba3d2d)", () => {
+  // The dogfood call (session 944df158): a person-graded fact about the
+  // `checklist` output, declared through the recommended `outcomes` shape.
+  const declared = [
+    { key: "checklist", label: "Checklist", kind: "document" },
+    {
+      key: "checklist-ok",
+      label: "The checklist reads right",
+      kind: "fact",
+      verify: { kind: "human" },
+      outputKey: "checklist",
+    },
+  ];
+
+  it("is stored on the criterion, as the criteria alias stores it", () => {
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse(declared)
+    );
+    expect(criteria).toEqual([
+      {
+        key: "checklist-ok",
+        statement: "The checklist reads right",
+        outputKey: "checklist",
+        check: { kind: "human" },
+      },
+    ]);
+    // The start merge (MCP and Hub REST start) carries it.
+    expect(
+      mergeOutcomesForStart({
+        outcomes: outcomeDeclarationsSchema.parse(declared),
+      }).criteria?.[0]?.outputKey
+    ).toBe("checklist");
+    // A proposed start stores the merged criteria; its replay parses them
+    // with the doors' strict schema, which keeps the pairing.
+    expect(sessionCriteriaSchema.parse(criteria)[0]?.outputKey).toBe(
+      "checklist"
+    );
+  });
+
+  it("an update upserts it onto the stored criterion", () => {
+    const stored: SessionCriterion[] = [
+      {
+        key: "checklist-ok",
+        statement: "The checklist reads right",
+        check: { kind: "human" },
+      },
+    ];
+    const next = upsertOutcomes(
+      { expectedOutputs: [], criteria: stored },
+      outcomeDeclarationsSchema.parse([declared[1]])
+    );
+    expect(next.criteria).toHaveLength(1);
+    expect(next.criteria[0]?.outputKey).toBe("checklist");
+  });
+
+  it("is refused when it is not an output key, or sits on a deliverable", () => {
+    const bad = outcomeDeclarationsSchema.safeParse([
+      { ...declared[1], outputKey: "Checklist!" },
+    ]);
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues[0]?.path).toEqual([0, "outputKey"]);
+
+    const onDeliverable = outcomeDeclarationsSchema.safeParse([
+      { label: "Checklist", kind: "document", outputKey: "other" },
+    ]);
+    expect(onDeliverable.success).toBe(false);
+    expect(onDeliverable.error?.issues[0]?.message).toMatch(/kind: "fact"/);
+  });
+
+  it("CONTROL: a fact with no outputKey stores none", () => {
+    const { criteria } = splitOutcomes(
+      outcomeDeclarationsSchema.parse([{ label: "Tests pass", kind: "fact" }])
+    );
+    expect(criteria[0]).not.toHaveProperty("outputKey");
   });
 });

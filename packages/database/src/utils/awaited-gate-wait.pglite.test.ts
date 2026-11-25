@@ -33,7 +33,12 @@ async function run(sql: SQL): Promise<Array<Record<string, unknown>>> {
 
 async function session(p: {
   status?: string;
-  gates?: Array<{ type: string; status: string; elsewhere?: boolean }>;
+  gates?: Array<{
+    type: string;
+    status: string;
+    elsewhere?: boolean;
+    target?: string;
+  }>;
 }): Promise<string> {
   const id = randomUUID();
   await client.query(
@@ -42,8 +47,14 @@ async function session(p: {
   );
   for (const g of p.gates ?? []) {
     await client.query(
-      `insert into proposals (id, session_id, status, proposal_type) values ($1, $2, $3, $4)`,
-      [randomUUID(), g.elsewhere ? randomUUID() : id, g.status, g.type]
+      `insert into proposals (id, session_id, status, proposal_type, target_type) values ($1, $2, $3, $4, $5)`,
+      [
+        randomUUID(),
+        g.elsewhere ? randomUUID() : id,
+        g.status,
+        g.type,
+        g.target ?? "session",
+      ]
     );
   }
   return id;
@@ -64,7 +75,7 @@ beforeAll(async () => {
   await client.exec(`
     create table focus_sessions (id uuid primary key, status text, expected_outputs jsonb, channel_id uuid);
     create table messages (id uuid primary key, channel_id uuid, author_type text, deleted_at timestamptz, metadata jsonb);
-    create table proposals (id uuid primary key, session_id uuid, status text, proposal_type text);
+    create table proposals (id uuid primary key, session_id uuid, status text, proposal_type text, target_type text);
   `);
 });
 afterAll(async () => {
@@ -77,6 +88,21 @@ describe("waits on the person: a pending awaited gate", () => {
       const id = await session({ gates: [{ type, status: "pending" }] });
       expect(await waits(id), type).toEqual({ byId: true, byRow: true });
     }
+  });
+
+  it("a hand-off to another agent waiting for approval waits", async () => {
+    const handOff = { type: "assign_agent", target: "focus_session" };
+    const id = await session({ gates: [{ ...handOff, status: "pending" }] });
+    expect(await waits(id)).toEqual({ byId: true, byRow: true });
+    const decided = await session({
+      gates: [{ ...handOff, status: "approved" }],
+    });
+    expect(await waits(decided)).toEqual({ byId: false, byRow: false });
+    // A goal's hand-off filed under the session is not this session's.
+    const goal = await session({
+      gates: [{ type: "assign_agent", target: "track", status: "pending" }],
+    });
+    expect(await waits(goal)).toEqual({ byId: false, byRow: false });
   });
 
   it("a decided gate does not", async () => {

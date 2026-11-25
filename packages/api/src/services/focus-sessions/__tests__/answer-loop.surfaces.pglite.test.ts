@@ -58,6 +58,7 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   db,
   focusSessions,
+  lifecycleTransitionOutbox,
   proposals,
   users,
   links,
@@ -71,6 +72,7 @@ import {
   messages,
   workspaces,
   workspaceMembers,
+  apiKeys,
   eq,
 } from "@synap/database";
 import { projectContinuationPacket } from "../continuation-packet.js";
@@ -116,6 +118,8 @@ async function row() {
 beforeAll(async () => {
   for (const t of [
     focusSessions,
+    // Slot doors owe their transition.
+    lifecycleTransitionOutbox,
     proposals,
     users,
     links,
@@ -129,6 +133,7 @@ beforeAll(async () => {
     messages,
     workspaces,
     workspaceMembers,
+    apiKeys,
   ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }

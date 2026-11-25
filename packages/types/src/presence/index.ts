@@ -74,6 +74,11 @@ export const SENSITIVE_APPROVALS: Readonly<Record<string, SensitiveReason>> = {
   "agent/updateCapabilities": "setup",
   "app/connect": "setup",
   "tool/create": "setup",
+  // An approved automation or playbook lands ACTIVE unless its author stated
+  // draft (founder, 9 Nov 2026: "add both"): approving it turns work on, the
+  // same class as a tool or skill.
+  "automation/create": "setup",
+  "playbook/create": "setup",
   // A skill created or changed by approval may turn a verb ON (founder, 4 Nov:
   // turning a tool or skill on is sensitive).
   "skill/create": "setup",
@@ -263,6 +268,17 @@ function sensitiveApprovalRow(proposal: {
 }
 
 /**
+ * The key of the row of the approval lists this proposal falls under
+ * (`<targetType>/<proposalType>`, a type, or a type prefix), or null.
+ */
+export function sensitiveApprovalKey(proposal: {
+  targetType: string;
+  proposalType: string;
+}): string | null {
+  return sensitiveApprovalRow(proposal)?.key ?? null;
+}
+
+/**
  * Is approving this proposal sensitive, and why? Exact `targetType/proposalType`
  * first, then the `proposalType` alone, then a prefix: the registry's own
  * lookup order, so a proposal never escapes by being typed one way or the other.
@@ -436,6 +452,12 @@ export const PRESENCE_REQUEST_KINDS = {
   skill: "setup",
   /** tools.setApproved, Hub /tools/:id/approve: a tool turned ON. */
   tool: "setup",
+  /**
+   * capabilities.enableMany: several verbs and tools of one capability turned ON
+   * by ONE confirmation. The id is `presenceBatchId` of the exact set, so a
+   * proof for one set never turns on another.
+   */
+  capability_batch: "setup",
   /** trustedIssuers.approve: what an outside issuer may do on the pod. */
   trusted_issuer: "governance",
   /** marketplace.approveKeyChange: trusting a catalog source's new signing key. */
@@ -472,6 +494,11 @@ export const PRESENCE_REQUEST_KINDS = {
    * new factor. The id is the person's own user id.
    */
   recovery_codes: "setup",
+  /**
+   * presence.deviceLink.approve: a device the person already uses approves a
+   * NEW device (founder, 9 Nov 2026). The id is the device-link request id.
+   */
+  device_link: "setup",
 } as const satisfies Record<string, SensitiveReason>;
 
 export type PresenceRequestKind = keyof typeof PRESENCE_REQUEST_KINDS;
@@ -545,6 +572,8 @@ export const SENSITIVE_ACTIONS = {
   // A key or a client an app or AI service holds, or what it may do.
   "apps.issueKey": "setup",
   "apps.setWriteMode": "setup",
+  // What a pod app may do and where (W3d): it may widen within its ask.
+  "apps.updateAccess": "setup",
   "apps.setRedirectUris": "setup",
   "apps.setSignInPolicy": "setup",
   "intelligenceRegistry.register": "setup",
@@ -612,6 +641,7 @@ export const SENSITIVE_ACTION_TOKENS = {
   "apiKeys.setMachineDefaults": { action: "update", objectKind: "machine" },
   "apps.issueKey": { action: "create", objectKind: "api_key" },
   "apps.setWriteMode": { action: "update", objectKind: "app" },
+  "apps.updateAccess": { action: "update", objectKind: "app" },
   "apps.setRedirectUris": { action: "update", objectKind: "app" },
   "apps.setSignInPolicy": { action: "update", objectKind: "app" },
   "intelligenceRegistry.register": {
@@ -677,6 +707,111 @@ export function sensitiveActionTitle(
 }
 
 /**
+ * The grace window (founder, 18 Nov 2026): after a passkey or device-key proof
+ * made from a person's own signed-in BROWSER session, that session may do the
+ * graceable acts below for this long without asking again. It starts when the
+ * proof is verified and never slides (a use does not extend it); only a new
+ * proof starts a new one. TOTP and recovery codes mint none.
+ */
+export const PRESENCE_GRACE_SECONDS = 300;
+
+/** Most verbs plus tools one `capabilities.enableMany` confirmation may turn on. */
+export const PRESENCE_BATCH_MAX = 50;
+
+/**
+ * What a grace may cover: an EXPLICIT allow-list, so a row added to any
+ * sensitive table asks for a fresh proof until someone lists it here (fail
+ * closed). Only a row whose reason is `setup` can be listed
+ * (`presenceGraceable` checks it). Everything else is NEVER graced, and
+ * `presenceNeverGrace` derives that set from the tables: keys and secrets
+ * (`apiKeys.*`, `key_request`, `vault/*`, `secretsVault.reveal`), factor and
+ * device changes (`device_enroll`, `passkey_change`, `totp_enroll`,
+ * `recovery_codes`), the mode and sensitivity switches, every governance,
+ * deploy and deletion row, a request filed AS the person, and any key caller.
+ *
+ * Request rows: the doors that turn a verb or tool ON, one at a time or
+ * as a set. Approval rows: none (an approval's content was written by
+ * someone else, often an AI: it asks every time). Action rows: none (every
+ * listed action creates or widens a credential or a rule).
+ */
+export const PRESENCE_GRACE_REQUEST_KINDS = [
+  "skill",
+  "tool",
+  "capability_batch",
+] as const satisfies readonly PresenceRequestKind[];
+export const PRESENCE_GRACE_APPROVALS =
+  [] as const satisfies readonly (keyof typeof SENSITIVE_APPROVALS)[];
+export const PRESENCE_GRACE_ACTIONS =
+  [] as const satisfies readonly SensitiveActionPath[];
+
+/** What a grace is asked to cover: a request kind, an approval row key, or an action path. */
+export type PresenceGraceTarget =
+  | { kind: "request"; key: string }
+  | { kind: "approval"; key: string }
+  | { kind: "action"; key: string };
+
+/** May a grace cover this? Only a listed row whose reason is `setup`; unknown = no. */
+export function presenceGraceable(target: PresenceGraceTarget): boolean {
+  const has = (list: readonly string[], key: string) => list.includes(key);
+  if (target.kind === "request") {
+    return (
+      has(PRESENCE_GRACE_REQUEST_KINDS, target.key) &&
+      (PRESENCE_REQUEST_KINDS as Record<string, SensitiveReason>)[
+        target.key
+      ] === "setup"
+    );
+  }
+  if (target.kind === "approval") {
+    return (
+      has(PRESENCE_GRACE_APPROVALS, target.key) &&
+      (SENSITIVE_APPROVALS as Record<string, SensitiveReason>)[target.key] ===
+        "setup"
+    );
+  }
+  return (
+    has(PRESENCE_GRACE_ACTIONS, target.key) &&
+    (SENSITIVE_ACTIONS as Record<string, SensitiveReason>)[target.key] ===
+      "setup"
+  );
+}
+
+/** Every row of the sensitive tables a grace NEVER covers, derived. */
+export function presenceNeverGrace(): PresenceGraceTarget[] {
+  const all: PresenceGraceTarget[] = [
+    ...Object.keys(PRESENCE_REQUEST_KINDS).map((key) => ({
+      kind: "request" as const,
+      key,
+    })),
+    ...[
+      ...Object.keys(SENSITIVE_APPROVALS),
+      ...Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES),
+    ].map((key) => ({ kind: "approval" as const, key })),
+    ...Object.keys(SENSITIVE_ACTIONS).map((key) => ({
+      kind: "action" as const,
+      key,
+    })),
+  ];
+  return all.filter((t) => !presenceGraceable(t));
+}
+
+/**
+ * The id a proof for a SET of verbs and tools names
+ * (`capability_batch:<id>`): hex SHA-256 of the canonical, sorted, de-duplicated
+ * ids. Add, drop or swap one id and the id changes, so the proof no longer
+ * fits. The client computes the same id as the pod.
+ */
+export function presenceBatchId(set: {
+  skillIds?: readonly string[];
+  toolIds?: readonly string[];
+}): Promise<string> {
+  const norm = (ids: readonly string[] | undefined) =>
+    [...new Set(ids ?? [])].sort();
+  return sha256Hex(
+    canonicalJson({ skills: norm(set.skillIds), tools: norm(set.toolIds) })
+  );
+}
+
+/**
  * The ways a person can prove presence, counted for the "two ways in" rule
  * (recovery ladder, founder, 6 Nov 2026): a pod in `enforce` must not rest on
  * ONE thing the person can lose. What counts as one way is what is lost
@@ -728,6 +863,95 @@ export const PRESENCE_RECOVERY_DELAY_SECONDS = 24 * 3600;
 
 /** The state of a person's recovery request, as every surface reads it. */
 export type PresenceRecoveryStatus = "pending" | "cancelled" | "completed";
+
+/**
+ * "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+ * person who already holds a proof factor brings a NEW device in by asking
+ * from it and approving from a device they already use. The new device shows
+ * a two-digit number; the approving device picks it among three
+ * (`presence.deviceLink.*`) and proves presence with an existing factor
+ * (`device_link:<request id>`). The new device then adds its own passkey or
+ * device key with no further proof, redeemed ONCE, by the session that asked.
+ *
+ * How long a request may wait for its approval, and how long an approval may
+ * be redeemed after it was given.
+ */
+export const DEVICE_LINK_TTL_SECONDS = 300;
+
+/** What the new device will add once approved. */
+export type DeviceLinkKind = "passkey" | "device_key";
+export const DEVICE_LINK_KINDS = [
+  "passkey",
+  "device_key",
+] as const satisfies readonly DeviceLinkKind[];
+
+/**
+ * A request's stored status. `replaced`: the person asked again (one pending
+ * request per person). `redeemed`: the approved device added its factor.
+ */
+export const DEVICE_LINK_STATUSES = [
+  "pending",
+  "approved",
+  "declined",
+  "redeemed",
+  "replaced",
+] as const;
+export type DeviceLinkStatus = (typeof DEVICE_LINK_STATUSES)[number];
+
+/**
+ * A request's status as a reader sees it: `expired` is DERIVED (a pending
+ * request past its wait, or an approval nobody redeemed in time), never stored.
+ */
+export type DeviceLinkReadStatus = DeviceLinkStatus | "expired";
+
+/**
+ * The refusals of "Add this device". None is a presence refusal (no proof
+ * would change it): they are never in `PRESENCE_REFUSAL_CODES`.
+ *  - MISMATCH: the number picked is not the one the new device shows; the
+ *    request is declined, so a request an attacker started cannot be retried.
+ *  - GONE: unknown, expired, declined, already used, or replaced.
+ *  - SELF: a device cannot approve its own request.
+ *  - NO_SESSION: the caller's sign-in has no session to bind the request to.
+ *  - RATE: too many requests (`DEVICE_LINK_REQUESTS_MAX` per
+ *    `DEVICE_LINK_RATE_WINDOW_SECONDS`).
+ */
+export const PRESENCE_DEVICE_LINK_MISMATCH =
+  "PRESENCE_DEVICE_LINK_MISMATCH" as const;
+export const PRESENCE_DEVICE_LINK_GONE = "PRESENCE_DEVICE_LINK_GONE" as const;
+export const PRESENCE_DEVICE_LINK_SELF = "PRESENCE_DEVICE_LINK_SELF" as const;
+export const PRESENCE_DEVICE_LINK_NO_SESSION =
+  "PRESENCE_DEVICE_LINK_NO_SESSION" as const;
+export const PRESENCE_DEVICE_LINK_RATE = "PRESENCE_DEVICE_LINK_RATE" as const;
+
+export const DEVICE_LINK_REFUSAL_CODES = [
+  PRESENCE_DEVICE_LINK_MISMATCH,
+  PRESENCE_DEVICE_LINK_GONE,
+  PRESENCE_DEVICE_LINK_SELF,
+  PRESENCE_DEVICE_LINK_NO_SESSION,
+  PRESENCE_DEVICE_LINK_RATE,
+] as const;
+export type DeviceLinkRefusalCode = (typeof DEVICE_LINK_REFUSAL_CODES)[number];
+
+/** At most this many device-link requests per person in the window. */
+export const DEVICE_LINK_REQUESTS_MAX = 5;
+export const DEVICE_LINK_RATE_WINDOW_SECONDS = 15 * 60;
+
+/**
+ * The key that binds a grant to ONE signed-in session (founder decision of
+ * 9 Nov 2026): a `passkey_change` grant and an approved device link are
+ * redeemed only by the session that asked for them, never by another session
+ * of the same person. `kratos:<Kratos session id>` for a browser (pod admin;
+ * Kratos' settings guard derives the same key from the session cookie), and
+ * `device:<person_devices id>` for a Synap app's device token. Null when there
+ * is no id: such a caller can neither ask nor redeem.
+ */
+export function presenceSessionKey(
+  kind: "kratos" | "device",
+  id: string | null | undefined
+): string | null {
+  const value = typeof id === "string" ? id.trim() : "";
+  return value ? `${kind}:${value}` : null;
+}
 
 /**
  * The ONE wording of proof of presence that every client shows (pod admin,

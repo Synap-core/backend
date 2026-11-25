@@ -89,23 +89,9 @@ ENV SYNAP_GIT_REPO=$GIT_REPO
 ARG BUILD_AT=""
 ENV SYNAP_BUILD_AT=$BUILD_AT
 
-# ── The cron scheduler's timezone, PINNED rather than inherited ─────────────
-# `computeNextRunAt` (packages/jobs/.../automation-cron-scheduler.ts) matches a
-# cron expression with `getHours`/`getDate`/`getDay`/`getMonth` — PROCESS-LOCAL
-# accessors. So every scheduled rule fires on this container's clock.
-#
-# That was already UTC, but only because `node:*-alpine` ships no
-# `/etc/localtime` and Node falls back — true by ACCIDENT, not by declaration,
-# and silently changed by any base-image or host that supplies a zone. A
-# schedule that shifts by an hour produces no error and no empty state: the
-# rule just runs at a time nobody chose. Declaring it makes the guarantee real,
-# and makes the user-facing "09:00 UTC" labels honest rather than lucky.
-#
-# ⚠️ This is NOT per-user timezones. `toBackendTrigger` stores
-# `timezone: cronTimezone ?? "UTC"` and NOTHING reads it back — a stamp nobody
-# earned. The real fix is teaching `computeNextRunAt` that stored value and
-# defaulting it to the author's device zone; until then a user outside UTC must
-# be TOLD the zone, never shown a bare local-looking hour.
+# The process clock is UTC by declaration, not by the base image's accident:
+# process-local readers (the matcher's `today` window) state "UTC". Cron rules
+# read their own zone (packages/shared-utils/src/cron.ts).
 ENV TZ=UTC
 
 RUN apk add --no-cache postgresql-client dumb-init
@@ -134,7 +120,7 @@ COPY --from=builder --chown=nodejs:nodejs /app/packages/database/migrations/*.sq
 # substrate 503s and the seeder no-ops in production.
 COPY --from=builder --chown=nodejs:nodejs /app/skills ./api/skills
 
-# Admin CLI scripts (create-admin-cli, user-admin-cli, field-crypto)
+# Admin CLI scripts (create-admin-cli, user-admin-cli, field-crypto, run-conversions, backfill-session-spaces)
 COPY --from=builder --chown=nodejs:nodejs /app/packages/api/dist/scripts ./api/dist/scripts/
 
 # Shameful hoist for API node_modules (pnpm deploy --legacy doesn't create top-level symlinks)

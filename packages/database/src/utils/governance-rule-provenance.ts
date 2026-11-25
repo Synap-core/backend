@@ -60,6 +60,21 @@ export const SETTINGS_MIRROR_CREATED_BY_PREFIX = "system:settings-mirror:";
  *  and `system:settings-mirror:*` all live under this namespace. */
 export const MACHINE_CREATED_BY_PREFIX = "system:";
 
+/**
+ * A rule 0435 made from a capability grant's `exec_mode` (decision D2:
+ * an approval row is the only verdict, a grant means "may use"). Format:
+ * `system:grant-exec-mode:<grant id>`, so each row names the grant it came
+ * from. Written by that migration's SQL only.
+ */
+export const GRANT_EXEC_MODE_CREATED_BY_PREFIX = "system:grant-exec-mode:";
+
+/**
+ * A rule a session pre-approval wrote (`focusSessions.grantCapability`: "this
+ * agent may run this tool here without asking"), next to the grant that lets
+ * it use the tool. Format: `system:session-grant:<session id>`.
+ */
+export const SESSION_GRANT_CREATED_BY_PREFIX = "system:session-grant:";
+
 /** Stamp for the human-authored door. Idempotent: never double-prefixes. */
 export function authoredCreatedBy(userId: string): string {
   return userId.startsWith(AUTHORED_CREATED_BY_PREFIX)

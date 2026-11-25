@@ -136,11 +136,15 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   focusSessions,
   entities,
   governanceCeilings,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
+  podMembers,
+  projectMembers,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import {
   checkPermissionOrPropose,
@@ -173,15 +177,20 @@ const q = <T>(sql: string, params?: unknown[]) =>
 
 beforeAll(async () => {
   for (const t of [
+    lifecycleTransitionOutbox,
     proposals,
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     focusSessions,
     entities,
     governanceCeilings,
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
+    // The kind floor reads the person's spaces (pod-visible ones too).
+    podMembers,
+    projectMembers,
   ])
     await h.client!.exec(ddlFor(t as PgTable));
   // The gate refuses an entity create whose kind does not resolve.
@@ -190,16 +199,17 @@ beforeAll(async () => {
     [randomUUID()]
   );
   await q(
-    `insert into users (id, email, name, user_type) values ($1, 'h@x', 'Human', 'human'), ($2, 'a@x', 'Scout', 'agent')`,
+    `insert into users (id, email, name, user_type, created_by_user_id) values ($1, 'h@x', 'Human', 'human', null), ($2, 'a@x', 'Scout', 'agent', $1)`,
     [HUMAN, AGENT]
   );
   await q(
     `insert into workspaces (id, name, archived_at) values ($1, 'Sales', null), ($2, 'Brand', null)`,
     [WS, WS2]
   );
+  // The agent works through its person's membership.
   await q(
     `insert into workspace_members (workspace_id, user_id, role) values ($1, $3, 'editor'), ($2, $3, 'editor')`,
-    [WS, WS2, AGENT]
+    [WS, WS2, HUMAN]
   );
   registerAgentExecutors();
 });

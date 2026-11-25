@@ -38,19 +38,17 @@ import type {
   DerivedStaticEntityRef,
 } from "@synap/database/schema";
 import {
+  formatSelectionContext,
+  parseTemplateMetadata,
+  substituteTemplate,
+  type SelectionContext,
+} from "@synap-core/types/text-template";
+import {
   TemplateMissCollector,
   recordTemplateMiss,
   withTemplateDiagnostics,
   type TemplateMiss,
 } from "./template-diagnostics.js";
-import {
-  REF_ARG,
-  REF_BARE_ARG,
-  REF_CONTEXT,
-  REF_ENTITY,
-  REF_LEGACY_ARG,
-  REF_LEGACY_SELECTION,
-} from "./template-references.js";
 
 export {
   findUnresolvedReferences,
@@ -58,58 +56,10 @@ export {
   type UnresolvedReferenceKind,
 } from "./template-references.js";
 
-// ── New @{...} regexes ─────────────────────────────────────────────────────
-
-/**
- * Matches @{arg:NAME} and @{arg:NAME:TYPE} and @{arg:NAME:choice=...}
- * Groups: 1=name, 2=full type/choice string (optional, e.g. "number", "choice=a,b,c")
- */
-const NEW_ARG_REGEX_FULL = new RegExp(REF_ARG.source, "g");
-
-/**
- * Matches @{context:entity|view|url|text}
- * Groups: 1=contextType
- */
-const NEW_CONTEXT_REGEX = new RegExp(REF_CONTEXT.source, "g");
-
-/**
- * Matches @{entity:ENTITY_ID:DISPLAY_NAME}
- * Groups: 1=entityId, 2=displayName
- */
-const NEW_STATIC_REGEX = new RegExp(REF_ENTITY.source, "g");
-
-// ── Legacy backward-compat regexes ────────────────────────────────────────
-
-/**
- * Matches {argument name="X"}, {argument name="Y" options="a,b" default="a"}
- * Groups: 1=name, 2=options csv (optional), 3=default (optional)
- */
-const OLD_ARG_REGEX = new RegExp(REF_LEGACY_ARG.source, "gi");
-
-/**
- * Matches {selection} and {selection type="viewRows"} (optional type).
- * Groups: 1=type (optional)
- */
-const OLD_SELECTION_REGEX = new RegExp(REF_LEGACY_SELECTION.source, "gi");
-
-/**
- * Bare `{name}` — the legacy-compat rule. Its source, its three guards and the
- * reason it is NOT a declaration form all live in `template-references.ts`,
- * next to the author-time checker that has to agree with it exactly.
- */
-const BARE_ARG_REGEX = REF_BARE_ARG;
-
-// ── SelectionContext ──────────────────────────────────────────────────────
-
-/** Formal selection context for {selection} placeholder. */
-export interface SelectionContext {
-  type: "entities" | "viewRows" | "documents" | "text";
-  entityIds?: string[];
-  viewId?: string;
-  rowEntityIds?: string[];
-  documentIds?: string[];
-  text?: string;
-}
+// The grammar, the parser and the substitution live in
+// `@synap-core/types/text-template`; this file is the api's door onto them
+// (miss diagnostics via AsyncLocalStorage, the `ParsedTemplate` shape).
+export { formatSelectionContext, type SelectionContext };
 
 // ── ParsedTemplate ────────────────────────────────────────────────────────
 
@@ -153,141 +103,14 @@ export interface ParsedTemplate {
   ): { text: string; misses: TemplateMiss[] };
 }
 
-// ── Helper: parse a type/options string from @{arg:NAME:...} ─────────────
-
-function parseArgTypeToken(raw: string | undefined): {
-  type: DerivedInput["type"];
-  options: string[] | null;
-} {
-  if (!raw) return { type: "text", options: null };
-  if (raw.startsWith("choice=")) {
-    const csv = raw.slice("choice=".length);
-    return {
-      type: "choice",
-      options: csv ? csv.split(",").map((s) => s.trim()) : [],
-    };
-  }
-  switch (raw) {
-    case "number":
-      return { type: "number", options: null };
-    case "entity":
-      return { type: "entity", options: null };
-    case "view":
-      return { type: "view", options: null };
-    case "text":
-      return { type: "text", options: null };
-    default:
-      return { type: "text", options: null };
-  }
-}
-
-// ── Main parser ───────────────────────────────────────────────────────────
-
 /**
  * Parse prompt_template and return derived_inputs + substitute function.
  * Called on command create/update to store derived_inputs in DB.
  * Context/static refs are re-parsed at run time from the template.
  */
 export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
-  const derivedInputs: DerivedInput[] = [];
-  const contextRefs: DerivedContextRef[] = [];
-  const staticRefs: DerivedStaticEntityRef[] = [];
-
-  const seenArgs = new Set<string>();
-  const seenCtx = new Set<string>();
-  const seenStatic = new Set<string>();
-
-  // ── 1. New @{arg:NAME:type} ──────────────────────────────────────────
-  {
-    const re = new RegExp(NEW_ARG_REGEX_FULL.source, "g");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(promptTemplate)) !== null) {
-      const name = m[1]!;
-      if (seenArgs.has(name)) continue;
-      seenArgs.add(name);
-      const { type, options } = parseArgTypeToken(m[2]);
-      derivedInputs.push({ name, label: name, type, options, default: null });
-    }
-  }
-
-  // ── 2. New @{context:TYPE} ───────────────────────────────────────────
-  {
-    const re = new RegExp(NEW_CONTEXT_REGEX.source, "g");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(promptTemplate)) !== null) {
-      const ctxType = m[1] as DerivedContextRef["contextType"];
-      if (seenCtx.has(ctxType)) continue;
-      seenCtx.add(ctxType);
-      contextRefs.push({ kind: "context", contextType: ctxType });
-    }
-  }
-
-  // ── 3. New @{entity:ID:NAME} ─────────────────────────────────────────
-  {
-    const re = new RegExp(NEW_STATIC_REGEX.source, "g");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(promptTemplate)) !== null) {
-      const entityId = m[1]!;
-      const displayName = m[2] ?? "";
-      if (seenStatic.has(entityId)) continue;
-      seenStatic.add(entityId);
-      staticRefs.push({ kind: "entity", entityId, displayName });
-    }
-  }
-
-  // ── 4. Legacy {argument name="X"...} ────────────────────────────────
-  {
-    const re = new RegExp(OLD_ARG_REGEX.source, "gi");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(promptTemplate)) !== null) {
-      const name = m[1]!;
-      const optionsStr = m[2];
-      const defaultVal = m[3];
-      if (seenArgs.has(name)) continue;
-      seenArgs.add(name);
-      derivedInputs.push({
-        name,
-        label: name,
-        type: optionsStr ? "choice" : "text",
-        options: optionsStr ? optionsStr.split(",").map((s) => s.trim()) : null,
-        default: defaultVal ?? null,
-      });
-    }
-  }
-
-  // ── 5. Legacy {selection [type="..."]} ───────────────────────────────
-  {
-    const re = new RegExp(OLD_SELECTION_REGEX.source, "gi");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(promptTemplate)) !== null) {
-      // Map the legacy type onto DerivedContextRef.contextType
-      const rawType = (m[1] ?? "text") as string;
-      let ctxType: DerivedContextRef["contextType"];
-      switch (rawType) {
-        case "entities":
-          ctxType = "entity";
-          break;
-        case "viewRows":
-          ctxType = "view";
-          break;
-        case "documents":
-          ctxType = "text";
-          break;
-        case "text":
-          ctxType = "text";
-          break;
-        default:
-          ctxType = "text";
-          break;
-      }
-      if (!seenCtx.has(ctxType)) {
-        seenCtx.add(ctxType);
-        contextRefs.push({ kind: "context", contextType: ctxType });
-      }
-    }
-  }
-
-  // ── substitute ────────────────────────────────────────────────────────
+  const { derivedInputs, contextRefs, staticRefs } =
+    parseTemplateMetadata(promptTemplate);
 
   function substitute(
     argValues: Record<string, string>,
@@ -295,112 +118,14 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     resolvedEntities?: Record<string, string>,
     resolvedUrl?: string
   ): string {
-    let out = promptTemplate;
-
-    /** Own-key lookup: `constructor`/`toString` must never resolve. */
-    const declared = (name: string): boolean =>
-      Object.prototype.hasOwnProperty.call(argValues, name);
-
-    // New: @{arg:NAME[:type]}
-    out = out.replace(
-      new RegExp(NEW_ARG_REGEX_FULL.source, "g"),
-      (_, name: string) => {
-        // Return BEFORE reading: `argValues[name]` walks the prototype chain, so
-        // an undeclared `constructor` / `toString` / `__proto__` would resolve to
-        // V8 source text (never nullish, so `??` never fires) and inject it into
-        // the prompt. The own-key guard has to gate the read, not just the miss.
-        if (!declared(name)) {
-          recordTemplateMiss(name, "unknown-arg");
-          return "";
-        }
-        return argValues[name] ?? "";
-      }
+    return substituteTemplate(
+      promptTemplate,
+      argValues,
+      selectionContext,
+      resolvedEntities,
+      resolvedUrl,
+      recordTemplateMiss
     );
-
-    // New: @{context:entity}
-    out = out.replace(
-      new RegExp(NEW_CONTEXT_REGEX.source, "g"),
-      (_, ctxType: string) => {
-        const resolved = ((): string => {
-          switch (ctxType) {
-            case "entity":
-              return (
-                resolvedEntities?.["__context_entity"] ??
-                formatSelectionContext(selectionContext)
-              );
-            case "view":
-              return selectionContext?.viewId ?? "";
-            case "url":
-              return resolvedUrl ?? "";
-            case "text":
-              return selectionContext?.text ?? "";
-            default:
-              return "";
-          }
-        })();
-        if (resolved === "")
-          recordTemplateMiss(`context:${ctxType}`, "unresolved-context");
-        return resolved;
-      }
-    );
-
-    // New: @{entity:ID:NAME}
-    out = out.replace(
-      new RegExp(NEW_STATIC_REGEX.source, "g"),
-      (_, entityId: string, displayName: string) => {
-        const resolved = resolvedEntities?.[entityId];
-        // Falling back to the author-time label is not nothing, but it IS stale.
-        if (resolved === undefined)
-          recordTemplateMiss(entityId, "unresolved-entity");
-        return resolved ?? displayName;
-      }
-    );
-
-    // Legacy: {argument name="X"}
-    out = out.replace(
-      new RegExp(OLD_ARG_REGEX.source, "gi"),
-      (_, name: string) => {
-        // Return BEFORE reading: `argValues[name]` walks the prototype chain, so
-        // an undeclared `constructor` / `toString` / `__proto__` would resolve to
-        // V8 source text (never nullish, so `??` never fires) and inject it into
-        // the prompt. The own-key guard has to gate the read, not just the miss.
-        if (!declared(name)) {
-          recordTemplateMiss(name, "unknown-arg");
-          return "";
-        }
-        return argValues[name] ?? "";
-      }
-    );
-
-    // Legacy: {selection [type="..."]}
-    out = out.replace(
-      new RegExp(OLD_SELECTION_REGEX.source, "gi"),
-      (_, rawType?: string) => {
-        if (!selectionContext) {
-          recordTemplateMiss("selection", "unresolved-context");
-          return "";
-        }
-        // If a specific type was requested in the legacy tag, honour it
-        if (rawType === "text") return selectionContext.text ?? "";
-        return formatSelectionContext(selectionContext);
-      }
-    );
-
-    // Legacy-compat: bare {NAME} — LAST, so canonical syntax always wins.
-    // An undeclared name is returned byte-for-byte, so nothing that works
-    // today can change meaning; it is only recorded.
-    out = out.replace(
-      new RegExp(BARE_ARG_REGEX.source, "g"),
-      (whole: string, name: string) => {
-        if (!declared(name)) {
-          recordTemplateMiss(name, "literal-brace");
-          return whole;
-        }
-        return argValues[name] ?? "";
-      }
-    );
-
-    return out;
   }
 
   function substituteWithMisses(
@@ -423,24 +148,6 @@ export function parseCommandTemplate(promptTemplate: string): ParsedTemplate {
     substitute,
     substituteWithMisses,
   };
-}
-
-// ── formatSelectionContext ────────────────────────────────────────────────
-
-export function formatSelectionContext(ctx?: SelectionContext | null): string {
-  if (!ctx) return "";
-  switch (ctx.type) {
-    case "text":
-      return ctx.text ?? "";
-    case "entities":
-      return `[Entities: ${(ctx.entityIds ?? []).join(", ")}]`;
-    case "viewRows":
-      return `[View ${ctx.viewId ?? ""} rows: ${(ctx.rowEntityIds ?? []).join(", ")}]`;
-    case "documents":
-      return `[Documents: ${(ctx.documentIds ?? []).join(", ")}]`;
-    default:
-      return "";
-  }
 }
 
 // ── validateArgumentValues ────────────────────────────────────────────────

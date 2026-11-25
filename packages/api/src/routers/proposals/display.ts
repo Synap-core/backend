@@ -34,6 +34,7 @@ import {
   ownerPrivateVisibleWhere,
   userVisibleWhere,
 } from "../../utils/user-visible-where.js";
+import { statusAtCreate } from "@synap-core/types/units";
 import { AccessContext, scopedDb } from "../../access/index.js";
 import { visibleSkillsWhere } from "../../services/skills/visibility.js";
 import { listRunTracks } from "../../services/runs/index.js";
@@ -80,6 +81,10 @@ import {
 } from "../../services/proposals/part-reach.js";
 import { readEnableTurnsOn } from "../../services/proposals/enable-turns-on.js";
 import { readToolRuns } from "../../services/proposals/tool-run.js";
+import {
+  redactRevisionHistory,
+  redactToolRunData,
+} from "../../services/proposals/redact-tool-run-parameters.js";
 import type { EventRecord } from "@synap/database";
 import type {
   ProposalRemoval,
@@ -120,7 +125,10 @@ import {
   buildRunSessionStartTitle,
   resolveSessionTitle,
 } from "@synap-core/types/focus-sessions";
-import { planSessionEdges } from "../../services/capture-agent/capture-plan.js";
+import {
+  planCrossKindEdges,
+  planSessionEdges,
+} from "../../services/capture-agent/capture-plan.js";
 import type {
   UpdateRequest,
   ProposalReviewGraph,
@@ -139,6 +147,7 @@ import {
 import {
   humanizeToken,
   resolveActionLabel,
+  resolveFormerObjectNouns,
   resolveObjectNoun,
   resolveObjectNounPlural,
 } from "@synap-core/types/vocabulary";
@@ -149,6 +158,10 @@ import {
 } from "./failure-projection.js";
 import { buildProposalChanges } from "./changes.js";
 import { resolveObjectRefs, type ProposalObjectRef } from "./object-refs.js";
+import {
+  resolveLandedObjects,
+  type ProposalLandedObject,
+} from "../../services/proposals/landed-read.js";
 import { resolveStatusMoves, type ProposalStatusMove } from "./status-move.js";
 import {
   resolveSessionBefore,
@@ -166,6 +179,7 @@ import {
   type AskedBy,
 } from "../../utils/proposal-governance-decision.js";
 import { assertEveryOperationRendered } from "./renderable-ops.js";
+import { isHtmlPageSource } from "@synap-core/types/renderables";
 import {
   createNameResolvers,
   stringProp,
@@ -449,6 +463,12 @@ type DisplayEnrichedProposal = ProposalRow &
      * absent = unknown. See `object-refs.ts`.
      */
     objectRefs?: Record<string, ProposalObjectRef>;
+    /**
+     * What its approval landed — the objects it created, updated or linked —
+     * that the viewer may read, each with its next step. Applied rows only.
+     * See `landed-read.ts`.
+     */
+    landed?: ProposalLandedObject[];
     /**
      * A lifecycle move (`entity.transition`) read on the object: the status
      * property, from/to with the kind's own labels and categories, and the
@@ -1517,6 +1537,12 @@ export async function enrichProposalsForDisplay(
     { userId, roster: opts.roster ?? false }
   );
 
+  // LANDED — what an applied row's approval made, each with its next step.
+  const landedByRow = await resolveLandedObjects(rows, {
+    userId,
+    roster: opts.roster ?? false,
+  });
+
   // STATUS MOVES — a lifecycle move named by the kind's own options, for a
   // subject the viewer may read under the row's lens (same lens as
   // `resolveEntityTitle`).
@@ -1843,6 +1869,16 @@ export async function enrichProposalsForDisplay(
     // beside the unmasked key it marks is the severance this prevents. Applied
     // LAST so the `{...payload}` re-spread above cannot reinstate the value.
     if (rowSetup) enrichedData = redactSecretParams(enrichedData, rowSetup);
+    // A tool run's credential arguments (`data.parameters`) the same way, and
+    // wherever the revision chain repeats them: the verb's own `secret` marks
+    // plus the name rule. Applied before the request and the review are built
+    // from `enrichedData`, so neither can carry a value the card masks.
+    const toolRunSecretKeys = new Set(
+      (toolRunById.get(row.id)?.parameters ?? [])
+        .filter((x) => x.secret)
+        .map((x) => x.key)
+    );
+    enrichedData = redactToolRunData(enrichedData, toolRunSecretKeys);
     // A pending AGENT session update's outputs list, as it would land NOW
     // (stored as sent; `session-before.ts`), so the slots it keeps never read
     // as deletions.
@@ -1933,6 +1969,10 @@ export async function enrichProposalsForDisplay(
       // `proposals.get`, the Hub REST `GET /proposals/:id` answer).
       // See `failure-projection.ts`.
       ...projectProposalRowForViewer(row),
+      revisionHistory: redactRevisionHistory(
+        row.revisionHistory,
+        toolRunSecretKeys
+      ),
       // Decision CLASS + its lifetime, derived (never stored) from
       // proposalType × targetType. Serialized here so `proposals.list` and
       // `proposals.get` — and every surface over them — can render the
@@ -1999,6 +2039,7 @@ export async function enrichProposalsForDisplay(
         : {}),
       ...(policyReason ? { policyReason } : {}),
       ...(objectRefsByRow[idx] ? { objectRefs: objectRefsByRow[idx] } : {}),
+      ...(landedByRow[idx] ? { landed: landedByRow[idx] } : {}),
       ...(statusMoveByRow[idx] ? { statusMove: statusMoveByRow[idx] } : {}),
       ...(sessionBeforeByRow[idx] ? { before: sessionBeforeByRow[idx] } : {}),
       ...(nameResolvers.resolveCapabilityCallLabel(row, payload)
@@ -2602,6 +2643,29 @@ export function buildProposalGraph(
  * The guard was right; the renderer was missing.
  */
 const SKILL_BODY_EXCERPT_CHARS = 280;
+/** A cell's source is CODE a person approves: a longer excerpt than a skill's. */
+const CELL_SOURCE_EXCERPT_CHARS = 1200;
+
+/**
+ * The bridge ops a cell's source NAMES (`query("op"` / `mutate("op"`), first
+ * appearance first: what the approver is told it reads and writes. A text
+ * read, like the cell door's own checks: an op name built at run time is not
+ * seen.
+ */
+export function cellBridgeOpsNamedIn(source: string): {
+  reads: string[];
+  writes: string[];
+} {
+  const reads: string[] = [];
+  const writes: string[] = [];
+  for (const m of source.matchAll(
+    /\b(query|mutate)\(\s*(["'`])([\w.:-]+)\2/g
+  )) {
+    const list = m[1] === "query" ? reads : writes;
+    if (!list.includes(m[3]!)) list.push(m[3]!);
+  }
+  return { reads, writes };
+}
 
 type UpdateReviewKind = NonNullable<
   ProposalReviewGraph["updates"]
@@ -2641,7 +2705,30 @@ function buildConfigReviewItems(
   const rules: NonNullable<ProposalReviewGraph["rules"]> = [];
   const playbooks: NonNullable<ProposalReviewGraph["playbooks"]> = [];
   const views: NonNullable<ProposalReviewGraph["views"]> = [];
+  const cells: NonNullable<ProposalReviewGraph["cells"]> = [];
   const updates: NonNullable<ProposalReviewGraph["updates"]> = [];
+  const workspaces: NonNullable<ProposalReviewGraph["workspaces"]> = [];
+  const kinds: NonNullable<ProposalReviewGraph["kinds"]> = [];
+  const lifecycles: NonNullable<ProposalReviewGraph["lifecycles"]> = [];
+  // The space a step names, when it names one (`ReviewStepSpace`).
+  const spaceOf = (op: { workspaceRef?: string; workspaceId?: string }) => ({
+    ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+    ...(op.workspaceId ? { workspaceId: op.workspaceId } : {}),
+  });
+  // A playbook naming a kind of this bundle shows that kind's slug.
+  const kindSlugByRef = new Map(
+    data.operations.flatMap((op) =>
+      op.op === "define_kind" ? [[op.ref, op.slug] as const] : []
+    )
+  );
+  /** `bind_renderer` ops, drawn under their cell once every cell is listed. */
+  const bindOps: Array<{
+    index: number;
+    op: Extract<
+      CompositeProposalData["operations"][number],
+      { op: "bind_renderer" }
+    >;
+  }> = [];
 
   data.operations.forEach((op, index) => {
     if (isUpdateOperation(op)) {
@@ -2695,12 +2782,22 @@ function buildConfigReviewItems(
       case "create_automation":
         renderedOpIndexes.add(index);
         automations.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           triggerType: op.triggerType,
-          // Forced false at materialization — see CompositeCreateAutomationOp.
-          bornEnabled: false,
+          bornEnabled:
+            statusAtCreate({
+              requested:
+                op.enabled === undefined
+                  ? undefined
+                  : op.enabled
+                    ? "active"
+                    : "draft",
+              personApproved: true,
+              actorIsAgent: true,
+            }) === "active",
           ...(stepSkills
             ? { reach: flowReach(op.flowDefinition, stepSkills) }
             : {}),
@@ -2719,21 +2816,72 @@ function buildConfigReviewItems(
       case "create_playbook":
         renderedOpIndexes.add(index);
         playbooks.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           ...(op.description ? { description: op.description } : {}),
           goalTemplate: op.goalTemplate,
-          subjectProfileSlug: op.subjectProfile.profileSlug,
-          ...(op.subjectProfile.statusProperty
+          subjectProfileSlug:
+            (op.subjectProfileRef
+              ? kindSlugByRef.get(op.subjectProfileRef)
+              : op.subjectProfile?.profileSlug) ?? "",
+          ...(op.subjectProfile?.statusProperty
             ? { statusProperty: op.subjectProfile.statusProperty }
             : {}),
-          // Forced at materialization — see CompositeCreatePlaybookOp.
-          bornStatus: "draft",
+          bornStatus: statusAtCreate({
+            requested: op.status,
+            personApproved: true,
+            actorIsAgent: true,
+          }),
         });
         return;
-      case "create_view":
+      case "create_workspace":
         renderedOpIndexes.add(index);
+        workspaces.push({ ref: op.ref, name: op.name });
+        return;
+      case "define_kind":
+        renderedOpIndexes.add(index);
+        kinds.push({
+          ref: op.ref,
+          slug: op.slug,
+          displayName: op.displayName,
+          fieldCount: op.fields?.length ?? 0,
+          ...(op.entityScope ? { entityScope: op.entityScope } : {}),
+          ...(op.workspaceRef ? { workspaceRef: op.workspaceRef } : {}),
+        });
+        return;
+      case "declare_lifecycle":
+        renderedOpIndexes.add(index);
+        lifecycles.push({
+          ref: op.ref,
+          ...(op.kindRef ? { kindRef: op.kindRef } : {}),
+          ...(op.profileId ? { profileId: op.profileId } : {}),
+          property: op.property ?? "status",
+          options: (op.options ?? []).map((o) => ({
+            key: String(o.key ?? ""),
+            category: String(o.category ?? ""),
+          })),
+          ...(op.initialStatus ? { initialStatus: op.initialStatus } : {}),
+        });
+        return;
+      case "create_view": {
+        renderedOpIndexes.add(index);
+        const lifecycleOf =
+          op.viewType === "pipeline" &&
+          typeof op.config?.profileSlug === "string"
+            ? op.config.profileSlug
+            : undefined;
+        const widgets =
+          op.viewType === "bento" && Array.isArray(op.config?.blocks)
+            ? (op.config.blocks as Array<Record<string, unknown>>).flatMap(
+                (block) =>
+                  typeof block?.widgetType === "string"
+                    ? [block.widgetType]
+                    : []
+              )
+            : undefined;
         views.push({
+          ...spaceOf(op),
           ref: op.ref,
           name: op.name,
           viewType: op.viewType,
@@ -2742,12 +2890,63 @@ function buildConfigReviewItems(
             : {}),
           memberCount: op.entityRefs?.length ?? 0,
           ...(op.containerRef ? { containerRef: op.containerRef } : {}),
+          ...(lifecycleOf ? { lifecycleOf } : {}),
+          ...(widgets ? { widgets } : {}),
         });
+        return;
+      }
+      case "create_cell": {
+        renderedOpIndexes.add(index);
+        const source = op.rendererSource ?? "";
+        cells.push({
+          ...spaceOf(op),
+          ref: op.ref,
+          name: op.name,
+          ...(op.description ? { description: op.description } : {}),
+          ...(op.contentKind ? { contentKind: op.contentKind } : {}),
+          mechanism: isHtmlPageSource(source) ? "page" : "module",
+          sourceExcerpt: source.slice(0, CELL_SOURCE_EXCERPT_CHARS),
+          sourceTruncated: source.length > CELL_SOURCE_EXCERPT_CHARS,
+          sourceBytes: Buffer.byteLength(source, "utf8"),
+          bridgeOps: cellBridgeOpsNamedIn(source),
+          bindings: [],
+        });
+        return;
+      }
+      case "bind_renderer":
+        renderedOpIndexes.add(index);
+        bindOps.push({ index, op });
         return;
       default:
         return;
     }
   });
+  // A binding is drawn under the cell it shows: an in-batch cell's entry, or
+  // an entry of its own for a cell that already exists.
+  for (const { op } of bindOps) {
+    const binding = {
+      ref: op.ref,
+      targetKind: op.target.kind,
+      targetId: op.target.id ?? op.target.ref ?? "",
+      ...(op.target.ref ? { targetRef: op.target.ref } : {}),
+      slot: op.slot,
+      scope: op.scope,
+    };
+    const home = op.cellRef
+      ? cells.find((cell) => cell.ref === op.cellRef && !cell.existingCellKey)
+      : undefined;
+    if (home) {
+      home.bindings.push(binding);
+    } else {
+      const key = op.cellKey ?? op.cellRef ?? "";
+      cells.push({
+        ref: op.ref,
+        name: key,
+        existingCellKey: key,
+        bindings: [binding],
+      });
+    }
+  }
 
   return {
     ...(skills.length ? { skills } : {}),
@@ -2755,7 +2954,11 @@ function buildConfigReviewItems(
     ...(rules.length ? { rules } : {}),
     ...(playbooks.length ? { playbooks } : {}),
     ...(views.length ? { views } : {}),
+    ...(cells.length ? { cells } : {}),
     ...(updates.length ? { updates } : {}),
+    ...(workspaces.length ? { workspaces } : {}),
+    ...(kinds.length ? { kinds } : {}),
+    ...(lifecycles.length ? { lifecycles } : {}),
   };
 }
 
@@ -2787,6 +2990,9 @@ function buildPlanReviewGraph(
   const projects: NonNullable<ProposalReviewGraph["projects"]> = [];
   const sessions: NonNullable<ProposalReviewGraph["sessions"]> = [];
   const documents: NonNullable<ProposalReviewGraph["documents"]> = [];
+  const tracks: NonNullable<ProposalReviewGraph["tracks"]> = [];
+  const sessionUpdates: NonNullable<ProposalReviewGraph["sessionUpdates"]> = [];
+  const linkRemovals: NonNullable<ProposalReviewGraph["linkRemovals"]> = [];
   const sessionLabelByRef = new Map<string, string>();
 
   data.operations.forEach((op, index) => {
@@ -2822,9 +3028,27 @@ function buildPlanReviewGraph(
           ...(op.subjectEntityId
             ? { subjectEntityId: op.subjectEntityId }
             : {}),
+          ...(op.trackRef ? { trackRef: op.trackRef } : {}),
+          ...(op.trackId ? { trackId: op.trackId } : {}),
         });
         return;
       }
+      case "create_track":
+        renderedOpIndexes.add(index);
+        tracks.push({
+          ref: op.ref,
+          name: op.name,
+          ...(op.direction ? { direction: op.direction } : {}),
+          ...(op.projectRef ? { projectRef: op.projectRef } : {}),
+          ...(op.projectId ? { projectId: op.projectId } : {}),
+          ...(op.parentRef ? { parentRef: op.parentRef } : {}),
+          ...(op.parentGoalId ? { parentGoalId: op.parentGoalId } : {}),
+          blockedBy: [
+            ...(op.blockedByRefs ?? []),
+            ...(op.blockedByTrackIds ?? []),
+          ],
+        });
+        return;
       case "create_document":
         renderedOpIndexes.add(index);
         documents.push({
@@ -2840,6 +3064,38 @@ function buildPlanReviewGraph(
       case "create_link":
         renderedOpIndexes.add(index);
         return;
+      case "update_session":
+        renderedOpIndexes.add(index);
+        sessionLabelByRef.set(
+          op.ref,
+          (typeof op.patch?.title === "string" && op.patch.title) ||
+            `session ${op.sessionId.slice(0, 8)}`
+        );
+        sessionUpdates.push({
+          ref: op.ref,
+          sessionId: op.sessionId,
+          ...(op.patch?.title !== undefined ? { title: op.patch.title } : {}),
+          ...(op.patch?.goal !== undefined ? { goal: op.patch.goal } : {}),
+          ...(op.patch?.status !== undefined
+            ? { status: op.patch.status }
+            : {}),
+        });
+        return;
+      case "remove_link": {
+        renderedOpIndexes.add(index);
+        const toKind = op.toEntityId
+          ? ("entity" as const)
+          : op.toTrackId
+            ? ("track" as const)
+            : ("session" as const);
+        linkRemovals.push({
+          fromSessionId: op.fromSessionId,
+          toKind,
+          toId: op.toEntityId ?? op.toTrackId ?? op.toSessionId ?? "",
+          itemRef: `$unlink${linkRemovals.length}`,
+        });
+        return;
+      }
       default:
         return;
     }
@@ -2871,18 +3127,58 @@ function buildPlanReviewGraph(
       itemRef: `$link${ordinal}`,
     };
   });
+  // A step that waits on a decision or a goal: the same list, its target
+  // kind named, so a reviewer sees what each step waits on.
+  const entityLabelByRef = new Map<string, string>();
+  for (const op of data.operations) {
+    if (op.op === "create_entity" && op.ref)
+      entityLabelByRef.set(op.ref, op.title ?? op.ref);
+  }
+  const trackLabelByRef = new Map(tracks.map((t) => [t.ref, t.name]));
+  for (const edge of planCrossKindEdges(data.operations)) {
+    const from = endpoint(edge.from);
+    const kindWord = edge.to.kind === "entity" ? "decision" : "goal";
+    const toLabel =
+      "ref" in edge.to
+        ? ((edge.to.kind === "entity"
+            ? entityLabelByRef.get(edge.to.ref)
+            : trackLabelByRef.get(edge.to.ref)) ?? edge.to.ref)
+        : `${kindWord} ${edge.to.id.slice(0, 8)}`;
+    links.push({
+      type: "blocked_by",
+      ...("ref" in from
+        ? { fromRef: from.ref }
+        : { fromSessionId: from.sessionId }),
+      toKind: edge.to.kind,
+      ...("ref" in edge.to
+        ? { toRef: edge.to.ref }
+        : edge.to.kind === "entity"
+          ? { toEntityId: edge.to.id }
+          : { toTrackId: edge.to.id }),
+      ...(edge.option ? { option: edge.option } : {}),
+      fromLabel: from.label,
+      toLabel,
+      itemRef: `$link${links.length}`,
+    });
+  }
 
   return {
     isPlan: true,
     planStepCount:
       projects.length +
+      tracks.length +
       sessions.length +
       documents.length +
+      sessionUpdates.length +
+      linkRemovals.length +
       data.operations.filter((op) => op.op === "create_link").length,
     projects,
     sessions,
     documents,
     links,
+    ...(tracks.length > 0 ? { tracks } : {}),
+    ...(sessionUpdates.length > 0 ? { sessionUpdates } : {}),
+    ...(linkRemovals.length > 0 ? { linkRemovals } : {}),
   };
 }
 
@@ -3111,7 +3407,7 @@ export function proposalPayloadTargetName(
  * pluralised, humanized, or raw). Nothing else. If even one word survives that
  * subtraction, the summary says something the metadata alone could not, and it
  * must be kept: a human wrote it, or it names the object, or it is a sentence
- * ({@link JOIN_GATE_SUMMARY}, a rule's `intent`) that a computed title would
+ * (a rule's `intent`) that a computed title would
  * destroy.
  *
  * Every word it subtracts comes from `@synap-core/types/vocabulary` — the same
@@ -3166,6 +3462,9 @@ export function summaryNamesTheObject(
     subtract(resolveObjectNounPlural(kind));
     subtract(humanizeToken(kind));
     subtract(kind);
+    // A durable summary filed before a kind was renamed spells its OLD noun
+    // ("Update Template" for a playbook, now a "Process"): still metadata.
+    for (const former of resolveFormerObjectNouns(kind)) subtract(former);
   }
 
   return wordsOf(summary).some((word) => !identityFree.has(word));

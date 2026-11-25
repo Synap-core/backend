@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
+  checkedOutputKeys,
+  criteriaNamingNoOutput,
   deriveSlotKeys,
+  nameSharedKeyOutputs,
+  outcomeSlotKeys,
   projectSessionOutcomes,
   readInputs,
   readOutcomes,
@@ -31,9 +35,16 @@ const T1 = "2026-10-01T11:00:00.000Z";
  *   E. "claimedDone is met"                   (the agent grades itself)
  *   F. "latest row wins"                      (a judge after a human un-grades)
  *   G. "evidence joins by label only"         (a renamed slot loses its proof)
- *   H. "a slot and a criterion sharing a key are two outcomes"
+ *   H. "a slot and the criterion checking it are two outcomes"
  *   I. "an ungraded check on an open session is being worked on" (the AI
  *      spark claims a check nobody is running)
+ *   J. "a criterion sharing a slot's key checks it" (the pre-W4 same-key
+ *      fold: pairing is `outputKey`, never the key)
+ *   K. "one passing check meets the output" (an output's checks all count:
+ *      its kind's and its step's, D4 a)
+ *   L. "a delivered slot is met" (a required criterion that failed, or has
+ *      no grade yet, still holds a delivered output: the projection must agree
+ *      with `computeSessionVerdict` and the close check)
  */
 interface Row {
   name: string;
@@ -258,7 +269,7 @@ const ROWS: Row[] = [
     inputs: [],
   },
   {
-    name: "a slot and a criterion sharing a key are ONE outcome, graded by the criterion",
+    name: "a slot and the criterion naming it (outputKey) are ONE outcome, graded by the criterion",
     rulesOut: "H",
     slots: [
       { kind: "report", label: "Founder approves", key: "founder-approves" },
@@ -268,6 +279,7 @@ const ROWS: Row[] = [
         key: "founder-approves",
         statement: "Founder approves the plan",
         check: { kind: "human" },
+        outputKey: "founder-approves",
       },
     ],
     evaluations: [
@@ -281,6 +293,150 @@ const ROWS: Row[] = [
     outcomes: [
       { key: "founder-approves", state: "done", met: true, verify: "human" },
     ],
+    inputs: [],
+  },
+  {
+    name: "a criterion sharing a slot's key but naming no output is its own outcome",
+    rulesOut: "J",
+    slots: [{ kind: "report", label: "Plan", key: "plan" }],
+    criteria: [
+      { key: "plan", statement: "The plan is sound", check: { kind: "judge" } },
+    ],
+    evaluations: [
+      {
+        criterionKey: "plan",
+        verdict: "pass",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [
+      { key: "plan", state: "working", met: false, verify: "evidence" },
+      { key: "plan", state: "done", met: true, verify: "judge" },
+    ],
+    inputs: [],
+  },
+  {
+    name: "an output with two checks is met only when both pass",
+    rulesOut: "K",
+    slots: [{ kind: "document", label: "Deck", key: "deck" }],
+    criteria: [
+      {
+        key: "on-brand",
+        statement: "The deck follows the brand guide",
+        check: { kind: "judge" },
+        outputKey: "deck",
+      },
+      {
+        key: "has-pricing",
+        statement: "The deck has a pricing slide",
+        check: { kind: "evidence" },
+        outputKey: "deck",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "on-brand",
+        verdict: "pass",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+      {
+        criterionKey: "has-pricing",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+        createdAt: T1,
+      },
+    ],
+    outcomes: [{ key: "deck", state: "failed", met: false, verify: "judge" }],
+    inputs: [],
+  },
+  {
+    name: "a DELIVERED output whose required criterion failed is not met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tests-pass",
+        statement: "Tests pass",
+        check: { kind: "evidence" },
+        outputKey: "pr",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "tests-pass",
+        verdict: "fail",
+        evaluatorKind: "evidence",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [{ key: "pr", state: "failed", met: false, verify: "evidence" }],
+    inputs: [],
+  },
+  {
+    name: "a DELIVERED output whose required criterion has no grade yet is not met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tests-pass",
+        statement: "Tests pass",
+        check: { kind: "evidence" },
+        outputKey: "pr",
+      },
+    ],
+    outcomes: [
+      { key: "pr", state: "unmeasured", met: false, verify: "evidence" },
+    ],
+    inputs: [],
+  },
+  {
+    name: "a DELIVERED output with only an OPTIONAL failing criterion is met",
+    rulesOut: "L",
+    slots: [
+      {
+        kind: "pull_request",
+        label: "PR",
+        key: "pr",
+        status: "done",
+        attestedBy: "u",
+      },
+    ],
+    criteria: [
+      {
+        key: "tidy",
+        statement: "The diff is tidy",
+        required: false,
+        check: { kind: "judge" },
+        outputKey: "pr",
+      },
+    ],
+    evaluations: [
+      {
+        criterionKey: "tidy",
+        verdict: "fail",
+        evaluatorKind: "judge",
+        createdAt: T0,
+      },
+    ],
+    outcomes: [{ key: "pr", state: "done", met: true, verify: "judge" }],
     inputs: [],
   },
   {
@@ -401,6 +557,185 @@ describe("evidence and unattached", () => {
     };
     expect(readOutcomes(input).map((o) => o.key)).toEqual(["r"]);
     expect(readInputs(input).map((i) => i.need)).toEqual(["credential"]);
+  });
+});
+
+describe("criteria hang on their output (rule 7, W4)", () => {
+  const slots = [
+    { kind: "document", label: "Deck", key: "deck" },
+    {
+      kind: CRITERION_SLOT_KIND,
+      label: "Grade: on brand",
+      key: "grade-on-brand",
+      criterionKey: "on-brand",
+      owner: "human",
+    },
+  ];
+  const criteria: OutcomeCriterionLike[] = [
+    {
+      key: "on-brand",
+      statement: "On brand",
+      check: { kind: "judge" },
+      outputKey: "deck",
+    },
+    {
+      key: "has-pricing",
+      statement: "Has a pricing slide",
+      check: { kind: "evidence" },
+      outputKey: "deck",
+      stageKey: "build",
+    },
+    {
+      key: "orphan",
+      statement: "Names an output the session does not hold",
+      check: { kind: "judge" },
+      outputKey: "nope",
+    },
+  ];
+  const pass = (criterionKey: string): EvaluationRowLike => ({
+    criterionKey,
+    verdict: "pass",
+    evaluatorKind: "judge",
+    createdAt: T0,
+  });
+
+  it("lists every check under its output, in declared order, each with its own state", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: slots,
+      criteria,
+      evaluations: [pass("has-pricing")],
+      sessionTerminal: false,
+    });
+    expect(view.outcomes.map((o) => [o.key, o.source])).toEqual([
+      ["deck", "slot+criterion"],
+      ["orphan", "criterion"],
+    ]);
+    const deck = view.outcomes[0]!;
+    expect(deck.met).toBe(false);
+    expect(
+      deck.criteria?.map((c) => [c.key, c.met, c.state.state, c.stageKey])
+    ).toEqual([
+      ["on-brand", false, "needs_you", undefined],
+      ["has-pricing", true, "done", "build"],
+    ]);
+    // The grade a person owes on a check blocks the OUTPUT it checks.
+    expect(view.inputs.map((i) => [i.key, i.blocksOutcomeKey])).toEqual([
+      ["grade-on-brand", "deck"],
+    ]);
+  });
+
+  it("met once every check passes, with the latest pass as its verdict", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: slots,
+      criteria,
+      evaluations: [
+        pass("on-brand"),
+        { ...pass("has-pricing"), createdAt: T1 },
+      ],
+      sessionTerminal: false,
+    });
+    const deck = view.outcomes[0]!;
+    expect(deck.met).toBe(true);
+    expect(deck.metBy).toBe("verdict");
+    expect(deck.verdict?.at).toBe(T1);
+  });
+
+  it("a required slot stays required when its only criteria are optional; an optional slot a required criterion checks becomes required", () => {
+    const optionalOnly = projectSessionOutcomes({
+      expectedOutputs: [slots[0]],
+      criteria: [{ ...criteria[0]!, required: false }],
+      sessionTerminal: false,
+    });
+    expect(optionalOnly.outcomes[0]!.required).toBe(true);
+    const optionalSlot = projectSessionOutcomes({
+      expectedOutputs: [{ ...slots[0]!, optional: true }],
+      criteria: [criteria[0]!],
+      sessionTerminal: false,
+    });
+    expect(optionalSlot.outcomes[0]!.required).toBe(true);
+  });
+
+  it("an optional check never holds the output while a required one counts", () => {
+    const view = projectSessionOutcomes({
+      expectedOutputs: [slots[0]],
+      criteria: [{ ...criteria[0]!, required: false }, criteria[1]!],
+      evaluations: [pass("has-pricing")],
+      sessionTerminal: false,
+    });
+    expect(view.outcomes[0]!.met).toBe(true);
+  });
+});
+
+describe("the pairing helpers (W4)", () => {
+  const slots = [
+    { kind: "document", label: "Plan", key: "plan" },
+    { kind: PARAM_SLOT_KIND, label: "Region", key: "region" },
+    { kind: CRITERION_SLOT_KIND, label: "Grade", key: "grade" },
+    { kind: "report", label: "Lead list" },
+  ];
+
+  it("outcomeSlotKeys: the outcome slots only, keyed as stamped, in order", () => {
+    expect(outcomeSlotKeys(slots)).toEqual([
+      { index: 0, key: "plan" },
+      { index: 3, key: "lead-list" },
+    ]);
+    expect(outcomeSlotKeys("not an array")).toEqual([]);
+  });
+
+  it("checkedOutputKeys: only a REQUIRED criterion holds its slot", () => {
+    const c = (required?: boolean) => ({
+      outputKey: "plan",
+      ...(required === undefined ? {} : { required }),
+    });
+    expect([...checkedOutputKeys([c()])]).toEqual(["plan"]);
+    expect([...checkedOutputKeys([c(false)])]).toEqual([]);
+  });
+
+  it("nameSharedKeyOutputs: a same-key criterion names its outcome slot; method, param and named ones are left alone", () => {
+    const criteria = [
+      { key: "plan", statement: "Sound", check: { kind: "judge" as const } },
+      { key: "lead-list", statement: "EU", check: { kind: "judge" as const } },
+      { key: "region", statement: "Set", check: { kind: "judge" as const } },
+      {
+        key: "plan-method",
+        statement: "Reviewed",
+        check: { kind: "judge" as const },
+        outputKey: "plan",
+      },
+      {
+        key: "nothing",
+        statement: "Free",
+        check: { kind: "judge" as const },
+      },
+    ];
+    expect(
+      nameSharedKeyOutputs(criteria, slots).map((c) => [c.key, c.outputKey])
+    ).toEqual([
+      ["plan", "plan"],
+      ["lead-list", "lead-list"],
+      ["region", undefined],
+      ["plan-method", "plan"],
+      ["nothing", undefined],
+    ]);
+    const method = [{ ...criteria[0]!, about: "method" as const }];
+    expect(nameSharedKeyOutputs(method, slots)).toBe(method);
+    expect(nameSharedKeyOutputs(criteria.slice(2), slots)).toEqual(
+      criteria.slice(2)
+    );
+  });
+
+  it("criteriaNamingNoOutput: an outputKey that names no outcome slot", () => {
+    expect(
+      criteriaNamingNoOutput(
+        [
+          { key: "a", outputKey: "plan" },
+          { key: "b", outputKey: "region" },
+          { key: "c", outputKey: "missing" },
+          { key: "d" },
+        ],
+        slots
+      )
+    ).toEqual(["b", "c"]);
   });
 });
 

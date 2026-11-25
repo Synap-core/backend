@@ -30,6 +30,7 @@ export {
   resolvePackageFieldLabel as packageFieldLabel,
   resolvePackageFieldStateLabel as packageFieldStateLabel,
   resolvePackageUpdateNeedsLabel as packageUpdateNeedsLabel,
+  resolveTemplateStepLabel,
 } from "@synap-core/types/vocabulary";
 
 /** One installed row of a plan (a skill, a view, an automation). */

@@ -41,7 +41,7 @@ import {
   takesIntentForm,
 } from "./capabilities-intent.js";
 
-import { ErrorSchema } from "./_codecs/_openapi.js";
+import { ErrorSchema, SupersedesBodyField } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
   hasScope,
@@ -64,10 +64,15 @@ import {
  * Building the schema from the contract is what makes that class of drop
  * impossible rather than merely fixed once.
  */
-const ExecuteCapabilityRequestSchema = CapabilityExecuteInput.refine(
-  (b) => !!b.verbId || !!b.skillId,
-  { message: "Either verbId or skillId is required" }
-).openapi("ExecuteCapabilityRequest");
+const ExecuteCapabilityRequestSchema = CapabilityExecuteInput.extend({
+  // Hub REST only (`SUPERSEDES_DOORS`): read by the door's wrapper, never by
+  // the shared core, so it stays out of the contract tRPC also accepts.
+  supersedes: SupersedesBodyField,
+})
+  .refine((b) => !!b.verbId || !!b.skillId, {
+    message: "Either verbId or skillId is required",
+  })
+  .openapi("ExecuteCapabilityRequest");
 
 const ExecuteCapabilityResultSchema = z
   .object({
@@ -322,6 +327,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
       sourceMessageId,
       sessionId,
       idempotencyKey,
+      reasoning,
       channelId,
     } = body;
     const { userId } = lens;
@@ -350,6 +356,7 @@ export function registerCapabilitiesExecuteRoutes(app: HubHono): void {
         // Caller idempotency: makes an external-send verb at-most-once across
         // retries instead of falling back to the derived content-hash window.
         idempotencyKey,
+        reasoning,
         // A pod app's intent action: what it asked, for the approval screen.
         intentRequest,
       });

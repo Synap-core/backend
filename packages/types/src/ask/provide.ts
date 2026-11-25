@@ -16,6 +16,36 @@ import { ASK_COPY } from "./card.js";
 export const PROVIDE_SECRET_GRANT_MINUTES = 60;
 
 /**
+ * How long a ONE-read grant waits for its read (`scope: 'once'`, one use):
+ * the vault grant writer's own window (`vault-secret-grant.ts`).
+ */
+export const PROVIDE_SECRET_ONCE_MINUTES = 15;
+
+/**
+ * How long the asking agent may read it: `once` (one read, then the grant is
+ * spent) or `session` (until the job closes or the hour ends). The ask
+ * declares one (`provide.uses`, default `session`); the person may pick the
+ * other on the answer (`secretUses`).
+ */
+export const PROVIDE_SECRET_USES = ["once", "session"] as const;
+export type ProvideSecretUses = (typeof PROVIDE_SECRET_USES)[number];
+
+/** The minutes a grant of these uses lasts at most. */
+export function provideSecretUsesMinutes(uses: ProvideSecretUses): number {
+  return uses === "once"
+    ? PROVIDE_SECRET_ONCE_MINUTES
+    : PROVIDE_SECRET_GRANT_MINUTES;
+}
+
+/**
+ * What the agent ended up with: a new `once` or `session` grant, or
+ * `standing` — the agent ALREADY held a permanent grant on this secret, the
+ * pod wrote nothing new, and the agent reads it until the person takes that
+ * grant back (finding ebc40493: the sheet used to promise an hour).
+ */
+export type ProvideSecretGrantUses = ProvideSecretUses | "standing";
+
+/**
  * Why a handed-over secret came with no read for the agent.
  *   `agent_unknown`  — the pod cannot tell which agent asked.
  *   `not_grantable`  — a legacy client-encrypted secret the pod cannot read.
@@ -34,6 +64,13 @@ export type ProvideSecretGrant =
       agentName: string;
       /** ISO; `null` when an existing grant with no end already covered it. */
       expiresAt: string | null;
+      /**
+       * The grant that applies (`secretsVault.revokeGrant` takes it back).
+       * Optional only for receipts written before it was stamped.
+       */
+      grantId?: string;
+      /** What kind of read it is; absent on a receipt written before it. */
+      uses?: ProvideSecretGrantUses;
     }
   | { status: "refused"; reason: ProvideSecretGrantRefusal }
   /** The read could not be written; the hand-over stands. */
@@ -50,7 +87,10 @@ export function provideSecretAccessLine(
   now: number
 ): string {
   if (grant.status !== "granted") return "No agent can read it yet";
+  if (grant.uses === "standing")
+    return `${grant.agentName} can read it until you take it back`;
   if (!grant.expiresAt) return `${grant.agentName} can read it`;
+  if (grant.uses === "once") return `${grant.agentName} can read it once`;
   const minutes = Math.max(
     1,
     Math.round((Date.parse(grant.expiresAt) - now) / 60_000)
@@ -70,15 +110,54 @@ export type ProvideSecretGrantOffer =
       /** Sent back on the answer as `expectedGranteeId`. */
       agentUserId: string;
       agentName: string;
+      /** The minutes of a NEW grant of `uses` ({@link provideSecretUsesMinutes}). */
       minutes: number;
+      /**
+       * The reads the ask asked for (default `session`); the person may pick
+       * the other, sent back on the answer as `secretUses`. Optional only for
+       * an offer from a pod older than it.
+       */
+      uses?: ProvideSecretUses;
     }
   | { status: "no_grant"; reason: ProvideSecretGrantRefusal };
 
-/** The line shown above the submit button of a secret sheet. */
-export function provideGrantNote(grant: ProvideSecretGrantOffer): string {
-  return grant.status === "will_grant"
-    ? ASK_COPY.provideGrantNote(grant.agentName, grant.minutes)
-    : ASK_COPY.provideNoGrantNote;
+/**
+ * An existing PERMANENT grant the asking agent already holds on one secret
+ * row (`provideOptions` `rows[].standingGrant`): handing that secret over
+ * writes no new grant, and the agent reads it until the person takes this one
+ * back. null on a row: a new bounded grant is written.
+ */
+export interface ProvideStandingGrant {
+  grantId: string;
+  /** Reads made through it so far, before this hand-over. */
+  useCount: number;
+}
+
+/**
+ * The line shown above the submit button of a secret sheet. With the row the
+ * person picked: its standing grant, when it has one, is the truth.
+ */
+export function provideGrantNote(
+  grant: ProvideSecretGrantOffer,
+  picked?: {
+    standingGrant?: ProvideStandingGrant | null;
+    /** The reads the person picked; default the offer's. */
+    uses?: ProvideSecretUses;
+  }
+): string {
+  if (grant.status !== "will_grant") return ASK_COPY.provideNoGrantNote;
+  if (picked?.standingGrant)
+    return ASK_COPY.provideStandingGrantNote(grant.agentName);
+  const uses = picked?.uses ?? grant.uses ?? "session";
+  return uses === "once"
+    ? ASK_COPY.provideGrantOnceNote(
+        grant.agentName,
+        provideSecretUsesMinutes("once")
+      )
+    : ASK_COPY.provideGrantNote(
+        grant.agentName,
+        picked?.uses ? provideSecretUsesMinutes(uses) : grant.minutes
+      );
 }
 
 /**

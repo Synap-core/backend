@@ -282,4 +282,46 @@ describe("settings.intent — projected by the create and reconcile writers", ()
       source: "template",
     });
   });
+
+  it("(6) a helper kind lands with it; the primary is never one", async () => {
+    const r = await createWorkspaceFromDefinition({
+      definition: {
+        workspaceName: "Builder",
+        intent: {
+          label: "Product",
+          primary: "devplane_feature",
+          produces: [
+            { profile: "devplane_feature", as: "helper" },
+            { profile: "devplane_story", as: "helper" },
+            { profile: "ui-design", as: "output" },
+          ],
+        },
+      },
+      userId: USER,
+      createdBy: "provisioning",
+    });
+    // Through the install door's zod: a key it did not declare would be
+    // stripped before the projection ever saw it.
+    expect((await settingsOf(r.workspaceId)).intent).toEqual({
+      label: "Product",
+      produces: ["devplane_feature", "devplane_story", "ui-design"],
+      primary: "devplane_feature",
+      helpers: ["devplane_story"],
+      source: "template",
+    });
+    // An unknown `as` drops its entry, like any malformed one.
+    expect(
+      projectTemplateIntent({
+        label: "Product",
+        produces: [
+          { profile: "devplane_feature" },
+          { profile: "note", as: "sidekick" },
+        ],
+      })
+    ).toEqual({
+      label: "Product",
+      produces: ["devplane_feature"],
+      source: "template",
+    });
+  });
 });

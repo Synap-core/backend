@@ -82,6 +82,13 @@ export interface ObjectKindDef {
   color: string;
   label: string;
   labelPlural: string;
+  /**
+   * The English words this kind was CALLED before a rename (singular and
+   * plural). Never shown: read only to recognise durable stored text that
+   * still spells the old word (a proposal summary filed before the rename,
+   * `resolveFormerObjectNouns`).
+   */
+  formerLabels?: readonly string[];
   /** Optional compact char for the densest inline chips (fallback when no icon fits). */
   glyph?: string;
 }
@@ -419,15 +426,28 @@ const OBJECT_KIND_ROWS = {
     labelPlural: "Automations",
     glyph: "⚡",
   },
-  // The user word is "Template" (concepts.md). Scoped surfaces say WHICH
-  // template through `resolveTemplateNoun(scope)` ("Work"/"Goal template").
+  // The user word is "Process" (founder D1, 16 Nov 2026, Process wave plan
+  // 0adf8352; it replaced "Template", concepts.md D2 of 31 Oct). "Template"
+  // now names only the space package (`resolvePackageNoun`, "Space template").
+  // A goal's method says WHICH process through `resolveTemplateNoun(scope)`
+  // ("Goal process").
   playbook: {
     kind: "playbook",
     category: "playbook",
     icon: "BookOpen",
     color: ID(8),
-    label: "Template",
-    labelPlural: "Templates",
+    label: "Process",
+    labelPlural: "Processes",
+    // Stored summaries filed before D1 say "Template" ("Update Template"),
+    // "Work/Goal template", or the older "Playbook".
+    formerLabels: [
+      "Template",
+      "Templates",
+      "Work template",
+      "Goal template",
+      "Playbook",
+      "Playbooks",
+    ],
   },
   // Concept glossary (`skills/synap/concepts.md` → Tools, founder D2): skill,
   // capability and tool are three DB kinds but ONE user word, "Tool". A detail
@@ -455,6 +475,17 @@ const OBJECT_KIND_ROWS = {
     color: ID(12),
     label: "Tool",
     labelPlural: "Tools",
+  },
+  // A NEED (0426, founder decisions D2 and D3): a seat a provider fills once
+  // per space ("Code host", "Payments"). Its own word, "Need", never "Role"
+  // (which already means four things). Category `tool`: a tool fills it.
+  need: {
+    kind: "need",
+    category: "tool",
+    icon: "Puzzle",
+    color: ID(12),
+    label: "Need",
+    labelPlural: "Needs",
   },
   // An Application (App Connect v1) — an app that REACHES the pod with a grant.
   // NOT `category: "tool"`: a tool is what the pod USES (outbound); an
@@ -938,19 +969,19 @@ export const resolveObjectLabel = (
 // ─── Template nouns (derived, never declared) ────────────────────────────────
 
 /**
- * The user noun for a template, DERIVED from what it is — never a field the
- * author declares (`skills/synap/concepts.md` → Template).
+ * The user noun for a playbook or a space template, DERIVED from what it is —
+ * never a field the author declares (`skills/synap/concepts.md`).
  *
- * A playbook's `scope` decides it: `"project"` is a method a project runs over
- * weeks as a goal → "Goal template" (starting a goal from it COPIES its steps
- * and params into the goal, `buildTrackSnapshot` — the same relation a work
- * template has to a session, so it is a template, not a new word);
- * `"session"` (the playbook default) is
- * one sitting of work → "Work template". A missing scope reads as a work
- * template because the schema says so (`playbooks.scope`: "NULL reads as
- * session"), not as a guess about the row. `"space"` names a space template
- * (the New space dialog's, a `workspace` package): "Template" stays the family
- * noun and is qualified where two families meet (founder D3, N6).
+ * A playbook is a "Process" (founder D1, 16 Nov 2026, Process wave plan
+ * 0adf8352: it replaced "Work template" / "Goal template"). Its `scope`
+ * qualifies it: `"project"` is a method a project runs over weeks as a goal
+ * → "Goal process" (starting a goal from it COPIES its steps and params into
+ * the goal, `buildTrackSnapshot`); `"session"` (the playbook default) is one
+ * sitting of work → "Process". A missing scope reads as session because the
+ * schema says so (`playbooks.scope`: "NULL reads as session"), not as a guess
+ * about the row. `"space"` names a space template (the New space dialog's, a
+ * `workspace` package): "Template" now names only that package (founder D3,
+ * N6, D1). The function keeps its name so no caller moves with the words.
  */
 export type TemplateScope = "session" | "project" | "space";
 

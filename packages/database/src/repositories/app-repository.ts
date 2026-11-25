@@ -17,9 +17,14 @@ import { randomUUID } from "crypto";
 import { APP_PUBLIC_ID_PREFIX } from "@synap-core/types/membrane";
 import {
   assertNeverPlace,
+  liftApprovedRequests,
+  pairsOfAccess,
+  withoutDormantPermissions,
+  parseAppAccess,
   parseRequestPlace,
   PlaceError,
   withAppRequestScope,
+  type AppAccess,
   type Place,
 } from "@synap-core/types/grants";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
@@ -129,11 +134,45 @@ export function readAppConnectRequests(raw: unknown): AppApprovedRequest[] {
       case "unbounded":
         // An app never holds a part with no space beyond a pod-wide read.
         break;
+      case "projects":
+        // A pair names no project (`parseRequestPlace` reads none here): an
+        // app's projects live in its v2 access (`approved_access`).
+        break;
       default:
         assertNeverPlace(place);
     }
   }
   return out;
+}
+
+/**
+ * The v2 form of an approval (`apps.approved_access`, 0434), kept in step
+ * with `approved_requests` on EVERY write of it: the lossless lift
+ * (`liftApprovedRequests`), or null when there is no approval or when the
+ * lift would change what the app may do (it then re-consents and every
+ * reader keeps its pairs). Until the consent screen writes v2 itself (W3),
+ * this is the only writer of the column besides the backfill, which applies
+ * the same rule.
+ */
+export function approvedAccessOf(
+  approvedRequests: readonly AppApprovedRequest[] | null
+): AppAccess | null {
+  if (approvedRequests === null) return null;
+  const lifted = liftApprovedRequests(approvedRequests, { examples: false });
+  return "access" in lifted ? lifted.access : null;
+}
+
+/**
+ * The old pairs of a v2 access, as stored beside it (W3d): its space part
+ * (`pairsOfAccess`), each pair with its explicit place.
+ */
+export function compatPairsOf(access: AppAccess): AppApprovedRequest[] {
+  return pairsOfAccess(access).pairs.map((r) =>
+    withAppRequestScope({
+      permission: r.permission,
+      workspaceId: r.workspaceId,
+    })
+  );
 }
 
 /** Thrown by `rename` when the owner already has an app of that name. */
@@ -275,6 +314,7 @@ export class AppRepository {
       // signs no one in until its owner registers redirect URIs again.
       if (existing.revokedAt || existing.removedAt) {
         patch.approvedRequests = null;
+        patch.approvedAccess = null;
         patch.redirectUris = [];
       }
       if (input.description !== undefined)
@@ -344,7 +384,12 @@ export class AppRepository {
       if (!existing.revokedAt && !existing.removedAt) return existing;
       const [row] = await this.db
         .update(apps)
-        .set({ revokedAt: null, removedAt: null, approvedRequests: null })
+        .set({
+          revokedAt: null,
+          removedAt: null,
+          approvedRequests: null,
+          approvedAccess: null,
+        })
         .where(eq(apps.id, existing.id))
         .returning();
       return row;
@@ -550,10 +595,140 @@ export class AppRepository {
     );
     const [row] = await this.db
       .update(apps)
-      .set({ approvedRequests })
+      .set({
+        approvedRequests,
+        approvedAccess: approvedAccessOf(approvedRequests),
+      })
       .where(eq(apps.id, appId))
       .returning();
     return row ?? null;
+  }
+
+  /**
+   * The v2 approval write (app permissions W3d): `approved_access` is the
+   * person's choice and the AUTHORITY, stored FIRST in its canonical form
+   * (`normalizeAppAccess`); `approved_requests` is DERIVED from it for the
+   * readers that still read pairs (`pairsOfAccess`: its space part, each
+   * pair with its explicit place, never wider than the access; a project is
+   * never a pair). W5 drops the pairs. Mints nothing, like
+   * `setApprovedRequests`.
+   */
+  async setApprovedAccess(
+    appId: string,
+    access: AppAccess
+  ): Promise<AppRecord | null> {
+    // Nothing dormant is stored (review of #1197): a permission with no
+    // place in its tier would be switched on unseen by a place added later.
+    const approvedAccess = withoutDormantPermissions(access);
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        approvedAccess,
+        approvedRequests: compatPairsOf(approvedAccess),
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
+   * The ADDITIVE v2 write (the short ask, W3d): `next` is given the
+   * connection's approval as it stands NOW, read under a row lock (its stored
+   * v2 when valid, else the lift of its pairs, else null: a connection that
+   * must re-consent), and returns the access to store, or null to write
+   * nothing (it may also throw to refuse). So an approval decided meanwhile
+   * is never lost.
+   */
+  async updateApprovedAccess(
+    appId: string,
+    next: (current: {
+      access: AppAccess | null;
+      pairs: AppApprovedRequest[];
+    }) => AppAccess | null
+  ): Promise<AppRecord | null> {
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          approvedRequests: apps.approvedRequests,
+          approvedAccess: apps.approvedAccess,
+        })
+        .from(apps)
+        .where(eq(apps.id, appId))
+        .for("update");
+      if (!current) return null;
+      const pairs = current.approvedRequests ?? [];
+      const access =
+        current.approvedRequests === null
+          ? null
+          : (parseAppAccess(current.approvedAccess) ?? approvedAccessOf(pairs));
+      const chosen = next({ access, pairs });
+      if (!chosen) return null;
+      const approvedAccess = withoutDormantPermissions(chosen);
+      const [row] = await tx
+        .update(apps)
+        .set({
+          approvedAccess,
+          approvedRequests: compatPairsOf(approvedAccess),
+        })
+        .where(eq(apps.id, appId))
+        .returning();
+      return row ?? null;
+    });
+  }
+
+  /**
+   * The ADDITIVE approval write (`app/connect` with `mode: "add"`, plan
+   * 647ebfd4 option C): the pairs are merged into the approval as it stands
+   * NOW, read under a row lock, so an approval decided meanwhile is never
+   * lost and no pair it holds is ever dropped. Written through the same
+   * shape `setApprovedRequests` stores (explicit place per pair).
+   */
+  async addApprovedRequests(
+    appId: string,
+    requests: AppApprovedRequest[]
+  ): Promise<AppRecord | null> {
+    return this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select({
+          approvedRequests: apps.approvedRequests,
+          approvedAccess: apps.approvedAccess,
+        })
+        .from(apps)
+        .where(eq(apps.id, appId))
+        .for("update");
+      if (!current) return null;
+      // A stored v2 its pairs cannot say (it names a project) is the
+      // authority (W3d): merging pairs and lifting them would drop its
+      // projects. Such a connection adds through `updateApprovedAccess`.
+      const stored = parseAppAccess(current.approvedAccess);
+      if (stored && !pairsOfAccess(stored).exact) {
+        throw new Error(
+          "addApprovedRequests: this connection's access names projects; add to it through updateApprovedAccess"
+        );
+      }
+      const seen = new Set<string>();
+      const merged: AppApprovedRequest[] = [];
+      for (const r of [...(current.approvedRequests ?? []), ...requests]) {
+        const key = `${r.permission}\u0000${r.workspaceId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(
+          withAppRequestScope({
+            permission: r.permission,
+            workspaceId: r.workspaceId,
+          })
+        );
+      }
+      const [row] = await tx
+        .update(apps)
+        .set({
+          approvedRequests: merged,
+          approvedAccess: approvedAccessOf(merged),
+        })
+        .where(eq(apps.id, appId))
+        .returning();
+      return row ?? null;
+    });
   }
 
   /**
@@ -697,26 +872,47 @@ export class AppRepository {
    * Withdraw the app's still-PENDING `app/connect` requests — a revoked app
    * asks for nothing, so its request must leave every review surface. Returns
    * the withdrawn proposal ids (the caller clears their notifications).
+   *
+   * `end` says why, as a reason (`data.ended`), never as English stored for
+   * an author: `app_revoked`, or `superseded` by the newer consent request
+   * that replaces it (its id is the door the end line opens).
    */
   async withdrawPendingRequests(
     appId: string,
     by: string,
-    reason: string
+    end:
+      | { reason: "app_revoked" }
+      | { reason: "superseded"; supersededBy: string },
+    /**
+     * Only the requests filed through this door (`data.via`): an additive
+     * consent withdraws the consent it interrupted, never the app's own asks
+     * still waiting for the person.
+     */
+    onlyVia?: string
   ): Promise<string[]> {
     const now = new Date();
     const rows = await transitionProposal(this.db, {
       to: ProposalStatus.WITHDRAWN,
+      ended: end,
       set: {
         reviewedBy: by,
         reviewedAt: now,
         updatedAt: now,
-        data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${reason}::text)`,
       },
       where: and(
         eq(proposals.targetType, APP_CONNECT_TARGET_TYPE),
         eq(proposals.proposalType, APP_CONNECT_PROPOSAL_TYPE),
         eq(proposals.targetId, appId),
-        eq(proposals.status, ProposalStatus.PENDING)
+        eq(proposals.status, ProposalStatus.PENDING),
+        // The newer request is never its own replaced one.
+        ...(end.reason === "superseded"
+          ? [ne(proposals.id, end.supersededBy)]
+          : []),
+        ...(onlyVia
+          ? [
+              sql`COALESCE(${proposals.data}->'data'->>'via', ${proposals.data}->>'via') = ${onlyVia}`,
+            ]
+          : [])
       ),
     }).returning({ id: proposals.id });
     return rows.map((r) => r.id);
@@ -737,6 +933,28 @@ export class AppRepository {
    * is also what `register` is idempotent by): a name the owner already uses
    * on another app is an `AppNameTakenError`, never a raw unique violation.
    */
+  /**
+   * A pod app connection: the hash of the client-id document the person
+   * consented to (`oauth_clients.metadata_sha256` at consent, stored in
+   * `metadata.consentedDocumentSha256`). An app that is not a Synap app acts
+   * as the person only while its document still hashes to this
+   * (`consentedDocumentHolds`, app-client.ts). Written only by the consent
+   * door (`connectOAuthApp`).
+   */
+  async setConsentedDocument(
+    appId: string,
+    documentSha256: string
+  ): Promise<AppRecord | null> {
+    const [row] = await this.db
+      .update(apps)
+      .set({
+        metadata: sql`COALESCE(${apps.metadata}, '{}'::jsonb) || jsonb_build_object('consentedDocumentSha256', ${documentSha256}::text)`,
+      })
+      .where(eq(apps.id, appId))
+      .returning();
+    return row ?? null;
+  }
+
   /**
    * "Sign in with Synap": may a person signed in to this app decide (approve)
    * proposals the app's OWN agent filed? Stored in `metadata`

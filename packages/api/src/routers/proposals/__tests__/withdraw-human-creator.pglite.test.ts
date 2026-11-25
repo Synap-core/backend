@@ -38,6 +38,22 @@ vi.mock("@synap/database", async (importOriginal) => {
     ...actual,
     db: drizzle(client, { schema: { proposals: actual.proposals as never } }),
     eventRepository: { append: async () => undefined },
+    // Placement lives with `openRunSession` (same package connection): the
+    // stub echoes what the door hands it, like the run stub below.
+    resolveRunSessionPlacement: async (
+      _db: unknown,
+      input: {
+        workspaceId?: string | null;
+        workspaceRung?: string | null;
+        projectId?: string | null;
+      }
+    ) => ({
+      projectId: input.projectId ?? null,
+      workspace: {
+        workspaceId: input.workspaceId ?? null,
+        rung: input.workspaceId ? (input.workspaceRung ?? "explicit") : null,
+      },
+    }),
     openRunSession: async (input: {
       userId: string;
       goal: string;
@@ -84,6 +100,7 @@ import {
   focusSessions,
   documents,
   documentVersions,
+  lifecycleTransitionOutbox,
 } from "@synap/database";
 import { proposalsRouter } from "../../proposals.js";
 import { proposalReasonBucket } from "../../../services/proposals/reason-bucket.js";
@@ -156,7 +173,13 @@ const callerFor = (userId: string) =>
 
 describe("proposals.withdraw — the human creator of an agent-less proposal", () => {
   beforeAll(async () => {
-    for (const t of [proposals, focusSessions, documents, documentVersions]) {
+    for (const t of [
+      lifecycleTransitionOutbox,
+      proposals,
+      focusSessions,
+      documents,
+      documentVersions,
+    ]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   });
@@ -229,7 +252,7 @@ describe("proposals.withdraw — the human creator of an agent-less proposal", (
     ).resolves.toEqual({ success: true });
   });
 
-  it("rerun replace now withdraws the parent's pending INTAKE rows through the real door, with the reason", async () => {
+  it("rerun replace withdraws the parent's pending INTAKE rows through the real door, ended as superseded (no helper English)", async () => {
     const parent = randomUUID();
     const docId = randomUUID();
     await q(
@@ -310,11 +333,21 @@ describe("proposals.withdraw — the human creator of an agent-less proposal", (
       ok: true,
       revert: { withdrawnPending: [intakePending], pendingNotWithdrawn: [] },
     });
-    const child = (res as { sessionId: string }).sessionId;
     expect(await row(intakePending)).toMatchObject({
       status: "withdrawn",
-      withdraw_reason: `Replaced by rerun ${child}`,
+      withdraw_reason: null,
       rejection_reason: null,
     });
+    // The rerun REPLACED it: the end says so as a reason, never as a sentence
+    // stored as its author's words (finding 156068a6).
+    const { rows: ended } = await q<{ ended: Record<string, unknown> }>(
+      `select data->'ended' as ended from proposals where id = $1`,
+      [intakePending]
+    );
+    expect(ended[0]!.ended).toMatchObject({
+      reason: "superseded",
+      by: "person",
+    });
+    expect(ended[0]!.ended).not.toHaveProperty("withdrawReason");
   });
 });

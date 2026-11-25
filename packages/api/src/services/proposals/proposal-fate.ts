@@ -16,12 +16,8 @@
  * on any row where they disagree.
  */
 
-import {
-  drizzleSql,
-  proposals,
-  SUPERSEDED_BY_KEY,
-  type SQL,
-} from "@synap/database";
+import { drizzleSql, proposals, type SQL } from "@synap/database";
+import { proposalEnded } from "@synap-core/types/proposals/ended";
 import {
   REVIEW_LATER_AFTER_MS,
   isReviewLater,
@@ -91,17 +87,16 @@ export function proposalFateFields(
 
 /**
  * A withdrawn proposal REPLACED by a newer version of itself (the supersede
- * rule, `insertPendingProposal`): the newer proposal's id, lifted off the
- * stamp so a review screen can say "Replaced by a newer version" and open it.
+ * rule, `insertPendingProposal`): the newer proposal's id, read through the
+ * one end door (`proposalEnded`: the `data.ended` stamp, else the old key) so
+ * a review screen can say "Replaced by a newer version" and open it.
  */
 export function supersededByFields(row: {
   status?: string | null;
   data?: unknown;
 }): { supersededBy?: string } {
-  if (row.status !== "withdrawn" || !row.data || typeof row.data !== "object")
-    return {};
-  const id = (row.data as Record<string, unknown>)[SUPERSEDED_BY_KEY];
-  return typeof id === "string" && id ? { supersededBy: id } : {};
+  const id = proposalEnded(row)?.supersededBy;
+  return id ? { supersededBy: id } : {};
 }
 
 function sqlList(values: Iterable<string>): SQL {

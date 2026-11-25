@@ -23,9 +23,16 @@
  *            ledger its own row carries (`stage_history`, 0382); its wait
  *            episodes (`readWaitEpisodes`, 0386) merged in by when each
  *            opened, every subject asked about in ONE read;
+ *   reactions the rules around it (`status-reactions.ts`): those that fire
+ *            when it moves and those that move it, each with its last
+ *            outcome and, for a roll-up, its parts' "3 of 5 done";
  *   links    a goal's or a session's `serves` edges, each end the reader sees;
  *   rollup   a goal's tree down `serves` (`readGoalTreeRollups`);
- *   signals  the status signals (`status_signal_raised`) still open.
+ *   signals  the status signals (`status_signal_raised`) still open;
+ *   work     where its work stands (`status-work.ts`): the sessions and runs
+ *            on a thing or a goal, or the session itself, each from THE
+ *            continuation packet, with its stages, gates, owed asks, stop
+ *            and the person's Continue.
  * A part that could not be read is `unavailable`, never empty.
  *
  * Served by orient's `statusOf` (MCP, Hub REST) and tRPC `lifecycle.statusOf`
@@ -86,10 +93,12 @@ import {
   type StatusOfRole,
   type StatusOfRollup,
   type StatusOfSignal,
+  type StatusOfWork,
   type UnitTone,
   type WaitingOnMark,
   type WaitingOnSource,
   type ThingBlocker,
+  type TimelineWithheldSource,
   deriveThingBlocker,
   deriveWaitingOn,
 } from "@synap-core/types/units";
@@ -121,6 +130,7 @@ import {
   type NextMoveHoldFact,
 } from "./next-move.js";
 import { readThingRoles, type ThingRoleRow } from "./status-roles.js";
+import type { StatusViewer } from "./status-work.js";
 import {
   sessionStatusFloor,
   statusAccess,
@@ -135,6 +145,7 @@ import {
   type WaitingOnQuestion,
 } from "./status-facts.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { stageLedgerEventId } from "../focus-sessions/stage-ledger-event.js";
 
 const logger = createLogger({ module: "status-read" });
 
@@ -217,6 +228,12 @@ export interface StatusOf {
    * moves its step offers ({@link StatusOfMove}).
    */
   moves?: StatusOfMove[];
+  /**
+   * On `include: ["reactions"]` (every type): the rules around it — those
+   * that fire when it moves, those that move it (`status-reactions.ts`).
+   */
+  reactions?:
+    import("@synap-core/types/units").StatusOfReaction[] | Unavailable;
   /** Things only: the roles it wears that the reader may see. */
   roles?: StatusOfRole[] | Unavailable;
   /** Things only: the account it works at, when the reader may read it. */
@@ -229,6 +246,11 @@ export interface StatusOf {
   rollup?: StatusOfRollup | Unavailable;
   /** On `include: ["signals"]` (things, goals, sessions): those still open. */
   signals?: StatusOfSignal[] | Unavailable;
+  /**
+   * On `include: ["work"]` (every type): the sessions and runs on it, or the
+   * session itself, and where each stands (`StatusOfWork`).
+   */
+  work?: StatusOfWork | Unavailable;
   link: string;
 }
 
@@ -275,6 +297,18 @@ function openSessionsOf(rollup: StatusOfRollup): number {
   return (c.open ?? 0) + (c.active ?? 0) + (c.paused ?? 0);
 }
 
+/**
+ * The session timeline sources whose events `include: ["history"]` never
+ * keeps (`isStatusHistoryEvent`): not read at all, so neither their cost nor
+ * a failed read reaches the history.
+ */
+export const STATUS_HISTORY_TIMELINE_WITHHELD = [
+  "dev_facts",
+  "decisions",
+  "runners",
+  "room_posts",
+] as const satisfies readonly TimelineWithheldSource[];
+
 /** Newest first; a tie by id, as the timeline orders its own. */
 function newestFirst(a: StatusOfHistoryEvent, b: StatusOfHistoryEvent): number {
   const t = Date.parse(b.at) - Date.parse(a.at);
@@ -286,7 +320,11 @@ function newestFirst(a: StatusOfHistoryEvent, b: StatusOfHistoryEvent): number {
  * A session's stage ledger as `stage_entered` history entries, each actor
  * named by the pod. The ledger comes with the session's own row, read under
  * the session floor: no second read of its stages. An entry whose time does
- * not parse is left out. The id is the change feed's `stage_moved` id.
+ * not parse is left out. The id is the one every ledger reader gives the
+ * entry (`stageLedgerEventId`): the change feed's and the timeline's
+ * `stage_moved` id. The timeline carries the same entries as `stage_moved`;
+ * this read keeps its own `stage_entered` shape (actor named, `stageKey`),
+ * and drops the timeline's twin, which it filters out.
  */
 async function stageEnteredEvents(
   sessionId: string,
@@ -299,7 +337,7 @@ async function stageEnteredEvents(
   return entries.map((e) => {
     const actorId = typeof e.actor === "string" && e.actor ? e.actor : null;
     return {
-      id: `stage:${sessionId}:${e.enteredAt}:${e.stageKey}`,
+      id: stageLedgerEventId(sessionId, e),
       kind: "stage_entered" as const,
       at: new Date(e.enteredAt).toISOString(),
       actor: activityActorOf(
@@ -329,7 +367,15 @@ async function orUnavailable<T>(p: Promise<T>): Promise<T | Unavailable> {
 export async function readStatusOf(
   userId: string,
   rawIds: readonly string[],
-  opts: { include?: readonly StatusOfInclude[] } = {}
+  opts: {
+    include?: readonly StatusOfInclude[];
+    /**
+     * Who reads, as the door knows them (`include: ["work"]` only): what they
+     * may do on each work item is decided by the doors' own checks. Absent =
+     * they may do nothing (no Continue, no gate to decide).
+     */
+    viewer?: StatusViewer;
+  } = {}
 ): Promise<StatusOfAnswer[]> {
   const wants = (part: StatusOfInclude) =>
     opts.include?.includes(part) ?? false;
@@ -444,10 +490,12 @@ export async function readStatusOf(
       // Every slot holding the thing up (plan e7f753db §9): a person's owed
       // slot on a session about it or naming it, an agent's slot declaring it.
       owed: { blocking: [t.id] },
-      proposals: { targetIds: [t.id] },
+      // The proposals ON it: its target or subject, or filed in a session on it.
+      proposals: { targetIds: [t.id], onThings: [t.id] },
       blockedNodes: [{ kind: "entity", id: t.id }],
       holds: [{ subjectType: "entity", subjectId: t.id }],
       steps: [{ subjectType: "entity", subjectId: t.id }],
+      requirements: [{ entityId: t.id }],
     });
   }
   for (const sid of new Set([
@@ -718,7 +766,10 @@ export async function readStatusOf(
       (async (): Promise<StatusOfHistory | Unavailable> => {
         const { readTimeline } = await import("../timeline/read-timeline.js");
         const [t, stages, episodes] = await Promise.all([
-          readTimeline(subject, { userId }),
+          readTimeline(subject, {
+            userId,
+            withhold: STATUS_HISTORY_TIMELINE_WITHHELD,
+          }),
           stageEnteredEvents(subject.id, ledger, userId),
           episodesOf(subject),
         ]);
@@ -775,6 +826,37 @@ export async function readStatusOf(
       ? {
           rollup: await orUnavailable(
             trees.then((m) => m.get(id) ?? UNAVAILABLE)
+          ),
+        }
+      : {};
+
+  // Where its work stands: every subject asked about in ONE read.
+  const worked = wants("work")
+    ? import("./status-work.js").then((m) =>
+        m.readStatusWork(
+          userId,
+          {
+            sessions: [
+              ...sessions.map((x) => ({ answerId: x.id, sessionId: x.id })),
+              ...runs.flatMap((r) =>
+                r.sessionId ? [{ answerId: r.id, sessionId: r.sessionId }] : []
+              ),
+            ],
+            things: thingIds,
+            goals: goals.map((g) => g.id),
+          },
+          opts.viewer
+        )
+      )
+    : null;
+  worked?.catch(() => undefined);
+  const workOf = async (
+    id: string
+  ): Promise<{ work?: StatusOfWork | Unavailable }> =>
+    worked
+      ? {
+          work: await orUnavailable(
+            worked.then((m) => m.get(id) ?? { items: [], truncated: false })
           ),
         }
       : {};
@@ -921,6 +1003,7 @@ export async function readStatusOf(
                   since: null,
                 }))),
           ])),
+          ...(await workOf(t.id)),
           link: openLink(t.id),
         };
       })()
@@ -985,6 +1068,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(g.id)),
           link: openLink(g.id),
         };
       })()
@@ -1032,6 +1116,7 @@ export async function readStatusOf(
               since: since.since,
             },
           ])),
+          ...(await workOf(s.id)),
           link: openLink(s.id),
         };
       })()
@@ -1054,16 +1139,46 @@ export async function readStatusOf(
         since: iso(r.completedAt ?? r.startedAt),
         sinceMeasured: settled,
         waitingOn: r.sessionId ? await waitingOf(`session:${r.sessionId}`) : [],
+        ...(await workOf(r.id)),
         link: openLink(r.sessionId ?? r.id),
       }))()
     );
   }
 
+  // The rules around each subject: every one asked about in ONE read of the
+  // rule list (`status-reactions.ts`).
+  const reacted = wants("reactions")
+    ? import("./status-reactions.js").then((m) =>
+        m.readStatusReactions(userId, [
+          ...things.map((t) => ({
+            id: t.id,
+            type: "entity" as const,
+            profileId: t.profileId ?? null,
+          })),
+          ...goals.map((g) => ({ id: g.id, type: "goal" as const })),
+          ...sessions.map((x) => ({ id: x.id, type: "session" as const })),
+          ...runs.map((r) => ({ id: r.id, type: "run" as const })),
+        ])
+      )
+    : null;
+  reacted?.catch(() => undefined);
+  const withReactions = async (a: StatusOf): Promise<StatusOf> =>
+    reacted
+      ? {
+          ...a,
+          reactions: await orUnavailable(
+            reacted.then((m) => m.get(a.id) ?? [])
+          ),
+        }
+      : a;
+
   return Promise.all(
-    asked.map(
-      (id): Promise<StatusOfAnswer> =>
-        answers.get(id) ?? Promise.resolve({ id, type: "unknown" })
-    )
+    asked.map((id): Promise<StatusOfAnswer> => {
+      const answer = answers.get(id);
+      return answer
+        ? answer.then(withReactions)
+        : Promise.resolve({ id, type: "unknown" });
+    })
   );
 }
 
@@ -1135,9 +1250,10 @@ type AccountRow = {
  * The `serves` edges of the asked goals and sessions, both ways, each end
  * the reader may see (a session through THE session read rule, a goal
  * through the goal visibility rule); an end it may not see is left out,
- * never named. THROWS.
+ * never named. THROWS. Also the work graph's `serves` edges
+ * (`work-graph-nodes.ts`): one reader of the edge, never two.
  */
-async function readServes(
+export async function readServes(
   userId: string,
   ids: readonly string[]
 ): Promise<Map<string, StatusOfLinks>> {

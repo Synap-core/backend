@@ -445,7 +445,7 @@ describe("tripwire: `project` is not an entity profile", () => {
     // Near-misses that are not writes to `profiles`.
     expect(hits("UPDATE profile_properties SET x = 1")).toBe(0);
     expect(hits("INSERT INTO profiles_archive (slug) VALUES ('a')")).toBe(0);
-    expect(hits("INSERT INTO profile_workspace_access VALUES ($1)")).toBe(0);
+    expect(hits("INSERT INTO space_access VALUES ($1)")).toBe(0);
     expect(hits("SELECT 1 FROM profiles WHERE slug = $1")).toBe(0);
 
     // The classifier refuses the two ways around the reservation, and a

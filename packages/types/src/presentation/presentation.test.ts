@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   INLINE_IMAGE_MIME_TYPES,
+  INLINE_AUDIO_MIME_TYPES,
   INLINE_VIDEO_MIME_TYPES,
   declaredMediaSources,
   parseProfilePresentation,
@@ -166,5 +167,35 @@ describe("inline mime allowlists (the ONE list; web + relay + the pod's copy rea
     expect([...INLINE_VIDEO_MIME_TYPES]).toEqual(["video/mp4", "video/webm"]);
     for (const m of INLINE_VIDEO_MIME_TYPES)
       expect(INLINE_IMAGE_MIME_TYPES as readonly string[]).not.toContain(m);
+  });
+  it("audio: exactly these containers, every one `audio/`, none a document", () => {
+    expect([...INLINE_AUDIO_MIME_TYPES]).toEqual([
+      "audio/mpeg",
+      "audio/mp4",
+      "audio/aac",
+      "audio/ogg",
+      "audio/wav",
+      "audio/x-wav",
+      "audio/webm",
+      "audio/flac",
+    ]);
+    for (const m of INLINE_AUDIO_MIME_TYPES) {
+      expect(m.startsWith("audio/")).toBe(true);
+      // A type that is also a document (an SVG, an HTML page, XML) must never
+      // ride in on an `audio/` prefix.
+      expect(m).not.toMatch(/svg|html|xml/);
+    }
+  });
+  it("the three lists never overlap: a type reaches exactly one element", () => {
+    const lists = [
+      INLINE_IMAGE_MIME_TYPES,
+      INLINE_VIDEO_MIME_TYPES,
+      INLINE_AUDIO_MIME_TYPES,
+    ].map((l) => l as readonly string[]);
+    const all = lists.flat();
+    expect(new Set(all).size).toBe(all.length);
+    // `audio/webm` and `video/webm` share a container but are two types, so
+    // the audio one can never be handed to a `<video>` by mistake.
+    expect(lists[1]).not.toContain("audio/webm");
   });
 });

@@ -22,10 +22,10 @@ import {
   db,
   eq,
   playbookRuns,
-  liveRunStatusWhere,
   isLiveRunStatus,
-  and,
+  setRunStatus,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 import type { PlaybookRunExternalAgent } from "@synap/database/schema";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { resolveServiceName } from "@synap-core/types/service-marks";
@@ -121,19 +121,16 @@ export async function cancelRun(p: {
   const externalAgentPatch = ext
     ? { externalAgent: { ...ext, status: "cancelled" as const } }
     : {};
-  const [updated] = await db
-    .update(playbookRuns)
-    .set({
-      status: "cancelled",
-      completedAt: new Date(),
-      // Built outside this literal — the terminal-settles tripwire parses a
-      // brace-free `.set({...})`.
-      ...externalAgentPatch,
-    })
-    .where(
-      and(eq(playbookRuns.id, run.id), liveRunStatusWhere(playbookRuns.status))
-    )
-    .returning({ id: playbookRuns.id });
+  const {
+    rows: [updated],
+  } = await setRunStatus(db, {
+    runId: run.id,
+    from: LIVE_RUN_STATUSES,
+    to: "cancelled",
+    actor: { kind: "human", userId: p.userId },
+    reason: "Cancelled by the person.",
+    set: { completedAt: new Date(), ...externalAgentPatch },
+  });
   if (!updated) {
     const [now] = await db
       .select({ status: playbookRuns.status })

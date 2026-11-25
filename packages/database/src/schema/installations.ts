@@ -39,20 +39,16 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
+import {
+  INSTALLATION_STATUSES,
+  type InstallationStatusValue,
+} from "@synap-core/types/units";
 import { capabilities } from "./capabilities.js";
 import { apiKeys } from "./api-keys.js";
 
-/** Stored lifecycle (reconciliation f75fbb48 §3.1). Health is read, never stored. */
-export const INSTALLATION_STATUSES = [
-  "planned",
-  "installing",
-  "installed",
-  "updating",
-  "removing",
-  "removed",
-  "failed",
-] as const;
-export type InstallationStatus = (typeof INSTALLATION_STATUSES)[number];
+/** Stored lifecycle: declared in `@synap-core/types/units` (`INSTALLATION_STATUS_DECLARATION`). */
+export { INSTALLATION_STATUSES };
+export type InstallationStatus = InstallationStatusValue;
 
 /** `service` = Docker compose services; `tool` = a CLI binary from per-OS steps. */
 export const INSTALLATION_KINDS = ["service", "tool"] as const;

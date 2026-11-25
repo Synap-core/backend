@@ -774,6 +774,16 @@ const ASK_PERSON_WITHHELD = [
   "followPlaybookId",
   "params",
   "followStageKey",
+  // Who works the stage entered (0422): rides with `currentStage`, which this
+  // door withholds too.
+  "stageRunner",
+  // The stage the caller read (W6 compare-and-set): rides with
+  // `currentStage`, which this door withholds too.
+  "expectedStage",
+  // A step's time (B5): schedules the work the ask lands on, which is
+  // `synap_update_session`'s job like every other field here.
+  "plannedFor",
+  "dueBy",
 ] as const;
 
 const ACKNOWLEDGED_GAPS: Gap[] = [
@@ -940,6 +950,21 @@ const ACKNOWLEDGED_GAPS: Gap[] = [
     door: "routers/focus-sessions.ts:graph",
     reason:
       "NO API KEY EXISTS ON THIS TRANSPORT. `boundWorkspaceId` is the workspace binding of the key a call authenticated with (`keyWorkspaceId`, set by the hub auth middleware and the MCP adapter). `protectedProcedure` authenticates a PERSON through the Kratos session, and `context.ts` carries no key, no key type and no binding (`keyWorkspaceId` has ZERO occurrences in it), so there is nothing server-side to forward. A body field would be self-declared confinement: a client could only narrow its own far ends, never be held to a binding it does not have. The Hub REST and MCP doors forward it from the key. If tRPC ever gains an API-key path, this entry becomes false and must be removed.",
+  },
+  // ── Grant reach: derived from the key's grant, and only Hub REST narrows ──
+  {
+    service: "work-graph",
+    param: "reach",
+    door: "routers/focus-sessions.ts:graph",
+    reason:
+      "NO NARROWED KEY REACHES THIS DOOR. `reach` is what the calling key's grant lets the graph draw (`workGraphReach(getRequestGrant())`), never a caller's choice: a body field would let a client widen its own read. The Bearer tRPC door answers a fenced key's query only for paths in `GRANT_SAFE_TRPC_QUERIES` (`trpcProcedureAllowed`), which does not list `focusSessions.graph`, so every caller here reads the graph whole (the default when `reach` is absent). Hub REST forwards it from the grant. If the graph joins that set, this entry becomes false.",
+  },
+  {
+    service: "work-graph",
+    param: "reach",
+    door: "routers/mcp/handlers/session.ts:synap_get_work_graph",
+    reason:
+      "NO NARROWED KEY REACHES THIS DOOR. `reach` is derived from the calling key's grant, never a caller's choice. MCP `synap_get_work_graph` is declared `READS(...WORK_GRAPH_SUBJECTS)` (`MCP_READ_TOOL_DOORS`): it admits only a key that reads every subject of the graph unbounded, for which `workGraphReach` is `{ whole: true }`, the default when `reach` is absent. Only Hub REST admits a key holding `session.read` alone (NARROWED) and forwards its reach.",
   },
 ];
 

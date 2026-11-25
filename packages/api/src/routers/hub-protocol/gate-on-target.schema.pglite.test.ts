@@ -335,7 +335,7 @@ describe("profiles.createProfile writes nothing outside the grant (W2a)", () => 
       })
     ).rejects.toMatchObject(GRANT_DENIED);
     const { rows } = await q(
-      `select profile_id from profile_workspace_access where workspace_id = $1`,
+      `select object_id as profile_id from space_access where object_type = 'profile' and workspace_id = $1`,
       [OTHER_WS]
     );
     expect(rows).toHaveLength(0);
@@ -370,6 +370,8 @@ describe("profiles.createProfile writes nothing outside the grant (W2a)", () => 
 });
 
 describe("profiles.setRenderer gates where the binding lands (W2a)", () => {
+  // A built-in renderable: the door refuses a cell that does not exist
+  // (`assertCellBindable`) before it reaches the grant under test here.
   it("a `pod` binding is pod scope, whatever workspace is named", async () => {
     await expect(
       hub().profiles.setRenderer({
@@ -377,7 +379,7 @@ describe("profiles.setRenderer gates where the binding lands (W2a)", () => {
         workspaceId: WS,
         profileSlug: "note",
         slot: "detail",
-        cellKey: "some-cell",
+        cellKey: "greeting",
         scope: "pod",
       })
     ).rejects.toMatchObject(GRANT_DENIED);
@@ -389,7 +391,7 @@ describe("profiles.setRenderer gates where the binding lands (W2a)", () => {
       workspaceId: WS,
       profileSlug: "note",
       slot: "detail",
-      cellKey: "some-cell",
+      cellKey: "greeting",
       scope: "workspace",
     });
     expect(res.status).toBe(PASSED_THE_GRANT);

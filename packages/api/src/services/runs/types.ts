@@ -25,10 +25,13 @@ import type {
 } from "@synap/database";
 import type { SessionActivityWire } from "@synap-core/types/run-activity";
 import type { RunWhere } from "@synap-core/types/computers";
+import type { GuidanceSnapshot } from "@synap-core/types/guidance";
+import type { RunCostRecord } from "./run-cost-record.js";
 import type {
   BoxRunEvidence,
   BoxRunRow,
   BoxRunSpec,
+  PlaybookRunGeneration,
 } from "@synap/database/schema";
 
 /**
@@ -50,25 +53,44 @@ export type FlowType =
   | "chat"
   | "agent_write";
 
-/** Normalised lifecycle across all ledgers. */
-export type RunStatus =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
+/**
+ * Normalised lifecycle across all ledgers — THE list; the run doors' zod
+ * enums (tRPC `runs.list`, Hub REST `/runs`) are built from it.
+ */
+export const RUN_STATUSES = [
+  // 'queued' — a playbook run handed to its holder, not claimed yet.
+  "queued",
+  "running",
+  "completed",
+  "failed",
+  "proposed",
+  "cancelled",
   // 'skipped' (Wave 4.V3) — an automation run whose flow precondition gated it
   // out before any step ran. Only automation_runs produces it today.
-  | "skipped"
+  "skipped",
   // 'blocked_by_policy' — an automation run whose effect a governance verdict
   // refused (agent-produced trigger → human-owned automation → producer ladder /
   // policy floor blocked the THEN-action). A calm governance OUTCOME, not a
   // transport failure. Only automation_runs produces it today.
-  | "blocked_by_policy"
+  "blocked_by_policy",
   // 'waiting_on_you' (W2 calm) — a run the reaper found past its window with
   // its session still owing the person an open slot. Not failed, not running:
   // waiting on the human. automation_runs and playbook_runs produce it.
-  | "waiting_on_you";
+  "waiting_on_you",
+  // 'paused' — the `paused` lifecycle category for a ledger word the feed
+  // does not speak itself: a paused session, and a `stale` session or
+  // playbook run (the reaper found it quiet; it READS as paused everywhere,
+  // founder 2026-11-20). Not running, not ended.
+  "paused",
+  // 'blocked' — a playbook run nobody claimed inside its window: the person
+  // is asked (`run-blocked-ask.ts`). Not failed.
+  "blocked",
+] as const;
+export type RunStatus = (typeof RUN_STATUSES)[number];
+
+export function isRunStatus(v: string | null | undefined): v is RunStatus {
+  return v != null && (RUN_STATUSES as readonly string[]).includes(v);
+}
 
 /** One run, ledger-agnostic. */
 export interface UnifiedRun {
@@ -364,6 +386,8 @@ export interface PlaybookRunDetail {
    * content, readable by its owner and its room's human roster). `session` is
    * then null and the page renders the "private session" placeholder — no
    * goal, no door. False when there is a readable session or none at all.
+   * Also true for ANOTHER person's one-shot run: its record (`generation`)
+   * is its creator's alone, so it is withheld the same way.
    */
   sessionPrivate: boolean;
   /** Entities the session produced (`session --produced--> entity`), user-visible only. */
@@ -372,6 +396,16 @@ export interface PlaybookRunDetail {
   proposals: RunProposalItem[];
   /** Best-effort distinct actors who worked the run (see RunAgent for the honesty caveats). */
   agents: RunAgent[];
+  /**
+   * The rules the run was given, as the POD stamped them on its definition
+   * snapshot when it rendered the method (`recordRunGuidance`): the refs used
+   * (with label, content hash, row ids + versions), those left out of the
+   * prompt for budget (`demoted`), those with no approved version (`missing`),
+   * or `status: "unavailable"` when they could not be read. `null` = the run
+   * carries no stamp (declared none, or an older run): never "no rules were
+   * checked". Absent when the session is private.
+   */
+  guidance?: GuidanceSnapshot | null;
   /**
    * A TRIAL run (the rule lab, design b199a3a4 slice 1b): the drafts it
    * rendered in place of current versions, and what it drafted (the agent's
@@ -382,6 +416,22 @@ export interface PlaybookRunDetail {
     draftedText: string | null;
     draftedAt: string | null;
   };
+  /**
+   * A ONE-SHOT run (`executor: "generate"`, no session): what its prompt was
+   * made of, the prompt itself, the model and tokens of its one call (NULL
+   * where the IS did not report them), and the proposal it filed — which is
+   * also the one item of `proposals`. Absent on every other run.
+   */
+  generation?: PlaybookRunGeneration;
+  /**
+   * Why an agent run cost what it cost (`run-cost-record.ts`): its turns as
+   * the ledger kept them (model, input, cache reads and writes, what counted
+   * against the budget), the first call's inventory (prompt sections, tool
+   * names, guidance), the input total over every turn, and the output tokens
+   * and real cost its agent-run telemetry reported. Present when the run's
+   * session is readable; a one-shot run's record is `generation`.
+   */
+  cost?: RunCostRecord;
 }
 
 /** The session card behind a playbook run. */

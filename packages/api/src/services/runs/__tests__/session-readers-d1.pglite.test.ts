@@ -285,6 +285,74 @@ describe("run detail — session card", () => {
   });
 });
 
+describe("run detail — the rules the run was given (guidance stamp)", () => {
+  const detail = (userId: string, door: { roster: boolean }) =>
+    getRun({ userId, flowType: "playbook", id: RUN, ...door });
+  const stamp = (snapshot: unknown) =>
+    q(
+      `update playbook_runs set definition_snapshot = $2::jsonb where id = $1`,
+      [RUN, snapshot === null ? null : JSON.stringify(snapshot)]
+    );
+
+  it("carries what the pod stamped: used, left out, missing, and 'unavailable'", async () => {
+    await stamp({
+      guidance: {
+        status: "ok",
+        hash: "abc",
+        used: [
+          {
+            ref: "kind:voice-guide",
+            label: "Voice guide",
+            hash: "h",
+            rows: [],
+          },
+        ],
+        demoted: [
+          { ref: "skill:big", label: "Big", reason: "over budget", hash: "h2" },
+        ],
+        missing: [
+          { ref: "kind:none", label: "None", reason: "no approved version" },
+        ],
+      },
+    });
+    const g = (await detail(MEMBER, HUMAN))?.playbookDetail?.guidance;
+    expect(g).toMatchObject({ status: "ok", hash: "abc" });
+    expect(g?.status === "ok" && g.used.map((u) => u.ref)).toEqual([
+      "kind:voice-guide",
+    ]);
+    expect(g?.status === "ok" && g.demoted.map((u) => u.ref)).toEqual([
+      "skill:big",
+    ]);
+    expect(g?.status === "ok" && g.missing.map((u) => u.ref)).toEqual([
+      "kind:none",
+    ]);
+
+    await stamp({ guidance: { status: "unavailable", error: "read failed" } });
+    expect((await detail(MEMBER, HUMAN))?.playbookDetail?.guidance).toEqual({
+      status: "unavailable",
+      error: "read failed",
+    });
+  });
+
+  it("is null for a run with no stamp, and never shown to a viewer who may not open the session", async () => {
+    await stamp(null);
+    expect((await detail(MEMBER, HUMAN))?.playbookDetail?.guidance).toBeNull();
+    await stamp({
+      guidance: {
+        status: "ok",
+        hash: "abc",
+        used: [],
+        demoted: [],
+        missing: [],
+      },
+    });
+    const hidden = await detail(COLLEAGUE, HUMAN);
+    expect(hidden?.playbookDetail?.guidance).toBeUndefined();
+    expect(JSON.stringify(hidden)).not.toContain("abc");
+    await stamp(null);
+  });
+});
+
 // ── 4. workflow place + feed ─────────────────────────────────────────────────
 describe("workflow place — sessions and their events", () => {
   const place = (userId: string, door: { roster: boolean }) =>

@@ -46,10 +46,17 @@ export interface ViewIdentity {
  * Resolve the trust of a framed-view-originated mutation, SERVER-SIDE.
  *
  * Returns an `IssuerTrust` with `kind: "view"`. `trusted` is true ONLY when
- * positively proven:
- *   1. The view is persisted and authored by the acting user
- *      (`views.userId === userId`), OR
- *   2. The backing widget definition is marked `trust_level = "trusted"`.
+ * positively proven, and a write is as trusted as the LEAST trusted thing that
+ * makes it (the view, and the cell code drawing it):
+ *   1. A `typeKey` is present (a cell's code draws the frame): the backing
+ *      widget definition must be marked `trust_level = "trusted"` or
+ *      `"installed"` (founder decision on backend#1290, 23 Nov 2026: "Trusted +
+ *      installed write"). Owning the view does NOT lift it: a `generated` cell
+ *      (or a type key with no row) drawing the person's own view runs code
+ *      nobody vouched for, and its writes propose (Surfaces P0-fix, finding
+ *      d3f3e0df: step 1 used to short-circuit this).
+ *   2. No `typeKey`: the view is persisted and authored by the acting user
+ *      (`views.userId === userId`).
  *
  * On (2) — this comment previously claimed `trust_level = "trusted"` was "set
  * exclusively by a human-approved install/publish path". That was FALSE for
@@ -59,10 +66,10 @@ export interface ViewIdentity {
  * every synced row to `"generated"` (see the `widget_definitions` handler in
  * `sync.ts`), which is what makes the claim true. Any NEW write path into
  * `widget_definitions.trust_level` must preserve that invariant: only a human
- * approval performed ON THIS POD may set `"trusted"`.
+ * approval performed ON THIS POD may set `"trusted"` or `"installed"`.
  *
- * `installed` / `generated` definitions, unknown identities, and any resolution
- * failure all yield `{ trusted: false }` → the permission gate proposes.
+ * `generated` definitions, unknown identities, and any resolution failure all
+ * yield `{ trusted: false }` → the permission gate proposes.
  *
  * @param identity   Host-stamped view identity (NEVER from the iframe / request body).
  * @param userId     The acting operator's user id (from the auth boundary).
@@ -76,25 +83,11 @@ export async function resolveViewTrust(
   const untrusted: IssuerTrust = { kind: "view", trusted: false };
 
   try {
-    // 1. User-authored view → trusted. A view the acting user created is, by
-    //    definition, acting on their behalf within what they declared.
-    if (identity.viewId) {
-      const [view] = await db
-        .select({ userId: views.userId })
-        .from(views)
-        .where(eq(views.id, identity.viewId))
-        .limit(1);
-
-      if (view && view.userId === userId) {
-        return { kind: "view", trusted: true };
-      }
-      // A viewId that resolves to someone else's view (or no row) is NOT a
-      // grounds for trust — fall through to the definition check.
-    }
-
-    // 2. Backing widget definition marked trust_level = "trusted".
-    //    type_key is unique within a scope (workspace row, else system NULL).
-    //    Prefer the workspace-scoped row, then the system-wide built-in.
+    // 1. A cell's code draws the frame: its definition decides, whoever owns
+    //    the view. type_key is unique within a scope (workspace row, else
+    //    system NULL). Prefer the workspace-scoped row, then the system-wide
+    //    one. "trusted" or "installed" → trusted; "generated" or no row →
+    //    untrusted.
     if (identity.typeKey) {
       const candidates = await db
         .select({
@@ -118,13 +111,26 @@ export async function resolveViewTrust(
               )
         );
 
-      if (candidates.length > 0) {
-        // Resolve the most specific row: workspace-scoped beats system-wide.
-        const scoped = candidates.find((c) => c.workspaceId === workspaceId);
-        const chosen = scoped ?? candidates[0];
-        if (chosen.trustLevel === "trusted") {
-          return { kind: "view", trusted: true };
-        }
+      // Resolve the most specific row: workspace-scoped beats system-wide.
+      const scoped = candidates.find((c) => c.workspaceId === workspaceId);
+      const chosen = scoped ?? candidates[0];
+      const level = chosen?.trustLevel;
+      return level === "trusted" || level === "installed"
+        ? { kind: "view", trusted: true }
+        : untrusted;
+    }
+
+    // 2. No cell code named: a view the acting user created is, by
+    //    definition, acting on their behalf within what they declared.
+    if (identity.viewId) {
+      const [view] = await db
+        .select({ userId: views.userId })
+        .from(views)
+        .where(eq(views.id, identity.viewId))
+        .limit(1);
+
+      if (view && view.userId === userId) {
+        return { kind: "view", trusted: true };
       }
     }
   } catch {

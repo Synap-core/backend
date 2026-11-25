@@ -132,3 +132,157 @@ describe("tripwire: the Hub entities forwarder passes on every filter it accepts
     expect(fwdKeys).not.toContain("since");
   });
 });
+
+/**
+ * THE MCP AND THE USER-ENTITIES DOOR (status-first wave, doors audit 1bb7b083).
+ *
+ * `synap_get_entities` and Hub `GET /users/{id}/entities` call the SAME
+ * forwarder (`getEntities`). Neither declared `filters` or `includeFacets`, so a
+ * caller that sent them got the whole kind back, 200, filter gone. The derived
+ * rule: every forwarder param is either declared by the MCP tool AND read by its
+ * handler, or sits in the one list below with its reason. A param added to the
+ * forwarder and not wired into the MCP fails here until someone decides.
+ */
+const MCP_TOOLS = join(
+  process.cwd(),
+  "src",
+  "routers",
+  "mcp",
+  "tools",
+  "index.ts"
+);
+const MCP_READ = join(
+  process.cwd(),
+  "src",
+  "routers",
+  "mcp",
+  "handlers",
+  "read.ts"
+);
+const REST_ENTITIES = join(
+  process.cwd(),
+  "src",
+  "routers",
+  "hub-protocol",
+  "rest",
+  "entities.ts"
+);
+
+/** Forwarder params the MCP tool deliberately does not expose, with why. */
+const MCP_NOT_EXPOSED: Record<string, string> = {
+  userId: "the acting user: the MCP context supplies it",
+  type: "deprecated alias: the MCP declares it and coalesces into profileSlug",
+  withoutProject: "no MCP lens for it yet",
+  includePodWide: "the MCP reads the user floor (the forwarder default)",
+  globalOnly: "REST scope=pod only",
+  facetProfileId: "the MCP names a role by facetSlug",
+  createdAfter: "not offered on the MCP tool today",
+  createdBefore: "not offered on the MCP tool today",
+};
+
+const between = (src: string, from: string, to: string): string => {
+  const a = src.indexOf(from);
+  const b = src.indexOf(to, a + from.length);
+  expect(a, `marker not found: ${from}`).toBeGreaterThan(-1);
+  expect(b, `marker not found: ${to}`).toBeGreaterThan(a);
+  return src.slice(a, b);
+};
+
+describe("tripwire: MCP get_entities and /users/{id}/entities carry the forwarder's params", () => {
+  const fwdSrc = stripComments(readFileSync(FORWARDER, "utf8"), "ts");
+  const fwdKeys = [
+    ...zodKeys(fwdSrc, "  getEntities: scopedProcedure"),
+    // spread from `lastInteractionWindowFields`: names the three window keys
+    "lastInteractionAfter",
+    "lastInteractionBefore",
+    "includeNever",
+  ];
+  const toolSrc = between(
+    readFileSync(MCP_TOOLS, "utf8"),
+    'name: "synap_get_entities"',
+    'name: "synap_get_document"'
+  );
+  const handlerSrc = stripComments(
+    between(
+      readFileSync(MCP_READ, "utf8"),
+      "synap_get_entities: async",
+      "synap_get_document: async"
+    ),
+    "ts"
+  );
+  const wanted = fwdKeys.filter((k) => !(k in MCP_NOT_EXPOSED));
+
+  it("non-vacuity: filters, includeFacets and the window are in the derived set", () => {
+    expect(wanted).toEqual(
+      expect.arrayContaining([
+        "profileSlug",
+        "facetSlug",
+        "includeFacets",
+        "lastInteractionAfter",
+      ])
+    );
+    expect(wanted.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it("the forwarder accepts `filters` (so the MCP is held to it)", () => {
+    expect(
+      readFileSync(FORWARDER, "utf8"),
+      "the forwarder lost `filters`"
+    ).toMatch(/^\s*filters:\s*EntityListFiltersSchema/m);
+  });
+
+  it("every param is declared by the MCP tool schema", () => {
+    const undeclared = wanted.filter(
+      (k) => !new RegExp(`^\\s*${k}:\\s*\\{`, "m").test(toolSrc)
+    );
+    expect(
+      undeclared,
+      "declared on the forwarder, absent from the tool"
+    ).toEqual([]);
+  });
+
+  it("every declared param is read by the handler and passed on", () => {
+    const dropped = wanted.filter(
+      (k) => !new RegExp(`\\b${k}\\b`).test(handlerSrc)
+    );
+    expect(
+      dropped,
+      "declared on the forwarder, never read by synap_get_entities: the " +
+        "filter would be silently ignored"
+    ).toEqual([]);
+    // filters/includeFacets must reach the call itself, not just be parsed.
+    const callAt = handlerSrc.indexOf("caller.entities.getEntities({");
+    expect(callAt).toBeGreaterThan(-1);
+    const call = handlerSrc.slice(callAt, handlerSrc.indexOf("});", callAt));
+    for (const k of ["filters", "includeFacets"]) {
+      expect(call, `${k} not passed to getEntities`).toMatch(
+        new RegExp(`\\b${k}\\b`)
+      );
+    }
+  });
+
+  it("GET /users/{id}/entities declares and forwards filters + includeFacets", () => {
+    const restSrc = stripComments(readFileSync(REST_ENTITIES, "utf8"), "ts");
+    const route = between(
+      restSrc,
+      'path: "/users/{userId}/entities"',
+      "app.openapi(listUserEntitiesRoute"
+    );
+    const handler = between(
+      restSrc,
+      "app.openapi(listUserEntitiesRoute",
+      "const getConnectionsRoute = createRoute("
+    );
+    const call = handler.slice(
+      handler.indexOf("caller.entities.getEntities({")
+    );
+    for (const k of ["filters", "includeFacets"]) {
+      expect(route, `${k} not declared on the route`).toMatch(
+        new RegExp(`^\\s*${k}:\\s*z`, "m")
+      );
+      expect(call, `${k} not forwarded`).toMatch(
+        new RegExp(`\\b${k}\\b|userFilters`)
+      );
+    }
+  });
+});

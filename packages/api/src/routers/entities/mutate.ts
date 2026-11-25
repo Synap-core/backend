@@ -19,6 +19,7 @@ import {
   isNotNull,
   getDb,
   getWorkspaceMembership,
+  getRequestGrant,
   eventRepository,
   EntityRepository,
   extractIdentitySignals,
@@ -38,6 +39,7 @@ import {
   checkPermissionOrPropose,
   proposedMessageFor,
 } from "../../utils/permission-check.js";
+import { grantWriteDenial } from "../../utils/grant-write-check.js";
 import { assertWorkspaceWrite } from "../../utils/workspace-write-access.js";
 import { loadEditableDocument } from "../../utils/document-edit-access.js";
 import { assertBodyNotReplacedSilently } from "../../services/entity-body/body-replace-guard.js";
@@ -51,6 +53,11 @@ import {
   isReachFieldPatch,
   reachFieldGrantSpace,
 } from "../../utils/reach-field-grant.js";
+import {
+  clearsDoNotContact,
+  isDoNotContactSetWrite,
+  replacesDoNotContactEvidence,
+} from "../../services/channels/do-not-contact-fields.js";
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import {
   emitAiCorrection,
@@ -539,19 +546,39 @@ export const mutateProcs = {
       // role (decision 3632f045): checked in that role's space and ALWAYS
       // proposed (utils/reach-field-grant.ts). Every other own field of a
       // pod-wide record stays judged pod scope.
-      const reachSpace = isReachFieldPatch(input)
-        ? await reachFieldGrantSpace({
-            entityId: input.id,
-            kind: existing.type,
-            storedWorkspaceId: existing.workspaceId,
-          })
-        : null;
+      const reachPatch = isReachFieldPatch(input);
+      // An opt-out the app records (CNIL): a patch that only SETS the
+      // person's do-not-contact flag reaches the pod-wide person through the
+      // same role rule, and the gate APPLIES it (a de-escalation,
+      // `isDoNotContactSetWrite`), never proposes it.
+      const doNotContactSet =
+        existing.type === "person" && isDoNotContactSetWrite(input);
+      const reachSpace =
+        reachPatch || doNotContactSet
+          ? await reachFieldGrantSpace({
+              entityId: input.id,
+              kind: existing.type,
+              storedWorkspaceId: existing.workspaceId,
+            })
+          : null;
+      // Lifting an opt-out is the person's: an app (any key's grant, the
+      // person's own token through it included) or an agent CLEARING the flag,
+      // or removing its reason or date, files a proposal the person approves
+      // in their pod. Signed in, or replaying their approval, they apply it.
+      // Replacing the reason or date of an opt-out in force is the same: the
+      // app may ask, the person approves (finding 6d7af9b9). Setting them the
+      // first time stays direct.
+      const appOrAgentChangesOptOut =
+        (clearsDoNotContact(input) ||
+          replacesDoNotContactEvidence(existing.properties, input)) &&
+        (isAiWriteRequest(input) || getRequestGrant() !== undefined);
       const forcePropose =
         promotesToGlobal ||
         changesProfileType ||
         aiAttachesBody ||
         aiHomesRecord ||
-        reachSpace !== null ||
+        (reachPatch && reachSpace !== null) ||
+        appOrAgentChangesOptOut ||
         input.forcePropose === true;
 
       // A promotion to pod-wide lands the row pod-wide: the key's grant must
@@ -622,13 +649,12 @@ export const mutateProcs = {
           status: "proposed",
           message: proposedMessageFor(
             perm.proposalType,
-            "Update proposed for review",
-            perm.deferred
+            "Update proposed for review"
           ),
           proposalId: perm.proposalId,
           proposalType: perm.proposalType,
           reviewUrl: perm.reviewUrl,
-          // Join gate that KEPT the write: replayed once the join is approved.
+          // KEPT on today's held-writes pack: replayed once it is approved.
           ...(perm.deferred
             ? { deferred: true as const, ref: perm.deferredRef }
             : {}),
@@ -1294,10 +1320,18 @@ export const mutateProcs = {
    *   - SOURCE: `checkPermissionOrPropose` gated on the entity's CURRENT
    *     workspaceId (mirrors `update`'s governance so agent callers get
    *     proposal-gated instead of blocked, per CLAUDE.md).
-   *   - TARGET: `assertWorkspaceWrite` — the caller must also be an editor+
-   *     member of the DESTINATION workspace, since moving an entity there is
-   *     a write to that workspace too (new check; `update`'s `global` path
-   *     never needed one because it only ever moves TO null).
+   *   - TARGET: moving an entity there is a write to that workspace too, so
+   *     the destination is checked the way the gate checks the source
+   *     (triage finding TF-1): the person must be an editor+ member
+   *     (`assertWorkspaceWrite`); the calling key's grant must allow the
+   *     write there (`grantWriteDenial`, refused, never proposed, as at the
+   *     gate's rung 0 and as `update` checks a home or a promotion); and an
+   *     acting agent the gate would not admit there (no membership, or a
+   *     role short of write) does not move it: the move is PROPOSED to the
+   *     person, whose approval replays it (executor `entity/update` with
+   *     `toWorkspaceId`). A join is not filed: its replay would rerun the
+   *     write as a field update and move nothing. The destination is never
+   *     null here (`update`'s `global` path moves to pod-wide, S7).
    *
    * Best-effort per entity (mirrors `batchCreate`'s partial-success shape) —
    * one entity's not-found/denied/proposed outcome never blocks the others.
@@ -1349,6 +1383,19 @@ export const mutateProcs = {
           // (the caller's desired end-state holds) and move on.
           if (fromWorkspaceId === input.workspaceId) {
             moved.push(entityId);
+            continue;
+          }
+
+          // The key's grant must allow writing this record in the
+          // destination, not only where it lives today (TF-1).
+          const targetDenial = await grantWriteDenial({
+            subjectType: "entity",
+            action: "update",
+            workspaceId: input.workspaceId,
+            data: { id: entityId },
+          });
+          if (targetDenial) {
+            errors.push({ entityId, error: targetDenial });
             continue;
           }
 

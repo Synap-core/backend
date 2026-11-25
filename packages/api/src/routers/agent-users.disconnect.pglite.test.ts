@@ -399,8 +399,9 @@ describe("agentUsers.list — the floor is one row per agent (W4 A1)", () => {
 describe("agentUsers.list — an app's own agent is shown only as its app", () => {
   it("an app agent is NOT on the roster; a plain agent of the same owner and shape is", async () => {
     const [appAgent, plainAgent] = [randomUUID(), randomUUID()];
-    // Same shape on purpose (pod-wide, cli, same creator): the ONLY difference
-    // is that an `apps` row names one of them as its agent.
+    // Same shape on purpose (cli, same creator, so on the roster through the
+    // owner's spaces): the ONLY difference is that an `apps` row names one of
+    // them as its agent.
     for (const [id, name] of [
       [appAgent, "synap.live"],
       [plainAgent, "Plain agent"],
@@ -413,7 +414,7 @@ describe("agentUsers.list — an app's own agent is shown only as its app", () =
       `insert into apps (id, owner_user_id, public_id, name, agent_user_id) values ($1, $2, $3, 'synap.live', $4)`,
       [randomUUID(), OWNER, `app_${randomUUID()}`, appAgent]
     );
-    for (const lens of [null, [] as string[]]) {
+    for (const lens of [[] as string[]]) {
       const ids = (
         (await caller(OWNER).list({ workspaceId: lens })) as ListRow[]
       ).map((r) => r.id);
@@ -508,7 +509,7 @@ describe("agentUsers.list — computers and the agents they host", () => {
     new Map(
       (
         (await caller(OWNER).list({
-          workspaceId: null,
+          workspaceId: [],
           ...input,
         })) as HostRow[]
       ).map((r) => [r.id, r])
