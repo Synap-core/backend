@@ -88,13 +88,19 @@ describe("cardState: five facts, never folded", () => {
 
   it("is loading while the first read is in flight", () => {
     expect(
-      cardState({ isError: false, data: undefined, fetchStatus: "fetching" }, project)
+      cardState(
+        { isError: false, data: undefined, fetchStatus: "fetching" },
+        project
+      )
     ).toEqual({ kind: "loading" });
   });
 
   it("is offline when the read waits for the network", () => {
     expect(
-      cardState({ isError: false, data: undefined, fetchStatus: "paused" }, project)
+      cardState(
+        { isError: false, data: undefined, fetchStatus: "paused" },
+        project
+      )
     ).toEqual({ kind: "offline" });
   });
 
@@ -235,10 +241,7 @@ describe("every door the member cards offer opens for a member", () => {
 describe("the cards draw every state apart", () => {
   const ready = <T,>(value: T): CardState<T> => ({ kind: "ready", value });
   const noop = () => {};
-  const access = (
-    state: CardState<never>,
-    skeleton = false
-  ) =>
+  const access = (state: CardState<never>, skeleton = false) =>
     renderToStaticMarkup(
       <MyAccessCardView
         spaces={state}
@@ -299,11 +302,7 @@ describe("the cards draw every state apart", () => {
 
   const made = (state: CardState<ArtifactRow[]>) =>
     renderToStaticMarkup(
-      <MadeForYouCardView
-        state={state}
-        skeleton={false}
-        onRetry={noop}
-      />
+      <MadeForYouCardView state={state} skeleton={false} onRetry={noop} />
     );
 
   it("frames at most the first record; every other row is its identity card", () => {
