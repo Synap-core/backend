@@ -89,7 +89,7 @@ describe("resolveUnitState — precedence", () => {
   });
 
   it("a schedule only shows when nothing live is happening", () => {
-    const sched = { cron: "0 8 * * *", enabled: true };
+    const sched = { cron: "0 8 * * *", on: true };
     expect(resolveUnitState({ ...base, schedule: sched }).state).toBe(
       "scheduled"
     );
@@ -102,7 +102,7 @@ describe("resolveUnitState — precedence", () => {
     expect(
       resolveUnitState({
         ...base,
-        schedule: { cron: "0 9 * * 1", enabled: false },
+        schedule: { cron: "0 9 * * 1", on: false },
       }).state
     ).toBe("paused");
   });
@@ -172,7 +172,7 @@ describe("resolveUnitState — the rail", () => {
     expect(
       resolveUnitState({
         ...base,
-        schedule: { cron: "0 8 * * *", enabled: true },
+        schedule: { cron: "0 8 * * *", on: true },
       }).rail.kind
     ).toBe("dashed");
     expect(resolveUnitState({ ...base, unreadable: true }).rail.kind).toBe(
@@ -222,8 +222,8 @@ describe("resolveUnitState — tones stay inside the palette", () => {
       { ...base, waitKind: "their_reply" },
       { ...base, waitKind: "ci" },
       { ...base, running: true },
-      { ...base, schedule: { cron: "0 8 * * *", enabled: true } },
-      { ...base, schedule: { cron: "0 8 * * *", enabled: false } },
+      { ...base, schedule: { cron: "0 8 * * *", on: true } },
+      { ...base, schedule: { cron: "0 8 * * *", on: false } },
       { ...base, unreadable: true },
       { ...base, everStarted: false },
       { ...base },
@@ -248,25 +248,19 @@ describe("resolveUnitState — tones stay inside the palette", () => {
 
 describe("describeCadence", () => {
   it("reads the shapes the pod actually stores", () => {
-    expect(describeCadence({ cron: "0 8 * * *", enabled: true })).toBe(
+    expect(describeCadence({ cron: "0 8 * * *", on: true })).toBe(
       "Daily 08:00"
     );
-    expect(describeCadence({ cron: "0 9 * * 1", enabled: false })).toBe(
-      "Mon 09:00"
-    );
-    expect(describeCadence({ cron: "0 */6 * * *", enabled: true })).toBe(
-      "Every 6h"
-    );
+    expect(describeCadence({ cron: "0 9 * * 1", on: false })).toBe("Mon 09:00");
+    expect(describeCadence({ cron: "0 */6 * * *", on: true })).toBe("Every 6h");
   });
 
   it("hands back the raw cron rather than guessing", () => {
     // A confidently wrong cadence is worse than one that admits it is a cron.
-    expect(describeCadence({ cron: "15 3 2 4 *", enabled: true })).toBe(
+    expect(describeCadence({ cron: "15 3 2 4 *", on: true })).toBe(
       "15 3 2 4 *"
     );
-    expect(describeCadence({ cron: "nonsense", enabled: true })).toBe(
-      "nonsense"
-    );
+    expect(describeCadence({ cron: "nonsense", on: true })).toBe("nonsense");
   });
 
   it("no schedule is null, not a label", () => {
@@ -292,6 +286,15 @@ describe("resolveRunUnitState — a run's status wears the unit mark", () => {
     // A rule refused the effect: blocked on the rule — not failed, not done,
     // not your turn.
     expect(resolveRunUnitState("blocked_by_policy").state).toBe("blocked");
+  });
+
+  it("a queued run has not started; a run nobody claimed is your turn", () => {
+    // Rules out "queued = working": nothing claimed it yet.
+    expect(resolveRunUnitState("queued").state).toBe("not_started");
+    // Rules out the unmeasured fallthrough: the person chooses its runner.
+    expect(resolveRunUnitState("blocked").state).toBe("needs_you");
+    // Waits for the person to approve its start: a decision, never unmeasured.
+    expect(resolveRunUnitState("proposed").state).toBe("needs_review");
   });
 
   it("paused and the reaper's stale read PAUSED — never stopped, never unmeasured", () => {
