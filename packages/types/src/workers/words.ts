@@ -29,6 +29,7 @@ import {
   type WorkerActivatorTrigger,
   type WorkerRunOutcome,
   type WorkerStatusSpec,
+  type PlaybookScheduleView,
 } from "./index.js";
 
 /** The fields of an enabled worker (`workers.list`) the words read. */
@@ -121,12 +122,12 @@ export function workerSentence(w: SentenceWorker): {
  * The worker's state as the SHARED unit input (`resolveUnitState`), never a
  * local mark: runs waiting on approval → your turn (`needs_review`); an
  * enabled worker waits for its trigger → `scheduled`; paused → `paused`.
- * (The schedule arm reads only `enabled`; the cron is not a state.)
+ * (The schedule arm reads only `on`; the cron is not a state.)
  */
 export function workerUnitInput(w: SentenceWorker): UnitStateInput {
   return {
     pendingDecisions: w.pendingApprovals ?? 0,
-    schedule: { cron: w.activator?.cron ?? "", enabled: w.state === "running" },
+    schedule: { cron: w.activator?.cron ?? "", on: w.state === "running" },
   };
 }
 
@@ -147,7 +148,7 @@ export type PlaybookTriggerFact =
 export function playbookTriggerFact(input: {
   workers: readonly TriggerWorker[] | undefined;
   workersFailed: boolean;
-  schedule: { cron: string; enabled: boolean } | null | undefined;
+  schedule: PlaybookScheduleView | null | undefined;
 }): PlaybookTriggerFact {
   const { workers, workersFailed, schedule } = input;
   if (workersFailed) return { state: "failed" };
@@ -166,7 +167,7 @@ export function playbookTriggerFact(input: {
   if (schedule) {
     return {
       state: "known",
-      text: `${cronWords(schedule.cron) ?? CUSTOM_SCHEDULE}${schedule.enabled ? "" : " (disabled)"}`,
+      text: `${cronWords(schedule.cron, schedule.timezone) ?? CUSTOM_SCHEDULE}${schedule.on ? "" : " (disabled)"}`,
     };
   }
   return { state: "known", text: "Manual / on demand" };

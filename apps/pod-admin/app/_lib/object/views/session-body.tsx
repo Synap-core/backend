@@ -145,14 +145,15 @@ import { objectPage, prepareContent } from "../content/markdown-model";
 const LIST_CAP = 5;
 
 /** The mark's glyph, as an icon. */
-const GLYPH_ICON: Record<SessionGlyph, LucideIcon> = {
+const GLYPH_ICON: Partial<Record<SessionGlyph, LucideIcon>> = {
   draft: CircleDashed,
+  clock: Clock,
   moving: Activity,
-  paused: Pause,
-  scheduled: Clock,
-  done: Check,
+  pause: Pause,
+  check: Check,
   stopped: Ban,
-  failed: TriangleAlert,
+  alert: TriangleAlert,
+  "dashed-circle": CircleDashed,
 };
 
 /** Each move's icon in the overflow menu. */
