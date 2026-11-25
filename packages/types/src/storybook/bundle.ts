@@ -14,7 +14,8 @@
  *   - page       `page:<titleId>`: the Storybook title id its stories share
  *                (the part of a story id before `--`), so reordering or
  *                renaming one of its stories never forks the page; a flow
- *                step names the page by the same key
+ *                step names the page by the same key. A page carries
+ *                `storyIds[]`; the sync stores the first as its `story-id`
  *   - flow       `flow:<flowId>`
  *
  * `sourceHash` is opaque: the sync only compares it with the hash a person
@@ -144,6 +145,8 @@ export interface StorybookBundlePage {
   /** One of page-grammar's layouts. */
   layout?: string;
   route?: string;
+  /** Repo-relative path of the file the page component lives in. */
+  sourcePath?: string;
   /** Its stories (at least one), the first the one it is shown by. */
   storyIds: string[];
   /** A pod file id (a `file` entity). */
@@ -520,6 +523,17 @@ export function parseStorybookBundle(
     const template = c.optStr(raw, "template", at);
     const layout = c.optStr(raw, "layout", at);
     const route = c.optStr(raw, "route", at);
+    const pageSourcePath = c.optStr(raw, "sourcePath", at);
+    if (
+      pageSourcePath !== undefined &&
+      !isRelativeSourcePath(pageSourcePath)
+    ) {
+      c.error(
+        "absolute-path",
+        `${at}.sourcePath`,
+        "`sourcePath` must be repo-relative (no leading /, no ..)"
+      );
+    }
     const screenshot = c.screenshot(raw, at);
     const pageComponents = c.keys(raw, "components", at);
     if (
@@ -568,6 +582,7 @@ export function parseStorybookBundle(
         ...(template ? { template } : {}),
         ...(layout ? { layout } : {}),
         ...(route ? { route } : {}),
+        ...(pageSourcePath ? { sourcePath: pageSourcePath } : {}),
         storyIds,
         ...(screenshot ? { screenshot } : {}),
         sourceHash,
