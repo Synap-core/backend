@@ -42,7 +42,14 @@
 
 import { Hono } from "hono";
 import { z } from "zod";
-import { db, eq, and, isDelegationHeaders } from "@synap/database";
+import {
+  db,
+  eq,
+  and,
+  inArray,
+  isDelegationHeaders,
+  membershipHolderIds,
+} from "@synap/database";
 import { getPodCallback } from "../utils/pod-callback.js";
 import {
   channels,
@@ -517,7 +524,7 @@ chatStreamApp.get("/history", async (c) => {
     const membership = await db.query.workspaceMembers.findFirst({
       where: and(
         eq(workspaceMembers.workspaceId, rawWorkspaceId),
-        eq(workspaceMembers.userId, userId)
+        inArray(workspaceMembers.userId, membershipHolderIds(userId))
       ),
       columns: { workspaceId: true },
     });
@@ -552,7 +559,7 @@ chatStreamApp.get("/history", async (c) => {
       const membership = await db.query.workspaceMembers.findFirst({
         where: and(
           eq(workspaceMembers.workspaceId, channel.workspaceId),
-          eq(workspaceMembers.userId, userId)
+          inArray(workspaceMembers.userId, membershipHolderIds(userId))
         ),
         columns: { workspaceId: true },
       });

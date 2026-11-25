@@ -32,6 +32,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   type db as DatabaseHandle,
 } from "@synap/database";
 import {
@@ -77,7 +78,7 @@ const ids: string[] = [];
 
 beforeAll(async () => {
   const client = new PGlite();
-  for (const t of [proposals, users, workspaces, workspaceMembers]) {
+  for (const t of [proposals, users, workspaces, workspaceMembers, apiKeys]) {
     await client.exec(ddlFor(t as unknown as PgTable));
   }
   await client.exec(`

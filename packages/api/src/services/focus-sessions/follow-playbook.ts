@@ -56,7 +56,7 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  usableInSpace,
+  isUsableInSpace,
   notUsableInSpaceReason,
   focusSessions,
   playbooks,
@@ -69,7 +69,7 @@ import {
   drizzleSql,
   liveRunStatusWhere,
   listHolds,
-  ownerAndActor,
+  insertPlaybookRun,
   starterHolder,
   setRunStatus,
 } from "@synap/database";
@@ -91,7 +91,7 @@ import {
 } from "@synap-core/types/units";
 import { paramOwedSlots, PARAM_SLOT_CIRCUMSTANCE } from "./param-slots.js";
 import { RUN_PARAMS_METADATA_KEY } from "../playbooks/playbook-lifecycle.js";
-import { userVisibleWhere } from "../../utils/user-visible-where.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
 import {
   createLinks,
   resolveGrantedCapabilities,
@@ -336,7 +336,7 @@ export async function followPlaybook(
     .where(
       and(
         eq(playbooks.id, followPlaybookId),
-        userVisibleWhere(playbooks.workspaceId, userId)
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
       )
     )
     .limit(1);
@@ -348,7 +348,10 @@ export async function followPlaybook(
   }
   // The run door's rule: a session in a space follows only a playbook usable
   // there. A session in no space is not checked (it runs nowhere yet).
-  if (session.workspaceId && !usableInSpace(playbook, session.workspaceId)) {
+  if (
+    session.workspaceId &&
+    !(await isUsableInSpace(db, "playbook", playbook, session.workspaceId))
+  ) {
     return {
       status: "refused",
       reason: notUsableInSpaceReason("Playbook", playbook, session.workspaceId),
@@ -457,6 +460,7 @@ export async function followPlaybook(
           expectedOutputs: focusSessions.expectedOutputs,
           metadata: focusSessions.metadata,
           currentStage: focusSessions.currentStage,
+          status: focusSessions.status,
         })
         .from(focusSessions)
         .where(eq(focusSessions.id, sessionId))
@@ -557,22 +561,19 @@ export async function followPlaybook(
 
       // The ledger row, WITH the definition pinned: a run executes what it
       // started with. The live session's worker holds it, working already.
-      const owner = await ownerAndActor(tx, userId, agentUserId);
-      const [run] = await tx
-        .insert(playbookRuns)
-        .values({
-          workspaceId: session.workspaceId,
-          playbookId: playbook.id,
-          sessionId,
-          executor: playbook.executor,
-          status: "running",
-          holder: starterHolder(userId, agentUserId),
-          createdBy: owner.ownerId,
-          agentUserId: owner.agentUserId,
-          // THE helper, not a hand-written field list (`run-playbook.ts`).
-          definitionSnapshot: buildDefinitionSnapshot(playbook),
-        })
-        .returning({ id: playbookRuns.id });
+      const run = await insertPlaybookRun(tx, {
+        workspaceId: session.workspaceId,
+        playbookId: playbook.id,
+        sessionId,
+        executor: playbook.executor,
+        holder: starterHolder(userId, agentUserId),
+        // A planned step's run waits with it and starts when it wakes (P4).
+        sessionStatus: locked?.status,
+        writerUserId: userId,
+        agentUserId,
+        // THE helper, not a hand-written field list (`run-playbook.ts`).
+        definitionSnapshot: buildDefinitionSnapshot(playbook),
+      });
 
       return {
         updated: row,
@@ -601,6 +602,15 @@ export async function followPlaybook(
     agentUserId,
     reason: { kind: "slots", before: outputsBefore, after: outputsAfter },
   });
+
+  // GRADES DECLARED UP FRONT (W5): the playbook's criteria merged above may
+  // declare grades the person gives on an output; their slots are filed now,
+  // owed once that output is delivered. After the commit, through the slot
+  // door's own lock; idempotent; never throws.
+  if (addedCriteria > 0) {
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+    await fileDeclaredGradeSlots(sessionId);
+  }
 
   // The stage the work is ALREADY in starts its run row's first step: the
   // stage runner records who works it (`enterStage`, spec 7111934d §3.1).

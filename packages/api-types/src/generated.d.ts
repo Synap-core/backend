@@ -3684,6 +3684,8 @@ export interface ObjectNext {
 	reason: string;
 	/** Where it is taken when not on the object: the session that owes it. */
 	sessionId?: string;
+	/** A `review` move: the request that waits for a decision. */
+	proposalId?: string;
 	/** A thing's or a session's next move, in the status read's words. */
 	label?: string;
 }
@@ -5493,6 +5495,14 @@ declare const WORKER_SIZES: readonly [
 	"per_moment"
 ];
 export type WorkerSize = (typeof WORKER_SIZES)[number];
+declare const WORKER_ACTIVATOR_MODES: readonly [
+	"run",
+	"propose",
+	"appointment"
+];
+export type WorkerActivatorMode = (typeof WORKER_ACTIVATOR_MODES)[number];
+/** A declared status: one value, or (schedule only) a list. */
+export type WorkerStatusSpec = string | string[];
 /**
  * "Unless the thing carries `property`": present = a value that is not null,
  * not an empty string and not an empty list. One shape on purpose: the
@@ -6139,9 +6149,9 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
 		 * which makes this a typed producer rather than an untyped passthrough.
 		 *
-		 * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
-		 * definitions, services/playbooks/cron-automation.ts) still emits no
-		 * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+		 * Remaining non-producer: a loop definition's trigger
+		 * (services/loops/create-from-definition.ts) emits no `agentType`, so a
+		 * loop-authored playbook run keeps the "meta" default.
 		 */
 		agentType?: string;
 		errorHandling?: NodeErrorHandling;
@@ -6163,11 +6173,10 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * (packages/types/src/automations/sentence.ts) and the app-side writer
 		 * (`makePlaybookRunAction`, @synap/automation-intent).
 		 *
-		 * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
-		 * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
-		 * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
-		 * to pass through, so a loop/cron-authored playbook run keeps the
-		 * playbook's own goalTemplate.
+		 * Non-producer, as with `agentType`: a loop definition's trigger emits no
+		 * goalOverride — `LoopTriggerDef` (@synap/playbooks) has no goal field to
+		 * pass through, so a loop-authored playbook run keeps the playbook's own
+		 * goalTemplate.
 		 */
 		goalOverride?: string;
 		/**
@@ -6181,8 +6190,8 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * does NOT dispatch the playbook's own executor — the named agent does the
 		 * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
 		 * Run mode only: the step refuses it beside `appointment` / `propose`.
-		 * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
-		 * `schedule.handToAgentId`. Absent ⇒ unchanged.
+		 * Producer: a schedule activator's `handToAgentId`, through the rule
+		 * grammar's `__handToAgentId` key. Absent ⇒ unchanged.
 		 */
 		handToAgentId?: string;
 		label: string;
@@ -6192,7 +6201,7 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
 		 * list in sync both ways):
 		 *   - absent / `"run"` — an unattended run (every pre-existing node).
 		 *   - `"appointment"` — a `scheduled` session waiting for the human
-		 *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+		 *     (a schedule activator's `mode`, through the rule grammar's `__mode`).
 		 *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
 		 *     a person approves, and approval replays `playbooks.run` →
 		 *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
@@ -6252,8 +6261,8 @@ export interface PlaybookRunWorkerSpec {
 	size: WorkerSize;
 	/** The subject kind or role the worker works on. */
 	profileSlug: string;
-	/** The status its things sit in (enters_status / count / schedule). */
-	status?: string;
+	/** The status its things sit in (enters_status / count / schedule; a list for schedule). */
+	status?: WorkerStatusSpec;
 	/** A `count` worker's threshold. */
 	minCount?: number;
 	maxPendingApprovals?: number;
@@ -11017,6 +11026,15 @@ export interface ProposalReviewEvent {
  * PINNED CONTRACT — the frontend mirrors this shape exactly; do not change field
  * names/shapes without updating the frontend in lockstep.
  */
+/**
+ * The space a step lands in when it is not the proposal's own: a space this
+ * bundle creates (`workspaceRef`) or an existing one (`workspaceId`). The
+ * reviewer of the proposal's space approves it, so the review names it.
+ */
+export interface ReviewStepSpace {
+	workspaceRef?: string;
+	workspaceId?: string;
+}
 export interface ProposalReviewGraph {
 	entities: Array<{
 		/**
@@ -11085,7 +11103,7 @@ export interface ProposalReviewGraph {
 	 * reviewer asks for a revision instead.
 	 */
 	isPlan?: true;
-	/** Number of plan steps (projects + sessions + documents + links). */
+	/** Number of plan steps (projects, goals, sessions, documents, links). */
 	planStepCount?: number;
 	projects?: Array<{
 		description?: string;
@@ -11110,6 +11128,38 @@ export interface ProposalReviewGraph {
 		subjectRef?: string;
 		/** As proposed (may be null). */
 		title: string | null;
+		trackId?: string;
+		/** In-graph goal ref (`tracks[].ref`) or an existing goal id. */
+		trackRef?: string;
+	}>;
+	/** Goals the plan starts (`create_track`), with where each sits. */
+	tracks?: Array<{
+		/** Goals it waits on: in-graph refs and existing ids. */
+		blockedBy: string[];
+		direction?: string;
+		name: string;
+		parentGoalId?: string;
+		/** The goal it serves: in-graph ref or existing id. */
+		parentRef?: string;
+		projectId?: string;
+		projectRef?: string;
+		ref: string;
+	}>;
+	/** Existing steps a re-plan changes (`update_session`). */
+	sessionUpdates?: Array<{
+		goal?: string;
+		ref: string;
+		sessionId: string;
+		status?: string;
+		title?: string | null;
+	}>;
+	/** Existing `blocked_by` edges a re-plan drops (`remove_link`). */
+	linkRemovals?: Array<{
+		fromSessionId: string;
+		/** Stable per-item address: `$unlinkN` in operation order. */
+		itemRef: string;
+		toId: string;
+		toKind: PlanBlockerKind;
 	}>;
 	documents?: Array<{
 		entityId?: string;
@@ -11134,9 +11184,16 @@ export interface ProposalReviewGraph {
 		fromSessionId?: string;
 		/** Stable per-item address: `$linkN` in derivation order. */
 		itemRef: string;
+		/** The decision option (arm) the step waits on, when it names one. */
+		option?: string;
+		toEntityId?: string;
+		/** What the step waits on when it is not a session (absent = a session). */
+		toKind?: PlanBlockerKind;
 		toLabel: string;
+		/** The in-graph ref of the target, whatever its kind. */
 		toRef?: string;
 		toSessionId?: string;
+		toTrackId?: string;
 		type: PlanLinkType;
 	}>;
 	/**
@@ -11167,13 +11224,13 @@ export interface ProposalReviewGraph {
 		ref: string;
 		scope: "pod" | "user" | "workspace";
 	}>;
-	automations?: Array<{
+	automations?: Array<ReviewStepSpace & {
 		/**
-		 * ALWAYS false: an approved automation is born INERT and a human activates
-		 * it. Carried so the surface can say so rather than leaving the reviewer to
-		 * assume it starts firing.
+		 * Whether a person's approval turns it on: true unless the op keeps it
+		 * off (`enabled: false`). Carried so the surface says whether it starts
+		 * firing.
 		 */
-		bornEnabled: false;
+		bornEnabled: boolean;
 		description?: string;
 		name: string;
 		/**
@@ -11196,11 +11253,11 @@ export interface ProposalReviewGraph {
 		scopeKind: "pod" | "user" | "workspace";
 	}>;
 	/**
-	 * `create_playbook` — a DRAFT process for a kind. Always born `draft`
-	 * (never runs until a person completes and activates it).
+	 * `create_playbook` — a process for a kind. A person's approval makes it
+	 * active unless the op keeps it a draft (`bornStatus`).
 	 */
-	playbooks?: Array<{
-		bornStatus: "draft";
+	playbooks?: Array<ReviewStepSpace & {
+		bornStatus: "active" | "draft";
 		description?: string;
 		goalTemplate: string;
 		name: string;
@@ -11209,10 +11266,37 @@ export interface ProposalReviewGraph {
 		subjectProfileSlug: string;
 	}>;
 	/**
+	 * A domain: `create_workspace`, `define_kind`, `declare_lifecycle`. Refs
+	 * name steps of this bundle (`workspaceRef`, `kindRef`).
+	 */
+	workspaces?: Array<{
+		name: string;
+		ref: string;
+	}>;
+	kinds?: Array<{
+		displayName: string;
+		entityScope?: "pod" | "workspace";
+		fieldCount: number;
+		ref: string;
+		slug: string;
+		workspaceRef?: string;
+	}>;
+	lifecycles?: Array<{
+		initialStatus?: string;
+		kindRef?: string;
+		options: Array<{
+			category: string;
+			key: string;
+		}>;
+		profileId?: string;
+		property: string;
+		ref: string;
+	}>;
+	/**
 	 * `create_view` — a List over this bundle's things (import Build). Counts,
 	 * not ids: the members are refs into `entities[]` or existing ids.
 	 */
-	views?: Array<{
+	views?: Array<ReviewStepSpace & {
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
 		/** A pipeline: the kind whose declared lifecycle its columns are. */
@@ -11233,15 +11317,17 @@ export interface ProposalReviewGraph {
 	 * bundle is drawn under that cell; a binding of an existing cell gets an
 	 * entry of its own (`existingCellKey`).
 	 */
-	cells?: Array<{
+	cells?: Array<ReviewStepSpace & {
 		bindings: Array<{
 			ref: string;
 			scope: "pod" | "workspace";
 			slot: "detail";
+			/** The object's id; with `targetRef`, the ref of a step of this bundle. */
 			targetId: string;
 			targetKind: BindRendererTargetKind;
 			/** The object's name, when the pod read it for this viewer. */
 			targetName?: string;
+			targetRef?: string;
 		}>;
 		/**
 		 * WHAT IT DOES once approved, read off the source: the bridge reads and
@@ -11506,6 +11592,9 @@ export interface CompositeCreateAutomationOp {
 	 * person's approval an agent's automation is born draft.
 	 */
 	enabled?: boolean;
+	/** The space it runs in: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
 }
 export interface CompositeCreateRuleOp {
 	op: "create_rule";
@@ -11527,11 +11616,11 @@ export interface CompositeCreateRuleOp {
  *
  * "Draft a process for this": a capture of a kind that has a lifecycle (a
  * select property whose slug names a status / stage) but no playbook built
- * for it files ONE draft playbook for that kind. Materialized through the
- * EXISTING `playbooks.create` door — never a raw insert — and ALWAYS as
- * `status: "draft"`: a process drafted from a capture is a starting point a
- * person (or agent) completes; it never arrives running. Goal and stages are
- * deliberately minimal.
+ * for it files ONE draft playbook for that kind (`status: "draft"`), and a
+ * plan files the playbooks of its domain. Materialized through the EXISTING
+ * `playbooks.create` door — never a raw insert — born by the one rule
+ * (`statusAtCreate`): a draft stays a draft; otherwise a person's approval
+ * makes it active.
  *
  * Per-op RESILIENT (like the Rule Loop config ops): a draft that fails does
  * not discard the entities captured beside it.
@@ -11544,16 +11633,66 @@ export interface CompositeCreatePlaybookOp {
 	description?: string;
 	/** Required by the playbook door; a one-line goal is enough for a draft. */
 	goalTemplate: string;
-	/** The kind the process runs on, and the property that holds its lifecycle. */
+	/**
+	 * The kind the process runs on, and the property that holds its lifecycle.
+	 * `profileSlug` may be left out when `subjectProfileRef` names the kind.
+	 */
 	subjectProfile: {
-		profileSlug: string;
+		profileSlug?: string;
 		statusProperty?: string;
 	};
+	/** A `define_kind` op of this batch: the process runs on the kind it defines. */
+	subjectProfileRef?: string;
+	/** The space it lives in: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
 	/**
-	 * ALWAYS FORCED "draft" at materialization; present so an author can state
-	 * it. Any other value is overridden, never honoured.
+	 * `draft` keeps it off. Absent: a person's approval of the batch makes it
+	 * active; with no person's approval it is born draft.
 	 */
-	status?: "draft";
+	status?: "active" | "draft";
+}
+/**
+ * ── Domain ops (a plan builds a domain) ──────────────────────────────────────
+ *
+ * A space, the kinds it holds and their lifecycles, filed in the SAME plan as
+ * the playbooks, automations, views and cells that use them, so the person
+ * approves a whole domain once. Each applies through its existing door (the
+ * template apply, the profile create, the lifecycle declaration) as the
+ * approver, before every op that may name it. Per-op resilient: an op that
+ * names one that failed is skipped, named.
+ */
+export interface CompositeCreateWorkspaceOp {
+	op: "create_workspace";
+	ref: string;
+	name: string;
+}
+export interface CompositeDefineKindOp {
+	op: "define_kind";
+	ref: string;
+	slug: string;
+	displayName: string;
+	description?: string;
+	icon?: string;
+	/** `pod`: its things are read in every space; `workspace`: in its home. */
+	entityScope?: "pod" | "workspace";
+	/** Field definitions, the `define_kind` door's contract (`{ slug, valueType, … }`). */
+	fields?: Array<Record<string, unknown>>;
+	/** Its home space: a `create_workspace` op of this batch, or an id. */
+	workspaceRef?: string;
+	workspaceId?: string;
+}
+export interface CompositeDeclareLifecycleOp {
+	op: "declare_lifecycle";
+	ref: string;
+	/** The kind: a `define_kind` op of this batch, or an existing kind's id. */
+	kindRef?: string;
+	profileId?: string;
+	/** The status field's slug (default `status`). */
+	property?: string;
+	/** Each `{ key, category, label?, … }`, the lifecycle door's contract. */
+	options: Array<Record<string, unknown>>;
+	initialStatus?: string;
 }
 /**
  * ── List op (import Build, 2026-10-12) ──────────────────────────────────────
@@ -11587,6 +11726,8 @@ export interface CompositeCreateViewOp {
 	viewType: CompositeViewType;
 	/** Space the list lives in; absent ⇒ the bundle's space (or pod-wide). */
 	workspaceId?: string;
+	/** …or a `create_workspace` op of this batch. */
+	workspaceRef?: string;
 	/** Kinds the list shows (profile slugs). Absent ⇒ derived from `entityRefs`. */
 	scopeProfileSlugs?: string[];
 	/** The listed things: in-batch `create_entity` refs or existing entity ids. */
@@ -11625,6 +11766,8 @@ export interface CompositeCreateCellOp {
 	description?: string;
 	/** Space the cell lives in; absent ⇒ pod-global. */
 	workspaceId?: string;
+	/** …or a `create_workspace` op of this batch. */
+	workspaceRef?: string;
 	/**
 	 * Its renderer slot kind (`CONTENT_KINDS` of `@synap/database`, e.g.
 	 * `entity-detail`), checked by the cell door. Absent ⇒ `widget`.
@@ -11640,17 +11783,22 @@ export interface CompositeBindRendererOp {
 	op: "bind_renderer";
 	/** Stable handle for this binding within the proposal (e.g. "board-on-playbook"). */
 	ref: string;
-	/** The object whose page shows the cell: an existing playbook or view. */
+	/**
+	 * The object whose page shows the cell: an existing playbook or view
+	 * (`id`), or a `create_playbook` / `create_view` op of this batch (`ref`).
+	 */
 	target: {
-		id: string;
+		id?: string;
 		kind: BindRendererTargetKind;
+		ref?: string;
 	};
 	/** Its slot: one object's page has only `detail`. */
 	slot: "detail";
 	/** `pod` = the object's own page everywhere; `workspace` = in one space. */
 	scope: "pod" | "workspace";
-	/** Required for `scope: "workspace"`. */
+	/** Required for `scope: "workspace"` (or its `workspaceRef`). */
 	workspaceId?: string;
+	workspaceRef?: string;
 	/** The cell: a `create_cell` op in this batch… */
 	cellRef?: string;
 	/** …or an existing cell's key. Exactly one of the two. */
@@ -11687,12 +11835,29 @@ export interface CompositeCreateSessionOp {
 	/** `blocked_by` edges declared at birth. */
 	blockedByRefs?: string[];
 	blockedBySessionIds?: string[];
+	/**
+	 * P4 (21 Nov 2026): a step that waits at birth (a `blocked_by` edge in this
+	 * plan, or a `plannedFor` to come) is born PLANNED (`forming`) unless
+	 * `startNow`; `stepBirthStatus` (`@synap-core/types/units`) decides.
+	 */
+	startNow?: boolean;
+	/** B5: when its window opens (a month, a day or an ISO date-time). */
+	plannedFor?: string;
+	/** B5: its deadline (same shapes). */
+	dueBy?: string;
 	/** The entity this session is about (a `create_entity` ref or a real id). */
 	subjectRef?: string;
 	subjectEntityId?: string;
 	/** The project it belongs to (a `create_project` ref or a real id). */
 	projectRef?: string;
 	projectId?: string;
+	/**
+	 * The goal it works toward: a `create_track` ref (created before every
+	 * session) or an existing goal id. Passed to the session door AT create,
+	 * like `start_session`'s `trackId`, which then implies the project.
+	 */
+	trackRef?: string;
+	trackId?: string;
 	/** Declared deliverables — sanitized by the session door at apply time. */
 	expectedOutputs?: Array<Record<string, unknown>>;
 	/**
@@ -11749,6 +11914,31 @@ export interface CompositeCreateProjectOp {
 	/** Server-stamped — any caller-supplied value is overwritten. */
 	evidence?: PlanProjectEvidence;
 }
+/**
+ * A GOAL in the plan (pathway plan 368179d7, P7). Materialized through THE
+ * start-goal door (`startTrack`) as the applying person, before every session,
+ * so a session's `trackRef` resolves at create. Shape only here: the door
+ * parses `kpi` / `criteria` / `workKind` / `endState` exactly as `start_track`.
+ */
+export interface CompositeCreateTrackOp {
+	op: "create_track";
+	ref: string;
+	name: string;
+	/** A goal lives in a project: a `create_project` ref or a real id. */
+	projectRef?: string;
+	projectId?: string;
+	direction?: string;
+	kpi?: Record<string, unknown>;
+	criteria?: Array<Record<string, unknown>>;
+	workKind?: string;
+	endState?: string;
+	/** The goal it serves (`goal --serves--> parent`): a track ref or a real id. */
+	parentRef?: string;
+	parentGoalId?: string;
+	/** Goals it waits on (`goal --blocked_by--> goal`): track refs or real ids. */
+	blockedByRefs?: string[];
+	blockedByTrackIds?: string[];
+}
 declare const PLAN_LINK_TYPES: readonly [
 	"blocked_by",
 	"spawned_from"
@@ -11762,6 +11952,55 @@ export interface CompositeCreateLinkOp {
 	fromSessionId?: string;
 	toRef?: string;
 	toSessionId?: string;
+	/**
+	 * `blocked_by` only — the step waits on a DECISION (an entity: a
+	 * `create_entity` ref or an existing id) or on a GOAL (a `create_track` ref
+	 * or an existing id): the cross-kind edge the dependency rule already reads
+	 * (`session --blocked_by--> entity | track`), written through THE governed
+	 * dependency door. Exactly one `to…` per link.
+	 */
+	toEntityRef?: string;
+	toEntityId?: string;
+	toTrackRef?: string;
+	toTrackId?: string;
+	/**
+	 * An ARM (P5): with a decision target, the step waits on that ONE option of
+	 * it. Stamped as `links.metadata.option` through the same governed door,
+	 * which refuses an option the decision does not list.
+	 */
+	option?: string;
+}
+/** What a step may wait on besides a session (`create_link` / `remove_link`). */
+export type PlanBlockerKind = "entity" | "session" | "track";
+/**
+ * RE-PLAN: change an EXISTING step (pathway plan 368179d7, B3 for B7). Only
+ * these fields, through THE session update door as the applying person (its
+ * move rules decide a status change). Its blockers change with `create_link`
+ * (from this session) and `remove_link`.
+ */
+export interface CompositeUpdateSessionOp {
+	op: "update_session";
+	ref: string;
+	sessionId: string;
+	patch: {
+		goal?: string;
+		status?: "active" | "paused";
+		title?: string | null;
+	};
+}
+/**
+ * RE-PLAN: drop an EXISTING `blocked_by` edge from an existing step, through
+ * the door that owns it (session → session: the session blocker door; a
+ * decision or a goal: THE governed dependency door). An edge already gone is
+ * a no-op, never a failure.
+ */
+export interface CompositeRemoveLinkOp {
+	op: "remove_link";
+	type: "blocked_by";
+	fromSessionId: string;
+	toSessionId?: string;
+	toEntityId?: string;
+	toTrackId?: string;
 }
 /**
  * ── UPDATE ops (Library rebuild, 2026-10-13) ────────────────────────────────
@@ -11843,7 +12082,7 @@ export interface CompositeUpdateEntityOp {
 	};
 }
 export type CompositeUpdateOperation = CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
-export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
+export type CompositeProposalOperation = CompositeCreateEntityOp | CompositeCreateRelationOp | CompositeCreateSkillOp | CompositeCreateAutomationOp | CompositeCreateRuleOp | CompositeCreatePlaybookOp | CompositeCreateWorkspaceOp | CompositeDefineKindOp | CompositeDeclareLifecycleOp | CompositeCreateViewOp | CompositeCreateSessionOp | CompositeCreateDocumentOp | CompositeCreateProjectOp | CompositeCreateLinkOp | CompositeCreateTrackOp | CompositeUpdateSessionOp | CompositeRemoveLinkOp | CompositeCreateCellOp | CompositeBindRendererOp | CompositeUpdateSkillOp | CompositeUpdateAutomationOp | CompositeUpdateRuleOp | CompositeUpdatePlaybookOp | CompositeUpdateViewOp | CompositeUpdateEntityOp;
 /**
  * Record of what a proposal MATERIALIZED on approval.
  *
@@ -11878,6 +12117,9 @@ export interface ProposalMaterializedRecord {
 	/** Connected plan: focus sessions and projects created by the run. */
 	sessionIds?: string[];
 	projectIds?: string[];
+	/** A domain: spaces and kinds created by the run (an undo keeps them). */
+	workspaceIds?: string[];
+	profileIds?: string[];
 	/** Entities a merge into a PRE-EXISTING entity changed. */
 	propertyDiffs?: Array<{
 		entityId: string;
@@ -12600,7 +12842,7 @@ export interface ProcessAutomation {
 export interface ProcessWorker {
 	ruleId: string;
 	activatorKey: string;
-	mode: "propose" | "run";
+	mode: WorkerActivatorMode;
 	scope: string;
 	/** `stopped`: a session's worker whose session ended. */
 	state: "paused" | "running" | "stopped";
@@ -13316,6 +13558,16 @@ export interface WorkReleaseRead {
 	/** Present only when the caller's grant narrowed the read. */
 	narrowed?: WorkReleaseNarrowing;
 }
+declare const WORK_GRAPH_EDGE_KINDS: readonly [
+	"blocked_by",
+	"spawned_from",
+	"orchestrated_by",
+	"waits_on_output",
+	"triggered",
+	"updated",
+	"serves"
+];
+export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 declare const REACTION_OUTCOMES: readonly [
 	"applied",
 	"proposed",
@@ -14952,13 +15204,38 @@ export interface MaterializeRuleResult {
 	factSkillId?: string;
 	automationIds: string[];
 }
-/** Per-op result for a `create_playbook` op (a DRAFT process). */
+/** Per-op result for a `create_playbook` op. */
 export interface MaterializePlaybookResult {
 	ref: string;
 	opIndex: number;
 	playbookId: string;
-	/** Always "draft" — what the op asked for is never honoured over this. */
-	status: "draft";
+	/** What the door wrote: the caller decides from the op and the approval. */
+	status: "active" | "draft";
+}
+/** Per-op result for a `create_workspace` op (a domain's space). */
+export interface MaterializeWorkspaceResult {
+	ref: string;
+	opIndex: number;
+	workspaceId: string;
+	/** The template apply reused a space a retry of this approval made. */
+	linked: boolean;
+}
+/** Per-op result for a `define_kind` op. */
+export interface MaterializeKindResult {
+	ref: string;
+	opIndex: number;
+	profileId: string;
+	/** The stored slug: what a playbook or a view of this batch names. */
+	slug: string;
+	/** The kind a retry of this approval already made. */
+	linked: boolean;
+}
+/** Per-op result for a `declare_lifecycle` op. */
+export interface MaterializeLifecycleResult {
+	ref: string;
+	opIndex: number;
+	profileId: string;
+	propertyDefId: string;
 }
 /** Per-op result for a `create_view` op (a List over the bundle's things). */
 export interface MaterializeViewResult {
@@ -15048,6 +15325,56 @@ export interface MaterializeLinkResult {
 	/** The edge was already in the graph — not created by this run. */
 	preExisting?: true;
 }
+/** Per-op result for a `create_track` op (connected plan). */
+export interface MaterializeTrackResult {
+	ref: string;
+	opIndex: number;
+	trackId: string;
+	/** The start door handed back a LIVE goal of the same name — not this run's row. */
+	linked?: boolean;
+	/** The goal→goal `blocked_by` edges this run wrote for it (`links` ids). */
+	blockerLinkIds?: string[];
+}
+/** One step → decision / goal `blocked_by` edge a plan applied. */
+export interface MaterializeCrossLinkResult {
+	opIndex: number;
+	fromSessionId: string;
+	toKind: "entity" | "track";
+	toId: string;
+	/** As declared (a ref or a real id per side) — the edge's identity in a record. */
+	requested: {
+		from: string;
+		to: string;
+	};
+	linkId?: string;
+	/** The edge was already in the graph — not created by this run. */
+	preExisting?: true;
+}
+/** One existing step a re-plan changed (`update_session`), before and after. */
+export interface MaterializeSessionUpdateResult {
+	ref: string;
+	opIndex: number;
+	sessionId: string;
+	before: {
+		goal: string;
+		status: string;
+		title: string | null;
+	};
+	after: {
+		goal: string;
+		status: string;
+		title: string | null;
+	};
+}
+/** One existing `blocked_by` edge a re-plan dropped (`remove_link`). */
+export interface MaterializeLinkRemovalResult {
+	opIndex: number;
+	fromSessionId: string;
+	toKind: PlanBlockerKind;
+	toId: string;
+	/** False when the edge was already gone (a no-op, nothing to restore). */
+	removed: boolean;
+}
 /** Per-op result for a `create_document` op (connected plan). */
 export interface MaterializeDocumentResult {
 	ref: string;
@@ -15088,8 +15415,12 @@ export interface MaterializeResult {
 	automations: MaterializeAutomationResult[];
 	/** Rule Loop (NS1): rules created by `create_rule` ops. */
 	rules: MaterializeRuleResult[];
-	/** Draft processes created by `create_playbook` ops. Empty by default. */
+	/** Processes created by `create_playbook` ops. Empty by default. */
 	playbooks: MaterializePlaybookResult[];
+	/** A domain: spaces, kinds and lifecycles its ops made. Absent when none. */
+	workspaces?: MaterializeWorkspaceResult[];
+	kinds?: MaterializeKindResult[];
+	lifecycles?: MaterializeLifecycleResult[];
 	/** Lists created by `create_view` ops. Empty by default. */
 	views: MaterializeViewResult[];
 	/** Cells defined by `create_cell` ops (a playbook's UI). */
@@ -15103,6 +15434,12 @@ export interface MaterializeResult {
 	sessions: MaterializeSessionResult[];
 	links: MaterializeLinkResult[];
 	documents: MaterializeDocumentResult[];
+	/** Goals (`create_track`) a plan started. */
+	tracks?: MaterializeTrackResult[];
+	/** Step → decision / goal edges, and a re-plan's edits. */
+	crossLinks?: MaterializeCrossLinkResult[];
+	sessionUpdates?: MaterializeSessionUpdateResult[];
+	linkRemovals?: MaterializeLinkRemovalResult[];
 }
 /** Per-op outcome, mirrored into `capture.execute`'s response as `updated[]`. */
 export interface CaptureUpdateResult {
@@ -15319,7 +15656,7 @@ export type CaptureReceiptState = "applied" | "partial" | "pending";
 export interface PlanStepSummary {
 	ref: string | null;
 	opIndex: number;
-	kind: "automation" | "binding" | "cell" | "document" | "entity" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "view";
+	kind: "automation" | "binding" | "cell" | "document" | "entity" | "kind" | "lifecycle" | "link" | "playbook" | "project" | "relation" | "rule" | "session" | "skill" | "track" | "view" | "workspace";
 	label: string;
 	/** Set on a step that CHANGES an existing row (a Library rebuild). */
 	update?: {
@@ -15473,20 +15810,6 @@ export interface SubmitCaptureGraphResult {
 	 * can have failed. Omitted when nothing failed.
 	 */
 	relationsFailed?: MaterializeRelationFailure[];
-	/**
-	 * The agent is not a member of a space this graph lands in, so NOTHING was
-	 * written: the whole graph is kept on that space's workspace-JOIN request
-	 * (`proposalId` names the join) and replayed, all of it, as the agent once a
-	 * person approves the join (finding 590ca76a). `deferred: false` when the
-	 * join could not keep it (the agent retries after approval). Omitted
-	 * otherwise.
-	 */
-	joinGate?: {
-		deferred: boolean;
-		message: string;
-		proposalId: string;
-		ref?: string;
-	};
 	writeReceipt: {
 		/** applied path only: fresh-created vs linked-existing counts + ids. */
 		created?: number;
@@ -15657,8 +15980,8 @@ export interface UpdateEntitiesResult {
 		reason: string;
 	}>;
 	/**
-	 * `deferred: true` = the write was KEPT on a workspace-join request and is
-	 * replayed for the caller once the join is approved — never resend it.
+	 * `deferred: true` = the write was KEPT on today's held-writes pack and is
+	 * replayed for the caller once it is approved — never resend it.
 	 */
 	skipped: Array<{
 		deferred?: true;
@@ -15812,6 +16135,21 @@ export interface SlotBlocks {
 	to?: string;
 }
 /**
+ * WHAT MOVES when the person answers, as data (work-model W5): ONE thing of
+ * the same session, named by its key — an output or a criterion. The prose
+ * line (`ExpectedOutput.unblocks`) stays what the person reads. The agent
+ * declares it, so the pod only RE-CHECKS what it names, through the existing
+ * doors (`notifications/session-unblock-reactor.ts`, api): the output's claim
+ * is read against its evidence again, the criterion's own check runs again (a
+ * criterion the person grades gets its grade card). It never writes the
+ * person's attestation or verdict. A stage moves on by itself (W6).
+ */
+export type SlotUnblocksTarget = {
+	output: string;
+} | {
+	criterion: string;
+};
+/**
  * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
  * intent (`request_connection`), a playbook the pod runs, or a capability.
  * The closed `blockedReason` list stays "what to build"; this says what to RUN.
@@ -15927,6 +16265,13 @@ export interface ExpectedOutput {
 	 * ownership fields when the slot goes back to the agent.
 	 */
 	unblocks?: string;
+	/**
+	 * WHAT MOVES, as data: the output or criterion of this session the answer
+	 * re-checks ({@link SlotUnblocksTarget}). DECLARED by the agent beside
+	 * `unblocks`, optional, and cleared with it when the slot goes back to the
+	 * agent.
+	 */
+	unblocksTarget?: SlotUnblocksTarget;
 	/**
 	 * WHEN the slot became the human's — stamped the moment `owner` becomes
 	 * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -16076,6 +16421,18 @@ export interface ExpectedOutput {
 	 * matching the label.
 	 */
 	criterionKey?: string;
+	/**
+	 * On a criterion slot: the key of the session output its criterion checks
+	 * (the criterion's own `outputKey`), written by the door that files the
+	 * slot (api `services/focus-sessions/evaluations/record.ts`) and never by a
+	 * client — the `criterionKey` precedent. While that output is not
+	 * delivered, the grade is not owed (`isGradeAwaitingOutput`,
+	 * `@synap-core/types/units`): the person grades work that exists.
+	 *
+	 * ABSENT on every slot filed before this field existed and on a slot whose
+	 * criterion names no output: such a grade is owed as soon as it is filed.
+	 */
+	outputKey?: string;
 	/**
 	 * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
 	 * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
@@ -16296,7 +16653,9 @@ export interface PlaybookActivator {
 	/**
 	 * `created` / `enters_status` — the thing is created / enters `status`.
 	 * `count` — at least `min` things sit in `status` (always per_moment).
-	 * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+	 * `schedule` — on `cron` in `timezone`, over the things in `status`: one
+	 *   run for the set (per_moment, default) or one per thing (per_thing); a
+	 *   playbook with no subject runs once per tick.
 	 * `manual` — a button, never by itself: compiles no rule.
 	 * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
 	 *   the new run works on the same subject.
@@ -16313,20 +16672,29 @@ export interface PlaybookActivator {
 	playbook?: string;
 	/** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
 	outcome?: "done" | "not_done";
-	/** Required for `enters_status` / `count`; optional for `schedule`. */
-	status?: string;
+	/** Required for `enters_status` / `count`; optional for `schedule` (a list there). */
+	status?: string | string[];
 	/** Required for `schedule`. */
 	cron?: string;
+	/** `schedule` only: the IANA zone of `cron`; absent = the owner's zone. */
+	timezone?: string;
+	/** `schedule` only: installed paused, the person turns it on. */
+	startsPaused?: true;
+	/** `schedule` in `run` mode only: the agent user id each run is handed to. */
+	handToAgentId?: string;
 	/** Required for `count` (≥ 2). */
 	min?: number;
-	/** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+	/** `per_thing` (default) or `per_moment`; count is per_moment, schedule defaults to it. */
 	size?: "per_moment" | "per_thing";
-	/** `run` starts the run; `propose` files a proposal (the public default). */
-	mode: "propose" | "run";
+	/**
+	 * `run` starts the run; `propose` files a proposal (the public default);
+	 * `appointment` (schedule only) opens a session that waits for the person.
+	 */
+	mode: "appointment" | "propose" | "run";
 	/** Pending approvals before the worker stops starting runs (default 20). */
 	maxPendingApprovals?: number;
 	/**
-	 * `created` / `enters_status` only: leave out a thing that carries this
+	 * per_thing `created` / `enters_status` / `schedule`: leave out a thing that carries this
 	 * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
 	 * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
 	 */
@@ -16335,7 +16703,7 @@ export interface PlaybookActivator {
 		property: string;
 	};
 	/**
-	 * `created` / `enters_status` only: keep only a thing whose property holds
+	 * per_thing `created` / `enters_status` / `schedule`: keep only a thing whose property holds
 	 * one of these values (trimmed, any case), e.g. `{ property: "post-format",
 	 * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
 	 * (`@synap-core/types/workers`).
@@ -17926,6 +18294,8 @@ export interface ProposalObjectRef {
 /** One landed object as a row carries it. */
 export interface ProposalLandedObject extends ProposalObjectRef {
 	role: ProposalLandedRole;
+	/** An entity's kind (its profile slug): what it is called and drawn as. */
+	profileSlug?: string;
 	/** Its next step; null = it needs nothing; absent = not read. */
 	next?: ObjectNext | null;
 }
@@ -18682,6 +19052,12 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
 	propertyDiffs?: EntityPropertyDiff[];
 	/** Connected plan: session edges created by the run. */
 	linkIds?: string[];
+	/**
+	 * Goals a plan started (`create_track`). A failed plan's compensation drops
+	 * them (`plan-callers.ts`); like the plan's sessions, a later whole revert
+	 * does not.
+	 */
+	trackIds?: string[];
 	/** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
 	projectSubjectIds?: Record<string, string>;
 	/**
@@ -18762,7 +19138,7 @@ export interface RowPatchRecord {
 export type UpdateOpName = MaterializeResult["updates"][number]["op"];
 /** What one op produced. `linked`/`preExisting` rows were never this run's. */
 export interface MaterializedOpRecord {
-	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_view" | UpdateOpName;
+	op: "bind_renderer" | "create_automation" | "create_cell" | "create_document" | "create_entity" | "create_link" | "create_playbook" | "create_project" | "create_relation" | "create_rule" | "create_session" | "create_skill" | "create_track" | "create_view" | "create_workspace" | "declare_lifecycle" | "define_kind" | "update_session" | UpdateOpName;
 	entityId?: string;
 	linked?: boolean;
 	relationId?: string;
@@ -18771,8 +19147,14 @@ export interface MaterializedOpRecord {
 	skillId?: string;
 	automationId?: string;
 	ruleId?: string;
-	/** `create_playbook`: the DRAFT playbook it created. */
+	/** `create_playbook`: the playbook it created. */
 	playbookId?: string;
+	/** `create_workspace`: the space it created. */
+	workspaceId?: string;
+	/** `define_kind` / `declare_lifecycle`: the kind. */
+	profileId?: string;
+	/** `declare_lifecycle`: the status field it declared. */
+	propertyDefId?: string;
 	/** `create_view`: the List it created. */
 	viewId?: string;
 	/** `create_cell`: the cell row it created. */
@@ -18783,6 +19165,8 @@ export interface MaterializedOpRecord {
 	projectId?: string;
 	documentId?: string;
 	linkId?: string;
+	/** `create_track`: the goal it started. */
+	trackId?: string;
 	/**
 	 * `update_*`: the row it changed and the fields' values before and after
 	 * (`{before, patch}` — `after` is the patch as it landed). An
@@ -20597,6 +20981,11 @@ export interface OpenBlocker extends DependencyNodeRef {
 	 * or link a replacement.
 	 */
 	dropped: boolean;
+	/**
+	 * With `dropped`: the step is an arm of this decision that was NOT taken
+	 * (P5). It holds until the pod closes the step as skipped.
+	 */
+	notTaken?: true;
 	/** Its own raw status, when the reader may see it. */
 	status?: string | null;
 	/** Its display name, when the reader may see it. */
@@ -21288,6 +21677,11 @@ export interface PacketChildItem {
 	 * ended. Absent on items of other sections.
 	 */
 	closedAs?: SessionClosedAs | null;
+	/**
+	 * It ended as a decision's arm not taken (P5): it holds none of its
+	 * dependents (`classifyDependencyBlocker`). Absent otherwise.
+	 */
+	skipped?: true;
 }
 /**
  * A session of an EARLIER stage of this session's track, with what it produced.
@@ -23893,8 +24287,12 @@ export interface CapabilityCredentialView {
 	contextId: string | null;
 	isDefault: boolean;
 	accountHint: string | null;
-	/** 'nango' when the credential delegates to Nango, else 'vault' (direct key). */
-	kind: "nango" | "vault";
+	/**
+	 * 'nango' when the credential delegates to Nango, 'source' for a SOURCE the
+	 * pod reads that holds no secret at all (a Storybook: its account hint names
+	 * it), else 'vault' (direct key).
+	 */
+	kind: "nango" | "source" | "vault";
 	/**
 	 * Pod-wide (0211): a shared vault key any member may USE for this capability
 	 * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
@@ -25523,6 +25921,65 @@ export type ProposeRetireResult = {
 	reasons: string[];
 	status: "refused";
 };
+/**
+ * What a frame is ABOUT, and the brand it draws in (frame contract v3).
+ *
+ * Every frame that runs stored code (a stored HTML page, a module cell, a
+ * renderer bundle cell) sits on something: an entity, a project, a session.
+ * The host knows that anchor, the space and project it belongs to, the goal
+ * a session serves, and the project's brand; the frame asks for them with one
+ * call:
+ *
+ *   window.synap.context() → Promise<SurfaceContext>
+ *
+ * which posts `synap:context` and resolves with the matching
+ * `synap:context:result` (`sdk.ts`). A module frame also receives the same
+ * fields in its `synap:init` context (`CellFrameInitContext`,
+ * `surfaceContextInitFields`).
+ *
+ * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
+ * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
+ * projection) with `brandFrameCss`, and written AFTER the host's tokens
+ * (`frameTokensWithBrand`), so a name the brand does not set keeps the
+ * host's value. No brand (no project, or a project with no token set) is
+ * `brand: null`, never a failure.
+ *
+ * Pure, like the rest of this leaf: no DOM, no fetch.
+ */
+/**
+ * The object a frame is anchored to. Structurally the same as
+ * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
+ * workspace, project, track, playbook, session); a host that renders a
+ * document or a view with no other anchor names that body itself
+ * (`document`, `view`).
+ */
+export interface SurfaceContextAnchor {
+	kind: string;
+	id: string;
+}
+/** The project's brand, as CSS the host writes after its own tokens. */
+export interface SurfaceContextBrand {
+	/** The brand identity's id (the record the brand door chose). */
+	id: string;
+	/** The brand token set's hash: a new one means new values. */
+	hash: string;
+	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
+	css: string;
+}
+/** Everything a frame may know about where it is (frame contract v3). */
+export interface SurfaceContext {
+	anchor: SurfaceContextAnchor | null;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The goal (track) the anchor serves, when it serves one. */
+	goalId: string | null;
+	/** The host's filters on what the frame shows (a bound view's), JSON only. */
+	filters: Record<string, unknown>;
+	brand: SurfaceContextBrand | null;
+	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
+	locale: string;
+	theme: "dark" | "light";
+}
 /** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
 export type RendererBindingStore = "profile" | "view" | "workspace";
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
@@ -27102,16 +27559,6 @@ export interface WorkGraphEntity {
 	/** The status's fixed category; `null` = no lifecycle. */
 	category: LifecycleCategory | null;
 }
-declare const WORK_GRAPH_EDGE_KINDS: readonly [
-	"blocked_by",
-	"spawned_from",
-	"orchestrated_by",
-	"waits_on_output",
-	"triggered",
-	"updated",
-	"serves"
-];
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
 /** What an edge end is when it is not a session (B4). */
 export type WorkGraphEndKind = "entity" | "track";
 export interface WorkGraphEdge {
@@ -27133,6 +27580,12 @@ export interface WorkGraphEdge {
 	lastAt?: string | null;
 	/** `serves`: the goal criterion the session serves, when the edge names one. */
 	criterionKey?: string;
+	/**
+	 * `blocked_by` to a decision (`toKind: "entity"`): the option this step is
+	 * the ARM of (`links.metadata.option`, decision arms P5). Taken when the
+	 * decision chooses it; another choice skips the step. Absent = a plain wait.
+	 */
+	option?: string;
 }
 export type WorkGraphSection = {
 	status: "ok";
@@ -27206,6 +27659,11 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 	 * narrowed). ABSENT without the narrow: there is nothing to match.
 	 */
 	playbookMatch?: WorkGraphPlaybookMatch | null;
+	/**
+	 * It ended as a decision's arm NOT taken (P5, `notTakenRecorded`): the
+	 * readiness rule's `skipped`, never a plain cancel. Absent otherwise.
+	 */
+	skipped?: true;
 	unitFacts: SessionUnitCounts;
 	viewerRole: SessionViewerRole;
 };
@@ -27649,6 +28107,7 @@ export interface SessionTargetsWrite {
 export type BlockerKey = {
 	blockerEntityId: string;
 	blockerTrackId?: never;
+	option?: string;
 } | {
 	blockerEntityId?: never;
 	blockerTrackId: string;
@@ -27665,6 +28124,20 @@ export type UnitBlockerReport = BlockerKey & ({
 	reason: UnitBlockerReason;
 	status: "failed";
 });
+/**
+ * Why a spawn target was not recorded. `checked_by_criterion`: a required
+ * criterion of the parent checks that output, so its evaluator meets it and
+ * the rollup never would (`selectSlotsDeliveredByChild`).
+ */
+export type SpawnTargetRefusal = "checked_by_criterion" | "no_such_output" | "not_a_parent_writer";
+export type SpawnTargetCheck = {
+	key: string;
+	status: "recorded";
+} | {
+	key: string;
+	reason: SpawnTargetRefusal;
+	status: "refused";
+};
 /** What happened to the create-time `spawned_from` edge. */
 export type CreateTimeParentLink = {
 	/**
@@ -27672,6 +28145,8 @@ export type CreateTimeParentLink = {
 	 * child. `null` when the write produced no report.
 	 */
 	blocksParent?: CreateTimeBlockerReport | null;
+	/** Present when `forOutput` was asked: recorded, or refused and why. */
+	forOutput?: SpawnTargetCheck;
 	parentSessionId: string;
 	status: "linked";
 	suspendedIntentRecorded: boolean;
@@ -28780,8 +29255,8 @@ export interface OpenTarget {
  *
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
- * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * migration 0225); scope (pod-wide vs workspace) is DERIVED from the spaces of
+ * the person it acts for (none ⇒ pod-wide). Floored like the scorecard
  * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
  * another owner's agent identity to a member. A pod admin may already list
  * every space, so the space names below reveal nothing new to one.
@@ -30874,7 +31349,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					code: string;
 					kind: "recovery_code";
 				} | undefined;
-				role?: "admin" | "editor" | "viewer" | undefined;
 				workspaceId: string;
 				writesRequireProposal?: boolean | undefined;
 			};
@@ -40093,7 +40567,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks: RequiredLinkCheck;
 				reviewUrl: string;
@@ -40117,7 +40591,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				message: string;
 				proposalId: string;
 				proposalType: string;
-				proposedEntityId?: string | undefined;
+				proposedEntityId: string;
 				ref?: string | undefined;
 				requiredLinks?: undefined;
 				reviewUrl: string;
@@ -41300,7 +41774,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					version: number;
 					workers: {
 						activatorKey: string;
-						mode: "propose" | "run";
+						mode: "appointment" | "propose" | "run";
 						projectId: string | null;
 						ruleId: string;
 						scope: "project" | "session" | "space";
@@ -42639,6 +43113,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
+					outputKey?: string | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
 					paramName?: string | undefined;
@@ -42742,6 +43217,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
 					unblocks?: string | undefined;
+					unblocksTarget?: {
+						output: string;
+					} | {
+						criterion: string;
+					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				forceCreate?: boolean | undefined;
@@ -44023,6 +44503,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					} | undefined;
 					laterUntil?: string | undefined;
 					optional?: boolean | undefined;
+					outputKey?: string | undefined;
 					owedSince?: string | undefined;
 					owner?: "agent" | "human" | undefined;
 					paramName?: string | undefined;
@@ -44126,6 +44607,11 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						status: "linked" | "proposed" | "skipped";
 					} | undefined;
 					unblocks?: string | undefined;
+					unblocksTarget?: {
+						output: string;
+					} | {
+						criterion: string;
+					} | undefined;
 					why?: string | undefined;
 				}[] | undefined;
 				expectedStatus?: "active" | "cancelled" | "closed" | "failed" | "forming" | "paused" | "scheduled" | "stale" | undefined;
@@ -51287,9 +51773,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				activators?: {
 					cron?: string | undefined;
+					handToAgentId?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode?: "propose" | "run" | undefined;
+					mode?: "appointment" | "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
@@ -51298,7 +51785,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					startsPaused?: true | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 					unless?: {
 						present: true;
 						property: string;
@@ -51922,9 +52411,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statusProperty?: string | undefined;
 					activators?: {
 						cron?: string | undefined;
+						handToAgentId?: string | undefined;
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
-						mode?: "propose" | "run" | undefined;
+						mode?: "appointment" | "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
@@ -51933,7 +52423,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
-						status?: string | undefined;
+						startsPaused?: true | undefined;
+						status?: string | string[] | undefined;
+						timezone?: string | undefined;
 						unless?: {
 							present: true;
 							property: string;
@@ -52707,9 +53199,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			input: {
 				activators?: {
 					cron?: string | undefined;
+					handToAgentId?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode?: "propose" | "run" | undefined;
+					mode?: "appointment" | "propose" | "run" | undefined;
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					only?: {
 						in: string[];
@@ -52718,7 +53211,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					startsPaused?: true | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 					unless?: {
 						present: true;
 						property: string;
@@ -53338,9 +53833,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					statusProperty?: string | undefined;
 					activators?: {
 						cron?: string | undefined;
+						handToAgentId?: string | undefined;
 						maxPendingApprovals?: number | undefined;
 						min?: number | undefined;
-						mode?: "propose" | "run" | undefined;
+						mode?: "appointment" | "propose" | "run" | undefined;
 						on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 						only?: {
 							in: string[];
@@ -53349,7 +53845,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 						outcome?: "done" | "not_done" | undefined;
 						playbook?: string | undefined;
 						size?: "per_moment" | "per_thing" | undefined;
-						status?: string | undefined;
+						startsPaused?: true | undefined;
+						status?: string | string[] | undefined;
+						timezone?: string | undefined;
 						unless?: {
 							present: true;
 							property: string;
@@ -57084,6 +57582,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					notRun?: MaterializedOpRef[];
 					opCount?: number;
 					playbookIds?: string[];
+					profileIds?: string[];
 					projectIds?: string[];
 					projectSubjectIds?: Record<string, string>;
 					propertyDiffs?: EntityPropertyDiff[];
@@ -57095,7 +57594,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					skillIds?: string[];
 					skipped?: MaterializedSkippedOp[];
 					stampedAt?: string;
+					trackIds?: string[];
 					viewIds?: string[];
+					workspaceIds?: string[];
 				};
 				revertedAt?: undefined;
 				skipped?: {
@@ -60417,6 +60918,18 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		context: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				kind: "document" | "entity" | "playbook" | "profile" | "project" | "session" | "track" | "view" | "workspace";
+				locale?: string | undefined;
+				projectId?: string | undefined;
+				theme?: "dark" | "light" | undefined;
+			};
+			meta: object;
+			output: SurfaceContext;
+		}>;
+	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cellKey?: string | undefined;
@@ -63547,12 +64060,13 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					cron?: string | undefined;
 					maxPendingApprovals?: number | undefined;
 					min?: number | undefined;
-					mode: "propose" | "run";
+					mode: "appointment" | "propose" | "run";
 					on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 					outcome?: "done" | "not_done" | undefined;
 					playbook?: string | undefined;
 					size?: "per_moment" | "per_thing" | undefined;
-					status?: string | undefined;
+					status?: string | string[] | undefined;
+					timezone?: string | undefined;
 				} | null;
 				activatorKey: string;
 				automationId: string | null;
@@ -63568,7 +64082,7 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				};
 				lastRunAt: string | null;
 				maxPendingApprovals: number;
-				mode: "propose" | "run";
+				mode: "appointment" | "propose" | "run";
 				nextRunAt: string | null;
 				pendingApprovals: number;
 				playbookId: string;
@@ -64231,9 +64745,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					playbooks?: {
 						activators?: {
 							cron?: string | undefined;
+							handToAgentId?: string | undefined;
 							maxPendingApprovals?: number | undefined;
 							min?: number | undefined;
-							mode?: "propose" | "run" | undefined;
+							mode?: "appointment" | "propose" | "run" | undefined;
 							on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 							only?: {
 								in: string[];
@@ -64242,7 +64757,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							outcome?: "done" | "not_done" | undefined;
 							playbook?: string | undefined;
 							size?: "per_moment" | "per_thing" | undefined;
-							status?: string | undefined;
+							startsPaused?: true | undefined;
+							status?: string | string[] | undefined;
+							timezone?: string | undefined;
 							unless?: {
 								present: true;
 								property: string;
@@ -64862,9 +65379,10 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 							statusProperty?: string | undefined;
 							activators?: {
 								cron?: string | undefined;
+								handToAgentId?: string | undefined;
 								maxPendingApprovals?: number | undefined;
 								min?: number | undefined;
-								mode?: "propose" | "run" | undefined;
+								mode?: "appointment" | "propose" | "run" | undefined;
 								on: "count" | "created" | "enters_status" | "manual" | "run_ended" | "schedule";
 								only?: {
 									in: string[];
@@ -64873,7 +65391,9 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 								outcome?: "done" | "not_done" | undefined;
 								playbook?: string | undefined;
 								size?: "per_moment" | "per_thing" | undefined;
-								status?: string | undefined;
+								startsPaused?: true | undefined;
+								status?: string | string[] | undefined;
+								timezone?: string | undefined;
 								unless?: {
 									present: true;
 									property: string;

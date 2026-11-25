@@ -12,6 +12,9 @@
  *                           agent claims it, a produced object or its `ref`
  *                           proves it — `satisfyClaimsByEvidence`); by the
  *                           person when `owner: "human"`.
+ *                           `outputKey` names the output it checks (work-model
+ *                           W1: THE pairing of a criterion with an output),
+ *                           the same field and alphabet as the criteria alias.
  *   + `verify` judge/capability/human, or evidence with an `evidenceKey`, on a
  *     deliverable → ALSO a criterion under the same key that NAMES the slot
  *     (`outputKey`). The projection folds a slot and the criteria naming it
@@ -73,6 +76,19 @@ export const outcomeDeclarationSchema = z
         params: z.record(z.string(), z.unknown()).optional(),
       })
       .optional(),
+    /**
+     * kind "fact" only: the key of the output this criterion checks — THE
+     * pairing (`criteriaByOutput`, work-model W1/W4), stored on the criterion
+     * as the criteria alias stores it (`sessionCriterionSchema.outputKey`, the
+     * same alphabet). A deliverable's own criterion already names itself.
+     */
+    outputKey: z
+      .string()
+      .regex(DECLARED_SLOT_KEY_RE, {
+        message:
+          "outputKey must be an output key (a lowercase slug: a-z, 0-9, -)",
+      })
+      .optional(),
     required: z.boolean().optional(),
     owner: z.enum(["human", "agent"]).optional(),
     blockedReason: z.enum(BLOCKED_REASONS).optional(),
@@ -85,7 +101,22 @@ export const outcomeDeclarationSchema = z
     blockerKey: expectedOutputWireSchema.shape.blockerKey,
     clearedBy: expectedOutputWireSchema.shape.clearedBy,
   })
-  .strict();
+  .strict()
+  .superRefine((o, ctx) => {
+    // A deliverable checked beyond its evidence gets a criterion naming
+    // ITSELF; another output key there would pair it with something else.
+    if (
+      o.outputKey !== undefined &&
+      (o.kind ?? "").toLowerCase() !== FACT_OUTCOME_KIND
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        message:
+          'outputKey goes on a kind: "fact" outcome (the output a checked statement checks); a deliverable is checked as itself',
+        path: ["outputKey"],
+      });
+    }
+  });
 
 export type OutcomeDeclaration = z.infer<typeof outcomeDeclarationSchema>;
 
@@ -220,7 +251,9 @@ function splitDeclared(outcomes: readonly OutcomeDeclaration[]): {
   const criteria: SessionCriterion[] = [];
   for (const o of outcomes) {
     if ((o.kind ?? "").toLowerCase() === FACT_OUTCOME_KIND) {
-      criteria.push(criterionOf(o));
+      criteria.push(
+        criterionOf(o, o.outputKey ? { outputKey: o.outputKey } : undefined)
+      );
       continue;
     }
     expectedOutputs.push(slotOf(o));

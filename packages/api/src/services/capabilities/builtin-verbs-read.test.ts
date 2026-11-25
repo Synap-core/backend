@@ -259,6 +259,10 @@ describe("W6 read/resolve verbs — registry", () => {
       // snippet.render reads a snippet (and a subject's fields) through the
       // caller's floor and returns text; it writes nothing.
       "snippet.render",
+      // storybook.changed (components as pod entities, plan 48854969 §9): the
+      // ui-components changed since their review, read through the caller's
+      // entity read floor; it writes nothing. storybook.sync stays gated.
+      "storybook.changed",
       // web.read reads a public page (or a read-only reader verb through its
       // own gate); it mutates nothing in the pod.
       "web.read",

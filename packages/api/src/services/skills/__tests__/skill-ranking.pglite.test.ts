@@ -45,9 +45,11 @@ import {
   skills,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   users,
   projectMembers,
+  spaceAccess,
 } from "@synap/database/schema";
 import { searchInstructionSkills } from "../search.js";
 import { rankByTerms } from "../../../utils/term-match.js";
@@ -147,9 +149,11 @@ beforeAll(async () => {
     skills,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     users,
     projectMembers,
+    spaceAccess,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
   }

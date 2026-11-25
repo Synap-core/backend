@@ -317,6 +317,18 @@ export interface SlotBlocks {
 }
 
 /**
+ * WHAT MOVES when the person answers, as data (work-model W5): ONE thing of
+ * the same session, named by its key — an output or a criterion. The prose
+ * line (`ExpectedOutput.unblocks`) stays what the person reads. The agent
+ * declares it, so the pod only RE-CHECKS what it names, through the existing
+ * doors (`notifications/session-unblock-reactor.ts`, api): the output's claim
+ * is read against its evidence again, the criterion's own check runs again (a
+ * criterion the person grades gets its grade card). It never writes the
+ * person's attestation or verdict. A stage moves on by itself (W6).
+ */
+export type SlotUnblocksTarget = { output: string } | { criterion: string };
+
+/**
  * WHAT CLEARS a blocker — exactly one door (plan §9): the person's answer, an
  * intent (`request_connection`), a playbook the pod runs, or a capability.
  * The closed `blockedReason` list stays "what to build"; this says what to RUN.
@@ -460,6 +472,13 @@ export interface ExpectedOutput {
    * ownership fields when the slot goes back to the agent.
    */
   unblocks?: string;
+  /**
+   * WHAT MOVES, as data: the output or criterion of this session the answer
+   * re-checks ({@link SlotUnblocksTarget}). DECLARED by the agent beside
+   * `unblocks`, optional, and cleared with it when the slot goes back to the
+   * agent.
+   */
+  unblocksTarget?: SlotUnblocksTarget;
   /**
    * WHEN the slot became the human's — stamped the moment `owner` becomes
    * `human`, and cleared with it. Mirrors `delegatedAt` accompanying
@@ -609,6 +628,18 @@ export interface ExpectedOutput {
    * matching the label.
    */
   criterionKey?: string;
+  /**
+   * On a criterion slot: the key of the session output its criterion checks
+   * (the criterion's own `outputKey`), written by the door that files the
+   * slot (api `services/focus-sessions/evaluations/record.ts`) and never by a
+   * client — the `criterionKey` precedent. While that output is not
+   * delivered, the grade is not owed (`isGradeAwaitingOutput`,
+   * `@synap-core/types/units`): the person grades work that exists.
+   *
+   * ABSENT on every slot filed before this field existed and on a slot whose
+   * criterion names no output: such a grade is owed as soon as it is filed.
+   */
+  outputKey?: string;
   /**
    * The `PlaybookParam.name` this slot STANDS FOR. Set only on a slot whose
    * `kind` is the param-slot kind (`PARAM_SLOT_KIND`, `@synap-core/types`),
@@ -836,7 +867,9 @@ export interface PlaybookActivator {
   /**
    * `created` / `enters_status` — the thing is created / enters `status`.
    * `count` — at least `min` things sit in `status` (always per_moment).
-   * `schedule` — on `cron` (UTC), over the things in `status` (per_moment).
+   * `schedule` — on `cron` in `timezone`, over the things in `status`: one
+   *   run for the set (per_moment, default) or one per thing (per_thing); a
+   *   playbook with no subject runs once per tick.
    * `manual` — a button, never by itself: compiles no rule.
    * `run_ended` — a LINK: a run of the playbook named in `playbook` ended;
    *   the new run works on the same subject.
@@ -854,26 +887,35 @@ export interface PlaybookActivator {
   playbook?: string;
   /** `run_ended` only: `done` or `not_done` (`WORKER_RUN_OUTCOMES`); absent = any end. */
   outcome?: "done" | "not_done";
-  /** Required for `enters_status` / `count`; optional for `schedule`. */
-  status?: string;
+  /** Required for `enters_status` / `count`; optional for `schedule` (a list there). */
+  status?: string | string[];
   /** Required for `schedule`. */
   cron?: string;
+  /** `schedule` only: the IANA zone of `cron`; absent = the owner's zone. */
+  timezone?: string;
+  /** `schedule` only: installed paused, the person turns it on. */
+  startsPaused?: true;
+  /** `schedule` in `run` mode only: the agent user id each run is handed to. */
+  handToAgentId?: string;
   /** Required for `count` (≥ 2). */
   min?: number;
-  /** `per_thing` (default) or `per_moment`; count/schedule are per_moment. */
+  /** `per_thing` (default) or `per_moment`; count is per_moment, schedule defaults to it. */
   size?: "per_thing" | "per_moment";
-  /** `run` starts the run; `propose` files a proposal (the public default). */
-  mode: "run" | "propose";
+  /**
+   * `run` starts the run; `propose` files a proposal (the public default);
+   * `appointment` (schedule only) opens a session that waits for the person.
+   */
+  mode: "run" | "propose" | "appointment";
   /** Pending approvals before the worker stops starting runs (default 20). */
   maxPendingApprovals?: number;
   /**
-   * `created` / `enters_status` only: leave out a thing that carries this
+   * per_thing `created` / `enters_status` / `schedule`: leave out a thing that carries this
    * property (a non-empty value), e.g. `{ property: "post-copy-of", present:
    * true }`. Mirror of `WorkerUnless` (`@synap-core/types/workers`).
    */
   unless?: { property: string; present: true };
   /**
-   * `created` / `enters_status` only: keep only a thing whose property holds
+   * per_thing `created` / `enters_status` / `schedule`: keep only a thing whose property holds
    * one of these values (trimmed, any case), e.g. `{ property: "post-format",
    * in: ["Short Video", "Long Video"] }`. Mirror of `WorkerOnly`
    * (`@synap-core/types/workers`).
@@ -2161,45 +2203,17 @@ export function resolveStageCategory(stage: unknown): PlaybookStageCategory {
     : DEFAULT_PLAYBOOK_STAGE_CATEGORY;
 }
 
+/**
+ * RETIRED: a schedule is a `schedule` activator ({@link PlaybookActivator}).
+ * Still accepted as input; the activator pass folds it into one.
+ */
 export interface PlaybookSchedule {
   /** 5-field cron expression (e.g. "0 9 * * MON"). */
   cron: string;
   enabled: boolean;
-  /**
-   * WHAT the schedule materializes at each slot. Two different products:
-   *
-   * - `"run"` (DEFAULT, and the pre-existing behaviour byte-for-byte) — an
-   *   unattended run. The slot instantiates a session, opens its channel, writes
-   *   a `playbook_runs` ledger row and DISPATCHES an agent. Nobody has to be
-   *   there.
-   *
-   * - `"appointment"` — an APPOINTMENT. The slot materializes a
-   *   `focus_sessions` row with `status: 'scheduled'` and stops: no channel, no
-   *   run row, no agent kickoff. It waits for the HUMAN, who opens the app and
-   *   finds the session already there, already scoped, saying "this is what you
-   *   are doing now". This is the ONLY producer of
-   *   `FocusSessionStatus.SCHEDULED` — the status existed in the union with zero
-   *   writers until it was built.
-   *
-   * Absent ⇒ `"run"`, so every playbook scheduled before this field existed keeps
-   * behaving exactly as it did.
-   */
+  /** Absent ⇒ `"run"`; folded into the activator's `mode`. */
   mode?: PlaybookScheduleMode;
-  /**
-   * HAND-OFF — the agent (its agent user id, `users.id`, as `synap_list_agents`
-   * returns it; the same identity `synap_start_session` `agentIds` and
-   * `synap_update_session` `addAgentId` take) that each slot's session is handed
-   * to. The compiler writes it onto the `playbook_run` node
-   * (`PlaybookRunNodeDef.data.handToAgentId`); `runPlaybook` resolves it ONCE per
-   * run through THE route, before any session exists, and puts it on the
-   * session's roster INSTEAD of dispatching the playbook's own executor — the
-   * named agent does the work (a `pull` agent picks it up from its orient's
-   * `handedToYou`; a `dispatch` agent is pushed it through its binding). An
-   * unknown, paused or foreign agent fails the slot by name.
-   *
-   * Only meaningful for `mode: "run"`: an appointment waits for the HUMAN, so the
-   * write door refuses the pair. Absent ⇒ unchanged.
-   */
+  /** Folded into the activator's `handToAgentId` (run mode only). */
   handToAgentId?: string;
 }
 
@@ -2966,7 +2980,7 @@ export interface LoopPlaybookDef {
   tools?: string[];
   /** Capabilities granted to the playbook (resolved local refs → `grants` links). */
   grants?: CapabilityRef[];
-  /** Inline schedule — materializes the backing cron automation via the create path. */
+  /** RETIRED inline schedule — folded into a `schedule` activator. */
   schedule?: PlaybookSchedule;
   /** Conforms to PlaybookStage[]; stored loosely (validated at the boundary). The
    * authored-loop path (create-from-definition) MUST thread these — playbooks.create

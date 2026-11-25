@@ -17,8 +17,6 @@ import {
   recordSessionSpawn,
   drizzleSql,
   and,
-  or,
-  isNull,
   ne,
   playbooks,
   projectTracks,
@@ -30,10 +28,18 @@ import {
   insertFocusSessionRow,
   workspacePlacementPatchFromProposal,
   getRequestGrant,
+  usableInSpaceWhere,
 } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { isTrackClosed, nameSharedKeyOutputs } from "@synap-core/types/units";
+import {
+  STEP_DUE_BY_KEY,
+  STEP_PLANNED_FOR_KEY,
+  isStepDate,
+  isTrackClosed,
+  nameSharedKeyOutputs,
+  stepBirthStatus,
+} from "@synap-core/types/units";
 import { resolveTrackStatusLabel } from "@synap-core/types/vocabulary";
 import {
   registerProposalExecutor,
@@ -49,6 +55,7 @@ import {
   applyOutputMutations,
   addOutputWireSchema,
   expectedOutputWireSchema,
+  mergeSessionMetadataSql,
   sanitizeDeclaredOutputs,
   withEvidenceVerdict,
   type CompleteOutputOutcome,
@@ -56,6 +63,7 @@ import {
 } from "../../../services/focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../../../services/focus-sessions/delegate-output.js";
 import { addCreateTimeBlockers } from "../../../services/focus-sessions/session-blocked-by.js";
+import { resolveSpawnTarget } from "../../../services/focus-sessions/lane-rollup.js";
 import { applyUnitBlockerEdits } from "../../../services/links/unit-blockers.js";
 import {
   findOpenSessionTwin,
@@ -297,6 +305,8 @@ export function registerFocusSessionExecutors(): void {
             innerData.workspacePlacement,
             proposal.workspaceId
           ),
+          // The step's window and deadline (B5), as the direct start stores them.
+          ...approvedStepBirth(innerData).time,
         };
         // THE ONE row writer (`insert-focus-session.ts`). The fixed id is
         // conflict-safe: a row already at it writes nothing (zero rows).
@@ -305,6 +315,8 @@ export function registerFocusSessionExecutors(): void {
           {
             // id = proposal.targetId so any link built at propose time resolves.
             id: proposal.targetId,
+            // P4: born planned exactly as the direct start would have been.
+            status: approvedStepBirth(innerData).status,
             // The proposal's chain id, so a later create on the same chain finds
             // this row through the correlation idempotency instead of minting a
             // twin (the create-session door has always stamped its own).
@@ -535,6 +547,13 @@ export function registerFocusSessionExecutors(): void {
       // own `.returning()` / affected-row count as the evidence, never re-derive
       // it from the code path that decided to write.
       const created = insertedSessions[0];
+      // GRADES DECLARED UP FRONT (W5), as the direct create files them: after
+      // the commit, never thrown over the session that exists.
+      if (created) {
+        const { fileDeclaredGradeSlots } =
+          await import("../../../services/focus-sessions/evaluations/record.js");
+        await fileDeclaredGradeSlots(created.id);
+      }
       const effect: ProposalEffect = {
         applied: "verified",
         rows: insertedSessions.length,
@@ -568,6 +587,23 @@ export function registerFocusSessionExecutors(): void {
         );
       } else if (created && typeof innerData.parentSessionId === "string") {
         try {
+          // The output this child is spawned FOR (W7): the same check as the
+          // direct path, on the agent that proposed the start.
+          const target =
+            typeof innerData.forOutput === "string" &&
+            innerData.forOutput.trim()
+              ? await resolveSpawnTarget({
+                  parentSessionId: innerData.parentSessionId,
+                  userId: proposal.subjectUserId as string,
+                  agentUserId: proposal.agentUserId ?? null,
+                  forOutput: innerData.forOutput,
+                })
+              : undefined;
+          if (target?.status === "refused") {
+            lineageRefusals.push(
+              `This session's target output "${target.key}" was not recorded (${target.reason}).`
+            );
+          }
           const spawn = await recordSessionSpawn({
             childSessionId: created.id,
             parentSessionId: innerData.parentSessionId,
@@ -577,6 +613,7 @@ export function registerFocusSessionExecutors(): void {
               typeof innerData.suspendedIntent === "string"
                 ? innerData.suspendedIntent
                 : null,
+            forOutput: target?.status === "recorded" ? target.key : null,
           });
           if (!spawn.linked) {
             lineageRefusals.push(
@@ -899,6 +936,7 @@ export function registerFocusSessionExecutors(): void {
         const goalChange = approvedSessionGoal(innerData, session.goal);
         if (goalChange.goal !== undefined) set.goal = goalChange.goal;
         // `null` (or blank) is the CLEAR — same explicit arm as the subject.
+        const metadataPatch: Record<string, unknown> = {};
         if (innerData.title === null || typeof innerData.title === "string") {
           set.title = storedTitle(innerData.title);
           // Provenance rides the rename: an agent's title is never replaced by
@@ -906,9 +944,16 @@ export function registerFocusSessionExecutors(): void {
           const titleSource: SessionTitleSource = set.title
             ? "agent"
             : "derived";
-          set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
-            { titleSource }
-          )}::jsonb`;
+          metadataPatch.titleSource = titleSource;
+        }
+        // The step's time (B5), re-checked: the payload sat in the queue. A
+        // date that no longer reads is dropped, never stored; `null` clears.
+        for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+          const v = innerData[key];
+          if (v === null || isStepDate(v)) metadataPatch[key] = v;
+        }
+        if (Object.keys(metadataPatch).length > 0) {
+          set.metadata = mergeSessionMetadataSql(metadataPatch);
         }
         if (typeof innerData.currentStage === "string") {
           set.currentStage = innerData.currentStage;
@@ -1182,6 +1227,14 @@ export function registerFocusSessionExecutors(): void {
           before: undoBefore,
           after: updated,
         });
+
+        // GRADES DECLARED UP FRONT (W5): an approved criteria change keeps the
+        // grade slots in step, as the direct door does. Never throws.
+        if (set.criteria !== undefined && updated) {
+          const { fileDeclaredGradeSlots } =
+            await import("../../../services/focus-sessions/evaluations/record.js");
+          await fileDeclaredGradeSlots(sessionId);
+        }
 
         if (trackFiling && updated) {
           const { stampTrackFilingUses } =
@@ -1506,12 +1559,10 @@ async function visibleTemplateCriteria(
     .where(
       and(
         eq(playbooks.id, templateId as string),
-        workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, workspaceId)
-            )
-          : isNull(playbooks.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       )
     )
     .limit(1);
@@ -1595,15 +1646,50 @@ async function instantiateApprovedPlaybook(args: {
     ...(typeof innerData.prompt === "string" && innerData.prompt.trim()
       ? { goalOverride: innerData.prompt }
       : {}),
+    // P4 / B5: born planned with its time, as the direct start.
+    status: approvedStepBirth(innerData).status,
     metadata: {
       ...startedByAgentPatch(args.startedByAgentId),
       ...workspacePlacementPatchFromProposal(
         innerData.workspacePlacement,
         args.workspaceId
       ),
+      ...approvedStepBirth(innerData).time,
     },
   });
   return row ? [row] : [];
+}
+
+/**
+ * The birth status and time an approved start carries (P4, B5): THE rule
+ * (`stepBirthStatus`) over what rode the proposal — `startNow`,
+ * `awaitsBlockers`, any `blockedBy*Ids`, and the dates the start door already
+ * validated (re-checked here: the payload sat in the queue). A date that no
+ * longer reads is dropped, never stored.
+ */
+function approvedStepBirth(innerData: Record<string, unknown>): {
+  status: "active" | "forming";
+  time: Record<string, string>;
+} {
+  const time: Record<string, string> = {};
+  for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+    const v = innerData[key];
+    if (isStepDate(v)) time[key] = v;
+  }
+  const count = (v: unknown) => (Array.isArray(v) ? v.length : 0);
+  return {
+    status: stepBirthStatus({
+      startNow: innerData.startNow === true,
+      hasBlockers:
+        innerData.awaitsBlockers === true ||
+        count(innerData.blockedBySessionIds) +
+          count(innerData.blockedByEntityIds) +
+          count(innerData.blockedByTrackIds) >
+          0,
+      plannedFor: time[STEP_PLANNED_FOR_KEY] ?? null,
+    }),
+    time,
+  };
 }
 
 /**
@@ -1678,7 +1764,7 @@ async function applyProposedOutputMutations(
         sessionId,
         userId: ownerUserId,
       });
-      report = withEvidenceVerdict(report, verdict.satisfied);
+      report = withEvidenceVerdict(report, verdict.satisfied, verdict.held);
     } catch {
       // The claim stands, unverified — reported below like any open claim.
     }

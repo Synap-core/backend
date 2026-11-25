@@ -41,10 +41,8 @@
  * change on that side.
  *
  * ── Where the schedule lives ────────────────────────────────────────────────
- * Nowhere new. A playbook's `schedule { cron, enabled, mode }` already maintains
- * exactly ONE backing cron `automations` row
- * (`services/playbooks/cron-automation.ts`), which the EXISTING
- * `automation-cron-scheduler` worker fires every minute off
+ * Nowhere new. A playbook's `schedule` activator compiles to a rule whose cron
+ * automation the EXISTING `automation-cron-scheduler` worker fires off
  * `triggerConfig.expression`. `mode: "appointment"` only changes what the flow's
  * `playbook_run` node does when it fires. No second scheduler, no appointments
  * table, no new cron parser.

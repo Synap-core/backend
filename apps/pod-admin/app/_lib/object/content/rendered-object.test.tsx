@@ -41,6 +41,8 @@ const { reads, query } = vi.hoisted(() => {
 vi.mock("../../../../lib/trpc", () => ({
   trpc: {
     useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
     renderers: {
       status: query(() => reads.status),
       hostModules: query(() => reads.modules),

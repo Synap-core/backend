@@ -42,8 +42,13 @@
  *      route table. No address crosses, in either direction.
  *   7. Tokens, when a host hands them in (the `tokens` option of
  *      `wrapHtmlForFrame`, built by `frameTokensCss`): the host's `--synap-*`
- *      values in the reader's theme, as the frame's first style.
- *   8. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
+ *      values in the reader's theme, as the frame's first style; then the
+ *      project's brand (the `brand` option, `frameTokensWithBrand`).
+ *   8. Context, when the host gives it (`window.synap.context()`,
+ *      `surface-context.ts`, contract v3): the anchor, its space, project and
+ *      goal, the host's filters, the brand, the locale and the theme. Plain
+ *      contract data only (`parseSurfaceContext`): never a token or an address.
+ *   9. Links, when a host asks (the `links` option of `wrapHtmlForFrame`,
  *      `frame-links.ts`). A clicked http(s) link does NOT navigate the frame:
  *      the frame posts `synap:navigate` and the host decides (`resolveFrameLink`):
  *      a console `/open/…` link in the reader's own tab, anything else in a new
@@ -128,9 +133,26 @@ export {
   type FrameNetworkLoads,
 } from "./network-loads.js";
 export {
+  FRAME_CONTEXT_RESULT_TYPE,
+  FRAME_CONTEXT_TYPE,
+  FRAME_NO_CONTEXT,
+  SURFACE_CONTEXT_FIELDS,
+  SURFACE_CONTEXT_MAX_BRAND_CHARS,
+  SURFACE_CONTEXT_MAX_FILTERS_CHARS,
+  brandFrameCss,
+  frameTokensWithBrand,
+  parseSurfaceContext,
+  surfaceContextInitFields,
+  type BrandFrameDeclarations,
+  type SurfaceContext,
+  type SurfaceContextAnchor,
+  type SurfaceContextBrand,
+} from "./surface-context.js";
+export {
   CELL_BRIDGE_MAX_ANSWER_CHARS,
   CELL_BRIDGE_MAX_IN_FLIGHT,
   cellBridgeAnswer,
+  cellBridgeContextAnswer,
   cellBridgeErrorText,
   createCellBridgeHost,
   type CellBridgeEventLike,

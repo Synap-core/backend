@@ -29,10 +29,6 @@ import type { ProposedKindField } from "../../services/profiles/proposed-kind-fi
 
 import type { HubProtocolCaller } from "./rest/_shared.js";
 import { withReviewUrl } from "./proposal-response.js";
-import {
-  isJoinGate,
-  proposedMessageFor,
-} from "../../utils/permission-check.js";
 
 const PROPERTY_VALUE_TYPES: string[] = Object.values(PropertyValueType);
 
@@ -122,7 +118,7 @@ function normalizationNotice(
  * valid ones ride the kind's proposal as `deferredFields`). An invalid spec
  * becomes its ledger entry, never a write.
  */
-function checkFieldSpec(
+export function checkFieldSpec(
   spec: Record<string, unknown>
 ):
   | { field: ProposedKindField; normalized: { normalizedFrom?: string } }
@@ -407,33 +403,9 @@ export async function defineProfile(
       })) as {
         status: string;
         proposalId?: string | null;
-        proposalType?: string;
-        deferred?: true;
         properties?: Array<Record<string, unknown>>;
       };
-      if (
-        batch.status === "proposed" &&
-        batch.proposalId &&
-        isJoinGate(batch.proposalType)
-      ) {
-        // A workspace JOIN gate filed INSTEAD of the fields' proposal
-        // (ticket a51e36e4): the id is the join's, never the fields'.
-        fieldsProposal = withReviewUrl({
-          status: JOIN_REQUIRED,
-          proposalId: batch.proposalId,
-          message: proposedMessageFor(
-            batch.proposalType,
-            "",
-            batch.deferred === true
-          ),
-        });
-        for (const field of toCreate) {
-          outcomeBySlug.set(field.slug, {
-            status: JOIN_REQUIRED,
-            joinProposalId: batch.proposalId,
-          });
-        }
-      } else if (batch.status === "proposed" && batch.proposalId) {
+      if (batch.status === "proposed" && batch.proposalId) {
         fieldsProposal = withReviewUrl({
           status: "proposed",
           proposalId: batch.proposalId,
@@ -486,9 +458,6 @@ export async function defineProfile(
     },
   };
 }
-
-/** A field's status when a workspace JOIN must be approved first. */
-const JOIN_REQUIRED = "join_required";
 
 /** Does the declaration change a setting the profile LINK holds? */
 function changesLink(stored: EffectiveProperty, field: ProposedKindField) {

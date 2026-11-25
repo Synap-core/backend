@@ -10,7 +10,11 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
-import { readTrackStage } from "@synap-core/types/units";
+import {
+  readTrackStage,
+  stepDateRefusal,
+  stepTimePatch,
+} from "@synap-core/types/units";
 import { readRunCost } from "../../../services/runs/run-cost.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
@@ -584,6 +588,9 @@ export const sessionHandlers: McpHandlerMap = {
     if (targetsArg === "invalid") {
       return ok({ error: TARGETS_ARG_ERROR });
     }
+    // The step's time (B5), refused in words before anything is read.
+    const stepTime = stepTimePatch(stepTimeArgs(args));
+    if (!stepTime.ok) return ok({ error: stepDateRefusal(stepTime.invalid) });
     const suspendedIntentArg = args.suspendedIntent;
     if (
       suspendedIntentArg !== undefined &&
@@ -593,6 +600,17 @@ export const sessionHandlers: McpHandlerMap = {
     ) {
       return ok({
         error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
+      });
+    }
+    const forOutputArg = args.forOutput;
+    if (
+      forOutputArg !== undefined &&
+      forOutputArg !== null &&
+      (typeof forOutputArg !== "string" || forOutputArg.length > 120)
+    ) {
+      return ok({
+        error:
+          "forOutput must be a string of at most 120 characters: the key of the parent's outcome this session delivers.",
       });
     }
     // `subjectRef` (W2): an identity naming the subject — the same
@@ -710,12 +728,17 @@ export const sessionHandlers: McpHandlerMap = {
         expectedOutputs: declared.expectedOutputs,
         parentSessionId: args.parentSessionId as string | undefined,
         suspendedIntent: args.suspendedIntent as string | undefined,
+        forOutput: (forOutputArg as string | null | undefined) ?? null,
         // Validated above (array of UUIDs), so this narrows nothing unchecked.
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
           : [],
         blockedByEntityIds,
         blockedByTrackIds,
+        // P4: a step with blockers (or a date to come) is born planned unless
+        // it says startNow. B5: its window and deadline, checked by the service.
+        ...(args.startNow === true ? { startNow: true } : {}),
+        ...stepTimeArgs(args),
         ...(targetsArg ? { targets: targetsArg } : {}),
         forceCreate: args.forceCreate === true,
       });
@@ -1876,8 +1899,17 @@ export const sessionHandlers: McpHandlerMap = {
         : args.criteria !== undefined
           ? { criteria: args.criteria as SessionCriterion[] }
           : {}),
-      status: args.status as "active" | "paused" | undefined,
+      // `forming` plans a started step back (P1); the service refuses it on
+      // anything not started. Any other value is not a move this door makes.
+      status:
+        args.status === "active" ||
+        args.status === "paused" ||
+        args.status === "forming"
+          ? args.status
+          : undefined,
       ...(expectedStatus ? { expectedStatus } : {}),
+      // The step's time (B5): the service refuses a malformed date in words.
+      ...stepTimeArgs(args),
       // A pause's hold and the move's time (W4), checked by the service.
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
@@ -2105,3 +2137,20 @@ export const sessionHandlers: McpHandlerMap = {
 /** Test-only export of the wire coercion above. */
 export { readParamsArg as __readParamsArgForTest };
 export { readTemplateIdArg as __readTemplateIdArgForTest };
+
+/**
+ * `plannedFor` / `dueBy` off a session tool's args (B5): a string sets, `null`
+ * clears, anything else is left alone. Their shape is checked by the session
+ * service (`stepTimePatch`), which refuses a malformed date in words.
+ */
+function stepTimeArgs(args: Record<string, unknown>): {
+  plannedFor?: string | null;
+  dueBy?: string | null;
+} {
+  const out: { plannedFor?: string | null; dueBy?: string | null } = {};
+  for (const key of ["plannedFor", "dueBy"] as const) {
+    const v = args[key];
+    if (v === null || typeof v === "string") out[key] = v;
+  }
+  return out;
+}

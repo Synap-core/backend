@@ -97,6 +97,9 @@ export async function renderProposalForPrompt(
           op.subjectRef || op.subjectEntityId
             ? `about ${String(op.subjectRef ?? op.subjectEntityId)}`
             : null,
+          op.trackRef || op.trackId
+            ? `in goal ${String(op.trackRef ?? op.trackId)}`
+            : null,
         ].filter(Boolean);
         lines.push(
           `- create session: "${String(op.title ?? op.goal ?? "")}" (ref ${String(op.ref)})${edges.length ? ` — ${edges.join(", ")}` : ""}`
@@ -109,9 +112,41 @@ export async function renderProposalForPrompt(
         lines.push(
           `- create document: "${String(op.title ?? "")}" (ref ${String(op.ref)})${on}`
         );
-      } else if (op.op === "create_link") {
+      } else if (op.op === "create_track") {
+        const edges = [
+          op.parentRef || op.parentGoalId
+            ? `serves ${String(op.parentRef ?? op.parentGoalId)}`
+            : null,
+          ...[
+            ...((op.blockedByRefs as string[] | undefined) ?? []),
+            ...((op.blockedByTrackIds as string[] | undefined) ?? []),
+          ].map((r) => `waits on ${r}`),
+        ].filter(Boolean);
         lines.push(
-          `- link session ${String(op.fromRef ?? op.fromSessionId)} --[${String(op.type)}]--> ${String(op.toRef ?? op.toSessionId)}`
+          `- start goal: "${String(op.name ?? "")}" (ref ${String(op.ref)})${edges.length ? ` — ${edges.join(", ")}` : ""}`
+        );
+      } else if (op.op === "create_link") {
+        const to =
+          op.toEntityRef || op.toEntityId
+            ? `decision ${String(op.toEntityRef ?? op.toEntityId)}${op.option ? ` (option ${String(op.option)})` : ""}`
+            : op.toTrackRef || op.toTrackId
+              ? `goal ${String(op.toTrackRef ?? op.toTrackId)}`
+              : String(op.toRef ?? op.toSessionId);
+        lines.push(
+          `- link session ${String(op.fromRef ?? op.fromSessionId)} --[${String(op.type)}]--> ${to}`
+        );
+      } else if (op.op === "update_session") {
+        const patch = (op.patch ?? {}) as Record<string, unknown>;
+        lines.push(
+          `- change session ${String(op.sessionId)} (ref ${String(op.ref)}): ${Object.keys(
+            patch
+          )
+            .map((k) => `${k} → ${JSON.stringify(patch[k])}`)
+            .join(", ")}`
+        );
+      } else if (op.op === "remove_link") {
+        lines.push(
+          `- unlink session ${String(op.fromSessionId)} --[${String(op.type)}]--> ${String(op.toSessionId ?? op.toEntityId ?? op.toTrackId)}`
         );
       }
     }

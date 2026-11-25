@@ -165,6 +165,11 @@ export function DocumentContentSection({
         bytes={content.bytes}
         tooLarge={content.tooLarge}
         workspaceId={content.workspaceId}
+        anchor={
+          content.documentId
+            ? { kind: "document", id: content.documentId }
+            : null
+        }
         source={content.source}
         sourceBody={(prepared) => (
           <ContentBody prepared={prepared} measure={measure} />

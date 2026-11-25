@@ -74,7 +74,9 @@ import {
 } from "@synap-core/types/focus-sessions";
 import {
   ADVANCES_LINK_TYPE,
+  DECISION_ARM_OPTION_KEY,
   DEPENDENCY_LINK_TYPE,
+  armOptionOf,
   LINK_PRIMARY_KEY,
   REPLACES_LINK_TYPE,
   SERVES_LINK_TYPE,
@@ -106,7 +108,11 @@ import {
 import { recordDomainMutation } from "../../utils/domain-mutation.js";
 import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import { linkProposalTitle } from "./link-proposal-title.js";
-import { closedNotDoneRecordedSql } from "../focus-sessions/session-closed-as.js";
+import { ARM_NOT_A_DECISION, armOptionProblem } from "./arm-option.js";
+import {
+  closedNotDoneRecordedSql,
+  notTakenRecordedSql,
+} from "../focus-sessions/session-closed-as.js";
 
 const logger = createLogger({ module: "dependency-links" });
 
@@ -216,6 +222,7 @@ export async function insertDependencyEdge(input: {
     );
   } else {
     await restampPrimaryMark(edge, input.metadata);
+    await restampArmOption(edge, input.metadata);
   }
   return { inserted: inserted.length, ...(linkId ? { linkId } : {}) };
 }
@@ -257,6 +264,60 @@ async function restampPrimaryMark(
         eq(links.linkType, edge.linkType)
       )
     );
+}
+
+/**
+ * Re-linking an EXISTING `blocked_by` edge with an arm option (P5) sets that
+ * one key on the stored row: a step re-planned onto another arm of the same
+ * decision keeps its edge (and the decision its id). The option was checked
+ * against the decision before this write ({@link validateArmEdge}).
+ */
+async function restampArmOption(
+  edge: DependencyEdgeInput,
+  metadata: Record<string, unknown> | undefined
+): Promise<void> {
+  const option = armOptionOf(metadata);
+  if (!option || edge.linkType !== DEPENDENCY_LINK_TYPE) return;
+  await db
+    .update(links)
+    .set({
+      metadata: drizzleSql`${links.metadata} || jsonb_build_object(${DECISION_ARM_OPTION_KEY}::text, ${option}::text)`,
+    })
+    .where(
+      and(
+        eq(links.fromType, edge.fromType as never),
+        eq(links.fromId, edge.fromId),
+        eq(links.toType, edge.toType as never),
+        eq(links.toId, edge.toId),
+        eq(links.linkType, edge.linkType)
+      )
+    );
+}
+
+/**
+ * An arm (P5) is a `blocked_by` edge to a DECISION naming one of the options
+ * it lists: the rule is {@link armOptionProblem} (`arm-option.ts`), read here
+ * on the stored row. Anything else is refused in words.
+ */
+async function validateArmEdge(
+  edge: DependencyEdgeInput,
+  option: string
+): Promise<DependencyRefusal | null> {
+  const refuse = (error: string): DependencyRefusal => ({
+    reason: "invalid_pair",
+    httpStatus: 400,
+    error,
+  });
+  if (edge.linkType !== DEPENDENCY_LINK_TYPE || edge.toType !== "entity") {
+    return refuse(ARM_NOT_A_DECISION);
+  }
+  const [row] = await db
+    .select({ type: entities.type, properties: entities.properties })
+    .from(entities)
+    .where(eq(entities.id, edge.toId))
+    .limit(1);
+  const problem = armOptionProblem(row, option);
+  return problem ? refuse(problem) : null;
 }
 
 /**
@@ -738,6 +799,11 @@ export async function validateDependencyEdge(
       error: DEPENDENCY_CYCLE_ERROR,
     };
   }
+  const arm = action === "create" ? armOptionOf(metadata) : null;
+  if (arm) {
+    const armRefusal = await validateArmEdge(edge, arm);
+    if (armRefusal) return { ok: false, ...armRefusal };
+  }
   if (action === "create" && edge.linkType === SERVES_LINK_TYPE) {
     const servesRefusal = await validateServesEdge(edge, metadata);
     if (servesRefusal) return { ok: false, ...servesRefusal };
@@ -1044,6 +1110,15 @@ export interface DependencyState {
 
 const refKey = (r: DependencyNodeRef) => `${r.kind}:${r.id}`;
 
+/** A stored `blocked_by` row as THE rule reads it: its arm option, no metadata. */
+function withArmOption<T extends { metadata: unknown }>(
+  row: T
+): Omit<T, "metadata"> & { option?: string } {
+  const { metadata, ...edge } = row;
+  const option = armOptionOf(metadata);
+  return option ? { ...edge, option } : edge;
+}
+
 /**
  * Follow `replaces` INTO `start` (`X --replaces--> blocker`), bounded by
  * {@link MAX_REPLACEMENT_HOPS}. Returns every `replaces` edge walked and adds
@@ -1131,6 +1206,7 @@ async function readStates(
         title: focusSessions.title,
         goal: focusSessions.goal,
         closedNotDone: closedNotDoneRecordedSql(),
+        skipped: notTakenRecordedSql(),
       })
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessionIds));
@@ -1145,6 +1221,8 @@ async function readStates(
               status: row.status ?? null,
               // "Delivered" = closed with the work done (`sessionClosedAs`).
               closedAs: sessionClosedAs(row.status, row.closedNotDone),
+              // An arm not taken (P5): it holds none of its dependents.
+              ...(row.skipped ? { skipped: true } : {}),
               title: resolveSessionTitle(row),
               hidden: !visible.has(id),
             }
@@ -1187,12 +1265,16 @@ async function readStates(
       // free `status` property is then the only status there is.
       const propStatus = (row.properties as Record<string, unknown> | null)
         ?.status;
+      const chosen = (row.properties as Record<string, unknown> | null)
+        ?.chosenOption;
       out.set(`entity:${id}`, {
         status:
           row.status ?? (typeof propStatus === "string" ? propStatus : null),
         category: isLifecycleCategory(row.statusCategory)
           ? row.statusCategory
           : null,
+        // A decision's pick, for an edge waiting on one of its arms (P5).
+        ...(typeof chosen === "string" ? { chosenOption: chosen } : {}),
         title: row.title ?? null,
         hidden: !visible.has(id),
       });
@@ -1253,22 +1335,25 @@ export async function readDependencyState(
   userId: string,
   opts: DependencyReadOptions = {}
 ): Promise<DependencyState> {
-  const declaredRows = await db
-    .select({
-      fromType: links.fromType,
-      fromId: links.fromId,
-      toType: links.toType,
-      toId: links.toId,
-      linkType: links.linkType,
-    })
-    .from(links)
-    .where(
-      and(
-        eq(links.fromType, node.kind as never),
-        eq(links.fromId, node.id),
-        eq(links.linkType, DEPENDENCY_LINK_TYPE)
+  const declaredRows = (
+    await db
+      .select({
+        fromType: links.fromType,
+        fromId: links.fromId,
+        toType: links.toType,
+        toId: links.toId,
+        linkType: links.linkType,
+        metadata: links.metadata,
+      })
+      .from(links)
+      .where(
+        and(
+          eq(links.fromType, node.kind as never),
+          eq(links.fromId, node.id),
+          eq(links.linkType, DEPENDENCY_LINK_TYPE)
+        )
       )
-    );
+  ).map(withArmOption);
   const edges: DependencyEdge[] = [...declaredRows];
   const declared: DependencyNodeRef[] = declaredRows.map((r) => ({
     kind: r.toType as string,
@@ -1309,9 +1394,10 @@ export interface DependencyFacts {
    * Every DECLARED blocker (its outgoing `blocked_by` edges, before
    * `replaces` following), open or cleared, whatever its kind:
    * {@link DependencyState.declared}, batched. The work graph draws its
-   * cross-kind edges from it (a step waiting on a decision or a goal).
+   * cross-kind edges from it (a step waiting on a decision or a goal), with
+   * the arm `option` an edge to a decision names (P5).
    */
-  declared: DependencyNodeRef[];
+  declared: Array<DependencyNodeRef & { option?: string }>;
 }
 
 /**
@@ -1349,9 +1435,10 @@ export async function readDependencyFacts(
   };
   const [declaredRows, dependentRows] = await Promise.all([
     db
-      .select(cols)
+      .select({ ...cols, metadata: links.metadata })
       .from(links)
-      .where(and(byEnd("from"), eq(links.linkType, DEPENDENCY_LINK_TYPE))),
+      .where(and(byEnd("from"), eq(links.linkType, DEPENDENCY_LINK_TYPE)))
+      .then((rows) => rows.map(withArmOption)),
     db
       .select(cols)
       .from(links)
@@ -1396,7 +1483,11 @@ export async function readDependencyFacts(
       unblocks: waiting.size,
       declared: declaredRows
         .filter((r) => r.fromType === node.kind && r.fromId === node.id)
-        .map((r) => ({ kind: r.toType as string, id: r.toId })),
+        .map((r) => ({
+          kind: r.toType as string,
+          id: r.toId,
+          ...(r.option ? { option: r.option } : {}),
+        })),
     });
   }
   return out;

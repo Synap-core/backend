@@ -5,7 +5,8 @@
  *    twice-run safe; the old table stays (forward-only);
  *  - kind grants stay equal in both tables, whichever side writes them (a
  *    previous release writes the old table), and the mirror stops after one hop;
- *  - deleting a kind removes its grants, and only its own;
+ *  - deleting a kind removes its grants, and only its own; with 0453, the
+ *    same for a playbook and a skill;
  *  - the baseline carries both tables; the boot coherence list names the new
  *    columns.
  */
@@ -20,6 +21,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const read = (f: string) =>
   readFileSync(resolve(HERE, "../migrations", f), "utf8");
 const M0448 = read("0448_space_access.sql");
+const M0453 = read("0453_space_access_playbooks_skills.sql");
 const BASELINE = read("0000_baseline_schema.sql");
 
 const WS = "11111111-1111-4111-8111-111111111111";
@@ -109,6 +111,31 @@ describe("migration 0448 — space_access (expand)", () => {
     expect(await rows(`SELECT object_id FROM space_access`)).toEqual([
       { object_id: KIND2 },
     ]);
+  });
+
+  it("0453: a deleted playbook or skill takes its grants with it, and only its own", async () => {
+    const PB = "55555555-5555-4555-8555-555555555555";
+    const SK = "66666666-6666-4666-8666-666666666666";
+    await pg.exec(`
+      CREATE TABLE "playbooks" ("id" uuid PRIMARY KEY);
+      CREATE TABLE "skills" ("id" uuid PRIMARY KEY);
+      INSERT INTO playbooks VALUES ('${PB}');
+      INSERT INTO skills VALUES ('${SK}');
+    `);
+    await pg.exec(M0453);
+    await pg.exec(M0453);
+    await pg.exec(`
+      INSERT INTO space_access (object_type, object_id, workspace_id) VALUES
+        ('playbook', '${PB}', '${WS}'), ('skill', '${SK}', '${WS}'),
+        ('playbook', '${SK}', '${WS2}');
+    `);
+    await pg.exec(`DELETE FROM playbooks WHERE id = '${PB}'`);
+    await pg.exec(`DELETE FROM skills WHERE id = '${SK}'`);
+    expect(
+      await rows(
+        `SELECT object_type, object_id FROM space_access WHERE object_type <> 'profile'`
+      )
+    ).toEqual([{ object_type: "playbook", object_id: SK }]);
   });
 
   it("the baseline carries both tables; the coherence list names the new columns", () => {

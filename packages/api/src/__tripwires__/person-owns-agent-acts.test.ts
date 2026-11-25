@@ -203,8 +203,8 @@ describe("tripwire: a person owns what an agent makes", () => {
     const inserts = actorInserts(FILES, tables);
     // Non-vacuity: the one automation insert (`insertAutomation`, which the
     // automation door, the cron backing row and the reconcile share), the
-    // playbook create and promote doors, the four run births.
-    expect(inserts.length).toBeGreaterThanOrEqual(7);
+    // playbook create and promote doors, the one run birth.
+    expect(inserts.length).toBeGreaterThanOrEqual(4);
     const offenders = inserts
       .filter((i) => !stampsOwnerAndActor(i.block))
       .map((i) => `${i.rel}: insert(${i.table})`);

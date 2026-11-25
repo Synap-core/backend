@@ -17,10 +17,26 @@
  * `absent` | `proposed` | `failed`), keyed `blockerEntityId` or
  * `blockerTrackId`. A bad id never fails the call and never vanishes.
  *
- * What it does NOT do: option arms on a decision (founder decision D-P5), or
- * wake a step when its blocker delivers (D-P3).
+ * AN ARM (founder decision P5): an entity ref `<decision id>:<option>`
+ * (`parseArmRef`) writes the edge with `links.metadata.option`; the door
+ * refuses an option the decision does not list. A bare id is a plain wait.
+ * Removing takes either form (the edge is the pair, whatever its arm).
+ *
+ * What it does NOT do: wake a step when its blocker delivers (D-P3).
  */
-import { DEPENDENCY_LINK_TYPE } from "@synap-core/types/connections";
+import {
+  DECISION_ARM_OPTION_KEY,
+  DEPENDENCY_LINK_TYPE,
+  parseArmRef,
+} from "@synap-core/types/connections";
+import {
+  and,
+  db,
+  eq,
+  inArray,
+  proposals,
+  ProposalStatus,
+} from "@synap/database";
 import {
   governedDependencyLink,
   governedRemoveDependencyLink,
@@ -38,7 +54,7 @@ export interface WaitingUnit {
 }
 
 type BlockerKey =
-  | { blockerEntityId: string; blockerTrackId?: never }
+  | { blockerEntityId: string; blockerTrackId?: never; option?: string }
   | { blockerTrackId: string; blockerEntityId?: never };
 
 export type UnitBlockerReason =
@@ -58,8 +74,14 @@ export type UnitBlockerRemovalReport = BlockerKey &
     | { status: "failed"; reason: UnitBlockerReason; message?: string }
   );
 
-function keyOf(kind: BlockerKind, id: string): BlockerKey {
-  return kind === "entity" ? { blockerEntityId: id } : { blockerTrackId: id };
+function keyOf(
+  kind: BlockerKind,
+  id: string,
+  option: string | null
+): BlockerKey {
+  return kind === "entity"
+    ? { blockerEntityId: id, ...(option ? { option } : {}) }
+    : { blockerTrackId: id };
 }
 
 /** The door's refusal, in the reasons the session reports already use. */
@@ -115,15 +137,22 @@ function notApplied(
 async function perId<R>(
   input: UnitBlockerInput,
   door: typeof governedDependencyLink,
-  applied: (r: GovernedLinkResult) => R | null
+  applied: (r: GovernedLinkResult) => R | null,
+  /** An add writes the arm an entity ref names; a removal drops the pair. */
+  writesArm = false
 ): Promise<
   Array<BlockerKey & (R | Failed | { status: "proposed"; proposalId: string })>
 > {
   const out: Array<
     BlockerKey & (R | Failed | { status: "proposed"; proposalId: string })
   > = [];
-  for (const id of [...new Set(input.ids)]) {
-    const key = keyOf(input.kind, id);
+  for (const ref of [...new Set(input.ids)]) {
+    // An entity ref may name an arm (`<id>:<option>`); a removal ignores it.
+    const arm =
+      input.kind === "entity" ? parseArmRef(ref) : { id: ref, option: null };
+    const id = arm?.id ?? ref;
+    const option = writesArm ? (arm?.option ?? null) : null;
+    const key = keyOf(input.kind, id, option);
     try {
       const r = await door({
         edge: {
@@ -133,6 +162,7 @@ async function perId<R>(
           toId: id,
           linkType: DEPENDENCY_LINK_TYPE,
         },
+        ...(option ? { metadata: { [DECISION_ARM_OPTION_KEY]: option } } : {}),
         userId: input.userId,
         agentUserId: input.agentUserId ?? null,
         approvedProposalId: input.approvedProposalId ?? null,
@@ -156,11 +186,65 @@ async function perId<R>(
 export async function addUnitBlockers(
   input: UnitBlockerInput
 ): Promise<UnitBlockerReport[]> {
-  return perId(input, governedDependencyLink, (r) =>
-    r.status === "created" || r.status === "exists"
-      ? { status: "linked" as const, inserted: r.inserted }
-      : null
+  const reports = await perId(
+    input,
+    governedDependencyLink,
+    (r) =>
+      r.status === "created" || r.status === "exists"
+        ? { status: "linked" as const, inserted: r.inserted }
+        : null,
+    true
   );
+  return input.kind === "track" ? explainPendingGoals(reports) : reports;
+}
+
+/**
+ * A goal id that is not a goal YET: `start_track` answered `proposed` with a
+ * `pendingTrackId`, and the person has not approved it. The door can only say
+ * "not found"; this says why, and what to do (link it once approved), instead
+ * of an agent concluding the id is wrong. Read-only: a pending `track/create`
+ * proposal filed under that id (the gate files it with `targetId = data.id`).
+ */
+async function explainPendingGoals(
+  reports: UnitBlockerReport[]
+): Promise<UnitBlockerReport[]> {
+  const missing = reports.flatMap((r) =>
+    r.status === "failed" && r.reason === "not_found" && r.blockerTrackId
+      ? [r.blockerTrackId]
+      : []
+  );
+  if (missing.length === 0) return reports;
+  // The explanation is advisory: a failed read leaves each report exactly as
+  // the door gave it (`failed`, `not_found`), never hides it.
+  let pending: Array<{ id: string; targetId: string | null }>;
+  try {
+    pending = await db
+      .select({ id: proposals.id, targetId: proposals.targetId })
+      .from(proposals)
+      .where(
+        and(
+          eq(proposals.targetType, "track"),
+          inArray(proposals.targetId, missing),
+          eq(proposals.status, ProposalStatus.PENDING)
+        )
+      );
+  } catch {
+    return reports;
+  }
+  if (pending.length === 0) return reports;
+  const proposalOf = new Map(pending.map((p) => [p.targetId, p.id]));
+  return reports.map((r) => {
+    const proposalId =
+      r.status === "failed" && r.reason === "not_found" && r.blockerTrackId
+        ? proposalOf.get(r.blockerTrackId)
+        : undefined;
+    return proposalId && r.status === "failed"
+      ? {
+          ...r,
+          message: `This goal is still a proposal (${proposalId}): it exists once the person approves it. Link it then.`,
+        }
+      : r;
+  });
 }
 
 /** Drop `from --blocked_by--> <kind>:<id>` for each id, governed, per id. */

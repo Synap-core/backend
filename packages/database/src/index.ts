@@ -503,9 +503,13 @@ export {
   claimRun,
   claimRunAsAgent,
   claimedHolderSql,
+  insertPlaybookRun,
+  runBirthStatus,
+  RUN_HOLDER_CLAIMED_SQL,
   runHolder,
   starterHolder,
   setRunStatus,
+  type InsertPlaybookRunInput,
   type RunColumnsPatch,
   type SetRunStatusInput,
   type SetRunStatusResult,
@@ -529,6 +533,8 @@ export {
 export {
   oweSlotTransitions,
   slotTransitionsOf,
+  gradesComeDueOf,
+  stampOwedSinceOnDue,
   type SlotForTransition,
   type SlotSessionPlace,
 } from "./services/lifecycle/slot-transition.js";
@@ -622,6 +628,7 @@ export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
 export * from "./utils/insert-automation.js";
 export * from "./utils/owner-person.js";
+export * from "./utils/person-time-zone.js";
 export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";
 

@@ -14,6 +14,7 @@
  * output RMW lock — they are intentionally distinct doors, not unified here.
  */
 
+import type { ClaimHeldByCriterion } from "./satisfy-expected-output.js";
 import type { PlaybookRunner } from "@synap/playbooks";
 import type { EnterStageResult } from "../playbooks/stage-runner.js";
 import { isDeepStrictEqual } from "node:util";
@@ -28,10 +29,13 @@ import {
   drizzleSql,
   LifecycleConflictError,
   oweSlotTransitions,
+  gradesComeDueOf,
+  stampOwedSinceOnDue,
   workUnitActorOf,
   writeSessionPatch,
   personTouchedSubjectIds,
 } from "@synap/database";
+import type { SQL } from "@synap/database";
 import {
   lifecycleConflictOf,
   type LifecycleConflictResult,
@@ -83,6 +87,8 @@ import type {
 } from "@synap/playbooks";
 import {
   criteriaNamingNoOutput,
+  stepDateRefusal,
+  stepTimePatch,
   type ThingBlockerBlocks,
   type ThingBlockerClearedBy,
 } from "@synap-core/types/units";
@@ -160,7 +166,9 @@ import type { StageSubjectStatusOutcome } from "./stage-subject-status.js";
 import {
   closedRunRefusal,
   normalizeSessionTitle,
+  PLANNED_SESSION_STATUS,
   SESSION_STATUS_DECLARATION,
+  UNDERWAY_SESSION_STATUSES,
   SESSION_TITLE_MAX,
   titleSourcePatch,
   type SessionStatus,
@@ -181,7 +189,18 @@ export interface UpdateFocusSessionParams {
   /** Rename. Blank or `null` CLEARS (untitled ⇒ goal's first line is shown). */
   title?: string | null;
   goal?: string;
-  status?: "active" | "paused";
+  /**
+   * `forming` PLANS a started step back (it owes nothing and the pod wakes it
+   * when its blockers deliver and its date comes, P1/P3); `active` starts a
+   * planned one. Only a started session is planned back.
+   */
+  status?: "active" | "paused" | "forming";
+  /**
+   * The step's window and deadline (B5), on `metadata`: a month, a day or an
+   * ISO date-time; `null` clears. A malformed value is refused.
+   */
+  plannedFor?: string | null;
+  dueBy?: string | null;
   /**
    * With `status`: the status the caller SAW. A session that moved meanwhile
    * answers `conflict` and nothing is written (compare-and-set), like an
@@ -595,6 +614,18 @@ export const slotClearedByWireSchema = z.union([
   z.object({ capability: z.string().trim().min(1).max(120) }).strict(),
 ]);
 
+/**
+ * `unblocksTarget` on the wire (`SlotUnblocksTarget`): exactly ONE key of the
+ * same session — an output or a criterion. Whether that key exists is read
+ * when the answer re-checks it, never at the parse: an output can be declared
+ * after the ask.
+ */
+const targetKeySchema = z.string().trim().min(1).max(80);
+export const unblocksTargetWireSchema = z.union([
+  z.object({ output: targetKeySchema }).strict(),
+  z.object({ criterion: targetKeySchema }).strict(),
+]);
+
 export const expectedOutputWireSchema = z.object({
   kind: z.string(),
   label: z.string(),
@@ -644,6 +675,10 @@ export const expectedOutputWireSchema = z.object({
     .min(1)
     .max(ASK_LIMITS.unblocksMaxChars)
     .optional(),
+  // The same, as data: the ONE output or criterion of this session the
+  // answer re-checks (`SlotUnblocksTarget`, work-model W5). Optional; the prose
+  // line above is what the person reads.
+  unblocksTarget: unblocksTargetWireSchema.optional(),
   // Server-stamped alongside `owner: 'human'` (see `reconcileOwedSince`). It is
   // ON the wire only so a caller round-tripping a stored slot does not lose it
   // at the parse — never so a client can author a time it did not observe; the
@@ -668,6 +703,9 @@ export const expectedOutputWireSchema = z.object({
   // `evaluations/record.ts`, never authored by a client. On the wire for the
   // same round-trip reason as `owedSince`: a naive echo must not lose it.
   criterionKey: z.string().optional(),
+  // The output a criterion slot grades — stamped with `criterionKey`, never
+  // authored by a client. On the wire for the same round-trip reason.
+  outputKey: z.string().optional(),
   // The param a param slot stands for — stamped by `param-slots.ts`, never
   // authored by a client. On the wire for the same round-trip reason.
   paramName: z.string().optional(),
@@ -838,6 +876,7 @@ export const CLIENT_DECLARABLE_OUTPUT_FIELDS = [
   "why",
   // What the answer unblocks — the declarer's word, like `why` (decision E).
   "unblocks",
+  "unblocksTarget",
   // The pointer the declarer supplies. Declaring WHERE something lives is not a
   // claim that it landed, so it closes nothing — same footing as `why`.
   "ref",
@@ -895,6 +934,9 @@ export const SERVER_STAMPED_OUTPUT_FIELDS = [
   // merely erasure-protected: an agent that could author it would point the
   // scorecard at a criterion it did not fail.
   "criterionKey",
+  // Stamped with `criterionKey`. An agent that could author it would hold the
+  // person's grade back until an output of its choosing is delivered.
+  "outputKey",
   // Stamped by the door that files a param slot. An agent that could author
   // it would make the person's answer overwrite a param it names.
   "paramName",
@@ -961,6 +1003,7 @@ export const SERVER_OWNED_OUTPUT_FIELDS = [
   // Same erasure reason as `why`: renaming a sibling must not drop what the
   // answer unblocks.
   "unblocks",
+  "unblocksTarget",
   // Listed for ERASURE, not authority (see the docblock above): a browser that
   // has never heard of `ref` reads the array, renames a sibling, sends it back —
   // and must not silently drop the door the agent put on the card.
@@ -1732,16 +1775,28 @@ export type CompleteOutputOutcome = {
  * the verdict closed are `verified`, and a claim fully verified reads
  * `completed`. Pure. `satisfied` names slots by key + stored label, matched to
  * the caller's ref the way `completeOutput` matched it (exact label or key).
+ *
+ * `held`: claims whose evidence is in place but that a required criterion
+ * holds (W4). Still `claimed`, but the sentence names the criterion it waits
+ * for: "no evidence" sent the agent to fix evidence it had (finding f301e997).
  */
 export function withEvidenceVerdict(
   report: CompleteOutputOutcome | undefined,
-  satisfied: ReadonlyArray<{ key: string; label: string }>
+  satisfied: ReadonlyArray<{ key: string; label: string }>,
+  held: readonly ClaimHeldByCriterion[] = []
 ): CompleteOutputOutcome | undefined {
   if (!report || report.result !== "claimed") return report;
   const verified = satisfied.filter(
     (s) => s.label === report.label || s.key === report.label
   ).length;
-  if (verified === 0) return report;
+  if (verified === 0) {
+    const waiting = held.find(
+      (h) => h.label === report.label || h.key === report.label
+    );
+    return waiting
+      ? { ...report, message: heldByCriterionMessage(report.label, waiting) }
+      : report;
+  }
   const { message: _pending, ...rest } = report;
   // Slots the report already counted as met (an earlier verdict) stay counted.
   return {
@@ -1749,6 +1804,31 @@ export function withEvidenceVerdict(
     verified: (report.verified ?? 0) + verified,
     result: "completed",
   };
+}
+
+/** A criterion's statement in a reply sentence, clipped. */
+const HELD_STATEMENT_MAX = 120;
+
+/**
+ * The claim's sentence when its evidence is in place and a required criterion
+ * holds it: which criterion (key and statement) and who checks it. Pure.
+ */
+export function heldByCriterionMessage(
+  label: string,
+  held: ClaimHeldByCriterion
+): string {
+  const named = held.criteria.map((c) => {
+    const statement =
+      c.statement.length > HELD_STATEMENT_MAX
+        ? `${c.statement.slice(0, HELD_STATEMENT_MAX - 1)}…`
+        : c.statement;
+    return `"${c.key}" (${statement})`;
+  });
+  const byPerson = held.criteria.every((c) => c.check.kind === "human");
+  const how = byPerson
+    ? "the person grades it"
+    : "check it with synap_evaluate_session";
+  return `Recorded your claim on "${label}"; its evidence is in place. It waits for its required criterion ${named.join(" and ")} to pass: ${how}.`;
 }
 
 /** The outputs array a patch produced, plus the report of what it refused. */
@@ -2145,6 +2225,23 @@ export function ownCriteriaChangeLine(input: {
   return `The agent changed this session's criteria (its own session, so the change applied directly). Before: ${list(input.before)}. Now: ${list(input.after)}.${undo}`;
 }
 
+/**
+ * SQL: the session's `metadata` with `patch` merged in; a key set to `null`
+ * is REMOVED (a cleared step date), never stored as `null`. Shared by this
+ * door and the `focus_session/update` approval replay.
+ */
+export function mergeSessionMetadataSql(patch: Record<string, unknown>): SQL {
+  const drop = Object.keys(patch).filter((k) => patch[k] === null);
+  const keep = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== null)
+  );
+  const base = drop.reduce<SQL>(
+    (acc, key) => drizzleSql`(${acc} - ${key}::text)`,
+    drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb)`
+  );
+  return drizzleSql`${base} || ${JSON.stringify(keep)}::jsonb`;
+}
+
 export async function updateFocusSession(
   params: UpdateFocusSessionParams
 ): Promise<UpdateFocusSessionResult> {
@@ -2185,6 +2282,27 @@ export async function updateFocusSession(
   // carries the hold it had there).
   const moveRefusal = sessionMoveRefusal(existing.status, params, agentUserId);
   if (moveRefusal) return { status: "denied", reason: moveRefusal };
+  // PLAN BACK (P1): only a started session becomes a planned step again.
+  if (
+    params.status === PLANNED_SESSION_STATUS &&
+    existing.status !== PLANNED_SESSION_STATUS &&
+    !(UNDERWAY_SESSION_STATUSES as readonly string[]).includes(existing.status)
+  ) {
+    return {
+      status: "denied",
+      reason: `Only a started session (active, paused, stale) is planned back; this one is ${existing.status}.`,
+    };
+  }
+  // The step's time (B5): refused in words before anything is filed.
+  const stepTime = stepTimePatch({
+    ...(params.plannedFor !== undefined
+      ? { plannedFor: params.plannedFor }
+      : {}),
+    ...(params.dueBy !== undefined ? { dueBy: params.dueBy } : {}),
+  });
+  if (!stepTime.ok) {
+    return { status: "denied", reason: stepDateRefusal(stepTime.invalid) };
+  }
 
   // A `projectId` equal to the one the session already has is NOT a filing:
   // dropped here, before every floor and the membrane, so it never forces a
@@ -2675,7 +2793,7 @@ export async function updateFocusSession(
   // A GRANTED filing beside other fields is applied NOW, on its own receipt,
   // and leaves the patch: the gate already minted that receipt as applied, so
   // the rest's own verdict (a criteria change that proposes, a session that
-  // forces proposals, a cap, a join gate, a denial) must not hold it back —
+  // forces proposals, a cap, a denial) must not hold it back —
   // that left a receipt claiming a filing that was never written, with no
   // Undo (FB1020 w2 review M1). Its Undo restores the project and the goal
   // filing only. The own-organise class grants a PROJECT filing, or a GOAL
@@ -2791,6 +2909,8 @@ export async function updateFocusSession(
           ...(params.expectedStatus
             ? { expectedStatus: params.expectedStatus }
             : {}),
+          // The step's time (B5): applied by the approval replay too.
+          ...stepTime.patch,
           ...(params.hold ? { hold: params.hold } : {}),
           ...(params.occurredAt ? { occurredAt: params.occurredAt } : {}),
           ...(params.progress !== undefined
@@ -2864,11 +2984,9 @@ export async function updateFocusSession(
       ...(filing ? { filing } : {}),
       ...(subSessionsFiled?.length ? { subSessionsFiled } : {}),
       proposalId: perm.proposalId,
-      // The discriminator MUST cross this boundary: this door is join-gate
-      // reachable (the MCP handler threads `agentUserId`), and without it the
-      // caller cannot tell a session-update proposal from a workspace-JOIN
-      // gate filed instead of it. Its two siblings (create-session,
-      // complete-session) already forward it.
+      // The discriminator crosses this boundary, as its two siblings
+      // (create-session, complete-session) forward it: a held-writes pack is
+      // told apart from a session-update proposal.
       proposalType: perm.proposalType,
       summary: perm.summary,
       reviewPath: perm.reviewPath,
@@ -2885,11 +3003,17 @@ export async function updateFocusSession(
   if (params.goal !== undefined) set.goal = params.goal;
   if (params.title !== undefined) {
     set.title = normalizeSessionTitle(params.title);
-    // An agent's rename is never overwritten by the background titler; a
-    // CLEAR hands the name back to it. Merged, never assigned over metadata.
-    set.metadata = drizzleSql`COALESCE(${focusSessions.metadata}, '{}'::jsonb) || ${JSON.stringify(
-      titleSourcePatch(set.title ? "agent" : "derived")
-    )}::jsonb`;
+  }
+  // An agent's rename is never overwritten by the background titler; a CLEAR
+  // hands the name back to it. The step's time rides the same merge (B5).
+  // Merged, never assigned over metadata.
+  if (params.title !== undefined || Object.keys(stepTime.patch).length > 0) {
+    set.metadata = mergeSessionMetadataSql({
+      ...(params.title !== undefined
+        ? titleSourcePatch(set.title ? "agent" : "derived")
+        : {}),
+      ...stepTime.patch,
+    });
   }
   if (params.status !== undefined) set.status = params.status;
   if (params.progress !== undefined) set.progress = params.progress;
@@ -2978,6 +3102,15 @@ export async function updateFocusSession(
           // An agent's list adds and updates, never deletes (C6).
           { keepUnlisted: !!agentUserId, askedBy: agentUserId }
         );
+        // A declared grade this patch made due (its output made here) is
+        // owed from now: this door owes before it writes, so it stamps its
+        // own list (`oweSlotTransitions` restamps the doors that write first).
+        applied.outputs =
+          stampOwedSinceOnDue(
+            applied.outputs,
+            gradesComeDueOf(current, applied.outputs),
+            new Date().toISOString()
+          ) ?? applied.outputs;
         set.expectedOutputs = applied.outputs;
         completeOutputOutcome = applied.completeOutput;
         retireOutputOutcome = applied.retireOutput;
@@ -3023,6 +3156,27 @@ export async function updateFocusSession(
     before: undoBefore,
     after: updated,
   });
+  // GRADES DECLARED UP FRONT (W5): a written criteria change, or outputs
+  // added, keep the grade slots in step: a grade naming its output is filed,
+  // a re-pointed one follows, one whose criterion was removed is withdrawn.
+  // Never throws. The push and the asked log below read the list as the
+  // reconcile left it.
+  if (
+    criteriaChange ||
+    params.addOutput !== undefined ||
+    params.expectedOutputs !== undefined
+  ) {
+    const { fileDeclaredGradeSlots } = await import("./evaluations/record.js");
+    const grades = await fileDeclaredGradeSlots(sessionId);
+    if (grades.outputs) {
+      if (!mutatesOutputs) {
+        outputsBefore = Array.isArray(existing.expectedOutputs)
+          ? (existing.expectedOutputs as OutputItem[])
+          : [];
+      }
+      outputsAfter = grades.outputs;
+    }
+  }
   // C6: the own-session criteria change says so in the room, with its Undo.
   if (ownSessionCriteria && params.criteria) {
     const before = Array.isArray(existing.criteria)
@@ -3108,7 +3262,8 @@ export async function updateFocusSession(
       }
       completeOutputOutcome = withEvidenceVerdict(
         completeOutputOutcome,
-        verdict.satisfied
+        verdict.satisfied,
+        verdict.held
       );
     } catch (err) {
       logger.warn(

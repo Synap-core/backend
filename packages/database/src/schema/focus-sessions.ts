@@ -24,12 +24,16 @@
  *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
  *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
  *   - forming — PLANNED (founder decision P1, 21 Nov 2026): a step of a plan
- *     that has not started. It owes nothing (the owed-slot predicate), is not
- *     where a write is filed (`IN_FLIGHT_SESSION_STATUSES`) and never reads
- *     as running (`@synap-core/types` units). It stays in the one-live-run
- *     index: a planned run IS the run for its subject. Triage is still
- *     orthogonal: acceptance is a RECEIPT (`metadata.triage.acceptedAt`),
- *     not a status.
+ *     that has not started. Born by the session door (`start_session`, a
+ *     capture plan's `sessions[]`, their approvals) when the step waits — a
+ *     blocker or a later `plannedFor` — unless `startNow` (P4). It owes
+ *     nothing (the owed-slot predicate), is not where a write is filed
+ *     (`IN_FLIGHT_SESSION_STATUSES`), never reads as running, and WAKES to
+ *     `active` when its last blocker delivers and its date comes (api
+ *     `planned-wake.ts`: the unblock reactor + the hourly sweep), or when
+ *     someone starts it. It stays in the one-live-run index: a planned run IS
+ *     the run for its subject. Triage is still orthogonal: acceptance is a
+ *     RECEIPT (`metadata.triage.acceptedAt`), not a status.
  *
  * RUNNING:  active → paused ↔ active
  *

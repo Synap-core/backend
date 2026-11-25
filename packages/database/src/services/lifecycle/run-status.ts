@@ -3,9 +3,9 @@
  * exists, on the model of `setSessionStatus`. Every door that moves a run (the
  * capture applier, the approval replay, the close door, unfollow, revive,
  * reopen, the generate decision, the approved start, cancel, redispatch, the
- * reaper's sweeps) calls this; a run is BORN with its first status (`queued`,
- * or `running` when its holder works it from birth), which is not a move. A
- * holder's claim moves it `running` through {@link claimRun}.
+ * reaper's sweeps) calls this; a run is BORN through {@link insertPlaybookRun},
+ * its first status read off its holder, which is not a move. A holder's claim
+ * moves it `running` through {@link claimRun}.
  *
  * One transaction (the caller's, as a savepoint, or its own):
  *   1. lock the rows that match (`runId` and/or `where`) AND stand in `from`
@@ -46,6 +46,7 @@ import {
   type RunTransitionPayload,
   type TransitionCause,
 } from "@synap-core/types/lifecycle";
+import { PLANNED_SESSION_STATUS } from "@synap-core/types/focus-sessions";
 import type * as schema from "../../schema/index.js";
 import {
   playbookRuns,
@@ -53,6 +54,7 @@ import {
   type PlaybookRunStatus,
 } from "../../schema/playbook-runs.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
+import { ownerAndActor } from "../../utils/owner-person.js";
 import { insertTransitionOutbox } from "./transition-outbox.js";
 import { HoldRefusedError, listHolds } from "./holds.js";
 import {
@@ -259,6 +261,45 @@ export async function setRunStatus(
   });
 }
 
+export type InsertPlaybookRunInput = Omit<
+  typeof playbookRuns.$inferInsert,
+  "status" | "holder" | "createdBy" | "agentUserId"
+> & {
+  holder: RunHolder;
+  /** The status of the session it is born beside, when it has one. */
+  sessionStatus?: string | null;
+  /** Who started it: the person, or the agent acting for one. */
+  writerUserId: string;
+  /** The agent that started it, when one did. */
+  agentUserId?: string | null;
+};
+
+/**
+ * THE run birth, the one `playbook_runs` insert. Its status is its holder's
+ * state: `queued` until a holder claims it; a holder working it from birth
+ * runs it, unless its session is a planned step ({@link runBirthStatus}).
+ * Owner = the person, actor = the agent.
+ */
+export async function insertPlaybookRun(
+  db: Db | Tx,
+  input: InsertPlaybookRunInput
+): Promise<PlaybookRun> {
+  const { holder, sessionStatus, writerUserId, agentUserId, ...columns } =
+    input;
+  const owner = await ownerAndActor(db, writerUserId, agentUserId);
+  const [run] = await db
+    .insert(playbookRuns)
+    .values({
+      ...columns,
+      status: holder.claimedAt ? runBirthStatus(sessionStatus) : "queued",
+      holder,
+      createdBy: owner.ownerId,
+      agentUserId: owner.agentUserId,
+    })
+    .returning();
+  return run!;
+}
+
 /** A holder named now; `claimed` when it works the run from this moment. */
 export function runHolder(
   kind: RunHolderKind,
@@ -268,6 +309,25 @@ export function runHolder(
   const now = new Date().toISOString();
   return { kind, id, assignedAt: now, claimedAt: claimed ? now : null };
 }
+
+/**
+ * The status a run is born in beside its session (founder P4, 21 Nov 2026):
+ * a PLANNED step's run waits (`queued`, its holder already named and
+ * claimed) and starts with its step — `setSessionStatus` moves it to
+ * `running` when the step leaves `forming`. Any other session's run runs.
+ */
+export function runBirthStatus(
+  sessionStatus: string | null | undefined
+): "queued" | "running" {
+  return sessionStatus === PLANNED_SESSION_STATUS ? "queued" : "running";
+}
+
+/**
+ * SQL over `playbook_runs`: the run's holder has CLAIMED it (a starter's run
+ * is claimed from birth). A planned step's own run is one; a run handed to
+ * another agent is not, and keeps waiting for that agent's claim.
+ */
+export const RUN_HOLDER_CLAIMED_SQL = sql`(${playbookRuns.holder} ->> 'claimedAt') IS NOT NULL`;
 
 /** The run's starter holds it, working it from birth: its agent, else the person. */
 export function starterHolder(

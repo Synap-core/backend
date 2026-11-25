@@ -151,11 +151,13 @@ import {
   proposals,
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
   links,
   sessionEvaluations,
   podMembers,
   projectMembers,
+  spaceAccess,
   trackParticipants,
 } from "@synap/database";
 import { asRunCriterion, runGoalLoop, sweepGoalLoops } from "../goal-loop.js";
@@ -293,6 +295,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     links,
     playbooks,
     projects,
@@ -300,6 +303,7 @@ beforeAll(async () => {
     sessionEvaluations,
     podMembers,
     projectMembers,
+    spaceAccess,
     // Who is on a goal (W3): the owner seat the loop asks; `startTrack` seeds it.
     trackParticipants,
   ]) {

@@ -44,13 +44,12 @@ import {
   eq,
   getRequestGrant,
   inArray,
-  isNull,
   liveRunStatusWhere,
-  or,
   playbookRuns,
   playbooks,
   readStoredIntent,
   workspaces,
+  usableInSpaceWhere,
 } from "@synap/database";
 import {
   resolveStageCategory,
@@ -188,14 +187,12 @@ export async function readFlowOf(
   // The space's flows and the pod-wide ones; no lens = every flow the
   // caller sees; `null` = pod-wide only.
   const flowSpace =
-    typeof lensWorkspaceId === "string"
-      ? or(
-          isNull(playbooks.workspaceId),
-          eq(playbooks.workspaceId, lensWorkspaceId)
-        )
-      : lensWorkspaceId === null
-        ? isNull(playbooks.workspaceId)
-        : undefined;
+    lensWorkspaceId === undefined
+      ? undefined
+      : usableInSpaceWhere(playbooks.workspaceId, lensWorkspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        });
 
   const [board, pbRows, workers, space] = await Promise.all([
     readBoard(

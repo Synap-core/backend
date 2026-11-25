@@ -6,18 +6,14 @@
  * `params` map it:
  *   1. interpolates every `{{paramName}}` placeholder (the SAME shared
  *      `interpolateDeep` the capability applier uses — no copy),
- *   2. creates each playbook via the GOVERNED `playbooksRouter.create` caller —
- *      which, for free, materializes the playbook's inline cron `schedule` into
- *      its backing cron automation (the one shared `cron-automation.ts`
- *      primitive). Captures `playbookIdByRef`,
+ *   2. creates each playbook via the GOVERNED `playbooksRouter.create` caller
+ *      (its schedule activators compile there). Captures `playbookIdByRef`,
  *   3. resolves each playbook's `grants` (template-local capability refs) into
  *      `playbook --grants--> {tool|skill|command}` link edges — reusing the SAME
  *      `createLinks` service the workspace materializer uses,
  *   4. creates each trigger via the GOVERNED `automationsRouter.create` caller —
- *      a trigger → single `playbook_run` flow node built by the SAME
- *      `buildPlaybookRunFlowDefinition` primitive the playbook-schedule sugar
- *      emits. The trigger's `playbookRef` resolves to the playbook id created
- *      in step 2.
+ *      a trigger → single `playbook_run` flow node. The trigger's
+ *      `playbookRef` resolves to the playbook id created in step 2.
  *
  * ZERO duplicated insert/business logic — every playbook & automation flows
  * through the existing governed router callers, so governance
@@ -25,8 +21,7 @@
  * Phase-1 routes. When governance defers a create, the proposal id is surfaced.
  *
  * This is the ONE loop-materialization primitive — shared by the standalone
- * Hub-REST door AND the workspace `createFromDefinition` path — exactly like
- * `cron-automation.ts` is the one schedule primitive.
+ * Hub-REST door AND the workspace `createFromDefinition` path.
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -42,7 +37,7 @@ import { resolveComposedPlaybooks } from "@synap/playbooks";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { createLinks } from "../links/links-service.js";
-import { buildPlaybookRunFlowDefinition } from "../playbooks/cron-automation.js";
+import { playbookRunNodeLabel } from "@synap-core/types/automations";
 import { interpolateDeep } from "../_shared/interpolate.js";
 import type { Context } from "../../types/context.js";
 import type { PlaybookStageInput } from "../../schemas/playbook-stage.js";
@@ -315,8 +310,7 @@ export async function createLoopFromDefinition(
   }
 
   // 2. Triggers — through the GOVERNED automationsRouter caller. Each trigger is
-  //    a trigger → single `playbook_run` node (the SAME flow primitive the
-  //    playbook-schedule sugar emits). Resolve playbookRef → id.
+  //    a trigger → single `playbook_run` node. Resolve playbookRef → id.
   const automationsCaller = automationsRouter.createCaller(ctx as never);
   const createdTriggers: CreateLoopResult["created"]["triggers"] = [];
   for (const trig of def.triggers ?? []) {
@@ -333,17 +327,26 @@ export async function createLoopFromDefinition(
       continue;
     }
 
-    const flowDefinition: FlowDefinition = buildPlaybookRunFlowDefinition(
-      playbookId,
-      {
-        playbookName: trig.playbookRef,
-        paramsMapping: trig.params
-          ? Object.fromEntries(
-              Object.entries(trig.params).map(([k, v]) => [k, String(v)])
-            )
-          : undefined,
-      }
-    );
+    const flowDefinition: FlowDefinition = {
+      nodes: [
+        {
+          id: "playbook-run",
+          type: "playbook_run",
+          position: { x: 0, y: 0 },
+          data: {
+            label: playbookRunNodeLabel(trig.playbookRef),
+            playbookId,
+            playbookName: trig.playbookRef,
+            paramsMapping: trig.params
+              ? Object.fromEntries(
+                  Object.entries(trig.params).map(([k, v]) => [k, String(v)])
+                )
+              : undefined,
+          },
+        },
+      ],
+      edges: [],
+    };
 
     const triggerType = trig.trigger.type;
     const triggerConfig =

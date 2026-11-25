@@ -14,8 +14,11 @@
  *
  * WHAT IT DOES NOT SEE, stated: a status assigned onto a variable that is
  * then passed to `.set(set)`, and raw SQL (`playbook-run-terminal-settles-
- * parent.test.ts` asserts no raw `UPDATE playbook_runs` exists). A run BORN
- * with a status (`.insert(playbookRuns)`) is not a move and is not scanned.
+ * parent.test.ts` asserts no raw `UPDATE playbook_runs` exists).
+ *
+ * A run's BIRTH has one writer too, beside the moves: `insertPlaybookRun`
+ * derives the first status from the holder it is given, so no door can bear
+ * a `running` run nobody claimed. One `.insert(playbookRuns)`, in that file.
  */
 import { describe, it, expect } from "vitest";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -54,6 +57,9 @@ function runSetArguments(src: string): string[] {
   }
   return out;
 }
+
+const insertsRun = (src: string): boolean =>
+  /\.insert\(\s*playbookRuns\s*\)/.test(src);
 
 const writesStatus = (src: string): boolean =>
   runSetArguments(src).some((arg) => /\bstatus\s*:/.test(arg));
@@ -98,6 +104,24 @@ describe("playbook_runs.status has one writer", () => {
     // guidance, the generate snapshot).
     expect(scanned).toBeGreaterThanOrEqual(4);
     expect(hits).toContain(THE_WRITER);
+  });
+
+  it("a run is born in one place: insertPlaybookRun", () => {
+    expect(insertsRun("await tx.insert(playbookRuns).values({})")).toBe(true);
+    const births: string[] = [];
+    for (const root of ROOTS) {
+      for (const file of walk(join(BACKEND_ROOT, root))) {
+        const src = stripComments(readFileSync(file, "utf8"), "ts");
+        if (insertsRun(src)) {
+          births.push(relative(BACKEND_ROOT, file).split("\\").join("/"));
+        }
+      }
+    }
+    expect(
+      births,
+      "Bear a run through insertPlaybookRun (@synap/database): it names " +
+        "the holder and derives the status from it."
+    ).toEqual([THE_WRITER]);
   });
 
   it("no other file writes playbook_runs.status", () => {

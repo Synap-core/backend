@@ -125,6 +125,10 @@ import {
   type WaitingAtClose,
 } from "./close-not-done.js";
 import { sessionNameField } from "./session-update-goal.js";
+import {
+  NOT_TAKEN_REPORT_KEY,
+  type NotTakenRecord,
+} from "./session-closed-as.js";
 import { createLogger } from "@synap-core/core";
 import {
   isPinnedStrategy,
@@ -189,6 +193,14 @@ export interface CompleteFocusSessionParams {
    * a run's end) passes the system.
    */
   actor?: WorkUnitActor;
+  /**
+   * The step is SKIPPED: an arm of a decision that chose another option (P5,
+   * `decision-arms.ts`). Recorded on `verification_report.notTaken`, which
+   * the dependency rule reads as `skipped` (it holds none of its
+   * dependents). Read only on a `cancelled` close by the system actor; a
+   * caller-sent report never carries it.
+   */
+  notTaken?: NotTakenRecord;
 }
 
 /** One of the closing agent's still-open questions, as the refusal lists it. */
@@ -487,20 +499,27 @@ export type CompleteFocusSessionResult = {
 };
 
 /**
- * The report this close writes: the caller's, with any `closedNotDone` it
- * sent dropped (this door alone writes it), plus the door's own record. An
+ * The report this close writes: the caller's, with any `closedNotDone` or
+ * `notTaken` it sent dropped (this door alone writes them: a sent `notTaken`
+ * would free the step's dependents), plus the door's own records. An
  * explicit `null` (clear the report) stays `null`.
  */
 export function withoutCallerCloseRecord(
   report: Record<string, unknown> | null | undefined,
-  closedNotDone: ClosedNotDoneRecord | undefined
+  closedNotDone: ClosedNotDoneRecord | undefined,
+  notTaken?: NotTakenRecord
 ): Record<string, unknown> | null | undefined {
   if (report === null) return null;
+  const own = {
+    ...(closedNotDone ? { closedNotDone } : {}),
+    ...(notTaken ? { [NOT_TAKEN_REPORT_KEY]: notTaken } : {}),
+  };
   if (report === undefined)
-    return closedNotDone ? { closedNotDone } : undefined;
+    return Object.keys(own).length > 0 ? own : undefined;
   const rest = { ...report };
   delete rest.closedNotDone;
-  return closedNotDone ? { ...rest, closedNotDone } : rest;
+  delete rest[NOT_TAKEN_REPORT_KEY];
+  return { ...rest, ...own };
 }
 
 /**
@@ -626,9 +645,15 @@ export async function completeFocusSession(
   // `closedNotDone` is written by this door only: a caller-sent one is
   // dropped. An explicit `null` report (clear it) is honoured as sent; the
   // record then lives in the room line, the close event and the result.
+  // A skip (P5) is the system's, on a cancel only (`decision-arms.ts`).
+  const notTaken =
+    terminalStatus === "cancelled" && params.actor?.kind === "system"
+      ? params.notTaken
+      : undefined;
   const verificationReport = withoutCallerCloseRecord(
     params.verificationReport,
-    closedNotDone
+    closedNotDone,
+    notTaken
   );
 
   // Lifecycle close must not be blocked by session forceProposeWrites (pack mode).

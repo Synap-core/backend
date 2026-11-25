@@ -34,12 +34,20 @@ import {
   type DiscoverScope,
 } from "../../../services/discover/discover.js";
 import { getRequestGrant } from "@synap/database";
-import { statusOfReach } from "../../../access/grant-door-fence.js";
+import {
+  sessionHolderReadable,
+  statusOfReach,
+} from "../../../access/grant-door-fence.js";
 import {
   narrowStatusOfAnswer,
   narrowStatusOfInclude,
   STATUS_OF_WITHHELD_REASON,
 } from "../../../services/status/status-of-narrowed.js";
+import {
+  STATUS_OF_WORK_WITHHELD_FIELDS,
+  STATUS_OF_WORK_WITHHELD_REASON,
+} from "../../../services/status/status-of-narrowed-work.js";
+import { readableWorkProposalIds } from "../../../services/status/status-of-narrowed-proposals.js";
 import {
   readStatusOf,
   STATUS_OF_INCLUDES,
@@ -80,8 +88,10 @@ export function registerOrientRoutes(app: HubHono): void {
       "`GET /orient?statusOf=`. Every id is read through the floors that AND " +
       "the key's grant: an id it cannot read answers `unknown`, as one that " +
       "does not exist. A key that does not read every subject unbounded " +
-      "(a pod app pinned to spaces) is answered the status, `moves` and " +
-      "`history` only; `withheld` names the parts left out.",
+      "(a pod app pinned to spaces) is answered the status, `moves`, " +
+      "`history` and a floored projection of `work` (the sessions its grant " +
+      "reads; a gate's proposal only when it may read it); `withheld` names " +
+      "the parts and fields left out.",
     responses: {
       200: {
         description: "One answer per id",
@@ -143,11 +153,27 @@ export function registerOrientRoutes(app: HubHono): void {
         },
       });
       if (!narrowed) return c.json({ statusOf: answers });
+      const grant = getRequestGrant();
+      const workAsked = narrowed.include.includes("work");
+      const ctx = {
+        holderReadable: sessionHolderReadable(grant),
+        readableProposalIds: workAsked
+          ? await readableWorkProposalIds(userId, answers)
+          : new Set<string>(),
+      };
       return c.json({
-        statusOf: answers.map(narrowStatusOfAnswer),
+        statusOf: answers.map((a) => narrowStatusOfAnswer(a, ctx)),
         withheld: {
           parts: narrowed.withheld,
           reason: STATUS_OF_WITHHELD_REASON,
+          ...(workAsked
+            ? {
+                work: {
+                  fields: STATUS_OF_WORK_WITHHELD_FIELDS,
+                  reason: STATUS_OF_WORK_WITHHELD_REASON,
+                },
+              }
+            : {}),
         },
       });
     } catch (err) {

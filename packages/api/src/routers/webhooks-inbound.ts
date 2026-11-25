@@ -398,7 +398,8 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
   let markSeen = false;
   try {
     if (trigger === "BOOKING_CREATED") {
-      const actor = (await getCaptureAgentUserId()) ?? ownerUserId;
+      // Capture acts, through the membership of the tool's person.
+      const captureAgentId = await getCaptureAgentUserId();
       const { entities: graphEntities, relations } = mapBookingToGraph(payload);
       // The RAW door: the verified body is staged as a capture source owned by
       // the tool's HUMAN owner BEFORE anything is filed. `markSeen` stops Cal.com
@@ -420,7 +421,8 @@ webhooksInboundRouter.post("/calcom/:token", async (c) => {
       }
       await submitCaptureGraph({
         sourceDocumentIds: rawStaged.sourceDocumentIds,
-        userId: actor,
+        userId: ownerUserId,
+        ...(captureAgentId ? { agentUserId: captureAgentId } : {}),
         workspaceId,
         entities: graphEntities,
         relations,

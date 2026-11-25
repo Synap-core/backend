@@ -112,6 +112,19 @@ vi.mock("../../../../utils/domain-event-bridge.js", () => ({
   emitHubRealtimeEvent: () => {},
 }));
 
+/** The declared-grade producer (W5): which sessions an approval reconciled. */
+const gradeReconciles = vi.hoisted(() => [] as string[]);
+vi.mock(
+  "../../../../services/focus-sessions/evaluations/record.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    fileDeclaredGradeSlots: async (sessionId: string) => {
+      gradeReconciles.push(sessionId);
+      return { filed: [], outputs: null };
+    },
+  })
+);
+
 import { proposalExecRegistry } from "../../execution-registry.js";
 import type { ProposalExecutorArgs } from "../../execution-registry.js";
 import { registerFocusSessionExecutors } from "../focus-session.js";
@@ -174,6 +187,7 @@ async function approve(
 beforeEach(() => {
   registerFocusSessionExecutors();
   updates.length = 0;
+  gradeReconciles.length = 0;
   sessionRow = {
     id: SESSION_ID,
     status: "active",
@@ -451,5 +465,32 @@ describe("focus_session/update — the deliverables half of an approval", () => 
     expect(writtenOutputs()).toBeUndefined();
     const scalar = updates.find((u) => u.table === "focus_sessions")!;
     expect(scalar.values).toMatchObject({ goal: "A new goal", progress: 60 });
+  });
+});
+
+/**
+ * W5 review (item 5): the governed path keeps declared grades in step as the
+ * direct door does. An approved criteria change reaches the declared-grade
+ * producer; an approval that carries no criteria does not.
+ */
+describe("focus_session/update — an approved criteria change files declared grades", () => {
+  it("an approved criteria change reconciles the session's grade slots", async () => {
+    const result = await approve({
+      criteria: [
+        {
+          key: "copy-reads-well",
+          statement: "The landing copy reads well",
+          check: { kind: "human" },
+          outputKey: "landing-copy",
+        },
+      ],
+    });
+    expect(result.success).toBe(true);
+    expect(gradeReconciles).toEqual([SESSION_ID]);
+  });
+
+  it("CONTROL: an approval with no criteria reconciles nothing", async () => {
+    await approve({ goal: "g", progress: 60 });
+    expect(gradeReconciles).toEqual([]);
   });
 });

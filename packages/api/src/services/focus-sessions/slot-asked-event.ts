@@ -78,7 +78,7 @@ export function stampAskProvenance(
   after: readonly ExpectedOutput[],
   provenance: AskProvenance
 ): ExpectedOutput[] {
-  const posedNow = posedBy(before);
+  const posedNow = posedBy(before, after);
   const askedBy = provenance.askedBy?.trim() || undefined;
   const askCause = provenance.askCause ?? undefined;
   return after.map((o) => {
@@ -98,7 +98,8 @@ export function stampAskProvenance(
  * `stampAskProvenance` stamps by and `slotsMissingUnblocks` checks by.
  */
 function posedBy(
-  before: readonly ExpectedOutput[]
+  before: readonly ExpectedOutput[],
+  after: readonly ExpectedOutput[]
 ): (o: ExpectedOutput | null | undefined) => o is ExpectedOutput {
   const prior = new Map<string, ExpectedOutput>();
   for (const o of before) {
@@ -106,11 +107,11 @@ function posedBy(
     if (key && !prior.has(key)) prior.set(key, o);
   }
   return (o): o is ExpectedOutput => {
-    if (!o || typeof o !== "object" || !isOwedSlot(o)) return false;
+    if (!o || typeof o !== "object" || !isOwedSlot(o, after)) return false;
     const was = prior.get(normalizeExpectedLabel(o.label) ?? "");
     return (
       !was ||
-      !isOwedSlot(was) ||
+      !isOwedSlot(was, before) ||
       askFingerprint(was.ask ?? null) !== askFingerprint(o.ask ?? null)
     );
   };
@@ -130,7 +131,7 @@ export function slotsMissingUnblocks(
   before: readonly ExpectedOutput[],
   after: readonly ExpectedOutput[]
 ): string[] {
-  const posedNow = posedBy(before);
+  const posedNow = posedBy(before, after);
   return after
     .filter(
       (o): o is ExpectedOutput =>

@@ -77,6 +77,7 @@ import { config } from "@synap-core/core";
 import {
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
   invites,
   inviteAcceptances,
@@ -138,6 +139,7 @@ beforeAll(async () => {
   for (const t of [
     workspaces,
     workspaceMembers,
+    apiKeys,
     users,
     invites,
     inviteAcceptances,

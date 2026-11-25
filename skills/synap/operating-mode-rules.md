@@ -23,7 +23,7 @@ GET /api/hub/discover?userId={userId}&workspaceId={workspaceId}
 ```
 
 `scope: "pod"` = visible across all workspaces (note, task, project, person, company, bookmark, event, contact, article, website).  
-`scope: "workspace"` = scoped to one workspace (deal, file, capture, custom profiles).  
+`scope: "workspace"` = scoped to one workspace (deal, file, capture, and custom kinds declared so; a custom kind defaults to pod).  
 Each profile includes its full property schema. Use `createCommand` as a template.
 
 **2. Ask before answering**  

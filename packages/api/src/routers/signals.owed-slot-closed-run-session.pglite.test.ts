@@ -129,6 +129,7 @@ import {
   users,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   chatTurns,
@@ -222,6 +223,7 @@ describe("signals: an owed decision on a closed, run-kind, null-workspace, proje
       users,
       workspaces,
       workspaceMembers,
+      apiKeys,
       podMembers,
       projectMembers,
       // The needs-you rule's facts (agent evidence, proposal waits).

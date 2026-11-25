@@ -55,8 +55,9 @@ export const AUTOMATION_TRANSITIONS = {
 } as const satisfies StatusTransitions<AutomationStatusValue>;
 
 /**
- * The status an automation is BORN with — the one decision every door that
- * writes a new automation reads (`insertAutomation`).
+ * The status a thing that runs on its own (an automation, a playbook) is BORN
+ * with — the one decision every door that writes one reads
+ * (`insertAutomation`, a plan's playbook step, the review of a plan).
  *
  *   - A person approved this definition: it keeps the status it asked for,
  *     `active` when it asked none (an approval activates).
@@ -64,11 +65,11 @@ export const AUTOMATION_TRANSITIONS = {
  *     agent's automation is floored to a person, `automation/activate`).
  *   - Anyone else's own create keeps its status, `draft` when it asked none.
  */
-export function automationStatusAtCreate(input: {
-  requested: AutomationStatusValue | undefined;
+export function statusAtCreate<S extends string>(input: {
+  requested: S | undefined;
   personApproved: boolean;
   actorIsAgent: boolean;
-}): AutomationStatusValue {
+}): S | "active" | "draft" {
   if (input.personApproved) return input.requested ?? "active";
   if (input.actorIsAgent) return "draft";
   return input.requested ?? "draft";

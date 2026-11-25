@@ -31,6 +31,7 @@ import {
   type GridPos,
   type MatrixRow,
 } from "../../../../../lib/agent-matrix/matrix-view-model";
+import { matrixT } from "./copy";
 import { toneTextClass } from "./mark-tone";
 
 export interface MatrixGridProps {
@@ -41,6 +42,7 @@ export interface MatrixGridProps {
 }
 
 export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
+  const t = matrixT();
   const { columns } = matrix;
   const groups = useMemo(() => columnGroups(columns), [columns]);
   const tableRef = useRef<HTMLTableElement>(null);
@@ -108,7 +110,7 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
       <table
         ref={tableRef}
         role="grid"
-        aria-label="Agents and work"
+        aria-label={t("grid.aria")}
         aria-rowcount={rows.length + 2}
         aria-colcount={columns.length + 1}
         onKeyDown={onKeyDown}
@@ -122,7 +124,7 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
               scope="col"
               className="sticky left-0 top-0 z-30 min-w-[220px] border-b border-r border-foreground/[0.08] bg-background px-3 text-left align-bottom font-medium text-foreground/65"
             >
-              <span className="block pb-2">Agent</span>
+              <span className="block pb-2">{t("grid.agent")}</span>
             </th>
             {groups.map((g) => (
               <th
@@ -146,7 +148,10 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
               >
                 <span className="flex items-center gap-1.5">
                   {column.kind === "floors" && (
-                    <Lock className="h-3 w-3 shrink-0" aria-label="Locked" />
+                    <Lock
+                      className="h-3 w-3 shrink-0"
+                      aria-label={t("grid.locked")}
+                    />
                   )}
                   <span className="line-clamp-2">{column.label}</span>
                 </span>
@@ -211,6 +216,7 @@ export function MatrixGrid({ matrix, rows, onToggle, onWhy }: MatrixGridProps) {
 }
 
 function RowLabel({ row }: { row: MatrixRow }) {
+  const t = matrixT();
   const indent = (row.level - 1) * 16;
   return (
     <span
@@ -245,7 +251,7 @@ function RowLabel({ row }: { row: MatrixRow }) {
       )}
       {row.agent?.paused && (
         <Pause
-          aria-label="Paused"
+          aria-label={t("row.paused")}
           className="h-3 w-3 shrink-0 text-status-stale"
         />
       )}

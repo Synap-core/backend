@@ -18,9 +18,11 @@
 import {
   BIND_RENDERER_TARGET_KINDS,
   COMPOSITE_VIEW_TYPES,
+  isDomainOperation,
   isLikelyUUID,
   isPlanOperation,
   isUpdateOperation,
+  type UPDATE_OPERATION_KINDS,
   updateOperationTargetId,
   PLAN_LINK_TYPES,
   type CompositeProposalOperation,
@@ -31,10 +33,42 @@ import {
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
 import { shouldMaterializeAsDocument } from "@synap-core/types/documents";
+import { decisionRecordView } from "@synap-core/types/ask";
+import {
+  STEP_DUE_BY_KEY,
+  STEP_PLANNED_FOR_KEY,
+  isStepDate,
+  stepDateRefusal,
+} from "@synap-core/types/units";
 import {
   skillAuthoringProblem,
   skillSlugProblem,
 } from "../skills/skill-authoring.js";
+
+/**
+ * Every step array a capture call may carry (`CapturePlanInput`), the one
+ * list both caller doors (MCP `synap_capture`, Hub REST `POST /capture/graph`)
+ * read, so neither can accept a step the other cannot.
+ */
+export const CAPTURE_PLAN_KEYS = [
+  "sessions",
+  "documents",
+  "projects",
+  "tracks",
+  "edits",
+  "links",
+  "skills",
+  "automations",
+  "rules",
+  "playbooks",
+  "views",
+  "cells",
+  "renderers",
+  "workspaces",
+  "kinds",
+  "lifecycles",
+  "updates",
+] as const;
 
 /** The session door's goal bound (`rest/focus-sessions.ts` `goal.max(2000)`). */
 export const PLAN_SESSION_GOAL_MAX = 2000;
@@ -97,7 +131,11 @@ export type PlanRefKind =
   | "automation"
   | "rule"
   | "playbook"
-  | "view";
+  | "view"
+  | "workspace"
+  | "track"
+  | "kind"
+  | "lifecycle";
 
 export interface CapturePlanProblem {
   /** Index in `operations[]`. */
@@ -106,6 +144,53 @@ export interface CapturePlanProblem {
   ref?: string;
   op: CompositeProposalOperation["op"];
   message: string;
+}
+
+/** One step → decision / goal edge (a cross-kind `blocked_by` `create_link`). */
+export interface PlanCrossKindEdge {
+  opIndex: number;
+  from: { ref: string } | { sessionId: string };
+  to: { kind: "entity" | "track" } & ({ ref: string } | { id: string });
+  /** The decision option the step waits on (an arm), when it names one. */
+  option?: string;
+}
+
+/** True when a `create_link` waits on a decision or a goal, not a session. */
+export function isCrossKindLink(
+  op: Extract<CompositeProposalOperation, { op: "create_link" }>
+): boolean {
+  return !!(op.toEntityRef || op.toEntityId || op.toTrackRef || op.toTrackId);
+}
+
+/**
+ * Every step → decision / goal `blocked_by` the plan declares — the cross-kind
+ * half of the plan's edges. `planSessionEdges` is the session↔session half;
+ * the two never overlap (`isCrossKindLink`).
+ */
+export function planCrossKindEdges(
+  operations: CompositeProposalOperation[]
+): PlanCrossKindEdge[] {
+  const edges: PlanCrossKindEdge[] = [];
+  operations.forEach((op, opIndex) => {
+    if (op.op !== "create_link" || !isCrossKindLink(op)) return;
+    const from = op.fromRef
+      ? { ref: op.fromRef }
+      : { sessionId: op.fromSessionId ?? "" };
+    const to = op.toEntityRef
+      ? { kind: "entity" as const, ref: op.toEntityRef }
+      : op.toEntityId
+        ? { kind: "entity" as const, id: op.toEntityId }
+        : op.toTrackRef
+          ? { kind: "track" as const, ref: op.toTrackRef }
+          : { kind: "track" as const, id: op.toTrackId ?? "" };
+    edges.push({
+      opIndex,
+      from,
+      to,
+      ...(op.option ? { option: op.option } : {}),
+    });
+  });
+  return edges;
 }
 
 /** One session↔session edge, from a `create_session` field or a `create_link` op. */
@@ -130,6 +215,12 @@ const OP_REF_KIND: Partial<
   create_playbook: "playbook",
   create_view: "view",
   create_cell: "cell",
+  create_workspace: "workspace",
+  create_track: "track",
+  define_kind: "kind",
+  declare_lifecycle: "lifecycle",
+  // A re-plan's step update names an EXISTING session; its ref resolves to it.
+  update_session: "session",
   // An update names an EXISTING row; its ref resolves to that row's id, so
   // a relation may target a reused container (`update_entity`).
   update_skill: "skill",
@@ -191,6 +282,7 @@ export function hasComposedSteps(
       op.op === "create_view" ||
       op.op === "create_cell" ||
       op.op === "bind_renderer" ||
+      isDomainOperation(op) ||
       isUpdateOperation(op)
   );
 }
@@ -229,7 +321,7 @@ export function planSessionEdges(
           to: { sessionId: blocker },
         });
       }
-    } else if (op.op === "create_link") {
+    } else if (op.op === "create_link" && !isCrossKindLink(op)) {
       const from = op.fromRef
         ? { ref: op.fromRef }
         : { sessionId: op.fromSessionId ?? "" };
@@ -386,6 +478,31 @@ export function validatePlanOperations(
     }
   };
 
+  /** A space named by `workspaceRef` (a space this batch creates) or `workspaceId`. */
+  const expectSpace = (
+    opIndex: number,
+    op: { workspaceRef?: string; workspaceId?: string }
+  ) => {
+    notBoth(
+      opIndex,
+      "workspaceRef",
+      op.workspaceRef,
+      "workspaceId",
+      op.workspaceId
+    );
+    if (op.workspaceRef)
+      expectRef(opIndex, "workspaceRef", op.workspaceRef, "workspace");
+    if (op.workspaceId) expectId(opIndex, "workspaceId", op.workspaceId);
+  };
+  // Existing steps this plan re-plans (`update_session`).
+  const replannedSessionIds = new Set(
+    operations.flatMap((op) =>
+      op.op === "update_session" && typeof op.sessionId === "string"
+        ? [op.sessionId]
+        : []
+    )
+  );
+
   operations.forEach((op, i) => {
     switch (op.op) {
       case "create_entity":
@@ -458,11 +575,21 @@ export function validatePlanOperations(
         }
         for (const id of op.blockedBySessionIds ?? [])
           expectId(i, "blockedBySessionIds", id);
+        // B5 / P4: the step's time and birth, as the session door checks them.
+        for (const key of [STEP_PLANNED_FOR_KEY, STEP_DUE_BY_KEY] as const) {
+          if (op[key] != null && !isStepDate(op[key]))
+            push(i, stepDateRefusal(key));
+        }
+        if (op.startNow !== undefined && typeof op.startNow !== "boolean")
+          push(i, "startNow must be true or false");
         if (op.subjectRef) expectRef(i, "subjectRef", op.subjectRef, "entity");
         if (op.subjectEntityId)
           expectId(i, "subjectEntityId", op.subjectEntityId);
         if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
         if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "trackRef", op.trackRef, "trackId", op.trackId);
+        if (op.trackRef) expectRef(i, "trackRef", op.trackRef, "track");
+        if (op.trackId) expectId(i, "trackId", op.trackId);
         if (
           op.expectedOutputs !== undefined &&
           !Array.isArray(op.expectedOutputs)
@@ -518,6 +645,109 @@ export function validatePlanOperations(
         for (const id of op.evidenceEntityIds ?? [])
           expectId(i, "evidenceEntityIds", id);
         return;
+      case "create_track": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a goal step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a goal step needs a `name`");
+        notBoth(i, "projectRef", op.projectRef, "projectId", op.projectId);
+        if (!op.projectRef && !op.projectId)
+          push(
+            i,
+            "a goal lives in a project: give it `projectRef` (a project step) or `projectId`"
+          );
+        if (op.projectRef) expectRef(i, "projectRef", op.projectRef, "project");
+        if (op.projectId) expectId(i, "projectId", op.projectId);
+        notBoth(i, "parentRef", op.parentRef, "parentGoalId", op.parentGoalId);
+        if (op.parentRef) {
+          if (op.parentRef === op.ref) push(i, "a goal cannot serve itself");
+          else expectRef(i, "parentRef", op.parentRef, "track");
+        }
+        if (op.parentGoalId) expectId(i, "parentGoalId", op.parentGoalId);
+        for (const blocker of op.blockedByRefs ?? []) {
+          if (blocker === op.ref) push(i, "a goal cannot wait on itself");
+          else expectRef(i, "blockedByRefs", blocker, "track");
+        }
+        for (const id of op.blockedByTrackIds ?? [])
+          expectId(i, "blockedByTrackIds", id);
+        if (op.criteria !== undefined && !Array.isArray(op.criteria))
+          push(i, "criteria must be an array");
+        if (
+          op.kpi !== undefined &&
+          (op.kpi === null ||
+            typeof op.kpi !== "object" ||
+            Array.isArray(op.kpi))
+        )
+          push(i, "kpi must be an object ({ label, target, unit? })");
+        return;
+      }
+      case "update_session": {
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a step update needs a `ref`");
+        expectId(i, "sessionId", op.sessionId);
+        const patch = op.patch as Record<string, unknown> | null | undefined;
+        if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
+          push(i, "a step update needs a `patch` object");
+          return;
+        }
+        const allowed = ["title", "goal", "status"];
+        const keys = Object.keys(patch);
+        if (keys.length === 0)
+          push(i, "a step update needs at least one of title, goal, status");
+        for (const key of keys) {
+          if (!allowed.includes(key))
+            push(
+              i,
+              `a step update changes title, goal or status only — not "${key}" (blockers: create_link / remove_link)`
+            );
+        }
+        if (
+          patch.goal !== undefined &&
+          (typeof patch.goal !== "string" ||
+            !patch.goal.trim() ||
+            patch.goal.length > PLAN_SESSION_GOAL_MAX)
+        ) {
+          push(
+            i,
+            `goal must be a non-empty string of at most ${PLAN_SESSION_GOAL_MAX} characters`
+          );
+        }
+        if (patch.title !== undefined && patch.title !== null) {
+          const title = normalizeSessionTitle(
+            typeof patch.title === "string" ? patch.title : null
+          );
+          if (typeof patch.title !== "string")
+            push(i, "title must be a string (or null to clear it)");
+          else if (title && title.length > SESSION_TITLE_MAX)
+            push(i, `title must be at most ${SESSION_TITLE_MAX} characters`);
+        }
+        if (
+          patch.status !== undefined &&
+          patch.status !== "active" &&
+          patch.status !== "paused"
+        ) {
+          push(i, 'a step update moves status to "active" or "paused" only');
+        }
+        return;
+      }
+      case "remove_link": {
+        if (op.type !== "blocked_by")
+          push(i, "a plan removes blocked_by edges only");
+        expectId(i, "fromSessionId", op.fromSessionId);
+        const targets = [
+          ["toSessionId", op.toSessionId],
+          ["toEntityId", op.toEntityId],
+          ["toTrackId", op.toTrackId],
+        ] as const;
+        const given = targets.filter(([, value]) => !!value);
+        if (given.length !== 1)
+          push(
+            i,
+            "a removed link names exactly one of toSessionId, toEntityId, toTrackId"
+          );
+        for (const [field, value] of given) expectId(i, field, value as string);
+        return;
+      }
       case "create_link": {
         if (!(PLAN_LINK_TYPES as readonly string[]).includes(op.type)) {
           push(
@@ -525,15 +755,67 @@ export function validatePlanOperations(
             `link type "${String(op.type)}" is not a plan edge — use one of ${PLAN_LINK_TYPES.join(", ")}`
           );
         }
-        for (const [side, ref, id] of [
-          ["from", op.fromRef, op.fromSessionId],
-          ["to", op.toRef, op.toSessionId],
-        ] as const) {
-          if (!ref && !id)
-            push(i, `a link needs ${side}Ref or ${side}SessionId`);
-          notBoth(i, `${side}Ref`, ref, `${side}SessionId`, id);
-          if (ref) expectRef(i, `${side}Ref`, ref, "session");
-          if (id) expectId(i, `${side}SessionId`, id);
+        if (!op.fromRef && !op.fromSessionId)
+          push(i, "a link needs fromRef or fromSessionId");
+        notBoth(i, "fromRef", op.fromRef, "fromSessionId", op.fromSessionId);
+        if (op.fromRef) expectRef(i, "fromRef", op.fromRef, "session");
+        if (op.fromSessionId) expectId(i, "fromSessionId", op.fromSessionId);
+        // Exactly ONE target: a session, a decision (entity) or a goal.
+        const targets = [
+          ["toRef", op.toRef, "session", true],
+          ["toSessionId", op.toSessionId, "session", false],
+          ["toEntityRef", op.toEntityRef, "entity", true],
+          ["toEntityId", op.toEntityId, "entity", false],
+          ["toTrackRef", op.toTrackRef, "track", true],
+          ["toTrackId", op.toTrackId, "track", false],
+        ] as const;
+        const given = targets.filter(([, value]) => !!value);
+        if (given.length !== 1) {
+          push(
+            i,
+            "a link needs exactly one target: toRef / toSessionId (a session), toEntityRef / toEntityId (a decision), or toTrackRef / toTrackId (a goal)"
+          );
+        }
+        for (const [field, value, kind, isRef] of given) {
+          if (isRef) expectRef(i, field, value as string, kind);
+          else expectId(i, field, value as string);
+        }
+        if (isCrossKindLink(op) && op.type !== "blocked_by") {
+          push(
+            i,
+            "only a blocked_by link may point at a decision or a goal (a session's parent is a session)"
+          );
+        }
+        // An ARM: an option names one of a DECISION's options.
+        if (op.option !== undefined) {
+          const decisionRef = op.toEntityRef;
+          if (typeof op.option !== "string" || !op.option.trim()) {
+            push(i, "option must be a non-empty string");
+          } else if (!op.toEntityRef && !op.toEntityId) {
+            push(
+              i,
+              "only a wait on a decision (toEntityRef / toEntityId) can name an option"
+            );
+          } else if (decisionRef) {
+            // A decision this plan creates: its options are in the plan, so the
+            // refusal is raised now (the door judges an existing one at apply).
+            const made = operations.find(
+              (o) => o.op === "create_entity" && o.ref === decisionRef
+            );
+            if (made && made.op === "create_entity") {
+              const keys = decisionRecordView(made.properties).options.map(
+                (o) => o.key
+              );
+              if (!keys.includes(op.option)) {
+                push(
+                  i,
+                  keys.length === 0
+                    ? `decision "${decisionRef}" lists no options (decisionOptions): give it its options, then name one`
+                    : `"${op.option}" is not an option of decision "${decisionRef}". Its options: ${keys.map((k) => `"${k}"`).join(", ")}`
+                );
+              }
+            }
+          }
         }
         // The CHILD of a `spawned_from` edge must be a session this plan
         // creates: the spawn producer floors the parent only, because its
@@ -545,12 +827,21 @@ export function validatePlanOperations(
             "a spawned_from link's `from` (the child) must be a session this plan creates — use fromRef"
           );
         }
-        // An edge between two EXISTING sessions is not part of building a
-        // plan — that is `POST /links`, governed on its own.
-        if (!op.fromRef && !op.toRef && op.fromSessionId && op.toSessionId) {
+        // An edge between two EXISTING things is not part of building a plan
+        // — that is `POST /links`, governed on its own — UNLESS the plan
+        // re-plans that existing step (`update_session` on it): a step's
+        // blockers change with it.
+        if (
+          op.fromSessionId &&
+          !op.fromRef &&
+          !op.toRef &&
+          !op.toEntityRef &&
+          !op.toTrackRef &&
+          !replannedSessionIds.has(op.fromSessionId)
+        ) {
           push(
             i,
-            "a plan link must touch a session this plan creates — link two existing sessions through the links door instead"
+            "a plan link must touch a step this plan creates — or re-plan that step (`update_session` on it) — otherwise link two existing things through the links door"
           );
         }
         if (
@@ -651,6 +942,7 @@ export function validatePlanOperations(
             }
           }
         }
+        expectSpace(i, op);
         return;
       }
       case "create_rule":
@@ -697,7 +989,9 @@ export function validatePlanOperations(
             i,
             "a process draft needs a `goalTemplate` (one line is enough)"
           );
-        if (
+        if (op.subjectProfileRef) {
+          expectRef(i, "subjectProfileRef", op.subjectProfileRef, "kind");
+        } else if (
           !op.subjectProfile ||
           typeof op.subjectProfile !== "object" ||
           typeof op.subjectProfile.profileSlug !== "string" ||
@@ -705,23 +999,30 @@ export function validatePlanOperations(
         ) {
           push(
             i,
-            "a process draft needs `subjectProfile.profileSlug` — the kind it runs on"
+            "a process needs `subjectProfile.profileSlug`, or `subjectProfileRef` naming a kind this plan defines — the kind it runs on"
           );
         }
-        if (op.status !== undefined && op.status !== "draft") {
-          push(
-            i,
-            'a process drafted from a capture is always `status: "draft"`'
-          );
+        if (
+          op.status !== undefined &&
+          op.status !== "draft" &&
+          op.status !== "active"
+        ) {
+          push(i, 'a process\'s `status` is "draft" or "active"');
         }
+        expectSpace(i, op);
         // A process lives in a space: the playbook door refuses a pod-wide
         // one at apply time, after the things beside it have landed. Refused
         // HERE instead, so the bundle is never filed with a step that cannot
         // apply.
-        if (placement && !placement.workspaceId) {
+        if (
+          placement &&
+          !placement.workspaceId &&
+          !op.workspaceRef &&
+          !op.workspaceId
+        ) {
           push(
             i,
-            "a process draft needs a space — file this bundle into a space (workspaceId), or drop the process step"
+            "a process draft needs a space — file this bundle into a space (workspaceId), name one (workspaceRef), or drop the process step"
           );
         }
         return;
@@ -741,7 +1042,7 @@ export function validatePlanOperations(
             `list viewType "${String(op.viewType)}" is not valid — use one of ${COMPOSITE_VIEW_TYPES.join(", ")}`
           );
         }
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        expectSpace(i, op);
         if (
           op.scopeProfileSlugs !== undefined &&
           (!Array.isArray(op.scopeProfileSlugs) ||
@@ -802,13 +1103,13 @@ export function validatePlanOperations(
           push(i, "a cell step needs a `name`");
         if (typeof op.rendererSource !== "string" || !op.rendererSource.trim())
           push(i, "a cell step needs its `rendererSource`");
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        expectSpace(i, op);
         return;
       case "bind_renderer": {
         if (typeof op.ref !== "string" || !op.ref)
           push(i, "a binding step needs a `ref`");
         const target = op.target as
-          { kind?: unknown; id?: unknown } | null | undefined;
+          { kind?: unknown; id?: unknown; ref?: unknown } | null | undefined;
         if (
           !target ||
           !(BIND_RENDERER_TARGET_KINDS as readonly unknown[]).includes(
@@ -819,18 +1120,34 @@ export function validatePlanOperations(
             i,
             `a binding's target.kind must be one of ${BIND_RENDERER_TARGET_KINDS.join(", ")} — one object's own page`
           );
-        } else if (typeof target.id !== "string") {
-          push(i, "a binding's target needs the object's `id`");
+        } else if (
+          (typeof target.id === "string") ===
+          (typeof target.ref === "string")
+        ) {
+          push(
+            i,
+            "a binding's target names its object once: `id` (an existing one) OR `ref` (a step of this plan)"
+          );
+        } else if (typeof target.ref === "string") {
+          expectRef(
+            i,
+            "target.ref",
+            target.ref,
+            target.kind as "playbook" | "view"
+          );
         } else {
-          expectId(i, "target.id", target.id);
+          expectId(i, "target.id", target.id as string);
         }
         if (op.slot !== "detail")
           push(i, 'one object\'s page has one slot: `slot: "detail"`');
         if (op.scope !== "pod" && op.scope !== "workspace")
           push(i, 'a binding\'s scope is "pod" or "workspace"');
-        if (op.scope === "workspace" && !op.workspaceId)
-          push(i, "a workspace binding needs its `workspaceId`");
-        if (op.workspaceId) expectId(i, "workspaceId", op.workspaceId);
+        if (op.scope === "workspace" && !op.workspaceId && !op.workspaceRef)
+          push(
+            i,
+            "a workspace binding needs its `workspaceId` or `workspaceRef`"
+          );
+        expectSpace(i, op);
         if (!op.cellRef === !op.cellKey) {
           push(
             i,
@@ -840,6 +1157,58 @@ export function validatePlanOperations(
         if (op.cellRef) expectRef(i, "cellRef", op.cellRef, "cell");
         return;
       }
+      // ── A domain: its space, kinds and lifecycles ─────────────────────
+      // Shape and refs only: the one-space-per-domain rule, the kind's slug
+      // and fields and the lifecycle's options are their doors' to judge at
+      // apply time.
+      case "create_workspace":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a space step needs a `ref`");
+        if (typeof op.name !== "string" || !op.name.trim())
+          push(i, "a space step needs a `name`");
+        return;
+      case "define_kind":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a kind step needs a `ref`");
+        if (typeof op.slug !== "string" || !op.slug.trim())
+          push(i, "a kind step needs a `slug`");
+        if (typeof op.displayName !== "string" || !op.displayName.trim())
+          push(i, "a kind step needs a `displayName`");
+        if (
+          op.entityScope !== undefined &&
+          op.entityScope !== "pod" &&
+          op.entityScope !== "workspace"
+        ) {
+          push(i, 'a kind\'s `entityScope` is "pod" or "workspace"');
+        }
+        if (
+          op.fields !== undefined &&
+          (!Array.isArray(op.fields) ||
+            op.fields.some(
+              (f) => !f || typeof f !== "object" || Array.isArray(f)
+            ))
+        ) {
+          push(i, "a kind's `fields` must be an array of field objects");
+        }
+        expectSpace(i, op);
+        return;
+      case "declare_lifecycle":
+        if (typeof op.ref !== "string" || !op.ref)
+          push(i, "a lifecycle step needs a `ref`");
+        if (!op.kindRef === !op.profileId) {
+          push(
+            i,
+            "a lifecycle names its kind once: `kindRef` (a kind this plan defines) OR `profileId` (an existing kind)"
+          );
+        }
+        if (op.kindRef) expectRef(i, "kindRef", op.kindRef, "kind");
+        if (op.profileId) expectId(i, "profileId", op.profileId);
+        if (!Array.isArray(op.options) || op.options.length === 0)
+          push(
+            i,
+            "a lifecycle step needs its `options` (each { key, category })"
+          );
+        return;
       // ── Updates (Library rebuild) ─────────────────────────────────────
       // Shape only: the row's existence, ownership and the field contracts
       // are the update door's to judge at apply time.
@@ -975,7 +1344,63 @@ export function validatePlanOperations(
     }
   }
 
+  // Goals: no cycle among in-plan goals, per edge (serves / waits on).
+  for (const [label, edgesOf] of [
+    [
+      "serves",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.parentRef ? [op.parentRef] : [],
+    ],
+    [
+      "blocked_by",
+      (op: Extract<CompositeProposalOperation, { op: "create_track" }>) =>
+        op.blockedByRefs ?? [],
+    ],
+  ] as const) {
+    const goalEdges = operations.flatMap((op) =>
+      op.op === "create_track"
+        ? edgesOf(op).map((to) => ({ from: op.ref, to }))
+        : []
+    );
+    const cycle = findCycle(goalEdges);
+    if (cycle) {
+      const at = operations.findIndex(
+        (op) => op.op === "create_track" && op.ref === cycle[0]
+      );
+      push(Math.max(at, 0), `goal ${label} cycle: ${cycle.join(" → ")}`);
+    }
+  }
+
   return problems;
+}
+
+/**
+ * `create_track` op indexes, parents before children (in-plan `parentRef`),
+ * so a goal's parent exists when the start door places it. Assumes
+ * `validatePlanOperations` passed (no cycle).
+ */
+export function trackOpsRootFirst(
+  operations: CompositeProposalOperation[]
+): number[] {
+  const indexByRef = new Map<string, number>();
+  operations.forEach((op, i) => {
+    if (op.op === "create_track") indexByRef.set(op.ref, i);
+  });
+  const ordered: number[] = [];
+  const placed = new Set<number>();
+  const place = (index: number, depth: number) => {
+    if (placed.has(index) || depth > operations.length) return;
+    const op = operations[index];
+    if (op.op !== "create_track") return;
+    const parent = op.parentRef ? indexByRef.get(op.parentRef) : undefined;
+    if (parent !== undefined) place(parent, depth + 1);
+    if (!placed.has(index)) {
+      placed.add(index);
+      ordered.push(index);
+    }
+  };
+  for (const index of indexByRef.values()) place(index, 0);
+  return ordered;
 }
 
 /**
@@ -1026,7 +1451,11 @@ export interface PlanStepSummary {
     | "playbook"
     | "view"
     | "cell"
-    | "binding";
+    | "binding"
+    | "workspace"
+    | "track"
+    | "kind"
+    | "lifecycle";
   label: string;
   /** Set on a step that CHANGES an existing row (a Library rebuild). */
   update?: { targetId: string };
@@ -1060,11 +1489,30 @@ export function planStepSummaries(
         return { ...base, kind: "document", label: op.title };
       case "create_project":
         return { ...base, kind: "project", label: op.name };
+      case "create_track":
+        return { ...base, kind: "track", label: op.name };
+      case "update_session":
+        return {
+          ...base,
+          kind: "session",
+          label:
+            (typeof op.patch?.title === "string" && op.patch.title) ||
+            (typeof op.patch?.goal === "string" && op.patch.goal) ||
+            base.ref ||
+            "session",
+          update: { targetId: op.sessionId },
+        };
+      case "remove_link":
+        return {
+          ...base,
+          kind: "link",
+          label: `${op.fromSessionId} -/-${op.type}-/-> ${op.toSessionId ?? op.toEntityId ?? op.toTrackId}`,
+        };
       case "create_link":
         return {
           ...base,
           kind: "link",
-          label: `${op.fromRef ?? op.fromSessionId} --${op.type}--> ${op.toRef ?? op.toSessionId}`,
+          label: `${op.fromRef ?? op.fromSessionId} --${op.type}--> ${op.toRef ?? op.toSessionId ?? op.toEntityRef ?? op.toEntityId ?? op.toTrackRef ?? op.toTrackId}`,
         };
       case "create_skill":
         return {
@@ -1087,7 +1535,17 @@ export function planStepSummaries(
         return {
           ...base,
           kind: "binding",
-          label: `${op.cellRef ?? op.cellKey} on ${op.target.kind} ${op.target.id}`,
+          label: `${op.cellRef ?? op.cellKey} on ${op.target.kind} ${op.target.ref ?? op.target.id}`,
+        };
+      case "create_workspace":
+        return { ...base, kind: "workspace", label: op.name };
+      case "define_kind":
+        return { ...base, kind: "kind", label: op.displayName || op.slug };
+      case "declare_lifecycle":
+        return {
+          ...base,
+          kind: "lifecycle",
+          label: `${op.kindRef ?? op.profileId} ${op.property ?? "status"}`,
         };
       case "update_skill":
       case "update_automation":
@@ -1122,7 +1580,7 @@ const UPDATE_STEP_KIND = {
   update_view: "view",
   update_entity: "entity",
 } as const satisfies Record<
-  Extract<CompositeProposalOperation["op"], `update_${string}`>,
+  (typeof UPDATE_OPERATION_KINDS)[number],
   PlanStepSummary["kind"]
 >;
 

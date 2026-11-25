@@ -127,6 +127,28 @@ const ONE_OF_EACH = {
     goalTemplate: "Onboard {name}",
     subjectProfile: { profileSlug: "company" },
   },
+  create_workspace: {
+    op: "create_workspace",
+    ref: "ws1",
+    name: "Clients",
+  },
+  define_kind: {
+    op: "define_kind",
+    ref: "k1",
+    slug: "client-file",
+    displayName: "Client file",
+    workspaceRef: "ws1",
+    fields: [{ slug: "tier", valueType: "string" }],
+  },
+  declare_lifecycle: {
+    op: "declare_lifecycle",
+    ref: "lc1",
+    kindRef: "k1",
+    options: [
+      { key: "open", category: "open" },
+      { key: "won", category: "done" },
+    ],
+  },
   create_view: {
     op: "create_view",
     ref: "v1",
@@ -158,6 +180,25 @@ const ONE_OF_EACH = {
     type: "blocked_by",
     fromRef: "s1",
     toSessionId: UUID,
+  },
+  create_track: {
+    op: "create_track",
+    ref: "g1",
+    name: "Acme live by June",
+    projectRef: "p1",
+    blockedByTrackIds: [UUID],
+  },
+  update_session: {
+    op: "update_session",
+    ref: "replan1",
+    sessionId: UUID,
+    patch: { goal: "Acme live by July" },
+  },
+  remove_link: {
+    op: "remove_link",
+    type: "blocked_by",
+    fromSessionId: UUID,
+    toEntityId: "2b6e1a9c-0f3d-4c51-8e7a-5d9b4f2a1c44",
   },
   create_cell: {
     op: "create_cell",
@@ -246,9 +287,10 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
   const keys = emittedKeys(graph);
 
   it("the projection lists the parts of a graph of every op kind (non-vacuity)", () => {
-    // 13 today: entities, relations, skills, automations, rules, playbooks,
-    // views, cells, updates, projects, sessions, documents, links.
-    expect(keys.length).toBeGreaterThanOrEqual(13);
+    // 16 today: entities, relations, skills, automations, rules, playbooks,
+    // views, cells, updates, projects, tracks, sessions, sessionUpdates,
+    // documents, links, linkRemovals.
+    expect(keys.length).toBeGreaterThanOrEqual(16);
     expect(keys).toEqual(
       expect.arrayContaining(["skills", "automations", "rules"])
     );
@@ -279,14 +321,15 @@ describe("every part the pod projects is drawn on pod-admin's proposal page", ()
     expect(graph.skills?.[0]?.bodyTruncated).toBe(true);
   });
 
-  it("an automation says when it fires, what it runs, and that it is born off", () => {
+  it("an automation says when it fires, what it runs, and whether approval turns it on", () => {
     const auto = items.find((i) => i.source === "automations");
     const fields =
       auto?.shape === "record"
         ? Object.fromEntries(auto.record.fields.map((f) => [f.key, f.after]))
         : {};
+    // `enabled: true`: a person's approval of the batch turns it on.
     expect(fields.status).toEqual(
-      expect.objectContaining({ kind: "status", raw: "draft" })
+      expect.objectContaining({ kind: "status", raw: "active" })
     );
     expect(fields.trigger).toEqual(expect.objectContaining({ kind: "text" }));
     expect(fields.runs).toEqual(

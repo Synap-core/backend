@@ -19,6 +19,7 @@ import {
   WORKER_MAX_PENDING_APPROVALS_CEILING,
   WORKER_SKIP_REASONS,
   isLinkActivatorKey,
+  isScheduleActivatorKey,
   skippedByOnly,
   skippedByUnless,
 } from "@synap-core/types/workers";
@@ -172,9 +173,8 @@ export async function executePlaybookRun(
      *   subject): a repeat returns `{ status: "skipped", reason:
      *   "already_proposed" }`.
      *
-     * Set by `buildPlaybookRunFlowDefinition` from the playbook's
-     * `schedule.mode` (run | appointment) and by the rule grammar's `__mode`
-     * (propose). Read through `readPlaybookRunMode` — the ONE place that
+     * Set by the rule grammar's `__mode` (a schedule activator's
+     * `appointment`, a rule's `propose`). Read through `readPlaybookRunMode` — the ONE place that
      * decides what an absent/unknown mode means (`run`).
      */
     mode?: PlaybookRunMode;
@@ -315,10 +315,16 @@ export async function executePlaybookRun(
     }
   }
 
+  // A schedule tick has no thing yet: the spine reads `unless` / `only` off
+  // each thing of its set.
+  const tickOverSet =
+    !resolvedSubjectId && isScheduleActivatorKey(data.worker?.key);
+
   // ── UNLESS: the worker leaves this thing out (its activator's `unless`). ────
   // Before the proposal and before the run, so a left-out thing files nothing
   // and starts nothing (Content OS's Repurpose: a post sent for another one).
   if (
+    !tickOverSet &&
     data.worker?.unless &&
     skippedByUnless(data.worker.unless, subjectProperties)
   ) {
@@ -332,7 +338,11 @@ export async function executePlaybookRun(
   // ── ONLY: the worker keeps this thing only for one of its values. ──────────
   // Same place as unless: a thing whose value is not listed files nothing and
   // starts nothing (Content OS: Produce a video only for a video post).
-  if (data.worker?.only && skippedByOnly(data.worker.only, subjectProperties)) {
+  if (
+    !tickOverSet &&
+    data.worker?.only &&
+    skippedByOnly(data.worker.only, subjectProperties)
+  ) {
     return {
       status: "skipped",
       reason: WORKER_SKIP_REASONS.onlyValues,

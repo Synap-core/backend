@@ -467,11 +467,14 @@ export function toolsGrid(
   }
   const order = { any: 0, class: 1, agent: 2 } as const;
   const cells = new Map<string, GridCell>();
-  for (const [k, v] of modes)
+  for (const [k, v] of modes) {
+    // One mode across the cell reads as itself; none or several read "mixed".
+    const [only, ...others] = v.set;
     cells.set(k, {
-      mark: v.set.size === 1 ? [...v.set][0]! : "mixed",
+      mark: only !== undefined && others.length === 0 ? only : "mixed",
       count: v.count,
     });
+  }
   return {
     principals: [...principals.values()].sort(
       (a, b) => order[a.kind] - order[b.kind]

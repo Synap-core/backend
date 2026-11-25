@@ -14,13 +14,12 @@ import { protectedProcedure } from "../../trpc.js";
 
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
-import { db, eq, and, inArray } from "@synap/database";
+import { db, eq, and, inArray, getWorkspaceMembership } from "@synap/database";
 import {
   channelMembers,
   ChannelMemberKind,
   ChannelMemberRole,
   users,
-  workspaceMembers,
 } from "@synap/database/schema";
 
 import { emitChatEvent } from "../../utils/chat-realtime-broadcast.js";
@@ -100,14 +99,13 @@ export const membershipProcedures = {
         });
       }
       if (channel.workspaceId) {
-        const wsMembership = await db.query.workspaceMembers.findFirst({
-          where: and(
-            eq(workspaceMembers.workspaceId, channel.workspaceId),
-            eq(workspaceMembers.userId, input.agentUserId)
-          ),
-          columns: { id: true },
-        });
-        if (!wsMembership) {
+        if (
+          !(await getWorkspaceMembership(
+            db,
+            channel.workspaceId,
+            input.agentUserId
+          ))
+        ) {
           throw new TRPCError({
             code: "FORBIDDEN",
             message: "Teammate is not a member of this channel's workspace",

@@ -16,8 +16,9 @@
  * door to the desktop app where runs are worked. No run list here
  * (CLAUDE.md: pod admin is not a work surface).
  *
- * Acts: Pause / Turn on (`playbooks.update` status, governed: an agent-owned
- * space proposes) and Archive. Authoring stays in the app ("Open in app").
+ * Acts: Pause / Turn on (`useProcessStatus`: `playbooks.update` status,
+ * governed: an agent-owned space proposes, and the receipt opens that request)
+ * and Archive. Authoring stays in the app ("Open in app").
  */
 
 import { addToast, Button, Select, SelectItem } from "@heroui/react";
@@ -64,6 +65,7 @@ import {
   stepGateLabel,
   stepUses,
 } from "../../../(admin)/processes/_lib/process-page";
+import { TurnOnButton, useProcessStatus } from "../use-process-status";
 import { couldNotLoad, loadFailure } from "../load-failure";
 import { useReauthOnUnauthorized } from "../use-reauth";
 import type { ObjectFrame } from "./object-frame";
@@ -100,7 +102,7 @@ export function ProcessObject({
     staleTime: 60_000,
     retry: false,
   });
-  const update = trpc.playbooks.update.useMutation();
+  const status = useProcessStatus();
   const archive = trpc.playbooks.archive.useMutation();
   useReauthOnUnauthorized(query.error);
 
@@ -147,52 +149,19 @@ export function ProcessObject({
   const desktop = openIn({ kind: "objectInApp", objectKind: "playbook", id });
   const week = countDoors(read.runs.counts);
 
-  async function setStatus(next: "paused" | "active") {
-    try {
-      const out = await update.mutateAsync({ id, status: next });
-      addToast({
-        title:
-          out.status === "proposed"
-            ? t("action.proposed")
-            : resolveActionLabel(
-                next === "paused" ? "pause" : "turn_on",
-                "past"
-              ),
-        color: "default",
-      });
-      if (out.status !== "proposed") {
-        await utils.playbooks.process.invalidate({ playbookId: id });
-      }
-    } catch (err) {
-      addToast({
-        title: t("action.failed"),
-        description: err instanceof Error ? err.message : undefined,
-        color: "danger",
-      });
-    }
-  }
-
   const statusAct =
     def.status === "active" ? (
       <Button
         size="sm"
         variant="flat"
         radius="md"
-        isLoading={update.isPending}
-        onPress={() => void setStatus("paused")}
+        isLoading={status.pending}
+        onPress={() => void status.set({ kind: "playbook", id, to: "paused" })}
       >
         {resolveActionLabel("pause", "imperative")}
       </Button>
     ) : def.status === "paused" || def.status === "draft" ? (
-      <Button
-        size="sm"
-        variant="flat"
-        radius="md"
-        isLoading={update.isPending}
-        onPress={() => void setStatus("active")}
-      >
-        {resolveActionLabel("turn_on", "imperative")}
-      </Button>
+      <TurnOnButton status={status} target={{ kind: "playbook", id }} />
     ) : null;
 
   const reviewUpdate =

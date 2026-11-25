@@ -22,6 +22,7 @@
 import { z } from "zod";
 import { vaultSecretIdOf } from "@synap-core/types/vault";
 import { CATALOG_DETAILS } from "@synap-core/types/design-board";
+import { STORYBOOK_CHANGED_MAX } from "@synap-core/types/storybook";
 import { withMarketplaceKindAliases } from "@synap-core/types/marketplace-source";
 import {
   renderText,
@@ -2869,7 +2870,7 @@ const marketScaffoldHandler: BuiltinVerbHandler = async (params, ctx) => {
     return {
       status: proposedView.status,
       // Allocated at propose-time so the caller can reference it before
-      // approval; absent on a join gate, where no id was ever allocated.
+      // approval.
       entityId: proposedView.proposedEntityId ?? null,
       proposalId: proposedView.proposalId,
       // The door already built the review link — never rebuild it here.
@@ -5054,6 +5055,47 @@ const designApplyParams = z.object({
   acceptDrops: z.boolean().optional(),
 });
 
+// ── The storybook door (plan 48854969 §9) ────────────────────────────────────
+//
+// Shipped by the market `storybook` capability, not Synap Core (same as the
+// design door): its param contract is `STORYBOOK_VERB_PARAMETERS`
+// (`@synap-core/types/storybook`; the package carries it verbatim and the
+// catalog-coherence tripwire reads it). Handlers in
+// `services/event-sync/storybook-door.ts`.
+//
+//   storybook.sync     WRITE, through the full outer gate: records the
+//                      Storybook as a source connection (no secret) and runs
+//                      connection sync on it, whose own first run is ONE
+//                      import proposal the person approves.
+//   storybook.changed  READ-ONLY: ui-components changed since their review.
+
+const storybookSyncParams = z.object({
+  bundleFileId: z.string().uuid().optional(),
+  url: z.string().trim().url().max(2048).optional(),
+  appId: z.string().uuid().optional(),
+  brandIdentityId: z.string().uuid().optional(),
+});
+const storybookChangedParams = z.object({
+  limit: z.number().int().min(1).max(STORYBOOK_CHANGED_MAX).optional(),
+  appId: z.string().uuid().optional(),
+});
+
+const storybookSyncHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = storybookSyncParams.parse(params);
+  const { syncStorybook } = await import("../event-sync/storybook-door.js");
+  return syncStorybook(
+    { userId: ctx.userId, workspaceId: ctx.workspaceId },
+    input
+  );
+};
+
+const storybookChangedHandler: BuiltinVerbHandler = async (params, ctx) => {
+  const input = storybookChangedParams.parse(params);
+  const { changedStorybookComponents } =
+    await import("../event-sync/storybook-door.js");
+  return changedStorybookComponents(ctx.userId, input);
+};
+
 /** The design door's TRPC refusals, as a verb's refusal (a definite not-run, classed). */
 async function designDoorRefusals<T>(run: () => Promise<T>): Promise<T> {
   try {
@@ -5251,6 +5293,9 @@ export const BUILTIN_VERBS: Record<string, BuiltinVerbHandler> = {
   "design.read": designReadHandler,
   "design.catalog": designCatalogHandler,
   "design.apply": designApplyHandler,
+  // The storybook door: shipped by the market `storybook` capability.
+  "storybook.sync": storybookSyncHandler,
+  "storybook.changed": storybookChangedHandler,
 };
 
 /**
@@ -5341,6 +5386,8 @@ export const BUILTIN_VERB_PARAM_SCHEMAS: Record<
   "design.read": designReadParams,
   "design.catalog": designCatalogParams,
   "design.apply": designApplyParams,
+  "storybook.sync": storybookSyncParams,
+  "storybook.changed": storybookChangedParams,
 };
 
 /**
@@ -5464,4 +5511,7 @@ export const READ_ONLY_BUILTIN_VERBS: ReadonlySet<string> = new Set([
   // design.catalog — the installed package's catalog snapshot. Write nothing.
   "design.read",
   "design.catalog",
+  // storybook.changed — ui-components through the caller's entity read floor.
+  // Writes nothing.
+  "storybook.changed",
 ]);

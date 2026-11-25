@@ -1692,7 +1692,7 @@
           },
           "proposalType": {
             "type": "string",
-            "description": "Present when status is \"proposed\". \"join\" for a workspace-join gate, else \"<subject>.<action>\" (e.g. \"entity.create\")."
+            "description": "Present when status is \"proposed\". \"held_writes\" for a write held past the daily limit, else \"<subject>.<action>\" (e.g. \"entity.create\")."
           },
           "reviewUrl": {
             "type": "string",
@@ -1701,11 +1701,11 @@
           "deferred": {
             "type": "boolean",
             "enum": [true],
-            "description": "Workspace-join gate only (proposalType \"join\"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it."
+            "description": "Held writes only (proposalType \"held_writes\"): this write was KEPT on today's held-writes pack and is replayed for you once it is approved — do not resend it."
           },
           "ref": {
             "type": "string",
-            "description": "With `deferred`: the kept write's ref on the join proposal."
+            "description": "With `deferred`: the kept write's ref on the held-writes pack."
           },
           "facets": {
             "type": "array",
@@ -1884,11 +1884,11 @@
           "deferred": {
             "type": "boolean",
             "enum": [true],
-            "description": "Workspace-join gate only (proposalType \"join\"): this write was KEPT on the join request and is replayed for you once the join is approved — do not resend it."
+            "description": "Held writes only (proposalType \"held_writes\"): this write was KEPT on today's held-writes pack and is replayed for you once it is approved — do not resend it."
           },
           "ref": {
             "type": "string",
-            "description": "With `deferred`: the kept write's ref on the join proposal."
+            "description": "With `deferred`: the kept write's ref on the held-writes pack."
           },
           "entityId": { "type": "string" },
           "title": {
@@ -4418,6 +4418,83 @@
           }
         },
         "required": ["userId", "workspaceId", "slug", "valueType"]
+      },
+      "ListWorkersResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/GoalWorkerView" }
+          },
+          "withheld": {
+            "type": "object",
+            "properties": {
+              "workers": { "type": "number" },
+              "needs": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": ["workers", "needs"],
+            "description": "A scoped key's left-out workers: their playbook is one it reads, not their automation and approvals in its space."
+          }
+        },
+        "required": ["items"]
+      },
+      "GoalWorkerView": {
+        "type": "object",
+        "properties": {
+          "ruleId": { "type": "string" },
+          "playbookId": { "type": "string" },
+          "playbookName": { "type": "string" },
+          "activatorKey": { "type": "string" },
+          "scope": {
+            "type": "string",
+            "enum": ["space", "project", "session"]
+          },
+          "mode": { "type": "string" },
+          "state": {
+            "type": "string",
+            "enum": ["running", "paused", "stopped"]
+          },
+          "projectId": { "type": ["string", "null"] },
+          "trackId": { "type": ["string", "null"] },
+          "automationId": { "type": ["string", "null"] },
+          "pendingApprovals": { "type": "number" },
+          "maxPendingApprovals": { "type": "number" },
+          "trigger": {
+            "type": "object",
+            "properties": {
+              "kind": { "type": "string" },
+              "words": { "type": ["string", "null"] }
+            },
+            "required": ["kind", "words"]
+          },
+          "lastRunAt": { "type": ["string", "null"] },
+          "nextRunAt": { "type": ["string", "null"] },
+          "health": {
+            "type": "object",
+            "properties": { "state": { "type": "string" } },
+            "required": ["state"],
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "ruleId",
+          "playbookId",
+          "playbookName",
+          "activatorKey",
+          "scope",
+          "mode",
+          "state",
+          "projectId",
+          "trackId",
+          "automationId",
+          "pendingApprovals",
+          "maxPendingApprovals",
+          "trigger",
+          "lastRunAt",
+          "nextRunAt",
+          "health"
+        ],
+        "additionalProperties": {}
       },
       "SiteStatus": {
         "type": ["object", "null"],
@@ -8760,84 +8837,11 @@
         }
       }
     },
-    "/workspaces/enroll-agent": {
-      "post": {
-        "tags": ["Workspaces"],
-        "summary": "Enroll an agent user into the caller's workspaces",
-        "description": "Adds the given agent user as a member to all workspaces the calling user belongs to (or just one, when workspaceId is supplied). Idempotent — safe to call on reconnect. Used by `synap connect` when 'All workspaces' is selected to give the agent key pod-wide access.",
-        "security": [{ "bearerAuth": [] }],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "agentUserId": { "type": "string", "format": "uuid" },
-                  "workspaceId": { "type": "string", "format": "uuid" },
-                  "role": {
-                    "type": "string",
-                    "enum": ["viewer", "editor", "admin"]
-                  }
-                },
-                "required": ["agentUserId"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "List of workspace IDs the agent was enrolled into",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "enrolled": {
-                      "type": "array",
-                      "items": { "type": "string" }
-                    },
-                    "skipped": {
-                      "type": "array",
-                      "items": { "type": "string" }
-                    }
-                  },
-                  "required": ["enrolled", "skipped"]
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid body or agentUserId not an agent user",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal error",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/HubError" }
-              }
-            }
-          }
-        }
-      }
-    },
     "/workspaces/provision-agent": {
       "post": {
         "tags": ["Workspaces"],
         "summary": "Provision an agent's workspace (idempotent)",
-        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent is its admin member. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
+        "description": "Idempotently provisions a workspace for one of the caller's agents. The calling user owns it; the agent works there through that membership. Sets wide autoApproveFor so the agent can write freely within it. Requires hub-protocol.write scope.",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -20077,14 +20081,42 @@
                                         ]
                                       },
                                       "status": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 200
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 20
+                                          }
+                                        ]
                                       },
                                       "cron": {
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 120
+                                      },
+                                      "timezone": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "startsPaused": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      },
+                                      "handToAgentId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
                                       },
                                       "min": {
                                         "type": "integer",
@@ -20106,7 +20138,11 @@
                                       },
                                       "mode": {
                                         "type": "string",
-                                        "enum": ["run", "propose"],
+                                        "enum": [
+                                          "run",
+                                          "propose",
+                                          "appointment"
+                                        ],
                                         "default": "propose"
                                       },
                                       "maxPendingApprovals": {
@@ -20193,14 +20229,42 @@
                                     ]
                                   },
                                   "status": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 200
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 20
+                                      }
+                                    ]
                                   },
                                   "cron": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "timezone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "startsPaused": {
+                                    "type": "boolean",
+                                    "enum": [true]
+                                  },
+                                  "handToAgentId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
                                   },
                                   "min": {
                                     "type": "integer",
@@ -20222,7 +20286,7 @@
                                   },
                                   "mode": {
                                     "type": "string",
-                                    "enum": ["run", "propose"],
+                                    "enum": ["run", "propose", "appointment"],
                                     "default": "propose"
                                   },
                                   "maxPendingApprovals": {
@@ -21830,7 +21894,7 @@
                           "accountHint": { "type": ["string", "null"] },
                           "kind": {
                             "type": "string",
-                            "enum": ["nango", "vault"]
+                            "enum": ["nango", "vault", "source"]
                           },
                           "isPodWide": { "type": "boolean" },
                           "provider": { "type": ["string", "null"] },
@@ -21937,7 +22001,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {
@@ -22046,7 +22113,10 @@
                     "contextId": { "type": ["string", "null"] },
                     "isDefault": { "type": "boolean" },
                     "accountHint": { "type": ["string", "null"] },
-                    "kind": { "type": "string", "enum": ["nango", "vault"] },
+                    "kind": {
+                      "type": "string",
+                      "enum": ["nango", "vault", "source"]
+                    },
                     "isPodWide": { "type": "boolean" },
                     "provider": { "type": ["string", "null"] },
                     "health": {
@@ -25414,14 +25484,42 @@
                                         ]
                                       },
                                       "status": {
-                                        "type": "string",
-                                        "minLength": 1,
-                                        "maxLength": 200
+                                        "anyOf": [
+                                          {
+                                            "type": "string",
+                                            "minLength": 1,
+                                            "maxLength": 200
+                                          },
+                                          {
+                                            "type": "array",
+                                            "items": {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200
+                                            },
+                                            "minItems": 1,
+                                            "maxItems": 20
+                                          }
+                                        ]
                                       },
                                       "cron": {
                                         "type": "string",
                                         "minLength": 1,
                                         "maxLength": 120
+                                      },
+                                      "timezone": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
+                                      },
+                                      "startsPaused": {
+                                        "type": "boolean",
+                                        "enum": [true]
+                                      },
+                                      "handToAgentId": {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 64
                                       },
                                       "min": {
                                         "type": "integer",
@@ -25443,7 +25541,11 @@
                                       },
                                       "mode": {
                                         "type": "string",
-                                        "enum": ["run", "propose"],
+                                        "enum": [
+                                          "run",
+                                          "propose",
+                                          "appointment"
+                                        ],
                                         "default": "propose"
                                       },
                                       "maxPendingApprovals": {
@@ -25530,14 +25632,42 @@
                                     ]
                                   },
                                   "status": {
-                                    "type": "string",
-                                    "minLength": 1,
-                                    "maxLength": 200
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1,
+                                        "maxLength": 200
+                                      },
+                                      {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200
+                                        },
+                                        "minItems": 1,
+                                        "maxItems": 20
+                                      }
+                                    ]
                                   },
                                   "cron": {
                                     "type": "string",
                                     "minLength": 1,
                                     "maxLength": 120
+                                  },
+                                  "timezone": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
+                                  },
+                                  "startsPaused": {
+                                    "type": "boolean",
+                                    "enum": [true]
+                                  },
+                                  "handToAgentId": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 64
                                   },
                                   "min": {
                                     "type": "integer",
@@ -25559,7 +25689,7 @@
                                   },
                                   "mode": {
                                     "type": "string",
-                                    "enum": ["run", "propose"],
+                                    "enum": ["run", "propose", "appointment"],
                                     "default": "propose"
                                   },
                                   "maxPendingApprovals": {
@@ -29063,6 +29193,68 @@
           },
           "500": {
             "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/workers": {
+      "get": {
+        "tags": ["Playbooks"],
+        "summary": "List workers (a goal's, a project's or a playbook's)",
+        "description": "The workers enabled on a goal (trackId, strict), over a project (projectId), or of one playbook (playbookId: every enablement, the space-wide one included). A scoped key (a pod app) needs playbook.read; it gets a worker only where it also reads automation and proposal in the playbook's space, the rest counted in `withheld`.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "trackId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "playbookId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workers",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ListWorkersResponse" }
+              }
+            }
+          },
+          "400": {
+            "description": "No filter, or a malformed id",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Refused by the key's scope or grant",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "The goal is not one you can see",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
@@ -32767,14 +32959,42 @@
                               ]
                             },
                             "status": {
-                              "type": "string",
-                              "minLength": 1,
-                              "maxLength": 200
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 200
+                                  },
+                                  "minItems": 1,
+                                  "maxItems": 20
+                                }
+                              ]
                             },
                             "cron": {
                               "type": "string",
                               "minLength": 1,
                               "maxLength": 120
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
+                            },
+                            "startsPaused": {
+                              "type": "boolean",
+                              "enum": [true]
+                            },
+                            "handToAgentId": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 64
                             },
                             "min": {
                               "type": "integer",
@@ -32796,7 +33016,7 @@
                             },
                             "mode": {
                               "type": "string",
-                              "enum": ["run", "propose"],
+                              "enum": ["run", "propose", "appointment"],
                               "default": "propose"
                             },
                             "maxPendingApprovals": {
@@ -40203,7 +40423,7 @@
       "get": {
         "tags": ["System"],
         "summary": "Where each id stands, per subject (narrowed for scoped keys)",
-        "description": "?ids=a,b (at most 10) and ?include=moves,history,... answer where each thing, goal, session or run stands, through the same reader as `GET /orient?statusOf=`. Every id is read through the floors that AND the key's grant: an id it cannot read answers `unknown`, as one that does not exist. A key that does not read every subject unbounded (a pod app pinned to spaces) is answered the status, `moves` and `history` only; `withheld` names the parts left out.",
+        "description": "?ids=a,b (at most 10) and ?include=moves,history,... answer where each thing, goal, session or run stands, through the same reader as `GET /orient?statusOf=`. Every id is read through the floors that AND the key's grant: an id it cannot read answers `unknown`, as one that does not exist. A key that does not read every subject unbounded (a pod app pinned to spaces) is answered the status, `moves`, `history` and a floored projection of `work` (the sessions its grant reads; a gate's proposal only when it may read it); `withheld` names the parts and fields left out.",
         "security": [{ "bearerAuth": [] }],
         "responses": {
           "200": {
@@ -41232,6 +41452,10 @@
                           },
                           "required": ["kind"]
                         },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
+                        },
                         "required": { "type": "boolean" },
                         "owner": {
                           "type": "string",
@@ -42122,6 +42346,34 @@
                           "minLength": 1,
                           "maxLength": 200
                         },
+                        "unblocksTarget": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "output": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["output"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "criterion": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["criterion"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -42168,6 +42420,7 @@
                           ]
                         },
                         "criterionKey": { "type": "string" },
+                        "outputKey": { "type": "string" },
                         "paramName": { "type": "string" },
                         "answer": {
                           "type": "object",
@@ -44520,6 +44773,11 @@
                     "minLength": 1,
                     "maxLength": 2000
                   },
+                  "forOutput": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120
+                  },
                   "blockedBySessionIds": {
                     "type": "array",
                     "items": { "type": "string", "format": "uuid" },
@@ -44752,7 +45010,8 @@
                           "playbookMatch": {
                             "type": ["string", "null"],
                             "enum": ["session", "goal", null]
-                          }
+                          },
+                          "skipped": { "type": "boolean", "enum": [true] }
                         },
                         "required": [
                           "id",
@@ -44806,7 +45065,8 @@
                           "entityId": { "type": "string" },
                           "count": { "type": "number" },
                           "lastAt": { "type": ["string", "null"] },
-                          "criterionKey": { "type": "string" }
+                          "criterionKey": { "type": "string" },
+                          "option": { "type": "string" }
                         },
                         "required": ["kind", "from", "to"]
                       }
@@ -45559,6 +45819,10 @@
                             }
                           },
                           "required": ["kind"]
+                        },
+                        "outputKey": {
+                          "type": "string",
+                          "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"
                         },
                         "required": { "type": "boolean" },
                         "owner": {
@@ -46450,6 +46714,34 @@
                           "minLength": 1,
                           "maxLength": 200
                         },
+                        "unblocksTarget": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "output": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["output"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "criterion": {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80
+                                }
+                              },
+                              "required": ["criterion"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        },
                         "owedSince": { "type": "string" },
                         "attestedBy": { "type": "string" },
                         "attestedAt": { "type": "string" },
@@ -46496,6 +46788,7 @@
                           ]
                         },
                         "criterionKey": { "type": "string" },
+                        "outputKey": { "type": "string" },
                         "paramName": { "type": "string" },
                         "answer": {
                           "type": "object",
@@ -52548,7 +52841,7 @@
                                 "activatorKey": { "type": "string" },
                                 "mode": {
                                   "type": "string",
-                                  "enum": ["run", "propose"]
+                                  "enum": ["run", "propose", "appointment"]
                                 },
                                 "scope": {
                                   "type": "string",
@@ -53666,6 +53959,141 @@
                     "projectId"
                   ]
                 }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/surfaces/context": {
+      "get": {
+        "tags": ["Surfaces"],
+        "summary": "What a frame anchored to an object is about, and its brand",
+        "description": "The context a host hands a frame (frame contract v3, `window.synap.context()`): the anchor, its space, project and goal, and the project's brand as `--synap-*` CSS to write after the host's tokens. `brand` is null when the anchor has no project or its project no brand. 404 when the caller cannot read the anchor; a failed read is a 5xx, never an empty context.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "entity",
+                "profile",
+                "workspace",
+                "project",
+                "track",
+                "playbook",
+                "session",
+                "document",
+                "view"
+              ]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "projectId",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "enum": ["light", "dark"] },
+            "required": false,
+            "name": "theme",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z]{2}(-[A-Za-z]{2})?$"
+            },
+            "required": false,
+            "name": "locale",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "anchor": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "kind": { "type": "string" },
+                        "id": { "type": "string" }
+                      },
+                      "required": ["kind", "id"]
+                    },
+                    "workspaceId": { "type": ["string", "null"] },
+                    "projectId": { "type": ["string", "null"] },
+                    "goalId": { "type": ["string", "null"] },
+                    "filters": { "type": "object", "additionalProperties": {} },
+                    "brand": {
+                      "type": ["object", "null"],
+                      "properties": {
+                        "id": { "type": "string" },
+                        "hash": { "type": "string" },
+                        "css": { "type": "string" }
+                      },
+                      "required": ["id", "hash", "css"]
+                    },
+                    "locale": { "type": "string" },
+                    "theme": { "type": "string", "enum": ["light", "dark"] }
+                  },
+                  "required": [
+                    "anchor",
+                    "workspaceId",
+                    "projectId",
+                    "goalId",
+                    "filters",
+                    "brand",
+                    "locale",
+                    "theme"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },

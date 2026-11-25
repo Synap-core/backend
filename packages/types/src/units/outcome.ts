@@ -712,6 +712,7 @@ export function projectSessionOutcomes<P extends ProducedItemLike>(
         ? criterionState(deciding!.c, verdict, gradeOwed.has(deciding!.c.key))
         : deliverableUnitInput(slot, {
             sessionTerminal: input.sessionTerminal,
+            outputs: raw,
           })
     );
     outcomes.push({

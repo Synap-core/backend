@@ -3,8 +3,8 @@
  *
  * Identity + origin from the governance-actor row (`users`, keyed by the same
  * `agentUserId` the scorecard uses). Origin is now a stored fact (`created_via`,
- * migration 0225); scope (pod-wide vs workspace) is DERIVED from the presence of
- * `workspace_members` rows (none ⇒ pod-wide). Floored like the scorecard
+ * migration 0225); scope (pod-wide vs workspace) is DERIVED from the spaces of
+ * the person it acts for (none ⇒ pod-wide). Floored like the scorecard
  * (`agentReadableBy`: its owner or a pod admin), so a guessed id can't leak
  * another owner's agent identity to a member. A pod admin may already list
  * every space, so the space names below reveal nothing new to one.
@@ -14,6 +14,7 @@ import {
   db,
   eq,
   inArray,
+  membershipHolderIds,
   users,
   workspaceMembers,
   workspaces,
@@ -78,12 +79,12 @@ export async function agentProfile(params: {
     createdByName = owner?.name ?? owner?.email ?? null;
   }
 
-  // Scope: workspace-membership presence. No rows ⇒ pod-wide (the sovereign
-  // whole-brain agent).
+  // Scope: the spaces of the person it acts for (an agent holds no seat). No
+  // rows ⇒ pod-wide (nobody's agent, or a person with no space).
   const memberRows = await db
     .select({ workspaceId: workspaceMembers.workspaceId })
     .from(workspaceMembers)
-    .where(eq(workspaceMembers.userId, agentId));
+    .where(inArray(workspaceMembers.userId, membershipHolderIds(agentId)));
   const wsIds = memberRows.map((r) => r.workspaceId);
 
   let wsList: Array<{ id: string; name: string | null }> = [];

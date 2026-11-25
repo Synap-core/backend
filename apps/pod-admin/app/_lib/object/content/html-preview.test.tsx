@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
 vi.mock("../../../../lib/trpc", () => ({
-  trpc: { useUtils: () => ({ client: {} }) },
+  trpc: {
+    useUtils: () => ({ client: {} }),
+    // The frame's context (contract v3): none to wear here.
+    surfaces: { context: { useQuery: () => ({ data: { brand: null } }) } },
+  },
 }));
 vi.mock("./content-block", () => ({
   ContentBody: ({ prepared }: { prepared: { text: string } }) => (

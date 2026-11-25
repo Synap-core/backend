@@ -13,7 +13,7 @@ import {
   PLAYBOOK_TRANSITIONS,
   STAGE_RUN_STATUS_DECLARATION,
   STAGE_RUN_TRANSITIONS,
-  automationStatusAtCreate,
+  statusAtCreate,
   canTransition,
   statusesThatMayBecome,
 } from "./machines.js";
@@ -72,17 +72,17 @@ describe("the declared machines", () => {
   });
 });
 
-describe("automationStatusAtCreate — the one birth decision", () => {
+describe("statusAtCreate — the one birth decision", () => {
   it("a person's approval activates; a stated status is kept", () => {
     expect(
-      automationStatusAtCreate({
+      statusAtCreate({
         requested: undefined,
         personApproved: true,
         actorIsAgent: true,
       })
     ).toBe("active");
     expect(
-      automationStatusAtCreate({
+      statusAtCreate({
         requested: "draft",
         personApproved: true,
         actorIsAgent: true,
@@ -92,7 +92,7 @@ describe("automationStatusAtCreate — the one birth decision", () => {
 
   it("an agent's automation no person approved is born draft", () => {
     expect(
-      automationStatusAtCreate({
+      statusAtCreate({
         requested: "active",
         personApproved: false,
         actorIsAgent: true,
@@ -102,14 +102,14 @@ describe("automationStatusAtCreate — the one birth decision", () => {
 
   it("a person's own create keeps its status, draft when none", () => {
     expect(
-      automationStatusAtCreate({
+      statusAtCreate({
         requested: "active",
         personApproved: false,
         actorIsAgent: false,
       })
     ).toBe("active");
     expect(
-      automationStatusAtCreate({
+      statusAtCreate({
         requested: undefined,
         personApproved: false,
         actorIsAgent: false,

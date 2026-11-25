@@ -222,7 +222,11 @@ describe("synap_create_playbook → the process contract", () => {
       "per_thing",
       "per_moment",
     ]);
-    expect(activatorItem.properties.mode!.enum).toEqual(["run", "propose"]);
+    expect(activatorItem.properties.mode!.enum).toEqual([
+      "run",
+      "propose",
+      "appointment",
+    ]);
     expect(tool.description).toContain("system/synap/processes");
   });
 });

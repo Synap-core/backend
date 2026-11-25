@@ -33,6 +33,7 @@ import {
   inArray,
   computeMessageHash,
   emitMessageEvent,
+  getWorkspaceMembership,
 } from "@synap/database";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import { queryChannelMessages } from "../../utils/query-channel-messages.js";
@@ -41,7 +42,6 @@ import {
   channels,
   channelMembers,
   messages,
-  workspaceMembers,
   ChannelType,
   ChannelMemberKind,
   ChannelMemberRole,
@@ -98,8 +98,9 @@ const EXTERNAL_SOURCES = [
 export type ExternalSource = (typeof EXTERNAL_SOURCES)[number];
 
 /**
- * Verify that agentUserId is a member of the target workspace.
- * Prevents one workspace's agent from posting into another workspace's channels.
+ * Verify that agentUserId may act in the target workspace (through its
+ * person's membership). Prevents an agent posting into channels of a space
+ * its person is not in.
  * Returns the effective userId to use for attribution (agentUserId if valid, else fallback).
  */
 async function assertAgentInWorkspace(
@@ -108,13 +109,7 @@ async function assertAgentInWorkspace(
   fallbackUserId: string
 ): Promise<string> {
   if (!agentUserId) return fallbackUserId;
-  const member = await db.query.workspaceMembers.findFirst({
-    where: and(
-      eq(workspaceMembers.userId, agentUserId),
-      eq(workspaceMembers.workspaceId, workspaceId)
-    ),
-  });
-  if (!member) {
+  if (!(await getWorkspaceMembership(db, workspaceId, agentUserId))) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: "agentUserId is not a member of the specified workspace",

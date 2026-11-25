@@ -39,6 +39,7 @@ import {
   withLoadFailure,
   type ImageDraw,
 } from "./stored-media-model";
+import { mediaT } from "./copy";
 import { useStoredMedia } from "./use-stored-media";
 
 /** `thumb` in a card or list; `full` on the object's own page. */
@@ -88,6 +89,7 @@ export function MediaFrame({
   /** The signed `src` whose image, video or audio element errored. */
   onMediaError?: (src: string) => void;
 }) {
+  const t = mediaT();
   // What it is called to someone who cannot see it, when the record named it
   // nothing: the kind it is, never "Image" over a recording.
   const name =
@@ -105,7 +107,7 @@ export function MediaFrame({
         <div
           role="status"
           aria-busy="true"
-          aria-label={`Loading ${name}…`}
+          aria-label={t("loading", { name })}
           className={`${BOX[size]} rounded-lg bg-foreground/[0.07] shimmer-pulse`}
         />
       );
@@ -129,7 +131,7 @@ export function MediaFrame({
           <div className="flex flex-wrap items-center justify-center gap-3">
             {draw.retryable && onRetry && (
               <Button size="sm" variant="flat" onPress={onRetry}>
-                Try again
+                {t("retry")}
               </Button>
             )}
             {draw.downloadHref && (
@@ -138,7 +140,7 @@ export function MediaFrame({
                 className={`inline-flex items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
               >
                 <Download aria-hidden="true" className="h-3.5 w-3.5" />
-                Download
+                {t("download")}
               </a>
             )}
           </div>
@@ -153,7 +155,7 @@ export function MediaFrame({
           className={`${CHIP} ${DOOR}`}
         >
           <ExternalLink aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate">{`Image: ${name}`}</span>
+          <span className="truncate">{t("image", { name })}</span>
         </a>
       );
     case "file": {
@@ -192,7 +194,7 @@ export function MediaFrame({
             className={`inline-flex w-fit items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
           >
             <Download aria-hidden="true" className="h-3.5 w-3.5" />
-            Download
+            {t("download")}
           </a>
         </div>
       );
@@ -217,7 +219,7 @@ export function MediaFrame({
             className={`inline-flex w-fit items-center gap-1.5 text-[12.5px] text-foreground/75 ${DOOR}`}
           >
             <Download aria-hidden="true" className="h-3.5 w-3.5" />
-            Download
+            {t("download")}
           </a>
         </div>
       );
@@ -228,7 +230,7 @@ export function MediaFrame({
         <button
           type="button"
           onClick={onOpen}
-          aria-label={`Open ${name} full size`}
+          aria-label={t("open", { name })}
           className="block w-fit max-w-full cursor-zoom-in rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
         >
           {/* A plain <img>, not next/image: the URL is signed and expires,
@@ -276,6 +278,7 @@ export function MediaView({
   // Only the full-size viewer needs a name here; the frame defaults its own by
   // what it draws (an image, a video or a recording).
   const name = alt.trim() || "Image";
+  const t = mediaT();
   return (
     <>
       <MediaFrame
@@ -304,7 +307,7 @@ export function MediaView({
                 className={`inline-flex shrink-0 items-center gap-1.5 text-[12.5px] font-normal text-foreground/75 ${DOOR}`}
               >
                 <Download aria-hidden="true" className="h-3.5 w-3.5" />
-                Download
+                {t("download")}
               </a>
             </ModalHeader>
             <ModalBody className="items-center pb-6">

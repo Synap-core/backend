@@ -57,16 +57,18 @@ const NO_VERSION: Record<string, string> = {
     "archives a playbook (status only)",
   "api:services/focus-sessions/complete-session.ts":
     "drops a closed session's subject from the pin list (metadata)",
-  // 0425: the ONE link's writer; it still stamps or clears the legacy
-  // `flow_automation_id` beside the join row (cron-automation no longer does).
+  // 0425: the ONE link's writer; it still clears the legacy
+  // `flow_automation_id` beside the join row.
   "api:services/playbooks/playbook-automation-links.ts":
-    "stamps or clears flow_automation_id",
+    "clears flow_automation_id",
   "api:services/playbooks/run-playbook.ts":
     "advances a rotating input cursor (inputStrategy.cursor), a run-time position, never a new definition",
   "api:services/playbooks/playbook-activators.ts":
     "writes the activators' memory into metadata",
   "api:services/capabilities/create-from-definition.ts":
     "stamps metadata.sourceCapability",
+  "api:services/move-to-space.ts":
+    "moves a playbook to another space (workspace_id only)",
 };
 
 const WRITE_CALL = /\.(insert|update)\(\s*(playbooks|playbooksTable)\s*\)/g;

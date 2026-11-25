@@ -72,6 +72,7 @@ import {
   mcpServers,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   users,
@@ -138,6 +139,7 @@ beforeAll(async () => {
   await h.client!.exec(ddlFor(mcpServers as never));
   await h.client!.exec(ddlFor(workspaces as never));
   await h.client!.exec(ddlFor(workspaceMembers as never));
+  await h.client!.exec(ddlFor(apiKeys as never));
   // Read by the scopedDb visibility predicate (`list` / `listTools`).
   await h.client!.exec(ddlFor(podMembers as never));
   await h.client!.exec(ddlFor(projectMembers as never));
