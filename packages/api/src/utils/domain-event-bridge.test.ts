@@ -120,7 +120,8 @@ describe("domain-event-bridge — facet events", () => {
         subjectId: "ent_1",
         subjectType: "entity",
         userId: "user_1",
-        data: {},
+        // No workspace key at all (absent, not null).
+        data: { type: "task" },
       })
     );
 
