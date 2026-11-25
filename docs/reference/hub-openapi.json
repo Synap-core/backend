@@ -54334,8 +54334,17 @@
         },
         "responses": {
           "200": {
-            "description": "The read's answer",
-            "content": { "application/json": { "schema": {} } }
+            "description": "The read's answer: exactly what the op's procedure returns (an object, or a list for list reads).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    { "type": "object", "additionalProperties": {} },
+                    { "type": "array", "items": {} }
+                  ]
+                }
+              }
+            }
           },
           "400": {
             "description": "Bad request",
