@@ -109,11 +109,7 @@ function StateBody<T>({
   const t = useT(CATALOGS);
   switch (state.kind) {
     case "loading":
-      return skeleton ? (
-        <ResourceRowSkeleton count={rows} />
-      ) : (
-        <div aria-busy="true" className="min-h-14" />
-      );
+      return <ResourceRowSkeleton count={rows} />;
     case "offline":
       return <ResourceRowEmpty message={t("offline")} />;
     case "failed":
@@ -384,7 +380,7 @@ export function MadeForYouCardView({
               <ul className="flex flex-col gap-2">
                 {(all ? rows : rows.slice(0, ARTIFACTS_CAP)).map((row) => {
                   const frame =
-                    row.card !== null && framed < MAX_FRAMED_ENTITY_CARDS;
+                    row.card !== null && framed < 99;
                   if (frame) framed += 1;
                   return (
                     <li key={row.id}>

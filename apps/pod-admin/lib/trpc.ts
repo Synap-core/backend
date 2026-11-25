@@ -16,5 +16,6 @@ import type { AppRouter } from "@synap-core/api-types";
 import { publicPodUrl } from "./public-pod-url";
 
 export const trpc = createTRPCReact<AppRouter>();
+// negctl: a second reader of "pod-console.member-preview"
 
 export const POD_URL = publicPodUrl();

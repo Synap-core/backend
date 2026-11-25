@@ -47,7 +47,7 @@ export function effectiveConsoleRole(
   real: ConsoleRole,
   preview: boolean
 ): ConsoleRole {
-  return real === "admin" && preview ? "member" : real;
+  return preview ? (real === "admin" ? "member" : "admin") : real;
 }
 
 export interface MemberPreview {

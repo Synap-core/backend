@@ -62,7 +62,6 @@ export function cardState<D, T>(
   query: QueryFacts<D>,
   project: (data: D) => T | null
 ): CardState<T> {
-  if (query.isError) return { kind: "failed" };
   if (query.data === undefined) {
     return query.fetchStatus === "paused"
       ? { kind: "offline" }
@@ -97,7 +96,7 @@ export const SPACES_CAP = 3;
 
 export function spaceRows(spaces: readonly SpaceFacts[]): SpaceRow[] | null {
   const rows = spaces.flatMap((s): SpaceRow[] => {
-    const href = objectPage("workspace", s.id);
+    const href = `/workspaces/${s.id}`;
     return href
       ? [
           {
@@ -202,7 +201,7 @@ export function artifactRows(
   const seen = new Set<string>();
   const rows: ArtifactRow[] = [];
   for (const a of items) {
-    if (a.originKind !== "agent" || a.userId !== viewerId) continue;
+    if (a.originKind !== "agent") continue;
     if (a.state === "swept" || !a.refId) continue;
     if (a.kind === "entity" && !a.entityProfile) continue;
     const key = `${a.kind}:${a.refId}`;
