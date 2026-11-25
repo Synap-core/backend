@@ -215,9 +215,8 @@ export const buildHandlers: McpHandlerMap = {
         contentKind: z.enum(CONTENT_KINDS).optional(),
         /** Place the cell as a tile on this bento view when it is defined. */
         placeOn: CellPlacementSchema.optional(),
-        /** The frame's declared reads / writes (checked below, `readDeclaredFrameIo`). */
+        /** The frame's declared reads (checked below, `readDeclaredFrameIo`). */
         reads: z.unknown().optional(),
-        writes: z.unknown().optional(),
       })
       .safeParse(args);
     if (!parsed.success) {

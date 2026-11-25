@@ -17,10 +17,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 
 import { router, protectedProcedure } from "../trpc.js";
-import {
-  frameRead,
-  FrameReadError,
-} from "../services/surfaces/frame-read.js";
+import { frameRead, FrameReadError } from "../services/surfaces/frame-read.js";
 
 export const frameReadInput = z.object({
   surface: z.discriminatedUnion("kind", [

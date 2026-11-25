@@ -1931,16 +1931,8 @@ export const tools = {
             },
             reads: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  op: { type: "string" },
-                  params: { type: "object" },
-                },
-                required: ["op"],
-              },
               description:
-                'With type "html": the reads the page makes (window.synap.query ops), e.g. [{"op":"entities.list","params":{"profileSlug":"deal"}}]; a param "*" = any value. The pod refuses any other read. Omit: every read allowed, logged.',
+                'An html page\'s declared reads: [{op, params?}] of window.synap.query; "*" = any. Others are refused.',
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
@@ -3929,26 +3921,8 @@ export const tools = {
             },
             reads: {
               type: "array",
-              items: {
-                type: "object",
-                properties: {
-                  op: { type: "string" },
-                  params: { type: "object" },
-                },
-                required: ["op"],
-              },
               description:
-                'The reads its frame makes (window.synap.query ops), e.g. [{"op":"entities.list","params":{"profileSlug":"deal"}}]; a param "*" = any value. The pod refuses any other read. Omit: every read allowed, logged.',
-            },
-            writes: {
-              type: "array",
-              items: {
-                type: "object",
-                properties: { op: { type: "string" } },
-                required: ["op"],
-              },
-              description:
-                "The writes its frame makes (create_entity, update_entity, delete_entity, create_relation).",
+                'Reads its frame declares: [{op, params?}] of window.synap.query; param "*" = any. Others are refused.',
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the

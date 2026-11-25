@@ -64,7 +64,7 @@ export function registerFrameReadRoutes(app: HubHono): void {
     tags: ["Surfaces"],
     summary: "A framed surface's read, checked against what it declares",
     description:
-      "The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:\"cell\", typeKey}` or `{kind:\"document\", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). " +
+      'The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:"cell", typeKey}` or `{kind:"document", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). ' +
       "The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. The read runs as the caller, floored to what they may see. Every call is logged. " +
       `Surface kinds: ${FRAME_SURFACE_KINDS.join(", ")}.`,
     request: { body: FrameReadBodySchema },
