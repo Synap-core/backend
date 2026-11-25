@@ -60,6 +60,7 @@ export * from "./utils/document-body-text.js";
 export * from "./utils/entity-project-membership.js";
 export * from "./utils/project-guardrails.js";
 export * from "./utils/reserved-profile-slugs.js";
+export * from "./utils/project-twins.js";
 export * from "./utils/profile-slug-precedence.js";
 export * from "./utils/request-write-context.js";
 export * from "./utils/api-usage.js";
@@ -84,12 +85,15 @@ export * from "./utils/open-run-session.js";
 export * from "./utils/session-started-by.js";
 export * from "./utils/owed-slot-predicate.js";
 export * from "./utils/open-room-question.js";
+export * from "./utils/stage-run-waiting.js";
 export * from "./utils/needs-you-predicate.js";
 export * from "./utils/awaited-gate-wait.js";
+export * from "./utils/stage-gate-wait.js";
 export * from "./utils/live-run-status.js";
 export * from "./utils/worker-enablement.js";
 export * from "./utils/worker-target-result.js";
 export * from "./utils/resolve-session-project.js";
+export * from "./utils/resolve-session-workspace.js";
 export * from "./utils/session-spawn.js";
 export * from "./utils/resolve-or-create-agent-proposal-session.js";
 export * from "./utils/agent-proposal-session-memo.js";
@@ -112,6 +116,7 @@ export * from "./utils/control-plane-link.js";
 export * from "./utils/onboarding-milestones.js";
 export * from "./utils/is-delegation.js";
 export * from "./utils/agent-turn-overrides.js";
+export * from "./utils/personal-agent-user.js";
 export * from "./utils/workspace-client-projection.js";
 export * from "./utils/workspace-identity.js";
 export * from "./utils/pg-errors.js";
@@ -191,9 +196,9 @@ export {
   type ServiceSecretResult,
   upsertServiceSecret,
   findRedeemableGrant,
-  findCapabilityGrant,
   resolveCapabilityGrant,
   incrementGrant,
+  consumeSecretGrantRead,
   VaultGrantError,
   assertGrantScoped,
   UnscopedVaultGrantError,
@@ -301,8 +306,8 @@ export {
 
 // The report automation ("Generate report") was RETIRED as a hardcoded flow.
 // Its single source is now base.yaml (@synap-core/workspace-templates), applied
-// by the base-template reconcile on `workspaces.get`. See git history of
-// utils/ensure-report-automation.ts (deleted) for the v1–v15 prompt rationale.
+// by the base-template reconcile on `workspaces.get`. See git history of the deleted
+// utils/ensure-report-automation.ts for the v1–v15 prompt rationale.
 
 // Export ensureDefaultRelationDefs utility
 export {
@@ -349,6 +354,8 @@ export {
 // A template's `meta.intent` → `settings.intent` (object-first homes).
 export {
   projectTemplateIntent,
+  readStoredIntent,
+  type StoredSpaceIntent,
   workspaceIntentDefinitionSchema,
   type WorkspaceIntentDefinition,
 } from "./utils/workspace-intent.js";
@@ -473,22 +480,69 @@ export {
   lifecycleProfilesOfDef,
   reprojectLifecycleProfiles,
   changeLifecycleOptions,
+  planLifecycleOptionsChange,
   setLifecycleInitialStatus,
   assertNotLifecycleDef,
+  type ChangeLifecycleOptionsInput,
   type ChangeLifecycleOptionsResult,
+  type LifecycleOptionsPlan,
   type SetLifecycleInitialStatusResult,
 } from "./services/lifecycle/lifecycle-def-guard.js";
 export { declaredLifecycleProfilesStatement } from "./services/lifecycle/project-lifecycle-columns.js";
 export { expireProposalsStaleAfterMove } from "./services/lifecycle/stale-proposals.js";
 export {
+  SessionStageConflictError,
+  sessionStageIs,
   setSessionStatus,
   writeSessionPatch,
   type SetSessionStatusInput,
   type SetSessionStatusResult,
 } from "./services/lifecycle/session-status.js";
 export {
+  RUN_PAUSE_DEFAULT_HOLD,
+  claimRun,
+  claimRunAsAgent,
+  claimedHolderSql,
+  insertPlaybookRun,
+  runBirthStatus,
+  RUN_HOLDER_CLAIMED_SQL,
+  runHolder,
+  starterHolder,
+  setRunStatus,
+  type InsertPlaybookRunInput,
+  type RunColumnsPatch,
+  type SetRunStatusInput,
+  type SetRunStatusResult,
+} from "./services/lifecycle/run-status.js";
+export {
+  setAutomationStatus,
+  type AutomationColumnsPatch,
+  type AutomationStatusWriter,
+  type SetAutomationStatusInput,
+} from "./services/lifecycle/automation-status.js";
+export {
+  REACTION_LOG_SUBJECT_TYPE,
+  REACTION_OUTCOMES,
+  listReactionOutcomes,
+  reactionLogEventType,
+  recordReactionOutcomes,
+  type ReactionLogEntry,
+  type ReactionLogRow,
+  type ReactionOutcome,
+} from "./services/lifecycle/reaction-log.js";
+export {
+  oweSlotTransitions,
+  slotTransitionsOf,
+  gradesComeDueOf,
+  stampOwedSinceOnDue,
+  type SlotForTransition,
+  type SlotSessionPlace,
+} from "./services/lifecycle/slot-transition.js";
+export {
   buildWorkUnitTransition,
+  transitionBaseOf,
   workUnitActorOf,
+  type TransitionBaseInput,
   type WorkUnitActor,
 } from "./services/lifecycle/work-unit-transition.js";
 export {
@@ -572,7 +626,10 @@ export * from "./projectors/index.js";
 // Export new multi-level permission system
 export * from "./utils/permissions.js";
 export * from "./utils/automation-owner-access.js";
+export * from "./utils/insert-automation.js";
 export * from "./utils/owner-person.js";
+export * from "./utils/person-time-zone.js";
+export * from "./utils/usable-in-space.js";
 export * from "./utils/preferences.js";
 
 // Export sync materializer (shared between API receive + pull worker)

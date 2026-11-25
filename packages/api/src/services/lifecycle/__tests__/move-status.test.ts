@@ -85,6 +85,13 @@ vi.mock("../../governance/own-organise.js", () => ({
 vi.mock("../status-write-floor.js", () => ({
   mayWriteStatusTarget: h.mayWrite,
 }));
+// The stage-gate plan reads the open sessions about the thing; no session
+// here (its refusal and routing are proven on PGlite in
+// focus-sessions/__tests__/subject-move-gate.pglite.test.ts).
+vi.mock("../../focus-sessions/subject-move-gate.js", () => ({
+  planSubjectMoveGates: async () => ({ kind: "none" }),
+  enterGatedStages: async () => ({ kind: "passed" }),
+}));
 
 import { moveStatus, statusMoveActorFor } from "../move-status.js";
 import {

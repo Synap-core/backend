@@ -329,6 +329,80 @@ describe("what never runs on its own", () => {
     expect(read.modes[0]).toMatchObject({ mayRunOnItsOwn: false });
   });
 
+  it("a public post under ANOTHER name (its intent is publish_post) always asks too (c7feaa6e)", async () => {
+    const OTHER_POST = "unipile_publish_post";
+    await q(
+      `insert into skills (id, name, approved, user_id, intent) values ($1, $2, true, $3, 'publish_post')`,
+      [randomUUID(), OTHER_POST, ALICE]
+    );
+    const err = await errorOf(
+      caller(ALICE).setActionMode({ action: OTHER_POST, mode: "auto" })
+    );
+    expect(err.code).toBe("PRECONDITION_FAILED");
+    expect(err.cause?.reasonCode).toBe("ACTION_ALWAYS_ASKS");
+    expect(await activeRules(OTHER_POST)).toEqual([]);
+    const read = await caller(ALICE).actionModes({
+      actions: [OTHER_POST, ACTION],
+    });
+    expect(read.modes.map((m) => m.mayRunOnItsOwn)).toEqual([false, true]);
+  });
+
+  it("a verb whose pack declares metadata.proposeOnly always asks, and an older rule stops firing (231020d4)", async () => {
+    const DELETE_SERVER = "hcloud_delete_server";
+    const deleteId = randomUUID();
+    await q(
+      `insert into skills (id, name, approved, user_id, metadata) values ($1, $2, true, $3, '{}'::jsonb)`,
+      [deleteId, DELETE_SERVER, ALICE]
+    );
+    // Set before the pack declared it: the rule runs it on its own.
+    await caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" });
+    expect(await nextRun(DELETE_SERVER, deleteId)).toEqual({ decision: "run" });
+
+    // The pack's update lands the declaration (it only tightens).
+    await q(
+      `update skills set metadata = '{"proposeOnly": true}'::jsonb where id = $1`,
+      [deleteId]
+    );
+    // The gate reads it off the row (the run door pre-loads none) and the
+    // standing rule no longer widens the run.
+    expect(await nextRun(DELETE_SERVER, deleteId)).toMatchObject({
+      decision: "propose",
+    });
+    const err = await errorOf(
+      caller(ALICE).setActionMode({ action: DELETE_SERVER, mode: "auto" })
+    );
+    expect(err.cause?.reasonCode).toBe("ACTION_ALWAYS_ASKS");
+    const read = await caller(ALICE).actionModes({ actions: [DELETE_SERVER] });
+    expect(read.modes[0]).toMatchObject({ mayRunOnItsOwn: false });
+  });
+
+  it("the general rule door refuses the same 'auto', by the verb's name or its row id; CONTROL: an ordinary action is written", async () => {
+    const POST = "unipile_publish_post_2";
+    const postId = randomUUID();
+    await q(
+      `insert into skills (id, name, approved, user_id, intent) values ($1, $2, true, $3, 'publish_post')`,
+      [postId, POST, ALICE]
+    );
+    const rule = (targetPattern: string) =>
+      caller(ALICE).create({
+        principalKind: "any",
+        scopeKind: "pod",
+        targetKind: "capability",
+        targetPattern,
+        verdict: "auto",
+      });
+    for (const target of [POST, postId]) {
+      const err = await errorOf(rule(target));
+      expect(err.code, target).toBe("PRECONDITION_FAILED");
+      expect(err.cause?.reasonCode, target).toBe("ACTION_ALWAYS_ASKS");
+      expect(await activeRules(target), target).toEqual([]);
+    }
+    await rule(ACTION);
+    expect(await activeRules(ACTION)).toEqual([
+      { verdict: "auto", principal_kind: "any" },
+    ]);
+  });
+
   it("a name that is no action on this pod is refused (a rule that never fires)", async () => {
     const err = await errorOf(
       caller(ALICE).setActionMode({ action: "no_such_action", mode: "auto" })
@@ -351,5 +425,74 @@ describe("what never runs on its own", () => {
     expect(await activeRules(TOOL_ACTION)).toEqual([
       { verdict: "auto", principal_kind: "any" },
     ]);
+  });
+});
+
+/* ── Finding ac28928c: the mode read ranks rows as the gate does ──────────── */
+
+/** Every AI × the pod × ACTION, through the human door. */
+const everyoneOn = (verdict: "auto" | "propose" | "deny", extra = {}) =>
+  caller(ALICE).create({
+    principalKind: "any",
+    scopeKind: "pod",
+    targetKind: "capability",
+    targetPattern: ACTION,
+    verdict,
+    ...extra,
+  });
+
+async function idsOf(action: string) {
+  const { rows } = await q<{ id: string; verdict: string }>(
+    `select id, verdict from governance_rules where target_pattern = $1 and revoked_at is null order by verdict`,
+    [action]
+  );
+  return rows;
+}
+
+describe("an auto and an asks-first row tie: the page reads what the gate does", () => {
+  it("the mode reads 'asks first', and the next run asks first", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    await everyoneOn("propose");
+    expect((await idsOf(ACTION)).map((r) => r.verdict)).toEqual([
+      "auto",
+      "propose",
+    ]);
+    const read = await caller(ALICE).actionModes({ actions: [ACTION] });
+    expect(read.modes[0]).toMatchObject({ action: ACTION, mode: "ask" });
+    expect(await nextRun(ACTION, SKILL_ID)).toMatchObject({
+      decision: "propose",
+    });
+  });
+});
+
+describe("one call replaces rows in one transaction", () => {
+  it("create with replacesRuleIds: the new row stands, the old one is taken back", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    const [old] = await idsOf(ACTION);
+    const res = await everyoneOn("deny", { replacesRuleIds: [old!.id] });
+    expect(await idsOf(ACTION)).toEqual([
+      { id: res.rule!.id, verdict: "deny" },
+    ]);
+    expect(await nextRun(ACTION, SKILL_ID)).toMatchObject({
+      decision: "deny",
+    });
+  });
+
+  it("a row it may not take back refuses the whole call: nothing is written", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    const [old] = await idsOf(ACTION);
+    const err = await errorOf(
+      everyoneOn("deny", { replacesRuleIds: [old!.id, randomUUID()] })
+    );
+    expect(err.code).toBe("NOT_FOUND");
+    expect(await idsOf(ACTION)).toEqual([{ id: old!.id, verdict: "auto" }]);
+  });
+
+  it("revoke with moreIds takes back a tie in one call", async () => {
+    await caller(ALICE).setActionMode({ action: ACTION, mode: "auto" });
+    await everyoneOn("propose");
+    const [a, b] = await idsOf(ACTION);
+    await caller(ALICE).revoke({ id: a!.id, moreIds: [b!.id] });
+    expect(await idsOf(ACTION)).toEqual([]);
   });
 });

@@ -543,8 +543,15 @@ describe("classifyThrownFailure — a kind missing in its space", () => {
       .createCaller({})
       .create()
       .catch((e: unknown) => e);
-    // The text every older reader shows is unchanged…
-    expect((err as Error).message).toBe("Profile not found: trend");
+    // The text keeps the prefix older readers match, then tells the CALLER
+    // (an agent reads the message, not the cause) where the kind lives and
+    // the door that widens it (ticket 83d494dd)…
+    expect((err as Error).message).toBe(
+      'Profile not found: trend. The kind "Trend" lives in another space and is not shared with "Foundation" (ws-foundation): ' +
+        "file the record in a space that has it, or widen the kind with change_kind_scope " +
+        '(scope "shared", allowedWorkspaceIds naming this space; grant_profile_access if it is already shared). ' +
+        'It exists in "Ecosystem" (ws-eco).'
+    );
     const meta = classifyThrownFailure(err);
     // …but the class is the true one, outranking the NOT_FOUND code.
     expect(meta.errorClass).toBe("kind_missing");
@@ -560,6 +567,17 @@ describe("classifyThrownFailure — a kind missing in its space", () => {
     );
     // The person-facing record carries it (projected, not agent-only).
     expect(failureRecord(meta).kindMissing).toEqual(meta.kindMissing);
+  });
+
+  it("a kind that exists NOWHERE the caller can read keeps the bare text (no fix to name)", async () => {
+    const { kindMissingError } = await import("../../utils/kind-missing.js");
+    const err = kindMissingError({
+      profileSlug: "trend",
+      workspaceId: "ws-foundation",
+      workspaceName: "Foundation",
+      foundIn: [],
+    });
+    expect(err.message).toBe("Profile not found: trend");
   });
 
   it("CONTROL: a plain NOT_FOUND with the same text stays target_missing", () => {

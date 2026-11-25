@@ -20,9 +20,13 @@
  *   reconcileInstallation at most ONE open job per installation (the partial
  *                         unique `uq_host_jobs_one_open_per_installation`
  *                         makes a second insert a no-op): planned → install;
- *                         desired removed → remove; a failed check or a
- *                         drifted version → install again at the approved
- *                         version (a repair); a check that is due → verify.
+ *                         desired removed → remove; a failed lifecycle → a
+ *                         check, then a repair; a failed check → install
+ *                         again from the approved snapshot (a repair); each
+ *                         retried on its own with a back-off and a cap
+ *                         (`self-heal.ts`); a drifted version → one repair;
+ *                         a check that is due → verify; an install waits
+ *                         for the prerequisites it names.
  *
  * Who may write what the computer OBSERVED: only its own key with
  * `host.runner`, through the host-job routes. An agent hosted on the computer
@@ -48,13 +52,27 @@ import {
   placementRefusal,
 } from "@synap-core/types/capability-manifest";
 import { scopedDb, type AccessContext } from "../../access/index.js";
-import { machineName } from "../machine-roster.js";
 import {
+  listMachines,
+  machineName,
+  type MachineView,
+} from "../machine-roster.js";
+import {
+  HELD_INSTALLATION_STATUSES,
   installationHealth,
   isoDurationSeconds,
+  releaseOrphanedInstallation,
   TOOL_REVERIFY_DEFAULT_SECONDS,
   type InstallationHealthVerdict,
 } from "../host-jobs/host-jobs.js";
+import {
+  loadInstallationJobHistory,
+  selfHealGate,
+  type InstallationJobHistoryEntry,
+} from "./self-heal.js";
+import { askForPrerequisites } from "./self-heal-notice.js";
+import { contentHashVersion } from "@synap-core/types/package-updates";
+import { deepEqual } from "../capabilities/market-source.js";
 
 /**
  * Was this installation request already approved? The approve executor's
@@ -146,20 +164,56 @@ export async function resolveCallerComputer(identity: {
   return toRef(machine);
 }
 
-/** One of the person's computers by id, or null (a stranger's reads as none). */
+/** A computer of the person's roster, as the installation doors name it. */
+export function computerRefOf(
+  personId: string,
+  m: Pick<MachineView, "id" | "name" | "platform" | "arch" | "hostsServices">
+): ComputerRef {
+  return {
+    id: m.id,
+    ownerUserId: personId,
+    name: m.name,
+    os: m.platform,
+    arch: m.arch,
+    installsFromPod: m.hostsServices,
+  };
+}
+
+/**
+ * One of the person's computers by id, or null (a stranger's reads as none).
+ * Read through the ONE roster (`machine-roster.ts` `listMachines`), the read
+ * an ask names a computer through (`listPersonsComputers`), so the computer
+ * an agent's ask was filed for is the computer its approval finds.
+ */
 export async function loadPersonsComputer(
   personId: string,
   computerId: string
 ): Promise<ComputerRef | null> {
+  const m = (await listMachines(personId)).find((c) => c.id === computerId);
+  return m ? computerRefOf(personId, m) : null;
+}
+
+/**
+ * Why `computerId` is not one of the person's computers, as the end of a
+ * refusal: it is gone, it is not a computer, or it is someone else's. Only
+ * for wording a refusal after `loadPersonsComputer` found nothing; it
+ * decides nothing.
+ */
+export async function whyNotPersonsComputer(
+  personId: string,
+  computerId: string
+): Promise<string> {
   const [row] = await db
-    .select(computerColumns)
+    .select({ ...computerColumns, userType: users.userType })
     .from(users)
-    .where(
-      and(eq(users.id, computerId), eq(users.agentType, MACHINE_AGENT_TYPE))
-    )
+    .where(eq(users.id, computerId))
     .limit(1);
-  if (!row || row.owner !== personId) return null;
-  return toRef(row);
+  if (!row) return "this computer is no longer on the pod";
+  const name = row.agentType === MACHINE_AGENT_TYPE ? machineName(row) : null;
+  if (row.userType !== "agent" || !name)
+    return `${row.name?.trim() || "what it names"} is not a computer`;
+  if (row.owner !== personId) return `${name} is not one of your computers`;
+  return `${name} is not on your list of computers`;
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -254,6 +308,83 @@ export async function listInstallations(
   return toViews(rows);
 }
 
+/** One installation with its approved snapshot, read by id (`detail`). */
+export interface InstallationDetail extends InstallationView {
+  capabilityId: string | null;
+  /** The pod definition's version the snapshot was taken at (`h-…`). */
+  capabilityVersion: string | null;
+  /** The computer block AS APPROVED: what the runner builds from. */
+  manifest: Record<string, unknown>;
+  /** Service id → image digest, pinned at approval. */
+  digests: Record<string, string>;
+  /** The pod capability row's CURRENT computer block; null when the pod has none. */
+  current: {
+    capabilityId: string;
+    version: string | null;
+    manifest: Record<string, unknown>;
+  } | null;
+  /**
+   * The snapshot against `current`, the comparison an update request makes
+   * (`requestNeedsApproval`): `same` ⇒ an update is a repair at the approved
+   * definition (asks nobody); `changed` ⇒ an update asks the person again;
+   * `no_current_definition` ⇒ the pod has no installable definition of it.
+   */
+  drift:
+    | {
+        verdict: "same" | "changed";
+        recipesAdded: string[];
+        recipesRemoved: string[];
+      }
+    | { verdict: "no_current_definition" };
+}
+
+/**
+ * ONE live installation by id with its approved snapshot and its drift
+ * against the pod's current definition (ticket c5e95df3), through the same
+ * owner floor as {@link listInstallations}. Null when the floor reaches no
+ * such live row.
+ */
+export async function getInstallationDetail(
+  access: AccessContext,
+  installationId: string
+): Promise<InstallationDetail | null> {
+  const [row] = await scopedDb(access).findMany<InstallationRow>(
+    installations,
+    {
+      where: and(
+        eq(installations.id, installationId),
+        ne(installations.status, "removed")
+      ),
+    }
+  );
+  if (!row) return null;
+  const [view] = await toViews([row]);
+  const current = await loadInstallableCapability(row.capabilityKey);
+  const manifest = row.manifest ?? {};
+  const change = current ? definitionChange(manifest, current.manifest) : null;
+  return {
+    ...view!,
+    capabilityId: row.capabilityId,
+    capabilityVersion: row.capabilityVersion,
+    manifest,
+    digests: row.digests ?? {},
+    current: current
+      ? {
+          capabilityId: current.capabilityId,
+          version: current.version,
+          manifest: current.manifest,
+        }
+      : null,
+    drift: change
+      ? {
+          verdict: change.same ? "same" : "changed",
+          recipesAdded: change.recipesAdded,
+          recipesRemoved: change.recipesRemoved,
+        }
+      : { verdict: "no_current_definition" },
+  };
+}
+
 /**
  * What is installed on ONE computer, read for that computer's own key: its
  * person's live rows on it (owner AND machine), the floor the host-job
@@ -304,6 +435,12 @@ export interface InstallableCapability {
   /** The computer blocks AS STORED by the applier (`metadata.computer`). */
   manifest: Record<string, unknown>;
   kind: "service" | "tool";
+  /**
+   * The pod definition's version, as the catalog lists it (its content hash,
+   * `h-…`, `contentHashVersion`); null when the row carries no hash. Stamped
+   * on the installation as `capabilityVersion` when its snapshot is taken.
+   */
+  version: string | null;
 }
 
 /**
@@ -331,11 +468,15 @@ export async function loadInstallableCapability(
     if (!parsed.success) continue;
     const kind = installKind(parsed.data);
     if (!kind) continue;
+    const contentHash = (r.metadata as Record<string, unknown>).contentHash;
     return {
       capabilityId: r.id,
       capabilityKey,
       manifest: computer as Record<string, unknown>,
       kind,
+      version: contentHashVersion(
+        typeof contentHash === "string" ? contentHash : null
+      ),
     };
   }
   return null;
@@ -384,19 +525,72 @@ export async function loadLiveInstallation(
   return row ?? null;
 }
 
+/** What the pod's current definition changes against an installation's snapshot. */
+export interface DefinitionChange {
+  /** The snapshot IS the pod's current definition: an update is a repair. */
+  same: boolean;
+  recipesAdded: string[];
+  recipesRemoved: string[];
+}
+
+/** The recipe names a computer block declares (flat, or under `spec`). */
+function recipeNamesOf(manifest: Record<string, unknown>): string[] {
+  const spec =
+    manifest.spec && typeof manifest.spec === "object"
+      ? (manifest.spec as Record<string, unknown>)
+      : manifest;
+  return Array.isArray(spec.recipes)
+    ? spec.recipes
+        .map((r) =>
+          r && typeof r === "object" ? (r as { name?: unknown }).name : null
+        )
+        .filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/**
+ * The approved snapshot against the pod's current definition of the same
+ * capability: whether they differ at all (the whole computer block), and the
+ * recipes the update adds or removes, named on the card.
+ */
+export function definitionChange(
+  approved: Record<string, unknown>,
+  current: Record<string, unknown>
+): DefinitionChange {
+  const before = new Set(recipeNamesOf(approved));
+  const after = new Set(recipeNamesOf(current));
+  return {
+    same: deepEqual(approved, current),
+    recipesAdded: [...after].filter((n) => !before.has(n)),
+    recipesRemoved: [...before].filter((n) => !after.has(n)),
+  };
+}
+
 /**
  * Does this ask need the person's approval? Approval is once per
- * (capability, computer): a verify, or an install of the version already
- * approved (a repair), asks nobody. A first install, a new version, a
- * removal or a reinstall (after a removal: no live row) asks again.
+ * (capability, computer, definition): a verify, or an install of what is
+ * already approved (a repair), asks nobody. A first install, a new version,
+ * a removal or a reinstall (after a removal: no live row) asks again, and so
+ * does an UPDATE when the pod's capability has a newer definition than the
+ * installation's snapshot (`current`): it widens what runs on the computer
+ * (founder decision 2: upgrades ask). An update to the definition already
+ * approved is a repair.
  */
 export function requestNeedsApproval(
   row: InstallationRow | null,
-  req: { action: InstallationRequestAction; version?: string | null }
+  req: { action: InstallationRequestAction; version?: string | null },
+  current?: Record<string, unknown> | null
 ): boolean {
   if (req.action === "verify") return false;
   if (req.action === "remove") return true;
   if (!row || !row.approvedAt || row.desiredState !== "installed") return true;
+  if (
+    req.action === "update" &&
+    !req.version &&
+    current &&
+    !definitionChange(row.manifest ?? {}, current).same
+  )
+    return true;
   return (req.version ?? row.desiredVersion ?? null) !== row.desiredVersion;
 }
 
@@ -435,6 +629,8 @@ export async function applyInstallationRequest(input: {
       })
       .where(eq(installations.id, live.id))
       .returning()) as [InstallationRow];
+    // The person asked: it runs now, whatever the ladder's back-off.
+    kindHint = "remove";
   } else if (!live) {
     const [inserted] = await db
       .insert(installations)
@@ -445,6 +641,7 @@ export async function applyInstallationRequest(input: {
         capabilityKey: input.capability.capabilityKey,
         machineUserId: input.computer.id,
         manifest: input.capability.manifest,
+        capabilityVersion: input.capability.version,
         desiredState: "installed",
         desiredVersion: input.version ?? null,
         approvedAt: now,
@@ -471,6 +668,7 @@ export async function applyInstallationRequest(input: {
         desiredState: "installed",
         desiredVersion: input.version ?? live.desiredVersion,
         manifest: input.capability.manifest,
+        capabilityVersion: input.capability.version,
         capabilityId: input.capability.capabilityId,
         approvedAt: now,
         approvedBy: input.approverId,
@@ -480,9 +678,37 @@ export async function applyInstallationRequest(input: {
       .where(eq(installations.id, live.id))
       .returning()) as [InstallationRow];
     if (upgrade || input.action === "update") kindHint = "update";
+    // The person approved a repair (their own ask, or the pod's "try
+    // again" card): it runs now, whatever the self-heal ladder says.
+    else if (input.action === "install") kindHint = repairKindFor(live);
   }
   const jobId = await reconcileInstallation(row, { kind: kindHint });
+  if (input.action === "install" && !jobId) {
+    // An install that waits for a prerequisite nobody approved on this
+    // computer: ONE ask, now, never one per lease.
+    const prerequisites = await loadPrerequisiteState(row);
+    if (prerequisites.missing.length > 0) {
+      await askForPrerequisites(row, prerequisites.missing);
+    }
+  }
   return { installation: row, jobId };
+}
+
+/**
+ * The job a person's repair ask (an install of the version already
+ * approved) runs now, past the ladder: an install on an installed or failed
+ * installation; a CHECK first on one left installing or updating by a job
+ * that ended without its finish (the tool may well be there: finding
+ * 36daa4e2's media-matte), which `reconcileInstallation` releases to
+ * `failed` before it queues, so a failed check is then repaired. Nothing
+ * while a lifecycle job is still open (the one open job stays the one).
+ */
+export function repairKindFor(
+  row: Pick<InstallationRow, "status">
+): HostJobKind | undefined {
+  if (row.status === "installed" || row.status === "failed") return "install";
+  if (row.status === "installing" || row.status === "updating") return "verify";
+  return undefined;
 }
 
 export class InstallationRequestError extends Error {
@@ -493,45 +719,152 @@ export class InstallationRequestError extends Error {
 
 // ── The reconciler ──────────────────────────────────────────────────────────
 
+/** An installation's prerequisites (`placement.requires.capabilities`) as they stand on its computer. */
+export interface PrerequisiteState {
+  /** Approved on this computer, not installed and working yet: an install waits for it. */
+  waiting: string[];
+  /** Not approved on this computer: an install waits for the person's yes. */
+  missing: string[];
+}
+
+export const NO_PREREQUISITES: PrerequisiteState = { waiting: [], missing: [] };
+
+/**
+ * The capability keys an installation's manifest needs first on its computer,
+ * for that computer's system (an entry with `os` counts only there). Pure.
+ */
+export function requiredCapabilityKeys(
+  row: Pick<InstallationRow, "capabilityKey" | "manifest">,
+  os: string | null
+): string[] {
+  const placement = (row.manifest.placement ?? {}) as {
+    requires?: { capabilities?: Array<{ slug?: unknown; os?: unknown }> };
+  };
+  const keys = new Set<string>();
+  for (const dep of placement.requires?.capabilities ?? []) {
+    if (typeof dep?.slug !== "string" || dep.slug === row.capabilityKey)
+      continue;
+    if (typeof dep.os === "string" && os && dep.os !== os) continue;
+    keys.add(dep.slug);
+  }
+  return [...keys];
+}
+
+/**
+ * Where each prerequisite of this installation stands on the same computer:
+ * ready (installed, its last check not failed), waiting (approved, not ready
+ * yet) or missing (no live installation the person still wants).
+ */
+export async function loadPrerequisiteState(
+  row: InstallationRow
+): Promise<PrerequisiteState> {
+  let os = row.observedOs;
+  if (!os) {
+    const [computer] = await db
+      .select({ agentMetadata: users.agentMetadata })
+      .from(users)
+      .where(eq(users.id, row.machineUserId))
+      .limit(1);
+    const platform = (computer?.agentMetadata as { platform?: unknown } | null)
+      ?.platform;
+    os = typeof platform === "string" ? platform : null;
+  }
+  const keys = requiredCapabilityKeys(row, os);
+  if (keys.length === 0) return NO_PREREQUISITES;
+  const deps = await db
+    .select()
+    .from(installations)
+    .where(
+      and(
+        eq(installations.machineUserId, row.machineUserId),
+        eq(installations.userId, row.userId),
+        inArray(installations.capabilityKey, keys),
+        ne(installations.status, "removed")
+      )
+    );
+  const state: PrerequisiteState = { waiting: [], missing: [] };
+  for (const key of keys) {
+    const dep = deps.find((d) => d.capabilityKey === key);
+    if (!dep || dep.desiredState === "removed") state.missing.push(key);
+    else if (
+      dep.status !== "installed" ||
+      installationHealth(dep).health === "failed"
+    )
+      state.waiting.push(key);
+  }
+  return state;
+}
+
 /**
  * What job (if any) turns this installation's asked state into its observed
- * one. Pure; {@link reconcileInstallation} queues it. `hint` is the request's
- * own (an approved upgrade is an `update`); the rest is derived:
+ * one. Pure; {@link reconcileInstallation} queues it. `hint` is a person's own
+ * ask (an approved upgrade is an `update`, a repair an `install`, a removal a
+ * `remove`): it runs now. The rest is derived, and every job runs the
+ * manifest snapshot the person approved:
  *   - desired removed and not removing        → remove
  *   - planned                                 → install
- *   - installed, last check failed or drifted → install (a repair at the
- *                                               approved version), ONCE per
- *                                               finding: when the last job
- *                                               was itself an install or an
- *                                               update, the repair did not
- *                                               take and it waits for the
- *                                               person (no loop: a package
- *                                               manager that cannot pin a
- *                                               version would drift forever)
+ *   - failed (an install or an update that
+ *     did not finish)                         → a check first (the tool may
+ *                                               work after all: tonight's
+ *                                               ffmpeg, installed, recorded
+ *                                               failed after a timeout); after
+ *                                               a failed check → install
+ *   - installed, last check failed            → install (a repair)
+ *   - installed, drifted                      → install, ONCE per finding: a
+ *                                               package manager that cannot
+ *                                               pin a version would drift
+ *                                               forever
  *   - installed, check due (never, or past
- *     `verify.reverifyEvery`, default P7D)    → verify
- * A `failed` lifecycle is not retried on its own: the person (or an agent,
- * which needs no approval for it) asks again (a repair at the same version).
+ *     `verify.reverifyEvery`, default P7D, or
+ *     a tool not checked for 10 min when the
+ *     runner came back: `recheckTools`)       → verify
+ * A job that failed is tried again only through the ladder
+ * ({@link selfHealGate}: back-off, cap, a person's stop). An install (first
+ * or repair) waits, counting no failure, while a prerequisite is not ready.
  */
 export function nextJobFor(
   row: InstallationRow,
   now: Date = new Date(),
   hint?: HostJobKind,
-  lastJobKind: HostJobKind | null = null
+  history: readonly InstallationJobHistoryEntry[] = [],
+  prerequisites: PrerequisiteState = NO_PREREQUISITES,
+  recheckTools = false
 ): HostJobKind | null {
   if (row.status === "removed" || row.status === "removing") return null;
-  if (row.desiredState === "removed") return "remove";
+  if (row.desiredState === "removed") {
+    return hint === "remove" || selfHealGate(history, now).open
+      ? "remove"
+      : null;
+  }
   if (hint) return hint;
-  if (row.status === "planned") return "install";
+  const install = (): HostJobKind | null =>
+    prerequisites.waiting.length === 0 && prerequisites.missing.length === 0
+      ? "install"
+      : null;
+  if (row.status === "planned") return install();
+  if (row.status === "failed") {
+    if (!selfHealGate(history, now).open) return null;
+    const last = history[0];
+    return last?.kind === "verify" && last.status === "failed"
+      ? install()
+      : "verify";
+  }
   if (row.status !== "installed") return null;
   const health = installationHealth(row, now).health;
-  if (health === "failed" || health === "drifted")
-    return lastJobKind === "install" || lastJobKind === "update"
-      ? null
-      : "install";
+  if (health === "failed") {
+    return selfHealGate(history, now).open ? install() : null;
+  }
+  if (health === "drifted") {
+    const last = history[0]?.kind ?? null;
+    return last === "install" || last === "update" ? null : install();
+  }
   const verify = (row.manifest.verify ?? {}) as { reverifyEvery?: unknown };
-  const every =
+  const cadence =
     isoDurationSeconds(verify.reverifyEvery) ?? TOOL_REVERIFY_DEFAULT_SECONDS;
+  const every =
+    recheckTools && row.kind === "tool"
+      ? Math.min(cadence, TOOL_RECHECK_MIN_AGE_SECONDS)
+      : cadence;
   if (
     row.verifiedAt === null ||
     (now.getTime() - row.verifiedAt.getTime()) / 1000 > every
@@ -541,22 +874,40 @@ export function nextJobFor(
 }
 
 /**
- * Queue the next job for this installation, at most ONE open per
- * installation: a second insert meets the partial unique index and is a
- * no-op. Returns the queued job's id, or null when nothing was due or a job
- * is already open.
+ * When the computer's runner comes back (`noteHostRunner`), every tool on it
+ * not checked in this long is checked again: a version check, cheap, and the
+ * moment a tool removed by hand is found (instead of its next `reverifyEvery`).
+ */
+export const TOOL_RECHECK_MIN_AGE_SECONDS = 10 * 60;
+
+/**
+ * Queue the next job for this installation, at most ONE open lifecycle job
+ * per installation: a second insert meets the partial unique index and is a
+ * no-op (hosted verb runs are not counted, 0415). Returns the queued job's id, or null when nothing was due, the
+ * ladder holds it back, or a job is already open.
  */
 export async function reconcileInstallation(
-  row: InstallationRow,
-  opts: { now?: Date; kind?: HostJobKind } = {}
+  current: InstallationRow,
+  opts: { now?: Date; kind?: HostJobKind; recheckTools?: boolean } = {}
 ): Promise<string | null> {
-  const [last] = await db
-    .select({ kind: hostJobs.kind })
-    .from(hostJobs)
-    .where(eq(hostJobs.installationId, row.id))
-    .orderBy(desc(hostJobs.queuedAt))
-    .limit(1);
-  const kind = nextJobFor(row, opts.now, opts.kind, last?.kind ?? null);
+  // A status only a job's finish moves, with no job open to finish it: it
+  // is failed (checked, then repaired), never left for good (36daa4e2).
+  const row = HELD_INSTALLATION_STATUSES.includes(current.status)
+    ? ((await releaseOrphanedInstallation(current)) ?? current)
+    : current;
+  const history = await loadInstallationJobHistory(row.id);
+  const prerequisites =
+    row.desiredState === "installed"
+      ? await loadPrerequisiteState(row)
+      : NO_PREREQUISITES;
+  const kind = nextJobFor(
+    row,
+    opts.now,
+    opts.kind,
+    history,
+    prerequisites,
+    opts.recheckTools ?? false
+  );
   if (!kind) return null;
   const [job] = await db
     .insert(hostJobs)
@@ -585,10 +936,13 @@ export async function reconcileInstallation(
  * This replaces a separate timer: a computer that never leases has nothing
  * to run anyway.
  */
-export async function reconcileComputer(runner: {
-  machineUserId: string;
-  ownerUserId: string;
-}): Promise<number> {
+export async function reconcileComputer(
+  runner: {
+    machineUserId: string;
+    ownerUserId: string;
+  },
+  opts: { recheckTools?: boolean } = {}
+): Promise<number> {
   const rows = await db
     .select()
     .from(installations)
@@ -597,13 +951,20 @@ export async function reconcileComputer(runner: {
         eq(installations.machineUserId, runner.machineUserId),
         eq(installations.userId, runner.ownerUserId),
         ne(installations.status, "removed"),
-        // Skip the ones with an open job without a round trip per row.
-        drizzleSql`NOT EXISTS (SELECT 1 FROM ${hostJobs} WHERE ${hostJobs.installationId} = ${installations.id} AND ${hostJobs.status} IN ('queued', 'leased', 'running'))`
+        // Skip the ones with an open LIFECYCLE job without a round trip per
+        // row; a queued hosted verb run does not hold its check back (0415).
+        drizzleSql`NOT EXISTS (SELECT 1 FROM ${hostJobs} WHERE ${hostJobs.installationId} = ${installations.id} AND ${hostJobs.kind} <> 'verb' AND ${hostJobs.status} IN ('queued', 'leased', 'running'))`
       )
     );
   let queued = 0;
   const now = new Date();
   for (const row of rows)
-    if (await reconcileInstallation(row, { now })) queued += 1;
+    if (
+      await reconcileInstallation(row, {
+        now,
+        recheckTools: opts.recheckTools,
+      })
+    )
+      queued += 1;
   return queued;
 }

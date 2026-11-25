@@ -27,6 +27,19 @@ import {
   SENSITIVE_ACTION_TOKENS,
   sensitiveActionTitle,
   type SensitiveActionPath,
+  DEVICE_LINK_REFUSAL_CODES,
+  DEVICE_LINK_STATUSES,
+  DEVICE_LINK_TTL_SECONDS,
+  presenceSessionKey,
+  PRESENCE_BATCH_MAX,
+  PRESENCE_GRACE_ACTIONS,
+  PRESENCE_GRACE_APPROVALS,
+  PRESENCE_GRACE_REQUEST_KINDS,
+  PRESENCE_GRACE_SECONDS,
+  presenceBatchId,
+  presenceGraceable,
+  presenceNeverGrace,
+  sensitiveApprovalKey,
 } from "./index.js";
 import { catalogProblems } from "../i18n/index.js";
 import { ACTION_VERBS } from "../vocabulary/index.js";
@@ -364,5 +377,117 @@ describe("the one wording of proof of presence", () => {
       expect(where).toContain(place);
     }
     expect(PRESENCE_WORDS.en["presence.off"]).toBe("Off");
+  });
+});
+
+describe("Add this device (founder, 9 Nov 2026)", () => {
+  it("approving a new device is a setup decision, named by its request id", () => {
+    expect(PRESENCE_REQUEST_KINDS.device_link).toBe("setup");
+    expect(presenceRequestSubject("device_link", "r1")).toBe("device_link:r1");
+    expect(DEVICE_LINK_TTL_SECONDS).toBe(300);
+    // `expired` is derived when read, never stored.
+    expect(DEVICE_LINK_STATUSES).not.toContain("expired");
+  });
+
+  it("its refusals are not presence refusals: no proof would change them", () => {
+    expect(DEVICE_LINK_REFUSAL_CODES).toHaveLength(5);
+    for (const code of DEVICE_LINK_REFUSAL_CODES) {
+      expect(isPresenceCode(code)).toBe(false);
+    }
+  });
+
+  it("a grant is bound to one session: a browser's and a device's keys never collide, and no id is no key", () => {
+    expect(presenceSessionKey("kratos", "s1")).toBe("kratos:s1");
+    expect(presenceSessionKey("device", "s1")).toBe("device:s1");
+    expect(presenceSessionKey("kratos", "s1")).not.toBe(
+      presenceSessionKey("device", "s1")
+    );
+    for (const missing of [null, undefined, "", "   "]) {
+      expect(presenceSessionKey("kratos", missing)).toBeNull();
+    }
+  });
+});
+
+describe("the grace window (18 Nov 2026)", () => {
+  it("is five minutes, and a batch is capped", () => {
+    expect(PRESENCE_GRACE_SECONDS).toBe(300);
+    expect(PRESENCE_BATCH_MAX).toBe(50);
+  });
+
+  it("only a listed row whose reason is setup is graceable; everything else is never, derived from the tables", () => {
+    for (const key of PRESENCE_GRACE_REQUEST_KINDS) {
+      expect(PRESENCE_REQUEST_KINDS[key]).toBe("setup");
+      expect(presenceGraceable({ kind: "request", key })).toBe(true);
+    }
+    // Every row of the three tables is either listed graceable or in the
+    // never list: a new row defaults to NEEDING a fresh proof.
+    const total =
+      Object.keys(PRESENCE_REQUEST_KINDS).length +
+      Object.keys(SENSITIVE_APPROVALS).length +
+      Object.keys(SENSITIVE_PROPOSAL_TYPE_PREFIXES).length +
+      Object.keys(SENSITIVE_ACTIONS).length;
+    const listed =
+      PRESENCE_GRACE_REQUEST_KINDS.length +
+      PRESENCE_GRACE_APPROVALS.length +
+      PRESENCE_GRACE_ACTIONS.length;
+    expect(presenceNeverGrace().length + listed).toBe(total);
+    // Keys, secrets, factors, the mode, governance, deploys, deletions: never.
+    const never = presenceNeverGrace().map((t) => `${t.kind}:${t.key}`);
+    for (const key of [
+      "request:key_request",
+      "request:device_enroll",
+      "request:passkey_change",
+      "request:presence_mode",
+      "request:presence_sensitivity",
+      "request:recovery_codes",
+      "request:trusted_issuer",
+      "approval:apiKey/create",
+      "approval:vault/grant",
+      "approval:entity/delete",
+      "approval:governance.",
+      "approval:focus_session/dev.deploy_approval",
+      "action:secretsVault.reveal",
+      "action:apiKeys.create",
+    ]) {
+      expect(never).toContain(key);
+    }
+    // A listed row is only graceable when its reason is `setup`, so a
+    // governance row listed by mistake still is not.
+    expect(presenceGraceable({ kind: "request", key: "trusted_issuer" })).toBe(
+      false
+    );
+    expect(presenceGraceable({ kind: "request", key: "nope" })).toBe(false);
+  });
+
+  it("the batch id names the exact set: order and repeats do not matter, one id more or less does", async () => {
+    const [a, b, c] = ["a", "b", "c"];
+    const base = await presenceBatchId({ skillIds: [a!, b!], toolIds: [c!] });
+    expect(base).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      await presenceBatchId({ skillIds: [b!, a!, a!], toolIds: [c!] })
+    ).toBe(base);
+    expect(await presenceBatchId({ skillIds: [a!], toolIds: [c!] })).not.toBe(
+      base
+    );
+    // The same id as a skill and as a tool is a different set.
+    expect(await presenceBatchId({ skillIds: [a!, b!, c!] })).not.toBe(base);
+    expect(await presenceBatchId({ skillIds: [a!], toolIds: [b!] })).not.toBe(
+      await presenceBatchId({ skillIds: [b!], toolIds: [a!] })
+    );
+  });
+
+  it("names the approval row a proposal falls under", () => {
+    expect(
+      sensitiveApprovalKey({ targetType: "tool", proposalType: "create" })
+    ).toBe("tool/create");
+    expect(
+      sensitiveApprovalKey({
+        targetType: "governance_rule",
+        proposalType: "governance.x",
+      })
+    ).toBe("governance.");
+    expect(
+      sensitiveApprovalKey({ targetType: "entity", proposalType: "create" })
+    ).toBeNull();
   });
 });

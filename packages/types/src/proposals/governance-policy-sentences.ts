@@ -84,7 +84,7 @@ export const GOVERNANCE_REASON_SHORT_LABELS: Readonly<
   CHANNEL_PROPOSE: "Teammate suggestion",
   USER_OBSERVATION_INFERENCE: "A guess about you",
   CAPABILITY_PROPOSE: "Runs a tool",
-  SCOPE_IDENTITY_CHANGE: "Changes what it is",
+  SCOPE_IDENTITY_CHANGE: "Changes its kind",
   PROJECT_FILING: "Shares with a project",
   CRITERIA_CHANGE: "Changes its own criteria",
   POSSIBLE_DUPLICATE: "Possible duplicate",

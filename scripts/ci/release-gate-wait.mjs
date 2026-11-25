@@ -26,7 +26,7 @@
  * affected" step; only the push run's own check suite counts, so a queue
  * verdict never stands in for the post-merge run.
  *
- *   pass  some push run of the commit has all 4 required checks `success`.
+ *   pass  some push run of the commit has all 5 required checks `success`.
  *   wait  a push run is queued or running and none of its required checks has
  *         ended without success yet.
  *   fail  no push run at all (a commit superseded before its run started, or
@@ -54,6 +54,7 @@ export const REQUIRED_CHECKS = [
   "Full suite",
   "API e2e",
   "Reference docs are current",
+  "Dependent repos typecheck",
 ];
 export const CI_WORKFLOW = "ci.yml";
 

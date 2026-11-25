@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  nudgeMarks,
   securityNudge,
   waysIn,
   waysInMark,
@@ -105,5 +106,52 @@ describe("securityNudge (the top bar's mark and Home's card)", () => {
   it("a failed ways-in read falls back to the codes alone, never a guess", () => {
     expect(securityNudge({ kind: "failed" }, "set")).toBeNull();
     expect(securityNudge({ kind: "failed" }, "not_set")).toBe("codes");
+  });
+});
+
+describe("securityNudge: this-device (Add this device, 9 Nov 2026)", () => {
+  it("a person with a way in, on a browser with no passkey marker, is offered to set one up here", () => {
+    expect(securityNudge(waysIn(read({ waysIn: 2 })), "set", false)).toBe(
+      "this-device"
+    );
+    expect(
+      securityNudge(waysIn(read({ waysIn: 1, enforce: false })), "set", false)
+    ).toBe("this-device");
+  });
+
+  it("it is the LOWEST ask: every other one comes first", () => {
+    expect(securityNudge(waysIn(read({ waysIn: 1 })), "set", false)).toBe(
+      "second-way"
+    );
+    expect(securityNudge(waysIn(read({ waysIn: 0 })), "set", false)).toBe(
+      "first-way"
+    );
+    expect(securityNudge(waysIn(read({ waysIn: 2 })), "not_set", false)).toBe(
+      "codes"
+    );
+  });
+
+  it("not offered with the marker, with no way in, or before the browser was read", () => {
+    expect(securityNudge(waysIn(read({ waysIn: 2 })), "set", true)).toBeNull();
+    // No way in at all (report mode): the person adds a first way; the
+    // offer is about bringing a device to a way they already hold.
+    expect(
+      securityNudge(waysIn(read({ waysIn: 0, enforce: false })), "set", false)
+    ).toBeNull();
+    expect(securityNudge(waysIn(read({ waysIn: 2 })), "set", null)).toBeNull();
+    expect(securityNudge(waysIn(read({ waysIn: 2 })), "set")).toBeNull();
+  });
+
+  it("a failed or loading ways-in read never offers it (a guess)", () => {
+    expect(securityNudge({ kind: "failed" }, "set", false)).toBeNull();
+    expect(securityNudge({ kind: "loading" }, "set", false)).toBeNull();
+  });
+
+  it("GUARDRAIL: the offer never lights the top bar's mark on its own; every other ask does", () => {
+    expect(nudgeMarks("this-device")).toBe(false);
+    expect(nudgeMarks(null)).toBe(false);
+    expect(nudgeMarks("first-way")).toBe(true);
+    expect(nudgeMarks("second-way")).toBe(true);
+    expect(nudgeMarks("codes")).toBe(true);
   });
 });

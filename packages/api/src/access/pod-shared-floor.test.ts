@@ -67,8 +67,8 @@ describe("podShared floor — pod members see pod-wide SHARED entities (Wave 2)"
     // the pod-SHARED branch itself (the pod-wide facet subquery it gates) and
     // resolve its bound value — it must be the caller.
     // Decision B (2026-09-27): the facet must ALSO wear a role granted to a
-    // space the caller belongs to — `profile_workspace_access` is in the arm.
-    expect(sql).toContain("profile_workspace_access");
+    // space the caller belongs to — `space_access` is in the arm.
+    expect(sql).toContain("space_access");
     const podSharedArm = q.sql.match(
       /"entity_facets"\."profile_id" in \(select "id" from "profiles" where .*?\) and exists \(select 1 from "pod_members" where \("pod_members"\."user_id" = \$(\d+) and "pod_members"\."removed_at" is null\)\)\) and "entity_facets"\."deleted_at" is null/
     );

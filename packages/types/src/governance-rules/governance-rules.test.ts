@@ -12,6 +12,7 @@ import {
   OWN_ORGANISE_CLASS_PATTERN,
   POD_DEFAULT_WORDS,
   REVERSIBLE_CLASS_PATTERN,
+  describeWritePattern,
   governanceRuleTitle,
   humanizePrincipal,
   humanizeScope,
@@ -155,5 +156,132 @@ describe("an action's run mode", () => {
     );
     expect(resolveActionRunModeLabel("auto")).toBe("Runs on its own");
     expect(resolveActionRunModeLabel("ask")).toBe("Asks first");
+  });
+});
+
+describe("letting agents run one playbook without asking (0420)", () => {
+  const P = "33333333-3333-4333-8333-333333333333";
+  const named = (o: {
+    id: string;
+    version: number;
+    verdict?: string;
+    pattern?: string;
+  }) => ({
+    id: o.id,
+    targetPattern: o.pattern ?? "playbook.run",
+    verdict: o.verdict ?? "auto",
+    targetSubjectId: P,
+    targetSubjectVersion: o.version,
+  });
+
+  it("builds the one rule shape: any agent, the playbook's home, its version", async () => {
+    const { playbookPreApprovalRule } = await import("./index.js");
+    expect(
+      playbookPreApprovalRule({ id: P, version: 3, workspaceId: "ws" })
+    ).toEqual({
+      principalKind: "any",
+      scopeKind: "workspace",
+      workspaceId: "ws",
+      targetKind: "action",
+      targetPattern: "playbook.run",
+      targetSubjectId: P,
+      targetSubjectVersion: 3,
+      verdict: "auto",
+    });
+    expect(
+      playbookPreApprovalRule({ id: P, version: 1, workspaceId: null })
+    ).toMatchObject({
+      scopeKind: "pod",
+    });
+  });
+
+  it("allowed only at the current version; an earlier one is outdated", async () => {
+    const { playbookPreApprovalState } = await import("./index.js");
+    const pb = { id: P, version: 4 };
+    expect(
+      playbookPreApprovalState([named({ id: "r4", version: 4 })], pb)
+    ).toEqual({
+      state: "allowed",
+      ruleId: "r4",
+      version: 4,
+    });
+    expect(
+      playbookPreApprovalState([named({ id: "r3", version: 3 })], pb)
+    ).toEqual({
+      state: "outdated",
+      allowedVersion: 3,
+    });
+    expect(playbookPreApprovalState([], pb)).toEqual({ state: "none" });
+    // A "propose" or another action naming it is not an approval.
+    expect(
+      playbookPreApprovalState(
+        [
+          named({ id: "p", version: 4, verdict: "propose" }),
+          named({ id: "u", version: 4, pattern: "playbook.update" }),
+        ],
+        pb
+      )
+    ).toEqual({ state: "none" });
+  });
+
+  it("a rule naming a playbook reads by its name and version", () => {
+    expect(
+      governanceRuleTitle({
+        targetKind: "action",
+        targetPattern: "playbook.run",
+        targetSubjectLabel: "Weekly review",
+        targetSubjectVersion: 3,
+      })
+    ).toMatch(/· Weekly review, version 3$/);
+  });
+
+  it("a rule list names the playbook and its version, never the whole action", () => {
+    const rule = {
+      targetKind: "action",
+      targetPattern: "playbook.run",
+      targetProfile: null,
+    } as const;
+    const broad = humanizeTarget(rule);
+    const one = humanizeTarget({
+      ...rule,
+      targetSubjectLabel: "Weekly review",
+      targetSubjectVersion: 3,
+    });
+    expect(one).toMatch(/· Weekly review, version 3$/);
+    expect(one).not.toBe(broad);
+  });
+
+  it("the held reasons are one closed list", async () => {
+    const { isPreApprovalHeldReason, PRE_APPROVAL_HELD_REASONS } =
+      await import("./index.js");
+    for (const r of PRE_APPROVAL_HELD_REASONS)
+      expect(isPreApprovalHeldReason(r)).toBe(true);
+    expect(isPreApprovalHeldReason("tool_missing")).toBe(false);
+    expect(isPreApprovalHeldReason(3)).toBe(false);
+  });
+});
+
+describe("finding b0bb38d4: a write on every kind names its object", () => {
+  it("entity.create reads 'Create anything', never a bare 'Create'", () => {
+    expect(writePatternTitle("entity.create")).toBe("Create anything");
+    expect(ruleTitle(rule({ targetPattern: "entity.create" }))).toBe(
+      "Create anything"
+    );
+    expect(describeWritePattern("entity.delete")).toBe(
+      "Delete anything (entity.delete)"
+    );
+  });
+
+  it("a rule narrowed to one kind names the kind, not 'anything'", () => {
+    expect(
+      governanceRuleTitle(
+        rule({ targetPattern: "entity.update", targetProfile: "note" })
+      )
+    ).toBe("Update · Notes");
+  });
+
+  it("a write on one kind keeps that kind's noun", () => {
+    expect(writePatternTitle("note.create")).not.toContain("anything");
+    expect(writePatternTitle("note.create")).toMatch(/note/i);
   });
 });

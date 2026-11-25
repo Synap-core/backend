@@ -58,7 +58,7 @@ import {
 } from "@synap/database";
 import { isUuid } from "@synap-core/types/property-render";
 import { loadAgentPresence } from "../services/agent-presence.js";
-import { OPEN_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
+import { sessionStatusesIn } from "@synap-core/types/focus-sessions";
 import {
   PUSH_CAP_EXEMPT_CATEGORIES,
   PUSH_DAILY_CAP,
@@ -420,11 +420,14 @@ export async function recordPush(
 }
 
 /**
- * Statuses a proposal can block: the open ones, plus `stale` — the reaper
- * marks a long-idle session stale, but an agent that files a proposal from it
- * is back at work and waiting on the decision. Terminal ones never block.
+ * Statuses a proposal can block: every status that has not ended (the `open`,
+ * `active` and `paused` categories) — `stale` included: the reaper marks a
+ * long-idle session stale, but an agent that files a proposal from it is back
+ * at work and waiting on the decision. Terminal ones never block.
  */
-const BLOCKABLE = new Set<string>([...OPEN_SESSION_STATUSES, "stale"]);
+const BLOCKABLE = new Set<string>(
+  sessionStatusesIn(["open", "active", "paused"])
+);
 
 /**
  * How recently the filing agent must have called the pod for its proposal to

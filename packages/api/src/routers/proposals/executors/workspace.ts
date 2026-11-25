@@ -1,19 +1,13 @@
 import { TRPCError } from "@trpc/server";
 import {
   db,
-  drizzleSql,
   proposals,
   eq,
   getWorkspaceMembership,
-  users,
-  workspaceMembers,
-  workspaces,
   transitionProposal,
 } from "@synap/database";
-import { readDeferredWrites } from "@synap-core/types/proposals/deferred-writes";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
-import { auditLog } from "../../../utils/audit-log.js";
 import { workspaceRuntimePrimarySurfaceSchema } from "../../../schemas/workspace-primary-surface.js";
 import {
   registerProposalExecutor,
@@ -141,12 +135,19 @@ async function executeTemplateApplyApproval({
     })
   );
   const workspaceId = applied.workspaceId;
+  const refusals = layerTwoRefusals(applied, input.proposalId);
 
   // Stamp the produced workspaceId onto the proposal row so clients/revert
   // can recover it (ProposalMaterializedRecord has no workspaceIds field —
-  // store as a sibling lifecycle key next to materialized).
-  await markApproved(proposal, input.proposalId, userId, applied);
-  const refusals = layerTwoRefusals(applied, input.proposalId);
+  // store as a sibling lifecycle key next to materialized), with what the
+  // apply did (`runResult`).
+  await markApproved(
+    proposal,
+    input.proposalId,
+    userId,
+    applied,
+    applyRunResult(applied, refusals, packageSlug)
+  );
 
   // Report to IS telemetry (fire-and-forget — never blocks)
   reportApproved(deps, proposal, input.proposalId);
@@ -208,7 +209,8 @@ async function markApproved(
   proposal: ProposalExecutorArgs["proposal"],
   proposalId: string,
   userId: string,
-  applied: TemplateApplyResult
+  applied: TemplateApplyResult,
+  runResult: TemplateApplyRunResult
 ): Promise<void> {
   await transitionProposal(db, {
     to: ProposalStatus.APPROVED,
@@ -216,6 +218,7 @@ async function markApproved(
       data: {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
+        runResult,
         materializedWorkspaceId: applied.workspaceId,
         materializeStatus: applied.materializeStatus,
         // Every space THIS approval minted (the template's own, then each
@@ -276,6 +279,36 @@ function layerTwoRefusals(
   return applied.warning ? [applied.warning] : [];
 }
 
+/** What an approved template apply did, stamped on the proposal (`data.runResult`). */
+type TemplateApplyRunResult =
+  { finished: true } | { finished: false; reason: string };
+
+/**
+ * Whether the approved apply finished, and when not, the pod's sentence for
+ * why. Perso pod, 18 Nov 2026 (8ef951e8): Operations' update read "approved"
+ * twice while its new playbook waited on a proposal and the version never
+ * moved, and the reason went only to the approve reply, so the proposal never
+ * said it. The approval stays APPROVED (a layer-2 failure never fails the
+ * door, decision 3 of 2026-10-13); the row says what the apply did.
+ */
+function applyRunResult(
+  applied: TemplateApplyResult,
+  refusals: string[],
+  slug: string | undefined
+): TemplateApplyRunResult {
+  if (refusals.length > 0)
+    return { finished: false, reason: refusals.join(" ") };
+  const version = applied.pendingVersionStamp;
+  if (!version || applied.finished?.versionStamped) return { finished: true };
+  const run = slug
+    ? ` Run \`synap templates update ${slug}\` to finish it.`
+    : "";
+  return {
+    finished: false,
+    reason: `Not finished: the update did not reach version ${version}.${run}`,
+  };
+}
+
 /** Register the workspace/* approve executors. */
 export function registerWorkspaceExecutors(): void {
   // ── workspace / create ─────────────────────────────────────────────────────
@@ -298,172 +331,6 @@ export function registerWorkspaceExecutors(): void {
   registerProposalExecutor({
     key: "workspace/create",
     execute: executeTemplateApplyApproval,
-  });
-
-  // ── workspace / join ───────────────────────────────────────────────────────
-  registerProposalExecutor({
-    key: "workspace/join",
-    // Adds a member / exposes a resource: lasting access for someone.
-    widensCredential: true,
-    async execute({ proposal, payload, userId, input, deps }) {
-      void payload;
-      const joinData = (proposal.data ?? {}) as Record<string, unknown>;
-
-      // Pre-flight: `proposals.workspaceId` has NO foreign key to `workspaces`
-      // (workspaceMembers does, ON DELETE CASCADE), so a pending join can
-      // outlive the workspace it targets. Without this check, approve would
-      // emit `.validated`, flip the row APPROVED, and only THEN — in the
-      // materializer worker, async — hit the membership insert's FK violation.
-      // The reviewer would see success while no membership was ever granted.
-      // This does not replace the materializer's FK (still the backstop for
-      // any other route into that insert); it only turns the failure loud and
-      // synchronous on the approve path instead of silent and deferred.
-      //
-      // Resolve the target the SAME way `materializeWorkspace` does
-      // (`data.workspaceId || workspaceId || subjectId` in materializer.ts) —
-      // the audit event below stamps `data.workspaceId: proposal.workspaceId`
-      // and the worker is invoked with that same `proposal.workspaceId`, so
-      // both arms of that `||` collapse to `proposal.workspaceId`, falling
-      // back to `proposal.targetId` (the materializer's `subjectId`).
-      const targetWorkspaceId = proposal.workspaceId || proposal.targetId;
-      if (targetWorkspaceId) {
-        const [existing] = await db
-          .select({ id: workspaces.id })
-          .from(workspaces)
-          .where(eq(workspaces.id, targetWorkspaceId));
-        if (!existing) {
-          throw new TRPCError({
-            code: "BAD_REQUEST",
-            message:
-              `Workspace ${targetWorkspaceId} no longer exists — this join ` +
-              "proposal cannot be approved and should be rejected.",
-          });
-        }
-      }
-
-      const agentUserId =
-        proposal.agentUserId ??
-        (typeof joinData.agentUserId === "string"
-          ? joinData.agentUserId
-          : null);
-      const role =
-        joinData.role === "owner" ||
-        joinData.role === "editor" ||
-        joinData.role === "viewer"
-          ? joinData.role
-          : "editor";
-      // Defence-in-depth, the materializer's rule: a join only ever makes an
-      // AGENT user row a member.
-      const [agentRow] = agentUserId
-        ? await db
-            .select({ userType: users.userType })
-            .from(users)
-            .where(eq(users.id, agentUserId))
-        : [];
-      if (
-        !targetWorkspaceId ||
-        !agentUserId ||
-        agentRow?.userType !== "agent"
-      ) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message:
-            "This join request names no agent to add (or its requester is not " +
-            "an agent), so no membership can be granted — reject it.",
-        });
-      }
-
-      const validatedEvent = await auditLog({
-        subjectType: "workspace",
-        action: "join",
-        phase: "validated",
-        throwOnError: true,
-        subjectId: proposal.targetId,
-        userId,
-        workspaceId: proposal.workspaceId ?? undefined,
-        correlationId:
-          typeof joinData.correlationId === "string"
-            ? joinData.correlationId
-            : undefined,
-        data: {
-          role: typeof joinData.role === "string" ? joinData.role : "editor",
-          agentUserId: proposal.agentUserId ?? joinData.agentUserId,
-          workspaceId: proposal.workspaceId,
-          approvedBy: userId,
-          approvedAt: new Date().toISOString(),
-          approvalComment: input.comment,
-          sourceProposalId: input.proposalId,
-        },
-        source: "api",
-      });
-
-      // MEMBERSHIP IS SYNCHRONOUS (#6): the row lands in the SAME transaction
-      // as the APPROVED flip, so the moment the join reads approved the agent
-      // IS a member — the deferred writes below replay against it. The
-      // materializer still receives `workspace.join.validated` and finds the
-      // row already there (its existing idempotent skip); it is the backstop
-      // for any other route into that insert, no longer the writer.
-      const { rows: inserted, approved } = await db.transaction(async (tx) => {
-        const rows = await tx
-          .insert(workspaceMembers)
-          .values({ workspaceId: targetWorkspaceId, userId: agentUserId, role })
-          .onConflictDoNothing()
-          .returning({ id: workspaceMembers.id });
-        const [approved] = await transitionProposal(tx, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            // MERGED into the row, never the copy read above: a write kept
-            // (or an item the reviewer dropped) since then must survive.
-            ...(validatedEvent
-              ? {
-                  data: drizzleSql`coalesce(${proposals.data}, '{}'::jsonb) || jsonb_build_object('validatedEventId', ${validatedEvent.id}::text)`,
-                }
-              : {}),
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        }).returning({ data: proposals.data });
-        return { rows, approved };
-      });
-
-      // Report to IS telemetry (fire-and-forget — never blocks)
-      reportApproved(deps, proposal, input.proposalId);
-
-      deps.emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "approved",
-        userId
-      );
-
-      // Replay the writes the agent made while it waited, AS THE AGENT, each
-      // through its own door — the ladder decides each one again (access was
-      // approved here, content was not). Outcomes land on the join row.
-      // Read from the row as approved: a write kept after this executor read
-      // the proposal is in it too.
-      if (readDeferredWrites(approved?.data).writes.length > 0) {
-        const { replayDeferredWrites } =
-          await import("../../../services/governance/deferred-writes.js");
-        await replayDeferredWrites({
-          proposalId: input.proposalId,
-          workspaceId: targetWorkspaceId,
-        });
-      }
-
-      return {
-        success: true,
-        // The storage engine's own answer: 1 = the agent became a member now,
-        // 0 = it already was (the conflict was the row).
-        effect: {
-          applied: "verified",
-          rows: inserted.length,
-          ids: inserted.map((r) => r.id),
-          subject: "workspace_members",
-        },
-      };
-    },
   });
 
   // ── workspace / declare_source ───────────────────────────────────────────────
@@ -541,6 +408,84 @@ export function registerWorkspaceExecutors(): void {
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
 
+      deps.emitProposalReviewed(
+        input.proposalId,
+        proposal.workspaceId,
+        "approved",
+        userId
+      );
+      return { success: true };
+    },
+  });
+
+  // ── workspace / bind_need ────────────────────────────────────────────────────
+  // (0426, founder decision D3) An agent's choice of the provider that fills a
+  // space's need (tRPC `needs.bind` / Hub `PUT /workspaces/:id/needs/:need`)
+  // lands here on approval. Applies through the SAME `applySpaceNeedBinding`
+  // the granted path calls, as the APPROVER. Without this executor the `*/*`
+  // catch-all would flip the proposal APPROVED and never bind the need.
+  //
+  // DATA-SHAPE NOTE: the gate stores `{ need, providerCapabilityId }` in
+  // `data.data`; the space is `proposal.workspaceId` (the one the gate checked).
+  registerProposalExecutor({
+    key: "workspace/bind_need",
+    async execute({ proposal, userId, input, deps }) {
+      const innerData = ((proposal.data as Record<string, unknown>)?.data ??
+        {}) as Record<string, unknown>;
+      const workspaceId = proposal.workspaceId ?? null;
+      const need = typeof innerData.need === "string" ? innerData.need : null;
+      const provider = innerData.providerCapabilityId;
+      if (
+        !workspaceId ||
+        !need ||
+        !(provider === null || typeof provider === "string")
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message:
+            "Need binding proposal is missing its workspace, need or providerCapabilityId",
+        });
+      }
+
+      const [alreadyDone] = await db
+        .select({ status: proposals.status })
+        .from(proposals)
+        .where(eq(proposals.id, input.proposalId));
+      if (alreadyDone?.status === ProposalStatus.APPROVED) {
+        return { success: true, alreadyApproved: true };
+      }
+
+      const {
+        applySpaceNeedBinding,
+        providerServesNeedIntent,
+        SpaceNeedBindError,
+      } = await import("../../../services/needs/space-needs.js");
+      try {
+        await applySpaceNeedBinding({
+          workspaceId,
+          need,
+          providerCapabilityId: provider,
+          userId,
+          servesIntent: (providerId, def) =>
+            providerServesNeedIntent({ workspaceId, userId }, providerId, def),
+        });
+      } catch (err) {
+        if (err instanceof SpaceNeedBindError) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: err.message });
+        }
+        throw err;
+      }
+
+      await transitionProposal(db, {
+        to: ProposalStatus.APPROVED,
+        set: {
+          reviewedBy: userId,
+          reviewedAt: new Date(),
+          updatedAt: new Date(),
+        },
+        where: eq(proposals.id, input.proposalId),
+      });
+      reportApproved(deps, proposal, input.proposalId);
       deps.emitProposalReviewed(
         input.proposalId,
         proposal.workspaceId,
@@ -685,6 +630,24 @@ export function registerWorkspaceExecutors(): void {
       if (alreadyDone?.status === ProposalStatus.APPROVED) {
         return { success: true, alreadyApproved: true };
       }
+      const approve = async () => {
+        await transitionProposal(db, {
+          to: ProposalStatus.APPROVED,
+          set: {
+            reviewedBy: userId,
+            reviewedAt: new Date(),
+            updatedAt: new Date(),
+          },
+          where: eq(proposals.id, input.proposalId),
+        });
+        reportApproved(deps, proposal, input.proposalId);
+        deps.emitProposalReviewed(
+          input.proposalId,
+          proposal.workspaceId,
+          "approved",
+          userId
+        );
+      };
 
       // `workspacesRouter.update` shape — `{ id, name, description, settings }`,
       // no `definition`, no `operation`. This is the RENAME / settings door
@@ -746,23 +709,7 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: inner.id };
       }
 
@@ -793,23 +740,7 @@ export function registerWorkspaceExecutors(): void {
         }
         await applySpaceBriefPatchNow(targetWorkspaceId, patch.data, userId);
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
@@ -827,23 +758,7 @@ export function registerWorkspaceExecutors(): void {
           userId,
         });
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         // The source is kept when anything is left in it (by contract), and
         // a per-entity move can fail: both are told to the reviewer.
         const refusals = [
@@ -859,6 +774,45 @@ export function registerWorkspaceExecutors(): void {
           primaryId: result.targetWorkspaceId,
           ...(refusals.length > 0 ? { refusals } : {}),
         };
+      }
+
+      // A move into this space, or a share with it (`services/move-to-space.ts`):
+      // replayed as the APPROVER through the same floor, never the gate.
+      if (inner.operation === "move_in" || inner.operation === "share") {
+        const {
+          applyMoveToSpace,
+          applyShareWithSpace,
+          MOVABLE_TYPES,
+          SHAREABLE_TYPES,
+        } = await import("../../../services/move-to-space.js");
+        const objectId = inner.objectId;
+        const objectType = inner.objectType;
+        const types: readonly unknown[] =
+          inner.operation === "move_in" ? MOVABLE_TYPES : SHAREABLE_TYPES;
+        if (typeof objectId !== "string" || !types.includes(objectType)) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `This request does not name an object that can be ${inner.operation === "move_in" ? "moved" : "shared"} (${types.join(", ")}).`,
+          });
+        }
+        if (inner.operation === "move_in") {
+          await applyMoveToSpace({
+            userId,
+            objectType: objectType as (typeof MOVABLE_TYPES)[number],
+            objectId,
+            workspaceId: targetWorkspaceId,
+          });
+        } else {
+          await applyShareWithSpace({
+            userId,
+            objectType: objectType as (typeof SHAREABLE_TYPES)[number],
+            objectId,
+            workspaceId: targetWorkspaceId,
+            revoke: inner.revoke === true,
+          });
+        }
+        await approve();
+        return { success: true, primaryId: objectId };
       }
 
       // `workspaces.setIntelligenceService` — pin a space to a service, or
@@ -907,23 +861,7 @@ export function registerWorkspaceExecutors(): void {
           })
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
@@ -948,23 +886,7 @@ export function registerWorkspaceExecutors(): void {
           userId
         );
 
-        await transitionProposal(db, {
-          to: ProposalStatus.APPROVED,
-          set: {
-            reviewedBy: userId,
-            reviewedAt: new Date(),
-            updatedAt: new Date(),
-          },
-          where: eq(proposals.id, input.proposalId),
-        });
-
-        reportApproved(deps, proposal, input.proposalId);
-        deps.emitProposalReviewed(
-          input.proposalId,
-          proposal.workspaceId,
-          "approved",
-          userId
-        );
+        await approve();
         return { success: true, primaryId: targetWorkspaceId };
       }
 
@@ -1001,8 +923,18 @@ export function registerWorkspaceExecutors(): void {
         })
       );
       const workspaceId = applied.workspaceId;
-      await markApproved(proposal, input.proposalId, userId, applied);
       const refusals = layerTwoRefusals(applied, input.proposalId);
+      await markApproved(
+        proposal,
+        input.proposalId,
+        userId,
+        applied,
+        applyRunResult(
+          applied,
+          refusals,
+          inner.packageSlug as string | undefined
+        )
+      );
 
       // Report to IS telemetry (fire-and-forget — never blocks)
       reportApproved(deps, proposal, input.proposalId);
@@ -1101,6 +1033,7 @@ export function registerWorkspaceExecutors(): void {
         ...((proposal.data as Record<string, unknown> | null | undefined) ??
           {}),
         materializedWorkspaceId: workspaceId,
+        runResult: applyRunResult(applied, refusals, templateSlug),
         ...(report
           ? {
               reconcile: {

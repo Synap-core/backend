@@ -1,6 +1,6 @@
 {
   "name": "@synap-core/types",
-  "version": "1.12.13",
+  "version": "1.12.14",
   "description": "Shared TypeScript types and Zod schemas for the Synap platform",
   "type": "module",
   "publishConfig": {
@@ -23,7 +23,8 @@
   "license": "MIT",
   "files": [
     "dist",
-    "src"
+    "src",
+    "LICENSE"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -103,6 +104,10 @@
     "./cell-bridge": {
       "types": "./dist/cell-bridge/index.d.ts",
       "import": "./dist/cell-bridge/index.js"
+    },
+    "./renderer-resolution": {
+      "types": "./dist/renderer-resolution/index.d.ts",
+      "import": "./dist/renderer-resolution/index.js"
     },
     "./presentation": {
       "types": "./dist/presentation/index.d.ts",
@@ -229,6 +234,18 @@
       "types": "./dist/proposals/fate.d.ts",
       "import": "./dist/proposals/fate.js"
     },
+    "./proposals/ended": {
+      "types": "./dist/proposals/ended.d.ts",
+      "import": "./dist/proposals/ended.js"
+    },
+    "./proposals/landed": {
+      "types": "./dist/proposals/landed.d.ts",
+      "import": "./dist/proposals/landed.js"
+    },
+    "./proposals/cannot-apply": {
+      "types": "./dist/proposals/cannot-apply.d.ts",
+      "import": "./dist/proposals/cannot-apply.js"
+    },
     "./proposals/item-pack": {
       "types": "./dist/proposals/item-pack.d.ts",
       "import": "./dist/proposals/item-pack.js"
@@ -308,6 +325,10 @@
     "./capability-intents": {
       "types": "./dist/capability-intents/index.d.ts",
       "import": "./dist/capability-intents/index.js"
+    },
+    "./needs": {
+      "types": "./dist/needs/index.d.ts",
+      "import": "./dist/needs/index.js"
     },
     "./skill-code": {
       "types": "./dist/skill-code/index.d.ts",
@@ -416,6 +437,10 @@
     "./presence": {
       "types": "./dist/presence/index.d.ts",
       "import": "./dist/presence/index.js"
+    },
+    "./processes": {
+      "types": "./dist/processes/index.d.ts",
+      "import": "./dist/processes/index.js"
     },
     "./marketplace-source": {
       "types": "./dist/marketplace-source/index.d.ts",

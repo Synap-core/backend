@@ -9,6 +9,10 @@
  */
 
 import { ask } from "../../../services/knowledge/ask.js";
+import {
+  echoRecallWindow,
+  parseRecallWindow,
+} from "../../../services/retrieval/recall-window.js";
 import { resolveProfileDescription } from "../../../utils/profile-presentation.js";
 import { leanProposal } from "./proposal-lean.js";
 import {
@@ -23,6 +27,7 @@ import {
 import {
   ENTITIES_LEAN_NOTE,
   projectLeanEntityList,
+  leanListedUnderRole,
 } from "../../../services/entity-lean-list.js";
 import {
   ASK_DETAILS,
@@ -45,7 +50,10 @@ import {
   parseEntityListSort,
   type EntityListOrderBy,
 } from "../../../utils/entity-list-sort.js";
-import { toolError } from "../tool-errors.js";
+import { fullUuidError, toolError } from "../tool-errors.js";
+import { fitReply } from "./fit-reply.js";
+
+import { parseEntityListFiltersInput } from "../../../utils/entity-list-filters-input.js";
 import {
   listEffectiveRelationTypes,
   type EffectiveRelationType,
@@ -76,8 +84,15 @@ import {
   pageLimit,
   pageOffset,
   pageSlice,
+  PROFILES_PAGE_DEFAULT,
   ENTITIES_PAGE_MAX,
 } from "./shared.js";
+
+/**
+ * The longest message a thread read carries whole; longer ones keep their
+ * start (`truncated: true`, `contentChars` = the full length).
+ */
+export const THREAD_MESSAGE_MAX_CHARS = 2_000;
 
 /**
  * Postgres 22P02 — "invalid input syntax for type uuid" — anywhere in the
@@ -133,6 +148,14 @@ export const readHandlers: McpHandlerMap = {
       { projectId, agentUserId }
     );
     const compare = args.compare === true;
+    // `since` / `until` (ticket a9888512): a filter on the entity lanes'
+    // candidate fetch, before ranking. A malformed or inverted window is
+    // refused, never read as "no window" (a different question).
+    const windowArg = parseRecallWindow({
+      since: args.since,
+      until: args.until,
+    });
+    if (!windowArg.ok) return toolError(windowArg.error);
     // Retrieve across all substrates (same call as /knowledge/search).
     const retrieved = await ask({
       query: args.query as string,
@@ -144,7 +167,13 @@ export const readHandlers: McpHandlerMap = {
       catalog,
       compare: compare || undefined,
       detail,
+      ...(windowArg.window ? { window: windowArg.window } : {}),
     });
+    // The window it applied, on every reply: "nothing in the window" must
+    // read differently from "the ranker missed it".
+    const windowBlock = windowArg.window
+      ? { window: echoRecallWindow(windowArg.window) }
+      : {};
 
     // A/B DIAGNOSTIC — when `compare` is set, return the ranker comparison
     // (baseline vs Horizon on the same pool) directly, skipping IS synthesis.
@@ -155,6 +184,7 @@ export const readHandlers: McpHandlerMap = {
         query: args.query,
         understanding: retrieved.understanding,
         lens: retrieved.lens,
+        ...windowBlock,
         comparison: retrieved.comparison ?? null,
       });
     }
@@ -214,22 +244,31 @@ export const readHandlers: McpHandlerMap = {
     if ((synthesis as { error?: string }).error === "synthesis_unavailable") {
       // The WHY comes from the one failure door, classified from the real
       // error — never a stock "temporarily unavailable" that could be telling
-      // the agent to retry a failure no retry can fix.
-      const failure = describeAiFailure(synthesis.failureClass ?? "unknown");
+      // the agent to retry a failure no retry can fix. The IS envelope rides
+      // in so the words end with the payer action the IS stated for this
+      // caller; it is evidence for the sentence, not a field of the reply.
+      const { failure: envelope, ...shown } = synthesis;
+      const failure = describeAiFailure(synthesis.failureClass ?? "unknown", {
+        envelope,
+      });
       return ok({
-        ...synthesis,
+        ...shown,
         ...sourcesBlock,
         ...pendingBlock,
         ...spacesBlock,
         ...queueBlock,
         degraded: retrieved.degraded,
         lens: retrieved.lens,
+        ...windowBlock,
         message:
           `⚠️ AI synthesis did not run. ${failure.message} ` +
           (failure.retryable
             ? "Retrying may work. "
             : "Do not retry — say so instead. ") +
-          "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found).",
+          "The matched sources below are real; tell the user the AI answer layer is degraded (not that nothing was found)." +
+          (synthesis.excerpts
+            ? " `excerpts` quotes the opening of the matched runbooks: follow them, and fetch a runbook whole by its source id when the excerpt is not enough."
+            : ""),
       });
     }
     // A Library item is a page or file from outside the pod: an answer
@@ -261,6 +300,7 @@ export const readHandlers: McpHandlerMap = {
       ...queueBlock,
       degraded: retrieved.degraded,
       lens: retrieved.lens,
+      ...windowBlock,
     });
   },
   synap_get_entities: async (ctx: McpToolContext): Promise<CallToolResult> => {
@@ -306,6 +346,24 @@ export const readHandlers: McpHandlerMap = {
     if ("error" in interactionWindow) {
       return ok({ error: interactionWindow.error });
     }
+    // FILTERS: the Hub `GET /entities` grammar (view filters, ANDed, capped),
+    // as an array or its JSON. Malformed, too many, or a property filter with
+    // no kind is an error the agent can read, never a list that silently
+    // ignores the filter. An unknown or secret property is the core's own
+    // BAD_REQUEST (`entityListFiltersWhere`).
+    const parsedFilters = parseEntityListFiltersInput(
+      args.filters,
+      profileSlug || undefined
+    );
+    if (!parsedFilters.ok) return ok({ error: parsedFilters.error });
+    const filters = parsedFilters.filters;
+    const includeFacets = args.includeFacets === true;
+    // Listed under a ROLE, a lean row's status is that role's facet status:
+    // the list loads the facet rows for it (`projectLeanEntityList`).
+    const listedUnder =
+      (args.detail as string | undefined) === "full"
+        ? undefined
+        : await leanListedUnderRole(profileSlug || undefined);
     const page = await caller.entities.getEntities({
       userId,
       profileSlug: profileSlug || undefined,
@@ -321,6 +379,8 @@ export const readHandlers: McpHandlerMap = {
       ...(lastInteractionAfter ? { lastInteractionAfter } : {}),
       ...(lastInteractionBefore ? { lastInteractionBefore } : {}),
       ...(args.includeNever === true ? { includeNever: true } : {}),
+      ...(filters ? { filters } : {}),
+      ...(includeFacets || listedUnder ? { includeFacets: true } : {}),
       limit: limit + 1,
       offset,
     });
@@ -341,6 +401,7 @@ export const readHandlers: McpHandlerMap = {
       args.workspaceId ? `workspaceId=${String(args.workspaceId)}` : null,
       args.projectId ? `projectId=${String(args.projectId)}` : null,
       args.facetSlug ? `facetSlug=${String(args.facetSlug)}` : null,
+      filters ? `filters=${JSON.stringify(filters)}` : null,
     ].filter(Boolean);
     const note =
       result.length === 0 && lens.length > 0
@@ -358,15 +419,25 @@ export const readHandlers: McpHandlerMap = {
     }
     // `fields`: extra property keys or columns the caller names, returned
     // whole — a lean row never makes a value unreachable.
-    const fields = Array.isArray(args.fields)
+    const named = Array.isArray(args.fields)
       ? (args.fields as unknown[]).filter(
           (f): f is string => typeof f === "string" && f.length > 0
         )
-      : undefined;
+      : [];
+    // A lean row drops `facets` (it only names it in `omitted`); a caller that
+    // asked for them with includeFacets must get them, whole.
+    const fields = includeFacets
+      ? [...new Set([...named, "facets", "facetSlugs"])]
+      : named.length > 0
+        ? named
+        : undefined;
     return ok({
       entities: await projectLeanEntityList(
         result as unknown as Array<Record<string, unknown>>,
-        fields ? { fields } : {}
+        {
+          ...(fields ? { fields } : {}),
+          ...(listedUnder ? { listedUnder } : {}),
+        }
       ),
       count: result.length,
       ...paging,
@@ -433,31 +504,65 @@ export const readHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     // `limit` used to reach nothing — every call returned 50 messages.
     // Clamped, not refused: an over-large ask still gets the cap.
+    const cursor =
+      typeof args.cursor === "string" && isUuid(args.cursor)
+        ? args.cursor
+        : undefined;
     const result = await caller.context.getThreadContext({
       threadId: args.threadId as string,
       limit: pageLimit(args.limit, 50, 100),
+      ...(cursor ? { cursor } : {}),
     });
     // Only the caller's own typing is theirs. A teammate's, an agent's, an
     // external contact's (WhatsApp, email, Telegram) or the pod's own message
     // is fenced (`untrusted`, audit F5), by the ONE room rule
-    // (`classifyRoomAuthor`) judged against the caller.
-    return ok({
-      ...result,
-      messages: result.messages.map((m) =>
-        m.userId &&
+    // (`classifyRoomAuthor`) judged against the caller. Each message is
+    // clipped to THREAD_MESSAGE_MAX_CHARS first (`truncated`, `contentChars`).
+    const messages = result.messages.map((m) => {
+      const long =
+        typeof m.content === "string" &&
+        m.content.length > THREAD_MESSAGE_MAX_CHARS;
+      const content = long
+        ? `${m.content.slice(0, THREAD_MESSAGE_MAX_CHARS - 1)}…`
+        : m.content;
+      const clip = long
+        ? { truncated: true, contentChars: m.content.length }
+        : {};
+      return m.userId &&
         classifyRoomAuthor(
           { role: m.role, authorType: m.authorType, userId: m.userId },
           userId
         ) === "person"
-          ? m
-          : {
-              ...m,
-              content: untrusted(
-                m.content,
-                `a channel message (${m.authorType ?? "unknown"} author)`
-              ),
-            }
-      ),
+        ? { ...m, content, ...clip }
+        : {
+            ...m,
+            content: untrusted(
+              content,
+              `a channel message (${m.authorType ?? "unknown"} author)`
+            ),
+            ...clip,
+          };
+    });
+    // A program reads this room (a worker's follow-ups): the reply fits under
+    // the cap instead of coming back cut (finding 69fdd2e6). The messages are
+    // newest first, so the ones a fit leaves out are the oldest, and
+    // `nextCursor` reads on from the last one shown.
+    const fitted = fitReply(
+      { ...result, messages },
+      {
+        how: "This reply was fitted under the reply cap: the oldest messages were left out (read them with `cursor: nextCursor`), and each list in `omitted` kept its first items, each string in `clipped` its start.",
+      }
+    );
+    const shown = fitted.messages;
+    const cutMessages = shown.length < messages.length;
+    return ok({
+      ...fitted,
+      ...(cutMessages
+        ? {
+            hasMore: true,
+            nextCursor: shown[shown.length - 1]?.id ?? result.nextCursor,
+          }
+        : {}),
     });
   },
   /**
@@ -555,6 +660,93 @@ export const readHandlers: McpHandlerMap = {
       )
     );
   },
+  /**
+   * THE board read — the twin of Hub `GET /whiteboards/:viewId/scene`: both
+   * call `readBoardScene`. A failed read is a tool error naming its `reason`,
+   * never an empty board. Shape and arrow text is what anyone on the board
+   * wrote, so it reaches the model fenced as untrusted data.
+   */
+  synap_read_board: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, keyWorkspaceId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const viewId = typeof args.viewId === "string" ? args.viewId.trim() : "";
+    if (!viewId)
+      return toolError(
+        `Tool '${toolName}': viewId is required: the whiteboard view's id (synap_list_views).`
+      );
+    const badId = fullUuidError(toolName, "viewId", viewId);
+    if (badId) return badId;
+    const num = (v: unknown) =>
+      typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : undefined;
+    const frameId =
+      typeof args.frameId === "string" && args.frameId.trim()
+        ? args.frameId.trim()
+        : undefined;
+    const { readBoardScene, BoardSceneReadError } =
+      await import("../../../services/whiteboards/read-board-scene.js");
+    const offset = Math.max(0, num(args.offset) ?? 0);
+    try {
+      const read = await readBoardScene({
+        viewId,
+        userId,
+        confinedWorkspaceId: keyWorkspaceId ?? null,
+        // Paged by default: a board's whole scene easily passes the reply cap.
+        window: {
+          ...(frameId ? { frameId } : {}),
+          offset,
+          limit: Math.min(60, Math.max(1, num(args.limit) ?? 15)),
+        },
+      });
+      // Every string a person or agent typed on the board reaches the model
+      // fenced as data: titles, text, page names, the board's name, urls.
+      const fence =
+        "text on a whiteboard (anyone on the board may have written it)";
+      const u = <T extends string | null | undefined>(t: T) =>
+        t ? untrusted(t, fence) : t;
+      const shapes = read.scene.shapes.map((s) => ({
+        ...s,
+        ...(s.title ? { title: u(s.title) } : {}),
+        ...(s.text ? { text: u(s.text) } : {}),
+        ...(s.refs?.url ? { refs: { ...s.refs, url: u(s.refs.url) } } : {}),
+      }));
+      // Fit under the reply cap like `synap_get_thread_context`: the list
+      // keeps its head (shapes are in reading order), so the next page starts
+      // right after the last shape that SURVIVED the fit, never after the
+      // last one read.
+      const fitted = fitReply(
+        {
+          ...read,
+          title: u(read.title),
+          scene: {
+            ...read.scene,
+            pages: read.scene.pages.map((p) =>
+              p.name ? { ...p, name: u(p.name) } : p
+            ),
+            shapes,
+            arrows: read.scene.arrows.map((a) =>
+              a.text ? { ...a, text: u(a.text) } : a
+            ),
+          },
+        },
+        {
+          how: "This reply was fitted under the reply cap: `fit.omitted` names the lists that kept only their first items (shapes: read on with `offset: scene.window.nextOffset`; arrows left out are those of the shapes not shown), `fit.clipped` the strings that kept their start.",
+        }
+      );
+      const kept = fitted.scene.shapes.length;
+      const win = fitted.scene.window;
+      if (win && kept < shapes.length) {
+        fitted.scene.window = { ...win, nextOffset: offset + kept };
+      }
+      return ok(fitted);
+    } catch (err) {
+      if (err instanceof BoardSceneReadError) {
+        return toolError(
+          `Tool '${toolName}' could not read the board (reason: ${err.reason}): ${err.message}`
+        );
+      }
+      throw err;
+    }
+  },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -612,9 +804,19 @@ export const readHandlers: McpHandlerMap = {
           ? args.sessionId
           : undefined,
       status: args.status as string | undefined,
-      limit: (args.limit as number) || undefined,
+      // One row past the page tells whether another page exists.
+      limit: pageLimit(args.limit, 20, LIST_PAGE_MAX) + 1,
+      offset: pageOffset(args.offset),
       package: isReviewPackage(args.package) ? args.package : undefined,
     });
+    const propLimit = pageLimit(args.limit, 20, LIST_PAGE_MAX);
+    const propOffset = pageOffset(args.offset);
+    const hasMoreProposals = result.length > propLimit;
+    const propPaging = {
+      offset: propOffset,
+      ...(hasMoreProposals ? { nextOffset: propOffset + propLimit } : {}),
+    };
+    const pageResult = result.slice(0, propLimit);
     // A LIST must be readable. Unprojected, this returned every row's full
     // `data` payload: 33 pending proposals measured at 283,737 characters
     // (~6k chars/row, largest single row 36k) — past the tool-result ceiling,
@@ -625,7 +827,9 @@ export const readHandlers: McpHandlerMap = {
     // agent's principal OWNS the target session (decision D1, agent door).
     const { redactUnreadableSessionTargets } =
       await import("../../../services/proposals/session-content-redaction.js");
-    const rawRows = await redactUnreadableSessionTargets(result, { userId });
+    const rawRows = await redactUnreadableSessionTargets(pageResult, {
+      userId,
+    });
     // SETUP — this door calls `listCreatedProposals` DIRECTLY (not
     // `hub.proposals.listProposals`), so the stamping the Hub procedure does
     // never happened here: `setup` was declared on the wire, forwarded by
@@ -660,11 +864,13 @@ export const readHandlers: McpHandlerMap = {
       // stripped (`data.failure.detail` is the redacted raw executor error and
       // its ONE reader is the server-side prompt path, `render-for-prompt.ts`,
       // never a tool result — `failure-projection.ts`).
+      // Unchanged shape for `full`: a bare array (paging: `limit`/`offset`).
       return ok(rows.map(withProposalClass));
     }
     const summarized = (rows as Record<string, unknown>[]).map(toProposalBasic);
     return ok({
       proposals: summarized,
+      ...propPaging,
       detail: "summary",
       note: "Compact rows. Call again with detail:'full' (and a small limit) to inspect a proposal's full payload.",
     });
@@ -734,6 +940,14 @@ export const readHandlers: McpHandlerMap = {
   synap_get_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
+    // Named HERE, by the tool's own input name: past this point it is the
+    // router's `id`, and a call without it failed on a field called `id`,
+    // which read as "you passed nothing" (ticket 2d61ff7c).
+    if (typeof args.entityId !== "string" || args.entityId.trim() === "") {
+      return toolError(
+        `${toolName} needs \`entityId\`: the entity's id (synap_ask or synap_get_entities find one).`
+      );
+    }
     // Hub protocol doesn't expose a single-entity get; use regular entities router
     const entityCallerCtx = await createHubProtocolCallerContext(
       userId,
@@ -819,8 +1033,12 @@ export const readHandlers: McpHandlerMap = {
     return ok({
       entity: row.entity,
       profile: row.profile,
-      effectiveProperties: row.effectiveProperties,
+      // FACETS BEFORE the schema: a person's roles and their status are the
+      // answer an agent reads this for, and the reply cap cuts from the END.
+      // `effectiveProperties` is the long half (live: eddaa74b, b3372cca,
+      // 77b977c2 lost their facets behind it).
       facets: row.facets,
+      effectiveProperties: row.effectiveProperties,
       externalLinks: row.externalLinks,
       graph: row.graph,
       // The SIGNPOST. This is what makes the omission honest rather than
@@ -842,6 +1060,13 @@ export const readHandlers: McpHandlerMap = {
     requireScope(apiKeyScopes, "mcp.read", toolName);
     const wsId = args.workspaceId as string | undefined;
     const wantFull = (args.detail as string | undefined) === "full";
+    // Filter to these kind slugs (the Hub `profileSlugs` filter).
+    const slugList = Array.isArray(args.slugs)
+      ? args.slugs
+          .filter((s): s is string => typeof s === "string" && s.length > 0)
+          .slice(0, 50)
+      : [];
+    const slugFilter = slugList.length ? { profileSlugs: slugList } : {};
 
     /**
      * Map a raw profile row to the lightweight digest shape (`read-lean.ts`:
@@ -905,6 +1130,7 @@ export const readHandlers: McpHandlerMap = {
       const result = await caller.profiles.listProfiles({
         userId,
         workspaceId: wsId,
+        ...slugFilter,
       });
       // BOTH lenses: the pod-wide base layer (`null`) AND the workspace's own
       // defs. Reading the workspace lens alone returned every overridden
@@ -913,15 +1139,24 @@ export const readHandlers: McpHandlerMap = {
       // group claimed all 24 globals as its own — live on Brand Library,
       // 2026-09-28, against this tool's own note that null = valid everywhere.
       const relationTypes = await relationTypesFor([null, wsId]);
-      if (wantFull) return ok({ ...result, ...relationTypes });
-      const profiles = Array.isArray(result)
-        ? result
-        : ((result as unknown as { profiles: unknown[] }).profiles ?? []);
+      const profiles = (
+        Array.isArray(result)
+          ? result
+          : ((result as unknown as { profiles?: unknown[] }).profiles ?? [])
+      ) as Array<Record<string, unknown>>;
+      const { page, paging } = pageSlice(
+        profiles,
+        args,
+        PROFILES_PAGE_DEFAULT,
+        LIST_PAGE_MAX
+      );
+      // The vocabulary rides the first page only: it does not change per page.
+      const rel = paging.offset === 0 ? relationTypes : {};
+      if (wantFull) return ok({ ...result, profiles: page, ...paging, ...rel });
       return ok({
-        profiles: (profiles as Array<Record<string, unknown>>).map((p) =>
-          toDigest(p)
-        ),
-        ...toDigestRelations(relationTypes),
+        profiles: page.map((p) => toDigest(p)),
+        ...paging,
+        ...(paging.offset === 0 ? toDigestRelations(relationTypes) : {}),
         detail: "digest",
         note: PROFILES_DIGEST_NOTE,
       });
@@ -949,7 +1184,7 @@ export const readHandlers: McpHandlerMap = {
     const perWs = await Promise.all(
       wsIds.map((id) =>
         caller.profiles
-          .listProfiles({ userId, workspaceId: id })
+          .listProfiles({ userId, workspaceId: id, ...slugFilter })
           .then((res) =>
             res.profiles.map(
               (p) =>
@@ -987,13 +1222,22 @@ export const readHandlers: McpHandlerMap = {
       }
     }
     const relations = await relationTypesFor([null, ...wsIds]);
+    const { page, paging } = pageSlice(
+      merged,
+      args,
+      PROFILES_PAGE_DEFAULT,
+      LIST_PAGE_MAX
+    );
     return ok({
-      profiles: merged,
+      profiles: page,
+      ...paging,
       ...(workspacesFailed.length ? { workspacesFailed } : {}),
       ...(wantFull
-        ? relations
+        ? paging.offset === 0
+          ? relations
+          : {}
         : {
-            ...toDigestRelations(relations),
+            ...(paging.offset === 0 ? toDigestRelations(relations) : {}),
             detail: "digest",
             note: PROFILES_DIGEST_NOTE,
           }),

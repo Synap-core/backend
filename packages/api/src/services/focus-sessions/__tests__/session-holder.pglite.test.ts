@@ -281,6 +281,7 @@ describe("readSessionHolder", () => {
         waitKind: null,
         since: null,
         agent: null,
+        runner: null,
         source: { from: "roster" },
         reason: "no_agent",
       },

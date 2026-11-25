@@ -12,6 +12,10 @@
 
 import { trialRunInputSchema } from "../../../services/playbooks/trial-run.js";
 import { z } from "@hono/zod-openapi";
+import {
+  playbookRunnerSchema,
+  stageRunnerSchema,
+} from "../../../schemas/playbook-runner.js";
 import type { Context } from "hono";
 
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
@@ -23,7 +27,9 @@ import {
   createPlaybookDoor,
   getPlaybookDoor,
   getPlaybookRunChoiceDoor,
+  getProcessDoor,
   listPlaybooksDoor,
+  listProcessesDoor,
   playbookDoorContext,
   runPlaybookDoor,
   type PlaybookDoorIdentity,
@@ -51,6 +57,41 @@ import { setPlaybookRunChoiceGoverned } from "../../../services/playbooks/set-ru
 type HubContext = Context<{ Variables: HubVariables }>;
 
 const PlaybookStatusSchema = z.enum(["draft", "active", "paused", "archived"]);
+
+/**
+ * The process read on the wire (`@synap-core/types/processes`, the contract
+ * every door returns). The OpenAPI shape names the top-level blocks; each
+ * block's full shape is the TS contract.
+ */
+const ProcessReadSchema = z
+  .object({
+    playbook: z.object({ id: z.string(), name: z.string() }).passthrough(),
+    when: z.object({}).passthrough(),
+    steps: z.array(z.object({}).passthrough()),
+    checks: z.object({}).passthrough(),
+    moves: z.object({}).passthrough().nullable(),
+    needs: z.array(z.object({}).passthrough()),
+    skills: z.array(z.object({}).passthrough()),
+    runs: z.object({}).passthrough(),
+    health: z.object({ state: z.string() }).passthrough(),
+    unavailable: z.array(z.string()),
+  })
+  .passthrough();
+
+const ProcessSummarySchema = z
+  .object({
+    id: z.string(),
+    name: z.string(),
+    health: z.object({ state: z.string() }).passthrough(),
+    counts: z.object({}).passthrough(),
+    needs: z.array(z.object({}).passthrough()),
+    unavailable: z.array(z.string()),
+  })
+  .passthrough();
+
+const ListProcessesQuerySchema = z.object({
+  workspaceId: z.string().uuid().optional(),
+});
 
 const ListPlaybooksQuerySchema = z.object({
   workspaceId: z
@@ -82,6 +123,9 @@ export const CreatePlaybookBodySchema = playbookDefinitionSchema
     scope: true,
     params: true,
     criteria: true,
+    runner: true,
+    requires: true,
+    tools: true,
   })
   .extend({
     workspaceId: z.string().uuid().describe("The playbook's home workspace."),
@@ -152,6 +196,17 @@ const RunPlaybookBodySchema = z.object({
     .describe(
       "Run it on Synap AI this time, whatever was remembered. Never with handToAgentId; refused on a playbook that runs only on agents."
     ),
+  runner: playbookRunnerSchema
+    .optional()
+    .describe(
+      "Who runs THIS run, in the playbook runner grammar: 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list of fallbacks. A role, engine or list is resolved now (only an agent that is yours, awake and allowed takes it); nobody it names can take it → refused. Never with handToAgentId or runOn. It comes before the playbook's own runner and your remembered choice."
+    ),
+  stageRunners: z
+    .record(z.string().trim().min(1).max(120), stageRunnerSchema)
+    .optional()
+    .describe(
+      "Who works each step of THIS run, by stage key: 'self', 'synap_ai', {synapAi:{persona}}, {agentId}, {role, computer?}, {engine, computer?}, or an ordered list. Kept on the run; when a step is entered it comes before the step's own runner."
+    ),
   remember: z
     .boolean()
     .optional()
@@ -162,6 +217,12 @@ const RunPlaybookBodySchema = z.object({
     .optional()
     .describe(
       "Try draft rules without making them current: { guidanceOverride: { <current version id>: <draft id> } }. The drafts render in place of those versions, the run is on Synap AI, and every write, send and save in it is refused. The drafted text is the agent's last reply: GET /runs/{runId}?flowType=playbook, playbookDetail.trial.draftedText. A person's act: refused for an agent, with remember or with handToAgentId."
+    ),
+  startAnother: z
+    .boolean()
+    .optional()
+    .describe(
+      "Start a second run even though one of this playbook is live on the subject. Without it, a live run (or an agent's draft of it waiting for you) comes back as status already_running with its session, and nothing starts."
     ),
 });
 
@@ -427,7 +488,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
     tags: ["Playbooks"],
     summary: "Run a playbook",
     description:
-      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. Same door as MCP synap_run_playbook.",
+      "Launches a playbook via its executor. Governed: an agent launch gets 202 `status: 'proposed'`. A playbook that depends on skills not enabled yet returns `status: 'blocked'` with `unenabledSkills` and `enableProposals` — nothing ran. While you already have a live run of the playbook on `subjectId` (or an agent's draft of it waiting for you), it returns `status: 'already_running'` with that run's `session`, its `run` (null for a draft) and a `reason` (`live_run` | `draft_awaiting_acceptance`) — nothing started; pass `startAnother: true` to start a second run. Same door as MCP synap_run_playbook.",
     request: {
       params: z.object({ id: z.string().uuid() }),
       body: RunPlaybookBodySchema,
@@ -444,6 +505,105 @@ export function registerPlaybooksRoutes(app: HubHono): void {
       },
       500: { description: "Internal error", schema: ErrorSchema },
     },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/playbooks/{id}/process",
+    tags: ["Playbooks"],
+    summary: "One process, whole",
+    description:
+      "The playbook seen as a Process: its definition and version, what starts it (its automations, from the one playbook → automation link, and its enabled workers), its steps, checks (criteria and gates), what it moves (the subject kind's lifecycle and the step owning each state), its needs (its `tools` and `requires` entries, each `filled`, `empty` or `unknown` against the space's tools), its skills, its runs (counts and recent sessions) and its health. A part the pod could not read is named in `unavailable`; its fields read null or `unknown`, never empty. Same read as tRPC playbooks.process and MCP synap_list_playbooks({playbookId}) → `process`.",
+    request: { params: z.object({ id: z.string().uuid() }) },
+    responses: {
+      200: { description: "The process", schema: ProcessReadSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Playbook not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "get",
+    path: "/processes",
+    tags: ["Playbooks"],
+    summary: "List processes",
+    description:
+      "A space's processes as cards (health, run counts, step and automation counts, needs), or every visible one when no space is named, plus the automations outside any process the caller can see. Archived playbooks are left out. Same read as tRPC playbooks.processes.",
+    request: { query: ListProcessesQuerySchema },
+    responses: {
+      200: {
+        description:
+          "{ processes, automationsOutsideProcess, unavailable }: `automationsOutsideProcess` is null when that read failed (then `unavailable` names `when`); an empty list means there are none.",
+        schema: z.object({
+          processes: z.array(ProcessSummarySchema),
+          automationsOutsideProcess: z
+            .array(
+              z.object({
+                id: z.string(),
+                name: z.string(),
+                triggerType: z.string(),
+                status: z.string(),
+                workspaceId: z.string().nullable(),
+              })
+            )
+            .nullable(),
+          unavailable: z.array(z.string()),
+        }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  /**
+   * GET /playbooks/:id/process — one process, whole (`playbooks.process`, the
+   * ONE process read). Before `/playbooks/:id`.
+   */
+  app.get("/playbooks/:id/process", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const id = requireUuidParam(c, "id");
+    if (id instanceof Response) return id;
+    try {
+      return c.json(
+        await getProcessDoor(doorIdentity(c, c.get("agentUserId")), id)
+      );
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.process failed");
+    }
+  });
+
+  /**
+   * GET /processes?workspaceId= — a space's process index
+   * (`playbooks.processes`): `{ processes, automationsOutsideProcess,
+   * unavailable }`.
+   */
+  app.get("/processes", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Missing scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const parsed = ListProcessesQuerySchema.safeParse(c.req.query());
+    if (!parsed.success) return c.json({ error: zodError(parsed.error) }, 400);
+    const confined = confineWorkspaceOrForbidden(c, parsed.data.workspaceId);
+    if (!confined.ok) return c.json({ error: confined.error }, 403);
+    try {
+      const index = await listProcessesDoor(
+        doorIdentity(c, c.get("agentUserId")),
+        confined.workspaceId ? { workspaceId: confined.workspaceId } : {}
+      );
+      return c.json(index);
+    } catch (err) {
+      return errorResponse(c, err, "playbooks.processes failed");
+    }
   });
 
   /**
@@ -606,6 +766,9 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           ...(body.scope ? { scope: body.scope } : {}),
           ...(body.params ? { params: body.params } : {}),
           ...(body.criteria ? { criteria: body.criteria } : {}),
+          ...(body.runner !== undefined ? { runner: body.runner } : {}),
+          ...(body.requires ? { requires: body.requires } : {}),
+          ...(body.tools !== undefined ? { tools: body.tools } : {}),
         }
       );
       return renderOutcome(c, outcome);
@@ -618,7 +781,8 @@ export function registerPlaybooksRoutes(app: HubHono): void {
    * PATCH /playbooks/:id
    * Body: { agentUserId?, source?, reasoning?, name?, description?, goalTemplate?,
    *         params?, inputStrategy?, channelSpec?, expectedOutputs?, stages?,
-   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope? }
+   *         criteria?, subjectProfile?, schedule?, executor?, status?, scope?,
+   *         runner?, requires?, tools? }
    *
    * Governed mirror of `playbooks.update` — the door the
    * analyzer persona uses to submit an evidence-backed definition diff. Never
@@ -671,13 +835,22 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           Record<string, unknown> | undefined,
         schedule: body.schedule as string | number | boolean | null | undefined,
         executor: body.executor as
-          "is-agent" | "external-agent" | "hybrid" | undefined,
+          "is-agent" | "external-agent" | "hybrid" | "generate" | undefined,
         status: body.status as
           "draft" | "active" | "paused" | "archived" | undefined,
         // `session` | `project` (a METHOD a project runs as a track). Validated
         // for real by `playbooks.update`'s zod enum; this only types the body.
         // It was dropped here, so no Hub caller could make a playbook a method.
         scope: body.scope as "session" | "project" | undefined,
+        // Who runs it and the tools it needs (0416). Validated for real by
+        // `playbooks.update` (`playbookRunnerSchema`, `requiresSchema`).
+        runner: body.runner as Parameters<
+          typeof caller.playbooks.update
+        >[0]["runner"],
+        requires: body.requires as string[] | undefined,
+        // What a run may use, "only these" (0419). Validated for real by
+        // `playbooks.update` (`playbookToolsSchema`; a stage list a subset).
+        tools: body.tools as string[] | undefined,
       });
       return jsonGoverned(c, result);
     } catch (err) {
@@ -734,7 +907,7 @@ export function registerPlaybooksRoutes(app: HubHono): void {
 
   /**
    * POST /playbooks/:id/run
-   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId?, trackStage?, handToAgentId? }
+   * Body: { workspaceId?, subjectId?, params?, agentIds?, reasoning?, agentUserId?, projectId?, trackId?, trackStage?, handToAgentId?, startAnother? }
    */
   app.post("/playbooks/:id/run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -768,8 +941,13 @@ export function registerPlaybooksRoutes(app: HubHono): void {
           trackStage: body.trackStage,
           handToAgentId: body.handToAgentId,
           runOn: body.runOn,
+          ...(body.runner !== undefined ? { runner: body.runner } : {}),
+          ...(body.stageRunners !== undefined
+            ? { stageRunners: body.stageRunners }
+            : {}),
           remember: body.remember,
           ...(body.trial ? { trial: body.trial } : {}),
+          ...(body.startAnother ? { startAnother: true } : {}),
           source: "hub-rest",
         }
       );

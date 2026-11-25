@@ -83,6 +83,17 @@ vi.mock("@synap/database", () => {
     and,
     inArray,
     isNull,
+    // The workspace branch reads membership through the one door (which maps
+    // an agent to its person); a person's own row answers here.
+    getWorkspaceMembership: async (
+      _db: unknown,
+      workspaceId: string,
+      userId: string
+    ) => {
+      h.lastQuery.push(`workspace_members:${workspaceId}`);
+      const role = h.wsRoles.get(`${workspaceId}:${userId}`);
+      return role ? { role } : null;
+    },
     db: {
       query: {
         workspaces: {

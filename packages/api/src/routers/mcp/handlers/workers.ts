@@ -62,6 +62,8 @@ function render<T>(
         reasonCode: outcome.reasonCode,
         holder: outcome.holder,
       });
+    case "refused":
+      return ok({ error: outcome.error, reasonCode: outcome.reasonCode });
   }
 }
 
@@ -86,14 +88,17 @@ export const workerHandlers: McpHandlerMap = {
     requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
     const playbookId = uuidArg(ctx.args.playbookId);
     const trackId = uuidArg(ctx.args.trackId);
+    // The session the worker is enabled FOR (its runs are that session's
+    // children). Not `sessionId`: that argument is the caller's attribution.
+    const scopeSessionId = uuidArg(ctx.args.scopeSessionId);
     const activatorKey =
       typeof ctx.args.activatorKey === "string"
         ? ctx.args.activatorKey.trim()
         : "";
-    if (!playbookId || !activatorKey || !trackId) {
+    if (!playbookId || !activatorKey || (!trackId && !scopeSessionId)) {
       return ok({
         error:
-          "playbookId (uuid), activatorKey (one the playbook declares: synap_list_playbooks shows its activators) and trackId (the goal) are required.",
+          "playbookId (uuid), activatorKey (one the playbook declares: synap_list_playbooks shows its activators) and trackId (the goal) or scopeSessionId (a session you own) are required.",
       });
     }
     const mode = ctx.args.mode;
@@ -104,7 +109,8 @@ export const workerHandlers: McpHandlerMap = {
       await enableWorkerDoor(identity(ctx), {
         playbookId,
         activatorKey,
-        trackId,
+        ...(trackId ? { trackId } : {}),
+        ...(scopeSessionId ? { scopeSessionId } : {}),
         ...(mode ? { mode } : {}),
       }),
       ctx.userId

@@ -54,6 +54,8 @@ vi.mock("../../../utils/relation-types.js", async (importOriginal) => ({
 vi.mock("@synap/database", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap/database")>()),
   getDb: vi.fn(async () => ({})),
+  // The lean list's role lookup: `note` is a kind.
+  resolveSlugKind: vi.fn(async () => ({ hasKindRow: true, hasRoleRow: false })),
   // The lean door reads each kind's defs; the note kind declares none here,
   // so its properties are ranked by their stored values.
   ProfileResolutionService: class {
@@ -222,7 +224,10 @@ beforeEach(() => {
 
 describe("synap_list_profiles — default digest fits the budget", () => {
   it("non-vacuity: detail:'full' reproduces the live overflow and carries what the digest drops", async () => {
-    const full = await call("synap_list_profiles", { detail: "full" });
+    const full = await call("synap_list_profiles", {
+      detail: "full",
+      limit: 200,
+    });
     expect(full.text.length).toBeGreaterThan(BUDGET_CHARS * 2);
     expect(full.json.profiles).toHaveLength(PROFILE_COUNT);
     expect(full.json.relationTypes.length).toBeGreaterThanOrEqual(400);
@@ -243,8 +248,18 @@ describe("synap_list_profiles — default digest fits the budget", () => {
   });
 
   it("the no-argument call is ≤ budget and still names every profile slug and every valid relation slug per lens", async () => {
-    const lean = await call("synap_list_profiles", {});
-    expect(lean.text.length).toBeLessThanOrEqual(BUDGET_CHARS);
+    const first = await call("synap_list_profiles", {});
+    expect(first.text.length).toBeLessThanOrEqual(BUDGET_CHARS);
+    // The default call is ONE page (40); walk nextOffset to see every kind.
+    // The relation vocabulary rides the first page only.
+    const all: unknown[] = [...first.json.profiles];
+    let next: number | undefined = first.json.nextOffset;
+    while (next !== undefined) {
+      const more = await call("synap_list_profiles", { offset: next });
+      all.push(...more.json.profiles);
+      next = more.json.nextOffset;
+    }
+    const lean = { ...first, json: { ...first.json, profiles: all } };
     expect(lean.json.detail).toBe("digest");
     expect(lean.json.note).toMatch(/detail:'full'/);
 

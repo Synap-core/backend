@@ -37,6 +37,7 @@ export async function expireProposalsStaleAfterMove(
   const rows = await transitionProposal(db as unknown as ProposalStatusWriter, {
     to: ProposalStatus.EXPIRED,
     from: [ProposalStatus.PENDING],
+    ended: { reason: "lifecycle_move" },
     set: {
       updatedAt: sql`now()`,
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(

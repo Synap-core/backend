@@ -15,6 +15,9 @@ import { COLUMN_DIRECTIVE, COLUMNS_DIRECTIVE, readEmbed } from "./embeds.js";
 export const DIRECTIVE_ATTRIBUTES = {
   "synap-entity": ["id"],
   "synap-view": ["viewId", "viewType", "data-view-id"],
+  // A session's real question: `sessionId` + the output `slot` (its key, or
+  // its label) address it; the card reads the live ask. Reference only.
+  "synap-ask": ["sessionId", "slot"],
   "synap-cell": [
     "instanceId",
     "cellKey",

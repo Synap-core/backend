@@ -247,6 +247,14 @@ export const NOTIFICATION_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const STALE_NEWS_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
 /**
+ * The AI availability notices' suppression window: their groupKey is the
+ * state, its mark and its reset (one credit period), so an unread notice of
+ * the same state in the same period is the same news. A month and a few days
+ * covers any period; a dismissed one never suppresses the next.
+ */
+export const AI_AVAILABILITY_DEDUPE_WINDOW_MS = 35 * 24 * 60 * 60 * 1000;
+
+/**
  * A STATUS SIGNAL: the status watcher (`services/status/watcher.ts`) noticed
  * that a thing its owner owns is late, nearly due, stuck in its step, or
  * paused past its review date. One row per subject type, so the button opens
@@ -644,6 +652,50 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     // The write already happened. News in the bell, not an ask.
     needsYou: "informational",
     expiresAfterMs: STALE_NEWS_EXPIRY_MS,
+  },
+  {
+    /**
+     * A change failed to apply where no one saw it fail (plan 8032a127 D6): an
+     * agent's auto-applied receipt whose materialization threw (nobody
+     * approved anything), or an approval the background job applied after the
+     * request returned. A person who clicked Approve and read the failure in
+     * their toast gets no row. So the words claim neither an approval nor a
+     * watcher: they say whose change and why. Producer:
+     * `notifyUnseenApprovalFailure` (`services/proposals/unseen-approval-failure.ts`),
+     * to the proposal's human owner. One open row per proposal (its groupKey
+     * is the proposal); every door that ends or approves the proposal settles
+     * it (`markProposalNotificationsActioned`, sourceType `proposal`). Like
+     * `proposal.created`, needs-you counts the proposal itself, never this row.
+     * Tokens: `named` (yes | no) + `name`, the proposal's display name for
+     * the owner; `reason` (yes | no) + `sentence`, the safe classified sentence;
+     * `agent` (yes | no), an agent is behind the change. No verb list in the
+     * body: what can be done (retry, repair, dismiss) depends on the failure,
+     * and the "Review" action opens the proposal that offers it.
+     */
+    type: "proposal.approval_failed",
+    category: "governance",
+    label: "Change couldn’t apply",
+    icon: "triangle-alert",
+    priority: "high",
+    messageSyntax: "icu",
+    titleTemplate:
+      "{named, select, yes {Couldn’t apply: {name}} other {A change couldn’t apply}}",
+    bodyTemplate:
+      "{reason, select, yes {{sentence}} other {{agent, select, yes {An agent’s change couldn’t be applied.} other {The change couldn’t be applied.}}}}",
+    // In the bell. A phone push needs a `PUSH_TYPE_RULES` entry
+    // (`@synap-core/types/push`): not decided yet.
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: NOTIFICATION_REPEAT_WINDOW_MS,
+    actions: [
+      {
+        id: "review",
+        label: "Review",
+        variant: "primary",
+        // `sourceId` is the proposalId.
+        handler: { type: "navigate-object", kind: "proposal" },
+      },
+    ],
   },
   {
     // Proactive twin of the approve-time preflight: a pending proposal whose
@@ -1427,6 +1479,69 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
     needsYou: "informational",
   },
   {
+    // AI AVAILABILITY (W3 C5): the pod's pull saw its credits cross a low
+    // mark (`services/ai-availability/notify.ts`). To the pod's payers (owner
+    // + admins), once per (kind, mark, reset) while unread; dismissed when
+    // the state changes. Health of the pod, not an ask: the status banner.
+    // Words from the ONE deck (`aiAvailabilityCopy`): title and CTA.
+    type: "ai.credits_low",
+    // `system`, as every status-role type: the narrow banner reads that category.
+    category: "system",
+    label: "AI credits running low",
+    icon: "gauge",
+    priority: "normal",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
+    needsYou: "status",
+  },
+  {
+    // AI AVAILABILITY (founder decision 4): the payment failed and the plan
+    // is in its grace period. AI still runs, the payer must fix the payment
+    // before it stops. To the payers, once per period while unread; dismissed
+    // when the state changes. The status banner, like low credits; words from
+    // the ONE deck (`aiAvailabilityCopy`).
+    type: "ai.payment_due",
+    category: "system",
+    label: "Payment needed for AI",
+    icon: "gauge",
+    priority: "normal",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
+    needsYou: "status",
+  },
+  {
+    // AI AVAILABILITY (W3 C5): AI stopped on this pod for a reason only a
+    // payer can change (out of credits, payment needed, no AI on the plan).
+    // To the payers, once per (kind, mark, reset) while unread, pushed;
+    // dismissed when the state changes. Its door is the pod's Credits page,
+    // where the deck's one CTA and the payer's link are. Agents never file
+    // this: they point the person at it.
+    type: "ai.unavailable",
+    category: "ai",
+    label: "AI stopped on this pod",
+    icon: "gauge",
+    priority: "high",
+    titleTemplate: "{{title}}",
+    bodyTemplate: "{{action}}",
+    defaultChannels: ["in_app", "os"],
+    actions: [
+      {
+        id: "open-credits",
+        label: "Open credits",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "credits" },
+      },
+    ],
+    ttl: 0,
+    dedupeWindowMs: AI_AVAILABILITY_DEDUPE_WINDOW_MS,
+  },
+  {
     type: "system.issuer_pending_approval",
     category: "system",
     label: "Issuer Pending Approval",
@@ -1461,6 +1576,25 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
       "{factor, select, passkey {{change, select, added {A passkey was added to your account} removed {A passkey was removed from your account} other {A passkey was added to or removed from your account}}} totp {{change, select, added {An authenticator app was added to your account} removed {An authenticator app was removed from your account} other {An authenticator app was added to or removed from your account}}} recovery_codes {{change, select, added {New recovery codes were made for your account} removed {Your recovery codes were cleared} other {Your recovery codes changed}}} other {{change, select, added {A device key was added to your account} removed {A device key was removed from your account} other {A device key was added to or removed from your account}}}}",
     bodyTemplate:
       "{named, select, yes {{label}. } other {}}If it wasn’t you, remove it in pod admin, Security.",
+    defaultChannels: ["in_app", "os"],
+    ttl: 0,
+    needsYou: "informational",
+  },
+  {
+    // "Add this device" (founder decision of 9 Nov 2026, session 84c74a23): a
+    // NEW device asks to be approved. Every device of the person hears it, so
+    // the person approves it on one they already use, or declines a request
+    // that is not theirs. Tokens from `requestDeviceLink`: `label` (what the
+    // new device calls itself), `id` (the request).
+    type: "security.device_link_requested",
+    category: "system",
+    label: "A new device asks to be approved",
+    icon: "shield-alert",
+    priority: "high",
+    messageSyntax: "icu",
+    titleTemplate: "A device asks to confirm it’s you",
+    bodyTemplate:
+      "{label} wants to approve requests for you. If it’s you, open this on a device you already use and pick the number it shows. If not, decline it.",
     defaultChannels: ["in_app", "os"],
     ttl: 0,
     needsYou: "informational",
@@ -1710,6 +1844,88 @@ export const NOTIFICATION_REGISTRY: NotificationDef[] = [
         label: "Open Session",
         variant: "primary",
         handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * A decision was ACCEPTED with a choice that NO step names as its arm
+     * (decision arms, P5): nothing was skipped, every arm waits, and the
+     * owner re-plans (add a step for the choice, or change the choice) —
+     * never a silent green. Producer: `resolveDecisionArms`
+     * (`services/focus-sessions/decision-arms.ts`), once per owner per
+     * choice (`groupKey`). `sourceId` is one of the waiting steps.
+     */
+    type: "session.arm_unmatched",
+    category: "system",
+    label: "No step for a choice",
+    icon: "split",
+    priority: "high",
+    titleTemplate: 'No step for "{{chosenOption}}" on {{decisionTitle}}',
+    bodyTemplate:
+      "{{sessionTitle}} and the other branches wait: add a step for this choice, or change it.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open Session",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "session" },
+      },
+    ],
+  },
+  {
+    /**
+     * A decision's answer-by date passed and the default the PERSON set was
+     * applied (the timeout arm, P5): it is accepted with that option, so its
+     * arms settle. Producer: `sweepDecisionTimeouts`
+     * (`services/decisions/decision-timeout.ts`), once per due date.
+     * `sourceId` is the decision.
+     */
+    type: "decision.decided_by_timeout",
+    category: "system",
+    label: "Decided by your default",
+    icon: "clock",
+    priority: "normal",
+    titleTemplate: '"{{decisionTitle}}" took your default: {{chosenOption}}',
+    bodyTemplate:
+      "Nobody answered by the date you set. {{waitingSteps}} waiting steps follow this choice.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open Decision",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "entity" },
+      },
+    ],
+  },
+  {
+    /**
+     * A decision's answer-by date passed with no default the person set
+     * (none, an agent's, or one it does not list): nothing was decided, the
+     * steps wait (the timeout arm, P5). Producer: `sweepDecisionTimeouts`
+     * (`services/decisions/decision-timeout.ts`), once per due date.
+     * `sourceId` is the decision.
+     */
+    type: "decision.overdue",
+    category: "system",
+    label: "Decision overdue",
+    icon: "clock",
+    priority: "high",
+    titleTemplate: '"{{decisionTitle}}" is past its answer-by date',
+    bodyTemplate:
+      "{{waitingSteps}} steps wait on your answer. Decide it, or set a default.",
+    defaultChannels: ["in_app"],
+    ttl: 0,
+    actions: [
+      {
+        id: "view",
+        label: "Open Decision",
+        variant: "primary",
+        handler: { type: "navigate-object", kind: "entity" },
       },
     ],
   },

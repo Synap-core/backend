@@ -12,7 +12,10 @@ import {
   CAPABILITY_COMPUTER_KEYS,
   installKind,
   pickComputerSpec,
+  normalizeRecipeValues,
   placementRefusal,
+  recipeSchema,
+  renderRecipe,
 } from "./index.js";
 
 const TOOL = {
@@ -159,5 +162,43 @@ describe("pickComputerSpec — what the applier stores", () => {
     expect(picked.recipes).toEqual({ marker: "recipes" });
     expect(picked).not.toHaveProperty("key");
     expect(pickComputerSpec({ key: "web.read", name: "Web" })).toBeNull();
+  });
+});
+
+describe("renderRecipe — a time given as a number of seconds", () => {
+  const recipe = recipeSchema.parse({
+    name: "range-cut",
+    description: "Keep one time range of a video.",
+    params: {
+      start: { type: "time", description: "Range start.", required: true },
+      end: { type: "time", description: "Range end.", default: "9" },
+    },
+    steps: [{ program: "ffmpeg", args: ["-ss", "{start}", "-to", "{end}"] }],
+    gotchas: ["Re-encodes the range."],
+  });
+  const argv = (values: Record<string, unknown>) =>
+    renderRecipe(recipe, values, { workdir: "/w" })[0]!.args;
+
+  it("fills a given number of seconds as its string", () => {
+    expect(argv({ start: 2, end: 7.5 })).toEqual(["-ss", "2", "-to", "7.5"]);
+    expect(argv({ start: 12 })).toEqual(["-ss", "12", "-to", "9"]);
+    expect(normalizeRecipeValues(recipe, { start: 2, other: 3 })).toEqual({
+      start: "2",
+      other: 3,
+    });
+    // A negative number is refused by the TIME rule, not as "not a string".
+    expect(() => argv({ start: -2 })).toThrow(/start must be a time/);
+  });
+
+  it("CONTROL: a string time fills as before; a negative or non-finite number is refused", () => {
+    expect(argv({ start: "00:12", end: "41" })).toEqual([
+      "-ss",
+      "00:12",
+      "-to",
+      "41",
+    ]);
+    // Refused before this change and after it.
+    expect(() => argv({ start: -2 })).toThrow(/start must be/);
+    expect(() => argv({ start: Number.NaN })).toThrow(/start must be a string/);
   });
 });

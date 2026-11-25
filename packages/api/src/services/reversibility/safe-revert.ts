@@ -59,15 +59,21 @@ import {
   links,
   views,
   documents,
+  widgetDefinitions,
+  rendererBindings,
+  drizzleSql,
   ProfileResolutionService,
   columnsForValue,
+  setAutomationStatus,
 } from "@synap/database";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 import {
   entityFieldApiName,
   type EntityDiffField,
 } from "../../utils/entity-property-diff.js";
 import { SESSION_UNDO_COLUMNS } from "../focus-sessions/session-undo.js";
+import { removeProjectPillarEdges } from "../../utils/project-workspace.js";
 import { documentOwnedByAnotherObject } from "../entity-body/document-ownership.js";
 
 export type RevertTarget =
@@ -81,6 +87,13 @@ export type RevertTarget =
   | { kind: "playbook"; id: string }
   /** A saved List (`views` row). No soft delete exists: retired by delete. */
   | { kind: "view"; id: string }
+  /**
+   * A generated cell (`widget_definitions` row) a playbook's UI created.
+   * Retired by delete while untouched and shown nowhere else.
+   */
+  | { kind: "cell"; id: string }
+  /** A renderer binding (`renderer_bindings` row). Retired by revoke, kept as history. */
+  | { kind: "renderer_binding"; id: string }
   | {
       kind: "project";
       id: string;
@@ -303,6 +316,8 @@ interface InspectContext {
   sessionIds: string[];
   /** Links retired by THIS undo — never a "use" of a project it also retires. */
   linkIds: string[];
+  /** Bindings revoked by THIS undo — never a "use" of a cell it also retires. */
+  rendererBindingIds: string[];
   sessionId: string | null;
   subjectEntityId: string | null;
   pass: RevertPass | null;
@@ -498,8 +513,8 @@ async function inspectAutomation(
   if ((runs?.n ?? 0) > 0) {
     return skip(target, "in_use", "the automation has already run");
   }
-  // Materialized as a draft, always. Anything else means someone turned it on.
-  if (row.status !== "draft" || changedAfter(row.updatedAt, ctx.since)) {
+  // Born draft or (approved) active; any move since stamps `updatedAt`.
+  if (changedAfter(row.updatedAt, ctx.since)) {
     return skip(
       target,
       "edited_since",
@@ -587,6 +602,85 @@ async function inspectView(
       target,
       "edited_since",
       "the list was changed after it was created"
+    );
+  }
+  return null;
+}
+
+/**
+ * A generated cell is the work's to retire only while it is exactly what the
+ * work made (not edited since) and nothing else shows it: no binding other
+ * than the ones this same undo revokes, and no bento tile.
+ */
+async function inspectCell(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "cell" }>,
+  ctx: InspectContext
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({
+      id: widgetDefinitions.id,
+      typeKey: widgetDefinitions.typeKey,
+      updatedAt: widgetDefinitions.updatedAt,
+    })
+    .from(widgetDefinitions)
+    .where(eq(widgetDefinitions.id, target.id))
+    .for("update");
+  if (!row) return skip(target, "already_reverted", "the cell is already gone");
+  if (changedAfter(row.updatedAt, ctx.since)) {
+    return skip(
+      target,
+      "edited_since",
+      "the cell was changed after it was created"
+    );
+  }
+  const bindingConditions = [
+    isNull(rendererBindings.revokedAt),
+    or(
+      drizzleSql`${rendererBindings.ref}->>'cellKey' = ${row.typeKey}`,
+      drizzleSql`${rendererBindings.ref}->'props'->>'typeKey' = ${row.typeKey}`
+    ),
+  ];
+  if (ctx.rendererBindingIds.length > 0) {
+    bindingConditions.push(
+      not(inArray(rendererBindings.id, ctx.rendererBindingIds))
+    );
+  }
+  const [bound] = await reader
+    .select({ n: count() })
+    .from(rendererBindings)
+    .where(and(...bindingConditions));
+  if ((bound?.n ?? 0) > 0) {
+    return skip(target, "in_use", "a page still shows the cell");
+  }
+  const [placed] = await reader
+    .select({ n: count() })
+    .from(views)
+    .where(
+      drizzleSql`jsonb_path_exists(coalesce(${views.config}, '{}'::jsonb), '$.blocks[*] ? (@.widgetType == $key)', jsonb_build_object('key', ${row.typeKey}::text))`
+    );
+  if ((placed?.n ?? 0) > 0) {
+    return skip(target, "in_use", "a dashboard places the cell");
+  }
+  return null;
+}
+
+/** A binding somebody replaced (or revoked) since is no longer the work's. */
+async function inspectRendererBinding(
+  reader: Reader,
+  target: Extract<RevertTarget, { kind: "renderer_binding" }>
+): Promise<RevertSkip | null> {
+  const [row] = await reader
+    .select({ id: rendererBindings.id, revokedAt: rendererBindings.revokedAt })
+    .from(rendererBindings)
+    .where(eq(rendererBindings.id, target.id))
+    .for("update");
+  if (!row) return skip(target, "not_found", "the binding no longer exists");
+  if (row.revokedAt) {
+    return skip(
+      target,
+      "already_reverted",
+      "the page no longer shows this cell (it was replaced or cleared)"
     );
   }
   return null;
@@ -833,6 +927,10 @@ async function inspect(
       return inspectPlaybook(reader, target);
     case "view":
       return inspectView(reader, target, ctx);
+    case "cell":
+      return inspectCell(reader, target, ctx);
+    case "renderer_binding":
+      return inspectRendererBinding(reader, target);
     case "project":
       return inspectProject(reader, target, ctx);
     case "link":
@@ -862,6 +960,9 @@ const APPLY_ORDER: Record<RevertTarget["kind"], number> = {
   skill: 7,
   playbook: 8,
   view: 8,
+  // A binding is revoked before the cell it shows is retired.
+  renderer_binding: 8,
+  cell: 9,
   project: 9,
 };
 
@@ -968,10 +1069,12 @@ async function apply(
       }
       return;
     case "automation":
-      await tx
-        .update(automations)
-        .set({ status: "archived", updatedAt: now })
-        .where(eq(automations.id, target.id));
+      await setAutomationStatus(tx, {
+        id: target.id,
+        from: AUTOMATION_STATUSES,
+        to: "archived",
+        set: { updatedAt: now },
+      });
       return;
     case "skill":
     case "rule":
@@ -989,15 +1092,51 @@ async function apply(
     case "view":
       await tx.delete(views).where(eq(views.id, target.id));
       return;
+    case "renderer_binding":
+      // A tombstone, like every unbind (`revokeRendererBinding`): the page
+      // falls back to its next rung, the row stays as history.
+      await tx
+        .update(rendererBindings)
+        .set({ revokedAt: now })
+        .where(
+          and(
+            eq(rendererBindings.id, target.id),
+            isNull(rendererBindings.revokedAt)
+          )
+        );
+      return;
+    case "cell":
+      // The work CREATED this row and nothing shows it (inspected above):
+      // retired whole, so the same proposal can be made again.
+      await tx
+        .delete(widgetDefinitions)
+        .where(eq(widgetDefinitions.id, target.id));
+      return;
     case "project":
       await tx
         .update(projects)
         .set({ status: "archived", updatedAt: now })
         .where(eq(projects.id, target.id));
       return;
-    case "link":
-      await tx.delete(links).where(eq(links.id, target.id));
+    case "link": {
+      const [removed] = await tx
+        .delete(links)
+        .where(eq(links.id, target.id))
+        .returning();
+      // A reverted `project --uses--> workspace` edge takes the project's
+      // goals' pillar edges to that space with it, as the unlink door does.
+      if (
+        removed?.linkType === "uses" &&
+        removed.fromType === "project" &&
+        removed.toType === "workspace"
+      ) {
+        await removeProjectPillarEdges(tx, {
+          projectId: removed.fromId,
+          workspaceId: removed.toId,
+        });
+      }
       return;
+    }
     case "row_patch": {
       // `inspectRowPatch` already refused a record naming a column outside
       // the allowlist, so every key written here is one an update writes.
@@ -1028,6 +1167,9 @@ export async function safeRevert(
     facetIds: opts.targets.flatMap((t) => (t.kind === "facet" ? [t.id] : [])),
     sessionIds: opts.ownSessionIds ?? [],
     linkIds: opts.targets.flatMap((t) => (t.kind === "link" ? [t.id] : [])),
+    rendererBindingIds: opts.targets.flatMap((t) =>
+      t.kind === "renderer_binding" ? [t.id] : []
+    ),
     sessionId: opts.sessionId ?? null,
     subjectEntityId: opts.subjectEntityId ?? null,
     pass: opts.touchedByPass ?? null,
@@ -1064,10 +1206,10 @@ export async function safeRevert(
 
 /**
  * An archived playbook is not live, so neither is what fires it: the SAME
- * teardown the archive doors run (`playbooksRouter.archive`) — its backing
- * cron automation and its activator rules. After the commit, because both read
- * the playbook's committed status. Without it, an undo archived the playbook
- * and its schedule kept firing (ticket cdf608a8).
+ * pass the archive doors run (`playbooksRouter.archive`) retires its
+ * activator rules, its schedule among them. After the commit, because it
+ * reads the playbook's committed status. Without it, an undo archived the
+ * playbook and its schedule kept firing.
  */
 async function tearDownArchivedPlaybooks(
   database: Database,
@@ -1075,16 +1217,13 @@ async function tearDownArchivedPlaybooks(
 ): Promise<void> {
   const ids = reverted.flatMap((t) => (t.kind === "playbook" ? [t.id] : []));
   if (ids.length === 0) return;
-  const { materializePlaybookCronAutomation } =
-    await import("../playbooks/cron-automation.js");
   const { convergePlaybookActivatorsSafely } =
     await import("../playbooks/playbook-activators.js");
   const rows = await database
-    .select()
+    .select({ id: playbooks.id, createdBy: playbooks.createdBy })
     .from(playbooks)
     .where(inArray(playbooks.id, ids));
   for (const row of rows) {
-    await materializePlaybookCronAutomation(row, { userId: row.createdBy });
     await convergePlaybookActivatorsSafely({
       playbookId: row.id,
       userId: row.createdBy,

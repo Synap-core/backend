@@ -2,7 +2,7 @@
  * resolveHolderAccess — one reading of what an agent, an app or a key may do.
  * Each row names the wrong rule it rules out.
  */
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   nounInSentence,
   resolveObjectNounPlural,
@@ -27,6 +27,17 @@ import {
 const NOW = Date.parse("2026-10-11T12:00:00Z");
 const FUTURE = "2027-01-12T00:00:00Z";
 const PAST = "2026-01-01T00:00:00Z";
+
+// `now` reaches the ended check but not the lifetime label (summary.ts
+// expiryWhen reads Date.now()), so FUTURE would age into "Expired" on the real
+// clock. Pin the clock itself, as NOW is pinned for the `now` input.
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
 
 const grant = (
   permissions: string[],

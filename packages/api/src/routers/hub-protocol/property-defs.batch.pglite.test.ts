@@ -124,12 +124,26 @@ vi.mock("../../middleware/api-key-auth.js", async (importOriginal) => {
   return { ...actual, scopedProcedure: () => t.procedure };
 });
 
+// The REAL gate, wrapped so one test can take the granted branch once (the
+// receipt a granted write returns); every other call runs the real gate.
+vi.mock("../../utils/permission-check.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../utils/permission-check.js")>();
+  return {
+    ...actual,
+    checkPermissionOrPropose: vi.fn(actual.checkPermissionOrPropose),
+  };
+});
+
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { eq } from "drizzle-orm";
 import * as schema from "@synap/database/schema";
 import { hubProfilesRouter } from "./profiles.js";
 import { applyProposalApproval } from "../proposals/apply-approval.js";
-import { buildProposalSummary } from "../../utils/permission-check.js";
+import {
+  buildProposalSummary,
+  checkPermissionOrPropose,
+} from "../../utils/permission-check.js";
 
 const USER = randomUUID();
 const AGENT = randomUUID();
@@ -359,5 +373,211 @@ describe("adding fields to an approved kind (ticket a375443d)", () => {
       })
     ).rejects.toThrow(/dup named more than once/);
     expect(await propertyDefProposals()).toHaveLength(before);
+  });
+});
+
+/**
+ * A kind field whose slug matches a pod-wide (global) field (control-plane
+ * report 0b5ca266). The funding test declared `stage` on its new kinds with
+ * its own values; `property-defs.create` falls back to the GLOBAL `stage`
+ * (the deal pipeline) on a profile-base lookup, so the kinds were bound to
+ * the deal stages and the declared values were lost without a word.
+ *
+ * Real path end to end: hub door → gate → proposal → approval executor →
+ * `createAndLinkPropertyDef` → the REAL `property-defs.create` and its
+ * `getBySlug` fallback. Nothing between the door and the rows is mocked.
+ */
+describe("a declared field whose slug matches a global field (0b5ca266)", () => {
+  const DEAL = randomUUID();
+  const FUND = randomUUID();
+  const FUND_B = randomUUID();
+  const NEED = randomUUID();
+  const GLOBAL_STAGE = randomUUID();
+  const GLOBAL_WEBSITE = randomUUID();
+  const DEAL_STAGES = [
+    "lead",
+    "qualified",
+    "proposal",
+    "negotiation",
+    "closed-won",
+    "closed-lost",
+  ];
+  const FUNDING_STAGES = ["idea", "pre-seed", "seed", "series-a"];
+
+  /** The hub door with its gate granting this one call: the field applies
+   *  at once and the door returns its per-field receipt. */
+  const grantedHub = () => {
+    vi.mocked(checkPermissionOrPropose).mockResolvedValueOnce({
+      granted: true,
+    } as never);
+    return agentHub();
+  };
+
+  /** Every def a kind links under a slug, with its scope and values. */
+  async function linkedDefs(profileId: string, slug: string) {
+    return (
+      await q<{ id: string; profile_id: string | null; constraints: unknown }>(
+        `select d.id, d.profile_id, d.constraints from profile_properties pp
+           join property_defs d on d.id = pp.property_def_id
+          where pp.profile_id = $1 and d.slug = $2`,
+        [profileId, slug]
+      )
+    ).rows;
+  }
+
+  beforeAll(async () => {
+    for (const [id, slug] of [
+      [DEAL, "deal"],
+      [FUND, "funding-need-a"],
+      [FUND_B, "funding-source-b"],
+      [NEED, "funding-need-old"],
+    ] as const) {
+      await q(
+        `insert into profiles (id, slug, display_name, scope, user_id, workspace_id, profile_kind)
+         values ($1, $2, $2, 'workspace', $3, $4, 'kind')`,
+        [id, slug, USER, WS]
+      );
+    }
+    await q(
+      `insert into property_defs (id, slug, value_type, constraints, ui_hints, profile_id, workspace_id) values
+        ($1, 'stage', 'string', $3::jsonb, '{}'::jsonb, null, null),
+        ($2, 'website', 'string', '{}'::jsonb, '{}'::jsonb, null, null)`,
+      [GLOBAL_STAGE, GLOBAL_WEBSITE, JSON.stringify({ enum: DEAL_STAGES })]
+    );
+    // `deal` uses the global stage; so does a kind already bound to it the
+    // way the funding test's kind was.
+    for (const profileId of [DEAL, NEED]) {
+      await q(
+        `insert into profile_properties (profile_id, property_def_id) values ($1, $2)`,
+        [profileId, GLOBAL_STAGE]
+      );
+    }
+  });
+
+  it("an agent's kind gets its OWN `stage` on approval; the global one and `deal` are untouched", async () => {
+    const res = (await agentHub().createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: FUND,
+      fields: [
+        {
+          slug: "stage",
+          valueType: "string",
+          constraints: { enum: FUNDING_STAGES },
+        },
+      ],
+    })) as { status: string; proposalId?: string };
+    expect(res.status, JSON.stringify(res)).toBe("proposed");
+    const approval = await personApproves(String(res.proposalId));
+    expect(approval.success, JSON.stringify(approval)).toBe(true);
+
+    const linked = await linkedDefs(FUND, "stage");
+    expect(linked).toHaveLength(1);
+    expect(linked[0]!.id).not.toBe(GLOBAL_STAGE);
+    expect(linked[0]!.profile_id).toBe(FUND);
+    expect(linked[0]!.constraints).toEqual({ enum: FUNDING_STAGES });
+
+    // The shared field and the kind that relies on it are as they were.
+    const global = await q<{ constraints: unknown }>(
+      `select constraints from property_defs where id = $1`,
+      [GLOBAL_STAGE]
+    );
+    expect(global.rows[0]!.constraints).toEqual({ enum: DEAL_STAGES });
+    expect((await linkedDefs(DEAL, "stage")).map((d) => d.id)).toEqual([
+      GLOBAL_STAGE,
+    ]);
+  });
+
+  it("the receipt says which: own field created over a differing global, or global field reused", async () => {
+    const res = (await grantedHub().createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: FUND_B,
+      fields: [
+        {
+          slug: "stage",
+          valueType: "string",
+          constraints: { enum: FUNDING_STAGES },
+        },
+        { slug: "website", valueType: "string" },
+      ],
+    })) as { status: string; properties: Array<Record<string, unknown>> };
+    expect(res.status, JSON.stringify(res)).toBe("applied");
+    const [stage, website] = res.properties;
+
+    expect(stage!.status).toBe("applied");
+    expect(stage!.globalField).toMatchObject({
+      outcome: "shadowed",
+      id: GLOBAL_STAGE,
+      conflicts: [
+        {
+          field: "constraints",
+          declared: { enum: FUNDING_STAGES },
+          stored: { enum: DEAL_STAGES },
+        },
+      ],
+    });
+    expect(String(stage!.message)).toContain("own field 'stage'");
+    expect((await linkedDefs(FUND_B, "stage"))[0]!.profile_id).toBe(FUND_B);
+
+    // Same type, no values declared: the shared field is the right one.
+    expect(website!.status).toBe("unchanged");
+    expect(website!.globalField).toEqual({
+      outcome: "reused",
+      id: GLOBAL_WEBSITE,
+    });
+    expect(String(website!.message)).toContain("Reused global field 'website'");
+    expect((await linkedDefs(FUND_B, "website")).map((d) => d.id)).toEqual([
+      GLOBAL_WEBSITE,
+    ]);
+  });
+
+  it("an OVERLAY declaration over a differing global field stays an overlay of this space", async () => {
+    const res = (await grantedHub().createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: DEAL,
+      fields: [
+        {
+          slug: "website",
+          valueType: "string",
+          constraints: { format: "uri" },
+          overlay: true,
+        },
+      ],
+    })) as { properties: Array<Record<string, unknown>> };
+    expect(res.properties[0]!.status, JSON.stringify(res)).toBe("applied");
+    const rows = await q<{ profile_id: string | null; workspace_id: string }>(
+      `select d.profile_id, d.workspace_id from profile_properties pp
+         join property_defs d on d.id = pp.property_def_id
+        where pp.profile_id = $1 and d.slug = 'website'`,
+      [DEAL]
+    );
+    expect(rows.rows).toEqual([{ profile_id: DEAL, workspace_id: WS }]);
+  });
+
+  it("a kind already bound to the global field gets no second `stage` (it would be hidden)", async () => {
+    const res = (await grantedHub().createPropertyDefs({
+      userId: USER,
+      workspaceId: WS,
+      profileId: NEED,
+      fields: [
+        {
+          slug: "stage",
+          valueType: "string",
+          constraints: { enum: FUNDING_STAGES },
+        },
+      ],
+    })) as { properties: Array<Record<string, unknown>> };
+    expect(res.properties[0]!.status).toBe("unchanged");
+    expect(res.properties[0]!.globalField).toBeUndefined();
+    expect((await linkedDefs(NEED, "stage")).map((d) => d.id)).toEqual([
+      GLOBAL_STAGE,
+    ]);
+    const owned = await q(
+      `select id from property_defs where slug = 'stage' and profile_id = $1`,
+      [NEED]
+    );
+    expect(owned.rows).toHaveLength(0);
   });
 });

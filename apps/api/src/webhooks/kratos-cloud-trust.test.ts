@@ -25,6 +25,7 @@ const cloudSession: KratosSessionLike = {
   authentication_methods: [{ method: "oidc", provider: "cp" }],
 };
 const passwordSession: KratosSessionLike = {
+  id: "kratos-session-1",
   identity: { id: ID },
   authentication_methods: [
     { method: "oidc", provider: "cp" },
@@ -45,6 +46,9 @@ function world(opts: {
   proofFactor?: boolean;
   grants?: number;
   notified?: string[];
+  /** "Add this device" (9 Nov 2026): the session the grants are bound to, and the keys the guard asked with. */
+  grantSession?: string;
+  askedWith?: Array<string | null>;
 }) {
   let grants = opts.grants ?? 0;
   const deps: CloudTrustHookDeps = {
@@ -56,7 +60,11 @@ function world(opts: {
     accountHasPodHeldFactor: async () => opts.podHeld ?? true,
     passkeyChange: {
       hasProofFactor: async () => opts.proofFactor ?? false,
-      redeemGrant: async () => {
+      redeemGrant: async (_identityId, sessionKey) => {
+        opts.askedWith?.push(sessionKey);
+        // As `redeemPasskeyChangeGrant`: no session, no grant.
+        if (!sessionKey) return false;
+        if (opts.grantSession && sessionKey !== opts.grantSession) return false;
         if (grants <= 0) return false;
         grants -= 1;
         return true;
@@ -192,6 +200,64 @@ describe("POST /settings/guard?method=passkey (W3 slice 3, founder decision 2)",
     expect((await passkey(w)).status).toBe(204);
     expect(notified).toEqual([ID]);
     expect((await passkey(w)).status).toBe(403);
+  });
+
+  it("GUARDRAIL: a grant is redeemed only by the session that obtained it (founder, 9 Nov 2026)", async () => {
+    const askedWith: Array<string | null> = [];
+    const w = world({
+      sessions: {
+        c1: passwordSession,
+        c2: { ...passwordSession, id: "kratos-session-2" },
+      },
+      proofFactor: true,
+      grants: 1,
+      grantSession: "kratos:kratos-session-1",
+      askedWith,
+    });
+    // Another session of the same person cannot spend it.
+    const other = await settings(
+      w,
+      { identity_id: ID, session_cookie: "c2" },
+      SECRET,
+      "/settings/guard?method=passkey"
+    );
+    expect(other.status).toBe(403);
+    // The session that obtained it can, once.
+    expect((await passkey(w)).status).toBe(204);
+    expect(askedWith).toEqual([
+      "kratos:kratos-session-2",
+      "kratos:kratos-session-1",
+    ]);
+  });
+
+  it("GUARDRAIL: with no session of this person (no cookie, or another person's), the guard asks with no key and refuses", async () => {
+    const askedWith: Array<string | null> = [];
+    // Cloud trusted for recovery, so the Cloud-only rule lets these through
+    // and the passkey check is what decides.
+    const w = world({
+      trust: "sign_in_recovery",
+      sessions: {
+        c9: { ...passwordSession, identity: { id: "someone-else" } },
+      },
+      proofFactor: true,
+      grants: 5,
+      askedWith,
+    });
+    const noCookie = await settings(
+      w,
+      { identity_id: ID },
+      SECRET,
+      "/settings/guard?method=passkey"
+    );
+    const foreign = await settings(
+      w,
+      { identity_id: ID, session_cookie: "c9" },
+      SECRET,
+      "/settings/guard?method=passkey"
+    );
+    expect(noCookie.status).toBe(403);
+    expect(foreign.status).toBe(403);
+    expect(askedWith).toEqual([null, null]);
   });
 
   it("the first passkey needs no proof (no factor yet); other methods are not asked", async () => {

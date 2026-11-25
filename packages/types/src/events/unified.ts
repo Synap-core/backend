@@ -309,6 +309,12 @@ export const DOMAIN_SUBJECT_TYPES = [
   // activator compiles to the attach (R1, `buildEventPattern`); its actions
   // are domain verbs, not CRUD, hence this list.
   "entity_facet",
+  // A playbook run's status moved (`setRunStatus`):
+  // `playbook_run.transition.completed`.
+  "playbook_run",
+  // An owed slot's derived status moved (the slot doors):
+  // `slot.transition.completed`, subject `<session id>/<slot key>`.
+  "slot",
 ] as const;
 
 export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];
@@ -327,7 +333,9 @@ export type DomainSubjectType = (typeof DOMAIN_SUBJECT_TYPES)[number];
  * nothing more.
  */
 const SUBJECT_EXTRA_ACTIONS: Record<string, readonly string[]> = {
-  proposal: ["approved", "created", "rejected"],
+  // `transition`: a proposal's status moved (`transitionProposal`),
+  // `proposal.transition.completed`.
+  proposal: ["approved", "created", "rejected", "transition"],
   user: ["updated"],
   // A key is revoked or replaced, never "deleted" / "updated" (`api-keys.ts`).
   apiKey: ["revoke", "rotate"],

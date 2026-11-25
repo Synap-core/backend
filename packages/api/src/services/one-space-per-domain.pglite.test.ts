@@ -140,7 +140,12 @@ async function seed(opts: {
 }
 
 beforeAll(async () => {
-  for (const t of [schema.workspaces, schema.workspaceMembers]) {
+  for (const t of [
+    schema.workspaces,
+    schema.workspaceMembers,
+    schema.users,
+    schema.apiKeys,
+  ]) {
     await h.client!.exec(ddlFor(t as unknown as PgTable));
   }
   await h.client!.exec(M0308);

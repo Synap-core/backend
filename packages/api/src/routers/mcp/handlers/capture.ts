@@ -13,9 +13,11 @@ import {
   deriveWorkspacePlacementView,
   type CapturePlacement,
   type CaptureStructureRouting,
+  type IsFailureAction,
 } from "@synap-core/types";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { createHash } from "crypto";
+import { shortenTitle } from "@synap-core/types/titles";
 import {
   TITLE_HARD_MAX,
   lintTitle,
@@ -38,10 +40,8 @@ import {
 import { resolveCaptureProjectRef } from "../../../services/capture-agent/resolve-capture-project.js";
 import { logger } from "../../hub-protocol/rest/_shared.js";
 import { toolError } from "../tool-errors.js";
-import {
-  describeAiFailure,
-  type AiFailureClass,
-} from "../../../utils/ai-failure.js";
+import type { AiFailureClass } from "../../../utils/ai-failure.js";
+import { describeDegradedCapture } from "../../../services/capture-agent/capture-degraded-guidance.js";
 import { ownerPrivateVisibleWhere } from "../../../utils/user-visible-where.js";
 import { accessScopeWhere } from "../../../utils/project-scope.js";
 import { validateCaptureGraphRefs } from "../../hub-protocol/rest/_capture-graph-dedup.js";
@@ -77,7 +77,24 @@ import {
   materializedReceiptState,
 } from "../../../services/capture-agent/capture-receipt-state.js";
 import { readStoredProposalScope } from "../../../services/capture-agent/stored-capture-scope.js";
-import { captureSkillStepProblems } from "../../../services/capture-agent/capture-plan.js";
+import {
+  routeSingleEntityCapture,
+  captureStatusForCreateState,
+} from "../../../services/capture-agent/single-entity-create.js";
+import { createEntityData } from "./entity.js";
+import {
+  CAPTURE_PLAN_KEYS,
+  captureSkillStepProblems,
+} from "../../../services/capture-agent/capture-plan.js";
+import { findLinkByMatches } from "../../../services/capture-agent/capture-table-links.js";
+import {
+  expandCaptureTable,
+  linkByValues,
+  parseCaptureTable,
+  tableHasUnlinkedCells,
+  type ExpandedCaptureTable,
+} from "../../../services/capture-agent/capture-table.js";
+import { buildImportTitle } from "../../../import/import-title.js";
 import type { PendingTextMatch } from "../../../utils/pending-capture-dedup.js";
 
 /** How many new entity titles the pending text scan reads, and how many matches it returns. */
@@ -125,6 +142,41 @@ export function pendingMatchesAdvice(
     : {};
 }
 
+/**
+ * An `entities[]` item named the way the caller knows it: its own `ref`, else
+ * its position (and title). The auto-assigned ref (`e0`) is never shown — the
+ * caller never sent it (ticket 8215c66a).
+ */
+function entityNamed(
+  e: Record<string, unknown>,
+  index: number,
+  callerRef: unknown
+): string {
+  if (typeof callerRef === "string" && callerRef)
+    return `entity '${callerRef}'`;
+  const title =
+    typeof e.title === "string" && e.title
+      ? ` ("${shortenTitle(e.title, 60)}")`
+      : "";
+  return `entities[${index}]${title}`;
+}
+
+/** The field names an entity is often sent with that this door does not read. */
+function misnamedFieldHint(e: Record<string, unknown>): string {
+  const hints: string[] = [];
+  for (const k of ["type", "kind"] as const) {
+    if (typeof e[k] === "string" && e[k]) {
+      hints.push(
+        `you sent \`${k}: "${String(e[k])}"\`: the field is \`profileSlug\``
+      );
+    }
+  }
+  if (e.key !== undefined && e.ref === undefined) {
+    hints.push("`key` is not read: name an entity with `ref`");
+  }
+  return hints.length > 0 ? ` (${hints.join("; ")})` : "";
+}
+
 const captureHandler: McpToolHandler = async (
   ctx: McpToolContext
 ): Promise<CallToolResult> => {
@@ -143,35 +195,65 @@ const captureHandler: McpToolHandler = async (
 
   const captureRawText = typeof args.text === "string" ? args.text : "";
   const captureNormalizedText = normalizeCaptureText(captureRawText);
-  const captureEntities = Array.isArray(args.entities)
-    ? (args.entities as Array<Record<string, unknown>>)
-    : [];
-  const captureRelations = Array.isArray(args.relations)
-    ? (args.relations as Array<Record<string, unknown>>)
-    : [];
-  // CONNECTED PLAN steps (sessions / documents / projects / links) and the
-  // Rule Loop config steps (skills / automations / rules). Each is
-  // shape-checked door-locally (an object), then validated in full — refs,
-  // cycles, limits, ownership, evidence — by the shared preflight.
-  const planArg = (
-    key:
-      | "sessions"
-      | "documents"
-      | "projects"
-      | "links"
-      | "skills"
-      | "automations"
-      | "rules"
-  ) => (Array.isArray(args[key]) ? (args[key] as unknown[]) : []);
-  const capturePlanRaw = {
-    sessions: planArg("sessions"),
-    documents: planArg("documents"),
-    projects: planArg("projects"),
-    links: planArg("links"),
-    skills: planArg("skills"),
-    automations: planArg("automations"),
-    rules: planArg("rules"),
-  };
+  // `table` (ticket a8884743): rows of ONE kind as columns, expanded here into
+  // the SAME entities[] + relations[] graph (one proposal); `linkBy` cells
+  // become links to existing entities matched exactly. Refused whole, every
+  // problem at once, when its shape is wrong or it exceeds the row cap.
+  let captureTable: ExpandedCaptureTable | null = null;
+  if (args.table !== undefined) {
+    const parsed = parseCaptureTable(args.table);
+    if (!parsed.ok) {
+      return ok({
+        ...(args.validate === true ? { status: "invalid", dryRun: true } : {}),
+        error: parsed.problems.join("; "),
+        problems: parsed.problems,
+        ...(parsed.limit ? { limit: parsed.limit } : {}),
+      });
+    }
+    const { table } = parsed;
+    const matches = await Promise.all(
+      table.linkBy.map((linkBy) =>
+        findLinkByMatches(db, {
+          userId,
+          linkBy,
+          values: linkByValues(table, linkBy),
+        })
+      )
+    );
+    captureTable = expandCaptureTable(table, matches);
+  }
+  const tableReply = captureTable
+    ? {
+        table: captureTable.report,
+        ...(tableHasUnlinkedCells(captureTable.report)
+          ? {
+              tableNote:
+                "Some linkBy cells matched no entity (`unmatched`) or several (`ambiguous`): those rows are written without that link. Fix the cell and re-send, or link them afterwards with synap_link_entities.",
+            }
+          : {}),
+      }
+    : {};
+  const captureEntities: Array<Record<string, unknown>> = [
+    ...(Array.isArray(args.entities)
+      ? (args.entities as Array<Record<string, unknown>>)
+      : []),
+    ...(captureTable?.entities ?? []),
+  ];
+  const captureRelations: Array<Record<string, unknown>> = [
+    ...(Array.isArray(args.relations)
+      ? (args.relations as Array<Record<string, unknown>>)
+      : []),
+    ...(captureTable?.relations ?? []),
+  ];
+  // Every plan step array (`CAPTURE_PLAN_KEYS`, the list the REST door reads
+  // too). Each is shape-checked door-locally (an object), then validated in
+  // full — refs, cycles, limits, ownership, evidence — by the shared preflight.
+  const capturePlanRaw = Object.fromEntries(
+    CAPTURE_PLAN_KEYS.map((key) => [
+      key,
+      Array.isArray(args[key]) ? (args[key] as unknown[]) : [],
+    ])
+  ) as Record<(typeof CAPTURE_PLAN_KEYS)[number], unknown[]>;
   const capturePlanShapeProblems: string[] = [];
   for (const [key, items] of Object.entries(capturePlanRaw)) {
     items.forEach((item, i) => {
@@ -310,18 +392,19 @@ const captureHandler: McpToolHandler = async (
     // `declaredRefs` are additive.
     const dryRun = args.validate === true;
     const problems: string[] = [...capturePlanShapeProblems];
-    for (const e of graphEntities) {
+    graphEntities.forEach((e, i) => {
+      // Named the way the CALLER knows it: its own `ref`, else its position
+      // and title — never the auto-assigned `e0` it never sent (8215c66a).
+      const named = entityNamed(e, i, captureEntities[i]?.ref);
       if (typeof e.profileSlug !== "string" || !e.profileSlug) {
         problems.push(
-          `entity '${e.ref}' needs a \`profileSlug\` — discover slugs with synap_list_profiles`
+          `${named} needs a \`profileSlug\` — discover slugs with synap_list_profiles${misnamedFieldHint(captureEntities[i] ?? e)}`
         );
       }
       if (typeof e.title === "string" && e.title.length > TITLE_HARD_MAX) {
-        problems.push(
-          `entity '${e.ref}': ${titleTooLongReason(e.title.length)}`
-        );
+        problems.push(`${named}: ${titleTooLongReason(e.title.length)}`);
       }
-    }
+    });
     // The title rubric per entity — stored as sent, reported so the writer
     // can rewrite. Same rubric as the create_entity receipt.
     const titleLint = graphEntities.flatMap((e) => {
@@ -380,6 +463,20 @@ const captureHandler: McpToolHandler = async (
           : {}),
       });
     }
+
+    // A table with no summary of the caller's is titled by what approving it
+    // creates ("Import 57 expenses and 55 links, linking 50 already in your
+    // pod"), through the one import-title derivation, never by its first row.
+    const tableSummary = captureTable
+      ? buildImportTitle([
+          ...graphEntities.map((e) => ({
+            op: "create_entity",
+            profileSlug: e.profileSlug,
+            existingEntityId: e.existingEntityId,
+          })),
+          ...shapedRelations.map(() => ({ op: "create_relation" })),
+        ])
+      : null;
 
     // The RAW requested id, not the dropped-on-failure lens: a placement pin
     // must fail loud (Forbidden, below) rather than silently land pod-wide.
@@ -669,6 +766,11 @@ const captureHandler: McpToolHandler = async (
           : "NOT written — fix every problem below, then re-send without `validate`.",
         entityCount: checked.entityCount,
         relationCount: checked.relationCount,
+        ...tableReply,
+        // What the review card will be titled when the caller sent no summary.
+        ...(tableSummary && !(typeof args.summary === "string" && args.summary)
+          ? { summary: tableSummary }
+          : {}),
         ...(relationsFailed.length ? { relationsFailed } : {}),
         ...(invalidEntities.length ? { invalidEntities } : {}),
         // Advisory: a title the rubric flags still writes, so it never makes
@@ -684,7 +786,7 @@ const captureHandler: McpToolHandler = async (
           ? {
               unmodeledProperties: checked.unmodeledProperties,
               unmodeledHint:
-                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given, or to a key from `modeledFields`.",
+                "These property keys are not modelled by their profile: they would be stored verbatim and nothing reads them. Rename each to its `didYouMean` where one is given, or to a key from `modeledFields`. A `movedTo` key is already stored under that field.",
             }
           : {}),
         // What each kind in the graph DOES model (key, type, options, limits,
@@ -701,6 +803,91 @@ const captureHandler: McpToolHandler = async (
       });
     }
 
+    // ── ONE PLAIN ENTITY → the TYPED CREATE door ─────────────────────────
+    // A single entity with no relation, plan step, link or text provenance is
+    // not a graph: it is filed the way `synap_create_entity` files it (a
+    // `create` proposal on target `entity`, "Create Decision ..."), so the
+    // review queue stops filling with `import.graph` requests. The write is the
+    // typed door's own (`createEntityData`): its dedup, governance, facets,
+    // long-content-to-document and placement. Everything that cannot ride it
+    // stays on the graph below; the reasons are in `routeSingleEntityCapture`.
+    const singleRoute = routeSingleEntityCapture({
+      entities: graphEntities,
+      relationCount: captureRelations.length,
+      planStepCount: capturePlanStepCount,
+      text: captureNormalizedText,
+    });
+    if (singleRoute.route === "typed-create") {
+      const created = await createEntityData({
+        ...ctx,
+        args: {
+          ...singleRoute.args,
+          // The typed door files into a project only for a truthy id.
+          projectId: captureProjectId ?? undefined,
+          ...(typeof args.summary === "string" && args.summary
+            ? { reasoning: args.summary }
+            : {}),
+        },
+      });
+      const createReceipt = (created.writeReceipt ?? {}) as {
+        state?: "pending" | "applied" | "partial" | "no_effect";
+        projectId?: string;
+        effectiveWorkspaceId?: string | null;
+      };
+      const state = createReceipt.state;
+      const createdId = typeof created.id === "string" ? created.id : undefined;
+      const createdProposalId =
+        typeof created.proposalId === "string" ? created.proposalId : undefined;
+      // Scope is READ OFF what the write stored (as the graph lane does): a
+      // proposal row carries the session and project its insert derived.
+      let createdScope: CaptureScope = {
+        workspaceId: createReceipt.effectiveWorkspaceId ?? null,
+        projectId: createReceipt.projectId ?? scopeProjectId,
+        sessionId: sessionId ?? null,
+      };
+      if (state === "pending" && createdProposalId) {
+        const stored = await readStoredProposalScope(db, {
+          userId,
+          proposalIds: [createdProposalId],
+        });
+        if (stored.status === "read") createdScope = stored.scope;
+      }
+      let createPendingMatches: PendingTextMatch[] = [];
+      try {
+        const { findPendingTextMatches } =
+          await import("../../../utils/pending-capture-dedup.js");
+        createPendingMatches = await findCapturePendingMatches(
+          (query) =>
+            findPendingTextMatches(db, {
+              userId,
+              query,
+              limit: PENDING_MATCH_LIMIT,
+            }),
+          graphEntities
+        );
+      } catch (err) {
+        logger.warn({ err, userId }, "capture: pending text scan failed");
+      }
+      return ok({
+        ...created,
+        status: captureStatusForCreateState(state),
+        entityCount: 1,
+        relationCount: 0,
+        ...tableReply,
+        applied: state === "applied" || state === "partial",
+        scope: createdScope,
+        sessionId: createdScope.sessionId,
+        ...(createdId && (state === "applied" || state === "partial")
+          ? { entityIds: [createdId] }
+          : {}),
+        ...(crossKindLinks.length
+          ? { links: { proposed: crossKindLinks } }
+          : {}),
+        ...(titleLint.length ? { titleLint } : {}),
+        ...pendingMatchesAdvice(createPendingMatches, createdProposalId),
+      });
+    }
+
     const { submitCaptureGraph } =
       await import("../../../services/capture-agent/submit-capture-graph.js");
     const { buildCaptureNarrativeSummary } =
@@ -708,10 +895,12 @@ const captureHandler: McpToolHandler = async (
     const graphSummary =
       typeof args.summary === "string" && args.summary
         ? args.summary
-        : buildCaptureNarrativeSummary({
-            sourceLabel: "Agent capture",
-            instruction: captureRawText,
-          });
+        : tableSummary
+          ? tableSummary
+          : buildCaptureNarrativeSummary({
+              sourceLabel: "Agent capture",
+              instruction: captureRawText,
+            });
 
     // AGENT-MODE routing (piece A): submitCaptureGraph derives the terminal
     // from identity + policy. We pass the acting `agentUserId` so the core
@@ -886,6 +1075,7 @@ const captureHandler: McpToolHandler = async (
       // Always recorded now: a failed room still staged the text sessionless,
       // and the session error rides `intake.errors`.
       intake: graphIntake.intake,
+      ...tableReply,
       ...(crossKindLinks.length ? { links: { proposed: crossKindLinks } } : {}),
       ...(titleLint.length ? { titleLint } : {}),
       ...pendingMatchesAdvice(pendingMatches, graphResult.proposalId),
@@ -1062,22 +1252,18 @@ const captureHandler: McpToolHandler = async (
     (structured as { degraded?: boolean }).degraded === true;
   const degradedReason = (structured as { degradedReason?: string })
     .degradedReason;
-  // `degradedDetail.failureClass` is the class the pod read off the failure
-  // itself (a 402 is `quota`, never retried). A plan the IS itself marked
-  // degraded carries only `degradedReason`, mapped onto the shared failure
-  // classes rather than re-deriving one.
-  const degradedFailureClass = (
-    structured as { degradedDetail?: { failureClass?: AiFailureClass } }
-  ).degradedDetail?.failureClass;
+  // The words and the retry verdict: the one composer every capture door uses.
   const degradedFailure = degradedCapture
-    ? describeAiFailure(
-        degradedFailureClass ??
-          (degradedReason === "is_auth_error"
-            ? "auth"
-            : degradedReason === "is_invalid_response" ||
-                degradedReason === "is_empty_result"
-              ? "invalid_response"
-              : "unknown")
+    ? describeDegradedCapture(
+        degradedReason,
+        (
+          structured as {
+            degradedDetail?: {
+              failureClass?: AiFailureClass;
+              action?: IsFailureAction;
+            };
+          }
+        ).degradedDetail
       )
     : null;
   // The records the raw text names by email or phone, matched on the degraded

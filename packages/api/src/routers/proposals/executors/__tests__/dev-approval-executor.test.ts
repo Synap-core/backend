@@ -58,6 +58,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       select: () => ({
         from: (table: unknown) => ({
           where: () => {
@@ -253,13 +258,15 @@ describe("registration", () => {
 });
 
 describe("apply stamps the session", () => {
-  it("plan approval records the decision and advances the stage", async () => {
+  it("plan approval records the decision; no stage names the gate, so the stage is left as it stands", async () => {
     const result = await executor("focus_session/dev.plan_approval").execute(
       args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
     );
 
     const values = sessionUpdate();
-    expect(values.currentStage).toBe("plan_approved");
+    // W6 (finding 9351820d): never the legacy `plan_approved` stamp.
+    expect(values).not.toHaveProperty("currentStage");
+    expect(values).not.toHaveProperty("stageHistory");
     // `metadata` is a drizzle SQL fragment (the JSONB `||` merge), and the
     // stamp is serialized INTO it — assert on the serialized parameter rather
     // than a plain object, so a regression to a clobbering `.set({metadata: {}})`
@@ -281,6 +288,7 @@ describe("apply stamps the session", () => {
 
   it("records the stage it entered in the stage ledger (0382), in the same UPDATE", async () => {
     sessionRow = { ...sessionRow!, currentStage: "plan" };
+    runSnapshot = { stages: DEV_METHOD_STAGES };
     await executor("focus_session/dev.plan_approval").execute(
       args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
     );
@@ -296,13 +304,14 @@ describe("apply stamps the session", () => {
           : String(c)
       )
       .join("");
-    expect(text).toContain('"stageKey":"plan_approved"');
+    expect(text).toContain('"stageKey":"build"');
     expect(text).toContain('"fromStage":"plan"');
     expect(text).toContain('"via":"approval"');
   });
 
   it("appends no ledger entry when the approval leaves the stage where it was", async () => {
-    sessionRow = { ...sessionRow!, currentStage: "plan_approved" };
+    sessionRow = { ...sessionRow!, currentStage: "build" };
+    runSnapshot = { stages: DEV_METHOD_STAGES };
     await executor("focus_session/dev.plan_approval").execute(
       args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
     );
@@ -316,7 +325,7 @@ describe("apply stamps the session", () => {
     );
 
     const values = sessionUpdate();
-    expect(values.currentStage).toBe("deploy_approved");
+    expect(values).not.toHaveProperty("currentStage");
     const metadataSql = metadataSqlText(values);
     expect(metadataSql).toContain("0a1b2c3d4e5f60718293");
     expect(metadataSql).toContain("pod-prod (eve)");
@@ -440,7 +449,7 @@ describe("SOURCE SCAN — the executor can never run a command", () => {
 });
 
 // ── The ONE stage rule: a session that follows a staged playbook advances to
-// the stage AFTER the gate stage; otherwise the legacy stamp. ────────────────
+// the stage AFTER the gate stage; otherwise no stage move. ──────────────────────
 
 const DEV_METHOD_STAGES = [
   { key: "intake", name: "Intake" },
@@ -478,12 +487,14 @@ describe("approval advances a staged session to the stage after the gate", () =>
     expect(sessionUpdate().currentStage).toBe("done");
   });
 
-  it("a playbook that does not name the gate keeps the legacy stamp", async () => {
+  it("a playbook that does not name the gate: the approval moves no stage (never the legacy stamp)", async () => {
+    sessionRow = { ...sessionRow!, currentStage: "b" };
     runSnapshot = { stages: [{ key: "a" }, { key: "b" }] };
     await executor(`focus_session/${DEV_PLAN_APPROVAL_TYPE}`).execute(
       args(DEV_PLAN_APPROVAL_TYPE, PLAN_PAYLOAD)
     );
-    expect(sessionUpdate().currentStage).toBe("plan_approved");
+    expect(sessionUpdate()).not.toHaveProperty("currentStage");
+    expect(sessionUpdate()).not.toHaveProperty("stageHistory");
   });
 
   it("approval hands the decision to the external-agent loop back, once", async () => {

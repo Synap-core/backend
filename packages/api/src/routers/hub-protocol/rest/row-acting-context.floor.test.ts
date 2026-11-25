@@ -80,6 +80,12 @@ vi.mock("../../../services/focus-sessions/delegate-output.js", () => ({
     return { status: "not_found" };
   },
 }));
+vi.mock("../../../services/focus-sessions/claim-output.js", () => ({
+  claimSessionOutput: async () => {
+    reach("claim");
+    return { status: "not_found" };
+  },
+}));
 vi.mock("../../../services/focus-sessions/block-output.js", async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   blockExpectedOutput: async () => {
@@ -190,6 +196,14 @@ const DOORS: Door[] = [
     path: `/focus-sessions/${ID}/outputs/block`,
     body: { expectedLabel: "Draft", blockedReason: BLOCKED_REASONS[0] },
     step: "block",
+    notFound: `Focus session ${ID} not found`,
+  },
+  {
+    name: "POST /focus-sessions/:id/outputs/complete",
+    method: "POST",
+    path: `/focus-sessions/${ID}/outputs/complete`,
+    body: { output: "Draft" },
+    step: "claim",
     notFound: `Focus session ${ID} not found`,
   },
   {

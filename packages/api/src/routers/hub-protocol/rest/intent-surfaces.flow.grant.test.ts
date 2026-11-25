@@ -91,6 +91,31 @@ vi.mock("../../../services/lifecycle/board.js", async (importOriginal) => ({
   }),
 }));
 
+// The blockers read is proven in `flow-read.pglite.test.ts`; here the door
+// must carry what it returns onto the card.
+vi.mock("../../../services/status/thing-blockers.js", () => ({
+  readThingBlockers: async () =>
+    new Map([
+      [
+        "e1",
+        {
+          blocked: true,
+          count: 1,
+          why: {
+            reason: "input",
+            waitKind: "answer",
+            blockedReason: "decision",
+            blockerKey: null,
+          },
+          ball: "me",
+          unlocks: null,
+          clearedBy: { answer: true },
+          ref: null,
+        },
+      ],
+    ]),
+}));
+
 import { runWithGrant, type KeyGrant } from "@synap/database";
 import { restDoorAllowed } from "../../../access/grant-door-fence.js";
 import { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
@@ -143,7 +168,13 @@ describe("GET /flow for a grant-bounded pod app", () => {
           key: "new",
           count: 1,
           owners: [],
-          cards: [{ id: "e1", profileSlug: "deal", blocker: null }],
+          cards: [
+            {
+              id: "e1",
+              profileSlug: "deal",
+              blocker: { blocked: true, ball: "me", why: { reason: "input" } },
+            },
+          ],
         },
       ],
       flows: [],

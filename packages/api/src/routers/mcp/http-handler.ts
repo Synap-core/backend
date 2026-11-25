@@ -47,6 +47,7 @@ import {
   type HubRateLimitCause,
 } from "../../utils/hub-protocol-rate-limit.js";
 import { tools, openWorldToolNames } from "./tools/index.js";
+import { effectiveToolCall } from "./call-tool-name.js";
 import {
   classifyMcpToolCall,
   REQUEST_TIMEOUT,
@@ -55,6 +56,8 @@ import {
   UNCOUNTED_KEY_TYPES,
 } from "../../middleware/hub-request-guard.js";
 import { createMCPServer, groundingBudgetBytes } from "./index.js";
+import { readAiAvailabilityFor } from "../../services/ai-availability/read.js";
+import { aiAvailabilityAgentLine } from "../../services/ai-availability/for-agents.js";
 import { resolveUiRendererFromDb } from "./ui-tools.js";
 import { loadKeyToolAccess } from "./tool-access.js";
 import { resolveIssuer } from "../oauth/config.js";
@@ -142,8 +145,8 @@ export function formatGrounding(
   // Concept prose lives in the reflexes + lenses skill; grounding carries the
   // live facts and the one rule a model applies to them.
   const rules =
-    ` For READS omit workspaceId for pod-wide recall.` +
-    ` For WRITES pass kind/profile (+ roles as facets); omit workspaceId unless you deliberately pin one space.`;
+    ` Pin workspaceId only on purpose; writes: kind + roles as facets;` +
+    ` a session's space comes from its playbook, subject, parent session, project or your focus.`;
 
   for (let n = Math.min(ranked.length, GROUNDING_WS_LIMIT); n >= 0; n--) {
     const shown = ranked.slice(0, n);
@@ -185,14 +188,20 @@ export async function buildGrounding(
       .from(projects)
       .where(eq(projects.userId, userId));
     const projNames = projRows.map((p) => p.name).filter(Boolean);
+    // AI not available leads (one line, only then): an agent that knows it
+    // points the person at it instead of retrying. Best-effort like the rest.
+    const aiLine = await readAiAvailabilityFor(userId)
+      .then((view) => aiAvailabilityAgentLine(view))
+      .catch(() => "");
     const projPart =
-      projNames.length === 0
+      (aiLine ? `${aiLine} ` : "") +
+      (projNames.length === 0
         ? ""
         : projNames.length <= 6
           ? `Projects (commitments): ${projNames.join(", ")}. `
-          : `${projNames.length} projects (commitments). `;
+          : `${projNames.length} projects (commitments). `);
     if (wsIds.length === 0) {
-      if (projNames.length === 0) return undefined;
+      if (!projPart) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
     const wsRows = await db
@@ -201,7 +210,7 @@ export async function buildGrounding(
       .where(inArray(workspaces.id, wsIds));
     const named = wsRows.filter((w) => Boolean(w.name));
     if (named.length === 0) {
-      if (projNames.length === 0) return undefined;
+      if (!projPart) return undefined;
       return `${projPart}No workspaces yet. Tools default to pod-wide scope.`;
     }
 
@@ -583,7 +592,10 @@ mcpHttpApp.post("/", async (c) => {
     (parsedBody as { method?: string } | null)?.method === "initialize";
   const transport = new WebStandardStreamableHTTPServerTransport({
     sessionIdGenerator: isInitialize ? () => randomUUID() : undefined,
-    enableJsonResponse: true, // prefer SSE when client accepts it, fall back to JSON otherwise
+    // Always a JSON answer, never an SSE stream, whatever the client's Accept.
+    // It also DROPS request-related notifications (`list_changed` from
+    // `synap_load_skill`): `synap_call_tool` runs an unlocked tool instead.
+    enableJsonResponse: true,
   });
   // A LOCAL agent's client (the synap stdio bridge) names its OWN conversation
   // (`X-Synap-Conversation`, e.g. `claude-code:<id>`) — the one a person can
@@ -728,16 +740,18 @@ mcpHttpApp.post("/", async (c) => {
   // The Hub request guard (`middleware/hub-request-guard.ts`): a call still
   // running after 30 s answers 503 REQUEST_TIMEOUT, and a key already running
   // 32 calls gets 429. A long-poll tool, a model call and an open-world tool
-  // are never timed out.
+  // are never timed out. A `synap_call_tool` call is judged, and labelled, by
+  // the tool it runs (`effectiveToolCall`), as the tools/call door does.
   const rpc = parsedBody as {
     id?: unknown;
     method?: string;
-    params?: { name?: unknown };
+    params?: { name?: unknown; arguments?: unknown };
   } | null;
-  const toolName =
-    rpc?.method === "tools/call" && typeof rpc.params?.name === "string"
-      ? rpc.params.name
+  const calledName =
+    rpc?.method === "tools/call"
+      ? effectiveToolCall(rpc.params?.name, rpc.params?.arguments).name
       : undefined;
+  const toolName = typeof calledName === "string" ? calledName : undefined;
   const rpcId = rpc?.id ?? null;
   return runGuarded(
     {

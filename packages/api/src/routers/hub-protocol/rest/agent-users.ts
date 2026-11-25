@@ -312,19 +312,23 @@ export function registerAgentUsersRoutes(app: HubHono): void {
           role: workspaceMembers.role,
         })
         .from(users)
+        // An agent is never a member: it is where its person is.
         .innerJoin(
           workspaceMembers,
           and(
-            eq(workspaceMembers.userId, users.id),
+            eq(workspaceMembers.userId, users.createdByUserId),
             inArray(workspaceMembers.workspaceId, accessibleWsIds)
           )
         )
         .where(and(eq(users.userType, "agent"), notAnAppAgent(users.id)));
+      // One row per agent, though its person sits in several of these spaces.
+      const seen = new Set<string>();
+      const agents = results.filter((r) => !seen.has(r.id) && !!seen.add(r.id));
       const dispatch = await loadAgentDispatchSummaries(
-        results.map((r) => r.id)
+        agents.map((r) => r.id)
       );
       return c.json(
-        results.map((r) => ({
+        agents.map((r) => ({
           ...r,
           reach: dispatch.get(r.id)?.reach ?? "pull",
           binding: dispatch.get(r.id)?.binding ?? null,
@@ -511,6 +515,9 @@ export function registerAgentUsersRoutes(app: HubHono): void {
             action: "update",
             workspaceId,
             projectId,
+            // The target project, found by `setAgentAssignment`: a stored
+            // place, not a lens (`grant-write-check.ts`).
+            ...(projectId ? { storedProjectIds: [projectId] } : {}),
           });
           if (denial) {
             throw new TRPCError({

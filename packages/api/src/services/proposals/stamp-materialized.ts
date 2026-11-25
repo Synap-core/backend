@@ -55,7 +55,8 @@ import {
   safeFailureSentence,
   type ProposalFailureMeta,
 } from "../../routers/proposals/failure-classification.js";
-import { redactForStorage } from "../../utils/redact-secrets.js";
+import { redactForStorage, redactSecrets } from "../../utils/redact-secrets.js";
+import { recordProposalFault } from "../server-faults/record.js";
 import {
   SESSION_UNDO_COLUMNS,
   type SessionUndoColumn,
@@ -67,21 +68,14 @@ const logger = createLogger({ module: "stamp-materialized" });
 
 /**
  * The complete created-rows record. Extends the shared
- * `ProposalMaterializedRecord` (`@synap-core/types`) with the fields only the
- * api writes and reads today.
+ * `ProposalMaterializedRecord` (`@synap-core/types`, which carries every id
+ * list a reader needs) with the fields only the api writes and reads.
  */
 export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   /** Facets attached by the run (revert re-checks each row's lineage). */
   facetIds?: string[];
-  /** Rule Loop config rows created by the run. */
-  skillIds?: string[];
-  automationIds?: string[];
-  /** Rules are `skills` rows (`kind: "rule"`). */
-  ruleIds?: string[];
-  /** DRAFT playbooks created by `create_playbook` ops (revert archives them). */
-  playbookIds?: string[];
-  /** Lists created by `create_view` ops (revert deletes them while untouched). */
-  viewIds?: string[];
+  /** Renderer bindings a `bind_renderer` op wrote (revert revokes them while active). */
+  rendererBindingIds?: string[];
   /**
    * Body documents created WITH an entity. They ride the entity's soft delete
    * (a restored entity keeps its body), so revert never deletes them on their
@@ -90,10 +84,14 @@ export interface CompleteMaterializedRecord extends ProposalMaterializedRecord {
   entityDocumentIds?: string[];
   /** What merges overwrote on PRE-EXISTING entities, with prior values. */
   propertyDiffs?: EntityPropertyDiff[];
-  /** Connected plan: focus sessions, projects and session edges created by the run. */
-  sessionIds?: string[];
-  projectIds?: string[];
+  /** Connected plan: session edges created by the run. */
   linkIds?: string[];
+  /**
+   * Goals a plan started (`create_track`). A failed plan's compensation drops
+   * them (`plan-callers.ts`); like the plan's sessions, a later whole revert
+   * does not.
+   */
+  trackIds?: string[];
   /** projectId → the subject entity the run bound it to (its own edge, see safe-revert). */
   projectSubjectIds?: Record<string, string>;
   /**
@@ -212,11 +210,18 @@ export interface MaterializedOpRecord {
     | "create_automation"
     | "create_rule"
     | "create_playbook"
+    | "create_workspace"
+    | "define_kind"
+    | "declare_lifecycle"
     | "create_view"
+    | "create_cell"
+    | "bind_renderer"
     | "create_session"
     | "create_document"
     | "create_project"
     | "create_link"
+    | "create_track"
+    | "update_session"
     | UpdateOpName;
   entityId?: string;
   linked?: boolean;
@@ -226,14 +231,26 @@ export interface MaterializedOpRecord {
   skillId?: string;
   automationId?: string;
   ruleId?: string;
-  /** `create_playbook`: the DRAFT playbook it created. */
+  /** `create_playbook`: the playbook it created. */
   playbookId?: string;
+  /** `create_workspace`: the space it created. */
+  workspaceId?: string;
+  /** `define_kind` / `declare_lifecycle`: the kind. */
+  profileId?: string;
+  /** `declare_lifecycle`: the status field it declared. */
+  propertyDefId?: string;
   /** `create_view`: the List it created. */
   viewId?: string;
+  /** `create_cell`: the cell row it created. */
+  cellId?: string;
+  /** `bind_renderer`: the binding row it wrote. */
+  rendererBindingId?: string;
   sessionId?: string;
   projectId?: string;
   documentId?: string;
   linkId?: string;
+  /** `create_track`: the goal it started. */
+  trackId?: string;
   /**
    * `update_*`: the row it changed and the fields' values before and after
    * (`{before, patch}` — `after` is the patch as it landed). An
@@ -279,12 +296,20 @@ type RecordSource = Pick<MaterializeResult, "entities" | "relations"> &
       | "automations"
       | "rules"
       | "playbooks"
+      | "workspaces"
+      | "kinds"
+      | "lifecycles"
       | "views"
+      | "cells"
+      | "renderers"
       | "updates"
       | "projects"
       | "sessions"
       | "links"
       | "documents"
+      | "tracks"
+      | "crossLinks"
+      | "sessionUpdates"
     >
   >;
 
@@ -403,9 +428,25 @@ function planRecordFields(
   // leaves them behind. Present only when the run made some.
   const playbookIds = unique((result.playbooks ?? []).map((p) => p.playbookId));
   const viewIds = unique((result.views ?? []).map((v) => v.viewId));
+  const cellIds = unique(
+    (result.cells ?? []).filter((c) => c.created).map((c) => c.cellId)
+  );
+  const rendererBindingIds = unique(
+    (result.renderers ?? []).map((r) => r.bindingId)
+  );
+  const workspaceIds = unique(
+    (result.workspaces ?? []).filter((w) => !w.linked).map((w) => w.workspaceId)
+  );
+  const profileIds = unique(
+    (result.kinds ?? []).filter((k) => !k.linked).map((k) => k.profileId)
+  );
   const configRows: Partial<CompleteMaterializedRecord> = {
+    ...(workspaceIds.length > 0 ? { workspaceIds } : {}),
+    ...(profileIds.length > 0 ? { profileIds } : {}),
     ...(playbookIds.length > 0 ? { playbookIds } : {}),
     ...(viewIds.length > 0 ? { viewIds } : {}),
+    ...(cellIds.length > 0 ? { cellIds } : {}),
+    ...(rendererBindingIds.length > 0 ? { rendererBindingIds } : {}),
   };
   return { ...configRows, ...planOnlyRecordFields(result) };
 }
@@ -417,12 +458,21 @@ function planOnlyRecordFields(
   const projects = result.projects ?? [];
   const links = result.links ?? [];
   const documents = result.documents ?? [];
+  const tracks = result.tracks ?? [];
+  const crossLinks = result.crossLinks ?? [];
   if (
-    sessions.length + projects.length + links.length + documents.length ===
+    sessions.length +
+      projects.length +
+      links.length +
+      documents.length +
+      tracks.length +
+      crossLinks.length ===
     0
   ) {
     return {};
   }
+  // A goal the start door handed back (a live one of that name) is not ours.
+  const ownTracks = tracks.filter((t) => !t.linked);
   // A project the door REUSED (exact-name match) is not this run's row.
   const ownProjects = projects.filter((p) => !p.linked);
   // Same for a session the door REUSED (open twin of the same goal + scope):
@@ -431,11 +481,20 @@ function planOnlyRecordFields(
   return {
     sessionIds: unique(ownSessions.map((s) => s.sessionId)),
     projectIds: unique(ownProjects.map((p) => p.projectId)),
-    linkIds: unique(
-      links
+    linkIds: unique([
+      ...links
         .filter((l) => !l.preExisting && l.linkId)
-        .map((l) => l.linkId as string)
-    ),
+        .map((l) => l.linkId as string),
+      // Goal → goal edges the run wrote for its goals.
+      ...tracks.flatMap((t) => t.blockerLinkIds ?? []),
+      // Step → decision / goal edges.
+      ...crossLinks
+        .filter((l) => !l.preExisting && l.linkId)
+        .map((l) => l.linkId as string),
+    ]),
+    ...(ownTracks.length > 0
+      ? { trackIds: unique(ownTracks.map((t) => t.trackId)) }
+      : {}),
     projectSubjectIds: Object.fromEntries(
       ownProjects.flatMap((p) =>
         p.subjectEntityId ? [[p.projectId, p.subjectEntityId]] : []
@@ -497,6 +556,36 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   for (const v of result.views ?? []) {
     byOp[v.ref] = { op: "create_view", viewId: v.viewId };
   }
+  for (const w of result.workspaces ?? []) {
+    byOp[w.ref] = {
+      op: "create_workspace",
+      workspaceId: w.workspaceId,
+      linked: w.linked,
+    };
+  }
+  for (const k of result.kinds ?? []) {
+    byOp[k.ref] = {
+      op: "define_kind",
+      profileId: k.profileId,
+      linked: k.linked,
+    };
+  }
+  for (const l of result.lifecycles ?? []) {
+    byOp[l.ref] = {
+      op: "declare_lifecycle",
+      profileId: l.profileId,
+      propertyDefId: l.propertyDefId,
+    };
+  }
+  for (const c of result.cells ?? []) {
+    // A cell the door UPDATED was somebody's already: recorded as linked.
+    byOp[c.ref] = c.created
+      ? { op: "create_cell", cellId: c.cellId }
+      : { op: "create_cell", linked: true };
+  }
+  for (const r of result.renderers ?? []) {
+    byOp[r.ref] = { op: "bind_renderer", rendererBindingId: r.bindingId };
+  }
   for (const u of result.updates ?? []) {
     byOp[u.ref] =
       u.op === "update_entity"
@@ -527,6 +616,25 @@ function buildByOp(result: RecordSource): Record<string, MaterializedOpRecord> {
   }
   for (const d of result.documents ?? []) {
     byOp[d.ref] = { op: "create_document", documentId: d.documentId };
+  }
+  for (const t of result.tracks ?? []) {
+    byOp[t.ref] = {
+      op: "create_track",
+      trackId: t.trackId,
+      ...(t.linked ? { linked: true } : {}),
+    };
+  }
+  for (const l of result.crossLinks ?? []) {
+    byOp[linkOpKey({ requested: l.requested, type: "blocked_by" })] = {
+      op: "create_link",
+      ...(l.linkId ? { linkId: l.linkId } : {}),
+      ...(l.preExisting ? { preExisting: true } : {}),
+    };
+  }
+  // A re-plan's step update: the step it changed (the change itself is put
+  // back by a failed plan's compensation, not by a later revert).
+  for (const u of result.sessionUpdates ?? []) {
+    byOp[u.ref] = { op: "update_session", sessionId: u.sessionId };
   }
   // An edge has no ref of its own — keyed by what it asked for, like a relation.
   for (const l of result.links ?? []) {
@@ -644,10 +752,13 @@ const ID_FIELDS = [
   "ruleIds",
   "playbookIds",
   "viewIds",
+  "cellIds",
+  "rendererBindingIds",
   "entityDocumentIds",
   "sessionIds",
   "projectIds",
   "linkIds",
+  "trackIds",
 ] as const satisfies ReadonlyArray<keyof CompleteMaterializedRecord>;
 
 /** Union two records. Keeps any fields a record carries that this module does not own (e.g. `merge`). */
@@ -776,6 +887,8 @@ export function buildStoppedRunRecord(
     result.rules ?? [],
     result.playbooks ?? [],
     result.views ?? [],
+    result.cells ?? [],
+    result.renderers ?? [],
     result.updates ?? [],
     result.projects ?? [],
     result.sessions ?? [],
@@ -1319,7 +1432,16 @@ export async function writeProducedEdges(args: {
  * erase the provenance the linkage exists for.
  */
 export async function runMaterializationUnderReceipt<T>(
-  receipt: { id?: string; data?: Record<string, unknown> } | undefined,
+  receipt:
+    | {
+        id?: string;
+        data?: Record<string, unknown>;
+        // Present when the caller passes the receipt ROW (the agent capture
+        // door does): who the owner-only fault record names.
+        createdBy?: string | null;
+        agentUserId?: string | null;
+      }
+    | undefined,
   run: () => Promise<T>,
   database: Pick<typeof db, "update"> = db
 ): Promise<T> {
@@ -1339,6 +1461,29 @@ export async function runMaterializationUnderReceipt<T>(
         // sentence ride alongside.
         const meta = classifyThrownFailure(err);
         const sentence = safeFailureSentence(err, meta);
+        // The cause, in the server log, under the row it failed. The approve
+        // door logs its failures with the proposal id
+        // (`dispatchProposalApproval`); this path logged nothing (its callers
+        // re-throw to their door), so a receipt that failed as "an internal
+        // error occurred" left no trace to diagnose (finding 7ca4953f, 16 Nov
+        // 2026). Redacted like the approve door's line: a log is shipped. The
+        // stack's frames say where it threw.
+        logger.warn(
+          {
+            proposalId: receipt.id,
+            errorClass: meta.errorClass,
+            err:
+              meta.detail ??
+              redactForStorage(
+                err instanceof Error ? err.message : String(err)
+              ),
+            stack:
+              err instanceof Error && err.stack
+                ? redactSecrets(err.stack)
+                : undefined,
+          },
+          "materialization under a receipt failed"
+        );
         // What DID land before the throw (a non-plan graph keeps it), in the
         // shape a complete run stamps, plus the op that threw and the ops it
         // never reached. Without it the receipt kept its placeholder
@@ -1360,6 +1505,15 @@ export async function runMaterializationUnderReceipt<T>(
             "materialization failed and what landed could not be described — the receipt records the failure only"
           );
         }
+        // The exact cause for the pod's owner only; the row keeps its id
+        // (plan 8032a127 D5, finding 7ca4953f).
+        const errorId = await recordProposalFault({
+          proposalId: receipt.id,
+          err,
+          meta,
+          userId: receipt.createdBy,
+          agentUserId: receipt.agentUserId,
+        });
         await transitionProposal(database, {
           to: ProposalStatus.APPROVAL_FAILED,
           set: {
@@ -1376,11 +1530,25 @@ export async function runMaterializationUnderReceipt<T>(
               materializationError: redactForStorage(
                 err instanceof Error ? err.message : String(err)
               ),
-              failure: failureRecord(meta),
+              failure: failureRecord({ ...meta, errorId }),
             },
           },
           where: eq(proposals.id, receipt.id),
         });
+        // An agent's receipt failed with no person in the loop: tell its
+        // owner (plan 8032a127 D6). Fire-and-forget; loaded lazily, as it
+        // reaches the notification and naming doors.
+        const failedId = receipt.id;
+        void import("./unseen-approval-failure.js")
+          .then((m) =>
+            m.notifyUnseenApprovalFailure(failedId, { agentReceipt: true })
+          )
+          .catch((notifyErr) =>
+            logger.warn(
+              { err: notifyErr, proposalId: failedId },
+              "receipt failure: the owner could not be notified"
+            )
+          );
       } catch (markErr) {
         logger.error(
           { err: markErr, proposalId: receipt.id },

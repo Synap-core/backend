@@ -42,6 +42,11 @@
       "type": "string",
       "minLength": 1
     },
+    "reasoning": {
+      "description": "Why, shown to the reviewer.",
+      "type": "string",
+      "maxLength": 2000
+    },
     "channelId": {
       "description": "Instruction-provenance: the acting channel of this agent turn. A run triggered from an untrusted-origin channel force-proposes instead of auto-running.",
       "type": "string"

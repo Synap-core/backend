@@ -16,6 +16,8 @@ import { randomUUID } from "node:crypto";
 import type {
   LifecycleCategory,
   RecordedHold,
+  TransitionBase,
+  TransitionCause,
   WorkUnitTransitionPayload,
 } from "@synap-core/types/lifecycle";
 import type { StatusMoveActor } from "./apply-status-move.js";
@@ -41,8 +43,8 @@ export function workUnitActorOf(
     : { kind: "human", userId };
 }
 
-export function buildWorkUnitTransition(input: {
-  subjectType: WorkUnitTransitionPayload["subjectType"];
+/** What every subject's transition is built from (the shared base fields). */
+export interface TransitionBaseInput {
   subjectId: string;
   from: string | null;
   to: string;
@@ -54,18 +56,26 @@ export function buildWorkUnitTransition(input: {
   reason?: string | null;
   proposalId?: string | null;
   workspaceId: string | null;
-  projectId: string | null;
-  trackId: string | null;
   /** When it really happened (already bounded by the door); default now. */
   occurredAt?: Date | null;
   /** Decided by the writer (`decideMoveHold`); null when not a pause. */
   hold?: RecordedHold | null;
   /** A replay: the app its proposal was filed by (`proposals.app_id`). */
   appId?: string | null;
-}): WorkUnitTransitionPayload {
+  /** The move that caused this one (a reaction); absent otherwise. */
+  cause?: TransitionCause | null;
+}
+
+/**
+ * The fields of `TransitionBase` every non-entity subject fills the same way
+ * (a goal, a session, a run, a proposal, a slot): the subject type and its
+ * own fields are the caller's.
+ */
+export function transitionBaseOf(
+  input: TransitionBaseInput
+): Omit<TransitionBase, "subjectType"> {
   return {
     transitionId: randomUUID(),
-    subjectType: input.subjectType,
     subjectId: input.subjectId,
     property: "status",
     from: input.from,
@@ -78,16 +88,30 @@ export function buildWorkUnitTransition(input: {
     sessionId: input.sessionId ?? null,
     reason: input.reason ?? null,
     // A `moveStatus` notion (a person's move applied over a value they had
-    // not seen). A goal or session write lands only from the statuses its
-    // compare-and-set names, or writes nothing, so it is never "stale".
+    // not seen). These writes land only from the statuses their
+    // compare-and-set names, or write nothing, so they are never "stale".
     staleExpected: false,
     proposalId: input.proposalId ?? null,
     workspaceId: input.workspaceId,
-    projectId: input.projectId,
-    trackId: input.trackId,
     ...transitionStamp(input.actor.kind, input.occurredAt, {
       appId: input.appId,
     }),
     hold: input.hold ?? null,
+    ...(input.cause ? { cause: input.cause } : {}),
+  };
+}
+
+export function buildWorkUnitTransition(
+  input: TransitionBaseInput & {
+    subjectType: WorkUnitTransitionPayload["subjectType"];
+    projectId: string | null;
+    trackId: string | null;
+  }
+): WorkUnitTransitionPayload {
+  return {
+    ...transitionBaseOf(input),
+    subjectType: input.subjectType,
+    projectId: input.projectId,
+    trackId: input.trackId,
   };
 }

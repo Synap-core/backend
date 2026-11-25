@@ -173,14 +173,6 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 /** The archive doors' teardown, as `safeRevert` calls it after the commit. */
 const teardown = vi.hoisted(() => [] as string[]);
-vi.mock("../../playbooks/cron-automation.js", () => ({
-  materializePlaybookCronAutomation: vi.fn(
-    async (pb: { id: string; status: string }) => {
-      teardown.push(`cron:${pb.id}:${pb.status}`);
-      return null;
-    }
-  ),
-}));
 vi.mock("../../playbooks/playbook-activators.js", () => ({
   convergePlaybookActivatorsSafely: vi.fn(
     async (input: { playbookId: string; userId: string }) => {
@@ -262,12 +254,9 @@ describe("revertConversion — transaction", () => {
   });
 
   // Last: `db.transaction` call counts accumulate across this suite.
-  it("tears down the archived playbook's schedule and activators AFTER the commit (cdf608a8)", async () => {
+  it("retires the archived playbook's activators (its schedule among them) AFTER the commit", async () => {
     await revertConversion({ sessionId: SESSION_ID, userId: USER_ID });
-    // Both read the committed status: archived, never the draft before.
-    expect(teardown).toEqual([
-      `cron:${PLAYBOOK_ID}:archived`,
-      `activators:${PLAYBOOK_ID}:archived`,
-    ]);
+    // Reads the committed status: archived, never the draft before.
+    expect(teardown).toEqual([`activators:${PLAYBOOK_ID}:archived`]);
   });
 });

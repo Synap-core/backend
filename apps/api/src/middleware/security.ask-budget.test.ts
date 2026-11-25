@@ -93,6 +93,37 @@ describe("synap_ask budget", () => {
     expect(String(body.hint)).toMatch(/synap_get_entity/);
   });
 
+  it("an answer from synap_ask through synap_call_tool stops at the same AI budget", async () => {
+    const app = makeApp();
+    const key = nextKey();
+    const dispatched = () => {
+      const text = JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "synap_call_tool",
+          arguments: { tool: "synap_ask", arguments: { query: "who is Ada?" } },
+        },
+      });
+      return app.request("/mcp", {
+        method: "POST",
+        headers: {
+          authorization: key,
+          "content-type": "application/json",
+          "content-length": String(Buffer.byteLength(text)),
+        },
+        body: text,
+      });
+    };
+    for (let i = 0; i < AI_BUDGET; i += 1) {
+      expect((await dispatched()).status).toBe(200);
+    }
+    const limited = await dispatched();
+    expect(limited.status).toBe(429);
+    expect(await limited.json()).toMatchObject({ class: "ai_interactive" });
+  });
+
   it("synap_ask with detail:'sources' is a read, past the AI budget", async () => {
     const app = makeApp();
     const key = nextKey();
@@ -139,6 +170,34 @@ describe("classifyMcpBody", () => {
     expect(
       classifyMcpBody(call("synap_ask", { compare: true }), readOnly)
     ).toBe("read");
+  });
+
+  it("synap_call_tool spends what the tool it runs spends, never a way around the AI budget", () => {
+    const dispatch = (tool: unknown, args?: unknown) =>
+      call("synap_call_tool", { tool, arguments: args });
+    // Negative control (re-run when touching this): drop the
+    // `effectiveToolCall` unwrap in `mcpMessageKind` — the first two rows
+    // read "write" and go RED.
+    expect(
+      classifyMcpBody(dispatch("synap_ask", { query: "q" }), readOnly)
+    ).toBe("ai");
+    expect(classifyMcpBody(dispatch("synap_get_entity", {}), readOnly)).toBe(
+      "read"
+    );
+    expect(
+      classifyMcpBody(dispatch("synap_ask", { detail: "sources" }), readOnly)
+    ).toBe("read");
+    expect(classifyMcpBody(dispatch("synap_create_entity", {}), readOnly)).toBe(
+      "write"
+    );
+    // Unwrapped once: a dispatcher naming itself, or no tool, is a write.
+    expect(
+      classifyMcpBody(
+        dispatch("synap_call_tool", { tool: "synap_get_entity" }),
+        readOnly
+      )
+    ).toBe("write");
+    expect(classifyMcpBody(dispatch(undefined), readOnly)).toBe("write");
   });
 
   it("a batch: any write is a write, else any ai is ai", () => {

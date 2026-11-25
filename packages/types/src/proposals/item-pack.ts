@@ -127,8 +127,8 @@ export function tallyItemPack(
  */
 export function readItemPackRefs(data: unknown): string[] {
   const top = asRecord(data);
-  // A workspace JOIN keeps the agent's blocked writes on `deferredWrites`
-  // (each with a `ref`), so a per-item drop on a join is checked too.
+  // A held-writes pack keeps the agent's writes on `deferredWrites` (each
+  // with a `ref`), so a per-item drop on a pack is checked too.
   const items = Array.isArray(top?.items)
     ? top.items
     : isUpdatePackData(top?.data)

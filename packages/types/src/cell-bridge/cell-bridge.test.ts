@@ -7,17 +7,23 @@ import {
   CELL_BRIDGE_WRITE_REFUSED,
   CELL_FRAME_MAX_BYTES,
   CELL_FRAME_SANDBOX,
+  FRAME_OPEN_KINDS,
   buildCellFrameCsp,
   buildCellModuleFrameCsp,
   cellBridgeReadRefusal,
   cellFrameHeadBlock,
   frameExternalOrigins,
+  frameTokensCss,
   htmlByteLength,
   isCellBridgeReadOp,
   narrowHomeToSpace,
   parseCellBridgeMessage,
   pickBridgeParams,
+  projectPillarsAnswer,
   wrapHtmlForFrame,
+  CELL_BRIDGE_VIEW_OFFSET_MAX,
+  CELL_BRIDGE_VIEW_PAGE_MAX,
+  cellBridgeViewPage,
 } from "./index.js";
 
 /** The policy as directive → sources, parsed from the built string. */
@@ -213,6 +219,8 @@ describe("the in-frame SDK", () => {
       ops: readonly string[];
       query: (op: string, params?: unknown) => Promise<unknown>;
       mutate: (op: string, payload?: unknown) => Promise<unknown>;
+      opens: readonly string[];
+      open: (kind: unknown, id: unknown) => void;
     };
     const deliver = (source: unknown, data: unknown) =>
       listeners.forEach((fn) => fn({ source, data }));
@@ -274,10 +282,91 @@ describe("the in-frame SDK", () => {
     });
     await expect(write).rejects.toThrow(CELL_BRIDGE_WRITE_REFUSED);
   });
+
+  it("open asks the parent to open one object by kind and id, and waits for nothing", () => {
+    const { synap, posted } = boot();
+    expect(synap.opens).toEqual(FRAME_OPEN_KINDS);
+    const id = "22222222-2222-4222-8222-222222222222";
+    expect(synap.open("session", id)).toBeUndefined();
+    expect(posted).toEqual([
+      {
+        msg: {
+          type: "synap:surface:open",
+          surface: { kind: "object", objectKind: "session", objectId: id },
+        },
+        target: "*",
+      },
+    ]);
+  });
+});
+
+describe("the host's tokens in the frame", () => {
+  const META = '<meta http-equiv="Content-Security-Policy"';
+
+  it("come right after the policy, before the SDK and every byte of the page", () => {
+    const out = wrapHtmlForFrame("<style>p{color:red}</style><p>a</p>", {
+      tokens: ":root{--synap-ink:#111}",
+    });
+    expect(out.startsWith(META)).toBe(true);
+    const tokens = out.indexOf(
+      "<style data-synap-tokens>:root{--synap-ink:#111}</style>"
+    );
+    expect(tokens).toBeGreaterThan(out.indexOf(META));
+    expect(tokens).toBeLessThan(out.indexOf("<script>"));
+    expect(tokens).toBeLessThan(out.indexOf("p{color:red}"));
+  });
+
+  it("cannot end their own element", () => {
+    const head = cellFrameHeadBlock({ tokens: "a{b:c}</style><script>x()" });
+    expect(head).toContain("a{b:c}<\\/style><script>x()</style>");
+    expect(head.match(/<\/style>/g)).toHaveLength(1);
+  });
+
+  it("without tokens the frame is the one it always was", () => {
+    expect(cellFrameHeadBlock({ tokens: "" })).toBe(cellFrameHeadBlock());
+    expect(cellFrameHeadBlock()).not.toContain("<style");
+  });
+
+  it("frameTokensCss: every --synap-* name the host declares, at the value the host computes now", () => {
+    const rule = (...names: string[]) => ({ style: names });
+    const sheets = [
+      {
+        cssRules: [
+          rule("--synap-bg", "color", "--other-x"),
+          rule("--synap-ink"),
+        ],
+      },
+      // A media or layer group: its rules are walked too.
+      { cssRules: [{ cssRules: [rule("--synap-bg", "--synap-accent")] }] },
+      // Another origin's sheet throws on read: it holds no token of ours.
+      {
+        get cssRules(): never {
+          throw new Error("SecurityError");
+        },
+      },
+    ];
+    const values: Record<string, string> = {
+      "--synap-bg": " #0b0b0c ",
+      "--synap-ink": "#f4f1ea",
+      "--synap-accent": "",
+    };
+    const css = frameTokensCss(sheets, {
+      getPropertyValue: (name) => values[name] ?? "",
+    });
+    expect(css).toBe(":root{--synap-bg:#0b0b0c;--synap-ink:#f4f1ea}");
+  });
+
+  it("frameTokensCss: a host that declares no token hands in nothing", () => {
+    expect(
+      frameTokensCss([{ cssRules: [{ style: ["color"] }] }], {
+        getPropertyValue: () => "red",
+      })
+    ).toBe("");
+  });
 });
 
 describe("the read allowlist", () => {
-  it("is the desktop's view-frame reads (with the lens page) plus documents.get, nothing more", () => {
+  it("is the desktop's view-frame reads (with the lens page), documents.get, flow.of, the work reads and a view adapter's reads, nothing more", () => {
     expect([...CELL_BRIDGE_READ_OP_NAMES].sort()).toEqual(
       [
         "entities.list",
@@ -293,8 +382,67 @@ describe("the read allowlist", () => {
         "lifecycle.moving",
         "lens.page",
         "documents.get",
+        "flow.of",
+        "sessions.get",
+        "playbook.process",
+        "playbook.scorecard",
+        "project.pillars",
+        "views.get",
+        "views.execute",
+        "profiles.get",
+        "propertyDefs.list",
+        "lifecycle.get",
       ].sort()
     );
+  });
+
+  it("the work reads name one object by its id, and nothing else", () => {
+    const id = "11111111-1111-4111-8111-111111111111";
+    const spoof = { workspaceId: "w", projectId: "p", trackId: "t", limit: 5 };
+    expect(pickBridgeParams("sessions.get", { id, ...spoof })).toEqual({ id });
+    expect(
+      pickBridgeParams("playbook.process", {
+        playbookId: id,
+        id: "x",
+        ...spoof,
+      })
+    ).toEqual({ playbookId: id });
+    expect(
+      pickBridgeParams("playbook.scorecard", { playbookId: id, ...spoof })
+    ).toEqual({ playbookId: id });
+    expect(
+      pickBridgeParams("project.pillars", { id, include: "all", ...spoof })
+    ).toEqual({ id });
+  });
+
+  it("project.pillars answers the three pillar fields of the project read, nothing of the row", () => {
+    const unavailable = { status: "unavailable" };
+    expect(
+      projectPillarsAnswer({
+        project: { id: "p", name: "Secret" },
+        usedWorkspaces: [{ id: "w" }],
+        mainGoal: null,
+        pillars: [{ trackId: "t", health: "on_track" }],
+        rootHealth: unavailable,
+      })
+    ).toEqual({
+      mainGoal: null,
+      pillars: [{ trackId: "t", health: "on_track" }],
+      rootHealth: unavailable,
+    });
+  });
+
+  it("a project read without its pillars is an error, never an empty project", () => {
+    for (const answer of [
+      null,
+      "x",
+      { project: { id: "p" } },
+      { project: { id: "p" }, pillars: [], rootHealth: null },
+    ]) {
+      expect(() => projectPillarsAnswer(answer)).toThrow(
+        "The project's pillars could not be read."
+      );
+    }
   });
 
   it("a lens page is bounded only by since; the host stamps its scope", () => {
@@ -308,6 +456,75 @@ describe("the read allowlist", () => {
         sessionId: "s",
       })
     ).toEqual({ since: "2026-11-01T00:00:00.000Z" });
+  });
+
+  it("a kind's flow is bounded like the board; the host stamps its scope", () => {
+    expect(CELL_BRIDGE_READ_OPS["flow.of"]).toEqual([
+      "profileSlug",
+      "trackId",
+      "windowDays",
+      "firstN",
+      "properties",
+    ]);
+    expect(
+      pickBridgeParams("flow.of", {
+        profileSlug: "deal",
+        firstN: 5,
+        properties: true,
+        workspaceId: "w",
+        projectId: "p",
+        window: { days: 400 },
+        column: "won",
+      })
+    ).toEqual({ profileSlug: "deal", firstN: 5, properties: true });
+  });
+
+  it("a view's rows are read one page at a time: limit and offset, never its filters", () => {
+    expect(CELL_BRIDGE_READ_OPS["views.execute"]).toEqual([
+      "id",
+      "limit",
+      "offset",
+    ]);
+    expect(
+      pickBridgeParams("views.execute", {
+        id: "v1",
+        limit: 100,
+        offset: 200,
+        filters: [{ field: "status" }],
+        workspaceId: "w",
+        projectId: "p",
+      })
+    ).toEqual({ id: "v1", limit: 100, offset: 200 });
+  });
+
+  it("every host forwards a page the same way: clamped into range, a missing one left out", () => {
+    expect(cellBridgeViewPage({ limit: 50, offset: 100 })).toEqual({
+      limit: 50,
+      offset: 100,
+    });
+    expect(cellBridgeViewPage({ limit: 5000, offset: 10 ** 9 })).toEqual({
+      limit: CELL_BRIDGE_VIEW_PAGE_MAX,
+      offset: CELL_BRIDGE_VIEW_OFFSET_MAX,
+    });
+    expect(cellBridgeViewPage({ limit: 0, offset: -3.7 })).toEqual({
+      limit: 1,
+      offset: 0,
+    });
+    expect(cellBridgeViewPage({ limit: "100", offset: NaN })).toEqual({});
+  });
+
+  it("a kind is read by identifier, with its fields' fill on request (a table's derived columns)", () => {
+    expect(CELL_BRIDGE_READ_OPS["profiles.get"]).toEqual([
+      "identifier",
+      "fill",
+    ]);
+    expect(
+      pickBridgeParams("profiles.get", {
+        identifier: "deal",
+        fill: true,
+        workspaceId: "w",
+      })
+    ).toEqual({ identifier: "deal", fill: true });
   });
 
   it("a page in no space is refused a space's own page, and only that", () => {

@@ -33,8 +33,10 @@
 
 import {
   humanizeToken,
+  isMachineToken,
   normalizeObjectKind,
   resolveObjectNoun,
+  resolvePrivateObjectLabel,
   sentenceCaseLabel,
 } from "../vocabulary/index.js";
 
@@ -42,6 +44,7 @@ export * from "./wire.js";
 export * from "./neighbourhood.js";
 export * from "./dependency.js";
 export * from "./neighbour-state.js";
+export * from "./graph-health.js";
 import { isProvenanceRole } from "./neighbourhood.js";
 
 export type ConnectionDirection = "outgoing" | "incoming" | "structural";
@@ -92,6 +95,12 @@ export interface ConnectionItem {
   edgeType: string;
   direction: ConnectionDirection;
   via: string | null;
+  /**
+   * The far end is on the edge but the reader cannot see it: `name` is the
+   * private placeholder (`resolvePrivateObjectLabel`), and the item has no
+   * door. Never a provenance line's session or capture.
+   */
+  hidden?: true;
 }
 
 export interface ConnectionGroup {
@@ -190,16 +199,30 @@ export function drawnNameKey(text: string | null | undefined): string | null {
   return norm ? `name:${norm}` : null;
 }
 
+/**
+ * The ONE name pass for a connection: what a reader may see, never an id. A
+ * hidden far end is named by the private placeholder (an older pod sends its
+ * id as its name); a name that is a machine token (`isMachineToken`: a uuid,
+ * a build tag) gives way to the object's noun. An EMPTY name stays empty:
+ * the host owns its empty copy.
+ */
+function readableName(n: ConnectionNeighbor, kind: string): string {
+  if (n.hidden) return resolvePrivateObjectLabel(kind);
+  return isMachineToken(n.name ?? "") ? resolveObjectNoun(kind) : n.name;
+}
+
 function toItem(n: ConnectionNeighbor): ConnectionItem {
   const subtype = n.subtype?.trim();
+  const kind = n.kind === "entity" && subtype ? subtype : n.kind;
   return {
     id: n.id,
-    name: n.name,
-    kind: n.kind === "entity" && subtype ? subtype : n.kind,
+    name: readableName(n, kind),
+    kind,
     graphKind: n.kind,
     edgeType: n.edgeType,
     direction: n.direction,
     via: n.via ?? null,
+    ...(n.hidden ? { hidden: true as const } : {}),
   };
 }
 
@@ -293,6 +316,10 @@ export function groupConnections(
     if (isProvenanceEdge(n)) {
       const item = toItem(n);
       provenance.all.push(item);
+      // The provenance LINE names only what the reader can open: a hidden
+      // capture or session stays in `all` (the Why pane), never "in Private
+      // session" on the header.
+      if (n.hidden) continue;
       if (
         n.edgeType === PRODUCED_EDGE &&
         n.direction === "incoming" &&

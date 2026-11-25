@@ -1,22 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
-  failingBoardComplete,
   flowHealthPill,
   flowHealthSentence,
-  flowHref,
   flowIsFailing,
   flowNoun,
   runActions,
-  runFilterOf,
-  runListInput,
   runRowSecondary,
-  toolRunsInput,
   triggeredByLabel,
   type FlowGroupFacts,
 } from "./run-board";
 
 const NOW = new Date("2026-10-13T12:00:00.000Z");
-const DAY = 24 * 60 * 60 * 1000;
 
 function group(over: Partial<FlowGroupFacts> = {}): FlowGroupFacts {
   return {
@@ -30,57 +24,12 @@ function group(over: Partial<FlowGroupFacts> = {}): FlowGroupFacts {
   };
 }
 
-describe("filters", () => {
-  it("reads every key and defaults to all", () => {
-    expect(runFilterOf("chat")).toBe("chat");
-    expect(runFilterOf("running")).toBe("running");
-    expect(runFilterOf(null)).toBe("all");
-    expect(runFilterOf("nope")).toBe("all");
-  });
-
-  it("sends Running and Failed AI turns to the per-run feed", () => {
-    expect(runListInput("running")).toEqual({ status: "running" });
-    // The same read the Intelligence page used before the section moved.
-    expect(runListInput("chat")).toEqual({
-      flowType: "chat",
-      status: "failed",
-    });
-    expect(runListInput("all")).toBeNull();
-    expect(runListInput("failing")).toBeNull();
-  });
-});
-
-describe("toolRunsInput — one tool's runs", () => {
-  const ID = "11111111-1111-4111-8111-111111111111";
-  const params = (qs: string) => new URLSearchParams(qs);
-  it("a capability or a skill id is the tool lens", () => {
-    expect(toolRunsInput(params(`capability=${ID}`))).toEqual({
-      flowType: "capability",
-      scope: { capabilityId: ID },
-    });
-    expect(toolRunsInput(params(`skill=${ID}`))).toEqual({
-      flowType: "capability",
-      scope: { skillId: ID },
-    });
-  });
-  it("no id, or a malformed one, is no lens", () => {
-    expect(toolRunsInput(params("filter=running"))).toBeNull();
-    expect(toolRunsInput(params("capability=not-an-id"))).toBeNull();
-  });
-});
-
 describe("flow words", () => {
   it("names registry kinds through the vocabulary, the rest plainly", () => {
     expect(flowNoun("automation")).toBe("Automation");
-    expect(flowNoun("playbook")).toBe("Template");
+    expect(flowNoun("playbook")).toBe("Process");
     expect(flowNoun("chat")).toBe("AI turn");
     expect(flowNoun("agent_write")).toBe("Agent write");
-  });
-
-  it("links rules and templates to their console pages only", () => {
-    expect(flowHref("automation", "a b")).toBe("/rules/a%20b");
-    expect(flowHref("playbook", "x")).toBe("/templates/x");
-    expect(flowHref("chat", "x")).toBeNull();
   });
 
   it("says health from this week's failures, not the lifetime count", () => {
@@ -95,23 +44,6 @@ describe("flow words", () => {
     );
     expect(flowIsFailing(group({ recentFailedCount: 1 }))).toBe(true);
     expect(flowIsFailing(group({ latestStatus: "failed" }))).toBe(false);
-  });
-});
-
-describe("failingBoardComplete", () => {
-  it("is complete when the cursor is exhausted", () => {
-    expect(failingBoardComplete([], false, NOW)).toBe(true);
-  });
-  it("keeps paging while the loaded flows ran inside the window", () => {
-    const recent = group({ latestStartedAt: new Date(NOW.getTime() - DAY) });
-    expect(failingBoardComplete([recent], true, NOW)).toBe(false);
-    expect(failingBoardComplete([], true, NOW)).toBe(false);
-  });
-  it("stops once a loaded flow last ran before the window", () => {
-    const old = group({
-      latestStartedAt: new Date(NOW.getTime() - 8 * DAY).toISOString(),
-    });
-    expect(failingBoardComplete([group(), old], true, NOW)).toBe(true);
   });
 });
 

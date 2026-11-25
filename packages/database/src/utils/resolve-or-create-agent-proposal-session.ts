@@ -8,7 +8,8 @@
  *  2. The client's own session (`findClientSession`): the one it started itself
  *     (start_session stamps `metadata.clientKey`), else the one this door
  *     auto-opened for it FOR THIS WRITE'S PROJECT while it is still in its
- *     activity window
+ *     activity window. Several started and open ⇒ none of them is guessed
+ *     (plan a640c5bb): only the receipt answers, else step 3 opens one.
  *  3. Auto-open one via openRunSession — a RECEIPT (`metadata.kind =
  *     'agent-proposal-package'`), marked `autoOpened` + `clientKey`, named by the
  *     caller (`buildDerivedSessionTitle`, titleSource "derived"). Minted under a
@@ -28,6 +29,7 @@
  */
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { IN_FLIGHT_SESSION_STATUSES } from "@synap-core/types/focus-sessions";
 import { db } from "../client-pg.js";
 import { focusSessions } from "../schema/focus-sessions.js";
 import { workspaces } from "../schema/workspaces.js";
@@ -100,9 +102,6 @@ export function resolveClientKey(input: {
   );
 }
 
-/** Statuses a client's current session may hold (`scheduled` is a future slot). */
-const CLIENT_SESSION_STATUSES = ["active", "paused", "forming"] as const;
-
 export interface ClientSession {
   id: string;
   /** True when this door auto-opened it (not started by the client itself). */
@@ -137,6 +136,12 @@ export function sessionLastActivitySql() {
  * AUTO-OPENED session counts only if it is that project's receipt. A started
  * session is unaffected. Omitted ⇒ any project (the attribution read and the
  * MCP door, which do not know the write's project yet).
+ *
+ * `refuseSeveralStarted`: when the client STARTED two or
+ * more sessions that are still open, none of them is picked (the newest used
+ * to win, so one conversation's sub-agents filed into each other's work); only
+ * the client's receipt can answer. The write gate asks for it; the MCP door
+ * reports the same ambiguity with the candidates (`resolveWorkSession`).
  */
 export async function findClientSession(
   userId: string,
@@ -145,11 +150,13 @@ export async function findClientSession(
     onlyAutoOpened?: boolean;
     database?: Pick<typeof db, "select">;
     projectId?: string | null;
+    refuseSeveralStarted?: boolean;
   } = {}
 ): Promise<ClientSession | null> {
   const database = opts.database ?? db;
   const onlyAutoOpened =
     opts.onlyAutoOpened === true || clientKeyScope(clientKey) === "key";
+  const refuseSeveral = opts.refuseSeveralStarted === true && !onlyAutoOpened;
   const autoOpened = sql`coalesce((${focusSessions.metadata} ->> 'autoOpened')::boolean, false)`;
   const rows = await database
     .select({
@@ -161,7 +168,7 @@ export async function findClientSession(
     .where(
       and(
         eq(focusSessions.userId, userId),
-        inArray(focusSessions.status, [...CLIENT_SESSION_STATUSES]),
+        inArray(focusSessions.status, [...IN_FLIGHT_SESSION_STATUSES]),
         sql`${focusSessions.metadata} ->> 'clientKey' = ${clientKey}`,
         onlyAutoOpened ? sql`${autoOpened}` : undefined,
         // An auto-opened session is the client's CURRENT one only while it saw
@@ -175,7 +182,15 @@ export async function findClientSession(
       )
     )
     .orderBy(sql`${autoOpened} asc`, desc(focusSessions.startedAt))
-    .limit(1);
+    // Started sessions sort first: a second started row means several.
+    .limit(refuseSeveral ? 2 : 1);
+  if (refuseSeveral && rows.length === 2 && rows[1]!.autoOpened !== true) {
+    return findClientSession(userId, clientKey, {
+      ...opts,
+      refuseSeveralStarted: false,
+      onlyAutoOpened: true,
+    });
+  }
   const row = rows[0];
   return row
     ? {
@@ -236,6 +251,7 @@ export async function resolveOrCreateAgentProposalSession(
     const projectId = input.projectId ?? null;
     const bound = await findClientSession(input.userId, clientKey, {
       projectId,
+      refuseSeveralStarted: true,
     });
     if (bound) return bound.id;
 
@@ -250,6 +266,7 @@ export async function resolveOrCreateAgentProposalSession(
       const raced = await findClientSession(input.userId, clientKey, {
         database: tx,
         projectId,
+        refuseSeveralStarted: true,
       });
       if (raced) return raced.id;
       // Inserted on the tx: the lock and the insert share one connection.
@@ -258,6 +275,8 @@ export async function resolveOrCreateAgentProposalSession(
         userId: input.userId,
         agentUserId: input.agentUserId,
         workspaceId: await receiptWorkspaceId(tx, input.workspaceId),
+        // A receipt keeps the caller's space (W3 decision D9 a).
+        keepCallerWorkspace: true,
         projectId,
         goal,
         title: input.title ?? null,

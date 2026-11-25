@@ -357,6 +357,11 @@ export function registerProjectExecutors(): void {
             ...("homeWorkspaceId" in innerData
               ? { homeWorkspaceId: innerData.homeWorkspaceId as string }
               : {}),
+            // `in`: `null` CLEARS the main goal. The replay re-runs its check
+            // (still this project's, still live) in `updateProjectGoverned`.
+            ...("mainGoalId" in innerData
+              ? { mainGoalId: innerData.mainGoalId as string | null }
+              : {}),
             ...("settings" in innerData
               ? { settings: innerData.settings as Record<string, unknown> }
               : {}),

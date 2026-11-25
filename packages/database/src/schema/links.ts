@@ -22,9 +22,11 @@
  *   source              --feeds-->             playbook     (input-strategy source)
  *   tool                --provided_by-->       source       (tool backed by a provider)
  *   participant|channel --member_of-->         session      (room participants)
- *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL)
+ *   project             --uses-->              workspace    (INDEX of domains an engagement runs through; NOT an ACL; metadata.purpose)
+ *   track               --advances-->          workspace    (the goal moves that pillar of its project; metadata.primary)
  *   participant(agent)  --dispatched_via-->    tool         (BINDING: how the pod hands this agent work — tools.config.agentBinding)
  *   participant(agent)  --assigned_to-->       playbook|profile|project|workspace (who takes that work by default — route())
+ *   capability(add-on)  --extends-->           capability (base)  (an add-on's base, written by the applier)
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
@@ -245,8 +247,47 @@ export type LinkType =
    * reader follows it. Goal rollups do (`services/status/status-rollup.ts`):
    * a goal's work counts the sessions filed in it OR serving it, each once,
    * and its sub-goals are listed as `children`.
+   *
+   * `metadata.primary: true` names the goal's PRIMARY parent: at most one per
+   * goal, on a goal → goal edge only (`validateServesEdge`). A goal rolls up
+   * fully to its primary parent; other parents only list it.
    */
-  | "serves";
+  | "serves"
+  /**
+   * track --advances--> workspace. The goal moves one SPACE of its project
+   * forward — the space is a "pillar" of the project (the `uses` edge, whose
+   * `metadata.purpose` says what the project needs from it). Written by THE
+   * dependency door (`services/links/dependency-links.ts`), which refuses a
+   * space the goal's project does not `uses`. `metadata.primary: true` on at
+   * most one per goal: a goal rolls up FULLY to its primary pillar only; in
+   * the others it is listed and changes nothing (`services/projects/
+   * pillar-health.ts`).
+   */
+  | "advances"
+  /**
+   * session --orchestrated_by--> session. The FROM session is coordinated by
+   * the TO session, an orchestrator (founder decision D5, plan b38bc224; design
+   * doc 5fccda9b). Deliberately NOT a second `spawned_from`: every lineage
+   * reader assumes ONE parent per child (`getParentSessionId`, the packet's
+   * parent row, `parentOfGraph`), and the picked sessions already belong to
+   * their wave. Not a dependency either: what the child waits on is its HOLD
+   * (`until: answer:<orchestrator>/plan-approval`), which the person's yes
+   * clears. ONE producer: `services/focus-sessions/start-orchestrator.ts`
+   * (same owner at both ends). The Hub REST links door lists and refuses it.
+   */
+  | "orchestrated_by"
+  /**
+   * capability(add-on) --extends--> capability(base). The add-on is its own
+   * container, package and listing; its actions run through its base's tool
+   * rows and are members of the add-on only (founder decision D6, document
+   * b387ca45 §6). ONE producer: the capability applier
+   * (`services/capabilities/addon.ts`, called by
+   * `createCapabilityFromDefinition` for a definition with `extends`), after it
+   * found the base installed. Readers: the add-on reads
+   * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
+   * REST links door lists and refuses it: an install writes it, never a key.
+   */
+  | "extends";
 
 export const links = pgTable(
   "links",

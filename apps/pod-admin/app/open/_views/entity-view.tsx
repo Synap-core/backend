@@ -16,16 +16,31 @@
  * the one image door; when the body document IS that media it is not read
  * again as text.
  *
+ * Its next step leads (`NextStepBlock`, the thing's next move from the same
+ * `statusOf` read) when it needs the reader.
+ *
+ * The work on it (`WorkSection`, `statusOf` work): the sessions and runs on
+ * it, a run that stopped early first with its Continue; omitted when none.
+ *
  * `entities.get` re-checks access server-side; no admin role is involved.
  * The body document is read through `documents.get` on the viewer's own
  * floor: a body they cannot read says so, and shows nothing; a body that
  * failed to load says so with a retry. A stored HTML file (an uploaded
  * report) is a body that RUNS: its page in the isolated frame, its source a
  * toggle away (`content/html-frame`).
+ *
+ * Its detail (the fields and prose) is the entity-detail SLOT: when the one
+ * renderer resolution picks a detail cell the pod can run (`RenderedObject`),
+ * that cell draws it in the module frame; otherwise the planned fields below.
+ *
+ * The rules around it (`RulesAroundSection`, `statusOf` reactions): a
+ * roll-up that moves it, with its parts' "3 of 5 done", then the rules its
+ * own moves set off; omitted when none.
  */
 
 import { Chip } from "@heroui/react";
 import { planEntityFields } from "@synap-core/types/property-render";
+import { objectNextOf } from "@synap-core/types/units";
 import { trpc } from "../../../lib/trpc";
 import { formatRelative } from "../../../lib/format";
 import { FieldList } from "../../_lib/object/field-list";
@@ -49,7 +64,14 @@ import {
 } from "../open-model";
 import { OpenFailure, OpenLoading, OpenObject } from "../open-shell";
 import { couldNotLoad, loadFailure } from "../../_lib/object/load-failure";
+import { ConnectedObjects } from "../../_lib/object/connected-objects";
+import { useWorkRead, WorkSection } from "../../_lib/object/views/work-section";
+import { NextStepBlock } from "../../_lib/object/next-step";
+import { nextStepOf } from "../../_lib/object/next-step-model";
+import { objectPage } from "../../_lib/object/content/markdown-model";
+import { RulesAroundSection } from "../../_lib/object/views/rules-around-section";
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
+import { RenderedObject } from "../../_lib/object/content/rendered-object";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
 
 /** The slice of `entities.get({ includeProfile: true })` this page reads. */
@@ -102,6 +124,15 @@ export function EntityView({ id }: { id: string }) {
     ? entityPageMedia({ ...loaded, id }, payload?.profile?.uiHints)
     : { media: null, bodyIsMedia: false };
   const body = useDocumentContent(bodyIsMedia ? null : loaded?.documentId);
+  // The work section's read (one request) carries the thing's next move; a
+  // failure of it is said there, once.
+  const answer = useWorkRead(id).query.data?.[0];
+  const next = answer
+    ? objectNextOf(
+        "entity",
+        "nextMove" in answer ? { nextMove: answer.nextMove } : {}
+      )
+    : null;
 
   if (query.isLoading) return <OpenLoading label="Loading entity…" />;
   const data = query.data as EntityPayload | undefined;
@@ -142,6 +173,16 @@ export function EntityView({ id }: { id: string }) {
   const summaryShownBelow =
     summary.propertySlug !== null && proseKeys.includes(summary.propertySlug);
   const openInApp = <OpenInAppLink type="entity" id={id} />;
+  const hasBody = Boolean(entity.documentId) && !bodyIsMedia;
+  // With a body of its own, what it is connected to follows the body.
+  const connected = (
+    <ConnectedObjects
+      key={id}
+      entityId={id}
+      kind={profileSlug}
+      definitions={data.effectiveProperties}
+    />
+  );
 
   return (
     <OpenObject
@@ -173,6 +214,9 @@ export function EntityView({ id }: { id: string }) {
         },
       }}
     >
+      <NextStepBlock
+        step={nextStepOf({ kind: "entity", id }, next, "itsPage")}
+      />
       {media && (
         <MediaView
           media={media}
@@ -195,22 +239,50 @@ export function EntityView({ id }: { id: string }) {
           ))}
         </div>
       )}
-      <FieldList
-        plan={plan}
-        omit={[
-          ...proseKeys,
-          ...(summary.propertySlug ? [summary.propertySlug] : []),
-        ]}
+      {/* Work waiting on the reader leads the fields; omitted when none. */}
+      <WorkSection
+        subjectId={id}
+        self={false}
+        sessionHref={(sid) => objectPage("session", sid)}
       />
-      {prose.map((field) => (
-        <ContentBlock
-          key={field.key}
-          title={field.label}
-          prepared={prepareContent(field.text, "markdown")}
-          openInApp={openInApp}
-        />
-      ))}
-      {entity.documentId && !bodyIsMedia && (
+      {/* The entity-detail slot: a detail cell the one resolution picks
+          (its own override, its kind's binding, the bundle's default) draws
+          the record's fields; else the console's own field list. */}
+      <RenderedObject
+        subject={{
+          kind: "entity",
+          slot: "entity-detail",
+          entityId: id,
+          profileSlug,
+          ...(entity.systemData !== undefined
+            ? { systemData: entity.systemData }
+            : {}),
+        }}
+        workspaceId={entity.workspaceId ?? null}
+        title={title}
+        fallback={
+          <>
+            <FieldList
+              plan={plan}
+              omit={[
+                ...proseKeys,
+                ...(summary.propertySlug ? [summary.propertySlug] : []),
+              ]}
+            />
+            {prose.map((field) => (
+              <ContentBlock
+                key={field.key}
+                title={field.label}
+                prepared={prepareContent(field.text, "markdown")}
+                openInApp={openInApp}
+              />
+            ))}
+          </>
+        }
+      />
+      <RulesAroundSection thingId={id} />
+      {!hasBody && connected}
+      {hasBody && (
         <DocumentContentSection
           title="Content"
           content={body.content}
@@ -218,6 +290,7 @@ export function EntityView({ id }: { id: string }) {
           onRetry={body.retry}
         />
       )}
+      {hasBody && connected}
     </OpenObject>
   );
 }

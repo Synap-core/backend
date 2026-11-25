@@ -23,8 +23,11 @@
  */
 
 import { grantWriteDenial } from "../../../utils/grant-write-check.js";
+import { sessionGrantWorkspaceId } from "../../../access/session-counted-spaces.js";
 import {
   mergeOutcomesForStart,
+  declaresVerify,
+  factOutcomeWarnings,
   outcomeDeclarationsSchema,
   upsertOutcomes,
 } from "../../../services/focus-sessions/outcome-declarations.js";
@@ -51,6 +54,7 @@ import { sessionReadableWhere } from "../../../access/session-visibility.js";
 import {
   sessionHolderReadable,
   sessionPacketReadable,
+  workGraphReach,
 } from "../../../access/grant-door-fence.js";
 import {
   checkPermissionOrPropose,
@@ -67,10 +71,12 @@ import {
   SESSION_TITLE_MAX,
   titleSourcePatch,
 } from "@synap-core/types/focus-sessions";
+import { TRACK_STAGE_POSITIONS } from "@synap-core/types/units";
 import {
   ASK_LIMITS,
   AskAnswerValueSchema,
   AskSchema,
+  PROVIDE_SECRET_USES,
 } from "@synap-core/types/ask";
 import {
   completeFocusSession,
@@ -173,7 +179,9 @@ import {
   expectedOutputWireSchema,
   outputRefWireSchema,
   mergeExpectedOutputs,
+  fileableExpectedOutputs,
   droppedAskWarnings,
+  outputKeyWarnings,
   criteriaDiffer,
 } from "../../../services/focus-sessions/update-session.js";
 import { restatedAskHints } from "../../../services/focus-sessions/ask-text.js";
@@ -193,6 +201,10 @@ import {
   readJsonBody,
 } from "./_shared.js";
 import { jsonGoverned } from "../proposal-response.js";
+import {
+  startOrchestrator,
+  startOrchestratorInputSchema,
+} from "../../../services/focus-sessions/start-orchestrator.js";
 import {
   gateAgentHandOff,
   handedOffAgentIds,
@@ -276,6 +288,14 @@ const WorkGraphWireSchema = z.object({
       viewerRole: z.enum(["owner", "member"]),
       /** false = only the far end of an edge of a window session. */
       inWindow: z.boolean(),
+      /**
+       * With `playbookId`: how this window node follows it — `session` (its
+       * own playbook) or `goal` (only through its goal's method); `null` on
+       * far ends. Absent without the narrow.
+       */
+      playbookMatch: z.enum(["session", "goal"]).nullable().optional(),
+      /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
+      skipped: z.literal(true).optional(),
     })
   ),
   edges: z.array(
@@ -283,9 +303,17 @@ const WorkGraphWireSchema = z.object({
       kind: z.enum(WORK_GRAPH_EDGE_KINDS),
       from: z.string(),
       to: z.string(),
+      /** Absent = `from` is a session. `track` = a goal in `goals`. */
+      fromKind: z.enum(["track"]).optional(),
+      /** Absent = `to` is a session. `entity` = in `decisions` or `entities`; `track` = in `goals`. */
+      toKind: z.enum(["entity", "track"]).optional(),
       entityId: z.string().optional(),
       count: z.number().optional(),
       lastAt: z.string().nullable().optional(),
+      /** `serves`: the goal criterion served, when the edge names one. */
+      criterionKey: z.string().optional(),
+      /** `blocked_by` to a decision: the option this step is the arm of. Absent = a plain wait. */
+      option: z.string().optional(),
     })
   ),
   /** One per PR a node recorded; `prState` absent = the pod recorded no fact about it. */
@@ -314,30 +342,93 @@ const WorkGraphWireSchema = z.object({
       reviewDue: z.boolean(),
     })
   ),
-  /** The goals (tracks) the nodes are filed into. */
+  /** The goals (tracks) the nodes are filed into or serve. */
   goals: z.array(
     z.object({
       id: z.string(),
       name: z.string(),
       status: z.string(),
       projectId: z.string(),
+      /** The goal's method; null = it follows none. */
+      playbookId: z.string().nullable(),
+      /** The stage key the goal is at; null = stageless or not started. */
+      currentStage: z.string().nullable(),
+      /** The method's stages in order, placed against `currentStage`. */
+      stages: z.array(
+        z.object({
+          key: z.string(),
+          name: z.string(),
+          category: z.string().nullable(),
+          position: z.enum(TRACK_STAGE_POSITIONS),
+        })
+      ),
+    })
+  ),
+  /** The decisions the nodes wait on (`blocked_by`) or are about. */
+  decisions: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().nullable(),
+      /** proposed | accepted | superseded | rejected; null = unset. */
+      status: z.string().nullable(),
+      category: z.string().nullable(),
+      /** Each option with its marks; [] = a yes/no decision. */
+      options: z.array(
+        z.object({
+          key: z.string(),
+          label: z.string(),
+          description: z.string().nullable(),
+          recommended: z.boolean(),
+          chosen: z.boolean(),
+        })
+      ),
+      recommendedOption: z.string().nullable(),
+      chosenOption: z.string().nullable(),
+      /** answered | asked (an owed question asks the person) | not_asked. */
+      answer: z.enum(["answered", "asked", "not_asked"]),
+      /** With `asked`: the session whose owed question asks it. */
+      askSessionId: z.string().nullable(),
+      sourceSessionId: z.string().nullable(),
+    })
+  ),
+  /** The other things the nodes wait on or are about (their subjects). */
+  entities: z.array(
+    z.object({
+      id: z.string(),
+      title: z.string().nullable(),
+      /** The thing's kind (profile slug). */
+      kind: z.string(),
+      status: z.string().nullable(),
+      category: z.string().nullable(),
     })
   ),
   sections: z.object({
     blockedBy: WorkGraphSectionWireSchema,
+    orchestration: WorkGraphSectionWireSchema,
     waitsOnOutputs: WorkGraphSectionWireSchema,
     interactions: WorkGraphSectionWireSchema,
     farEnds: WorkGraphSectionWireSchema,
     pullRequests: WorkGraphSectionWireSchema,
     holds: WorkGraphSectionWireSchema,
     goals: WorkGraphSectionWireSchema,
+    crossKind: WorkGraphSectionWireSchema,
+    serves: WorkGraphSectionWireSchema,
+    decisions: WorkGraphSectionWireSchema,
+    entities: WorkGraphSectionWireSchema,
   }),
   window: z.object({
     since: z.string(),
     hours: z.number(),
+    /** True under trackId / rootSessionId: settled work of any age is in; since/hours limit nothing. */
+    allSettled: z.boolean(),
     ceiling: z.number(),
     truncated: z.boolean(),
     omitted: z.number(),
+    /**
+     * Of `omitted`, the sessions the person sees here that this key's grant
+     * does not cover (a pod app): counted, never returned. 0 otherwise.
+     */
+    omittedByGrant: z.number(),
   }),
 });
 
@@ -408,6 +499,14 @@ const CreateBodySchema = z
      */
     suspendedIntent: z.string().min(1).max(2000).optional(),
     /**
+     * With parentSessionId: the key of the parent's output this child
+     * delivers (W7). Recorded on the edge only when the caller may write the
+     * parent (roster, and the key's grant) and the parent declares it with no
+     * required criterion checking it; `parentLink.forOutput` says which.
+     * Without parentSessionId, or blank, the start is refused (400).
+     */
+    forOutput: z.string().min(1).max(120).optional(),
+    /**
      * Sessions this one waits on — `session --blocked_by--> session` edges,
      * validated and written through the same door as POST /links, each outcome
      * reported per id on the response's `blockerLinks`.
@@ -450,7 +549,7 @@ const CreateBodySchema = z
 export function unsupportedUpdateFieldError(raw: unknown): string | null {
   if (typeof raw !== "object" || raw === null) return null;
   if ("completeOutput" in raw) {
-    return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to mark a declared deliverable done; it takes the row lock this door does not.";
+    return "completeOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use POST /focus-sessions/:id/outputs/complete (or the synap_update_session MCP tool) to mark a declared deliverable done; it takes the row lock this door does not.";
   }
   if ("retireOutput" in raw) {
     return "retireOutput is not supported on PATCH /focus-sessions/:id — nothing was changed. Use the synap_update_session tool (MCP) to withdraw a declared deliverable; it takes the row lock this door does not.";
@@ -632,6 +731,14 @@ const UnblockOutputBodySchema = z.object({
   expectedLabel: z.string().min(1).max(500),
 });
 
+/**
+ * The CLAIM of a declared deliverable: its key (or exact label). The Hub twin
+ * of MCP `synap_update_session { completeOutput }`, through the same service.
+ */
+const CompleteOutputBodySchema = z.object({
+  output: z.string().min(1).max(500),
+});
+
 /** The person's answer to what an agent asked about a slot. */
 const AnswerOutputBodySchema = z
   .object({
@@ -644,6 +751,8 @@ const AnswerOutputBodySchema = z
     askFingerprint: z.string().min(1).max(64).optional(),
     // A secret answer: the agent `provideOptions` named as the reader.
     expectedGranteeId: z.string().min(1).max(200).optional(),
+    // A secret answer: the reads the person picked (`once` | `session`).
+    secretUses: z.enum(PROVIDE_SECRET_USES).optional(),
     // The one-tap Confirm of a relay waiting on the slot (`pendingRelay`).
     confirmRelayed: z.literal(true).optional(),
     // "Not what I said" (`correctRelayedAnswer`).
@@ -897,17 +1006,28 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "One read for a whole map (`services/focus-sessions/work-graph.ts`): " +
       "every OPEN session, plus every session settled in the last " +
       "`windowHours` (default 72), plus the far end of every edge of those, " +
-      "with the edges flat (`blocked_by`, `spawned_from`, `waits_on_output`, " +
-      "`triggered`, `updated`), and the PRs, holds and goals its sessions " +
+      "with the edges flat (`blocked_by`, `spawned_from`, `orchestrated_by`, " +
+      "`waits_on_output`, `triggered`, `updated`), and the PRs, holds and goals its sessions " +
       "point at. `trackId` narrows it to one goal's sessions, " +
       "`rootSessionId` to one wave (the root and every session spawned " +
-      "under it); one or the other. For an unbound key, pod-wide when neither " +
+      "under it); one or the other. `playbookId` narrows it to the sessions " +
+      "that follow a playbook: run from it, or filed in a goal whose method " +
+      "it is (each window node's `playbookMatch` says which: `session` or " +
+      "`goal`). `subjectEntityId` narrows it to the sessions on one thing " +
+      "(its subject, or a worker targeting it). Each goal carries its method " +
+      "(`playbookId`, `currentStage`, `stages`). For an unbound key, pod-wide when neither " +
       "`workspaceId` nor `projectId` is given. A workspace-bound key reads " +
       "its own workspace, far ends included, and another `workspaceId` is a " +
       "403. Floored at the sessions the caller can read, " +
       "like the list. At most 500 window sessions, open first: " +
       "`window.truncated` / `window.omitted` say when it cut. A failed edge " +
-      "read is `sections.<name>.status: unavailable`, never an empty list.",
+      "read is `sections.<name>.status: unavailable`, never an empty list. " +
+      "A pod app (a key holding `session.read` that does not read every " +
+      "subject of the graph) gets the sessions its grant covers and the " +
+      "edges between them; `window.omittedByGrant` counts the sessions it " +
+      "does not cover, and the parts that read past its grant (next move, " +
+      "interactions, waits on an output, PR facts, goals; holder without " +
+      "`agent.read`) are `unavailable` with a reason saying they were withheld.",
     request: {
       query: z.object({
         workspaceId: uuidQueryParam.optional(),
@@ -923,6 +1043,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         lens: z.enum(["default", "triage", "all"]).optional(),
         trackId: uuidQueryParam.optional(),
         rootSessionId: uuidQueryParam.optional(),
+        playbookId: uuidQueryParam.optional(),
+        subjectEntityId: uuidQueryParam.optional(),
       }),
     },
     responses: {
@@ -1008,9 +1130,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       "agent's closed/failed close is refused (409 OPEN_QUESTIONS) while a " +
       "question it asked is open, unless questionDispositions settles each. " +
       "An agent's closed close is refused (409 NOT_DONE: unmetCriteria[], " +
-      "openOutcomes[], owedByPerson[], waiting) while a required criterion it " +
-      "can still check is not passing or a required outcome (an agent's or " +
-      "the person's) is open, unless `reason` says why it is done anyway " +
+      "openOutcomes[], owedByPerson[], unreadMessages[], waiting) while a " +
+      "required criterion it can still check is not passing, a required " +
+      "outcome (an agent's or the person's) is open, or a blocked_on_you / " +
+      "handoff another session sent it was never read, unless `reason` says " +
+      "why it is done anyway " +
       "(posted in the session room). " +
       "Distinct from POST .../complete-run (playbook run only).",
     request: {
@@ -1130,6 +1254,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           agentAttached: z.boolean(),
         }),
       },
+      202: {
+        description: "Proposed for review: a hand-off to another agent",
+        schema: z.object({}).passthrough(),
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "Not found", schema: ErrorSchema },
@@ -1192,6 +1320,44 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           expectedLabel: z.string(),
           kind: z.string(),
         }),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/outputs/complete",
+    tags: ["FocusSessions"],
+    summary: "Claim a declared deliverable as done",
+    description:
+      "The agent's claim on one declared deliverable, named by its key or " +
+      "exact label (`output`). The same service as MCP " +
+      "`synap_update_session { completeOutput }`: with evidence in place the " +
+      "pod verifies it at once (`completed`), otherwise it waits for review " +
+      "(`claimed`). A person's slot (`owner: 'human'`) is `refused`; no such " +
+      "deliverable is `no_match`. Owner-floored: another person's session is 404.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+      body: CompleteOutputBodySchema,
+    },
+    responses: {
+      200: {
+        description: "The claim's verdict",
+        schema: z.object({
+          ok: z.boolean(),
+          result: z.enum(["completed", "claimed", "refused", "no_match"]),
+          output: z.string(),
+          message: z.string().optional(),
+        }),
+      },
+      202: {
+        description:
+          "Proposed for review — `{ status: 'proposed', proposalId, reviewUrl }`",
+        schema: z.object({}).passthrough(),
       },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
@@ -1543,7 +1709,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=&trackId=&rootSessionId=
+   * GET /focus-sessions/graph?workspaceId=&projectId=&windowHours=&kind=&lens=&trackId=&rootSessionId=&playbookId=&subjectEntityId=
    *
    * The work graph (`buildWorkGraph`); `trackId` narrows it to one goal,
    * `rootSessionId` to one wave (one or the other). STATIC, so it is registered before
@@ -1627,9 +1793,13 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (trackId && rootSessionId) {
       return c.json({ error: "Pass trackId or rootSessionId, not both." }, 400);
     }
+    const playbookId = c.req.query("playbookId") || undefined;
+    const subjectEntityId = c.req.query("subjectEntityId") || undefined;
     for (const [name, value] of [
       ["trackId", trackId],
       ["rootSessionId", rootSessionId],
+      ["playbookId", playbookId],
+      ["subjectEntityId", subjectEntityId],
     ] as const) {
       if (value && !isUuid(value)) {
         return c.json({ error: `${name} is not a valid id: ${value}` }, 400);
@@ -1647,11 +1817,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // (decision C v1: `rosterReadFor` is false for every Hub caller).
         roster: false,
         boundWorkspaceId: c.get("keyWorkspaceId") ?? undefined,
+        // A pod app reads the sessions its grant covers, the rest withheld
+        // and counted (`workGraphReach`); every other caller reads it whole.
+        reach: workGraphReach(getRequestGrant()),
         focus: trackId
           ? { trackId }
           : rootSessionId
             ? { rootSessionId }
             : undefined,
+        playbookId,
+        subjectEntityId,
       });
       return c.json(graph);
     } catch (err) {
@@ -1796,16 +1971,31 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // without the packet (Content Studio's edit band).
         const { readSessionHolder } =
           await import("../../../services/focus-sessions/session-holder.js");
-        const holder = sessionHolderReadable(getRequestGrant())
-          ? await readSessionHolder(row, { userId: acting.userId })
-          : undefined;
+        const { projectSessionShape } =
+          await import("../../../services/focus-sessions/continuation-packet.js");
+        const readsAgents = sessionHolderReadable(getRequestGrant());
+        const [holder, shape] = await Promise.all([
+          readsAgents
+            ? readSessionHolder(row, { userId: acting.userId })
+            : undefined,
+          // The parts of the packet the grant does read (founder decision
+          // D1): parent, children and siblings under the session floor, the
+          // PRs the row recorded, and its runners with `agent.read`.
+          projectSessionShape(row, {
+            userId: acting.userId,
+            runners: readsAgents,
+            withheldReason:
+              "This key does not read the person's agents: who works this session is not shown.",
+          }),
+        ]);
         return c.json({
           ...attachSessionKind(attachTriage([row]))[0],
           ...(holder ? { holder } : {}),
+          ...shape,
           packet: {
             status: "withheld",
             reason:
-              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself is shown.",
+              "This key does not read everything a session's packet holds (its room, outcomes, links and more): only the session itself, its neighbour sessions, the pull requests it recorded and (with agent.read) its runners are shown.",
           },
         });
       }
@@ -1959,9 +2149,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       // Capture agent so focus_session.create auto-approves; otherwise keep the
       // caller's own agent identity (normal governance).
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
       const result = await createFocusSession({
         userId,
         workspaceId,
@@ -1991,6 +2179,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // NO_CRITERIA). A person's key and the capture path (X-Capture: 1, a
         // person capturing through a key) are exempt.
         requireCriteria: !!ctxAgentUserId && c.req.header("x-capture") !== "1",
+        // An outcome with `verify` says what done means.
+        declaredVerify: declaresVerify(body.outcomes),
         ...(body.outcomes && body.outcomes.length > 0
           ? mergeOutcomesForStart({
               outcomes: body.outcomes,
@@ -2004,6 +2194,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         subjectEntityId: body.subjectEntityId ?? null,
         parentSessionId: body.parentSessionId ?? null,
         suspendedIntent: body.suspendedIntent ?? null,
+        forOutput: body.forOutput ?? null,
         blockedBySessionIds: body.blockedBySessionIds ?? [],
         targets: body.targets,
         forceCreate: body.forceCreate,
@@ -2169,6 +2360,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
 
+      // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+      const outcomeWarnings = factOutcomeWarnings(patch.outcomes);
       // `outcomes` → the same two fields, UPSERTED by key onto the
       // loaded row (or onto the wholesale lists this same PATCH sent). From
       // here on the patch is an ordinary `expectedOutputs` / `criteria` write:
@@ -2201,6 +2394,20 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         !criteriaDiffer(existing.criteria, patch.criteria as SessionCriterion[])
       ) {
         delete patch.criteria;
+      }
+
+      // Step 2a: AUTHORITY FLOOR on the slots, before the membrane: the same
+      // `fileableExpectedOutputs` as `updateFocusSession`.
+      if (patch.expectedOutputs !== undefined) {
+        const fileable = fileableExpectedOutputs(
+          Array.isArray(existing.expectedOutputs)
+            ? (existing.expectedOutputs as ExpectedOutput[])
+            : [],
+          patch.expectedOutputs
+        );
+        if (!fileable.ok) return c.json({ error: fileable.reason }, 400);
+        patch.expectedOutputs =
+          fileable.expectedOutputs as typeof patch.expectedOutputs;
       }
 
       // Step 2b: VISIBILITY FLOOR on the subject anchor, before the membrane
@@ -2289,9 +2496,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
       const agentUserId =
         patch.agentUserId !== undefined
           ? resolvedAgentUserId
-          : await resolveCaptureActorUserId(c, resolvedAgentUserId, {
-              workspaceId,
-            });
+          : await resolveCaptureActorUserId(c, resolvedAgentUserId);
 
       // W4: what a pause waits on, and when it happened — refused up front.
       const moveRefusal = sessionMoveRefusal(
@@ -2444,6 +2649,18 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId,
         agentUserId,
         workspaceId,
+        // The key's grant: a project-only session counts in its project's
+        // spaces (`session-counted-spaces.ts`); governance stays at its home.
+        grantWorkspaceId: await sessionGrantWorkspaceId(existing, {
+          subjectType: "focus_session",
+          action: "update",
+          data: { id },
+          ...(trackFiling ? { filesIntoProject: true } : {}),
+        }),
+        // A person's goal filing rides this patch and files the session into
+        // the goal's project: checked where it lives now with no project (the
+        // filing rule, `grant-write-check.ts`).
+        ...(trackFiling ? { grantFilesIntoProject: true } : {}),
         subjectType: "focus_session",
         action: "update",
         source: "intelligence",
@@ -2531,6 +2748,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           reviewPath: perm.reviewPath,
           reviewUrl: perm.reviewUrl,
           ...(filing ? { filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       }
@@ -2657,6 +2875,14 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         throw err;
       }
 
+      // GRADES DECLARED UP FRONT (W5): a written criteria change keeps the
+      // grade slots in step, as every criteria door does. Never throws.
+      if (updated && patch.criteria !== undefined) {
+        const { fileDeclaredGradeSlots } =
+          await import("../../../services/focus-sessions/evaluations/record.js");
+        await fileDeclaredGradeSlots(id);
+      }
+
       // The TARGETS, after the row write, through THE writer every door uses.
       const targetsWrite =
         updated && patch.targets
@@ -2727,6 +2953,15 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         // Report the status the ROW now holds — see the MCP door for why a
         // caller told "active" past an open gate is the dangerous answer.
         if (advance.paused) updated = { ...updated, status: "paused" };
+        // A gate wrote the row after this call's write (its pause, its
+        // `checkGate` record, an `onFail` return): read it back, so the reply
+        // and its nudges read the gate as stored (finding 2c63fc36).
+        if (advance.gated) {
+          const stored = await db.query.focusSessions.findFirst({
+            where: eq(focusSessions.id, updated.id),
+          });
+          if (stored) updated = stored as typeof updated;
+        }
         // What the advance did to the subject (the MCP door's `subjectMove`).
         const { reportedSubjectMove } =
           await import("../../../services/focus-sessions/stage-subject-status.js");
@@ -2833,8 +3068,16 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
               ...restatedAskHints(
                 patch.expectedOutputs as Parameters<typeof restatedAskHints>[0]
               ),
+              ...outcomeWarnings,
             ]
-          : [];
+          : [...outcomeWarnings];
+      // A criterion whose outputKey names no output of this session.
+      warnings.push(
+        ...outputKeyWarnings(
+          patch.criteria as SessionCriterion[] | undefined,
+          updated.expectedOutputs
+        )
+      );
 
       return c.json({
         ...updated,
@@ -3053,12 +3296,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
 
       const ctxAgentUserId = c.get("agentUserId") as string | undefined;
-      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId, {
-        workspaceId,
-      });
+      const agentUserId = await resolveCaptureActorUserId(c, ctxAgentUserId);
 
       const result = await completeFocusSession({
         sessionId: id,
@@ -3101,8 +3342,6 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
           ? { closedNotDone: result.closedNotDone }
           : {}),
         ...(result.waiting ? { waiting: result.waiting } : {}),
-        // What the end moved (`subjectProfile.onEnd`), each with why.
-        ...(result.endMoves ? { endMoves: result.endMoves } : {}),
         ...(nudges ? { nudges } : {}),
       });
     } catch (err) {
@@ -3194,11 +3433,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         notFound: `Focus session ${id} not found`,
       });
       if (!acting.ok) return c.json({ error: acting.error }, acting.status);
-      const { userId, workspaceId } = acting;
+      const { userId } = acting;
       const agentUserId = await resolveCaptureActorUserId(
         c,
-        c.get("agentUserId") as string | undefined,
-        { workspaceId }
+        c.get("agentUserId") as string | undefined
       );
 
       const { cancelSession } =
@@ -3409,6 +3647,159 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   });
 
   /**
+   * POST /focus-sessions/orchestrate — START AN ORCHESTRATOR (founder
+   * decision D5): ONE session coordinating the picked running sessions, each
+   * linked (`orchestrated_by`), paused until the person approves the merged
+   * plan, and told so in its room. Governed (`focus_session/orchestrate`): an
+   * agent key gets 202 `proposed`; a person 200 `started`. Same service and
+   * input schema as tRPC `focusSessions.startOrchestrator` and MCP
+   * `synap_start_orchestrator`. Refusals: 400 bad input, a session that is
+   * not running or paused, an agent that cannot take the work · 403 the gate,
+   * a picked session outside the key's grant or its bound workspace · 404 a
+   * session that is not the caller's.
+   */
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/orchestrate",
+    tags: ["FocusSessions"],
+    summary: "Start an orchestrator over several running sessions",
+    description:
+      "Files ONE governed write (focus_session/orchestrate). On approval (or " +
+      "at once for a person): an orchestrator session (goal = the brief, a " +
+      "merged-plan deliverable, the person's plan-approval slot), one " +
+      "`orchestrated_by` link per picked session, each running one paused " +
+      "until the person answers plan-approval, and a handoff note in each " +
+      "room. Until then a held session changes no stage. A yes resumes " +
+      "them; a no resumes them as they were and cancels the orchestrator " +
+      "('Plan declined'); an orchestrator that ends unanswered releases " +
+      "them. 403 when a picked session is outside the key's grant or bound " +
+      "workspace (nothing written). Same service as tRPC " +
+      "focusSessions.startOrchestrator and MCP synap_start_orchestrator.",
+    request: { body: startOrchestratorInputSchema },
+    responses: {
+      200: {
+        description:
+          "Started: { status: 'started', orchestratorSessionId, channelId, children[] }",
+        schema: z.object({}).passthrough(),
+      },
+      202: {
+        description:
+          "Proposed for review: { status: 'proposed', orchestratorSessionId, proposalId, reviewUrl }",
+        schema: z.object({}).passthrough(),
+      },
+      400: { description: "Bad request", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: { description: "Not found", schema: ErrorSchema },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/focus-sessions/orchestrate", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const raw = await c.req.json().catch(() => null);
+    if (!raw) return c.json({ error: "Invalid JSON in request body" }, 400);
+    try {
+      const result = await startOrchestrator({
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+        input: raw,
+        // A workspace-bound key picks only sessions in its workspace (403
+        // otherwise), as the other session doors confine it.
+        boundWorkspaceId: c.get("keyWorkspaceId") ?? null,
+      });
+      return jsonGoverned(c, result);
+    } catch (err) {
+      logger.error({ err }, "focus-sessions.orchestrate failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
+   * POST /focus-sessions/:id/continue — CONTINUE AT <STAGE>: a run that ended
+   * or stopped before its last stage resumes in the SAME session at the stage
+   * it stopped on, with a new run turn (an ended session is reopened for it).
+   * Same service and body as tRPC `focusSessions.continueRun` and MCP
+   * `synap_continue_session`. Refusals: 404 unknown
+   * session · 403 an agent credential (a person's move) or a key whose grant
+   * does not allow it · 409 nothing to
+   * continue / another run live on the record / the session moved.
+   */
+  registerOpenApi(app, {
+    method: "post",
+    path: "/focus-sessions/:id/continue",
+    tags: ["FocusSessions"],
+    summary: "Continue a run that stopped before its last stage",
+    description:
+      "CONTINUE AT <STAGE>: the SAME session resumes at the stage its run " +
+      "stopped on, with a new run turn (an ended session is reopened for it; " +
+      "the stopped run keeps its verdict). A person's move: an agent " +
+      "credential is refused (403 person_only). Offered by statusOf " +
+      "include work as `continue`, with `canAct` from the same check. " +
+      "Same service as tRPC focusSessions.continueRun and MCP " +
+      "synap_continue_session.",
+    request: {
+      params: z.object({ id: z.string().uuid() }),
+    },
+    responses: {
+      200: {
+        description:
+          "Continued: { ok, sessionId, runId, runStatus, at, reopenedFrom, warnings }",
+        schema: z.object({}).passthrough(),
+      },
+      403: {
+        description:
+          "Refused: an agent credential (person_only) or the key's grant (denied)",
+        schema: z.object({}).passthrough(),
+      },
+      404: { description: "Not found", schema: z.object({}).passthrough() },
+      409: {
+        description:
+          "Refused: nothing to continue, another run live on the record (already_running), or the session moved (conflict)",
+        schema: z.object({}).passthrough(),
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.post("/focus-sessions/:id/continue", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    try {
+      const { continueStoppedRun } =
+        await import("../../../services/focus-sessions/continue-run.js");
+      const result = await continueStoppedRun({
+        sessionId: id,
+        userId: c.get("userId") as string,
+        agentUserId: (c.get("agentUserId") as string | undefined) ?? null,
+      });
+      if (result.ok) return c.json(result, 200);
+      const status =
+        result.reason === "not_found"
+          ? 404
+          : result.reason === "person_only" || result.reason === "denied"
+            ? 403
+            : 409;
+      return c.json(result, status);
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.continue failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err)
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/recall — "recall again": re-run session recall
    * now (same runner as the start doors and the sweep). Mirrors tRPC
    * `focusSessions.recallAgain`. Owner-floored; 404 for a foreign/unknown
@@ -3584,7 +3975,10 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * a retry cannot mint two rooms.
    *
    * Ungoverned like `/used`: minting the room a session already implies is
-   * provenance plumbing, not a mutation of user data.
+   * provenance plumbing, not a mutation of user data. Bounded by the key's
+   * grant like every other session write: `session.update` where the session
+   * counts (its space, or its project's spaces: `answerGrantWrite`), so a
+   * person's app token passes only where it may take part in the session.
    */
   app.post("/focus-sessions/:id/channel", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
@@ -3594,6 +3988,8 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     try {
       // Load by id, bind to the row's workspace (membership check) — the same
       // two steps `/used` and PATCH take.
@@ -3683,6 +4079,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
     if (!isUuid(id)) {
       return c.json({ error: `Focus session ${id} not found` }, 404);
     }
+    // A key bounded by a grant must hold `session.update` on the session's
+    // own place (the rung the unblock, complete and answer doors run):
+    // delegating starts an agent turn and posts in the session's room, which
+    // workspace membership alone must not let a narrowed key do.
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
     const raw = await c.req.json().catch(() => null);
     const parsed = DelegateOutputBodySchema.safeParse(raw);
     if (!parsed.success) {
@@ -3708,10 +4110,27 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         userId: acting.userId,
         expectedLabel: parsed.data.expectedLabel,
         agentType: parsed.data.agentType,
+        // An agent key handing the slot to another agent meets the ONE
+        // hand-off gate (`agent-hand-off.ts`): refused or proposed.
+        actingAgentUserId: (c.get("agentUserId") as string | undefined) ?? null,
       });
       switch (result.status) {
         case "not_found":
           return c.json({ error: `Focus session ${id} not found` }, 404);
+        case "refused":
+          return c.json({ error: result.reason }, 403);
+        case "proposed":
+          return jsonGoverned(c, {
+            status: "proposed" as const,
+            message: proposedMessageFor(
+              result.proposalType,
+              "Handing this deliverable to another agent was proposed for review"
+            ),
+            proposalId: result.proposalId,
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+          });
         case "unknown_label":
           return c.json(
             {
@@ -3788,11 +4207,12 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         );
       }
       const id = c.req.param("id");
-      if (path === "unblock") {
-        // The tRPC twin's grant rung: the session's own space + project.
-        const denial = await grantWriteDenial(await answerGrantWrite(id));
-        if (denial) return c.json({ error: denial }, 403);
-      }
+      // The grant rung, on BOTH doors: `session.update` on the session's own
+      // space + project (the tRPC twin's rung for unblock). Blocking hands a
+      // slot to the person, so a narrowed key may do it only where its grant
+      // lets it update the session.
+      const denial = await grantWriteDenial(await answerGrantWrite(id));
+      if (denial) return c.json({ error: denial }, 403);
       if (!isUuid(id)) {
         return c.json({ error: `Focus session ${id} not found` }, 404);
       }
@@ -3894,6 +4314,101 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
   );
 
   /**
+   * POST /focus-sessions/:id/outputs/complete
+   *
+   * The Hub door for CLAIMING a declared deliverable. The PATCH door refuses
+   * `completeOutput` (it takes no row lock: `unsupportedUpdateFieldError`), so
+   * an in-pod run, whose only door is Hub REST, could declare outputs and never
+   * claim one (run audit 80005d94, 10 Nov 2026). `claimSessionOutput` calls the
+   * ONE service the MCP door calls (`updateFocusSession`, `completeOutput`
+   * only): the row lock, the human-slot floor, the evidence verdict and
+   * governance are its, never a second copy here.
+   * Owner-floored like the block door (`resolveRowActingContext`).
+   */
+  app.post("/focus-sessions/:id/outputs/complete", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json({ error: "Missing scope: hub-protocol.write" }, 403);
+    }
+    const id = c.req.param("id");
+    if (!isUuid(id)) {
+      return c.json({ error: `Focus session ${id} not found` }, 404);
+    }
+    // A key bounded to a space or project must hold write on the session's
+    // own place (the rung the unblock and answer doors run).
+    const denial = await grantWriteDenial(await answerGrantWrite(id));
+    if (denial) return c.json({ error: denial }, 403);
+    const raw = await c.req.json().catch(() => null);
+    const parsed = CompleteOutputBodySchema.safeParse(raw);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid request body", details: parsed.error.flatten() },
+        400
+      );
+    }
+    try {
+      const session = await db.query.focusSessions.findFirst({
+        where: eq(focusSessions.id, id),
+      });
+      if (!session) {
+        return c.json({ error: `Focus session ${id} not found` }, 404);
+      }
+      const acting = await resolveRowActingContext(c, session, {
+        notFound: `Focus session ${id} not found`,
+      });
+      if (!acting.ok) return c.json({ error: acting.error }, acting.status);
+
+      const { claimSessionOutput } =
+        await import("../../../services/focus-sessions/claim-output.js");
+      const result = await claimSessionOutput({
+        sessionId: session.id,
+        userId: acting.userId,
+        // The verified acting agent (auth context), never a body field.
+        agentUserId: c.get("agentUserId") as string | undefined,
+        output: parsed.data.output,
+      });
+      switch (result.status) {
+        case "not_found":
+          return c.json({ error: `Focus session ${id} not found` }, 404);
+        case "denied":
+          return c.json({ error: result.reason }, 403);
+        case "proposed":
+          return jsonGoverned(c, {
+            status: "proposed",
+            message: proposedMessageFor(
+              result.proposalType,
+              "The claim was proposed for review"
+            ),
+            proposalId: result.proposalId,
+            ...(result.proposalType
+              ? { proposalType: result.proposalType }
+              : {}),
+            summary: result.summary,
+            reviewPath: result.reviewPath,
+            reviewUrl: result.reviewUrl,
+          });
+        case "updated": {
+          const report = result.completeOutput;
+          return c.json({
+            ok: report?.result === "completed" || report?.result === "claimed",
+            result: report?.result ?? "no_match",
+            output: parsed.data.output,
+            ...(report?.message ? { message: report.message } : {}),
+          });
+        }
+        default:
+          // A lifecycle conflict: the session moved under the claim.
+          return c.json(result, 409);
+      }
+    } catch (err) {
+      logger.error({ err, id }, "focus-sessions.completeOutput failed");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  /**
    * POST /focus-sessions/:id/outputs/answer
    *
    * The person ANSWERS what an agent asked about a slot — the Hub twin of
@@ -3958,6 +4473,7 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
         value: parsed.data.value,
         askFingerprint: parsed.data.askFingerprint,
         expectedGranteeId: parsed.data.expectedGranteeId,
+        secretUses: parsed.data.secretUses,
         confirmRelayed: parsed.data.confirmRelayed,
       });
       if (result.status !== "answered") {
@@ -4292,8 +4808,11 @@ export function registerFocusSessionsRoutes(app: HubHono): void {
    * playbook_run from how the turn ended (`run-turn-end.ts`, B8 2026-10-21).
    * No body / `outcome: 'completed'` → the run completes (the old behaviour).
    * `outcome: 'stopped'` + `reason: 'turn_budget' | 'max_steps'` → the run stays LIVE: it
-   * continues on its own up to N times, then the person is asked. Best-effort
-   * on "no run": a session that is not a playbook run is a normal 200.
+   * continues on its own up to N times, then the person is asked.
+   * `outcome: 'failed'` + `reason: 'read_failed' | 'turn_error' |
+   * 'budget_exceeded'` → the run ends failed and its session closes failed.
+   * Best-effort on "no run": a session that is not a playbook run is a
+   * normal 200.
    */
   app.post("/focus-sessions/:sessionId/complete-run", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {

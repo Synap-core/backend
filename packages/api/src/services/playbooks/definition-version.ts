@@ -13,15 +13,23 @@ export const DEFINITION_VERSION_FIELDS = [
   "channelSpec",
   "expectedOutputs",
   "criteria",
-  // A playbook's DECLARED requirements are part of its definition: a run
-  // snapshots them, and changing them changes what the process asks the pod to
-  // do. Omitting them here would let a requirements edit leave `version`
-  // untouched, so the snapshot could not tell the two apart.
-  "requiredIntents",
+  // What a run of it may use (0419, "only these") is part of its definition:
+  // a run snapshots it, and changing it changes what the run can do. Omitting
+  // it here would let a tools edit leave `version` untouched, so the snapshot
+  // could not tell the two apart.
+  "tools",
   // The rules it follows: a changed ref list changes what a run is told.
   // (A new VERSION of a referenced rule does not bump this; the run records
   // that through `guidance.used`, its content hashes.)
   "guidance",
+  // Who runs it and the tools it needs (0416): a changed runner changes who a
+  // run is handed to, a changed requires what is checked before it is.
+  "runner",
+  "requires",
+  // How a run is carried out (an agent session vs a one-shot `generate`): an
+  // executor-only change changes what a run IS, so runs before and after must
+  // carry different versions (founder, doc a7811b28 §3).
+  "executor",
 ] as const;
 
 export function definitionVersionChanged(

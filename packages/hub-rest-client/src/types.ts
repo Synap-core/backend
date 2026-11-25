@@ -726,6 +726,12 @@ export interface CaptureGraphSessionStep {
   /** `blocked_by` edges declared at birth. */
   blockedByRefs?: string[];
   blockedBySessionIds?: string[];
+  /** A step that waits (a blocker, a later `plannedFor`) is born planned unless true. */
+  startNow?: boolean;
+  /** When its window opens: a month, a day or an ISO date-time. */
+  plannedFor?: string;
+  /** Its deadline (same shapes). */
+  dueBy?: string;
   /** The entity this session is about (a session ref or a real id). */
   subjectRef?: string;
   subjectEntityId?: string;
@@ -1180,7 +1186,19 @@ export type HubSlotAsk = (
       provide:
         | { kind: "connection"; service: string }
         | { kind: "file"; accept?: string[] }
-        | { kind: "secret"; name: string };
+        | {
+            kind: "secret";
+            name: string;
+            /** What it is for, declared; short words, never the secret. */
+            purpose?: {
+              for: string;
+              tool: string;
+              action?: string;
+              on?: string;
+            };
+            /** One read, or until the job closes (the default). */
+            uses?: "once" | "session";
+          };
     }
 ) & {
   /**
@@ -1238,7 +1256,13 @@ export type HubSlotAnswerValue =
         | { kind: "secret"; vaultRef: string }
         | { kind: "connection"; connectionId: string }
         | { kind: "file"; fileId: string };
-    };
+    }
+  /**
+   * The person REFUSED the ask (mirrors the `declined` arm of
+   * `AskAnswerValue`): nothing was handed over; `reason` is theirs, for you.
+   * Do not ask the same again: re-plan, withdraw the slot, or close failed.
+   */
+  | { type: "declined"; reason?: string };
 
 /** A person's answer to an agent's question about one slot (pod-stamped). */
 export interface HubSlotAnswer {
@@ -1418,15 +1442,63 @@ export interface GetWorkGraphOptions {
   rootSessionId?: string;
 }
 
-/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker. */
+/** One edge of the work graph, flat. `blocked_by` runs from the waiter to its blocker; `orchestrated_by` from the coordinated session to its orchestrator; `serves` from a session or goal to the goal it is done for. */
 export interface HubWorkGraphEdge {
   kind:
-    "blocked_by" | "spawned_from" | "waits_on_output" | "triggered" | "updated";
+    | "blocked_by"
+    | "spawned_from"
+    | "orchestrated_by"
+    | "waits_on_output"
+    | "triggered"
+    | "updated"
+    | "serves";
   from: string;
   to: string;
+  /** Absent = `from` is a session. `track` = a goal in `goals`. */
+  fromKind?: "track";
+  /** Absent = `to` is a session. `entity` = in `decisions` or `entities`; `track` = in `goals`. */
+  toKind?: "entity" | "track";
   entityId?: string;
   count?: number;
   lastAt?: string | null;
+  /** `serves`: the goal criterion served, when the edge names one. */
+  criterionKey?: string;
+  /** `blocked_by` to a decision: the option this step is the arm of. Absent = a plain wait. */
+  option?: string;
+}
+
+/** A decision a node waits on or is about. Absent from an older pod. */
+export interface HubWorkGraphDecision {
+  id: string;
+  title: string | null;
+  /** proposed | accepted | superseded | rejected; null = unset. */
+  status: string | null;
+  category: string | null;
+  /** Each option with its marks; [] = a yes/no decision. */
+  options: Array<{
+    key: string;
+    label: string;
+    description: string | null;
+    recommended: boolean;
+    chosen: boolean;
+  }>;
+  recommendedOption: string | null;
+  chosenOption: string | null;
+  /** answered | asked (an owed question asks the person) | not_asked. */
+  answer: "answered" | "asked" | "not_asked";
+  /** With `asked`: the session whose owed question asks it. */
+  askSessionId: string | null;
+  sourceSessionId: string | null;
+}
+
+/** Another thing a node waits on or is about (its subject). Absent from an older pod. */
+export interface HubWorkGraphEntity {
+  id: string;
+  title: string | null;
+  /** The thing's kind (profile slug). */
+  kind: string;
+  status: string | null;
+  category: string | null;
 }
 
 /** `unavailable` = the read FAILED: no edge of that kind was drawn, which is not "none". */
@@ -1447,6 +1519,8 @@ export interface HubWorkGraphNode extends HubFocusSessionListItem {
   viewerRole: "owner" | "member";
   /** false = only the far end of an edge of a window session. */
   inWindow: boolean;
+  /** Ended as a decision's arm not taken (readiness `skipped`). Absent otherwise. */
+  skipped?: true;
 }
 
 /** GET /api/hub/focus-sessions/graph. */
@@ -1495,18 +1569,30 @@ export interface HubWorkGraph {
   pullRequests: HubWorkGraphPullRequest[];
   holds: HubWorkGraphHold[];
   goals: HubWorkGraphGoal[];
+  /** Absent from an older pod. */
+  decisions?: HubWorkGraphDecision[];
+  /** Absent from an older pod. */
+  entities?: HubWorkGraphEntity[];
   sections: {
     blockedBy: HubWorkGraphSection;
+    orchestration: HubWorkGraphSection;
     waitsOnOutputs: HubWorkGraphSection;
     interactions: HubWorkGraphSection;
     farEnds: HubWorkGraphSection;
     pullRequests: HubWorkGraphSection;
     holds: HubWorkGraphSection;
     goals: HubWorkGraphSection;
+    /** Absent from an older pod: then these were not read. */
+    crossKind?: HubWorkGraphSection;
+    serves?: HubWorkGraphSection;
+    decisions?: HubWorkGraphSection;
+    entities?: HubWorkGraphSection;
   };
   window: {
     since: string;
     hours: number;
+    /** True under trackId / rootSessionId: settled work of any age is in. Absent from an older pod. */
+    allSettled?: boolean;
     ceiling: number;
     truncated: boolean;
     omitted: number;
@@ -1559,6 +1645,11 @@ export interface HubSessionCriterion {
     capability?: string;
     evidenceKey?: string;
     hint?: string;
+    /**
+     * kind=capability: the verb's arguments. A KPI the pod measures:
+     * `capability: "measure.check"`, `params: { op, params, threshold, comparator }`.
+     */
+    params?: Record<string, unknown>;
   };
   stageKey?: string;
   /**
@@ -1574,6 +1665,8 @@ export interface HubSessionCriterion {
     | "certified";
   /** R7 — about the result (default) or the method. */
   about?: "result" | "method";
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 /**
@@ -3191,6 +3284,11 @@ export interface RunPlaybookInput {
    * unknown, paused or acts for someone else.
    */
   handToAgentId?: string;
+  /**
+   * Start a second run although one of this playbook is live on the subject.
+   * Without it, a live run comes back as `status: "already_running"`.
+   */
+  startAnother?: boolean;
 }
 
 /** One request to enable a pack a blocked playbook depends on. */
@@ -3240,6 +3338,21 @@ export type HubRunPlaybookResult =
         [key: string]: unknown;
       }>;
       enableProposals: HubCapabilityEnableOffer[];
+    }
+  | {
+      /**
+       * Nothing started: you already have a live run of this playbook on the
+       * subject (`live_run`), or an agent's draft of it waits for you
+       * (`draft_awaiting_acceptance`). `session` is that run; `run` its
+       * newest ledger row, null for a draft. Pass `startAnother` to start a
+       * second run.
+       */
+      status: "already_running";
+      run: Record<string, unknown> | null;
+      session: Record<string, unknown>;
+      proposalId: null;
+      reason: "live_run" | "draft_awaiting_acceptance";
+      message: string;
     };
 
 // ─── Skills / Rules (prompt-injecting authoring doors) ───────────────────────

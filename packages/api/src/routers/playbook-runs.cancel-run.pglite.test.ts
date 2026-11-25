@@ -53,7 +53,11 @@ vi.mock("@synap/jobs", () => ({
 }));
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
-import { focusSessions, playbookRuns } from "@synap/database";
+import {
+  focusSessions,
+  lifecycleTransitionOutbox,
+  playbookRuns,
+} from "@synap/database";
 import { playbookRunsRouter } from "./playbook-runs.js";
 
 const BASIC =
@@ -90,7 +94,7 @@ async function run(): Promise<string> {
 
 describe("playbookRuns.cancelRun", () => {
   beforeAll(async () => {
-    for (const t of [focusSessions, playbookRuns]) {
+    for (const t of [focusSessions, playbookRuns, lifecycleTransitionOutbox]) {
       await h.client!.exec(ddlFor(t as unknown as PgTable));
     }
   }, 120_000);

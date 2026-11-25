@@ -28,7 +28,11 @@ import {
   links,
   secrets,
 } from "@synap/database/schema";
-import type { CapabilityDefinition } from "@synap/playbooks";
+import type {
+  CapabilityDefinition,
+  CapabilityParamObtain,
+} from "@synap/playbooks";
+import { readParamObtain } from "./param-obtain.js";
 
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import {
@@ -264,6 +268,8 @@ export interface CapabilityCardInstallParam {
   required?: boolean;
   description?: string;
   secret?: boolean;
+  /** How a person gets this value (manifest `obtain`, `param-obtain.ts`). */
+  obtain?: CapabilityParamObtain;
 }
 
 export interface CapabilityCard {
@@ -346,6 +352,8 @@ export function extractInstallParams(
   if (!Array.isArray(params)) return [];
   return params.map((p) => {
     const type = typeof p.type === "string" ? p.type : undefined;
+    // Dropped when invalid: a cached manifest was not validated here.
+    const obtain = readParamObtain(p.obtain);
     return {
       name: String(p.name),
       ...(typeof p.label === "string" ? { label: p.label } : {}),
@@ -354,6 +362,7 @@ export function extractInstallParams(
       ...(typeof p.description === "string"
         ? { description: p.description }
         : {}),
+      ...(obtain ? { obtain } : {}),
       // Prompt these masked: an explicit secret/password type, or the
       // conventional credential param names used by vault-generic templates.
       ...(type === "password" ||
@@ -832,11 +841,49 @@ export async function buildCapabilityCatalog(
           )
       : [];
 
-  const memberToolIds = Array.from(
-    new Set(
-      memberLinks.filter((l) => l.fromType === "tool").map((l) => l.fromId)
-    )
+  // 2b. ADD-ONS (founder decision D6): an add-on owns no tool. Its actions run
+  //     through its BASE's tool rows (`capability --extends--> capability`),
+  //     so its connection and its access are the base's: when the base's
+  //     access is off, the add-on's card says so and no action reads runnable.
+  const extendsLinks =
+    containerIds.length > 0
+      ? await db
+          .select({ fromId: links.fromId, toId: links.toId })
+          .from(links)
+          .where(
+            and(
+              eq(links.fromType, "capability"),
+              inArray(links.fromId, containerIds),
+              eq(links.toType, "capability"),
+              eq(links.linkType, "extends")
+            )
+          )
+      : [];
+  const baseIdByAddOn = new Map(extendsLinks.map((l) => [l.fromId, l.toId]));
+  const loadedContainerIds = new Set(containerIds);
+  const unloadedBaseIds = [...new Set(extendsLinks.map((l) => l.toId))].filter(
+    (id) => !loadedContainerIds.has(id)
   );
+  const baseToolLinks =
+    unloadedBaseIds.length > 0
+      ? await db
+          .select()
+          .from(links)
+          .where(
+            and(
+              eq(links.fromType, "tool"),
+              eq(links.toType, "capability"),
+              inArray(links.toId, unloadedBaseIds),
+              eq(links.linkType, "member_of")
+            )
+          )
+      : [];
+  const toolLinks = [
+    ...memberLinks.filter((l) => l.fromType === "tool"),
+    ...baseToolLinks,
+  ];
+
+  const memberToolIds = Array.from(new Set(toolLinks.map((l) => l.fromId)));
   const memberSkillIds = Array.from(
     new Set(
       memberLinks.filter((l) => l.fromType === "skill").map((l) => l.fromId)
@@ -932,8 +979,13 @@ export async function buildCapabilityCatalog(
     installedNames.add(container.name.toLowerCase());
 
     const myLinks = memberLinks.filter((l) => l.toId === container.id);
-    const myTools = myLinks
-      .filter((l) => l.fromType === "tool")
+    // An add-on's tools are its base's (2b above).
+    const baseId = baseIdByAddOn.get(container.id);
+    const myTools = toolLinks
+      .filter(
+        (l) =>
+          l.toId === container.id || (baseId !== undefined && l.toId === baseId)
+      )
       .map((l) => toolById.get(l.fromId))
       .filter((t): t is NonNullable<typeof t> => !!t);
     const myToolRefs = myTools.map((t) => t.credentialRef ?? null);

@@ -18,7 +18,7 @@ vi.mock("../../utils/user-visible-where.js", () => ({
 }));
 
 import { listRecentRunsByFlows } from "./recent-by-flows.js";
-import { LIVE_RUN_STATUSES } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 
 const AUTO_ID = "00000000-0000-4000-8000-000000000001";
 const PLAYBOOK_ID = "00000000-0000-4000-8000-000000000002";

@@ -33,11 +33,13 @@ import {
   tools,
   links,
   vaultGrants,
+  governanceRules,
   isNull,
   drizzleSql,
 } from "@synap/database";
+import { revokeHostSeeds } from "@synap/database/agent-governance";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 
 export interface ShadowPart {
   id: string;
@@ -185,7 +187,7 @@ export async function findCapabilityShadows(
         // Only an ACTIVE skill can answer a verb, so only an active one shadows.
         .where(
           and(
-            visibleSkillsAnyWorkspaceWhere(userId),
+            visibleSkillsWhere(userId, undefined, { allSpaces: true }),
             eq(skills.status, "active")
           )
         ),
@@ -344,6 +346,26 @@ export async function retireCapabilityShadows(input: {
           isNull(vaultGrants.revokedAt)
         )
       );
+    // The auto approval rows naming a removed part by its id (a grant's, since
+    // 0435) would match nothing again; take them back with the grants so the
+    // approvals list does not keep a dead "runs on its own".
+    const revokedRules = await tx
+      .update(governanceRules)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(governanceRules.targetKind, "capability"),
+          inArray(governanceRules.targetPattern, ids),
+          eq(governanceRules.verdict, "auto"),
+          isNull(governanceRules.revokedAt)
+        )
+      )
+      .returning({ id: governanceRules.id });
+    // Their copies on an agent's box go with them (host-seed.ts).
+    await revokeHostSeeds(
+      tx,
+      revokedRules.map((r) => r.id)
+    );
   });
   return {
     retired: chosen.map((s) => ({ type: s.type, id: s.id, name: s.name })),

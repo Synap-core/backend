@@ -72,9 +72,11 @@ export interface ScanResult {
   unclosedRootFence: boolean;
 }
 
-interface FenceState {
+export interface FenceState {
   char: string;
   length: number;
+  /** The info string after the fence characters (trimmed). */
+  info: string;
 }
 
 interface Frame {
@@ -91,7 +93,7 @@ const COLON_LINE_RE = /^[ \t]*(:{3,})[ \t]*$/;
 const CODE_FENCE_RE = /^ {0,3}(`{3,}|~{3,}|\${2,})(.*)$/;
 
 /** A line that closes an open fence (same char, at least as long, nothing after). */
-function closesFence(line: string, fence: FenceState): boolean {
+export function closesFence(line: string, fence: FenceState): boolean {
   const m = /^ {0,3}(`{3,}|~{3,}|\${2,})[ \t]*$/.exec(line);
   return !!m && m[1]![0] === fence.char && m[1]!.length >= fence.length;
 }
@@ -101,12 +103,12 @@ function closesFence(line: string, fence: FenceState): boolean {
  * backtick, and a math meta cannot contain a dollar (`$$E = mc^2$$` on one line
  * is inline math in a paragraph, not a block).
  */
-function opensFence(line: string): FenceState | null {
+export function opensFence(line: string): FenceState | null {
   const m = CODE_FENCE_RE.exec(line);
   if (!m) return null;
   const char = m[1]![0]!;
   if ((char === "`" || char === "$") && m[2]!.includes(char)) return null;
-  return { char, length: m[1]!.length };
+  return { char, length: m[1]!.length, info: m[2]!.trim() };
 }
 
 // ─── Attributes (micromark-extension-directive's grammar) ───────────────────

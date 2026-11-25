@@ -27,8 +27,10 @@ import {
   buildObjectActionTitle,
   humanizeToken,
   resolveActionLabel,
+  resolveObjectNoun,
 } from "@synap-core/types/vocabulary";
 import { trpc } from "../../../../lib/trpc";
+import { isRuleSkill } from "../../../../lib/rule-skill";
 import { useSetSkillApproved } from "../../presence/use-request-doors";
 import { formatRelative, readableError } from "../../../../lib/format";
 import { ExitLink } from "../../../../lib/exit-link";
@@ -103,6 +105,10 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
   }
 
   const instruction = skill.kind === "instruction";
+  // A rule is pushed into the work it scopes, never a Tool (founder, 19 Nov
+  // 2026): its page names it a Rule (`lib/rule-skill.ts`, the predicate the
+  // Tools and Rules lists read).
+  const objectKind = isRuleSkill(skill) ? "rule" : "skill";
   const row = skillRow(skill);
   const spaceName = (wsId: string) =>
     (spaces.data ?? []).find((s) => s.id === wsId)?.name;
@@ -155,7 +161,7 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
     <>
       {frame.object({
         header: {
-          kind: "skill",
+          kind: objectKind,
           title: skill.name,
           summary: skill.description?.trim() || undefined,
           status: approvedStatus(skill),
@@ -167,7 +173,13 @@ export function SkillObject({ id, frame }: { id: string; frame: ObjectFrame }) {
         },
         facts: [
           { label: t("fact.space"), value: toolWhere(row, spaceName) },
-          { label: t("fact.kind"), value: humanizeToken(skill.kind) },
+          {
+            label: t("fact.kind"),
+            value:
+              objectKind === "rule"
+                ? resolveObjectNoun("rule")
+                : humanizeToken(skill.kind),
+          },
           ...(row.slug ? [{ label: t("fact.loadsBy"), value: row.slug }] : []),
           {
             label: t("fact.added"),

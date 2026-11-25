@@ -151,14 +151,16 @@ import {
   proposals,
   workspaces,
   workspaceMembers,
+  apiKeys,
   users,
   links,
   sessionEvaluations,
   podMembers,
   projectMembers,
+  spaceAccess,
   trackParticipants,
 } from "@synap/database";
-import { runGoalLoop, sweepGoalLoops } from "../goal-loop.js";
+import { asRunCriterion, runGoalLoop, sweepGoalLoops } from "../goal-loop.js";
 import { goalLoopReactor } from "../goal-loop-reactor.js";
 import { setTrackDirection, startTrack } from "../tracks-service.js";
 
@@ -293,6 +295,7 @@ beforeAll(async () => {
     users,
     workspaces,
     workspaceMembers,
+    apiKeys,
     links,
     playbooks,
     projects,
@@ -300,6 +303,7 @@ beforeAll(async () => {
     sessionEvaluations,
     podMembers,
     projectMembers,
+    spaceAccess,
     // Who is on a goal (W3): the owner seat the loop asks; `startTrack` seeds it.
     trackParticipants,
   ]) {
@@ -350,6 +354,25 @@ describe("runGoalLoop — proposes the next run", () => {
     expect((data.criteria as Array<{ key: string }>).map((c) => c.key)).toEqual(
       ["pages", "links", "polish"]
     );
+    // W4: carried, they check the goal through this run, not a run output.
+    expect(
+      asRunCriterion({
+        key: "k",
+        statement: "S",
+        check: { kind: "judge" },
+        outputKey: "deck",
+        about: "result",
+        acceptance: null,
+      })
+    ).toEqual({
+      key: "k",
+      statement: "S",
+      check: { kind: "judge" },
+      about: "method",
+    });
+    expect(
+      (data.criteria as Array<{ about?: string }>).map((c) => c.about)
+    ).toEqual(["method", "method", "method"]);
     // The goal's end state rides as the run's brief.
     expect(String(data.goal)).toContain(
       "What done looks like: The new site is live"

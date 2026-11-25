@@ -4,7 +4,8 @@
  *    (`writeStageSubjectStatus`) and reports it;
  *  - a HUMAN gate holds that write (the approval does it);
  *  - a HOLDING check gate on a stage that declares `onFail` returns the run to
- *    that stage — un-paused, through the same door, never re-routed again;
+ *    that stage — un-paused, through the same door, never re-routed again —
+ *    unless it held only because the AI judge could not run (it stays held);
  *  - STEP = STATUS: a door advance the subject leads moves the subject and
  *    does NOT write `current_stage` (the follow does).
  */
@@ -74,9 +75,23 @@ vi.mock("../stage-subject-status.js", () => ({
     h.writes.push(input);
     return h.subjectOutcome;
   },
+  // A gate's pass (D2): the stage left's `onApproved`, then the entered one.
+  writeGatePassStatuses: async (input: Record<string, unknown>) => {
+    h.writes.push({ ...input, pass: true });
+    return {
+      reached: { status: "written", property: "post-status", value: "done-x" },
+      entered: h.subjectOutcome,
+    };
+  },
 }));
 vi.mock("@synap/jobs/utils/session-process.js", () => ({
   loadSessionProcess: async () => h.proc,
+}));
+// The orchestrator hold (D-O1) is its own rule with its own suite
+// (`start-orchestrator.pglite.test.ts`); nothing here is orchestrated.
+vi.mock("@synap/jobs/utils/orchestrator-hold.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  orchestratorHolding: async () => null,
 }));
 
 import { advanceSessionStage } from "../advance-stage.js";
@@ -192,6 +207,31 @@ describe("advanceSessionStage — process hooks", () => {
     expect(h.writes.map((w) => w.toStage)).toEqual(["draft"]);
   });
 
+  it("a check gate held because the AI judge could not run stays held: no onFail", async () => {
+    (h.proc as { stages: Array<Record<string, unknown>> }).stages[1]!.gate = {
+      kind: "check",
+    };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: false,
+      failing: ["k"],
+      paused: true,
+      notJudged: true,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "u",
+      stageWrite: "door",
+    });
+    expect(r).toMatchObject({ gated: true, paused: true });
+    expect(r.onFail).toBeUndefined();
+    // Never un-paused, never moved back to "draft".
+    expect(h.updates.some((u) => u.status === "active")).toBe(false);
+    expect(h.writes).toEqual([]);
+  });
+
   it("a holding check gate WITHOUT onFail just holds (today's behaviour)", async () => {
     const review = (h.proc as { stages: Array<Record<string, unknown>> })
       .stages[1]!;
@@ -227,6 +267,37 @@ describe("advanceSessionStage — process hooks", () => {
     expect(h.updates).toContainEqual(
       expect.objectContaining({ currentStage: "review" })
     );
+  });
+
+  it("a PASSING check gate reaches the stage LEFT first, then writes the entered status (D2)", async () => {
+    const proc = h.proc as { stages: Array<Record<string, unknown>> };
+    proc.stages[1]!.gate = { kind: "check" };
+    h.gates.push({
+      kind: "check",
+      stageKey: "review",
+      passed: true,
+      failing: [],
+      paused: false,
+    });
+    const r = await advanceSessionStage({
+      session: SESSION,
+      toStage: "review",
+      userId: "owner-1",
+      agentUserId: "agent-1",
+      stageWrite: "door",
+    });
+    // ONE gate-pass write, naming the stage left and the stage entered.
+    expect(h.writes).toEqual([
+      expect.objectContaining({
+        pass: true,
+        gatedStage: "review",
+        fromStage: "draft",
+        userId: "owner-1",
+        agentUserId: "agent-1",
+      }),
+    ]);
+    expect(r.subjectReached).toMatchObject({ value: "done-x" });
+    expect(r.subjectStatus).toMatchObject({ status: "written" });
   });
 
   it("a FOLLOW into a PASSING check gate writes nothing either", async () => {

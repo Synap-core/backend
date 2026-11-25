@@ -5,7 +5,7 @@
  * WHY THIS EXISTS
  * ---------------
  * A template whose profiles are `scope: shared` seeds ONE base row, reachable
- * from other workspaces only through `profile_workspace_access` grants. (NOTE:
+ * from other workspaces only through `space_access` grants. (NOTE:
  * `shared` is NOT pod-wide — that is `scope: system`. See ProfileScope in
  * `@synap/database`.) The template that reaches that row FIRST seeds its body;
  * later templates only add workspace OVERLAYS. So "which template applies first"

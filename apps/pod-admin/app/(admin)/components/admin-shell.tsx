@@ -7,6 +7,11 @@
  *   1. `searchOpen` — controls the global ⌘K palette.
  *   2. `navOpen`    — the phone nav drawer (< md).
  *
+ * Above every page: the new devices asking the signed-in person to confirm
+ * it's them ("Add this device", founder decision of 9 Nov 2026), so a
+ * device they already use sees the request wherever they are. Nothing is
+ * drawn when nobody asks.
+ *
  * The TopNav reads operator email + pod host from the parent server
  * layout (cookie / header — not state), and gets the search and drawer
  * triggers as props. The viewer's role arrives the same
@@ -29,6 +34,7 @@ import {
   type ReactNode,
 } from "react";
 import type { ConsoleRole } from "../../../lib/route-policy";
+import { DeviceLinkRequests } from "../../_lib/presence/device-link/DeviceLinkRequests";
 import { AllToolsProvider } from "./all-tools";
 import { SearchModal } from "./search-modal";
 import { NavDrawer, SideNav } from "./side-nav";
@@ -95,6 +101,7 @@ export function AdminShell({
             <div className="flex min-h-0 flex-1">
               <SideNav />
               <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                <DeviceLinkRequests placement="banner" />
                 {children}
               </main>
             </div>

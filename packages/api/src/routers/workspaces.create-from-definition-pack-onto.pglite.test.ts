@@ -116,6 +116,8 @@ import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import {
   workspaces,
   workspaceMembers,
+  users,
+  apiKeys,
   syncGeneration,
 } from "@synap/database/schema";
 import { router } from "../trpc.js";
@@ -175,7 +177,13 @@ const rowOf = async (id: string) =>
   ).rows[0]!;
 
 beforeAll(async () => {
-  for (const t of [workspaces, workspaceMembers, syncGeneration])
+  for (const t of [
+    workspaces,
+    workspaceMembers,
+    users,
+    apiKeys,
+    syncGeneration,
+  ])
     await h.client!.exec(ddlFor(t as unknown as PgTable));
 });
 

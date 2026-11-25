@@ -26,14 +26,20 @@ const WS_A = "00000000-0000-4000-8000-00000000000a";
 const WS_B = "00000000-0000-4000-8000-00000000000b";
 const PB_ID = "00000000-0000-4000-8000-000000000091";
 
+/** The playbook, and no `space_access` grant (it is shared with no space). */
 function dbReturning(playbook: unknown) {
+  const noGrant: { from: () => unknown; where: () => Promise<never[]> } = {
+    from: () => noGrant,
+    where: async () => [],
+  };
   return {
     query: { playbooks: { findFirst: vi.fn().mockResolvedValue(playbook) } },
+    select: () => noGrant,
   };
 }
 
 describe("resolveRunnablePlaybook cross-workspace floor", () => {
-  it("throws the founder's error when the run workspace disagrees with the playbook's home", async () => {
+  it("refuses when the run workspace disagrees with the playbook's home, naming where it lives and the fix", async () => {
     mockGetDb.mockResolvedValue(
       dbReturning({ id: PB_ID, name: "Weekly review", workspaceId: WS_A })
     );
@@ -41,7 +47,7 @@ describe("resolveRunnablePlaybook cross-workspace floor", () => {
     await expect(
       resolveRunnablePlaybook({ playbookId: PB_ID, workspaceId: WS_B })
     ).rejects.toThrow(
-      `resolveRunnablePlaybook: playbook ${PB_ID} not visible in workspace ${WS_B}`
+      `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or move or share it (synap_move_entities playbookIds / synap_grant_profile_access playbookId).`
     );
   });
 

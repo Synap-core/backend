@@ -30,6 +30,11 @@
  *   - inbox           → `readSessionInbox` (`session-inbox.ts`), the one
  *                        "addressed to this session" predicate the change
  *                        feed's `session_message` reads too
+ *   - precedents      → the playbook scorecard (`loadPlaybookScorecardRows`
+ *                        + `projectPlaybookScorecard` + `compactScorecard`)
+ *                        and its successful runs (`successfulRunIds`) with
+ *                        what each used (`loadRunsUsedParts`), the lessons
+ *                        scanner's own derivations
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ──────────────────────────────────────
  * Each part that needs a query is a {@link PacketSection}: `ok` with a total and
@@ -66,8 +71,13 @@ import {
   ownerPrivateVisibleWhere,
   openRoomQuestionConditions,
   listHolds,
+  sessionStageRuns,
 } from "@synap/database";
-import { questionDisposition } from "@synap-core/types/ask";
+import {
+  declinedReasonOf,
+  isDeclinedValue,
+  questionDisposition,
+} from "@synap-core/types/ask";
 import {
   questionShortId,
   readRoomPostMeta,
@@ -91,6 +101,12 @@ import type { RecordedHold } from "@synap-core/types/lifecycle";
 import { readDependencyState } from "../links/dependency-links.js";
 import { holdNextMove } from "../status/next-move.js";
 import {
+  stagesLeft,
+  stagesLeftWords,
+  stoppedWhere,
+  type StagesLeft,
+} from "../runs/stages-left.js";
+import {
   holdWaitingOnRef,
   readWaitingOn,
   sessionWaitingOnQuestion,
@@ -103,10 +119,21 @@ import {
 import {
   resolveSessionTitle,
   readSuspendedNote,
+  sessionClosedAs,
   sessionStatusCategory,
+  type SessionClosedAs,
   type SessionVerdict,
 } from "@synap-core/types/focus-sessions";
 import type { SessionCriterion } from "@synap/playbooks";
+import {
+  compactScorecard,
+  loadPlaybookScorecardRows,
+  loadRunsUsedParts,
+  projectPlaybookScorecard,
+  successfulRunIds,
+  PLAYBOOK_LEARNING_WINDOW_DAYS,
+  type CompactPlaybookScorecard,
+} from "@synap/jobs/utils/playbook-scorecard.js";
 import { loadSessionEvaluationSummary } from "./evaluations/record.js";
 import { readCapturePart } from "@synap-core/types/capture";
 import type {
@@ -151,6 +178,10 @@ import {
   OPEN_SESSION_STATUSES,
   TERMINAL_SESSION_STATUSES,
 } from "./session-statuses.js";
+import {
+  closedNotDoneRecordedSql,
+  notTakenRecordedSql,
+} from "./session-closed-as.js";
 import {
   projectSessionKind,
   sessionKindWhere,
@@ -198,6 +229,29 @@ const logger = createLogger({ module: "continuation-packet" });
 
 /** Items per section. Totals are always exact; only the item list is cut. */
 export const PACKET_TOP_N = 5;
+
+/** At most this many step entries on a session read (the newest; `total` counts all). */
+export const PACKET_STAGE_RUNS_MAX = 50;
+
+/**
+ * ONE ENTRY OF A STEP (`session_stage_runs`, runner engine slice 3): who works
+ * or worked it, on which computer, and where it stands. `agent: null` = Synap
+ * AI (or the run's own executor). Names are the users table's, or null.
+ */
+export interface PacketStageRunItem {
+  id: string;
+  stageKey: string;
+  /** 1 for the first entry of the step; more after a return (`onFail`). */
+  attempt: number;
+  /** running | waiting_tools | waiting_start | unreached | waiting_child | done | failed | cancelled */
+  status: string;
+  agent: { id: string; name: string | null } | null;
+  computer: { id: string; name: string | null } | null;
+  /** The child run's session when the step IS a playbook (`uses`). */
+  childSessionId: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
 
 export type PacketSection<T> =
   | { status: "ok"; total: number; items: T[] }
@@ -344,6 +398,18 @@ export interface PacketChildItem {
   title: string;
   status: string;
   statusLabel: string;
+  /**
+   * How it ENDED (`sessionClosedAs`): on a session-edge item (`blockedBy`,
+   * `unblocks`, parent, children), so a blocker that closed with required
+   * work open reads as not delivered (`openBlockerTitle`); `null` = not
+   * ended. Absent on items of other sections.
+   */
+  closedAs?: SessionClosedAs | null;
+  /**
+   * It ended as a decision's arm not taken (P5): it holds none of its
+   * dependents (`classifyDependencyBlocker`). Absent otherwise.
+   */
+  skipped?: true;
 }
 
 /**
@@ -538,7 +604,9 @@ export interface PacketDecision {
  * `waiting_on` (a wait on someone or something, its `waitKind` saying whose
  * ball), `step` (a thing's next step on its path, `to`), `judge_review` (a
  * goal's claims wait on its judge) and `start_work` (no open session works
- * on a goal).
+ * on a goal). `stopped_early` is a session's that ENDED before its last
+ * declared stage (wave 0, plan 7d71ddcc): the person decides whether to run
+ * it again.
  */
 export type NextMoveKind =
   | "owed_slot"
@@ -551,6 +619,7 @@ export type NextMoveKind =
   | "agent_slot"
   | "undeclared"
   | "ready_to_close"
+  | "stopped_early"
   | "waiting_on"
   | "step"
   | "judge_review"
@@ -659,6 +728,104 @@ export type NextMoveInbox =
     }
   | { status: "unavailable"; reason: string };
 
+/** At most this many earlier successful runs ride in the packet. */
+export const PACKET_PRECEDENTS_MAX = 3;
+/** At most this many tools and skills are named per earlier run. */
+export const PACKET_PRECEDENT_USED_MAX = 5;
+/** At most this many of the playbook's runs are read for the precedents. */
+const PRECEDENT_ROWS_MAX = 200;
+
+/** One earlier successful run of the same playbook. */
+export interface PacketPrecedentItem {
+  sessionId: string;
+  /** `resolveSessionTitle`, as every session name. */
+  title: string;
+  closedAt: string | null;
+  /** The tools and skills it recorded using (`session --used-->`). */
+  used: string[];
+}
+
+/**
+ * PRECEDENTS: how the reader's own earlier runs of the playbook this session
+ * follows went, within the learning window: its compact scorecard (`null` =
+ * no closed run) and its newest successful runs (every required criterion
+ * passed), each with what it used. A failed read is `unavailable`, never "no
+ * precedent".
+ */
+export type PacketPrecedents =
+  | {
+      status: "ok";
+      playbookId: string;
+      scorecard: CompactPlaybookScorecard | null;
+      runs: PacketSection<PacketPrecedentItem>;
+    }
+  | { status: "unavailable"; reason: string };
+
+/**
+ * Read {@link PacketPrecedents} for `row`; `null` when it follows no
+ * playbook. The runs are the READER's (sessions are owner-private, so the
+ * scorecard is one person's), this session left out, the last
+ * `PLAYBOOK_LEARNING_WINDOW_DAYS` only. THROWS on a failed read.
+ */
+export async function readPrecedents(
+  database: typeof db,
+  row: Pick<SessionRow, "id" | "playbookId">,
+  userId: string,
+  now: Date = new Date()
+): Promise<PacketPrecedents | null> {
+  if (!row.playbookId) return null;
+  const { sessions, evaluations } = await loadPlaybookScorecardRows(database, {
+    playbookIds: [row.playbookId],
+    userId,
+    closedAfter: new Date(
+      now.getTime() - PLAYBOOK_LEARNING_WINDOW_DAYS * 24 * 60 * 60 * 1000
+    ),
+    limit: PRECEDENT_ROWS_MAX,
+  });
+  const others = sessions.filter((s) => s.id !== row.id);
+  // Instantiated runs only, as the lessons scanner reads them: a session
+  // attached late did not run under the playbook.
+  const successIds = successfulRunIds(
+    others.filter((s) => !s.attached),
+    evaluations
+  );
+  const recent =
+    successIds.length === 0
+      ? []
+      : await database
+          .select({
+            id: focusSessions.id,
+            title: focusSessions.title,
+            goal: focusSessions.goal,
+            closedAt: focusSessions.closedAt,
+          })
+          .from(focusSessions)
+          .where(inArray(focusSessions.id, successIds))
+          .orderBy(desc(focusSessions.closedAt), asc(focusSessions.id))
+          .limit(PACKET_PRECEDENTS_MAX);
+  const used = await loadRunsUsedParts(
+    database,
+    recent.map((r) => r.id)
+  );
+  return {
+    status: "ok",
+    playbookId: row.playbookId,
+    scorecard: compactScorecard(projectPlaybookScorecard(others, evaluations)),
+    runs: {
+      status: "ok",
+      total: successIds.length,
+      items: recent.map((r) => ({
+        sessionId: r.id,
+        title: resolveSessionTitle(r),
+        closedAt: toIso(r.closedAt),
+        used: (used.get(r.id) ?? [])
+          .map((p) => p.name)
+          .slice(0, PACKET_PRECEDENT_USED_MAX),
+      })),
+    },
+  };
+}
+
 export interface ContinuationPacket {
   version: 1;
   session: {
@@ -711,6 +878,15 @@ export interface ContinuationPacket {
    * `waitingOn`); any of them failed ⇒ `unavailable`, never "nobody".
    */
   holder: SessionHolderSection;
+  /**
+   * WHO WORKS EACH STEP — every entry of a step of this run
+   * (`session_stage_runs`), oldest first, the newest
+   * {@link PACKET_STAGE_RUNS_MAX} kept (`total` counts all). The newest entry
+   * of a `stageKey` is who is on it now (`status` running or waiting_*), or
+   * who did it. `total: 0` = no step entered yet (or a session with no
+   * stages); a failed read is `unavailable`, never an empty list.
+   */
+  stageRuns: PacketSection<PacketStageRunItem>;
   outputs: PacketSection<PacketOutputItem>;
   /**
    * Child sessions (detours and planned sub-sessions), oldest first. A parent
@@ -773,6 +949,17 @@ export interface ContinuationPacket {
    * the inbound twin of `blockedBy`: closing this session releases them.
    */
   unblocks: PacketSection<PacketChildItem>;
+  /**
+   * The orchestrator coordinating this session
+   * (`this --orchestrated_by--> orchestrator`, `start-orchestrator.ts`): it
+   * holds this session until the person approves its merged plan.
+   */
+  orchestratedBy: PacketSection<PacketChildItem>;
+  /**
+   * The sessions this orchestrator coordinates
+   * (`other --orchestrated_by--> this`), open first: the inbound twin.
+   */
+  orchestrates: PacketSection<PacketChildItem>;
   /** Capture clarification questions still open in this session's room, oldest first. */
   openQuestions: PacketSection<PacketQuestionItem>;
   /**
@@ -815,6 +1002,11 @@ export interface ContinuationPacket {
    * A FAILED read is `unavailable`, never "nothing beside it".
    */
   siblings: PacketSiblings | { status: "unavailable"; reason: string } | null;
+  /**
+   * How the reader's earlier runs of the same playbook went (see
+   * {@link PacketPrecedents}). `null` = the session follows no playbook.
+   */
+  precedents: PacketPrecedents | null;
   /**
    * The PRs and branches this session recorded as outcomes, declaration
    * order (see {@link PacketWorkUnitItem}). Derived from the row itself — an
@@ -1097,6 +1289,95 @@ export function isOpenAgentSlot(slot: ExpectedOutput): boolean {
   );
 }
 
+/**
+ * What the agent can do now: its open slots (`isOpenAgentSlot`). An ANSWERED
+ * slot is the agent's most actionable work (the person already replied), so
+ * it leads (stable sort: declaration order otherwise). ONE rule for the
+ * packet's `aiCanDo` and the needs-you context's "Meanwhile".
+ */
+export function aiCanDoItems(all: readonly ExpectedOutput[]): PacketSlotItem[] {
+  return all
+    .filter(isOpenAgentSlot)
+    .map((s): PacketSlotItem => ({
+      label: s.label,
+      kind: s.kind,
+      ...kindIdentity(s.kind),
+      ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
+      ...(s.answer
+        ? {
+            answer: {
+              text: s.answer.text,
+              answeredAt: s.answer.answeredAt,
+              messageId: s.answer.messageId,
+              ...(s.answer.value ? { value: s.answer.value } : {}),
+            },
+          }
+        : {}),
+    }))
+    .sort((a, b) => Number(!!b.answer) - Number(!!a.answer));
+}
+
+/** The session's step entries, with the agent's and the computer's names. */
+async function readStageRuns(
+  database: typeof db,
+  sessionId: string
+): Promise<PacketSection<PacketStageRunItem>> {
+  const where = eq(sessionStageRuns.sessionId, sessionId);
+  const [[totalRow], newest] = await Promise.all([
+    database.select({ n: count() }).from(sessionStageRuns).where(where),
+    database
+      .select({
+        id: sessionStageRuns.id,
+        stageKey: sessionStageRuns.stageKey,
+        attempt: sessionStageRuns.attempt,
+        status: sessionStageRuns.status,
+        agentId: sessionStageRuns.runnerAgentUserId,
+        computerId: sessionStageRuns.computerUserId,
+        childSessionId: sessionStageRuns.childSessionId,
+        startedAt: sessionStageRuns.startedAt,
+        endedAt: sessionStageRuns.endedAt,
+      })
+      .from(sessionStageRuns)
+      .where(where)
+      .orderBy(desc(sessionStageRuns.startedAt), desc(sessionStageRuns.id))
+      .limit(PACKET_STAGE_RUNS_MAX),
+  ]);
+  const ids = [
+    ...new Set(
+      newest
+        .flatMap((r) => [r.agentId, r.computerId])
+        .filter((id): id is string => !!id)
+    ),
+  ];
+  const named =
+    ids.length > 0
+      ? await database
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(inArray(users.id, ids))
+      : [];
+  const nameOf = new Map(named.map((u) => [u.id, u.name?.trim() || null]));
+  const who = (id: string | null) =>
+    id ? { id, name: nameOf.get(id) ?? null } : null;
+  const iso = (d: Date | string | null) =>
+    d === null ? null : d instanceof Date ? d.toISOString() : String(d);
+  return {
+    status: "ok",
+    total: Number(totalRow?.n ?? 0),
+    items: newest.reverse().map((r) => ({
+      id: r.id,
+      stageKey: r.stageKey,
+      attempt: r.attempt,
+      status: r.status,
+      agent: who(r.agentId),
+      computer: who(r.computerId),
+      childSessionId: r.childSessionId ?? null,
+      startedAt: iso(r.startedAt)!,
+      endedAt: iso(r.endedAt),
+    })),
+  };
+}
+
 async function readPendingProposals(
   database: typeof db,
   sessionId: string
@@ -1185,7 +1466,7 @@ async function readInboundSessions(
   database: typeof db,
   reader: SessionReader,
   sessionId: string,
-  linkType: "spawned_from" | "blocked_by"
+  linkType: "spawned_from" | "blocked_by" | "orchestrated_by"
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.fromId);
   const where = and(
@@ -1208,6 +1489,8 @@ async function readInboundSessions(
         title: focusSessions.title,
         goal: focusSessions.goal,
         status: focusSessions.status,
+        closedNotDone: closedNotDoneRecordedSql(),
+        skipped: notTakenRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1227,6 +1510,8 @@ async function readInboundSessions(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })),
   };
 }
@@ -1245,7 +1530,7 @@ async function readOutboundSessions(
   database: typeof db,
   reader: SessionReader,
   sessionId: string,
-  linkType: "spawned_from" | "blocked_by"
+  linkType: "spawned_from" | "blocked_by" | "orchestrated_by"
 ): Promise<PacketSection<PacketChildItem>> {
   const join = eq(drizzleSql`${focusSessions.id}::text`, links.toId);
   const where = and(
@@ -1267,6 +1552,8 @@ async function readOutboundSessions(
         title: focusSessions.title,
         goal: focusSessions.goal,
         status: focusSessions.status,
+        closedNotDone: closedNotDoneRecordedSql(),
+        skipped: notTakenRecordedSql(),
       })
       .from(links)
       .innerJoin(focusSessions, join)
@@ -1285,6 +1572,8 @@ async function readOutboundSessions(
       title: resolveSessionTitle(r),
       status: r.status,
       statusLabel: resolveStatusLabel(r.status),
+      closedAs: sessionClosedAs(r.status, r.closedNotDone),
+      ...(r.skipped ? { skipped: true as const } : {}),
     })),
   };
 }
@@ -2275,6 +2564,11 @@ function readLastCompletion(
  * A blocker as a next move names it: its title in quotes, or — unnamed or not
  * visible — "the <noun>" through the vocabulary door (no a/an guessing).
  */
+/** The person's words in a next-move reason: at most 140 characters. */
+function clip140(text: string): string {
+  return text.length > 140 ? `${text.slice(0, 140)}…` : text;
+}
+
 function blockerName(b: OpenBlocker): string {
   return b.title
     ? `"${b.title}"`
@@ -2390,7 +2684,12 @@ function pullRequestMove(
  *     a PR whose checks have not answered (nobody acts). A PR outcome is never
  *     "Produce …" once the pod knows the PR exists. The PR rungs are skipped
  *     for a terminal session: a closed session's open PR is no move of its own;
- *  4. `none` for a terminal session;
+ *  4. `stopped_early` for a terminal session that ended before its last
+ *     declared stage (`stages-left.ts`: its current stage is not the last
+ *     one), unless the person CANCELLED it (they chose to stop: nothing
+ *     waits on them) — the person's move: whether to run it again. Before,
+ *     such a run read "Nothing waiting" (session 12dbd086: one turn, still on
+ *     `brief`, closed). Then `none` for a terminal session;
  *  5. `waiting_on_session` while a sub-session is still OPEN: a parent never
  *     auto-closes, and its children are still producing;
  *  6. `ready_to_close` ONLY when there is evidence of work — a declared,
@@ -2433,6 +2732,12 @@ export function deriveNextMove(input: {
   workUnits: PacketSection<PacketWorkUnitItem>;
   /** The current hold — rung 2c reads it for a paused session only. */
   hold: NextMoveHold;
+  /**
+   * The declared stages the session has not reached (`stagesLeft` over its
+   * `stages` and `currentStage`); `null`/absent = none, or no stages. Rung 4
+   * reads it for a terminal session only.
+   */
+  stagesLeft?: StagesLeft | null;
 }): ContinuationNextMove {
   const { owedSlots, pendingProposals, aiCanDo, blockers } = input;
   const terminal = isTerminalSessionStatus(input.status);
@@ -2572,16 +2877,25 @@ export function deriveNextMove(input: {
       : [];
   if (ownSlots[0]) {
     const s = ownSlots[0];
+    // The person REFUSED the ask: the next move is a new plan, never the
+    // same question again (the ask doors refuse an identical re-ask).
+    if (s.answer && isDeclinedValue(s.answer.value)) {
+      const reason = declinedReasonOf(s.answer);
+      return {
+        kind: "agent_slot",
+        actor: "ai",
+        label: `Re-plan "${s.label}"`,
+        reason:
+          `The person refused your ask${reason ? `: "${clip140(reason)}"` : ""}. ` +
+          "Do it another way, ask something new, withdraw the slot (retireOutput), or close the session failed.",
+      };
+    }
     if (s.answer) {
-      const said =
-        s.answer.text.length > 140
-          ? `${s.answer.text.slice(0, 140)}…`
-          : s.answer.text;
       return {
         kind: "agent_slot",
         actor: "ai",
         label: `Continue "${s.label}"`,
-        reason: `The person answered: "${said}"`,
+        reason: `The person answered: "${clip140(s.answer.text)}"`,
       };
     }
     return {
@@ -2627,6 +2941,19 @@ export function deriveNextMove(input: {
     ? undefined
     : prWith((pr) => pr.state === "open" && !pr.checks);
   if (pending) return pullRequestMove(pending, "checks_pending");
+  if (terminal && input.stagesLeft && input.status !== "cancelled") {
+    const left = input.stagesLeft;
+    const where = stoppedWhere(left);
+    return {
+      kind: "stopped_early",
+      actor: "user",
+      label: `Stopped ${where}`,
+      reason:
+        `The run ended (${resolveStatusLabel(input.status).toLowerCase()}) ${where}, ` +
+        `with ${stagesLeftWords(left)}: ${left.left.map((s) => s.name).join(", ")}. ` +
+        "Whether to run it again is yours to decide.",
+    };
+  }
   if (terminal) {
     return {
       kind: "none",
@@ -2753,6 +3080,129 @@ export function deriveNextMove(input: {
  * owner floor (every door loads it anyway; re-reading it here would be a second
  * query answering the same question).
  */
+/** A part of {@link SessionShape} this key's grant does not read. */
+export interface PacketWithheld {
+  status: "withheld";
+  reason: string;
+}
+
+/**
+ * A runner as a key narrowed by its grant reads it: who and where (harness,
+ * computer, model, state), never the local details a person's own client
+ * needs to reopen it (`cwd`, `conversationId`, `processId`, `twin`, `resume`).
+ */
+export type PacketAppRunnerItem = Omit<
+  PacketRunnerItem,
+  "cwd" | "conversationId" | "processId" | "twin" | "resume"
+>;
+
+/**
+ * The parts of a session's packet a key NARROWED by its grant may read
+ * (a pod app holding `session.read` but not every packet subject, founder
+ * decision D1, 17 Nov 2026): GET /focus-sessions/:id answers them beside the
+ * row when the packet itself is withheld. Each is read by the packet's OWN
+ * reader, so the two cannot drift:
+ *  - `parent`, `children`, `siblings`: the neighbour sessions, under the
+ *    session floor (`sessionReadableWhere`, which ANDs the key's grant): a
+ *    neighbour the grant does not read is neither listed nor counted;
+ *  - `workUnits`: the PRs and branches the row RECORDED (its own slots),
+ *    without `prState` (the recorded PR facts are events anywhere in the pod,
+ *    which no pinned key reads);
+ *  - `runners`: who works it (harness, computer, model, state), only when the
+ *    key reads the person's agents (`sessionHolderReadable`), else withheld.
+ * The stage history is a column of the row (`stageHistory`), already served.
+ */
+export interface SessionShape {
+  parent: ContinuationPacket["parent"];
+  children: PacketSection<PacketChildItem>;
+  siblings: ContinuationPacket["siblings"];
+  workUnits: PacketSection<PacketWorkUnitItem>;
+  runners: PacketSection<PacketAppRunnerItem> | PacketWithheld;
+}
+
+export async function projectSessionShape(
+  row: SessionRow,
+  ctx: {
+    database?: typeof db;
+    userId: string;
+    /** Whether the key reads the person's agents (`sessionHolderReadable`). */
+    runners: boolean;
+    /** The sentence a withheld part carries. */
+    withheldReason: string;
+  }
+): Promise<SessionShape> {
+  const database = ctx.database ?? db;
+  const reader: SessionReader = { userId: ctx.userId, roster: false };
+  const trackRead: TrackRead = row.trackId
+    ? getTrack(row.trackId, { userId: reader.userId })
+    : Promise.resolve(null);
+  trackRead.catch(() => undefined);
+  const [parentRow, children, siblings, runners] = await Promise.all([
+    readParentRow(database, reader, row.id).catch((err) => {
+      logger.warn(
+        { err, sessionId: row.id, section: "parent" },
+        "session shape: section read failed"
+      );
+      return "unavailable" as const;
+    }),
+    readInboundSessions(database, reader, row.id, "spawned_from").catch(
+      unavailable(
+        row.id,
+        "children",
+        "This session's sub-sessions could not be read."
+      )
+    ),
+    readSiblings(database, reader, row, trackRead).catch(
+      unavailable(
+        row.id,
+        "siblings",
+        "The sessions beside this one could not be read."
+      )
+    ),
+    ctx.runners
+      ? loadSessionRunners(row.id, { database, limit: 100 })
+          .then((all) =>
+            section(
+              all.map((r): PacketAppRunnerItem => {
+                const {
+                  cwd: _cwd,
+                  conversationId: _conversationId,
+                  processId: _processId,
+                  twin: _twin,
+                  resume: _resume,
+                  ...app
+                } = runnerItem(r);
+                return app;
+              })
+            )
+          )
+          .catch(
+            unavailable(
+              row.id,
+              "runners",
+              "Who is attached to this session could not be read."
+            )
+          )
+      : Promise.resolve<PacketWithheld>({
+          status: "withheld",
+          reason: ctx.withheldReason,
+        }),
+  ]);
+  return {
+    parent:
+      parentRow === "unavailable"
+        ? {
+            status: "unavailable",
+            reason: "This session's parent session could not be read.",
+          }
+        : parentSection(parentRow),
+    children,
+    siblings,
+    workUnits: workUnitsSection(slots(row)),
+    runners,
+  };
+}
+
 export async function projectContinuationPacket(
   row: SessionRow,
   ctx: ProjectContinuationPacketCtx
@@ -2775,29 +3225,7 @@ export async function projectContinuationPacket(
   const blockers = section(
     owed.filter((s) => s.blockedReason !== undefined).map(owedItem)
   );
-  // An ANSWERED slot is the agent's most actionable work — the person already
-  // replied — so it leads (stable sort: declaration order otherwise).
-  const aiCanDo = section(
-    all
-      .filter(isOpenAgentSlot)
-      .map((s): PacketSlotItem => ({
-        label: s.label,
-        kind: s.kind,
-        ...kindIdentity(s.kind),
-        ...(s.delegatedTo ? { delegatedTo: s.delegatedTo } : {}),
-        ...(s.answer
-          ? {
-              answer: {
-                text: s.answer.text,
-                answeredAt: s.answer.answeredAt,
-                messageId: s.answer.messageId,
-                ...(s.answer.value ? { value: s.answer.value } : {}),
-              },
-            }
-          : {}),
-      }))
-      .sort((a, b) => Number(!!b.answer) - Number(!!a.answer))
-  );
+  const aiCanDo = section(aiCanDoItems(all));
 
   // One rejected promise, shared: `outputs` and `alreadyDone` each turn it into
   // their own `unavailable` below.
@@ -2811,6 +3239,22 @@ export async function projectContinuationPacket(
   trackRead.catch(() => undefined);
   // The person's notification facts (`session-notify.ts`), read beside the
   // sections below; each failure is its own `unavailable`.
+  // Who works each step (slice 3), read beside the sections below.
+  // The precedents, read beside the sections below.
+  const precedentsRead = readPrecedents(database, row, ctx.userId).catch(
+    unavailable(
+      row.id,
+      "precedents",
+      "How earlier runs of this playbook went could not be read."
+    )
+  );
+  const stageRunsRead = readStageRuns(database, row.id).catch(
+    unavailable(
+      row.id,
+      "stageRuns",
+      "Who works each step of this session could not be read."
+    )
+  );
   const notifyReads = Promise.all([
     readSessionDevboxJobs(database, reader, row)
       .then((r): PacketDevboxJobsSection => ({ status: "ok", ...r }))
@@ -2841,6 +3285,8 @@ export async function projectContinuationPacket(
     parentRow,
     blockedBy,
     unblocks,
+    orchestratedBy,
+    orchestrates,
     openQuestions,
     openRoomQuestions,
     alreadyDone,
@@ -2918,6 +3364,20 @@ export async function projectContinuationPacket(
         row.id,
         "unblocks",
         "The sessions waiting on this one could not be read."
+      )
+    ),
+    readOutboundSessions(database, reader, row.id, "orchestrated_by").catch(
+      unavailable(
+        row.id,
+        "orchestratedBy",
+        "The orchestrator coordinating this session could not be read."
+      )
+    ),
+    readInboundSessions(database, reader, row.id, "orchestrated_by").catch(
+      unavailable(
+        row.id,
+        "orchestrates",
+        "The sessions this orchestrator coordinates could not be read."
       )
     ),
     readOpenQuestions(database, row).catch(
@@ -3200,6 +3660,7 @@ export async function projectContinuationPacket(
 
   const manifest = readSessionRunManifest(row.metadata);
   const [devboxJobs, muted] = await notifyReads;
+  const stageRuns = await stageRunsRead;
 
   return {
     version: 1,
@@ -3220,17 +3681,21 @@ export async function projectContinuationPacket(
     blockers,
     externalAgent,
     holder,
+    stageRuns,
     outputs,
     children,
     parent,
     resume,
     blockedBy,
     unblocks,
+    orchestratedBy,
+    orchestrates,
     openQuestions,
     openRoomQuestions,
     priorStages,
     goal,
     siblings,
+    precedents: await precedentsRead,
     workUnits,
     waitingOn,
     alreadyDone,
@@ -3275,6 +3740,7 @@ export async function projectContinuationPacket(
       criteria: evaluation,
       workUnits: allWorkUnits,
       hold,
+      stagesLeft: stagesLeft(row.stages, row.currentStage),
     }),
     evaluation,
   };

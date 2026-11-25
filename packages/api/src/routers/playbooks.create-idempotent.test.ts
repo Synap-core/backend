@@ -18,7 +18,7 @@ const {
   mockGetDb,
   mockCheckPermission,
   mockPreviewDecision,
-  mockMaterializeCron,
+  mockConverge,
   mockCreateLinks,
   insertReturning,
   selectLimit,
@@ -37,8 +37,14 @@ const {
   const insertChain = {
     values: vi.fn().mockReturnThis(),
     returning: insertReturning,
+    // The kept version (0416) rides in the create's transaction.
+    onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
   };
   const mockDb = {
+    // The create's row and its kept version (0416) share one transaction.
+    transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+      fn(mockDb)
+    ),
     insert: vi.fn(() => insertChain),
     select: vi.fn(() => selectChain),
     query: {
@@ -54,7 +60,7 @@ const {
     mockDb,
     insertReturning,
     selectLimit,
-    mockMaterializeCron: vi.fn().mockResolvedValue(undefined),
+    mockConverge: vi.fn().mockResolvedValue(undefined),
     mockCreateLinks: vi.fn().mockResolvedValue([]),
     mockCheckPermission: vi.fn().mockResolvedValue({ granted: true }),
     mockPreviewDecision: vi.fn().mockResolvedValue({ decision: "propose" }),
@@ -76,6 +82,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
     db: mockDb,
     getDb: mockGetDb,
     and: vi.fn((...c: unknown[]) => ({ and: c })),
@@ -121,12 +135,15 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => ({
     message,
 }));
 
-vi.mock("../services/playbooks/cron-automation.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../services/playbooks/cron-automation.js")
-  >()),
-  materializePlaybookCronAutomation: mockMaterializeCron,
-}));
+vi.mock(
+  "../services/playbooks/playbook-activators.js",
+  async (importOriginal) => ({
+    ...(await importOriginal<
+      typeof import("../services/playbooks/playbook-activators.js")
+    >()),
+    convergePlaybookActivatorsSafely: mockConverge,
+  })
+);
 
 vi.mock("../services/links/links-service.js", () => ({
   getLinksFor: vi.fn().mockResolvedValue([]),
@@ -234,7 +251,7 @@ describe("playbooks.create — agent idempotency before the propose path", () =>
     // duplicate proposal row and no duplicate insert.
     expect(mockCheckPermission).not.toHaveBeenCalled();
     expect(mockDb.insert).not.toHaveBeenCalled();
-    expect(mockMaterializeCron).not.toHaveBeenCalled();
+    expect(mockConverge).not.toHaveBeenCalled();
   });
 
   it("a FIRST-TIME agent create still proposes exactly as before", async () => {
@@ -291,7 +308,7 @@ describe("playbooks.create — name uniqueness / 23505 recovery", () => {
     expect(result.status).toBe("created");
     expect(result.playbook?.id).toBe("pb-new");
     expect(result.message).toBe("Playbook created");
-    expect(mockMaterializeCron).toHaveBeenCalledTimes(1);
+    expect(mockConverge).toHaveBeenCalledTimes(1);
   });
 
   it("on concurrent unique violation returns the existing non-archived winner without side-effects", async () => {
@@ -317,8 +334,8 @@ describe("playbooks.create — name uniqueness / 23505 recovery", () => {
     expect(result.status).toBe("created");
     expect(result.playbook?.id).toBe(WINNER_ID);
     expect(result.message).toMatch(/idempotent/i);
-    // Must NOT re-materialize cron or attach context skills on reuse.
-    expect(mockMaterializeCron).not.toHaveBeenCalled();
+    // Must NOT re-converge activators or attach context skills on reuse.
+    expect(mockConverge).not.toHaveBeenCalled();
     expect(mockCreateLinks).not.toHaveBeenCalled();
   });
 

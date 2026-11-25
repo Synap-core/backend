@@ -483,7 +483,9 @@ export const CaptureStructureResponseSchema = z
     degraded: z.boolean().optional(),
     /**
      * WHY it degraded. Either one of the pod's plumbing reasons
-     * (`is_auth_error` | `is_invalid_response` | `is_empty_result`) or — and
+     * (`is_auth_error` | `is_invalid_response` | `is_empty_result`), the IS
+     * code of a refusal for an AI availability state (`credits_empty`,
+     * `account_quota_exceeded`, `llm_budget_exceeded`, …), or — and
      * this is the one that matters — an Intelligence Service extraction reason
      * (`vision_provider_not_configured`, `pdf_scanned_needs_ocr`,
      * `transcription_provider_not_configured`, `unsupported_type`, …). Kept an
@@ -495,8 +497,10 @@ export const CaptureStructureResponseSchema = z
      * Why it degraded, beside `degradedReason` (which keeps its value):
      * `cause` (`http` | `stream` | `network` | `timeout` | `empty` |
      * `unknown`), the IS `status` when it answered, the structure `attempts`
-     * made, and `failureClass` — the pod's AI failure class (`quota`,
-     * `bad_request`, `upstream`, …) that says whether retrying can help.
+     * made, `failureClass` — the pod's AI failure class (`quota`,
+     * `bad_request`, `upstream`, …) that says whether retrying can help — and
+     * `action`, the payer action the IS stated on an account refusal
+     * (`top_up` | `upgrade` | `fix_payment` | `ask_admin` | `none`).
      * Never the IS body. Open strings: the vocabularies may grow.
      */
     degradedDetail: z
@@ -505,6 +509,7 @@ export const CaptureStructureResponseSchema = z
         status: z.number().int().optional(),
         attempts: z.number().int(),
         failureClass: z.string(),
+        action: z.string().optional(),
       })
       .optional(),
     /**

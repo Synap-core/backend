@@ -1,17 +1,18 @@
 /**
- * `create_playbook` — the DRAFT-process composite op (capture → process,
- * 2026-10-08), end to end through every seam it touches EXCEPT the database:
+ * `create_playbook` — the process composite op, end to end through every
+ * seam it touches EXCEPT the database:
  *
  *   validate (capture-plan) → govern (capture-graph-policy, strictest member)
- *   → materialize (pass 4, forced draft, per-op resilient, fail-closed when
- *   unwired) → executor caller (`buildRuleLoopCallers().playbookCaller` →
- *   `playbooks.create`, membership-floored) → receipt (`byOp`) → review render.
+ *   → materialize (per-op resilient, fail-closed when unwired) → executor
+ *   caller (`buildRuleLoopCallers().playbookCaller` → `playbooks.create`,
+ *   membership-floored, deciding the status) → receipt (`byOp`) → review.
  *
  * Rows chosen where naive implementations DISAGREE: an op that asks for
- * `status: "active"` (must still land draft); a batch with an entity beside a
- * failing draft (the entity must survive); an unwired caller (must refuse
- * BEFORE the entity is written); a pod-wide batch (no workspace — a process
- * lives in a space).
+ * `active` with no person's approval (must land draft); a person's approval
+ * with no status (active) or with `draft` (stays draft); a batch with an
+ * entity beside a failing playbook (the entity must survive); an unwired
+ * caller (must refuse BEFORE the entity is written); a pod-wide batch (no
+ * workspace — a process lives in a space).
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -66,11 +67,16 @@ describe("create_playbook — the op", () => {
     ]);
   });
 
-  it("refuses a draft with no kind, or one that is not a draft", () => {
+  it("refuses a process with no kind, or a status that is not draft/active", () => {
     const bad = [
       { ...op, subjectProfile: { profileSlug: "" } },
-      { ...op, ref: "pb2", status: "active" },
+      { ...op, ref: "pb2", status: "paused" },
     ] as unknown as CompositeProposalOperation[];
+    expect(
+      validatePlanOperations([
+        { ...op, status: "active" } as unknown as CompositeProposalOperation,
+      ])
+    ).toEqual([]);
     const problems = validatePlanOperations(bad);
     expect(problems.map((p) => p.opIndex)).toEqual([0, 1]);
   });
@@ -96,9 +102,9 @@ describe("create_playbook — materializer pass", () => {
   const entityCaller = { create: vi.fn() };
   const relationCaller = { create: vi.fn() };
 
-  it("creates the playbook as a DRAFT even when the op asks for active", async () => {
+  it("hands the asked status to the door and records what it wrote", async () => {
     const playbookCaller: PlaybookCreateCaller = {
-      create: vi.fn().mockResolvedValue({ id: "pb-1" }),
+      create: vi.fn().mockResolvedValue({ id: "pb-1", status: "draft" }),
     };
     const result = await materializeCompositeGraph(
       [{ ...op, status: "active" } as unknown as CompositeProposalOperation],
@@ -109,7 +115,7 @@ describe("create_playbook — materializer pass", () => {
     );
     expect(playbookCaller.create).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: "draft",
+        status: "active",
         subjectProfile: {
           profileSlug: "track",
           statusProperty: "track-status",
@@ -169,7 +175,7 @@ describe("create_playbook — executor caller (playbooks.create door)", () => {
     skillAuthor: { agentUserId: null, personApproved: false },
   };
 
-  it("routes through playbooks.create with status draft", async () => {
+  it("routes through playbooks.create; with no person's approval it is a draft", async () => {
     h.create.mockResolvedValue({
       status: "created",
       playbook: { id: "pb-9" },
@@ -179,14 +185,43 @@ describe("create_playbook — executor caller (playbooks.create door)", () => {
       name: draft.name,
       goalTemplate: draft.goalTemplate,
       subjectProfile: draft.subjectProfile,
-      status: "draft",
+      status: "active",
     });
-    expect(out).toEqual({ id: "pb-9" });
+    expect(out).toEqual({ id: "pb-9", status: "draft" });
     expect(h.create).toHaveBeenCalledWith(
       expect.objectContaining({
         status: "draft",
         subjectProfile: draft.subjectProfile,
       })
+    );
+  });
+
+  it("a person's approval makes it active, unless the op keeps it a draft", async () => {
+    h.create.mockResolvedValue({
+      status: "created",
+      playbook: { id: "pb-9" },
+    });
+    const approved = buildRuleLoopCallers({
+      ...ctx,
+      skillAuthor: { agentUserId: "agent-1", personApproved: true },
+    });
+    const base = {
+      name: draft.name,
+      goalTemplate: draft.goalTemplate,
+      subjectProfile: draft.subjectProfile,
+    };
+    expect(await approved.playbookCaller.create(base)).toEqual({
+      id: "pb-9",
+      status: "active",
+    });
+    expect(h.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "active" })
+    );
+    expect(
+      await approved.playbookCaller.create({ ...base, status: "draft" })
+    ).toEqual({ id: "pb-9", status: "draft" });
+    expect(h.create).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "draft" })
     );
   });
 

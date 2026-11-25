@@ -156,8 +156,11 @@ CREATE TABLE entities (
   status text,
   status_category text,
   deleted_at timestamptz,
-  updated_at timestamptz DEFAULT now()
+  updated_at timestamptz DEFAULT now(),
+  -- retireProjectTwins reads the title and the projects table.
+  title text
 );
+CREATE TABLE projects (id uuid PRIMARY KEY);
 CREATE TABLE entity_facets (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   entity_id uuid,
@@ -179,13 +182,16 @@ CREATE TABLE property_defs (
   profile_id uuid,
   slug text,
   workspace_id uuid,
-  constraints jsonb DEFAULT '{}'
+  constraints jsonb DEFAULT '{}',
+  ui_hints jsonb,
+  updated_at timestamptz DEFAULT now()
 );
 CREATE TABLE profile_properties (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   profile_id uuid,
   property_def_id uuid,
-  is_lifecycle boolean DEFAULT false
+  is_lifecycle boolean DEFAULT false,
+  default_value jsonb
 );
 CREATE TABLE views (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

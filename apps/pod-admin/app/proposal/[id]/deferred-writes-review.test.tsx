@@ -69,6 +69,7 @@ vi.mock("../../../lib/trpc", async () => ({
         useMutation: () => ({ mutate() {}, isPending: false }),
       },
       reject: { useMutation: () => ({ mutate() {}, isPending: false }) },
+      revise: { useMutation: () => ({ mutate() {}, isPending: false }) },
       approvalProgress: {
         useQuery: () => ({
           data: null,
@@ -93,12 +94,25 @@ vi.mock("../../../lib/trpc", async () => ({
     },
     entities: { get: { useQuery: () => ({ data: undefined }) } },
     signals: {
+      needsYou: {
+        // The request story's context read (`useRequestContext`): no row
+        // stands for this proposal, so its story has no Before or Next.
+        useQuery: () => ({
+          data: {
+            rows: { needs_you: [] },
+            context: { timelineItems: 4, sessions: {}, rows: {} },
+          },
+          isError: false,
+          refetch() {},
+        }),
+      },
       list: {
         useQuery: () => ({ data: undefined, isLoading: true, error: null }),
       },
     },
     workspaces: { get: { useQuery: () => ({ data: undefined }) } },
     governanceRules: {
+      actionModes: { useQuery: () => ({ data: undefined }) },
       create: { useMutation: () => ({ mutate() {}, isPending: false }) },
     },
   },

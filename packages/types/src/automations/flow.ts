@@ -8,7 +8,12 @@
  * code, nothing from the database package.
  */
 
-import type { WorkerOnly, WorkerSize, WorkerUnless } from "../workers/index.js";
+import type {
+  WorkerOnly,
+  WorkerSize,
+  WorkerStatusSpec,
+  WorkerUnless,
+} from "../workers/index.js";
 
 // ── Flow definition types ───────────────────────────────────────────────────
 
@@ -62,6 +67,14 @@ export interface AutomationTriggerConfig {
    * REJECTED at the door — both compare by identity and can never match.
    */
   filters?: Record<string, unknown>;
+
+  /**
+   * Whose events a POD-WIDE automation answers to: `me` (default — its person's
+   * own events, its person's agents' included) or `everyone` (any pod member's,
+   * in a space its person can see). A space automation ignores it. Grammar and
+   * reader: `readAutomationAudience` (./rule-run-policy.ts), decision 782c862e.
+   */
+  audience?: "me" | "everyone";
 
   // ── cron trigger ───────────────────────────────────────────────────────
   /** Cron expression (e.g. "0 9 * * MON") */
@@ -688,6 +701,15 @@ export interface CapabilityNodeDef extends AutomationNodeBase {
     capabilityName?: string;
     /** Verb id = the requiring skill's name (resolves to the backing skill). */
     verbId?: string;
+    /**
+     * Instead of a concrete verb: a NEED ref (`need:<need>` or
+     * `need:<need>/<intent>`, 0426, `@synap-core/types/needs`). At run time
+     * the executor runs the ONE verb the provider the space bound to that need
+     * offers for it; an unfilled need, or a provider with several verbs for it
+     * and no `/<intent>`, fails the step with the reason. `verbId` wins when
+     * both are set.
+     */
+    need?: string;
     verbLabel?: string;
     verbKind?: "read" | "write" | "action";
     granted?: boolean;
@@ -731,9 +753,9 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * (`__agentType` → `data.agentType`, packages/types/src/automations/sentence.ts),
      * which makes this a typed producer rather than an untyped passthrough.
      *
-     * Remaining non-producer: `buildPlaybookRunFlowDefinition` (loop/cron
-     * definitions, services/playbooks/cron-automation.ts) still emits no
-     * `agentType`, so a loop-authored playbook run keeps the "meta" default.
+     * Remaining non-producer: a loop definition's trigger
+     * (services/loops/create-from-definition.ts) emits no `agentType`, so a
+     * loop-authored playbook run keeps the "meta" default.
      */
     agentType?: string;
     /**
@@ -754,11 +776,10 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * (packages/types/src/automations/sentence.ts) and the app-side writer
      * (`makePlaybookRunAction`, @synap/automation-intent).
      *
-     * Non-producer, as with `agentType`: `buildPlaybookRunFlowDefinition`
-     * (services/playbooks/cron-automation.ts) emits no goalOverride — the loop
-     * definition schema (`LoopTriggerDef`, @synap/playbooks) has no goal field
-     * to pass through, so a loop/cron-authored playbook run keeps the
-     * playbook's own goalTemplate.
+     * Non-producer, as with `agentType`: a loop definition's trigger emits no
+     * goalOverride — `LoopTriggerDef` (@synap/playbooks) has no goal field to
+     * pass through, so a loop-authored playbook run keeps the playbook's own
+     * goalTemplate.
      */
     goalOverride?: string;
     /**
@@ -783,17 +804,29 @@ export interface PlaybookRunNodeDef extends AutomationNodeBase {
      * does NOT dispatch the playbook's own executor — the named agent does the
      * work (`pull`: its orient's `handedToYou`; `dispatch`: its binding).
      * Run mode only: the step refuses it beside `appointment` / `propose`.
-     * Producer: `buildPlaybookRunFlowDefinition` from the playbook's
-     * `schedule.handToAgentId`. Absent ⇒ unchanged.
+     * Producer: a schedule activator's `handToAgentId`, through the rule
+     * grammar's `__handToAgentId` key. Absent ⇒ unchanged.
      */
     handToAgentId?: string;
+    /**
+     * PARENT SESSION — the focus session (`focus_sessions.id`) this node's
+     * runs are CHILDREN of. Forwarded to `runPlaybook({ parentSessionId })`,
+     * which writes `run session --spawned_from--> parent` through its one
+     * producer (`recordSessionSpawn`, owner floor on the parent). A node
+     * naming a parent that is no longer open (closed, cancelled, failed, or
+     * gone) starts and files NOTHING (`session_closed`): a session's worker
+     * stops with its session, and nothing on the session moves. Producer: a
+     * SESSION-scoped worker enablement (`workers.enable({ sessionId })`, via
+     * the rule grammar's `__parentSessionId` key). Absent ⇒ unchanged.
+     */
+    parentSessionId?: string;
     /**
      * WHAT this node materializes (read through `readPlaybookRunMode`,
      * `@synap-core/types/automations`, which keeps this union and its runtime
      * list in sync both ways):
      *   - absent / `"run"` — an unattended run (every pre-existing node).
      *   - `"appointment"` — a `scheduled` session waiting for the human
-     *     (`buildPlaybookRunFlowDefinition` from a playbook's `schedule.mode`).
+     *     (a schedule activator's `mode`, through the rule grammar's `__mode`).
      *   - `"propose"` — a governed `playbook/run` PROPOSAL; nothing starts until
      *     a person approves, and approval replays `playbooks.run` →
      *     `runPlaybook`. Producer: the rule grammar's `__mode` key.
@@ -826,8 +859,8 @@ export interface PlaybookRunWorkerSpec {
   size: WorkerSize;
   /** The subject kind or role the worker works on. */
   profileSlug: string;
-  /** The status its things sit in (enters_status / count / schedule). */
-  status?: string;
+  /** The status its things sit in (enters_status / count / schedule; a list for schedule). */
+  status?: WorkerStatusSpec;
   /** A `count` worker's threshold. */
   minCount?: number;
   maxPendingApprovals?: number;

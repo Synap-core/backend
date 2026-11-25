@@ -38,7 +38,19 @@
 #             still succeeds; a custom domain is never waited on
 #   bootstrap install.sh: retired flags refused with the new spelling; bundle
 #             sha mismatch refused; happy path unpacks, links the CLI, execs
-#             `synap install --non-interactive --release <id> …`
+#             `synap install --non-interactive --release <id> …`; a terminal and
+#             nothing decided → execs WITHOUT --non-interactive, stdin = the
+#             terminal; a flag that decides, --non-interactive, or a terminal
+#             that does not open → unattended as before
+#   zone      a Synap-zone address (--name, or --domain under pod.synap.live or
+#             the legacy synap.live) without a code is refused before docker
+#             runs (its DNS exists only once the CP registers the pod); a pod
+#             already registered here re-runs with --name and no code
+#   onboard   a person at a terminal (a real pty) and no code/name/domain: asked
+#             linked or standalone. Linked: code (hidden) + name → the same
+#             registration as the flags, Synap's ACME contact, no AI question.
+#             Standalone: a Synap address is refused and asked again, then a
+#             domain they own; no Control Plane contacted
 set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP="$(mktemp -d)"
@@ -135,7 +147,7 @@ case "$*" in
   "compose ps"*postgres*) [ -f "$F/up" ] && echo pg1; exit 0 ;;
   "compose ps"*) exit 0 ;;
   "compose exec -T postgres psql"*federationOidcClient*) echo "pod-client-1|pod-secret-1|https://cp.test"; exit 0 ;;
-  "compose exec -T postgres psql"*) cat >/dev/null 2>&1; echo 1; exit 0 ;;
+  "compose exec -T postgres psql"*) { [ -t 0 ] || cat >/dev/null 2>&1; }; echo 1; exit 0 ;;   # drain a heredoc; never wait on a terminal (psql -c reads none)
   "compose run --rm --no-deps -T --user 0:0 --entrypoint node "*)
     # The CLI's real key script, on this host, against the host side of the -v mount.
     [ -f "$F/podkey-fail" ] && exit 1
@@ -222,6 +234,9 @@ refuse "--control-plane alone"   "only applies with"       --non-interactive --n
 refuse "unknown edge"            "--edge must be"          --non-interactive --name lab1 --edge nginx
 refuse "a zone as --domain"      "is not a pod's address"  --non-interactive --domain pod.synap.live
 refuse "a console as --domain"   "is not a pod's address"  --non-interactive --domain admin.lab1.pod.synap.live
+refuse "a Synap name, no code"   "exists only for a pod linked"  --non-interactive --name lab1
+refuse "a Synap domain, no code" "exists only for a pod linked"  --non-interactive --domain lab1.pod.synap.live --email ops@example.org
+refuse "a legacy Synap domain"   "exists only for a pod linked"  --non-interactive --domain pod.lab1.synap.live --email ops@example.org
 
 # ── plain: unattended, no code (a self-hoster's non-interactive run) ─────────
 setup plain
@@ -327,6 +342,9 @@ rm -f "$TMP/calls.log"
 run_install "${REG[@]}"; rc=$?
 [ "$rc" = 0 ] && ! grep -q '/pods/register' "$TMP/calls.log" 2>/dev/null && grep -q 'already registered as pod pod_123' "$S/out" \
   && ok "rerun: second install succeeds without calling the CP" || { bad "rerun: rc=$rc"; show; }
+run_install --non-interactive --release "$REL" --name lab1; rc=$?
+[ "$rc" = 0 ] && ! grep -q 'exists only for a pod linked' "$S/out" && [ "$(env_of DOMAIN)" = lab1.pod.synap.live ] \
+  && ok "zone: a pod already registered here re-runs with --name and no code" || { bad "zone: registered rerun rc=$rc"; show; }
 
 # ── podkey: the key is stable, its absence never spends the code ─────────────
 before="$(shasum "$KEYF" 2>/dev/null | cut -d' ' -f1)"
@@ -442,9 +460,77 @@ run_install "${REG[@]}"; rc=$?
   && grep -q 'docker compose restart caddy' "$S/out" && [ "$(jq -r .podId "$DEPLOY/state/registration.json" 2>/dev/null)" = pod_123 ] \
   && ok "dns: a record that never resolves → bounded wait, says how to finish, the install still succeeds" || { bad "dns/never: rc=$rc"; show; }
 
+# ── onboard: a person at a terminal, nothing decided by flags ─────────────────
+# A real pty (the engine asks only when stdin IS a terminal). The driver answers
+# each expected prompt in order, and exits 97 on a prompt that never comes.
+cat > "$TMP/answer-prompts.py" <<'PYTTY'
+import os, pty, re, select, sys, time
+out_path, script = sys.argv[1], sys.argv[2]
+pairs = [l.rstrip("\n").split("\t", 1) for l in open(script) if l.strip()]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(sys.argv[3], sys.argv[3:])
+buf, pos, out = b"", 0, open(out_path, "wb")
+def pump(timeout):
+    global buf
+    r, _, _ = select.select([fd], [], [], timeout)
+    if not r: return True
+    try: chunk = os.read(fd, 65536)
+    except OSError: return False
+    if not chunk: return False
+    buf += chunk; out.write(chunk); out.flush(); return True
+for pat, ans in pairs:
+    deadline = time.time() + 90
+    while True:
+        m = re.compile(pat.encode()).search(buf, pos)
+        if m: pos = m.end(); break
+        if time.time() > deadline or not pump(1):
+            out.write(("\n[pty] prompt never came: %s\n" % pat).encode()); out.flush()
+            os.kill(pid, 9); os.waitpid(pid, 0); sys.exit(97)
+    os.write(fd, (ans + "\n").encode())
+# Then until EOF; 60 s with no output means it waits on a prompt nobody expected.
+idle = time.time()
+while True:
+    n = len(buf)
+    if not pump(1): break
+    if len(buf) > n: idle = time.time()
+    elif time.time() - idle > 60:
+        out.write(b"\n[pty] waiting on a prompt the test did not expect\n"); out.flush()
+        os.kill(pid, 9); os.waitpid(pid, 0); sys.exit(98)
+_, st = os.waitpid(pid, 0)
+sys.exit(os.waitstatus_to_exitcode(st))
+PYTTY
+run_install_tty() { # <answers file> <args...> — a pty is the person's terminal
+  local answers="$1"; shift
+  ( cd "$ROOT" || exit; PATH="$TMP/bin:$PATH" SYNAP_DEPLOY_DIR="$DEPLOY" SYNAP_RELEASE_BASE_URL="$BASE/rel" \
+    SYNAP_LOCAL_POD_URL="$BASE" SYNAP_METADATA_IP_URL="$BASE/meta/ip" \
+    SYNAP_DNS_QUERY_URL="$BASE/dns" SYNAP_DNS_WAIT_SECONDS=0 SYNAP_DNS_WAIT_TRIES=3 \
+    SYNAP_HEALTH_INTERVAL=0 SYNAP_REGISTER_RETRY_SECONDS=0 SYNAP_REGISTER_HEALTH_TRIES=2 \
+    SYNAP_RELEASE_VERIFY=warn python3 -I "$TMP/answer-prompts.py" "$S/out" "$answers" bash "$ROOT/synap" install "$@" ) </dev/null >/dev/null 2>"$S/driver.err"
+}
+setup onboardlinked; cp_response "$OIDC" "$INTEL"
+printf '%s\t%s\n' 'Choice \[1/2\] \(1\): ' '1' 'Registration code' "$TOKEN" \
+  'Pod name the code was minted for: ' 'lab1' 'type a domain you own' '' > "$S/answers"
+run_install_tty "$S/answers" --release "$REL" --control-plane "$BASE"; rc=$?
+[ "$rc" = 0 ] && grep -q '^/pods/register$' "$TMP/calls.log" && [ "$(env_of DOMAIN)" = lab1.pod.synap.live ] \
+  && [ "$(jq -r .podId "$DEPLOY/state/registration.json" 2>/dev/null)" = pod_123 ] && [ "$(jq -r .name "$DEPLOY/state/registration.json" 2>/dev/null)" = lab1 ] \
+  && ok "onboard: linked → the code and name typed at the terminal register the pod as the flags would" || { bad "onboard/linked: rc=$rc"; show; sed "s/^/      driver: /" "$S/driver.err" 2>/dev/null; }
+[ "$(env_of LETSENCRYPT_EMAIL)" = ops@synap.live ] && ! grep -q 'Enter email for SSL' "$S/out" && ! grep -q 'Intelligence Service Configuration' "$S/out" \
+  && grep -q 'comes with your Synap plan' "$S/out" \
+  && ok "onboard: linked → no certificate-email or AI question (Synap's contact, the plan's AI)" || { bad "onboard/linked: email=$(env_of LETSENCRYPT_EMAIL)"; show; }
+grep -q "$TOKEN" "$S/out" && bad "onboard: the code was echoed on the terminal" || ok "onboard: the code is typed hidden (never echoed)"
+setup onboardalone
+printf '%s\t%s\n' 'Choice \[1/2\] \(1\): ' '2' 'Domain you own for this pod' 'lab1.pod.synap.live' \
+  'Domain you own for this pod' 'pod.example.org' 'Enter email for SSL certificates' 'ops@example.org' \
+  'Choice \[1/2\] \(preseed\): ' '2' 'Choice \[1/2/3\]: ' '3' > "$S/answers"
+run_install_tty "$S/answers" --release "$REL"; rc=$?
+[ "$rc" = 0 ] && grep -q 'is a Synap address: it exists only for a linked pod' "$S/out" && [ "$(env_of DOMAIN)" = pod.example.org ] \
+  && [ "$(env_of LETSENCRYPT_EMAIL)" = ops@example.org ] && [ ! -s "$TMP/calls.log" ] && [ -z "$(env_of CONTROL_PLANE_URL)" ] \
+  && ok "onboard: standalone → a Synap address is refused and asked again; their own domain, no Control Plane" || { bad "onboard/standalone: rc=$rc domain=$(env_of DOMAIN)"; show; sed "s/^/      driver: /" "$S/driver.err" 2>/dev/null; }
+
 # ── install.sh: the bootstrapper ──────────────────────────────────────────────
 B="$TMP/boot"; mkdir -p "$B/bundle/deploy" "$B/bin" "$B/fake"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "SYNAP_DEPLOY_DIR=$SYNAP_DEPLOY_DIR" "$@" > "%s/fake/exec-args"\n' "$B" > "$B/bundle/synap"
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$PWD" "SYNAP_DEPLOY_DIR=$SYNAP_DEPLOY_DIR" "$@" > "%s/fake/exec-args"\nIFS= read -r l || true; printf "%%s\\n" "$l" > "%s/fake/exec-stdin"\n' "$B" "$B" > "$B/bundle/synap"
 cp "$HERE/deploy/docker-compose.yml" "$B/bundle/deploy/"
 BREL="v9.9.9"; mkdir -p "$TMP/srv/rel/$BREL" "$TMP/srv/rel/channel-stable"
 tar -czf "$TMP/srv/rel/$BREL/synap-deploy-$BREL.tar.gz" -C "$B/bundle" .
@@ -454,7 +540,7 @@ cp "$TMP/srv/rel/channel-stable/release.json" "$TMP/srv/rel/$BREL/release.json"
 boot() { # <dir> <args...>
   local d="$1"; shift
   PATH="$TMP/bin:$PATH" SYNAP_RELEASE_BASE_URL="$BASE/rel" SYNAP_DIR="$d" SYNAP_BIN_DIR="$B/bin" \
-    SYNAP_RELEASE_VERIFY=warn bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null   # signatures: install-manifest-signature.test.sh
+    SYNAP_RELEASE_VERIFY=warn SYNAP_TTY="${SYNAP_TTY-$B/no-such-tty}" bash "$HERE/install.sh" "$@" >"$B/out" 2>&1 </dev/null   # signatures: install-manifest-signature.test.sh
 }
 for retired in "--provisioning-token x" "--control-plane-url https://cp" "--backend-version v1" "--token x"; do
   # shellcheck disable=SC2086
@@ -474,5 +560,20 @@ expected="$(printf '%s\n' "$B/opt" "SYNAP_DEPLOY_DIR=$B/opt/deploy" install --no
   && ok "bootstrap: stable → $BREL, unpacked, execs synap install --non-interactive --release $BREL + the flags" || { bad "bootstrap: rc=$rc"; cat "$B/out"; diff <(echo "$expected") "$B/fake/exec-args"; }
 [ "$(readlink "$B/bin/synap")" = "$B/opt/synap" ] && ok "bootstrap: the CLI is linked onto PATH (operators find it)" || bad "bootstrap: $B/bin/synap → $(readlink "$B/bin/synap")"
 grep -q "$TOKEN" "$B/out" && bad "bootstrap: the code was printed" || ok "bootstrap: the code is never printed"
+# A terminal that opens, nothing decided → the engine may ask, reading that terminal.
+echo "typed-at-the-terminal" > "$B/tty"
+SYNAP_TTY="$B/tty" boot "$B/opt" --release "$BREL"; rc=$?
+expected="$(printf '%s\n' "$B/opt" "SYNAP_DEPLOY_DIR=$B/opt/deploy" install --release "$BREL")"
+[ "$rc" = 0 ] && [ "$(cat "$B/fake/exec-args")" = "$expected" ] && [ "$(cat "$B/fake/exec-stdin")" = typed-at-the-terminal ] \
+  && ok "bootstrap: a terminal and no deciding flag → synap install without --non-interactive, stdin = the terminal" || { bad "bootstrap: tty rc=$rc"; cat "$B/out"; cat "$B/fake/exec-args"; }
+for decided in "--name lab1" "--domain pod.example.org" "--register-token $TOKEN" "--non-interactive" "--automated"; do
+  # shellcheck disable=SC2086
+  SYNAP_TTY="$B/tty" boot "$B/opt" --release "$BREL" $decided; rc=$?
+  [ "$rc" = 0 ] && sed -n 3,4p "$B/fake/exec-args" | grep -qx -- --non-interactive && [ -z "$(cat "$B/fake/exec-stdin")" ] \
+    && ok "bootstrap: a terminal but '${decided%% *}' → unattended, as before" || { bad "bootstrap: '${decided%% *}' rc=$rc"; cat "$B/fake/exec-args"; }
+done
+boot "$B/opt" --release "$BREL"; rc=$?
+[ "$rc" = 0 ] && sed -n 3,4p "$B/fake/exec-args" | grep -qx -- --non-interactive \
+  && ok "bootstrap: no terminal that opens (cloud-init) → unattended" || { bad "bootstrap: no tty rc=$rc"; cat "$B/fake/exec-args"; }
 
 exit $fail

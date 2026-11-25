@@ -16,12 +16,12 @@
  * WHAT a create mints, in ONE transaction (nothing half-exists):
  *   1. the form's own agent user — `agentType: form:<formId>`, `createdVia:
  *      system`, capabilities EXACTLY `["entity.create"]` (never empty: empty
- *      means unrestricted), `writesRequireProposal: true`, no API key;
- *   2. an `editor` membership in exactly the form's workspace;
- *   3. the per-form mode rule (agent principal, workspace scope, exact action
+ *      means unrestricted), `writesRequireProposal: true`, no API key, no
+ *      space seat (it writes through its creator's membership);
+ *   2. the per-form mode rule (agent principal, workspace scope, exact action
  *      `entity.create`, `propose` or `auto`), namespaced `system:forms:<id>`;
- *   4. an explicit `pending_proposal_cap` ceiling for that actor;
- *   5. the `tools` row whose `metadata.form` carries the definition, the token
+ *   3. an explicit `pending_proposal_cap` ceiling for that actor;
+ *   4. the `tools` row whose `metadata.form` carries the definition, the token
  *      HASH + 6-char prefix and the ticket secret. The plaintext token is
  *      returned ONCE and never stored (`utils/share-token.ts`, the same token
  *      machinery as share links).
@@ -39,12 +39,12 @@ import {
   isNull,
   drizzleSql,
   getActingAgentUserId,
+  personOfOwner,
 } from "@synap/database";
 import {
   tools,
   users,
   workspaces,
-  workspaceMembers,
   governanceRules,
   governanceCeilings,
   profiles,
@@ -130,7 +130,11 @@ async function assertWorkspaceOwner(
     .limit(1);
   if (!ws)
     throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
-  if (ws.ownerId !== userId) {
+  // An agent principal stands for its person, who owns the space.
+  if (
+    ws.ownerId !== userId &&
+    (await personOfOwner(database, userId)) !== ws.ownerId
+  ) {
     throw forbidden("Only the workspace owner can manage its public forms.");
   }
 }
@@ -306,12 +310,6 @@ export async function createForm(
       isPersonalAgent: false,
       timezone: "UTC",
       locale: "en",
-    });
-    await tx.insert(workspaceMembers).values({
-      workspaceId: input.workspaceId,
-      userId: actorId,
-      role: "editor",
-      invitedBy: actor.userId,
     });
     await tx.insert(governanceRules).values({
       principalKind: "agent",

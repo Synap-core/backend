@@ -33,6 +33,8 @@ export interface GoalCriterionInput {
   check: { kind: EvaluatorKind; evidenceKey?: string };
   checkKind: CriterionCheckMeaning;
   about?: "method";
+  /** The key of the session output this criterion checks (absent = none named). */
+  outputKey?: string;
 }
 
 /** The pod's key rule (`sessionCriterionSchema`): a lowercase slug, at most 80. */

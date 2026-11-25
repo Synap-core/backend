@@ -16,7 +16,7 @@
  * carried hold of a `paused → paused` move), the holds whose `until.date` has
  * come (the hourly resume sweep), the holds waiting on a thing that just
  * moved (the `until.moves` resume), the holds waiting on a dev fact
- * (`pr:` / `main:` / `job:`, the hourly sweep's second half), and the holds
+ * (`pr:` / `main:` / `job:` / `ai:`, the hourly sweep's second half), and the holds
  * whose `reviewBy` has passed (the status watcher, W6). A passed `reviewBy`
  * never moves anything.
  */
@@ -40,6 +40,7 @@ import { entityFacets } from "../../schema/entity-facets.js";
 import { projectTracks } from "../../schema/project-tracks.js";
 import { focusSessions } from "../../schema/focus-sessions.js";
 import { proposals } from "../../schema/proposals.js";
+import { playbookRuns } from "../../schema/playbook-runs.js";
 
 const logger = createLogger({ module: "holds" });
 
@@ -188,7 +189,7 @@ function filterSql(filter: HoldFilter): SQL {
   }
   if ("current" in filter) return sql`TRUE`;
   if ("awaitingDevFacts" in filter) {
-    return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job):'`;
+    return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(pr|main|job|ai):'`;
   }
   if ("awaitingWaitRefs" in filter) {
     return sql`(o.transition->'hold'->'until'->>'moves') ~ '^(answer|proposal):'`;
@@ -335,6 +336,11 @@ async function statusesNow(
   const sessions = ids((t) =>
     t.subjectType === "focus_session" ? t.subjectId : null
   );
+  // A run's pause (`waiting_on_you`, `stale`, `proposed`) records a hold
+  // too. Proposals and slots have no paused status.
+  const runs = ids((t) =>
+    t.subjectType === "playbook_run" ? t.subjectId : null
+  );
   if (kinds.length) {
     for (const r of await db
       .select({ id: entities.id, status: entities.status })
@@ -364,6 +370,13 @@ async function statusesNow(
       .from(focusSessions)
       .where(inArray(focusSessions.id, sessions)))
       out.set(`focus_session:${r.id}`, r.status);
+  }
+  if (runs.length) {
+    for (const r of await db
+      .select({ id: playbookRuns.id, status: playbookRuns.status })
+      .from(playbookRuns)
+      .where(inArray(playbookRuns.id, runs)))
+      out.set(`playbook_run:${r.id}`, r.status);
   }
   return out;
 }

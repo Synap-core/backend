@@ -179,6 +179,8 @@ const DOCUMENT_UPDATE = {
   metadata: null,
   parameters: null,
   executionMode: null,
+  intent: null,
+  inputMap: null,
 };
 
 const BASIC =

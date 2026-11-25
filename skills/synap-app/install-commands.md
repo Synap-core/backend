@@ -1,20 +1,18 @@
 # Install & scaffold commands
 
-## Scaffold a full app (recommended for a fresh start)
+## Start a fresh app
 
-> **Not published yet.** The scaffolder (`@synap-core/create-synap-app`) is not
-> on npm and the base template is not public, so `npx` returns 404 today. Use the
-> SDK path below until a release exists.
+> **No public starter yet.** A public starter is decided but not published. The
+> older scaffolder (`@synap-core/create-synap-app`, a Next.js + HeroUI base
+> template) was never published and is retired, so `npx` returns 404. Start a
+> Next.js app on shadcn + Tailwind v4 and add the SDK (below).
 
-Once published:
+## Register an app on your pod
 
 ```bash
-npx @synap-core/create-synap-app my-app
+synap app init      # writes synap.app.json (name, pod, what the app asks for) and registers the app on your pod
+synap app connect   # files ONE proposal for the app's access; once you approve it, writes the app's key into the deploy target (Vercel, or .env.local)
 ```
-
-It creates a Next.js + HeroUI project from the base template, with the SDK, auth,
-app shell, command palette, realtime, and mock mode pre-wired. It also drops an
-`AGENTS.md` into the project so your AI coding tool knows how to work with it.
 
 ## Add the SDK to an existing app
 
@@ -48,9 +46,8 @@ synap skill get synap-app
 synap connect --target=cursor        # or claude-code, claude-desktop, codex, …
 ```
 
-Once the scaffolder is published, the scaffolded project ships an `AGENTS.md` at its root — most AI
-coding tools read it automatically, so a freshly-scaffolded app teaches the AI
-how to build on it with zero extra setup.
+The SDK ships its own `AGENTS.md` (`node_modules/@synap-core/sdk/AGENTS.md`):
+point your AI coding tool at it, or link it from your project's own `AGENTS.md`.
 
 ## Verify an install actually works
 

@@ -38,6 +38,7 @@ import {
   isNotNull,
   drizzleSql,
   declaredLifecycleProfilesStatement,
+  readStoredIntent,
 } from "@synap/database";
 import {
   entities,
@@ -75,6 +76,7 @@ import {
   kindVisibilityConditions,
   roleVisibilityConditions,
   stuckAfterDaysOf,
+  stuckForDays,
   type StatusGroup,
 } from "./status-groups.js";
 import { asksYouSessionIds } from "../signals/needs-you-owed.js";
@@ -167,6 +169,8 @@ export interface ProducedKind {
     status: string | null;
     reason: HeadlineReason;
   } | null;
+  /** `helper`: worked here to serve an output, not one (`settings.intent.helpers`); absent = an output. */
+  as?: "helper";
 }
 
 export interface SpaceIntent {
@@ -370,19 +374,9 @@ async function projectSpaceIds(
   ]);
 }
 
-/** The stored (template) intent, when well-formed. */
-function storedIntentOf(
-  settings: Record<string, unknown> | null
-): { label: string; produces: string[] } | null {
-  const intent = settings?.intent as
-    { label?: unknown; produces?: unknown } | null | undefined;
-  if (!intent || typeof intent.label !== "string" || !intent.label.trim())
-    return null;
-  const produces = Array.isArray(intent.produces)
-    ? intent.produces.filter((s): s is string => typeof s === "string")
-    : [];
-  return { label: intent.label, produces };
-}
+/** The stored (template) intent, when well-formed (THE reader, `readStoredIntent`). */
+const storedIntentOf = (settings: Record<string, unknown> | null) =>
+  readStoredIntent(settings);
 
 /**
  * Counts PER SPACE and profile — what a space with no declared intent
@@ -699,8 +693,7 @@ async function readProducedKind(
         ? g.items
             .filter(
               (i) =>
-                Date.parse(i.since) <
-                now - stuckDays.get(g.status!)! * 86_400_000
+                stuckForDays(i.since, stuckDays.get(g.status!), now) !== null
             )
             .map((i) => ({ ...i, status: g.status }))
         : []
@@ -823,12 +816,14 @@ export async function readHome(
           label: own.label,
           source: "template" as const,
           produces: own.produces,
+          helpers: own.helpers,
         }
       : {
           space: s,
           label: s.name,
           source: "inferred" as const,
           produces: inferred.get(s.id) ?? [],
+          helpers: [] as string[],
         };
   });
 
@@ -901,9 +896,13 @@ export async function readHome(
     })
   );
   const out = intents.map((i, idx): SpaceIntent => {
-    const produced = read.filter(
-      (p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx
-    );
+    const produced = read
+      .filter((p, n): p is ProducedKind => p !== null && pairs[n]!.idx === idx)
+      // What the template says each kind is to the space.
+      .map((p) => ({
+        ...p,
+        ...(i.helpers.includes(p.profileSlug) ? { as: "helper" as const } : {}),
+      }));
     return {
       workspaceId: i.space.id,
       name: i.space.name,

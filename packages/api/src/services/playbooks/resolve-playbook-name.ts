@@ -13,11 +13,10 @@ import {
   getDb,
   eq,
   and,
-  or,
   ne,
-  isNull,
   drizzleSql,
   playbooks,
+  usableInSpaceWhere,
 } from "@synap/database";
 import type { Playbook } from "@synap/database/schema";
 import { AccessContext, scopedDb } from "../../access/index.js";
@@ -99,10 +98,10 @@ export async function resolvePlaybookByPublicName(opts: {
         drizzleSql`lower(${playbooks.name}) = lower(${name})`,
         ne(playbooks.status, "archived"),
         opts.workspaceId
-          ? or(
-              isNull(playbooks.workspaceId),
-              eq(playbooks.workspaceId, opts.workspaceId)
-            )
+          ? usableInSpaceWhere(playbooks.workspaceId, opts.workspaceId, {
+              type: "playbook",
+              id: playbooks.id,
+            })
           : undefined
       )
     );

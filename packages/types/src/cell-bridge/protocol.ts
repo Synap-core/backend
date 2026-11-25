@@ -4,13 +4,17 @@
  * iframe-protocol.ts`: `synap:query` / `synap:mutate` with an `id`, answered
  * by `synap:query:result` / `synap:mutate:result` carrying the same `id`).
  *
- * Only the read path and the write REFUSAL are here: a host of this version
- * answers reads and refuses every write (writes come later, through the
- * proposal door).
+ * A PAGE host (a stored HTML page, `host.ts`) answers reads and refuses every
+ * write. A MODULE host (`frame-host.ts`) also forwards the typed writes of
+ * `write-ops.ts` to the pod's governed doors.
  */
+
+import type { SurfaceContext } from "./surface-context.js";
 
 /** Frame → host. */
 export type CellBridgeFrameMessage =
+  /** "Where am I?" (`window.synap.context()`, frame contract v3). */
+  | { type: "synap:context"; id: string }
   | {
       type: "synap:query";
       id: string;
@@ -24,14 +28,29 @@ export type CellBridgeFrameMessage =
       payload: unknown;
     };
 
-/** Host → frame. Exactly one of `data` / `error` is meaningful. */
+/**
+ * Host → frame. Exactly one of `data` / `error` is meaningful on a read. A
+ * write's answer is what the pod said: `approved` (applied), `proposed` (sent
+ * for review, `proposalId`) or `denied` (`error` says why). A page host only
+ * ever answers `denied` (`CELL_BRIDGE_WRITE_REFUSED`); a module host answers
+ * all three (`createCellFrameHost`, `frame-host.ts`).
+ */
 export type CellBridgeHostMessage =
   | { type: "synap:query:result"; id: string; data?: unknown; error?: string }
+  /** The frame's context (`surface-context.ts`), or why there is none. */
+  | {
+      type: "synap:context:result";
+      id: string;
+      data?: SurfaceContext;
+      error?: string;
+    }
   | {
       type: "synap:mutate:result";
       id: string;
-      status: "denied";
-      error: string;
+      status: "approved" | "proposed" | "denied";
+      data?: unknown;
+      proposalId?: string;
+      error?: string;
     };
 
 const MAX_ID_LENGTH = 100;
@@ -46,11 +65,17 @@ export function parseCellBridgeMessage(
 ): CellBridgeFrameMessage | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const msg = data as Record<string, unknown>;
-  if (msg.type !== "synap:query" && msg.type !== "synap:mutate") return null;
+  if (
+    msg.type !== "synap:query" &&
+    msg.type !== "synap:mutate" &&
+    msg.type !== "synap:context"
+  )
+    return null;
   const { id, operation } = msg;
   if (typeof id !== "string" || id.length === 0 || id.length > MAX_ID_LENGTH) {
     return null;
   }
+  if (msg.type === "synap:context") return { type: "synap:context", id };
   if (
     typeof operation !== "string" ||
     operation.length === 0 ||

@@ -50,16 +50,21 @@ describe("parseOpenParams", () => {
     });
   });
 
-  it("takes a cell's type key, colon and all, encoded or not", () => {
+  it("hosts a cell by its type key, colon and all, encoded or not", () => {
     // A document's cell chip links `/open/cell/<key>` (`objectPage`): a
     // `generated:` key that failed here made every such chip a dead link.
-    const bounce = {
-      status: "bounce",
+    // A cell is a HOST type keyed by its key, never a uuid: its page runs it.
+    const host = {
+      status: "host",
       type: "cell",
       id: "generated:weekly-pulse",
     };
-    expect(parseOpenParams("cell", "generated:weekly-pulse")).toEqual(bounce);
-    expect(parseOpenParams("cell", "generated%3Aweekly-pulse")).toEqual(bounce);
+    expect(parseOpenParams("cell", "generated:weekly-pulse")).toEqual(host);
+    expect(parseOpenParams("cell", "generated%3Aweekly-pulse")).toEqual(host);
+    expect(parseOpenParams("cell", "cell:synap-renderers:board")).toEqual({
+      ...host,
+      id: "cell:synap-renderers:board",
+    });
     expect(parseOpenParams("cell", "generated:<x>").status).toBe("invalid-id");
     expect(parseOpenParams("cell", "generated:a/b").status).toBe("invalid-id");
   });

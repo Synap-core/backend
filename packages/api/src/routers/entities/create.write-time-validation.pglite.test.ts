@@ -50,7 +50,6 @@ vi.mock("../../utils/permission-check.js", () => ({
   checkPermissionOrPropose: h.gate,
   previewPermissionDecision: vi.fn(async () => ({ decision: "allow" })),
   proposedMessageFor: vi.fn(() => "proposed"),
-  isJoinGate: vi.fn(() => false),
 }));
 vi.mock("../../utils/audit-log.js", () => ({ auditLog: vi.fn() }));
 vi.mock("../../utils/split-brain-service.js", () => ({
@@ -131,6 +130,22 @@ beforeAll(async () => {
      values ($1,$2,true,0,false)`,
     [profileId, (def.rows[0] as { id: string }).id]
   );
+  // A kind whose status field carries its own name (as `decisionStatus`).
+  const verdict = await q(
+    `insert into profiles (id, slug, display_name, profile_kind, scope, entity_scope, workspace_id, is_active, ui_hints)
+     values (gen_random_uuid(),'verdict','Verdict','kind','system','pod',null,true,'{}'::jsonb) returning id`
+  );
+  const verdictId = (verdict.rows[0] as { id: string }).id;
+  const status = await q(
+    `insert into property_defs (id, slug, profile_id, workspace_id, value_type, constraints, ui_hints)
+     values (gen_random_uuid(),'verdictStatus',$1,null,'string','{}'::jsonb,'{}'::jsonb) returning id`,
+    [verdictId]
+  );
+  await q(
+    `insert into profile_properties (profile_id, property_def_id, required, display_order, is_lifecycle)
+     values ($1,$2,false,0,true)`,
+    [verdictId, (status.rows[0] as { id: string }).id]
+  );
 }, 120_000);
 
 beforeEach(() => {
@@ -195,6 +210,28 @@ describe("entities.create: properties are validated at write time", () => {
     expect(out).toMatchObject({ status: "proposed", proposalId: "prop-1" });
   });
 
+  it("a caller-requested review (forcePropose) reaches the gate; without it the gate is told false", async () => {
+    // The design door (design.apply, self-gated) asks for review this way
+    // when the outer capability gate said propose: dropped here, the
+    // agent's create could auto-approve past that review.
+    await create({
+      title: "Founder working preference",
+      properties: { uo_category: "preferences" },
+      agentUserId: AGENT,
+      source: "ai",
+      forcePropose: true,
+    });
+    await create({
+      title: "Founder working preference",
+      properties: { uo_category: "preferences" },
+      agentUserId: AGENT,
+      source: "ai",
+    });
+    expect(h.gate).toHaveBeenCalledTimes(2);
+    expect(h.gate.mock.calls[0]![0]).toMatchObject({ forcePropose: true });
+    expect(h.gate.mock.calls[1]![0]).toMatchObject({ forcePropose: false });
+  });
+
   it("a person's bad create is still refused by the repository", async () => {
     h.gate.mockResolvedValue({ allowed: true });
     await expect(
@@ -206,5 +243,18 @@ describe("entities.create: properties are validated at write time", () => {
     // The person's write reached the gate (no write-time refusal for them):
     // the refusal came from the repository's materialization.
     expect(h.gate).toHaveBeenCalledTimes(1);
+  });
+
+  it("an agent's status under another key is refused with the kind's own name", async () => {
+    await expect(
+      create({
+        profileSlug: "verdict",
+        title: "Go",
+        properties: { status: "accepted" },
+        agentUserId: AGENT,
+        source: "ai",
+      })
+    ).rejects.toThrow(/status: .*'verdictStatus'/);
+    expect(h.gate).not.toHaveBeenCalled();
   });
 });

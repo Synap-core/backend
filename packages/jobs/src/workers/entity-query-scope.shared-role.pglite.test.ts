@@ -34,9 +34,11 @@ import {
   entities,
   entityFacets,
   profiles,
-  profileWorkspaceAccess,
+  spaceAccess,
   podMembers,
   workspaceMembers,
+  apiKeys,
+  users,
   workspaces,
 } from "@synap/database/schema";
 import { db } from "@synap/database";
@@ -79,9 +81,11 @@ beforeAll(async () => {
     entities,
     entityFacets,
     profiles,
-    profileWorkspaceAccess,
+    spaceAccess,
     podMembers,
     workspaceMembers,
+    apiKeys,
+    users,
     workspaces,
   ] as PgTable[]) {
     await h.client!.exec(ddlFor(t));
@@ -99,7 +103,7 @@ beforeAll(async () => {
     [ROLE]
   );
   await q(
-    `insert into profile_workspace_access (profile_id, workspace_id) values ($1,$2)`,
+    `insert into space_access (object_type, object_id, workspace_id) values ('profile',$1,$2)`,
     [ROLE, WS_A]
   );
   await q(

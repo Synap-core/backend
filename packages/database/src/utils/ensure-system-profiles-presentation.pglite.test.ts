@@ -108,6 +108,30 @@ describe("ensureSystemProfiles — presentation backfill", () => {
     });
   }, 120_000);
 
+  it("a note can carry the link it is about: `url` is linked, not required", async () => {
+    const rows = await db
+      .select({
+        slug: schema.propertyDefs.slug,
+        required: schema.profileProperties.required,
+      })
+      .from(schema.profileProperties)
+      .innerJoin(
+        schema.profiles,
+        eq(schema.profiles.id, schema.profileProperties.profileId)
+      )
+      .innerJoin(
+        schema.propertyDefs,
+        eq(schema.propertyDefs.id, schema.profileProperties.propertyDefId)
+      )
+      .where(
+        and(
+          eq(schema.profiles.slug, "note"),
+          eq(schema.profiles.scope, ProfileScope.SYSTEM)
+        )
+      );
+    expect(rows).toContainEqual({ slug: "url", required: false });
+  }, 120_000);
+
   it("an existing pod: backfills a missing one, never flips a refined one", async () => {
     const bookmark = await hintsOf("bookmark");
     const { presentation: _drop, ...withoutPresentation } = bookmark;

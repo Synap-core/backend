@@ -19,6 +19,11 @@
  *            yet: no surface offers it.
  *            Offered only when the session read says so (`rerun.available`,
  *            `assessRerunAvailability`), never re-derived here.
+ *   continue the SAME run resumes at the stage it stopped on, with a new run
+ *            turn: a run that ended or stopped before its last stage, with
+ *            nothing live on it (plan 7d71ddcc W4). A PERSON's move; an
+ *            ended session is reopened for it. Offered only when the read
+ *            says so (`statusOf` `include: ["work"]` → `continue`).
  *   wait_on  add a `session --blocked_by--> session` edge.
  *   release  drop that edge (stop waiting on that session).
  *
@@ -44,6 +49,7 @@ export const SESSION_VERBS = [
   "resume",
   "stop",
   "rerun",
+  "continue",
   "wait_on",
   "release",
 ] as const;
@@ -57,6 +63,8 @@ export type SessionVerbEffect =
   | { kind: "close"; terminalStatus: "cancelled" }
   /** A new session `spawned_from` this one; this one is untouched. */
   | { kind: "new_session"; link: "spawned_from" }
+  /** The same session runs again from the stage it stopped on: a new run turn. */
+  | { kind: "new_run"; at: "current_stage" }
   /** A `blocked_by` edge from this session to another is added or dropped. */
   | { kind: "edge"; link: "blocked_by"; op: "add" | "remove" };
 
@@ -133,6 +141,17 @@ export const SESSION_VERB_DECLARATION = {
       hub: "POST /focus-sessions/:id/rerun",
     },
   },
+  continue: {
+    action: "session.continue",
+    // Wherever a run can stand stopped; offered only on the read's word.
+    from: ["active", "paused", "stale", "closed", "failed"],
+    effect: { kind: "new_run", at: "current_stage" },
+    doors: {
+      trpc: "continueRun",
+      mcp: { tool: "synap_continue_session", arg: "sessionId" },
+      hub: "POST /focus-sessions/:id/continue",
+    },
+  },
   wait_on: {
     action: "session.wait_on",
     from: LIVE,
@@ -179,6 +198,11 @@ export interface SessionVerbSubject {
    * refuse is not offered.
    */
   rerunAvailable?: boolean | null;
+  /**
+   * The read offers Continue (`statusOf` `include: ["work"]`, the item's
+   * `continue`). Anything but `true` hides it.
+   */
+  continueAvailable?: boolean | null;
 }
 
 /**
@@ -194,6 +218,7 @@ export function sessionVerbsFor(subject: SessionVerbSubject): SessionVerb[] {
     const decl: SessionVerbDeclaration = SESSION_VERB_DECLARATION[verb];
     if (!(decl.from as readonly string[]).includes(status)) return false;
     if (verb === "rerun") return subject.rerunAvailable === true;
+    if (verb === "continue") return subject.continueAvailable === true;
     return true;
   });
 }

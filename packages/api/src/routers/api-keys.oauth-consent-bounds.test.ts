@@ -56,7 +56,10 @@ vi.mock("@synap/events", () => ({ emitSideEffects: vi.fn() }));
 // Import AFTER mocks.
 import { db } from "@synap/database";
 import { apiKeysRouter } from "./api-keys.js";
-import { ClientMetadataError } from "./oauth/client-metadata.js";
+import {
+  CIMD_MAX_BYTES,
+  ClientMetadataError,
+} from "./oauth/client-metadata.js";
 
 const caller = () =>
   apiKeysRouter.createCaller({
@@ -121,6 +124,45 @@ describe("consent procedures — client_id length is bounded", () => {
     );
     expect(err.message).toMatch(/could not be read/);
     expect(resolveCimdClient).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Content Studio's real request on 11 Nov 2026: 48 permissions, the most an
+// app description may declare, joined by /authorize into 1046 characters.
+const CONTENT_STUDIO_SCOPE =
+  "entity.post.read entity.idea.read entity.pillar.read entity.journey-stage.read entity.series.read entity.platform.read entity.campaign.read entity.file.read entity.content-composition.read entity.content-asset.read entity.inspiration.read entity.signal_item.read document.read relation.read session.read proposal.read proposal.approve proposal.reject entity.post.create entity.post.update capability.publish_post.run entity.signal_item.update entity.file.create entity.brand-template.read entity.brand-asset.read entity.brand-component.read entity.brand-color.read entity.brand-font.read entity.brand-rule.read entity.brand-voice-guide.read entity.content-guideline.read entity.brand-template.update entity.brand-asset.update entity.brand-asset.create entity.inspiration.create session.update playbook.run playbook.read agent.read channel.read document.update relation.create entity.content-asset.create entity.content-asset.update entity.content-composition.create entity.content-composition.update entity.file.delete entity.content-asset.delete";
+
+describe("consent procedures — the scope fits what an app description may declare", () => {
+  const id = "https://studio.example.com/.well-known/synap-client.json";
+  const withScope = (scope: string) => ({ ...params(id), scope });
+
+  it("Content Studio's 48 permissions (1046 characters) reach the OAuth layer", async () => {
+    expect(CONTENT_STUDIO_SCOPE.split(" ")).toHaveLength(48);
+    expect(CONTENT_STUDIO_SCOPE.length).toBeGreaterThan(1024);
+    const err = await errorOf(
+      caller().getOAuthConsentContext(withScope(CONTENT_STUDIO_SCOPE))
+    );
+    expect(err.message).toMatch(/could not be read/);
+    expect(resolveCimdClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("the decision takes the same scope", async () => {
+    const err = await errorOf(
+      caller().decideOAuthAuthorization({
+        ...withScope(CONTENT_STUDIO_SCOPE),
+        approve: true,
+      })
+    );
+    expect(err.message).toMatch(/could not be read/);
+    expect(resolveCimdClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("a scope longer than a whole app description is refused at the input schema", async () => {
+    const err = await errorOf(
+      caller().getOAuthConsentContext(withScope("a".repeat(CIMD_MAX_BYTES + 1)))
+    );
+    expect(err.code).toBe("BAD_REQUEST");
+    expect(resolveCimdClient).not.toHaveBeenCalled();
   });
 });
 

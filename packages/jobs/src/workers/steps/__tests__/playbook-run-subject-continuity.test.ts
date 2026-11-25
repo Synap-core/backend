@@ -28,8 +28,14 @@ const h = vi.hoisted(() => ({
     session: { id: "sess-followup", channelId: "chan-1" },
   })),
   entityFindFirstMock: vi.fn(),
+  runFloor: vi.fn(() => "run-floor"),
+  and: vi.fn((first: unknown, ..._rest: unknown[]) => first),
 }));
 
+// The run floor is SQL; this suite stubs the database.
+vi.mock("../../entity-query-scope.js", () => ({
+  runEntityVisibilityWhere: h.runFloor,
+}));
 vi.mock("@synap/database", () => ({
   db: {
     query: { entities: { findFirst: h.entityFindFirstMock } },
@@ -40,7 +46,8 @@ vi.mock("@synap/database", () => ({
   },
   // The where-clause is the id itself, so the mock below can answer by id.
   eq: (_col: unknown, value: unknown) => value,
-  and: vi.fn(),
+  // The subject read is `and(eq(id), floor)`: the mock answers by id.
+  and: h.and,
   drizzleSql: vi.fn(),
   isNull: vi.fn(),
   entities: {},
@@ -139,5 +146,19 @@ describe("session close → follow-up keeps the subject", () => {
     };
     expect(input.playbookId).toBe("pb-repurpose");
     expect(input.subjectId).toBe(ENTITY);
+  });
+
+  it("reads the subject through the run's entity floor (its space, its owner)", async () => {
+    h.runFloor.mockClear();
+    const context = {
+      trigger: { payload: {}, subject: ENTITY },
+      steps: {},
+      automation: { id: "auto-1", state: {} },
+    } as unknown as StepContext;
+
+    await executePlaybookRun({ playbookId: "pb-x" }, context, "ws-1", "user-1");
+
+    expect(h.runFloor).toHaveBeenCalledWith("ws-1", "user-1");
+    expect(h.and).toHaveBeenCalledWith(ENTITY, "run-floor");
   });
 });

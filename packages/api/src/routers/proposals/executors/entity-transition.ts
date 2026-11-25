@@ -4,7 +4,7 @@ import { ProposalStatus } from "@synap/database/schema";
 import { moveStatus } from "../../../services/lifecycle/move-status.js";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved } from "./shared.js";
-import type { Hold } from "@synap-core/types/lifecycle";
+import type { Hold, TransitionCause } from "@synap-core/types/lifecycle";
 
 /**
  * Approval half of the `moveStatus` door (work model L2): `entity/transition`.
@@ -60,6 +60,9 @@ export function registerEntityTransitionExecutors(): void {
         reason: typeof inner.reason === "string" ? inner.reason : null,
         workspaceId: proposal.workspaceId ?? null,
         approvedProposalId: input.proposalId,
+        // The approver acts (founder, 17 Nov 2026): what this move sets off
+        // runs as the person who approved it; the agent stays the proposer.
+        approvedBy: userId,
         // The pause's hold and the move's time, as filed (W4).
         hold:
           inner.hold && typeof inner.hold === "object"
@@ -69,6 +72,8 @@ export function registerEntityTransitionExecutors(): void {
           typeof inner.occurredAt === "string" ? inner.occurredAt : null,
         // Moved for the app whose key filed it (0310), not the approver's.
         appId: proposal.appId ?? null,
+        // A move a reaction proposed (D3) keeps why it was proposed.
+        cause: readFiledCause(inner.cause),
       });
 
       if (result.status === "conflict") {
@@ -119,4 +124,23 @@ export function registerEntityTransitionExecutors(): void {
       };
     },
   });
+}
+
+/** The `cause` a reaction filed with its proposed move, or null. */
+function readFiledCause(raw: unknown): TransitionCause | null {
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  if (
+    typeof c.transitionId !== "string" ||
+    typeof c.chainId !== "string" ||
+    typeof c.depth !== "number"
+  ) {
+    return null;
+  }
+  return {
+    ...(typeof c.reactionId === "string" ? { reactionId: c.reactionId } : {}),
+    transitionId: c.transitionId,
+    chainId: c.chainId,
+    depth: c.depth,
+  };
 }

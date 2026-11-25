@@ -42,13 +42,33 @@
  * direction (posted, stamp throws) surfaces as a thrown error with the message
  * visible in the room, which is a legible state rather than a silent one.
  *
+ * AN AGENT HANDING IT ON goes through the ONE hand-off gate
+ * (`agent-hand-off.ts`, `gateAgentHandOff`) before anything is written: a
+ * paused agent or one that does not act for the owner is refused, and handing
+ * the slot to ANOTHER agent proposes by default (`focus_session/assign_agent`,
+ * carrying the slot). Approving it attaches that agent and finishes the
+ * delegation through this same door (`approvedHandOff`). The agent's post and slot move are
+ * recorded as the agent's. A person delegating is applied directly, as
+ * before. Not gated: a type with no agent user on this pod (its turn is
+ * routed by type, with no principal to hand the session to).
+ *
  * OWNER-FLOORED, exactly like its siblings: `focus_sessions` is owner-private
  * and carries no `VisibilityRule`, so the floor is an explicit `userId`
  * predicate on the load (`attach-session-agent.ts` documents the reasoning). A
  * session that is missing and a session that is not yours are indistinguishable.
  */
 
-import { db, focusSessions, and, eq, users } from "@synap/database";
+import {
+  db,
+  focusSessions,
+  and,
+  eq,
+  users,
+  oweSlotTransitions,
+  getActingAgentUserId,
+  workUnitActorOf,
+  type WorkUnitActor,
+} from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import type { ExpectedOutput } from "@synap/playbooks";
@@ -56,6 +76,7 @@ import { normalizeExpectedLabel } from "./satisfy-expected-output.js";
 import { findSlotIndex } from "./slot-keys.js";
 import { ensureSessionChannel } from "./ensure-session-channel.js";
 import { attachSessionAgent } from "./attach-session-agent.js";
+import { gateAgentHandOff } from "./agent-hand-off.js";
 import { postChannelMessage } from "../messaging/post-message.js";
 import { triggerAutoRespond } from "../../utils/trigger-auto-respond.js";
 import { carrySlotKeys } from "./slot-keys.js";
@@ -76,6 +97,17 @@ export interface DelegateExpectedOutputParams {
   expectedLabel: string;
   /** Specialist agent type. Absent ⇒ {@link DEFAULT_DELEGATE_AGENT_TYPE}. */
   agentType?: string | null;
+  /**
+   * The AGENT asking, when an agent key calls (the person is `userId`).
+   * Absent ⇒ the acting agent every key door enters, else a person.
+   */
+  actingAgentUserId?: string | null;
+  /**
+   * The hand-off proposal a person approved for this slot (its executor calls
+   * back here): the gate is not asked again for the agent it names, and the
+   * roster append lands under that proposal.
+   */
+  approvedHandOff?: { proposalId: string; agentId: string } | null;
 }
 
 export type DelegateExpectedOutputResult =
@@ -86,6 +118,17 @@ export type DelegateExpectedOutputResult =
   | { status: "already_done" }
   /** The session room could not be resolved or minted; nothing was posted. */
   | { status: "no_channel" }
+  /** The hand-off gate refused the agent (paused, not the owner's…); nothing written. */
+  | { status: "refused"; reason: string }
+  /** An agent handing it to ANOTHER agent: proposed for review; nothing posted. */
+  | {
+      status: "proposed";
+      proposalId: string;
+      proposalType?: string;
+      summary?: string;
+      reviewPath?: string;
+      reviewUrl?: string;
+    }
   | {
       status: "delegated";
       /** The DECLARED label (the slot's own casing), never the caller's. */
@@ -115,6 +158,7 @@ export async function delegateExpectedOutput(
       userId: true,
       workspaceId: true,
       goal: true,
+      title: true,
       channelId: true,
       expectedOutputs: true,
     },
@@ -135,6 +179,42 @@ export async function delegateExpectedOutput(
       ? params.agentType.trim()
       : DEFAULT_DELEGATE_AGENT_TYPE;
 
+  // The agent USER this type names for the owner (none ⇒ routed by type).
+  const delegateId = await findDelegateAgent(session.userId, agentType);
+
+  // AN AGENT HANDING IT ON: the one hand-off gate, before anything is written.
+  const actingAgent =
+    params.actingAgentUserId ?? getActingAgentUserId() ?? null;
+  const approved =
+    delegateId && params.approvedHandOff?.agentId === delegateId
+      ? params.approvedHandOff
+      : null;
+  if (actingAgent && delegateId && delegateId !== actingAgent && !approved) {
+    const handOff = await gateAgentHandOff({
+      userId: session.userId,
+      agentUserId: actingAgent,
+      workspaceId: session.workspaceId,
+      sessionId: session.id,
+      goal: session.goal,
+      title: session.title,
+      agentId: delegateId,
+      slot: { expectedLabel: slot.label, agentType },
+    });
+    if (handOff.status === "denied") {
+      return { status: "refused", reason: handOff.reason };
+    }
+    if (handOff.status === "proposed") {
+      return {
+        status: "proposed",
+        proposalId: handOff.proposalId,
+        proposalType: handOff.proposalType,
+        summary: handOff.summary,
+        reviewPath: handOff.reviewPath,
+        reviewUrl: handOff.reviewUrl,
+      };
+    }
+  }
+
   const channelId = await ensureSessionChannel({
     sessionId: session.id,
     userId: session.userId,
@@ -154,6 +234,8 @@ export async function delegateExpectedOutput(
     sessionId: session.id,
     ownerId: session.userId,
     agentType,
+    agentId: delegateId,
+    viaProposalId: approved?.proposalId,
   });
 
   // The ask itself. `resolveObjectNoun` (never a local label map) turns the
@@ -169,6 +251,8 @@ export async function delegateExpectedOutput(
     // NOT `triggerAI` — that path starts an orchestrator turn with no agentType.
     triggerAI: false,
     userId: session.userId,
+    // An agent's ask is recorded as the agent's, never the person's.
+    ...(actingAgent ? { agentUserId: actingAgent } : {}),
   });
 
   // The stamp is re-derived INSIDE the lock from the REQUESTED slot label —
@@ -177,8 +261,13 @@ export async function delegateExpectedOutput(
   // by `find((o) => o.delegatedTo)`, which on a session with a sibling slot
   // already delegated re-stamped THAT slot (wiping its return note) and left
   // the requested one untouched: the door reported a delegation it never made.
-  const stamped = await updateExpectedOutputsLocked(session.id, (current) =>
-    stampDelegated(current, slot.label, agentType)
+  const stamped = await updateExpectedOutputsLocked(
+    session.id,
+    (current) => stampDelegated(current, slot.label, agentType),
+    {
+      actor: workUnitActorOf(session.userId, actingAgent),
+      reason: `Handed to ${agentType}.`,
+    }
   );
   // `false` ⇒ the row vanished between the load and the lock. Nothing was
   // recorded, so the ask that IS in the room must not be reported as a
@@ -239,7 +328,13 @@ export function stampDelegated(
  */
 export async function updateExpectedOutputsLocked(
   sessionId: string,
-  mutate: (current: ExpectedOutput[]) => ExpectedOutput[] | null
+  mutate: (current: ExpectedOutput[]) => ExpectedOutput[] | null,
+  /**
+   * Who changes the slots, for the slot transitions this write owes (a slot
+   * whose derived status moved: asked, handed back, answered, done, retired).
+   * Absent: the system's.
+   */
+  mover: { actor?: WorkUnitActor; reason?: string | null } = {}
 ): Promise<boolean> {
   return await db.transaction(async (tx) => {
     const [locked] = await tx
@@ -261,35 +356,59 @@ export async function updateExpectedOutputsLocked(
       .update(focusSessions)
       .set({ expectedOutputs: next, updatedAt: new Date() })
       .where(eq(focusSessions.id, sessionId));
+    // Each slot whose derived status moved owes its transition, in this
+    // same transaction (`oweSlotTransitions`).
+    await oweSlotTransitions(tx, {
+      sessionId,
+      before: current,
+      after: next,
+      actor: mover.actor ?? { kind: "system" },
+      reason: mover.reason,
+    });
     return true;
   });
 }
 
 /**
- * Resolve the agent USER for a type owned by this session's owner and append it
- * to the roster. Returns `false` (never throws) when there is no such user or
- * the append fails — the delegation itself does not depend on it.
+ * The agent USER a type names for this owner (the oldest), or null when the
+ * pod has none. A failed read throws: the hand-off gate decides on it, so it
+ * never reads a fault as "no agent".
+ */
+async function findDelegateAgent(
+  ownerId: string,
+  agentType: string
+): Promise<string | null> {
+  const agent = await db.query.users.findFirst({
+    where: and(
+      eq(users.userType, "agent"),
+      eq(users.agentType, agentType),
+      eq(users.createdByUserId, ownerId)
+    ),
+    orderBy: (u, { asc }) => [asc(u.createdAt)],
+    columns: { id: true },
+  });
+  return agent?.id ?? null;
+}
+
+/**
+ * Append the type's agent USER to the roster. Returns `false` (never throws)
+ * when there is no such user or the append fails — the delegation itself
+ * does not depend on it.
  */
 async function attachDelegateToRoster(args: {
   sessionId: string;
   ownerId: string;
   agentType: string;
+  agentId: string | null;
+  viaProposalId?: string;
 }): Promise<boolean> {
   try {
-    const agent = await db.query.users.findFirst({
-      where: and(
-        eq(users.userType, "agent"),
-        eq(users.agentType, args.agentType),
-        eq(users.createdByUserId, args.ownerId)
-      ),
-      orderBy: (u, { asc }) => [asc(u.createdAt)],
-      columns: { id: true },
-    });
-    if (!agent) return false;
+    if (!args.agentId) return false;
     const result = await attachSessionAgent({
       sessionId: args.sessionId,
-      agentId: agent.id,
+      agentId: args.agentId,
       userId: args.ownerId,
+      ...(args.viaProposalId ? { viaProposalId: args.viaProposalId } : {}),
     });
     return result.status === "attached";
   } catch (err) {

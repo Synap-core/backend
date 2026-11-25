@@ -12,6 +12,7 @@
  */
 
 import { readTrialDraft } from "../playbooks/trial-run.js";
+import { stampedGuidanceOf } from "../playbooks/playbook-guidance.js";
 import {
   db,
   and,
@@ -55,6 +56,10 @@ import {
 import { authoredByUser } from "../agent-identity-service.js";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
+import {
+  runSubjectColumn,
+  runSubjectMatches,
+} from "../playbooks/run-subject.js";
 import { AI_DECISION, AI_PROCESSING } from "../../lib/ai-events.js";
 import {
   AGENT_WRITE_EVENT_KIND,
@@ -96,13 +101,24 @@ import {
 } from "@synap-core/types/run-activity";
 import { humanizeToken } from "@synap-core/types/vocabulary";
 import { loadSessionActivity } from "./session-activity.js";
+import { loadRunCostRecord } from "./run-cost-record.js";
 import { withRunWhere } from "./run-where.js";
 import { isQueuedBoxRunResult } from "../box-runs/box-runs.js";
+import {
+  isQueuedHostVerbResult,
+  listHostVerbRunsForFeed,
+  loadHostVerbRunDetail,
+} from "../host-jobs/hosted-verbs.js";
 import {
   listBoxRunsForFeed,
   loadBoxRunDetail,
 } from "../box-runs/box-run-reads.js";
-import { runStatusOfPlaybookRun } from "./playbook-run-status.js";
+import {
+  playbookRunStatusesReadingAs,
+  runStatusOfPlaybookRun,
+  runStatusOfSession,
+  sessionStatusesReadingAs,
+} from "./playbook-run-status.js";
 import {
   CAPABILITY_RUN_EVENT_KIND,
   capabilityRunEventWhere,
@@ -148,6 +164,16 @@ function byStartedAtDesc(
  * a huge payload never bloats the detail response.
  */
 /** The slim summary a mirror read's `capability_run` event carries instead of a payload. */
+
+/**
+ * A capability run that only QUEUED work on a computer (a box script, a hosted
+ * verb): its own row (box run, host job) is the run, so the proposal or event
+ * that queued it is not listed a second time as a "completed" run.
+ */
+function isQueuedRun(result: unknown): boolean {
+  return isQueuedBoxRunResult(result) || isQueuedHostVerbResult(result);
+}
+
 export function isSlimRunSummary(
   value: unknown
 ): value is { itemCount: number | null; bytes: number } {
@@ -256,33 +282,11 @@ export interface ListRunsInput {
   roster?: boolean;
 }
 
-// ── Status normalisers ───────────────────────────────────────────────────────
-
-/** focus_sessions lifecycle → the run vocabulary. */
-function sessionStatus(s: string): RunStatus {
-  switch (s) {
-    case "closed":
-      return "completed";
-    case "failed":
-      return "failed";
-    case "cancelled":
-      return "cancelled";
-    // A reaper-marked stale session is NOT "still going" — mapping it to
-    // "running" in the run feed would mislabel a dead session as active. It is
-    // a terminal, non-success end-state → cancelled.
-    case "stale":
-      return "cancelled";
-    // active / paused / forming are "still going" for a run view. `scheduled`
-    // never reaches this mapper: an appointment has executed nothing, so it is
-    // not a run at all and `listSessionRuns` excludes it at the query.
-    default:
-      return "running";
-  }
-}
-
 // ── Status-filter mappers (normalised RunStatus → each ledger's own vocabulary) ─
 // Each returns the concrete column values matching the normalised filter; an
 // EMPTY array means the ledger can never produce that status (skip the query).
+// Sessions and playbook runs have a declaration: their reading and their
+// filter both come from it (`./playbook-run-status.ts`).
 
 type AutomationRunStatus =
   | "running"
@@ -292,24 +296,6 @@ type AutomationRunStatus =
   | "skipped"
   | "blocked_by_policy"
   | "waiting_on_you";
-type PlaybookRunStatusValue =
-  | "running"
-  | "completed"
-  | "failed"
-  | "proposed"
-  | "cancelled"
-  | "waiting_on_you"
-  | "stale";
-type FocusSessionStatus =
-  | "active"
-  | "paused"
-  | "closed"
-  | "forming"
-  | "scheduled"
-  | "failed"
-  | "cancelled"
-  | "stale";
-
 function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
   switch (status) {
     case "running":
@@ -321,50 +307,10 @@ function automationStatusValues(status: RunStatus): AutomationRunStatus[] {
     case "waiting_on_you":
       return [status];
     case "proposed":
-      return []; // automation_runs has no "proposed"
-  }
-}
-
-function playbookStatusValues(status: RunStatus): PlaybookRunStatusValue[] {
-  switch (status) {
-    // A `stale` run projects to `cancelled` (`runStatusOfPlaybookRun`), so the
-    // reverse filter MUST include it — the same pairing `sessionStatusValues`
-    // keeps for a stale session.
-    case "cancelled":
-      return ["cancelled", "stale"];
-    // `waiting_on_you` — W2 calm: the reaper found the run quiet, its session
-    // owing the person.
-    case "running":
-    case "completed":
-    case "failed":
-    case "proposed":
-    case "waiting_on_you":
-      return [status];
-    case "skipped":
-    case "blocked_by_policy":
-      return []; // playbook_runs has no "skipped"/"blocked_by_policy"
-  }
-}
-
-function sessionStatusValues(status: RunStatus): FocusSessionStatus[] {
-  switch (status) {
-    case "running":
-      // No `scheduled`: an appointment is not a run (see listSessionRuns).
-      return ["active", "paused", "forming"];
-    case "completed":
-      return ["closed"];
-    case "failed":
-      return ["failed"];
-    case "cancelled":
-      // `stale` projects to the `cancelled` RunStatus (see normalizeSessionStatus),
-      // so the reverse filter MUST include it — else a stale session shows a
-      // `cancelled` badge in the run feed but is unreachable by the cancelled filter.
-      return ["cancelled", "stale"];
-    case "proposed":
-    case "skipped":
-    case "blocked_by_policy":
-    case "waiting_on_you":
-      return []; // focus_sessions is never "proposed"/"skipped"/"blocked_by_policy"/"waiting_on_you"
+    case "paused":
+    case "queued":
+    case "blocked":
+      return []; // automation_runs has none of these
   }
 }
 
@@ -402,6 +348,9 @@ function chatStatusValues(status: RunStatus): ChatTurnStatusValue[] {
     case "skipped":
     case "blocked_by_policy":
     case "waiting_on_you":
+    case "paused":
+    case "queued":
+    case "blocked":
       return []; // chat_turns has none of these
   }
 }
@@ -512,7 +461,7 @@ async function listPlaybookRuns(
   exactRunId?: string,
   roster = false
 ): Promise<UnifiedRun[]> {
-  const statusValues = status ? playbookStatusValues(status) : null;
+  const statusValues = status ? playbookRunStatusesReadingAs(status) : null;
   if (statusValues && statusValues.length === 0) return [];
   const rows = await db
     .select({
@@ -527,7 +476,9 @@ async function listPlaybookRuns(
       error: playbookRuns.error,
       // The run's room lives on its session (playbook → 1 channel per run).
       channelId: focusSessions.channelId,
-      subjectEntityId: focusSessions.subjectEntityId,
+      // A one-shot run's subject is on its record, its creator's alone:
+      // another member's one-shot run names no subject (`run-subject.ts`).
+      subjectEntityId: runSubjectColumn(userId),
       projectId: focusSessions.projectId,
       // Progress signal: `playbook_runs` has no updated_at, so "actively
       // worked" is read off the linked session — the SAME column
@@ -566,8 +517,10 @@ async function listPlaybookRuns(
         scope.projectId
           ? eq(focusSessions.projectId, scope.projectId)
           : undefined,
+        // A one-shot run counts only for its creator: the lens is no oracle
+        // for what a colleague drafted about (`run-subject.ts`).
         scope.subjectEntityId
-          ? eq(focusSessions.subjectEntityId, scope.subjectEntityId)
+          ? runSubjectMatches(scope.subjectEntityId, userId)
           : undefined,
         statusValues ? inArray(playbookRuns.status, statusValues) : undefined,
         startedBeforeWhere(playbookRuns.startedAt, scope)
@@ -786,10 +739,7 @@ async function listCapabilityRuns(
   // a second time as a "completed" run.
   const proposalRuns: UnifiedRun[] = rows
     .filter(
-      (r) =>
-        !isQueuedBoxRunResult(
-          ((r.data ?? {}) as Record<string, unknown>).runResult
-        )
+      (r) => !isQueuedRun(((r.data ?? {}) as Record<string, unknown>).runResult)
     )
     .map((r) => {
       const data = (r.data ?? {}) as Record<string, unknown>;
@@ -865,7 +815,7 @@ async function listCapabilityRuns(
             // box run row is the run (see the proposal filter above).
             .filter(
               (e) =>
-                !isQueuedBoxRunResult(
+                !isQueuedRun(
                   ((e.data ?? {}) as Record<string, unknown>).runResult
                 )
             )
@@ -963,12 +913,22 @@ async function listCapabilityRuns(
     status,
     exactRunId
   );
+  // HOSTED VERB runs (0415): a recipe run on a computer lives in `host_jobs`,
+  // as a box run lives in `box_runs`.
+  const hostVerbRows = await listHostVerbRunsForFeed(
+    userId,
+    scope,
+    limit,
+    status,
+    exactRunId
+  );
   const merged = [
     ...proposalRuns,
     ...eventRuns.filter(
       (r) => !r.correlationId || !seenCorrelation.has(r.correlationId)
     ),
     ...boxRunRows,
+    ...hostVerbRows,
   ];
   merged.sort(byStartedAtDesc);
   return merged.slice(0, limit).filter((r) => !status || r.status === status);
@@ -1199,7 +1159,7 @@ async function listSessionRuns(
   exactRunId?: string,
   roster = false
 ): Promise<UnifiedRun[]> {
-  const statusValues = status ? sessionStatusValues(status) : null;
+  const statusValues = status ? sessionStatusesReadingAs(status) : null;
   if (statusValues && statusValues.length === 0) return [];
   // Sessions that carry their OWN story — i.e. have NO playbook_runs row. This
   // covers both standalone agent/interactive sessions AND playbook-linked sessions
@@ -1280,7 +1240,7 @@ async function listSessionRuns(
     flowType: "session" as const,
     flowId: null,
     flowName: resolveSessionTitle(r) || "Session",
-    status: sessionStatus(r.status),
+    status: runStatusOfSession(r.status),
     startedAt: r.startedAt,
     completedAt: r.closedAt ?? null,
     lastActivityAt: r.lastActivityAt ?? null,
@@ -1712,6 +1672,29 @@ export async function listRunTracks(
       g,
     ])
   );
+}
+
+/**
+ * The EXACT run group of each given playbook (the whole visible ledger, not a
+ * recent window), in ONE grouped query: the process read's batch over a
+ * space's processes (no per-flow page). Keyed by playbook id; a playbook with
+ * no visible run is ABSENT (zero runs, exactly). Ids must already be floored
+ * by the caller's playbook visibility read. THROWS on a failed read.
+ */
+export async function listPlaybookRunGroups(input: {
+  userId: string;
+  playbookIds: readonly string[];
+}): Promise<Map<string, RunGroup>> {
+  const ids = [...new Set(input.playbookIds)];
+  if (ids.length === 0) return new Map();
+  const groups = await groupPlaybookRuns(
+    input.userId,
+    undefined,
+    ids.length,
+    undefined,
+    ids
+  );
+  return new Map(groups.map((g) => [g.flowId, g]));
 }
 
 /**
@@ -2258,6 +2241,37 @@ async function getRunDetail(
         boxRun: box.boxRun,
       };
     }
+    // A HOSTED VERB run answers with its host job: its steps as activity,
+    // its evidence (files, log, verdict) as the output.
+    const hosted = await loadHostVerbRunDetail(userId, id);
+    if (hosted) {
+      const steps = hosted.job.evidence?.steps ?? [];
+      return {
+        run: { ...hosted.run, flowType: "capability" },
+        activity: steps.map((st, i) => ({
+          id: `${hosted.job.id}:${i}`,
+          at: hosted.job.finishedAt ?? hosted.job.queuedAt,
+          kind: "host_job_step",
+          status: st.ok ? "completed" : "failed",
+          label: st.name,
+          hint: st.detail ?? null,
+          detail: st as unknown as Record<string, unknown>,
+        })),
+        trigger: null,
+        outputSummary: {
+          computer: hosted.computerName,
+          recipe: (hosted.job.spec as { recipe?: string }).recipe ?? null,
+          capabilityKey:
+            (hosted.job.spec as { capabilityKey?: string }).capabilityKey ??
+            null,
+          parameters: hosted.job.parameters,
+          evidence: hosted.job.evidence,
+        },
+        playbookDetail: null,
+        definitionSnapshot: null,
+        pathTaken: null,
+      };
+    }
     const [run] = await listCapabilityRuns(userId, {}, 1, undefined, id);
     if (!run) return null;
     // A PROPOSAL-backed run stores its output in `data.runResult` on approval
@@ -2563,6 +2577,9 @@ async function loadPlaybookRunDetail(
       verificationReport: focusSessions.verificationReport,
       channelId: focusSessions.channelId,
       metadata: focusSessions.metadata,
+      runSnapshot: playbookRuns.definitionSnapshot,
+      runStartedAt: playbookRuns.startedAt,
+      runStopReason: playbookRuns.stopReason,
     })
     .from(playbookRuns)
     .innerJoin(focusSessions, eq(focusSessions.id, playbookRuns.sessionId))
@@ -2576,10 +2593,46 @@ async function loadPlaybookRunDetail(
     // so the run page renders a private-session placeholder instead of a blank.
     // Only the run's own `session_id` is read — never a session column.
     const [link] = await db
-      .select({ sessionId: playbookRuns.sessionId })
+      .select({
+        sessionId: playbookRuns.sessionId,
+        createdBy: playbookRuns.createdBy,
+        generation: playbookRuns.generation,
+        runSnapshot: playbookRuns.definitionSnapshot,
+      })
       .from(playbookRuns)
       .where(eq(playbookRuns.id, runId))
       .limit(1);
+    // A ONE-SHOT run (`executor: "generate"`) has no session by design: its
+    // record is the run row's `generation` (prompt, model, tokens) and its
+    // result is the ONE proposal it filed on its subject. No room, so no
+    // agents and no door to a session. The record is its CREATOR's: the
+    // prompt quotes the subject's document and the person's own past drafts
+    // and reject reasons, so for anyone else who sees the run row it is the
+    // private placeholder, like a session they may not open.
+    const generation = !link?.sessionId ? (link?.generation ?? null) : null;
+    if (generation && link?.createdBy !== userId) {
+      return {
+        session: null,
+        sessionPrivate: true,
+        produced: [],
+        proposals: [],
+        agents: [],
+      };
+    }
+    if (generation) {
+      const filed = generation.proposal
+        ? await loadRunProposals({ proposalId: generation.proposal.id }, userId)
+        : { items: [] };
+      return {
+        session: null,
+        sessionPrivate: false,
+        produced: [],
+        proposals: filed.items,
+        agents: [],
+        guidance: stampedGuidanceOf(link?.runSnapshot),
+        generation,
+      };
+    }
     return {
       session: null,
       sessionPrivate: !!link?.sessionId,
@@ -2589,14 +2642,27 @@ async function loadPlaybookRunDetail(
     };
   }
 
-  const [produced, proposalResult, trial] = await Promise.all([
+  const [produced, proposalResult, trial, cost] = await Promise.all([
     loadRunProduced([sess.id], userId),
-    loadRunProposals(sess.id, userId),
+    loadRunProposals({ sessionId: sess.id }, userId),
     // A trial run's drafted text (the rule lab). THROWS on a failed read.
     readTrialDraft({
       metadata: sess.metadata,
       channelId: sess.channelId ?? null,
     }),
+    // Why the run cost what it cost (plan 08e4fba7 §3.5): its turn ledger and
+    // its agent-run telemetry, read on the session the viewer may open.
+    loadNextRunStart(sess.id, runId, sess.runStartedAt).then(
+      (nextRunStartedAt) =>
+        loadRunCostRecord({
+          runId,
+          sessionId: sess.id,
+          metadata: sess.metadata,
+          startedAt: sess.runStartedAt,
+          nextRunStartedAt,
+          stopReason: sess.runStopReason ?? null,
+        })
+    ),
   ]);
   const agents = await loadRunAgents(
     sess.channelId ?? null,
@@ -2618,8 +2684,35 @@ async function loadPlaybookRunDetail(
     produced,
     proposals: proposalResult.items,
     agents,
+    guidance: stampedGuidanceOf(sess.runSnapshot),
     ...(trial ? { trial } : {}),
+    cost,
   };
+}
+
+/**
+ * When the session's NEXT run started, after `runId` (a session can host a
+ * later run, a re-run): the telemetry from then on is that run's, not this
+ * one's. `null` = this is the session's latest run.
+ */
+async function loadNextRunStart(
+  sessionId: string,
+  runId: string,
+  startedAt: Date
+): Promise<Date | null> {
+  const [next] = await db
+    .select({ startedAt: playbookRuns.startedAt })
+    .from(playbookRuns)
+    .where(
+      and(
+        eq(playbookRuns.sessionId, sessionId),
+        gt(playbookRuns.startedAt, startedAt),
+        ne(playbookRuns.id, runId)
+      )
+    )
+    .orderBy(asc(playbookRuns.startedAt))
+    .limit(1);
+  return next?.startedAt ?? null;
 }
 
 /**
@@ -2727,7 +2820,8 @@ function deriveChangeKind(
  * ids (proposals.agentUserId) so the caller can resolve "who worked it".
  */
 async function loadRunProposals(
-  sessionId: string,
+  /** The session's proposals, or — a one-shot run has none — the one it filed. */
+  of: { sessionId: string } | { proposalId: string },
   userId: string
 ): Promise<{ items: RunProposalItem[]; agentUserIds: string[] }> {
   const rows = await db
@@ -2746,7 +2840,9 @@ async function loadRunProposals(
     .from(proposals)
     .where(
       and(
-        eq(proposals.sessionId, sessionId),
+        "sessionId" in of
+          ? eq(proposals.sessionId, of.sessionId)
+          : eq(proposals.id, of.proposalId),
         userVisibleWhere(proposals.workspaceId, userId)
       )
     )

@@ -66,10 +66,13 @@ describe("criterion meaning (R5) and about (R7) — reader ↔ types parity", ()
           check: { kind: "human" },
           checkKind,
           about: "method",
+          outputKey: "the-report",
         },
       ]);
       expect(c?.checkKind).toBe(checkKind);
       expect(c?.about).toBe("method");
+      // W1: the output a criterion checks is read back with the rest.
+      expect(c?.outputKey).toBe("the-report");
     }
   });
 

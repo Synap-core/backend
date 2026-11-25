@@ -12,6 +12,10 @@ import { entitiesRouter as regularEntitiesRouter } from "../../entities.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import { attachCreatedDocument } from "../../hub-protocol/attach-created-document.js";
 import { preflightAttachToEntity } from "../../../services/entity-body/body-replace-guard.js";
+import {
+  bodyPlacementFor,
+  withPlacementWarning,
+} from "../../../services/entity-body/body-placement.js";
 import { checkHubRateLimit } from "../../../utils/hub-protocol-rate-limit.js";
 import { isAllowedMimeType, MAX_FILE_SIZE } from "../../file-upload.js";
 import {
@@ -38,7 +42,8 @@ import {
   type CallToolResult,
   type McpHandlerMap,
 } from "./shared.js";
-import { toolError } from "../tool-errors.js";
+import { toolError, fullUuidError } from "../tool-errors.js";
+import { TRPCError } from "@trpc/server";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import {
   TITLE_HARD_MAX,
@@ -161,8 +166,19 @@ async function supersedeHintFor(
   }
 }
 
-export const entityHandlers: McpHandlerMap = {
-  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+/**
+ * The typed create door's whole answer (entity id or proposal, `writeReceipt`,
+ * `placement`, `resolution`) as data. `synap_create_entity` wraps it in `ok()`;
+ * `synap_capture` calls it for a payload of exactly one plain entity, so a
+ * single captured entity is filed the way the typed door files it (a `create`
+ * proposal on target `entity`), never as an `import.graph`.
+ *
+ * The caller has already checked the `mcp.write` scope and the title cap.
+ */
+export async function createEntityData(
+  ctx: McpToolContext
+): Promise<Record<string, unknown>> {
+  {
     const {
       toolName,
       args,
@@ -172,21 +188,14 @@ export const entityHandlers: McpHandlerMap = {
       lensCaller,
       lensWorkspaceId,
     } = ctx;
-    requireScope(apiKeyScopes, "mcp.write", toolName);
     // `lensCaller` carries the injected `?workspaceId=` lens as the AMBIENT
     // governance workspace (see above) — without it the hub picked a random
-    // membership and the caller got a `workspace.join` proposal instead of an
-    // entity proposal. It is deliberately NOT passed as the input's explicit
+    // membership. It is deliberately NOT passed as the input's explicit
     // `workspaceId` (that is a rung-1 placement pin and would workspace-pin
     // pod-scope kinds — the four-door bug).
     const profileSlug =
       (args.profileSlug as string | undefined) ||
       (args.type as string | undefined);
-    // The pod refuses a title over the hard cap at `entities.create`; saying it
-    // here names the length, where the nested refusal could not.
-    if (typeof args.title === "string" && args.title.length > TITLE_HARD_MAX) {
-      return toolError(titleTooLongReason(args.title.length));
-    }
     const result = await lensCaller.entities.createEntity({
       userId,
       profileSlug,
@@ -298,7 +307,7 @@ export const entityHandlers: McpHandlerMap = {
       source: "agent",
       ...(agentUserId ? { resolvedAgentUserId: agentUserId } : {}),
     });
-    return ok({
+    return {
       ...created,
       effectiveWorkspaceId: receiptWorkspaceId,
       writeReceipt: {
@@ -307,7 +316,22 @@ export const entityHandlers: McpHandlerMap = {
       },
       ...(placement ? { placement } : {}),
       ...(resolution ? { resolution } : {}),
-    });
+    };
+  }
+}
+
+export const entityHandlers: McpHandlerMap = {
+  synap_create_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    requireScope(ctx.apiKeyScopes, "mcp.write", ctx.toolName);
+    // The pod refuses a title over the hard cap at `entities.create`; saying it
+    // here names the length, where the nested refusal could not.
+    if (
+      typeof ctx.args.title === "string" &&
+      ctx.args.title.length > TITLE_HARD_MAX
+    ) {
+      return toolError(titleTooLongReason(ctx.args.title.length));
+    }
+    return ok(await createEntityData(ctx));
   },
   synap_update_entity: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const {
@@ -472,13 +496,28 @@ export const entityHandlers: McpHandlerMap = {
     if (typeof entityId !== "string" || entityId === "") {
       return toolError("entityId is required.");
     }
+    const badId = fullUuidError(toolName, "entityId", entityId);
+    if (badId) return badId;
     const reasoning = readReasoning(args);
-    const result = (await lensCaller.entities.deleteEntity({
-      entityId,
-      userId,
-      ...(agentUserId ? { agentUserId } : {}),
-      ...(reasoning ? { reasoning } : {}),
-    })) as { status: string } & Record<string, unknown>;
+    let result: { status: string } & Record<string, unknown>;
+    try {
+      result = (await lensCaller.entities.deleteEntity({
+        entityId,
+        userId,
+        ...(agentUserId ? { agentUserId } : {}),
+        ...(reasoning ? { reasoning } : {}),
+      })) as { status: string } & Record<string, unknown>;
+    } catch (err) {
+      if (err instanceof TRPCError && err.code === "NOT_FOUND") {
+        // Nothing here can tell "already deleted" from "not visible to this
+        // key" from "another pod": say all three, and that a retry is futile.
+        return toolError(
+          `Entity not found: ${entityId}. It is already deleted, not visible to this key, or belongs to another pod. ` +
+            `Retrying this id will fail the same way. Check it with synap_get_entity; if a delete may already be pending, look in synap_list_proposals.`
+        );
+      }
+      throw err;
+    }
     const supersedeHint = await supersedeHintFor(entityId, userId, agentUserId);
     // Say what landed: a proposal deleted nothing yet; a completed call (only
     // a non-agent principal reaches it) soft-deleted the row.
@@ -559,20 +598,26 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
     const replaceBody = args.replaceBody === true;
-    // Refuse an attach that would replace a body BEFORE the document exists.
-    if (attachEntityId) {
-      await preflightAttachToEntity({
-        entityId: attachEntityId,
-        userId,
-        replaceBody,
-      });
-    }
+    // Refuse an attach that would replace a body BEFORE the document exists,
+    // and file the body where its entity lives (a part follows its whole).
+    const placement = attachEntityId
+      ? bodyPlacementFor(
+          await preflightAttachToEntity({
+            entityId: attachEntityId,
+            userId,
+            replaceBody,
+          }),
+          requestedWorkspaceId,
+          { keyType: ctx.keyType, keyWorkspaceId: ctx.keyWorkspaceId }
+        )
+      : undefined;
     const result = await caller.documents.createDocument({
       userId,
       // Idempotency: a retry with the same key/content returns the prior doc.
       idempotencyKey: args.idempotencyKey as string | undefined,
-      // Confined workspace (service-key clamp) — not the raw model-supplied id.
-      workspaceId: requestedWorkspaceId as string,
+      // Confined workspace (service-key clamp) — not the raw model-supplied id;
+      // a body takes its entity's space instead (`bodyPlacementFor`).
+      workspaceId: placement ? placement.workspaceId : requestedWorkspaceId,
       title: args.title as string,
       content: (args.content as string) || "",
       // The same door diagnoses an html page and puts what will not run in
@@ -605,19 +650,22 @@ export const entityHandlers: McpHandlerMap = {
     // this call goes through), so MCP and the IS REST door share one producer.
     if (!attachEntityId) return ok(result);
     return ok(
-      await attachCreatedDocument({
-        created: result,
-        entityId: attachEntityId,
-        replaceBody,
-        userId,
-        scopes: apiKeyScopes,
-        // Membership-gated lens, never the raw model-supplied id — this ctx
-        // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
-        workspaceId: lensWorkspaceId,
-        sessionId,
-        ...(agentUserId ? { agentUserId } : {}),
-        reasoning: `Attach document created via MCP tool: ${toolName}`,
-      })
+      withPlacementWarning(
+        await attachCreatedDocument({
+          created: result,
+          entityId: attachEntityId,
+          replaceBody,
+          userId,
+          scopes: apiKeyScopes,
+          // Membership-gated lens, never the raw model-supplied id — this ctx
+          // drives a GOVERNED entity update (see the SECURITY note on lensCaller).
+          workspaceId: lensWorkspaceId,
+          sessionId,
+          ...(agentUserId ? { agentUserId } : {}),
+          reasoning: `Attach document created via MCP tool: ${toolName}`,
+        }),
+        placement
+      )
     );
   },
   /**
@@ -692,10 +740,11 @@ export const entityHandlers: McpHandlerMap = {
     if (typeof args.uploadToken === "string" && args.uploadToken.trim()) {
       if (
         typeof args.content === "string" ||
-        typeof args.contentBase64 === "string"
+        typeof args.contentBase64 === "string" ||
+        typeof args.sourceUrl === "string"
       ) {
         throw new Error(
-          "Provide either `uploadToken` or inline `content`/`contentBase64`, not both."
+          "Provide either `uploadToken` or `content`/`contentBase64`/`sourceUrl`, not both."
         );
       }
       const fin = await finalizeAgentUpload({
@@ -734,24 +783,48 @@ export const entityHandlers: McpHandlerMap = {
       );
     }
 
-    const filename =
+    let filename =
       typeof args.filename === "string" ? args.filename.trim() : "";
-    const mimeType =
+    let mimeType =
       typeof args.mimeType === "string" ? args.mimeType.trim() : "";
-    if (!filename) throw new Error("filename is required.");
-    if (!mimeType) throw new Error("mimeType is required.");
 
-    // Exactly ONE of content (UTF-8 text) | contentBase64 (binary).
+    // Exactly ONE of content (UTF-8 text) | contentBase64 (binary) |
+    // sourceUrl (the pod fetches it: an agent with no disk keeps a generated
+    // image as a file, report 630ff4f7).
     const hasText = typeof args.content === "string";
     const hasBase64 = typeof args.contentBase64 === "string";
-    if (hasText === hasBase64) {
+    const sourceUrl =
+      typeof args.sourceUrl === "string" && args.sourceUrl.trim()
+        ? args.sourceUrl.trim()
+        : undefined;
+    if (Number(hasText) + Number(hasBase64) + Number(!!sourceUrl) !== 1) {
       throw new Error(
-        "Provide exactly one of `content` (UTF-8 text) or `contentBase64` (binary)."
+        "Provide exactly one of `content` (UTF-8 text), `contentBase64` (binary) or `sourceUrl` (an https URL the pod downloads)."
       );
     }
-    const buffer = hasText
-      ? Buffer.from(args.content as string, "utf-8")
-      : Buffer.from(args.contentBase64 as string, "base64");
+    let buffer: Buffer;
+    if (sourceUrl) {
+      // The SSRF-guarded door (https on every hop, public addresses only,
+      // size cap, served type checked); the bytes then meet the same guards
+      // below as inline content.
+      const { fetchUrlFile } =
+        await import("../../../services/files/fetch-url-file.js");
+      const got = await fetchUrlFile(sourceUrl, {
+        ...(mimeType ? { mimeType } : {}),
+        maxBytes: MAX_FILE_SIZE,
+        isAllowedType: isAllowedMimeType,
+      });
+      if (!got.ok) throw new Error(got.error);
+      buffer = got.bytes;
+      mimeType = got.mimeType;
+      filename = filename || got.filename;
+    } else {
+      if (!filename) throw new Error("filename is required.");
+      if (!mimeType) throw new Error("mimeType is required.");
+      buffer = hasText
+        ? Buffer.from(args.content as string, "utf-8")
+        : Buffer.from(args.contentBase64 as string, "base64");
+    }
 
     // SAME guards as the POST /files door: non-empty, allowed mime, size cap.
     if (buffer.length === 0) throw new Error("Decoded file is empty.");

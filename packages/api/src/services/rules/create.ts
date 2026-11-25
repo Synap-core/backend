@@ -16,7 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { db, skills } from "@synap/database";
+import { db, ownerAndActor, skills } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import { checkPermissionOrPropose } from "../../utils/permission-check.js";
 import {
@@ -31,6 +31,7 @@ import {
   linkRuleHalves,
   ruleNameFromIntent,
   type RuleBehaviourRecord,
+  type RuleReaction,
   type RuleRouting,
   type RuleScope,
   type RuleSeed,
@@ -39,7 +40,8 @@ import { normalizeExpiresAt } from "./expiry.js";
 import { compileRuleSentence, type RuleCompileFailure } from "./compile.js";
 import { applyRuleProjectScope } from "./scope.js";
 import { readRuleSentence } from "./sentence-schema.js";
-import { automations, eq, inArray } from "@synap/database";
+import { automations, eq, inArray, setAutomationStatus } from "@synap/database";
+import { AUTOMATION_STATUSES } from "@synap-core/types/units";
 
 const logger = createLogger({ module: "rules-create" });
 
@@ -48,19 +50,13 @@ export interface CreateRuleGovernedInput {
   /** Present ⇒ an AGENT authored this; the gate routes it to a proposal. */
   agentUserId?: string;
   /**
-   * The agent that authored this rule's BEHAVIOUR, when it is not the caller.
-   *
-   * These are two different questions and they were collapsed onto one field.
-   * The approval replay deliberately re-enters this door with NO `agentUserId`
-   * so the re-entrant gate auto-grants for the operator — correct for the rule
-   * row's ownership. But the compiled automation's draft floor keys on WHO WROTE
-   * IT, and reading the same field made `rule/create` a strictly wider path than
-   * `automation/create`: an agent that cannot get a live trigger through the
-   * automation door got one through the rule door plus one human approval.
-   * The sibling executor (`executors/automation.ts`) has always threaded the
-   * author through; this is that thread.
+   * The approval replay of this write's proposal: who authored it (recorded
+   * as the automation's actor) and whether a person approved it. The replay
+   * re-enters with no `agentUserId`, so the gate auto-grants for the operator;
+   * the automation's status is decided from these facts
+   * (`automationStatusAtCreate`).
    */
-  behaviourAuthorAgentUserId?: string;
+  approval?: { authorAgentUserId: string | null; personApproved: boolean };
   workspaceId?: string | null;
   intent: string;
   scope: RuleScope;
@@ -102,12 +98,20 @@ export interface CreateRuleGovernedInput {
   automationIds?: string[];
   /** Folded into the gate payload for observability. */
   auditSource?: string;
+  /** WHY this write — shown to the reviewer when an agent's call is proposed. */
+  reasoning?: string;
   /**
    * Template provenance (`metadata.rule.seed`) — set ONLY by the template-rule
    * applier (`./template-rules.ts`). Rides the proposal payload so an approved
    * template rule is stamped exactly like a direct one.
    */
   seed?: RuleSeed;
+  /**
+   * The reaction this rule makes visible and pausable (`metadata.rule.
+   * reaction`) — set ONLY by the reactions compile pass. Such a rule carries
+   * no sentence: the reactions reactor runs it, never the matcher.
+   */
+  reaction?: RuleReaction;
 }
 
 /**
@@ -321,6 +325,7 @@ export async function createRuleGoverned(
     workspaceId: workspaceId ?? undefined,
     subjectType: "rule",
     action: "create",
+    ...(input.reasoning ? { reasoning: input.reasoning } : {}),
     // FULL payload — an approved proposal must materialize the real rule
     // (intent + scope + expiry + both halves), never a labelled shell. That
     // "the gate stored only {id}" shape is the exact defect this repo has
@@ -345,6 +350,7 @@ export async function createRuleGoverned(
       ...(compiled || draft ? { sentence: input.sentence } : {}),
       ...(input.auditSource ? { auditSource: input.auditSource } : {}),
       ...(input.seed ? { seed: input.seed } : {}),
+      ...(input.reaction ? { reaction: input.reaction } : {}),
     },
   });
 
@@ -362,23 +368,11 @@ export async function createRuleGoverned(
 
   // ── Materialize the compiled behaviour ─────────────────────────────────
   // AFTER the gate: a proposed rule must not leave an automation behind if the
-  // owner never approves it. Through the ONE insert door
-  // (`materializeAutomationForPrincipal`), which derives the draft floor from
-  // the principal itself — an AGENT-authored rule's automation lands `draft`,
-  // on the direct path AND on the approval replay (see
-  // `behaviourAuthorAgentUserId`). A rule a HUMAN authored but could not create
-  // for lack of permission keeps its requested status on approval, exactly like
-  // that human's own direct create: P2-3 is about an agent planting a live
-  // trigger, not about the approval step itself.
+  // owner never approves it. Through the ONE insert door, which decides the
+  // status from who authored it and whether a person approved it.
   // Dynamic import mirrors `apply-approval.ts`: the router module pulls in the
   // whole tRPC surface, and a service must not depend on that at load time.
   if (compiled) {
-    // The DIRECT path never reaches here with an `agentUserId` — the gate
-    // returns `proposed` above — so on this path the author only ever arrives
-    // via `behaviourAuthorAgentUserId`, from the approval replay. Both are read
-    // so the field cannot become the only source and rot.
-    const behaviourAuthor =
-      input.agentUserId ?? input.behaviourAuthorAgentUserId;
     const { materializeAutomationForPrincipal } =
       await import("../../routers/automations.js");
     try {
@@ -397,8 +391,9 @@ export async function createRuleGoverned(
           //
           // A pod-wide automation IS a supported lane — `podWideMatch`
           // (automation-trigger-matcher.ts) pairs `workspaceId IS NULL` with
-          // `createdBy = userId`, so it matches the owner's events across every
-          // workspace, which is exactly what "pod" means here. The one gap is a
+          // the owner's PERSON (`podWideAutomationAnswersTo`, audience `me` by
+          // default), so it matches the owner's events — and their agents' —
+          // across every workspace, which is exactly what "pod" means here. The one gap is a
           // pod-wide automation meeting a pod-wide EVENT, which the matcher
           // skips with a loud warning — a pre-existing executor-side limitation,
           // not something this door introduces.
@@ -413,8 +408,8 @@ export async function createRuleGoverned(
           // `"ai" | "agent"` branch demands an authored Gets/Stores/Reacts data
           // contract, which a sentence-compiled flow has no way to produce — so
           // declaring an agent-authored rule "agent" here would refuse every
-          // single one. The agent floor is NOT source-based anyway: the draft
-          // forcing below is derived from `agentUserId` inside the insert door.
+          // single one. The status is not source-based anyway: the door decides
+          // it from `agentUserId` and `personApproved`.
           source: "user",
           // ── R3: the metadata the RULES LIST already reads ────────────────
           // `kind: "rule"` is not decoration — it is the ONE discriminator the
@@ -442,7 +437,9 @@ export async function createRuleGoverned(
           typeof materializeAutomationForPrincipal
         >[0]["definition"],
         createdBy: input.userId,
-        ...(behaviourAuthor ? { agentUserId: behaviourAuthor } : {}),
+        agentUserId:
+          input.agentUserId ?? input.approval?.authorAgentUserId ?? null,
+        personApproved: input.approval?.personApproved ?? false,
       });
       if (automationId) {
         automationIds.push(automationId);
@@ -478,6 +475,7 @@ export async function createRuleGoverned(
     // running for a month.
     ...(input.sentence !== undefined ? { sentence: input.sentence } : {}),
     ...(input.seed ? { seed: input.seed } : {}),
+    ...(input.reaction ? { reaction: input.reaction } : {}),
   });
 
   // COMPENSATION for the ordering below. The automation is created BEFORE the
@@ -490,10 +488,11 @@ export async function createRuleGoverned(
   const archiveOrphanedBehaviour = async (cause: unknown) => {
     if (automationsCreatedHere.length === 0) return;
     try {
-      await db
-        .update(automations)
-        .set({ status: "archived", updatedAt: new Date() })
-        .where(inArray(automations.id, automationsCreatedHere));
+      await setAutomationStatus(db, {
+        from: AUTOMATION_STATUSES,
+        to: "archived",
+        where: inArray(automations.id, automationsCreatedHere),
+      });
       logger.warn(
         { err: cause, ruleId, automationIds: automationsCreatedHere },
         "rule insert failed — archived the automation it had already created"
@@ -509,11 +508,17 @@ export async function createRuleGoverned(
 
   let row: { id: string } | undefined;
   try {
+    const owner = await ownerAndActor(
+      db,
+      input.userId,
+      input.agentUserId ?? input.approval?.authorAgentUserId
+    );
     [row] = await db
       .insert(skills)
       .values({
         id: ruleId,
-        userId: input.userId,
+        userId: owner.ownerId,
+        agentUserId: owner.agentUserId,
         workspaceId: input.scope.kind === "workspace" ? workspaceId : null,
         kind: "instruction",
         scope: input.scope.kind,

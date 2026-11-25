@@ -447,7 +447,7 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
           },
           executor: {
             type: "string",
-            enum: ["is-agent", "external-agent", "hybrid"],
+            enum: ["is-agent", "external-agent", "hybrid", "generate"],
           },
           reasoning: { type: "string" },
         },
@@ -786,6 +786,42 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         },
       },
     },
+    {
+      name: "measure.check",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal count: reached by name, from a
+      // capability criterion (INTENTIONALLY_UNROUTABLE in the
+      // intent-reachability tripwire).
+      description:
+        "Measure a KPI: run one read op as the caller in the run's space and compare its count with a bar. op: entities.list (things of a kind: total) | lifecycle.board (a kind's status column: its count, else live) | lifecycle.throughput (things that reached done over the period) | attention.count (what needs the person). params: the op's own (profileSlug, column, windowDays, bucket, count, trackId...). Put it on a capability criterion: check { kind: 'capability', capability: 'measure.check', params: { op, params, threshold, comparator } }. Returns { passed, detail: { value, threshold, comparator, op } }. Read-only.",
+      parameters: {
+        type: "object",
+        required: ["op", "threshold"],
+        properties: {
+          op: {
+            type: "string",
+            enum: [
+              "entities.list",
+              "lifecycle.board",
+              "lifecycle.throughput",
+              "attention.count",
+            ],
+          },
+          params: {
+            type: "object",
+            description:
+              "The op's own params (never the space), e.g. { profileSlug: 'deal', column: 'won' }.",
+          },
+          threshold: { type: "number" },
+          comparator: {
+            type: "string",
+            enum: ["gte", "lte", "eq", "gt", "lt"],
+            description: "Default gte (at least).",
+          },
+        },
+      },
+    },
     // ── Kind + Facets (roles) — attach/detach/list over the one facet door ──
     {
       name: "entity_facet.attach",
@@ -874,6 +910,26 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         additionalProperties: false,
       },
     },
+    // ── Hosted verbs — a recipe of a tool installed on a computer ───────────
+    {
+      name: "computer.run_recipe",
+      kind: "builtin",
+      scope: "pod",
+      intent: null,
+      description:
+        "Run one recipe of a tool INSTALLED on one of the person's computers (media-ffmpeg's loudness-normalize, reframe-crop, …), on that computer, with nobody at the keyboard. `capability` is the tool's key, `recipe` the recipe's name (the tool's approved recipes; an unknown name is refused with the list), `params` its values: a `file` param takes a pod file id (a file entity you can read), an `output` param a bare file name with an extension (\"voice-loud.m4a\"). `computer` names one (\"mac\", its name or id); omitted, the one where the tool is installed and checked. Never sent to a computer where the tool is missing or failed its check: that is refused with the next step (synap_request_installation). QUEUES the run: returns { status: 'queued', hostJobId, computer, recipe }; the run's log and files land on that host job and in the asking session's room. The files are the person's, in the run's space.",
+      parameters: {
+        type: "object",
+        required: ["capability", "recipe"],
+        properties: {
+          capability: { type: "string" },
+          recipe: { type: "string" },
+          params: { type: "object" },
+          computer: { type: "string" },
+        },
+        additionalProperties: false,
+      },
+    },
     // ── Marketplace (Wave 3b) — search/install over cp_catalog_cache ────────
     {
       name: "market.search",
@@ -949,6 +1005,76 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
         properties: {
           query: { type: "string" },
           provider: { type: "string" },
+        },
+      },
+    },
+    // ── Read a public JSON API on an allowed host ────────────────────────────
+    {
+      name: "http.get_json",
+      kind: "builtin",
+      scope: "pod",
+      intent: "fetch_record",
+      description:
+        "GET a public JSON API that needs no key (open data: company registers, public records) and return the parsed JSON. " +
+        "Only hosts on the pod's allow-list, https only, public addresses only, on every redirect too; no credentials or cookies are sent. " +
+        "Use when: an open API answers what you need. Don't use when: you read a web page (web.read), or the API needs a key (install its tool). " +
+        "A host not on the list is refused with what to do: ask for it with http.allow_host, which files a proposal the person approves. " +
+        "Returns { status: ok, url, contentType, bytes, truncated, json } (json is cut with a marker past about 60,000 characters) or { status: refused, reason, message, allowedHosts? }. " +
+        "Args: url (required, https); query (optional: name → value, added to the URL); headers (optional: Accept, Accept-Language only).",
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: { type: "string" },
+          query: { type: "object", additionalProperties: true },
+          headers: { type: "object", additionalProperties: true },
+        },
+      },
+    },
+    {
+      name: "http.allow_host",
+      kind: "builtin",
+      scope: "pod",
+      // An agent never adds a host itself: no rule or grant runs this verb on
+      // its own, so an agent's run is always a proposal the person approves.
+      metadata: { proposeOnly: true },
+      description:
+        "Ask to add a host to the pod's allow-list for http.get_json (e.g. recherche-entreprises.api.gouv.fr). " +
+        "For an agent this ALWAYS files a proposal the person approves; it never adds the host itself. A pod admin's own run adds it at once. " +
+        "Returns { status: allowed, host, alreadyAllowed } once applied. Args: host (required: the name only, no scheme, port or path); reason (optional: why it is needed, shown on the proposal).",
+      parameters: {
+        type: "object",
+        required: ["host"],
+        properties: {
+          host: { type: "string" },
+          reason: { type: "string" },
+        },
+      },
+    },
+    {
+      name: "inbound_source.connect",
+      kind: "builtin",
+      scope: "pod",
+      description:
+        "Connect a space's inbound webhook source to the site that posts to it (a contact form on Vercel): the pod creates the source (or replaces its secret), sets its URL (Config) and its secret (Secret, write-only) as environment variables on the host project, and redeploys production. ALWAYS files a proposal `webhook/inbound_source.connect`, for anyone, and does nothing else; a pod admin approves it on the console. The secret goes from the pod to the host directly: no agent or person ever sees it, so never ask a person to paste one. Checked before filing: PUBLIC_URL set, the Vercel capability installed and enabled (with vercel_upsert_env), the project found, and no same-named source unless replaceExistingSecret. Returns { status: 'proposed', proposalId } or { success: false, error } naming the fix.",
+      parameters: {
+        type: "object",
+        required: ["name", "project", "urlEnvKey", "secretEnvKey"],
+        properties: {
+          workspaceId: { type: "string", format: "uuid" },
+          name: { type: "string" },
+          host: { type: "string", enum: ["vercel"] },
+          project: { type: "string" },
+          teamId: { type: "string" },
+          urlEnvKey: { type: "string" },
+          secretEnvKey: { type: "string" },
+          target: {
+            type: "string",
+            enum: ["production", "preview", "development"],
+          },
+          redeploy: { type: "boolean" },
+          replaceExistingSecret: { type: "boolean" },
+          reasoning: { type: "string" },
         },
       },
     },
@@ -1206,6 +1332,33 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       },
     },
     {
+      name: "snippet.render",
+      kind: "builtin",
+      scope: "pod",
+      metadata: { readOnly: true },
+      description:
+        'Render a stored snippet (a text with variables, kind `snippet`) once and return the text: { text, misses }. `values` fills its variables by name; a variable declared `from: "subject.<field>"` fills from `subjectEntityId` (title, preview or a property) when you give no value, read only if the person may read that entity. A required variable with no value (and no default) refuses the render and names it. An optional one with none renders empty and is listed in `misses`, as is any unknown {name} left as written. Built-ins {today}, {now}, {me}, {clipboard}, {selection} are filled when not declared. A retired snippet is refused. A value containing braces is kept literally. READ, auto-runs, writes nothing: to send the text use messaging.send.',
+      parameters: {
+        type: "object",
+        properties: {
+          snippetId: { type: "string", format: "uuid" },
+          values: {
+            type: "object",
+            description: "Variable values by name.",
+            additionalProperties: true,
+          },
+          subjectEntityId: {
+            type: "string",
+            format: "uuid",
+            description:
+              "The entity that `from: subject.<field>` variables read from.",
+          },
+          workspaceId: { type: "string", format: "uuid" },
+        },
+        required: ["snippetId"],
+      },
+    },
+    {
       name: "governance.recommend_tighten",
       kind: "builtin",
       scope: "pod",
@@ -1258,6 +1411,159 @@ export const SYNAP_CORE_DEFINITION: CapabilityDefinition = {
       parameters: {
         type: "object",
         properties: {},
+      },
+    },
+    // ── PDF tools (W1) — the pod's internal PDF engine (Stirling PDF) ───────
+    // Handlers: builtin-verbs.ts → services/pdf/run-pdf-verb.ts. Every verb but
+    // pdf.info makes a NEW governed file linked `derived_from` its source(s).
+    {
+      name: "pdf.ocr",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        'Make a scanned PDF searchable: OCR adds an invisible text layer over each page image. Use when: a PDF\'s text cannot be selected or searched. Don\'t use when: the PDF already has text and you want its words (pdf.to_markdown). Runs on the pod\'s own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); languages (Tesseract codes, default ["eng"], e.g. ["eng","fra"]); mode (skip-text: only pages with no text, the default; force-ocr: every page). Can take minutes.',
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          languages: {
+            type: "array",
+            items: { type: "string", pattern: "^[a-z]{3}(?:_[a-z]{3,4})?$" },
+            minItems: 1,
+            maxItems: 10,
+          },
+          mode: { type: "string", enum: ["skip-text", "force-ocr"] },
+        },
+      },
+    },
+    {
+      name: "pdf.compress",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Make a PDF smaller. Use when: a PDF is too heavy to send or store. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); level (1 lightest \u2026 9 strongest, default 5).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          level: { type: "integer", minimum: 1, maximum: 9 },
+        },
+      },
+    },
+    {
+      name: "pdf.merge",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Join 2 to 20 PDFs into one, in the order given. The sources are kept as they are. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileIds (2-20 pod PDF files, in order).",
+      parameters: {
+        type: "object",
+        required: ["fileIds"],
+        properties: {
+          fileIds: {
+            type: "array",
+            items: { type: "string", format: "uuid" },
+            minItems: 2,
+            maxItems: 20,
+          },
+        },
+      },
+    },
+    {
+      name: "pdf.split",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        'Cut a PDF into parts at the pages given: each listed page ends a part ("1-3,5", "all" for one file per page, or "2n"). The parts come back as ONE ZIP of PDF files, stored as one file (mimeType application/zip). Runs on the pod\'s own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); pages (required).',
+      parameters: {
+        type: "object",
+        required: ["fileId", "pages"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          pages: { type: "string", minLength: 1, maxLength: 200 },
+        },
+      },
+    },
+    {
+      name: "pdf.redact",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Black out words in a PDF for good: the pages are turned into images after redaction, so the hidden text cannot be recovered (and the result's text is no longer selectable). Use when: a PDF must be shared without names, numbers or other terms. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file); terms (1-50 words or phrases, one per entry, no newlines); useRegex (terms are regular expressions); wholeWord (match whole words only).",
+      parameters: {
+        type: "object",
+        required: ["fileId", "terms"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+          terms: {
+            type: "array",
+            items: { type: "string", minLength: 1, maxLength: 500 },
+            minItems: 1,
+            maxItems: 50,
+          },
+          useRegex: { type: "boolean" },
+          wholeWord: { type: "boolean" },
+        },
+      },
+    },
+    {
+      name: "pdf.to_pdf",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Turn a pod file into a PDF: an Office document (Word, Excel, PowerPoint, OpenDocument, RTF, CSV, text), an image (PNG, JPEG, GIF, WebP, BMP, TIFF), an HTML page or a Markdown file. Any other type is refused ([UNSUPPORTED_TYPE]). Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (the pod file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "pdf.to_markdown",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Turn a PDF's text into a new Markdown file (headings, lists and tables kept where the engine finds them). Use when: you need a PDF's words to read, quote or edit. Runs on the pod's own PDF engine; the file never leaves the pod. The source is never changed: the result is a NEW file, linked to its source by a derived_from relation. If the engine is off on this pod or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]): tell the user, never retry blindly. Returns { status: created|proposed, fileEntityId?, proposalId?, reviewUrl?, documentId, title, mimeType, size, sourceFileIds, link: linked|proposed|failed|pending, links[], note? }; link is pending while the new file itself awaits review. Args: fileId (a pod PDF file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
+      },
+    },
+    {
+      name: "pdf.info",
+      kind: "builtin",
+      scope: "pod",
+      // No intent fits a pod-internal file transform: reached by name
+      // (INTENTIONALLY_UNROUTABLE in the intent-reachability tripwire).
+      description:
+        "Read a PDF's facts: pages, metadata, encryption and permissions, fonts, images, forms, compliance (PDF/A). READ-ONLY: creates nothing; runs on the pod's own PDF engine and the file never leaves the pod. If the engine is off or not answering, nothing runs and the error says so ([PDF_ENGINE_OFF] / [PDF_ENGINE_DOWN]). Returns { fileId, info } (the engine's JSON report). Args: fileId (a pod PDF file).",
+      parameters: {
+        type: "object",
+        required: ["fileId"],
+        properties: {
+          fileId: { type: "string", format: "uuid" },
+        },
       },
     },
   ],

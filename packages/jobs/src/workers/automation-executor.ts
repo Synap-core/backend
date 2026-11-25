@@ -45,7 +45,6 @@ import {
   automationRuns,
   automationStepRuns,
   automationClaims,
-  users,
   drizzleSql,
   openRunSession,
   normalizeCommandNodeData,
@@ -53,6 +52,7 @@ import {
   isLiveRunStatus,
   automationOwnerHasSpaceAccess,
   AUTOMATION_OWNER_LEFT_SPACE,
+  setAutomationStatus,
 } from "@synap/database";
 import type {
   AutomationTriggerConfig,
@@ -192,6 +192,7 @@ export {
 export { evaluateCondition } from "./condition-eval.js";
 export {
   registerCapabilityExecutor,
+  registerNeedVerbResolver,
   registerPlaybookRunner,
   registerPlaybookReadinessGate,
   registerSessionScheduler,
@@ -298,9 +299,9 @@ async function executeAutomationFlow(params: {
     automationId,
     workspaceId,
     ownerId,
-    automationContext,
+    automationContext: payloadAutomationContext,
     completedNodeIds,
-    producerAgentUserId,
+    producerAgentUserId: chainProducerAgentUserId,
   } = params;
   const alreadyCompleted = new Set(completedNodeIds ?? []);
 
@@ -331,6 +332,17 @@ async function executeAutomationFlow(params: {
     logger.error({ runId }, "Automation run not found");
     return {};
   }
+  const actorAgentUserId = automation.agentUserId ?? null;
+  const automationContext: ExecutionPayload["automationContext"] = {
+    ...payloadAutomationContext,
+    actorAgentUserId,
+  };
+  // Confused-deputy guard: the automation's own agent producing its trigger is
+  // not a deputy. Children and resumptions decide on the raw chain producer.
+  const producerAgentUserId =
+    chainProducerAgentUserId && chainProducerAgentUserId !== actorAgentUserId
+      ? chainProducerAgentUserId
+      : null;
   // Manual runs execute under the authenticated workspace member who started
   // them. Scheduled/system runs retain the automation owner. This keeps the
   // generic workflow engine domain-agnostic while allowing shared workspaces
@@ -453,10 +465,10 @@ async function executeAutomationFlow(params: {
   // it creates carry the session's id and group under one reviewable card, and
   // the automation's data lives ON the session (openRunSession's contract).
   //
-  // A "playbook-delegate" automation is the single-node `playbook_run` flow
-  // shape `buildPlaybookRunFlowDefinition` produces (e.g. a scheduled
-  // playbook's backing cron automation) — `executePlaybookRun` already opens
-  // its OWN session for that case, so we must not double-open here.
+  // A "playbook-delegate" automation is a single-node `playbook_run` flow
+  // (e.g. a compiled schedule activator, a loop trigger) —
+  // `executePlaybookRun` already opens its OWN session for that case, so we
+  // must not double-open here.
   const isPlaybookDelegate =
     flow.nodes.length === 1 && flow.nodes[0]?.type === "playbook_run";
 
@@ -469,23 +481,8 @@ async function executeAutomationFlow(params: {
   let sessionOwned = automationContext.focusSessionOwned ?? false;
   let runSuspended = false;
 
-  // The agent this run writes as: the automation's runtime principal when it
-  // is an agent user (the identity `openRunSession` stamps as the session's
-  // `startedByAgentId`), else none (a person's automation acts as the person).
-  // Read where it is used: to open the session, and on a delay-resumption that
-  // still has capability steps to run (so they carry the same identity as the
-  // first pass did).
-  const needsRunAgent =
-    !isPlaybookDelegate &&
-    (!runSessionId || flow.nodes.some((n) => n.type === "capability"));
-  const [ownerUser] = needsRunAgent
-    ? await db
-        .select({ userType: users.userType })
-        .from(users)
-        .where(eq(users.id, ownerId))
-        .limit(1)
-    : [];
-  const runAgentUserId = ownerUser?.userType === "agent" ? ownerId : null;
+  // Stamped as the session's `startedByAgentId`; the session is the owner's.
+  const runAgentUserId = actorAgentUserId;
 
   if (!isPlaybookDelegate && !runSessionId) {
     // Channel resolution — the ONE door shared with the run-narration path
@@ -1055,7 +1052,7 @@ async function executeAutomationFlow(params: {
                   // producer → an agent-produced trigger's post-delay THEN-actions
                   // auto-executed ungoverned under the human owner. Thread it so a
                   // `trigger → delay → entity_create` still PROPOSES after resume.
-                  producerAgentUserId,
+                  producerAgentUserId: chainProducerAgentUserId,
                 },
                 { startAfter: resumeAt }
               );
@@ -1296,7 +1293,12 @@ async function executeAutomationFlow(params: {
                             inputMapping?: Record<string, string>;
                           },
                           context,
-                          { workspaceId, ownerId, producerAgentUserId }
+                          {
+                            workspaceId,
+                            ownerId,
+                            producerAgentUserId,
+                            automationRun,
+                          }
                         );
                         break;
                       case "capability":
@@ -1304,6 +1306,7 @@ async function executeAutomationFlow(params: {
                           childNode.data as {
                             capabilityId?: string;
                             verbId?: string;
+                            need?: string;
                             inputMapping?: Record<string, string>;
                             connectionSelector?: {
                               connectionId?: string;
@@ -1332,6 +1335,7 @@ async function executeAutomationFlow(params: {
                             projectId?: string;
                             trackId?: string;
                             handToAgentId?: string;
+                            parentSessionId?: string;
                             mode?: PlaybookRunMode;
                             worker?: PlaybookRunWorkerSpec;
                           },
@@ -1730,7 +1734,13 @@ async function executeAutomationFlow(params: {
                   inputMapping?: Record<string, string>;
                 },
                 context,
-                { workspaceId, ownerId, stepRun, producerAgentUserId }
+                {
+                  workspaceId,
+                  ownerId,
+                  stepRun,
+                  producerAgentUserId,
+                  automationRun,
+                }
               );
               break;
             }
@@ -1750,6 +1760,7 @@ async function executeAutomationFlow(params: {
                 node.data as {
                   capabilityId?: string;
                   verbId?: string;
+                  need?: string;
                   inputMapping?: Record<string, string>;
                   connectionSelector?: {
                     connectionId?: string;
@@ -1854,7 +1865,7 @@ async function executeAutomationFlow(params: {
                 // The producer stays in the causal chain across sub_automation
                 // delegation — a chained child's THEN-actions are still governed
                 // against the agent that fired the ROOT trigger.
-                producerAgentUserId,
+                producerAgentUserId: chainProducerAgentUserId,
               });
 
               // Return the child automation's output DIRECTLY (flat) — one rule.
@@ -1876,6 +1887,8 @@ async function executeAutomationFlow(params: {
                 trackId?: string;
                 /** Hand-off: the agent user id the session is handed to. */
                 handToAgentId?: string;
+                /** A session's worker: the session its runs are children of. */
+                parentSessionId?: string;
                 /** `"appointment"` ⇒ a `scheduled` session; `"propose"` ⇒ a
                  *  governed proposal only (see `executePlaybookRun`). */
                 mode?: PlaybookRunMode;
@@ -1918,6 +1931,14 @@ async function executeAutomationFlow(params: {
                   // start the run with the playbook's own executor and nobody
                   // on the roster. Pinned by `playbook-run-mode-honoured.tripwire`.
                   handToAgentId: data.handToAgentId,
+                  // Same hazard, same fix: a SESSION's worker reaching the
+                  // TOP-LEVEL path without this line would start runs that are
+                  // nobody's children (no `spawned_from`) and keep running
+                  // after its session closed, while the identical node inside
+                  // a loop kept its parent. Pinned by
+                  // `playbook-run-mode-honoured.tripwire` and
+                  // `steps/__tests__/playbook-run-parent-session.test.ts`.
+                  parentSessionId: data.parentSessionId,
                   // Same hazard, same fix: without this line an `appointment`
                   // node reaching the TOP-LEVEL path would silently execute as a
                   // RUN — dispatching an agent at a session the human was meant
@@ -2377,16 +2398,12 @@ export async function handleAutomationExecute(job: {
         completedAt: new Date(),
       })
       .where(eq(automationRuns.id, runId));
-    await db
-      .update(automations)
-      .set({
-        status: "paused",
-        errorMessage: AUTOMATION_OWNER_LEFT_SPACE,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(automations.id, automationId), eq(automations.status, "active"))
-      );
+    await setAutomationStatus(db, {
+      id: automationId,
+      from: "active",
+      to: "paused",
+      set: { errorMessage: AUTOMATION_OWNER_LEFT_SPACE },
+    });
     return;
   }
 

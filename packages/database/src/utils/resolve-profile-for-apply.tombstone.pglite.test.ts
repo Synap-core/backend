@@ -15,7 +15,7 @@
  *       `slug-taken-pod-wide` deferral.
  *
  * ENGINE: PGlite, ONE instance for the file; `profiles` and
- * `profile_workspace_access` are created from their drizzle definitions (enums
+ * `space_access` are created from their drizzle definitions (enums
  * as text, constraints dropped). Rows are truncated between tests.
  *
  * NOT covered here: `delete()` stamping / `reactivate()` clearing the tombstone
@@ -28,7 +28,7 @@ import { drizzle } from "drizzle-orm/pglite";
 import { SQL } from "drizzle-orm";
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "../schema/index.js";
-import { profiles, profileWorkspaceAccess } from "../schema/profiles.js";
+import { profiles, spaceAccess } from "../schema/profiles.js";
 import {
   ProfileRepository,
   markProfileRetired,
@@ -117,7 +117,7 @@ const TOMBSTONE = { at: "2026-09-14T00:00:00.000Z", reason: "deleted" };
 beforeAll(async () => {
   pg = new PGlite();
   await pg.exec(ddlFor(profiles as unknown as PgTable));
-  await pg.exec(ddlFor(profileWorkspaceAccess as unknown as PgTable));
+  await pg.exec(ddlFor(spaceAccess as unknown as PgTable));
   repo = new ProfileRepository(drizzle(pg, { schema }) as never);
 }, 60_000);
 
@@ -126,7 +126,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await pg.exec(`truncate profiles; truncate profile_workspace_access;`);
+  await pg.exec(`truncate profiles; truncate space_access;`);
 });
 
 describe("resolveProfileForApply — retirement tombstone (PGlite)", () => {
@@ -193,7 +193,7 @@ describe("resolveProfileForApply — retirement tombstone (PGlite)", () => {
     expect(r.profile?.id).toBe(CANON);
     expect(await isActive(HOLDER)).toBe(false);
     const grants = await pg.query(
-      `select 1 from profile_workspace_access where profile_id = $1 and workspace_id = $2`,
+      `select 1 from space_access where object_type = 'profile' and object_id = $1 and workspace_id = $2`,
       [CANON, WS]
     );
     expect(grants.rows).toHaveLength(1);

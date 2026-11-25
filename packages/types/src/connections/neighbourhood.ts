@@ -245,6 +245,15 @@ export const LINK_EDGE_ROLES = {
   // session|track --serves--> track: the work is done FOR that goal (a
   // sub-goal serves its parent). Read like `member_of`: not a wait.
   serves: { outgoing: "servesAndBlocks", incoming: "work" },
+  // track --advances--> workspace: the goal moves that pillar of its project
+  // forward. Read like `serves`: work done for it, not a wait.
+  advances: { outgoing: "servesAndBlocks", incoming: "work" },
+  // session --orchestrated_by--> session: the child works FOR its
+  // orchestrator, read like `member_of`. Not a wait (the hold is).
+  orchestrated_by: { outgoing: "servesAndBlocks", incoming: "work" },
+  // capability(add-on) --extends--> capability(base): which tool an add-on
+  // runs through — configuration, like `dispatched_via`, not work or lineage.
+  extends: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;
 
 /**
@@ -280,6 +289,9 @@ export const RELATION_EDGE_ROLES = {
   affiliated_with: RELATED,
   knows: RELATED,
   discussed_with: RELATED,
+  // new file --derived_from--> source (PDF tools W1): from the new file, the
+  // source is where it came from; from the source, the copy is what it became.
+  derived_from: { outgoing: "cameFrom", incoming: "became" },
   embedded_in: RELATED,
   visualized_in: RELATED,
 } as const satisfies Readonly<Record<string, EdgeRole>>;

@@ -1,6 +1,7 @@
 {
   "name": "@synap/governance-policy",
   "version": "0.1.0",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -17,6 +18,10 @@
     "./grants": {
       "types": "./dist/grants.d.ts",
       "import": "./dist/grants.js"
+    },
+    "./rule-ranking": {
+      "types": "./dist/rule-ranking.d.ts",
+      "import": "./dist/rule-ranking.js"
     }
   },
   "dependencies": {

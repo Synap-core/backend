@@ -492,6 +492,69 @@ describe("A KEY LIMITED TO SPACES rewords its own proposal, never what it runs",
     expect(h.updates).toBe(0);
   });
 
+  // 60dae4c8: the title lint flags a defect after filing; the author agent
+  // renames what it asked for instead of withdrawing and filing a twin.
+  it("its OWN proposal's title, alone: renamed; title + anything else, or a payload with no title: FORBIDDEN", async () => {
+    h.row = {
+      data: {
+        targetType: "entity",
+        changeType: "create",
+        data: { profileSlug: "decision", title: "A title the lint flags" },
+      },
+      status: ProposalStatus.PENDING,
+      workspaceId: "ws",
+      agentUserId: AGENT,
+      proposalType: "entity.create",
+    };
+    await asKey(CRM_KEY, () =>
+      mergeProposalRevision({
+        proposalId: "p1",
+        patch: { kind: "inner", fields: { title: "A short title" } },
+        actorId: HUMAN,
+        actingAgentUserId: AGENT,
+      })
+    );
+    expect(h.updates).toBe(1);
+    for (const change of [
+      {
+        patch: {
+          kind: "inner" as const,
+          fields: { title: "x", profileSlug: "task" },
+        },
+      },
+      {
+        patch: { kind: "inner" as const, fields: { title: "x" } },
+        workspaceId: "brand",
+      },
+      { patch: { kind: "inner" as const, fields: { title: 42 } } },
+    ]) {
+      await expect(
+        asKey(CRM_KEY, () =>
+          mergeProposalRevision({
+            proposalId: "p1",
+            actorId: HUMAN,
+            actingAgentUserId: AGENT,
+            ...change,
+          })
+        ),
+        JSON.stringify(change)
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    // The default row carries no title: a "title" there would ADD a field.
+    h.row = { ...h.row, data: { _summary: "before", sourceId: AGENT } };
+    await expect(
+      asKey(CRM_KEY, () =>
+        mergeProposalRevision({
+          proposalId: "p1",
+          patch: { kind: "inner", fields: { title: "x" } },
+          actorId: HUMAN,
+          actingAgentUserId: AGENT,
+        })
+      )
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(h.updates).toBe(1);
+  });
+
   it("CONTROL — an unbounded `*` key amends the payload as before", async () => {
     await asKey(FULL_KEY, () =>
       mergeProposalRevision({

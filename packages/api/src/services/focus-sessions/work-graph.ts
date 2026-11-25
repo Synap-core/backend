@@ -18,7 +18,8 @@
  *     `attachSessionHolder` + `withViewerRole` — exactly what
  *     `focusSessions.list({ nextMove })` returns for the same row.
  *   - WHICH edges: the list's attach helpers — `attachSessionEdges`
- *     (declared `blocked_by`), `attachSessionOutputDependencies` (derived
+ *     (declared `blocked_by`), `attachSessionOrchestration` (declared
+ *     `orchestrated_by`), `attachSessionOutputDependencies` (derived
  *     waits on an output), `attachSessionInteractions` (derived `triggered` /
  *     `updated`) — plus lineage (`spawned_from`) from `projectSessionRows`.
  *     Flattened to one list; nothing is derived here.
@@ -42,6 +43,20 @@
  * (`inWindow: false`) and is still counted in `omitted`: `omitted` counts the
  * window's sessions not returned AS window sessions.
  *
+ * ── A KEY NARROWED BY ITS GRANT ─────────────────────────────────────────────
+ * A pod app reads the graph through its grant (`workGraphReach`, founder
+ * decision D1, 17 Nov 2026): the WHERE's floor already ANDs the grant, so its
+ * nodes are the sessions it reads; `window.omittedByGrant` counts the ones the
+ * person sees in the same window that it does not (also in `omitted`). The
+ * parts that read past the grant (next move, interactions, waits on an
+ * output, PR facts, goals; holder and liveness without `agent.read`) are
+ * withheld: a section `unavailable` with `WORK_GRAPH_WITHHELD_REASON`, a node
+ * move `unknown`, never an empty answer. An edge is drawn only when the key
+ * reads BOTH ends (`orchestrated_by` included), and a node's
+ * `parentSessionId` is kept only when that parent is a node too: a parent
+ * the key does not hold reads `null`, so its id never leaks (a far end's
+ * parent is never fetched, one hop, so it reads `null` as well).
+ *
  * ── ONE GOAL OR ONE WAVE ────────────────────────────────────────────────────
  * `focus` narrows the WINDOW (design rule 8: graph one goal or wave, list the
  * fleet): `{ trackId }` keeps the sessions filed in that goal (the list's own
@@ -49,6 +64,23 @@
  * session spawned under it (`spawned_from`, followed parent → child; the
  * list's `waveRootId` narrow). Far ends
  * are still fetched, so a wave blocked by another goal's session still says so.
+ * Under a focus the SETTLE WINDOW is lifted (a pathway, B4): a year-long plan
+ * keeps the steps it closed long ago, so every session of the goal or wave
+ * comes back whatever its age, open first, still bounded by the ceiling and
+ * said by `window.allSettled` (`truncated` / `omitted` as ever).
+ *
+ * ── ONE PLAYBOOK OR ONE THING ──────────────────────────────────────────────
+ * Two more narrows of the WINDOW, both clauses of the list's ONE WHERE (never
+ * a filter here), combinable with `focus` and with each other:
+ *   - `playbookId`: the sessions that FOLLOW that playbook, run from it OR
+ *     filed in a goal whose method it is (`sessionFollowsPlaybookWhere`,
+ *     founder decision D2). Each window node then says which way it matched
+ *     (`playbookMatch`: `session` = its own playbook, `goal` = only through
+ *     its goal's method), so a board places the first by the session's
+ *     `currentStage` and the second by its `trackStage` on the goal's stages.
+ *   - `subjectEntityId`: the sessions ON that thing, its subject or a worker
+ *     targeting it (`sessionSubjectWhere`, the list's `subject` narrow).
+ * Far ends are not narrowed: an edge still says what it points at.
  *
  * ── WHAT THE SESSIONS POINT AT ──────────────────────────────────────────────
  * Besides sessions, the read carries three kinds of node, each derived by the
@@ -58,7 +90,22 @@
  *     `foldPullRequestState`), read ONCE for every node;
  *   - `holds`: the standing hold of each paused node (`listHolds`): what it
  *     waits on, why, and what resumes it;
- *   - `goals`: the goal (track) each node is filed into, under the track floor.
+ *   - `goals`: the goal (track) each node is filed into, under the track floor,
+ *     plus the goal at the far end of a goal edge below (one hop);
+ *   - `decisions` and `entities` (a pathway, B4): the decision entities and
+ *     other things the nodes wait on (`blocked_by`) or are about (subject),
+ *     under the entity floor; a decision carries its options and whether the
+ *     person answered or is asked.
+ *
+ * ── EDGES BEYOND SESSIONS (B4) ──────────────────────────────────────────────
+ * `blocked_by` joins any two units of work (`dependency-links.ts`). The
+ * session-to-session ones come from `attachSessionEdges` as before; the
+ * others (a session waiting on a decision, a thing or a goal; a goal on a
+ * goal) come from `readDependencyFacts`' declared blockers, THE dependency
+ * read, and `serves` (a session or goal done FOR a goal) from `readServes`.
+ * Each names the kind of an end that is not a session (`fromKind`, `toKind`;
+ * absent = a session, as every edge before), and is drawn only when that end
+ * is in `goals`, `decisions` or `entities`. Withheld from a narrowed key.
  *
  * ── A FAILED READ IS NOT AN EMPTY ONE ───────────────────────────────────────
  * Each edge read is settled on its own (`settle`): a failure marks its
@@ -70,6 +117,11 @@
  */
 
 import type { FocusSession } from "@synap/database/schema";
+import {
+  WORK_GRAPH_EDGE_KINDS,
+  type WorkGraphEdgeKind,
+} from "@synap-core/types/focus-sessions";
+import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
 import type {
@@ -80,10 +132,12 @@ import type {
 import {
   attachSessionLiveness,
   countUserSessions,
+  countUserSessionsForPerson,
   projectSessionRows,
   queryUserSessions,
 } from "./session-list-rows.js";
 import { attachSessionEdges } from "./session-blocked-by.js";
+import { attachSessionOrchestration } from "./session-orchestration.js";
 import { attachSessionOutputDependencies } from "./session-output-edges.js";
 import {
   attachSessionInteractions,
@@ -99,15 +153,24 @@ import {
   readGraphGoals,
   readGraphHolds,
   readGraphPullRequests,
+  readGraphServes,
+  readGraphThings,
+  type WorkGraphDecision,
+  type WorkGraphEntity,
   type WorkGraphGoal,
   type WorkGraphHold,
   type WorkGraphPullRequest,
 } from "./work-graph-nodes.js";
+import { readDependencyFacts } from "../links/dependency-links.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
+import { projectTriage } from "./triage.js";
+import { notTakenRecorded } from "./session-closed-as.js";
 import {
   attachSessionHolder,
   type SessionHolderSection,
 } from "./session-holder.js";
+
+import { resolveSessionSubject } from "./session-subject.js";
 
 import {
   WORK_GRAPH_CEILING,
@@ -120,30 +183,45 @@ export {
   WORK_GRAPH_DEFAULT_WINDOW_HOURS,
   WORK_GRAPH_MAX_WINDOW_HOURS,
 };
-export type { WorkGraphGoal, WorkGraphHold, WorkGraphPullRequest };
+export type {
+  WorkGraphDecision,
+  WorkGraphEntity,
+  WorkGraphGoal,
+  WorkGraphHold,
+  WorkGraphPullRequest,
+};
 
 /**
  * One edge, flat. Direction follows the stored or derived relation:
  *   - `blocked_by`      from = the waiting session, to = its blocker. The
  *                       same edge IS the blocker's "unblocks": one edge, read
- *                       from either end, never listed twice.
+ *                       from either end, never listed twice. Either end may
+ *                       be a goal, and the blocker a decision or a thing
+ *                       (`fromKind` / `toKind`).
  *   - `spawned_from`    from = the child, to = the parent.
+ *   - `orchestrated_by` from = the coordinated session, to = its orchestrator
+ *                       (`start-orchestrator.ts`): the orchestrator holds it
+ *                       until the person approves the merged plan.
  *   - `waits_on_output` from = the session taking the output as input, to = the
  *                       open session producing it; `entityId` = the output.
  *   - `triggered`       from = the session whose write fired the run, to = the run.
  *   - `updated`         from = the producer, to = the session that wrote to its
  *                       output (`session-interactions.ts`).
+ *   - `serves`          from = a session or a goal (`fromKind: "track"`), to =
+ *                       the goal it is done for (`toKind: "track"`).
  */
-export const WORK_GRAPH_EDGE_KINDS = [
-  "blocked_by",
-  "spawned_from",
-  "waits_on_output",
-  "triggered",
-  "updated",
-] as const satisfies ReadonlyArray<
-  "blocked_by" | "spawned_from" | "waits_on_output" | SessionInteractionType
->;
-export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];
+export { WORK_GRAPH_EDGE_KINDS, type WorkGraphEdgeKind };
+// The list is declared once in `@synap-core/types/focus-sessions` (the apps
+// import it); a kind this read cannot produce stops the build here.
+const _kindsKnown: ReadonlyArray<
+  | "blocked_by"
+  | "spawned_from"
+  | "orchestrated_by"
+  | "waits_on_output"
+  | SessionInteractionType
+  | "serves"
+> = WORK_GRAPH_EDGE_KINDS;
+void _kindsKnown;
 // A new interaction type the graph does not list stops the build: it would
 // otherwise reach the wire as an edge kind no schema declares.
 type _InteractionsCovered = [
@@ -154,16 +232,34 @@ type _InteractionsCovered = [
 const _interactionsCovered: _InteractionsCovered = true;
 void _interactionsCovered;
 
+/** What an edge end is when it is not a session (B4). */
+export type WorkGraphEndKind = "entity" | "track";
+
 export interface WorkGraphEdge {
   kind: WorkGraphEdgeKind;
   from: string;
   to: string;
+  /** ABSENT = `from` is a session (every edge an older pod sent). `track` = a goal in `goals`. */
+  fromKind?: "track";
+  /**
+   * ABSENT = `to` is a session. `entity` = a decision in `decisions` or a
+   * thing in `entities`; `track` = a goal in `goals`.
+   */
+  toKind?: WorkGraphEndKind;
   /** `waits_on_output`: the entity waited on. */
   entityId?: string;
   /** `triggered` / `updated`: how many events back the relation. */
   count?: number;
   /** `triggered` / `updated`: the latest of them, ISO. */
   lastAt?: string | null;
+  /** `serves`: the goal criterion the session serves, when the edge names one. */
+  criterionKey?: string;
+  /**
+   * `blocked_by` to a decision (`toKind: "entity"`): the option this step is
+   * the ARM of (`links.metadata.option`, decision arms P5). Taken when the
+   * decision chooses it; another choice skips the step. Absent = a plain wait.
+   */
+  option?: string;
 }
 
 export type WorkGraphSection =
@@ -173,6 +269,8 @@ export type WorkGraphSection =
 export interface WorkGraphSections {
   /** Declared `blocked_by` edges. */
   blockedBy: WorkGraphSection;
+  /** Declared `orchestrated_by` edges (who coordinates whom). */
+  orchestration: WorkGraphSection;
   /** Derived waits on another open session's output. */
   waitsOnOutputs: WorkGraphSection;
   /** Derived `triggered` / `updated` interactions. */
@@ -183,19 +281,39 @@ export interface WorkGraphSections {
   pullRequests: WorkGraphSection;
   /** The standing holds of the nodes. */
   holds: WorkGraphSection;
-  /** The goals the nodes are filed into. */
+  /** The goals the nodes are filed into, and those at the far end of a goal edge. */
   goals: WorkGraphSection;
+  /** Declared `blocked_by` edges with an end that is not a session (B4). */
+  crossKind: WorkGraphSection;
+  /** `serves` edges: the goals the nodes and their goals are done for (B4). */
+  serves: WorkGraphSection;
+  /** The decisions the nodes wait on or are about (B4). */
+  decisions: WorkGraphSection;
+  /** The other things the nodes wait on or are about (B4). */
+  entities: WorkGraphSection;
 }
 
 export interface WorkGraphWindow {
-  /** ISO: settled work is in the window from this instant on. */
+  /** ISO: settled work is in the window from this instant on (not with `allSettled`). */
   since: string;
   hours: number;
+  /**
+   * True under a goal or wave focus: settled work of ANY age is in the
+   * window (a pathway keeps its old steps), and `since` / `hours` limit
+   * nothing. Still bounded by `ceiling`.
+   */
+  allSettled: boolean;
   ceiling: number;
   /** True when sessions were left out — `omitted` says how many. */
   truncated: boolean;
   /** Sessions the window (or an edge) selected that this read did not return. */
   omitted: number;
+  /**
+   * Of `omitted`, the sessions the PERSON could see here that the calling
+   * key's grant does not cover (`workGraphReach`): never returned, only
+   * counted. 0 for a person and for a key that reads the graph whole.
+   */
+  omittedByGrant: number;
 }
 
 /** One node: the list row (`focusSessions.list({ nextMove: true })`), plus whether it is IN the window or only the far end of an edge. */
@@ -212,7 +330,25 @@ export type WorkGraphNode = Awaited<
   holder: SessionHolderSection;
   viewerRole: SessionViewerRole;
   inWindow: boolean;
+  // A planned step's time (lane B1: `plannedFor`, `dueBy`) rides on the row's
+  // own `metadata` once B1 stores it there; lift it to a node field HERE
+  // when B1 names it. Not invented before.
+  /**
+   * With the `playbookId` narrow, how this window node follows it: `session`
+   * = its own `playbookId` is the playbook, `goal` = only through the method
+   * of the goal it is filed in; `null` on a far end (far ends are not
+   * narrowed). ABSENT without the narrow: there is nothing to match.
+   */
+  playbookMatch?: WorkGraphPlaybookMatch | null;
+  /**
+   * It ended as a decision's arm NOT taken (P5, `notTakenRecorded`): the
+   * readiness rule's `skipped`, never a plain cancel. Absent otherwise.
+   */
+  skipped?: true;
 };
+
+/** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
+export type WorkGraphPlaybookMatch = "session" | "goal";
 
 export interface WorkGraph {
   nodes: WorkGraphNode[];
@@ -220,6 +356,10 @@ export interface WorkGraph {
   pullRequests: WorkGraphPullRequest[];
   holds: WorkGraphHold[];
   goals: WorkGraphGoal[];
+  /** The decisions the nodes wait on or are about (B4). */
+  decisions: WorkGraphDecision[];
+  /** The other things the nodes wait on or are about: subjects, blockers (B4). */
+  entities: WorkGraphEntity[];
   sections: WorkGraphSections;
   window: WorkGraphWindow;
 }
@@ -249,7 +389,25 @@ export interface BuildWorkGraphInput {
   boundWorkspaceId?: string;
   /** Narrow the window to one goal or one wave (see the header). */
   focus?: WorkGraphFocus;
+  /**
+   * Narrow the window to the sessions that follow this playbook: run from it,
+   * or filed in a goal whose method it is (see the header).
+   */
+  playbookId?: string;
+  /** Narrow the window to the sessions on this thing (see the header). */
+  subjectEntityId?: string;
+  /**
+   * What the calling key's grant lets the graph draw (`workGraphReach`).
+   * Absent = whole (a person, or a key that reads every subject). Narrowed:
+   * the nodes are the sessions the grant reads, and the parts that read past
+   * it are withheld, each said so (see `workGraphReach`).
+   */
+  reach?: WorkGraphReach;
 }
+
+/** The reason every part withheld from a narrowed key carries. */
+export const WORK_GRAPH_WITHHELD_REASON =
+  "Withheld: this key's grant does not read everything this part needs.";
 
 const LOG = { door: "focusSessions.graph" };
 
@@ -266,6 +424,11 @@ export async function buildWorkGraph(
   input: BuildWorkGraphInput
 ): Promise<WorkGraph> {
   const { userId, scope, kind, lens, roster } = input;
+  const narrowed = input.reach && !input.reach.whole ? input.reach : null;
+  const withheld = {
+    status: "unavailable" as const,
+    reason: WORK_GRAPH_WITHHELD_REASON,
+  };
   const hours = Math.min(
     Math.max(
       Math.floor(input.windowHours ?? WORK_GRAPH_DEFAULT_WINDOW_HOURS),
@@ -276,19 +439,29 @@ export async function buildWorkGraph(
   const since = new Date(Date.now() - hours * 3_600_000).toISOString();
 
   // ── The window: one WHERE, open first, at most the ceiling; a full page
-  // asks the count (same WHERE) how many it left out.
+  // asks the count (same WHERE) how many it left out. A goal or a wave keeps
+  // its settled work of any age (B4): no settle window under a focus.
   const focus = input.focus;
+  const allSettled = !!focus;
   const windowQuery: SessionListQuery = {
     userId,
     scope,
     status: "all",
-    openOrSettledSince: since,
+    ...(allSettled ? {} : { openOrSettledSince: since }),
     kind,
     lens,
     roster,
     ...(focus && "trackId" in focus ? { trackId: focus.trackId } : {}),
     ...(focus && "rootSessionId" in focus
       ? { waveRootId: focus.rootSessionId }
+      : {}),
+    ...(input.playbookId ? { followsPlaybookId: input.playbookId } : {}),
+    ...(input.subjectEntityId
+      ? {
+          subject: await resolveSessionSubject({
+            entityIds: [input.subjectEntityId],
+          }),
+        }
       : {}),
   };
   const windowRows = await queryUserSessions(
@@ -301,22 +474,42 @@ export async function buildWorkGraph(
       ? windowRows.length
       : await countUserSessions(windowQuery);
   const windowNodes = await projectSessionRows(windowRows, userId);
+  // A narrowed key: how many sessions the PERSON sees in this window that the
+  // grant does not, counted with the same WHERE without the grant. A count,
+  // never a row (`countUserSessionsForPerson`). Counted over
+  // the WINDOW, the map's population: a far end the grant does not read is
+  // a window session (counted here) or settled before the window (not part
+  // of the map); either way the edge to it is not drawn.
+  const omittedByGrant = narrowed
+    ? Math.max(0, (await countUserSessionsForPerson(windowQuery)) - windowTotal)
+    : 0;
 
   // ── The edges of the window, each read settled on its own.
   const ids = windowRows.map((r) => ({ id: r.id }));
-  const [declared, outputs] = await Promise.all([
+  const [declared, orchestration, outputs] = await Promise.all([
     settle(
       LOG,
       "blockedBy",
       "Which sessions wait on which could not be read.",
       () => attachSessionEdges(ids)
     ),
+    // Session to session only: drawn for a narrowed key between two
+    // sessions it reads, like `blocked_by`.
     settle(
       LOG,
-      "waitsOnOutputs",
-      "Which sessions wait on another's output could not be read.",
-      () => attachSessionOutputDependencies(ids, userId)
+      "orchestration",
+      "Which sessions an orchestrator coordinates could not be read.",
+      () => attachSessionOrchestration(ids)
     ),
+    // Names the output entity: withheld from a narrowed key.
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "waitsOnOutputs",
+          "Which sessions wait on another's output could not be read.",
+          () => attachSessionOutputDependencies(ids, userId)
+        ),
   ]);
 
   const edges: WorkGraphEdge[] = [];
@@ -338,6 +531,14 @@ export async function buildWorkGraph(
         push({ kind: "blocked_by", from: r.id, to: b });
       for (const w of r.unblocks)
         push({ kind: "blocked_by", from: w, to: r.id });
+    }
+  }
+  if (orchestration.status === "ok") {
+    for (const r of orchestration.value) {
+      for (const o of r.orchestratedBy)
+        push({ kind: "orchestrated_by", from: r.id, to: o });
+      for (const c of r.orchestrates)
+        push({ kind: "orchestrated_by", from: c, to: r.id });
     }
   }
   if (outputs.status === "ok") {
@@ -421,34 +622,87 @@ export async function buildWorkGraph(
     ...windowNodes.map((n) => ({ ...n, inWindow: true })),
     ...farNodes.map((n) => ({ ...n, inWindow: false })),
   ];
-  const withMove = await attachNextMove(all, {
-    userId,
-    roster,
-    lens: input.boundWorkspaceId,
-    logContext: LOG,
-  });
-  const withLive = await attachSessionLiveness<
-    (typeof withMove)[number] & { live?: SessionActivityLive | null }
-  >(withMove, { userId, roster });
+  // The next move reads proposals, room inboxes and cross-kind blockers:
+  // withheld from a narrowed key (`unknown`, counts `null` = not read).
+  const withMove = narrowed
+    ? all.map((n) => ({
+        ...n,
+        nextMove: {
+          kind: "unknown" as const,
+          actor: "none" as const,
+          label: "Not shown to this app",
+          reason: WORK_GRAPH_WITHHELD_REASON,
+        },
+        unitFacts: {
+          owedFromYou: null,
+          pendingDecisions: null,
+          awaitingReview: false,
+          draft: projectTriage(n).pending,
+        } satisfies SessionUnitCounts,
+      }))
+    : await attachNextMove(all, {
+        userId,
+        roster,
+        lens: input.boundWorkspaceId,
+        logContext: LOG,
+      });
   // Who has it, through the session read's own derivation; the liveness just
-  // attached is reused, never read twice.
-  const withHolder = await attachSessionHolder(
-    withLive.map((n) => ({ ...n, live: n.live ?? null })),
-    // A bound key's PR facts stay in its workspace, as the PR nodes' do.
-    { userId, roster, lens: input.boundWorkspaceId }
-  );
-  const nodes: WorkGraphNode[] = withHolder.map((n) =>
-    withViewerRole(n, userId)
-  );
+  // attached is reused, never read twice. A narrowed key reads both only when
+  // it reads the person's agents (`sessionHolderReadable`).
+  const withHolder =
+    narrowed && !narrowed.holder
+      ? withMove.map((n) => ({
+          ...n,
+          live: null,
+          holder: withheld as SessionHolderSection,
+        }))
+      : await attachSessionHolder(
+          (
+            await attachSessionLiveness<
+              (typeof withMove)[number] & { live?: SessionActivityLive | null }
+            >(withMove, { userId, roster })
+          ).map((n) => ({ ...n, live: n.live ?? null })),
+          // A bound key's PR facts stay in its workspace, as the PR nodes' do.
+          { userId, roster, lens: input.boundWorkspaceId }
+        );
+  // A window node passed the WHERE, so it follows the playbook one way or
+  // the other: its own playbook first, else its goal's method. Without the
+  // narrow there is nothing to match, and the field is left out.
+  const playbookId = input.playbookId;
+  const projected: WorkGraphNode[] = withHolder.map((n) => ({
+    ...withViewerRole(n, userId),
+    ...(notTakenRecorded(n) ? { skipped: true as const } : {}),
+    ...(playbookId
+      ? {
+          playbookMatch: !n.inWindow
+            ? null
+            : n.playbookId === playbookId
+              ? ("session" as const)
+              : ("goal" as const),
+        }
+      : {}),
+  }));
 
-  // Interactions are derived among the nodes (both ends on the read).
-  const withInteractions = await attachSessionInteractions(
-    nodes.map((n) => ({ id: n.id }))
-  );
+  // A narrowed key keeps a node's parent only when it holds that parent: a
+  // parent it does not read is never named (its edge is not drawn either).
+  const projectedIds = new Set(projected.map((n) => n.id));
+  const nodes: WorkGraphNode[] = narrowed
+    ? projected.map((n) =>
+        n.parentSessionId && !projectedIds.has(n.parentSessionId)
+          ? { ...n, parentSessionId: null }
+          : n
+      )
+    : projected;
+
+  // Interactions are derived among the nodes (both ends on the read), from
+  // events and automation runs: withheld from a narrowed key.
+  const withInteractions = narrowed
+    ? []
+    : await attachSessionInteractions(nodes.map((n) => ({ id: n.id })));
   // One read for every row: a failure marks every row, so the first says it.
-  const interactions = sectionOf(
-    withInteractions[0]?.interactions ?? { status: "ok" }
-  );
+  const interactions: WorkGraphSection = narrowed
+    ? withheld
+    : sectionOf(withInteractions[0]?.interactions ?? { status: "ok" });
   for (const r of withInteractions) {
     if (r.interactions.status !== "ok") continue;
     for (const i of r.interactions.items) {
@@ -466,53 +720,180 @@ export async function buildWorkGraph(
   const held = new Set(nodes.map((n) => n.id));
   const drawn = edges.filter((e) => held.has(e.from) && held.has(e.to));
 
-  // ── What the nodes point at: PRs, holds, goals, each read settled on its own.
-  const trackIds = [
+  // ── What the nodes point at: PRs, holds, the edges beyond sessions, then
+  // the goals, decisions and things at their ends, each read settled on its
+  // own.
+  const sessionIds = nodes.map((n) => n.id);
+  const filedTrackIds = [
     ...new Set(nodes.flatMap((n) => (n.trackId ? [n.trackId] : []))),
   ];
-  const [prs, holds, goals] = await Promise.all([
+  const [prs, holds, dependencies, serves] = await Promise.all([
     // The PR facts are events: a workspace-bound key reads them under its own
     // workspace floor, the one the far ends already use.
-    readGraphPullRequests(nodes, {
-      userId,
-      roster,
-      lens: input.boundWorkspaceId,
-    }),
+    readGraphPullRequests(
+      nodes,
+      { userId, roster, lens: input.boundWorkspaceId },
+      narrowed ? WORK_GRAPH_WITHHELD_REASON : undefined
+    ),
     settle(
       LOG,
       "holds",
       "What the paused sessions wait on could not be read.",
-      () => readGraphHolds(nodes.map((n) => n.id))
+      () => readGraphHolds(sessionIds)
     ),
-    settle(
-      LOG,
-      "goals",
-      "The goals these sessions serve could not be read.",
-      () => readGraphGoals(trackIds, userId)
-    ),
+    // THE dependency read (`readDependencyFacts`, the batch of
+    // `readDependencyState`): every blocker the nodes and their goals
+    // declared. Reads entities and goals: withheld from a narrowed key.
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "crossKind",
+          "What these sessions and goals wait on, beside sessions, could not be read.",
+          () =>
+            readDependencyFacts(
+              [
+                ...sessionIds.map((id) => ({ kind: "session", id })),
+                ...filedTrackIds.map((id) => ({ kind: "track", id })),
+              ],
+              userId
+            )
+        ),
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "serves",
+          "Which goals these sessions and goals serve could not be read.",
+          () => readGraphServes(sessionIds, filedTrackIds, userId)
+        ),
   ]);
+
+  // The edges beyond sessions. Session to session `blocked_by` is drawn
+  // above (`attachSessionEdges`); only an edge with another kind of end is
+  // added here, each end named by its kind.
+  const beyond: WorkGraphEdge[] = [];
+  if (dependencies.status === "ok") {
+    for (const [key, facts] of dependencies.value) {
+      const i = key.indexOf(":");
+      const fromKind = key.slice(0, i);
+      const from = key.slice(i + 1);
+      for (const b of facts.declared) {
+        // Drawn above (`attachSessionEdges`), or a kind no node draws.
+        if (fromKind === "session" && b.kind === "session") continue;
+        if (b.kind !== "session" && b.kind !== "entity" && b.kind !== "track")
+          continue;
+        beyond.push({
+          kind: "blocked_by",
+          from,
+          to: b.id,
+          ...(fromKind === "track" ? { fromKind: "track" as const } : {}),
+          ...(b.kind === "entity"
+            ? { toKind: "entity" as const }
+            : b.kind === "track"
+              ? { toKind: "track" as const }
+              : {}),
+          ...(b.option ? { option: b.option } : {}),
+        });
+      }
+    }
+  }
+  if (serves.status === "ok") {
+    for (const sv of serves.value) {
+      beyond.push({
+        kind: "serves",
+        from: sv.from,
+        to: sv.to,
+        ...(sv.fromKind === "track" ? { fromKind: "track" as const } : {}),
+        toKind: "track",
+        ...(sv.criterionKey ? { criterionKey: sv.criterionKey } : {}),
+      });
+    }
+  }
+  // The ends they need, one hop: the goals, and the decisions and things
+  // (with each node's subject).
+  const trackIds = [
+    ...new Set([
+      ...filedTrackIds,
+      ...beyond.flatMap((e) => [
+        ...(e.fromKind === "track" ? [e.from] : []),
+        ...(e.toKind === "track" ? [e.to] : []),
+      ]),
+    ]),
+  ];
+  const entityIds = [
+    ...new Set([
+      ...beyond.flatMap((e) => (e.toKind === "entity" ? [e.to] : [])),
+      ...nodes.flatMap((n) => (n.subjectEntityId ? [n.subjectEntityId] : [])),
+    ]),
+  ];
+  const [goals, things] = await Promise.all([
+    narrowed && !narrowed.goals
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "goals",
+          "The goals these sessions serve could not be read.",
+          () => readGraphGoals(trackIds, userId)
+        ),
+    narrowed
+      ? Promise.resolve(withheld)
+      : settle(
+          LOG,
+          "decisions",
+          "The decisions and things these sessions point at could not be read.",
+          () =>
+            readGraphThings(entityIds, {
+              userId,
+              lens: input.boundWorkspaceId,
+            })
+        ),
+  ]);
+  // An edge beyond sessions is drawn only when the caller holds both ends.
+  const heldEnds = new Set<string>([
+    ...[...held].map((id) => `session:${id}`),
+    ...(goals.status === "ok" ? goals.value : []).map((g) => `track:${g.id}`),
+    ...(things.status === "ok"
+      ? [...things.value.decisions, ...things.value.entities]
+      : []
+    ).map((t) => `entity:${t.id}`),
+  ]);
+  const drawnBeyond = beyond.filter(
+    (e) =>
+      heldEnds.has(`${e.fromKind ?? "session"}:${e.from}`) &&
+      heldEnds.has(`${e.toKind ?? "session"}:${e.to}`)
+  );
 
   return {
     nodes,
-    edges: drawn,
+    edges: [...drawn, ...drawnBeyond],
     pullRequests: prs.items,
     holds: holds.status === "ok" ? holds.value : [],
     goals: goals.status === "ok" ? goals.value : [],
+    decisions: things.status === "ok" ? things.value.decisions : [],
+    entities: things.status === "ok" ? things.value.entities : [],
     sections: {
       blockedBy: sectionOf(declared),
+      orchestration: sectionOf(orchestration),
       waitsOnOutputs: sectionOf(outputs),
       interactions,
       farEnds,
       pullRequests: prs.section,
       holds: sectionOf(holds),
       goals: sectionOf(goals),
+      crossKind: sectionOf(dependencies),
+      serves: sectionOf(serves),
+      decisions: sectionOf(things),
+      entities: sectionOf(things),
     },
     window: {
       since,
       hours,
+      allSettled,
       ceiling: WORK_GRAPH_CEILING,
-      truncated: omitted > 0,
-      omitted,
+      truncated: omitted + omittedByGrant > 0,
+      omitted: omitted + omittedByGrant,
+      omittedByGrant,
     },
   };
 }

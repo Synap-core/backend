@@ -19,6 +19,8 @@ import { hubAuthMiddleware } from "./hub-protocol/_middleware/auth.js";
 import { grantDenialCodeMiddleware } from "./hub-protocol/_middleware/grant-denial-code.js";
 import { idempotencyMiddleware } from "./hub-protocol/_middleware/idempotency.js";
 import { sessionMiddleware } from "./hub-protocol/_middleware/session.js";
+import { supersedesMiddleware } from "./hub-protocol/_middleware/supersedes.js";
+import { SUPERSEDES_DOORS } from "../services/proposals/supersedes-door.js";
 import { hubRequestGuardMiddleware } from "../middleware/hub-request-guard.js";
 import { AuthErrorEnvelopeSchema } from "./hub-protocol/rest/_codecs/auth.js";
 import { registerOpenApiStubs } from "./hub-protocol/rest/_openapi-stubs.js";
@@ -52,6 +54,7 @@ import {
   registerHealthDependenciesRoutes,
   registerIdentityRoutes,
   registerKnowledgeRoutes,
+  registerFindRoutes,
   registerMcpServersRoutes,
   registerMemoryRoutes,
   registerNotificationsRoutes,
@@ -80,6 +83,7 @@ import {
   registerSkillsRoutes,
   registerSkillsCrudRoutes,
   registerBriefsRoutes,
+  registerDesignsRoutes,
   registerChatRoutes,
   registerLibraryRoutes,
   registerToolsRoutes,
@@ -90,12 +94,15 @@ import {
   registerViewsRoutes,
   registerWidgetDefinitionsRoutes,
   registerCellsRoutes,
+  registerRenderersRoutes,
   registerCellInstancesRoutes,
   registerWhiteboardsRoutes,
+  registerRealtimeRoutes,
   registerWorkspacesRoutes,
   registerWorkspacesEnsureTemplateRoutes,
   registerWorkspaceOpsRoutes,
   registerInstalledRoutes,
+  registerNeedsRoutes,
   registerPackageUpdatesRoutes,
   registerCatalogRefreshRoutes,
   registerMessagingRoutes,
@@ -112,10 +119,12 @@ import {
   registerFederationRoutes,
   registerKeysRoutes,
   registerAiProvidersRoutes,
+  registerAiProvidersAvailableRoute,
   registerFocusSessionsRoutes,
   registerIntentSurfacesRoutes,
   registerGuidelinesRoutes,
   registerBrandRoutes,
+  registerSurfaceContextRoutes,
   registerAgentSkillsRoutes,
   registerRulesRoutes,
   registerUiRoutes,
@@ -298,6 +307,17 @@ app.use(
   })
 );
 
+// ── `supersedes` on the filing doors (plan 8032a127 D3) ────────────────────
+//
+// The routes that file the same requests as the MCP tools taking
+// `supersedes` (`SUPERSEDES_DOORS`, one table for both doors) accept it too,
+// through the one function MCP calls (`./hub-protocol/_middleware/
+// supersedes.ts`). AFTER idempotency, so a replay serves the answer that
+// already says what became of the failed proposal; before the routes.
+for (const door of SUPERSEDES_DOORS) {
+  app.use(door.route, supersedesMiddleware(door.method));
+}
+
 // ── Mount route slices in EXACTLY the original order ───────────────────────
 //
 // Hono is first-match: the order in which routes are registered matters when
@@ -313,6 +333,7 @@ registerWorkspacesEnsureTemplateRoutes(app); // /workspaces/ensure-template (Con
 registerWorkspacesRoutes(app); // /workspaces, /workspaces/:id/*, /users/:id/context
 registerWorkspaceOpsRoutes(app); // governed archive/restore/rename, /entities/move, /profiles/grant-access (R8a)
 registerInstalledRoutes(app); // /installed — the ONE read door over the install ledgers
+registerNeedsRoutes(app); // /workspaces/:id/needs — a space's needs, each filled once (0426)
 registerPackageUpdatesRoutes(app); // /package-updates — one update's plan and its apply (S2/S3)
 registerCatalogRefreshRoutes(app); // POST /catalog/refresh — the official catalog sync now (pod admins)
 registerThreadsRoutes(app); // /threads* — combines GET-list, context, link, branches, messages, etc.
@@ -339,6 +360,7 @@ registerCapabilityConnectionsRoutes(app); // GET/POST/PATCH/DELETE /capabilities
 registerLoopsRoutes(app); // POST /loops/apply (loop / autonomy-template applier)
 registerMemoryRoutes(app); // /memory*
 registerKnowledgeRoutes(app); // /knowledge*, /graph/traverse
+registerFindRoutes(app); // GET /find (the one find door, as MCP synap_find)
 registerCommandsRoutes(app); // /commands*, /commands/execute
 registerAgentUsersRoutes(app); // /agent-users
 registerAgentConfigsRoutes(app); // /agent-configs
@@ -361,8 +383,10 @@ registerSessionsRoutes(app); // /sessions*, /compacted-states*
 registerPlaybooksRoutes(app); // /playbooks/promote-from-session (governed)
 registerWidgetDefinitionsRoutes(app); // /widget-definitions
 registerCellsRoutes(app); // /cells, /cells/install, /cells/:typeKey
+registerRenderersRoutes(app); // /renderers/host-modules
 registerCellInstancesRoutes(app); // /cell-instances, /cell-instances/html, /cell-instances/:id*
 registerWhiteboardsRoutes(app); // /whiteboards/:viewId/placements/propose
+registerRealtimeRoutes(app); // POST /realtime/room-ticket — a pod app opens a live room (0438)
 registerMcpServersRoutes(app); // /mcp-servers
 registerAutomationsRoutes(app); // /automations*
 registerVaultRoutes(app); // /vault/request
@@ -377,7 +401,7 @@ registerEntityShareRoutes(app); // /entity-share/deliver (CP JWT auth)
 registerDeviceRoutes(app); // /setup/device, /setup/device/token — RFC 8628 device door (unauthenticated, MACHINE-IDENTITY-PLAN W2)
 registerSetupRoutes(app); // /setup/agent (provisioning auth)
 registerMcpRedeemRoutes(app); // /mcp/redeem (CP-MCP consent-code → claude-web key), /mcp/revoke (disconnect)
-registerAgentsRoutes(app); // /agents/sync
+registerAgentsRoutes(app); // /agents/sync, /agents/access-requests
 registerMessagingRoutes(app); // /messaging/*
 registerDiscordRoutes(app); // /discord/agent-turn
 registerDiscordIdentityRoutes(app); // /discord/identity, /discord/identity/members, /discord/identity/link
@@ -392,10 +416,13 @@ registerPodAdoptRoutes(app); // /pod/adopt
 registerFederationRoutes(app); // /federation/oidc-config — CP→pod OIDC federation push
 registerKeysRoutes(app); // /keys/rotate-cli + key requests (/keys/templates, /keys/requests[/token], /keys/requested[/:keyId])
 registerAiProvidersRoutes(app); // /ai-providers
+registerAiProvidersAvailableRoute(app); // GET /ai-providers/available (the enabled models an app may pick)
 registerFocusSessionsRoutes(app); // /focus-sessions*
 registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/{needs-you,count}
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
+registerSurfaceContextRoutes(app); // GET /surfaces/context — a frame's anchor, space, project, goal and brand (frame contract v3)
+registerDesignsRoutes(app); // GET /designs/catalog, GET /designs/kit, POST /designs/apply (static, first), GET /designs/:id — the design door for apps
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list), PATCH /rules/:id (edit, LAST)
 registerUiRoutes(app); // /ui/focus

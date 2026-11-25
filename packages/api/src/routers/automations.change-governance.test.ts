@@ -33,8 +33,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       query: { automations: { findFirst: async () => h.automation } },
       update: () => ({
         set: (v: Record<string, unknown>) => ({
-          where: async () => {
+          // Awaited directly, or with `.returning()` (the status door).
+          where: () => {
             h.updates.push(v);
+            const rows = Promise.resolve([{ id: "row" }]) as Promise<
+              unknown[]
+            > & { returning: () => Promise<unknown[]> };
+            rows.returning = async () => [{ id: "row" }];
+            return rows;
           },
         }),
       }),
@@ -179,6 +185,16 @@ describe("a person writes directly", () => {
     expect(h.gateCalls).toEqual([]);
     expect(h.updates).toHaveLength(2);
     expect(h.deletes).toBe(1);
+  });
+});
+
+describe("an archived automation", () => {
+  it("is not revived through update: activate is the way back", async () => {
+    h.automation.status = "archived";
+    await expect(caller().update({ id: ID, status: "active" })).rejects.toThrow(
+      /archived/
+    );
+    expect(h.updates).toEqual([]);
   });
 });
 

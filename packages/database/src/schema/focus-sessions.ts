@@ -23,15 +23,17 @@
  *     Produced by `materializeScheduledSession`
  *     (api services/focus-sessions/schedule-session.ts) from a playbook whose
  *     `schedule.mode` is `"appointment"`. This is its ONLY producer.
- *   - forming — waits for a PERSON. Reserved for a session that has been drafted
- *     but not yet constituted. ⚠️ STILL UNPRODUCED: nothing in any repo assigns
- *     it (verified 2026-09-08 across the monorepo; the only occurrences are one
- *     browser test fixture and an unrelated content status). It is NOT redundant
- *     with triage — `services/focus-sessions/triage.ts` states outright that
- *     acceptance is a RECEIPT (`metadata.triage.acceptedAt`), not a status,
- *     precisely so a session can be `forming`/`scheduled` AND triage-pending at
- *     once. Status and acceptance are orthogonal axes. `forming` is unbuilt, not
- *     superfluous; do not repurpose or delete it without deciding what it means.
+ *   - forming — PLANNED (founder decision P1, 21 Nov 2026): a step of a plan
+ *     that has not started. Born by the session door (`start_session`, a
+ *     capture plan's `sessions[]`, their approvals) when the step waits — a
+ *     blocker or a later `plannedFor` — unless `startNow` (P4). It owes
+ *     nothing (the owed-slot predicate), is not where a write is filed
+ *     (`IN_FLIGHT_SESSION_STATUSES`), never reads as running, and WAKES to
+ *     `active` when its last blocker delivers and its date comes (api
+ *     `planned-wake.ts`: the unblock reactor + the hourly sweep), or when
+ *     someone starts it. It stays in the one-live-run index: a planned run IS
+ *     the run for its subject. Triage is still orthogonal: acceptance is a
+ *     RECEIPT (`metadata.triage.acceptedAt`), not a status.
  *
  * RUNNING:  active → paused ↔ active
  *
@@ -57,11 +59,20 @@ import {
   varchar,
   jsonb,
   integer,
+  boolean,
   timestamp,
   index,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { createInsertSchema, createSelectSchema } from "drizzle-zod";
+
+/**
+ * The partial unique index that IS "one live run per object" (0427): at most
+ * one live (active, paused, forming, stale) session per (playbook, subject,
+ * owner) among the runs that hold the slot (`one_live_per_subject`). The run
+ * door recognises its conflict by this name (`uniqueViolationConstraint`).
+ */
+export const ONE_LIVE_RUN_INDEX = "uniq_focus_sessions_one_live_run";
 
 /**
  * One stage a session ENTERED (0382), oldest first — the shape of a goal's
@@ -210,6 +221,19 @@ export const focusSessions = pgTable(
      */
     playbookId: uuid("playbook_id"),
     /**
+     * This run HOLDS its object's one live slot (0427, "one live run per
+     * object"): a person's run started through the run door (`playbooks.run`,
+     * and so Hub REST, MCP and the approved replay) without "start another".
+     * The partial unique index {@link ONE_LIVE_RUN_INDEX} lets one such row be
+     * live per (playbook, subject, owner); the door catches the conflict and
+     * answers `already_running` with the live run. Written ONCE, at birth, by
+     * the row writer (`insertFocusSessionRow`); never cleared, so ending the
+     * run (any terminal status) is what frees the object. FALSE for every
+     * other session: fan-out and hand-off children, automation runs, "start
+     * another" runs and every row from before 0427.
+     */
+    oneLivePerSubject: boolean("one_live_per_subject").notNull().default(false),
+    /**
      * Expected deliverables declared at session start.
      *
      * Shape: `ExpectedOutput[]` (@synap/playbooks) — that interface is the SSOT
@@ -354,6 +378,14 @@ export const focusSessions = pgTable(
     automationIdIdx: index("idx_focus_sessions_automation_id")
       .on(sql`(${table.metadata}->>'automationId')`)
       .where(sql`(metadata->>'automationId') IS NOT NULL`),
+    // One live run per object (0427): see ONE_LIVE_RUN_INDEX. The status
+    // list is LIVE_RUN_SESSION_STATUSES (@synap-core/types/focus-sessions),
+    // pinned equal by migrations-0427.pglite.test.ts.
+    oneLiveRunIdx: uniqueIndex(ONE_LIVE_RUN_INDEX)
+      .on(table.playbookId, table.subjectEntityId, table.userId)
+      .where(
+        sql`one_live_per_subject AND status IN ('active', 'paused', 'forming', 'stale')`
+      ),
   })
 );
 

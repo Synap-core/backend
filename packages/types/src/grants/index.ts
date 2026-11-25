@@ -19,6 +19,8 @@
  *  - `pod-wide` — the one rule for an app's pod-wide reads, and its words.
  *  - `reach`    — where a grant reaches: ONE explicit `Place`, parsed once.
  *  - `access-model` — per tier, what and where; the ONE access sentence.
+ *  - `app-access` — an app connection's v2 access (what + where), its lift
+ *                 from the old pairs, and the grant scopes it makes.
  *
  * Pure and dependency-free: browser, Electron, landing, Node and CLI.
  */
@@ -39,3 +41,6 @@ export * from "./key-steps.js";
 export * from "./pod-wide.js";
 export * from "./reach.js";
 export * from "./access-model.js";
+export * from "./access-ask.js";
+export * from "./app-access.js";
+export * from "./app-access-consent.js";

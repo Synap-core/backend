@@ -13,14 +13,20 @@
  * EXPIRED, never rejected or approved: `ProposalStatus.EXPIRED` is "never
  * decided, its moment passed" and is not scored. Each row is stamped with what
  * superseded it. Precedents: `expirePendingCreatesOfLandedRecord`,
- * `expireProposalsStaleAfterMove`.
+ * `expireProposalsStaleAfterMove`. A failed hand-off ends the same way (plan
+ * 8032a127 D2).
  *
  * Never the hand-off being approved right now (`landedByProposalId`): its own
  * executor attaches the agent while it is still pending.
  */
 import { and, eq, ne, sql } from "drizzle-orm";
 import { db } from "../client-pg.js";
-import { transitionProposal } from "./proposal-transition.js";
+import {
+  endedByNoPersonSet,
+  NOT_PARTLY_APPLIED,
+  transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
+} from "./proposal-transition.js";
 import { proposals, ProposalStatus } from "../schema/proposals.js";
 
 type DbTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -37,18 +43,21 @@ export async function expirePendingHandOffsOfAttachedAgent(
 ): Promise<string[]> {
   const expired = await transitionProposal(executor, {
     to: ProposalStatus.EXPIRED,
+    from: UNDECIDED_PROPOSAL_STATUSES,
+    ended: { reason: "agent_attached" },
     set: {
+      ...endedByNoPersonSet(),
       updatedAt: new Date(),
       data: sql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object(
         'expiredBy', 'agent_attached',
         'supersededByProposalId', ${input.landedByProposalId ?? null}::text)`,
     },
     where: and(
-      eq(proposals.status, ProposalStatus.PENDING),
       eq(proposals.targetType, "focus_session"),
       eq(proposals.proposalType, "assign_agent"),
       eq(proposals.targetId, input.sessionId),
       sql`${proposals.data}->'data'->>'addAgentId' = ${input.agentId}`,
+      NOT_PARTLY_APPLIED,
       ...(input.landedByProposalId
         ? [ne(proposals.id, input.landedByProposalId)]
         : [])

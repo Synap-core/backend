@@ -108,6 +108,7 @@ import * as schema from "@synap/database/schema";
 import { computeS256Challenge } from "../routers/oauth/protocol.js";
 import { oauthApp } from "../routers/oauth/routes.js";
 import { decideOAuthAuthorization } from "../routers/oauth/consent.js";
+import { oauthKeyInstanceId } from "../routers/oauth/config.js";
 import { apiKeyService } from "./api-keys.js";
 import {
   APP_OAUTH_DEAD_KEYS_KEPT,
@@ -212,9 +213,11 @@ beforeAll(async () => {
   ]) {
     await q(
       `insert into oauth_clients (client_id, client_kind, client_name, redirect_uris, scopes,
-         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, created_at)
-       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', now())`,
-      [clientId, [callback], [READ, CREATE]]
+         requested_permissions, requested_templates, metadata_fetched_at, metadata_expires_at, metadata_sha256, created_at)
+       values ($1, 'cimd', 'Content Studio', $2, '{}', $3, '{}', now(), now() + interval '1 hour', $4, now())`,
+      // A document hash: an app that is not a Synap app acts as the person
+      // only while its document is the one consented to (12 Nov 2026).
+      [clientId, [callback], [READ, CREATE], sha256(`${clientId}#1`)]
     );
   }
   // The one foreign key the GC relies on (0305: a key's grants go with it);
@@ -329,11 +332,17 @@ const usedSecondsAgo = (raw: string, seconds: number) =>
     [sha256(raw), seconds]
   );
 
-const liveAgentKeys = async () =>
+/**
+ * The connection's key slot: since 12 Nov 2026 its keys are the PERSON's
+ * (`app_person`), before that its agent's; the slot is the same either way.
+ */
+const SLOT = () => oauthKeyInstanceId(STUDIO, OWNER);
+
+const liveSlotKeys = async () =>
   (
     await q<{ id: string }>(
-      `select id from api_keys where user_id = $1 and is_active = true`,
-      [(await connection()).agent_user_id]
+      `select id from api_keys where instance_id = $1 and is_active = true`,
+      [SLOT()]
     )
   ).rows;
 
@@ -545,13 +554,13 @@ describe("a server failure mid-refresh leaves the token unspent (review S1)", ()
     );
     expect(failed.status).toBe(500);
     expect(await lastUsedAt(rt)).toBeNull();
-    const before = await liveAgentKeys();
+    const before = await liveSlotKeys();
     expect(before).toHaveLength(1); // the failed mint's key, answered to no one
 
     const retry = await refresh(rt);
     expect(retry.status).toBe(200);
     expect(await valid(retry.body.access_token)).toBe(true);
-    const after = await liveAgentKeys();
+    const after = await liveSlotKeys();
     expect(after).toHaveLength(1);
     expect(after[0]!.id).not.toBe(before[0]!.id);
   });
@@ -625,6 +634,8 @@ describe("R5 — the refreshed key carries the CURRENT approval", () => {
         workspaceId: BRAND,
         workspaceName: "Brand",
         scope: "space",
+        projectId: null,
+        place: { kind: "spaces", ids: [BRAND] },
       },
     ]);
   });
@@ -635,12 +646,14 @@ describe("R5 — the refreshed key carries the CURRENT approval", () => {
       { permission: READ, workspaceId: SHARED },
     ]);
     // A door that changes the approval without re-deriving the live key: the
-    // key in hand still reaches both spaces.
+    // key in hand still reaches both spaces. The row is written as before
+    // W3d (pairs, no stored v2): since W3d a stored v2 is the authority, so a
+    // write of the pairs alone clears it, as every repository write does.
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
-      JSON.stringify([{ permission: READ, workspaceId: SHARED }]),
-      app.id,
-    ]);
+    await q(
+      `update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`,
+      [JSON.stringify([{ permission: READ, workspaceId: SHARED }]), app.id]
+    );
     expect((await keyGrants(access)).flat().sort()).toEqual(
       [BRAND, SHARED].sort()
     );
@@ -660,13 +673,13 @@ describe("R6 — 30-day idle expiry, no absolute cap", () => {
       [app.id]
     );
     const keysBefore = (
-      await q(`select id from api_keys where user_id = $1`, [app.agent_user_id])
+      await q(`select id from api_keys where instance_id = $1`, [SLOT()])
     ).rows.length;
     const after = await refresh(rt);
     expect(after.status).toBe(400);
     expect(after.body.error).toBe("invalid_grant");
     const keysAfter = (
-      await q(`select id from api_keys where user_id = $1`, [app.agent_user_id])
+      await q(`select id from api_keys where instance_id = $1`, [SLOT()])
     ).rows.length;
     expect(keysAfter).toBe(keysBefore);
   });
@@ -743,8 +756,8 @@ describe("GC — a refreshed connection does not grow without bound", () => {
     }
     const keys = (
       await q<{ is_active: boolean }>(
-        `select is_active from api_keys where user_id = $1`,
-        [app.agent_user_id]
+        `select is_active from api_keys where instance_id = $1`,
+        [SLOT()]
       )
     ).rows;
     expect(keys.filter((k) => k.is_active)).toHaveLength(1);
@@ -830,7 +843,7 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
 
     // No family revoke, no second key, no new successor, no longer expiry.
     expect(await valid(r1.body.access_token)).toBe(true);
-    expect(await liveAgentKeys()).toHaveLength(1);
+    expect(await liveSlotKeys()).toHaveLength(1);
     const live = await liveRefreshRows();
     expect(live).toHaveLength(1);
     expect(live[0]!.id).toBe(successor!.id);
@@ -985,17 +998,18 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
       `select approved_requests from apps where id = $1`,
       [app.id]
     );
-    await q(`update apps set approved_requests = '[]'::jsonb where id = $1`, [
-      app.id,
-    ]);
+    await q(
+      `update apps set approved_requests = '[]'::jsonb, approved_access = null where id = $1`,
+      [app.id]
+    );
     const emptied = await refresh(first.refresh);
     expect(emptied.status).toBe(400);
     expect(emptied.body.error).toBe("invalid_grant");
     expect(emptied.body).not.toHaveProperty("access_token");
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
-      JSON.stringify(before.rows[0]!.approved_requests),
-      app.id,
-    ]);
+    await q(
+      `update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`,
+      [JSON.stringify(before.rows[0]!.approved_requests), app.id]
+    );
   });
 
   it("the grace never reaches more than the CURRENT approval: narrowed in the row alone, the key handed back is narrowed", async () => {
@@ -1008,10 +1022,10 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
       [BRAND, SHARED].sort()
     );
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
-      JSON.stringify([{ permission: READ, workspaceId: SHARED }]),
-      app.id,
-    ]);
+    await q(
+      `update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`,
+      [JSON.stringify([{ permission: READ, workspaceId: SHARED }]), app.id]
+    );
     const replay = await refresh(first.refresh);
     expect(replay.status).toBe(200);
     expect(replay.body.synap_grant).toEqual([
@@ -1020,6 +1034,8 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
         workspaceId: SHARED,
         workspaceName: "Shared",
         scope: "space",
+        projectId: null,
+        place: { kind: "spaces", ids: [SHARED] },
       },
     ]);
     expect(await keyGrants(replay.body.access_token)).toEqual([[SHARED]]);
@@ -1029,18 +1045,21 @@ describe("PB3b — the reuse grace: the same client, within 30 s, gets the same 
     const first = await connect();
     const r1 = await refresh(first.refresh);
     const app = await connection();
-    await q(`update apps set approved_requests = $1::jsonb where id = $2`, [
-      JSON.stringify([
-        { permission: READ, workspaceId: BRAND },
-        { permission: CREATE, workspaceId: BRAND },
-      ]),
-      app.id,
-    ]);
+    await q(
+      `update apps set approved_requests = $1::jsonb, approved_access = null where id = $2`,
+      [
+        JSON.stringify([
+          { permission: READ, workspaceId: BRAND },
+          { permission: CREATE, workspaceId: BRAND },
+        ]),
+        app.id,
+      ]
+    );
     const replay = await refresh(first.refresh);
     expect(replay.status).toBe(200);
     expect(replay.body.refresh_token).toBe(r1.body.refresh_token);
     expect(replay.body.access_token).not.toBe(r1.body.access_token);
-    expect(await liveAgentKeys()).toHaveLength(1);
+    expect(await liveSlotKeys()).toHaveLength(1);
     expect(await valid(replay.body.access_token)).toBe(true);
   });
 

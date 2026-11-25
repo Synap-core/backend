@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATION_SKIP_REASONS,
+  readAutomationAudience,
   readMaxRunsPerDay,
   readPlaybookRunMode,
   ruleActMode,
@@ -82,5 +83,35 @@ describe("skip reasons are tokens that humanize", () => {
     expect(humanizeToken(AUTOMATION_SKIP_REASONS.conditionNotMet)).toBe(
       "Condition not met"
     );
+  });
+});
+
+describe("readAutomationAudience — absent is `me` (decision 782c862e)", () => {
+  it("defaults every automation authored before the field to `me`", () => {
+    expect(readAutomationAudience({})).toEqual({ ok: true, value: "me" });
+    expect(readAutomationAudience(null)).toEqual({ ok: true, value: "me" });
+    expect(readAutomationAudience({ audience: null })).toEqual({
+      ok: true,
+      value: "me",
+    });
+  });
+
+  it("accepts the two audiences", () => {
+    expect(readAutomationAudience({ audience: "me" })).toEqual({
+      ok: true,
+      value: "me",
+    });
+    expect(readAutomationAudience({ audience: "everyone" })).toEqual({
+      ok: true,
+      value: "everyone",
+    });
+  });
+
+  it("refuses anything else with words the door returns verbatim", () => {
+    for (const bad of ["all", "Everyone", "", 1, true, ["everyone"]]) {
+      const r = readAutomationAudience({ audience: bad });
+      expect(r.ok).toBe(false);
+      if (!r.ok) expect(r.error).toContain("triggerConfig.audience");
+    }
   });
 });

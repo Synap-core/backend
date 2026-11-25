@@ -624,7 +624,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     expect(node!.data).toEqual({
       // `PlaybookRunNodeDef.data.label` is declared REQUIRED, so the grammar
       // must emit it. Composed through the vocabulary door, never hand-written.
-      label: "Run template",
+      label: "Run process",
       playbookId: "11111111-1111-4111-8111-111111111111",
       paramsMapping: { subject: "{{trigger.entityId}}" },
     });
@@ -706,7 +706,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     [
       "id only",
       { playbookId: "11111111-1111-4111-8111-111111111111", paramsMapping: {} },
-      "Run template",
+      "Run process",
     ],
     [
       "name only",
@@ -720,7 +720,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         agentType: "researcher",
         paramsMapping: { topic: "{{trigger.data.title}}" },
       },
-      "Run template",
+      "Run process",
     ],
     [
       "id + goalOverride",
@@ -729,7 +729,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
         goalOverride: "Qualify {{trigger.payload.data.title}}",
         paramsMapping: {},
       },
-      "Run template",
+      "Run process",
     ],
   ])(
     "a stored node survives read → write on every semantic field (%s)",
@@ -783,7 +783,7 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     };
     const rebuilt = toFlowDefinition(flowToSentenceActions(original));
     const node = rebuilt.nodes.find((n) => n.type === "playbook_run");
-    expect(node!.data.label).toBe("Run template");
+    expect(node!.data.label).toBe("Run process");
     expect(node!.data.playbookId).toBe("11111111-1111-4111-8111-111111111111");
   });
 
@@ -836,6 +836,44 @@ describe("playbook_run THEN — grammar authors what the executor already runs",
     const back = flowToSentenceActions(flow)[0]!.config;
     expect(back.__projectId).toBe("proj-1");
     expect(back.__trackId).toBe("trk-1");
+  });
+
+  it("a session worker's parent lands on data.parentSessionId, never in params, and round-trips", () => {
+    const flow = toFlowDefinition([
+      {
+        type: null,
+        config: {
+          __nodeType: "playbook_run",
+          __playbookId: "11111111-1111-4111-8111-111111111111",
+          __parentSessionId: "sess-parent",
+          topic: "x",
+        },
+      },
+    ]);
+    const node = flow.nodes.find((n) => n.type === "playbook_run")!;
+    // Negative control: without the bookkeeping key the value lands in
+    // paramsMapping and data.parentSessionId is undefined.
+    expect(node.data.parentSessionId).toBe("sess-parent");
+    expect(node.data.paramsMapping).toEqual({ topic: "x" });
+    expect(flowToSentenceActions(flow)[0]!.config.__parentSessionId).toBe(
+      "sess-parent"
+    );
+  });
+
+  it("playbookActivatorSentence carries a session enablement's parent only when given", () => {
+    const base = {
+      playbookId: "11111111-1111-4111-8111-111111111111",
+      profileSlug: "deal",
+      mode: "run" as const,
+      on: "created" as const,
+    };
+    expect(
+      playbookActivatorSentence({ ...base, parentSessionId: "sess-1" })
+        .actions[0]!.config
+    ).toMatchObject({ __parentSessionId: "sess-1" });
+    expect(
+      playbookActivatorSentence(base).actions[0]!.config
+    ).not.toHaveProperty("__parentSessionId");
   });
 
   it("omits goalOverride entirely when the rule states no goal", () => {
@@ -899,6 +937,7 @@ describe("event pattern round trip", () => {
     "completed",
     "approved",
     "rejected",
+    "closed",
   ]);
 
   it("covers every subject category the union declares", () => {
@@ -1212,6 +1251,41 @@ describe("playbookActivatorSentence — a declared activator as a rule", () => {
         mode: "propose",
       })
     );
+  });
+
+  it("a LINK (run_ended) compiles onto the session close door's event, on the followed playbook, its owner's runs and its end", () => {
+    const SHIP = "88888888-8888-4888-8888-888888888888";
+    const link = (outcome?: "done" | "not_done") => {
+      const sentence = playbookActivatorSentence({
+        playbookId: PB,
+        profileSlug: "devplane_feature",
+        on: "run_ended",
+        afterPlaybookId: SHIP,
+        ownerUserId: "user-1",
+        ...(outcome ? { outcome } : {}),
+        mode: "propose",
+      });
+      return toBackendTrigger(sentence.trigger!, sentence.conditions);
+    };
+    // `focus_session.closed.completed` IS what the close door emits
+    // (`close-event.ts`), and the authoring door accepts it.
+    expect(validateEventPattern("focus_session.closed.completed")).toBeTruthy();
+    // The close event's own data keys; no kind filter on a session's event.
+    expect(link().triggerConfig).toEqual({
+      eventPattern: "focus_session.closed.completed",
+      filters: { playbookId: SHIP, userId: "user-1", attached: false },
+    });
+    expect(link("done").triggerConfig.filters).toMatchObject({
+      closedAs: "done",
+    });
+    expect(link("not_done").triggerConfig.filters).toMatchObject({
+      closedAs: "not_done",
+    });
+    // It reads back as the sentence it was written from.
+    expect(triggerToSentence("event", link().triggerConfig)).toMatchObject({
+      subjectCategory: "focus_session",
+      actionVerb: "closed",
+    });
   });
 });
 

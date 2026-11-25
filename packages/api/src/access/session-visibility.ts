@@ -274,12 +274,20 @@ export function sessionDecidableWhere(reader: SessionReader): SQL {
  * `AccessContext.from` already routes to the AGENT factory. Without the second
  * check a Hub REST door that re-enters a tRPC router without an
  * `agentUserId` (e.g. `GET /proposals/:id`) read as a human door.
+ *
+ * One opt-in exception, `personRoster`: a Hub door acting as the PERSON
+ * (their own app token, after `rejectAgentReviewer`) sets it on the context
+ * it builds, so the person keeps the human doors' roster there (the CRM's
+ * send, founder 9 Nov 2026). Never honoured with an acting agent; no door
+ * sets it for an agent or integration key.
  */
 export function rosterReadFor(ctx: {
   agentUserId?: string | null;
   isHubProtocol?: boolean;
+  personRoster?: boolean;
 }): boolean {
-  return !ctx.agentUserId && !ctx.isHubProtocol;
+  if (ctx.agentUserId) return false;
+  return !ctx.isHubProtocol || ctx.personRoster === true;
 }
 
 /**

@@ -5,8 +5,8 @@ import { CardBody, CardHeader, Spinner } from "@heroui/react";
 import { ShieldCheck } from "lucide-react";
 import { openIn } from "../../../lib/open-in";
 import { ExitLink } from "../../../lib/exit-link";
-import { StatusPill } from "../../(admin)/components/status-pill";
 import { statusPillFor } from "../../(admin)/components/status-tone";
+import { StoryStatusMark } from "../../_lib/request/request-story-view";
 import { trpc } from "../../../lib/trpc";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { redirectToLoginIfUnauthorized } from "../../../lib/auth-redirect";
@@ -32,10 +32,14 @@ export function ProposalReview({
   podHost?: string;
   identity?: string;
 }) {
-  const { query, sourceExits, workspaceName } = useProposalReview(proposalId);
+  const { query, sourceExits, sourceState, workspaceName } =
+    useProposalReview(proposalId);
   const utils = trpc.useUtils();
   // Decided HERE — what `afterDecisionShown` reads.
   const [decided, setDecided] = useState(false);
+  // When the request's own newest event IS its status ("Approval failed",
+  // 8h ago): folded into the status mark, said once (the body reports it).
+  const [statusAt, setStatusAt] = useState<string | null>(null);
 
   // A session that expired mid-review returns tRPC UNAUTHORIZED — bounce to
   // login and back. Run it as an effect (not during render, matching
@@ -135,9 +139,7 @@ export function ProposalReview({
         {/* The one status door (`statusPillFor`): the tone every console
             pill and app chip paints `status` with, never a table of this
             page's own (it painted `rejected` red, `approval_failed` amber). */}
-        {statusPill && (
-          <StatusPill kind={statusPill.kind} label={statusPill.label} />
-        )}
+        {statusPill && <StoryStatusMark status={status} at={statusAt} />}
       </CardHeader>
 
       {/* Clips nothing, so the decision bar pins to the window. */}
@@ -145,6 +147,7 @@ export function ProposalReview({
         <ProposalReviewBody
           proposal={p}
           sourceExits={sourceExits}
+          sourceState={sourceState}
           workspaceName={workspaceName}
           identity={identity}
           onDecided={() => {
@@ -154,6 +157,8 @@ export function ProposalReview({
             void query.refetch();
           }}
           barClassName={DECISION_BAR_PIN}
+          statusMark="host"
+          onStatusAt={setStatusAt}
           /* The reader often arrives in an overlay (a Glance of `/open/<id>`)
              with no list behind it: once this one is decided, the next one
              is a door here, not a trip back to Review. */
@@ -171,10 +176,10 @@ export function ProposalReview({
 }
 
 /**
- * The decision bar pinned to the window's bottom: Approve and Reject stay in
- * reach under a long review (a 106-record capture read 34,545 px). Spans the
- * card body's padding, on the card's own ground made opaque (the page under
- * it plus the card's 4% tint), so nothing scrolls visibly beneath it.
+ * The decision bar pinned to the window's bottom: Approve and Refuse stay in
+ * reach under a long review (a 106-record capture read 34,545 px). The
+ * story's own footer, spanning the card body's padding, on the card's own
+ * surface (`STORY_FOOTER`'s `bg-content1`), so nothing scrolls visibly
+ * beneath it and it never runs past the card's edge.
  */
-const DECISION_BAR_PIN =
-  "bottom-0 -mx-7 bg-background bg-[linear-gradient(hsl(var(--heroui-foreground)/0.04),hsl(var(--heroui-foreground)/0.04))] px-7 py-3";
+const DECISION_BAR_PIN = "bottom-0 -mx-7 px-7 py-3";

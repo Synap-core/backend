@@ -230,11 +230,24 @@ export const SpaceConversationsResponseSchema = z
   })
   .openapi("SpaceConversationsResponse");
 
+/** The words of a message the person writes: one limit for send and save. */
+const MessageTextSchema = z.string().trim().min(1).max(8000);
+const MessageSubjectSchema = z.string().max(500);
+const expectedRevisionSchema = () =>
+  z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe(
+      "The draft's revision you read (`revisionHistory.length`): a draft revised since is refused (409)."
+    );
+
 /** POST /channels/{channelId}/send body. */
 export const ChannelSendRequestSchema = z
   .object({
-    text: z.string().trim().min(1).max(8000),
-    subject: z.string().max(500).optional(),
+    text: MessageTextSchema,
+    subject: MessageSubjectSchema.optional(),
     draftId: z
       .string()
       .uuid()
@@ -242,16 +255,69 @@ export const ChannelSendRequestSchema = z
       .describe(
         "The draft this sends: its text is replaced by `text` (the recipient stays), then it is approved."
       ),
-    expectedRevision: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe(
-        "The draft's revision you read (`revisionHistory.length`): a draft revised since is refused (409)."
-      ),
+    expectedRevision: expectedRevisionSchema(),
   })
   .openapi("ChannelSendRequest");
+
+/** PUT /channels/{channelId}/drafts/{draftId} body. */
+export const ChannelDraftSaveRequestSchema = z
+  .object({
+    text: MessageTextSchema.describe(
+      "The draft's words, as the person left them."
+    ),
+    subject: MessageSubjectSchema.optional(),
+    expectedRevision: expectedRevisionSchema(),
+  })
+  .openapi("ChannelDraftSaveRequest");
+
+export const ChannelDraftSaveResponseSchema = z
+  .object({
+    draftId: z.string(),
+    revision: z
+      .number()
+      .int()
+      .describe(
+        "The draft's revision after the save (`revisionHistory.length`): pass it as `expectedRevision` on the send."
+      ),
+    changed: z
+      .boolean()
+      .describe("false = the words were already these: nothing was recorded."),
+    status: z
+      .string()
+      .describe(
+        "The draft's status after the save: `pending` (a failed send the person reworded is reopened as pending)."
+      ),
+  })
+  .openapi("ChannelDraftSaveResponse");
+
+export const ChannelDraftVersionSchema = z
+  .object({
+    version: z
+      .number()
+      .int()
+      .describe("1 = the first words, then each change in order."),
+    author: z
+      .enum(["ai", "person"])
+      .describe("ai = written by an agent; person = written by the person."),
+    authorId: z.string().nullable(),
+    at: z.string().describe("When these words were written (ISO 8601)."),
+    text: z.string(),
+    subject: z.string().optional(),
+  })
+  .openapi("ChannelDraftVersion");
+
+export const ChannelDraftVersionsResponseSchema = z
+  .object({
+    draftId: z.string(),
+    revision: z
+      .number()
+      .int()
+      .describe("The draft's revision now (`revisionHistory.length`)."),
+    versions: z
+      .array(ChannelDraftVersionSchema)
+      .describe("Oldest first; the last is the draft's words now."),
+  })
+  .openapi("ChannelDraftVersionsResponse");
 
 export const ChannelSendResponseSchema = z
   .object({

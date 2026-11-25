@@ -13,8 +13,17 @@
  *    lifecycle does not declare going unreported;
  *  - open runs on an older frozen copy of the flow not marked;
  *  - a flow of another space, or an archived one, listed in this space;
- *  - a role read losing the kind of each thing (people and companies);
- *  - the space's primary output not read from its settings;
+ *  - a role read losing the kind of each thing (people and companies), or a
+ *    role card's blocker not reading what the ROLE's step requires;
+ *  - the space's primary output and its helper kinds not read from its
+ *    settings;
+ *  - a live link between playbooks (a `link` automation, `run_ended`) not
+ *    drawn as the followed playbook on the flow it starts, or a link whose
+ *    automation is no longer active still drawn;
+ *  - a card's `blocker` not the one `statusOf` returns for the thing (a
+ *    person's owed slot, an agent's slot that declares `blocks`), one read per
+ *    card instead of one for the board, a card with nothing blocking it not
+ *    `blocked: false`, or a grant-bounded key told of a session it cannot read;
  *  - a key bounded by a grant answered pod-wide, answered a kind it may not
  *    read, or shown flows / workers its grant does not reach as "none".
  *
@@ -66,7 +75,19 @@ vi.mock("@synap/database", async (importOriginal) => {
       propertySlug: "leadStatus",
       options: [
         { key: "new", category: "open" },
-        { key: "contacted", category: "active" },
+        {
+          key: "contacted",
+          category: "active",
+          // Read on the ROLE's status (the facet's), for people only.
+          requires: [
+            {
+              kind: "property",
+              blockerKey: "no_linkedin",
+              property: "linkedinUrl",
+              forKinds: ["person"],
+            },
+          ],
+        },
         { key: "qualified", category: "active" },
         { key: "converted", category: "done" },
       ],
@@ -87,6 +108,9 @@ vi.mock("@synap/database", async (importOriginal) => {
       async getEffectiveLifecycle(profileId: string) {
         return lifecycles[profileId] ?? null;
       }
+      async getEffectiveLifecycles(ids: readonly string[]) {
+        return new Map(ids.map((id) => [id, lifecycles[id] ?? null]));
+      }
     },
   };
 });
@@ -94,6 +118,9 @@ vi.mock("@synap/database", async (importOriginal) => {
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import { runWithGrant, type KeyGrant } from "@synap/database";
 import { flowOfInput, readFlowOf, type FlowOf } from "../flow-read.js";
+import { flowOfSchema } from "../flow-schema.js";
+import { readStatusOf } from "../../status/status-read.js";
+import { listSessionOutputsWithOutcomes } from "../../focus-sessions/session-outputs.js";
 
 const USER = "user-1";
 const WS = "55555555-5555-4555-8555-555555555555";
@@ -153,7 +180,7 @@ async function playbook(o: {
 }): Promise<string> {
   const id = randomUUID();
   await q(
-    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, required_intents, version, executor, status, subject_profile, metadata, created_at, updated_at)
+    `insert into playbooks (id, workspace_id, created_by, name, goal_template, params, input_strategy, channel_spec, expected_outputs, stages, criteria, tools, version, executor, status, subject_profile, metadata, created_at, updated_at)
      values ($1,$2,$3,$4,'g','[]','{"kind":"none"}','{}','[]',$5::jsonb,'[]','[]',$6,'is-agent',$7,$8::jsonb,'{}',now(),now())`,
     [
       id,
@@ -210,7 +237,12 @@ beforeAll(async () => {
       WS,
       "Builder",
       {
-        intent: { label: "Product", produces: ["finding"], primary: "finding" },
+        intent: {
+          label: "Product",
+          produces: ["finding", "note"],
+          primary: "finding",
+          helpers: ["note"],
+        },
       },
     ],
     [WS2, "Other", {}],
@@ -336,6 +368,37 @@ beforeAll(async () => {
     workspaceId: null,
     stages: [{ key: "qualify", name: "Qualify", subjectStatus: "qualified" }],
   });
+
+  // A LINK: "Close a finding" starts when a run of "Fix a finding" is done —
+  // its compiled rule, linked with role `link`. A second link whose
+  // automation was archived (the rule retired) is not drawn.
+  for (const [status, closedAs] of [
+    ["active", "done"],
+    ["archived", "not_done"],
+  ] as const) {
+    const filters = {
+      playbookId: ids.fix,
+      userId: USER,
+      attached: false,
+      closedAs,
+    };
+    const automationId = randomUUID();
+    await q(
+      `insert into automations (id, name, status, trigger_type, trigger_config) values ($1,'link',$2,'event',$3::jsonb)`,
+      [
+        automationId,
+        status,
+        JSON.stringify({
+          eventPattern: "focus_session.closed.completed",
+          filters,
+        }),
+      ]
+    );
+    await q(
+      `insert into playbook_automations (id, playbook_id, automation_id, role) values (gen_random_uuid(),$1,$2,'link')`,
+      [ids.close, automationId]
+    );
+  }
 });
 
 describe("flow.of — a kind (finding-like)", () => {
@@ -369,7 +432,7 @@ describe("flow.of — a kind (finding-like)", () => {
     const open = state(f, "open").cards.find((c) => c.id === ids.open)!;
     expect(open.next).toMatchObject({ to: "fixing", humanOnly: false });
     expect(open.next!.owners.map((o) => o.stageKey)).toEqual(["fix"]);
-    expect(open.blocker).toBeNull();
+    expect(open.blocker).toHaveProperty("blocked");
     expect(open.profileSlug).toBe("finding");
     const fixing = state(f, "fixing").cards.find((c) => c.id === ids.fixing)!;
     expect(fixing.next!.to).toBe("fixed");
@@ -401,14 +464,34 @@ describe("flow.of — a kind (finding-like)", () => {
     expect(f.withheld).toEqual([]);
   });
 
-  it("reads the space's primary output from its settings", async () => {
+  it("draws a live link as the playbook whose run end starts the flow", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    const close = f.flows.find((p) => p.id === ids.close)!;
+    expect(close.startsAfter).toEqual([
+      {
+        playbookId: ids.fix,
+        playbookName: "Fix a finding",
+        outcome: "done",
+      },
+    ]);
+    expect(f.flows.find((p) => p.id === ids.fix)!.startsAfter).toEqual([]);
+    // The wire carries it (the Hub schema parses it).
+    expect(flowOfSchema.parse(f).flows).toHaveLength(f.flows.length);
+  });
+
+  it("reads the space's primary output and its helper kinds from its settings", async () => {
     const f = await read({ profileSlug: "finding", workspaceId: WS });
     expect(f.space).toEqual({
       primaryOutput: "finding",
-      produces: ["finding"],
+      produces: ["finding", "note"],
+      helpers: ["note"],
     });
     const other = await read({ profileSlug: "finding", workspaceId: WS2 });
-    expect(other.space).toEqual({ primaryOutput: null, produces: [] });
+    expect(other.space).toEqual({
+      primaryOutput: null,
+      produces: [],
+      helpers: [],
+    });
     expect(other.flows.map((p) => p.name).sort()).toEqual([
       "Close a finding",
       "Elsewhere",
@@ -440,6 +523,20 @@ describe("flow.of — a role across kinds (lead on people and companies)", () =>
     ]);
     const bob = state(f, "contacted").cards.find((c) => c.id === ids.bob)!;
     expect(bob.next!.to).toBe("qualified");
+  });
+
+  it("a card is blocked by what its role's step requires and it lacks", async () => {
+    const f = await read({ profileSlug: "lead" });
+    const bob = state(f, "contacted").cards.find((c) => c.id === ids.bob)!;
+    expect(bob.blocker).toMatchObject({
+      blocked: true,
+      ball: "me",
+      why: { blockerKey: "no_linkedin" },
+      unlocks: { to: "qualified" },
+    });
+    // Ada stands in `new`, which requires nothing.
+    const ada = state(f, "new").cards.find((c) => c.id === ids.ada)!;
+    expect(ada.blocker).toMatchObject({ blocked: false });
   });
 });
 
@@ -479,5 +576,125 @@ describe("flow.of — a key bounded by a grant", () => {
     );
     expect(withFlows.withheld).toEqual(["workers"]);
     expect(withFlows.flows.map((p) => p.name)).toContain("Fix a finding");
+  });
+});
+
+describe("flow.of — a card's blocker is statusOf's blocker", () => {
+  const NOW = new Date().toISOString();
+  async function session(subject: string, outputs: unknown[]) {
+    const id = randomUUID();
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, subject_entity_id, title, goal, status, origin, expected_outputs, metadata, started_at, created_at, updated_at)
+       values ($1,$2,$3,$4,'Work','Do it','active','user',$5::jsonb,'{}'::jsonb,now(),now(),now())`,
+      [id, USER, WS, subject, JSON.stringify(outputs)]
+    );
+    return id;
+  }
+  const blockerOf = (f: FlowOf, key: string, id: string) =>
+    state(f, key).cards.find((c) => c.id === id)!.blocker;
+
+  beforeAll(async () => {
+    // "Open one": a person's owed ask. "Fixing one": an agent's slot that
+    // declares what it blocks. "Renamed state" (unclassified): nothing.
+    ids.askSession = await session(ids.open, [
+      {
+        kind: "decision",
+        label: "Fix it now?",
+        owner: "human",
+        status: "pending",
+        blockedReason: "decision",
+        owedSince: NOW,
+        ask: { mode: "confirm" },
+      },
+    ]);
+    await session(ids.fixing, [
+      {
+        kind: "output",
+        label: "Patch",
+        status: "pending",
+        blocks: {},
+        blockerKey: "needs_patch",
+      },
+    ]);
+  });
+
+  it("carries the blocker statusOf returns, for blocked and free things", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    const answers = await readStatusOf(USER, [ids.open, ids.fixing, ids.stray]);
+    const statusBlocker = (id: string) =>
+      (answers.find((a) => a.id === id) as { blocker?: unknown }).blocker;
+    const open = blockerOf(f, "open", ids.open);
+    expect(open).toMatchObject({
+      blocked: true,
+      ball: "me",
+      why: { reason: "input" },
+      ref: { kind: "slot", id: ids.askSession },
+    });
+    expect(open).toEqual(statusBlocker(ids.open));
+    const fixing = blockerOf(f, "fixing", ids.fixing);
+    expect(fixing).toMatchObject({
+      blocked: true,
+      ball: "agent",
+      why: { blockerKey: "needs_patch" },
+    });
+    expect(fixing).toEqual(statusBlocker(ids.fixing));
+    const stray = f.unclassified!.cards.find((c) => c.id === ids.stray)!;
+    expect(stray.blocker).toMatchObject({ blocked: false, count: 0 });
+    expect(stray.blocker).toEqual(statusBlocker(ids.stray));
+  });
+
+  it("an undelivered slot of the session names the thing it holds up", async () => {
+    const { db: pg } = await import("@synap/database");
+    const view = await listSessionOutputsWithOutcomes({
+      db: pg,
+      userId: USER,
+      sessionId: ids.askSession,
+    });
+    const slot = view!.pendingExpected.find((e) => e.label === "Fix it now?");
+    expect(slot?.blockedThing).toMatchObject({
+      thing: { id: ids.open, name: "Open one" },
+      statusNow: { key: "open" },
+      statusNext: { key: "fixing" },
+    });
+    expect(slot).not.toHaveProperty("subjectEntityId");
+  });
+
+  it("the response parses against the Hub schema, blockers included", async () => {
+    const f = await read({ profileSlug: "finding", workspaceId: WS });
+    expect(() =>
+      flowOfSchema.parse(JSON.parse(JSON.stringify(f)))
+    ).not.toThrow();
+    const lead = await read({ profileSlug: "lead", workspaceId: WS });
+    expect(() =>
+      flowOfSchema.parse(JSON.parse(JSON.stringify(lead)))
+    ).not.toThrow();
+  });
+
+  it("a key bounded by a grant is not told of a session it cannot read", async () => {
+    const grantOf = (permissions: string[]) =>
+      ({
+        scopes: [
+          {
+            permissions,
+            workspaceIds: [WS],
+            projectIds: null,
+            entityIds: null,
+          },
+        ],
+        clientId: null,
+      }) as KeyGrant;
+    const blind = await runWithGrant(grantOf(["entity.finding.read"]), () =>
+      read({ profileSlug: "finding", workspaceId: WS })
+    );
+    expect(blockerOf(blind, "open", ids.open)).toMatchObject({
+      blocked: false,
+    });
+    const sighted = await runWithGrant(
+      grantOf(["entity.finding.read", "session.read"]),
+      () => read({ profileSlug: "finding", workspaceId: WS })
+    );
+    expect(blockerOf(sighted, "open", ids.open)).toMatchObject({
+      blocked: true,
+    });
   });
 });

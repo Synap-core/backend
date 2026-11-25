@@ -143,10 +143,12 @@ async function approve(proposalId: string, userId = OWNER) {
 beforeEach(async () => {
   h.notified = [];
   await h.client!.exec(
-    `drop table if exists "trusted_issuers"; drop table if exists "proposals"; drop table if exists "notifications";` +
+    `drop table if exists "trusted_issuers"; drop table if exists "proposals"; drop table if exists "notifications"; drop table if exists "lifecycle_transition_outbox";` +
       ddlFor(schema.trustedIssuers as unknown as PgTable) +
       ddlFor(schema.proposals as unknown as PgTable) +
-      ddlFor(schema.notifications as unknown as PgTable)
+      ddlFor(schema.notifications as unknown as PgTable) +
+      // The proposal door owes its transition.
+      ddlFor(schema.lifecycleTransitionOutbox as unknown as PgTable)
   );
 });
 

@@ -29,15 +29,15 @@ describe("buildNavBadges", () => {
     expect(badges.home).toEqual({ count: 2, text: "2", tone: "down" });
   });
 
-  it("badges the pages that own a counted section", () => {
+  it("badges no page for the sections whose work moved to the app", () => {
+    // Jobs and Runs left the console: failing flows and stuck runs count on
+    // Home only (above), never on a nav item the console no longer has.
     const badges = buildNavBadges({
       sections: SECTIONS,
       review: undefined,
       role: "admin",
     });
-    expect(badges.runs).toEqual({ count: 2, text: "2", tone: "down" });
-    expect(badges.sessions).toEqual({ count: 17, text: "17", tone: "stale" });
-    expect(badges.marketplace).toBeUndefined();
+    expect(Object.keys(badges)).toEqual(["home"]);
   });
 
   it("badges Review with signals.count, as a floor when truncated", () => {

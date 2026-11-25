@@ -91,6 +91,16 @@ vi.mock("@synap/database", async (importOriginal) => {
         transitions: [],
       };
     },
+    // The run status door (pinned on PGlite by run-status.pglite.test.ts):
+    // recorded as the run row's write.
+    setRunStatus: async (
+      _tx: unknown,
+      input: { runId?: string; to: string; set?: Record<string, unknown> }
+    ) => {
+      const patch = { status: input.to, ...(input.set ?? {}) };
+      rowWrites.push({ table: actual.playbookRuns, patch });
+      return { rows: [{ id: input.runId, ...patch }], transitions: [] };
+    },
     writeSessionPatch: async (
       _db: unknown,
       input: { set: Record<string, unknown> }
@@ -99,6 +109,11 @@ vi.mock("@synap/database", async (importOriginal) => {
       return [{ ...stored("active"), ...input.set }];
     },
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       select,
       update,
       insert,

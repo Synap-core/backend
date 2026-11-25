@@ -49,13 +49,14 @@ import type { ProposalRevision } from "@synap/database";
 import { accessScopeWhere } from "../../utils/project-scope.js";
 import { sessionReadableWhere } from "../../access/session-visibility.js";
 import { AccessContext } from "../../access/context.js";
+import { scopedDb } from "../../access/scoped-db.js";
 import { projectVisibleWhere } from "../../access/project-visibility.js";
 import { channelVisibilityWhere } from "../../utils/channel-visibility.js";
 import {
   userVisibleWhere,
   ownerPrivateVisibleWhere,
 } from "../../utils/user-visible-where.js";
-import { visibleSkillsAnyWorkspaceWhere } from "../skills/visibility.js";
+import { visibleSkillsWhere } from "../skills/visibility.js";
 import { listRuns, listRunGroups, getRun } from "../runs/index.js";
 import { readUsageForCaller } from "../usage/read-usage.js";
 import { TRPCError } from "@trpc/server";
@@ -498,7 +499,12 @@ async function diagnoseObject(
           workspaceId: skills.workspaceId,
         })
         .from(skills)
-        .where(and(eq(skills.id, id), visibleSkillsAnyWorkspaceWhere(userId)))
+        .where(
+          and(
+            eq(skills.id, id),
+            visibleSkillsWhere(userId, undefined, { allSpaces: true })
+          )
+        )
         .limit(1);
       if (skillRow) {
         return {
@@ -747,7 +753,7 @@ async function diagnoseObject(
         .where(
           and(
             eq(playbooks.id, id),
-            userVisibleWhere(playbooks.workspaceId, userId)
+            scopedDb(AccessContext.from({ userId })).predicate(playbooks)
           )
         )
         .limit(1);

@@ -14,28 +14,20 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * ── THE FAILURE THIS CATCHES ────────────────────────────────────────────────
  * `checkPermissionOrPropose` has TWO proposed outcomes, not one:
  *   • a CONTENT proposal for the write the caller asked for; and
- *   • a WORKSPACE-JOIN gate (`proposalType === "join"`,
- *     `maybeCreateWorkspaceJoinProposal` in `utils/permission-check.ts`) filed
- *     INSTEAD of that write, when an agent is not yet a member of the
- *     workspace. That degradation is deliberate and correct.
+ *   • a HELD-WRITES pack (`proposalType === "held_writes"`,
+ *     `utils/permission-check.ts`): past its daily write ceiling an agent's
+ *     write is kept with the day's others on ONE review, and replayed for it.
  * A door that answers BOTH with a hardcoded `message: "<X> proposed for
- * review"` narrates, on the join path, a write that was never proposed. The
- * discriminator is not missing — `proposalType` is usually returned ONE LINE
- * BELOW the sentence that ignores it. An external agent reading
- * "Entity creation proposed for review" plus a `proposedEntityId` that resolves
- * to nothing built an entirely wrong root-cause theory from it; that is the
- * concrete damage, not a hypothetical.
- *
- * It is the same family as the "PHANTOM ENVELOPE ID FIX" comment in
- * `routers/entities/create.ts` (a proposed response must not carry a top-level
- * `id` that looks materialized) — applied there to `id` and, for years, not to
- * the prose or to `proposedEntityId` on the join branch.
+ * review"` tells the agent, on the held path, a proposal of its own exists,
+ * and it resends or waits on the wrong thing. The discriminator is not
+ * missing — `proposalType` is usually returned ONE LINE BELOW the sentence
+ * that ignores it.
  *
  * ── THE INVARIANT ───────────────────────────────────────────────────────────
  * Inside a GOVERNED-PROPOSE BRANCH, a `message`/`hint`/`note` assigned a STRING
  * LITERAL that asserts a specific write is pending must be DERIVED from the
- * discriminator — `proposedMessageFor(...)`, `isJoinGate(...)`, an explicit
- * `proposalType === "join"`, or `JOIN_GATE_*` — or carry an
+ * discriminator — `proposedMessageFor(...)` or an explicit
+ * `proposalType ===` — or carry an
  * {@link ACKNOWLEDGED} entry.
  *
  * Merely FORWARDING `proposalType: perm.proposalType` does NOT count as
@@ -56,7 +48,7 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  *
  * ── WHAT A REGEX CAN AND CANNOT PROVE ───────────────────────────────────────
  * This proves a STRING LITERAL APPEARS inside a propose branch and that the
- * words `proposedMessageFor` / `isJoinGate` / `proposalType ===` do or do not
+ * words `proposedMessageFor` / `proposalType ===` do or do not
  * appear in the same block. It does NOT prove the derivation is applied to THAT
  * message, on the right branch, with the right wording, or that the resulting
  * sentence is true. A door could call `proposedMessageFor` on one field and
@@ -69,8 +61,8 @@ import { stripComments } from "../../../../scripts/strip-comments.mjs";
  * with nothing in the block consulting the discriminator. It under-reports; by
  * construction it never invents a violation that isn't one.
  *
- * It also cannot prove a branch is REACHABLE by a join gate (that needs
- * `agentUserId` + `workspaceId` at the call site, resolved at runtime). Doors
+ * It also cannot prove a branch is REACHABLE by a held-writes pack (that needs
+ * `agentUserId` at the call site, resolved at runtime). Doors
  * that cannot receive one are handled as ACKNOWLEDGED entries stating that,
  * naming what would have to change — never as a silent exemption.
  *
@@ -123,7 +115,7 @@ interface Branch {
  * THREE branch shapes, not one. The first cut of this file matched only
  * `"proposalId" in x` and `status === "proposed"`, which SILENTLY exempted
  * every door written the other two ways — including
- * `mcp/handlers/session.ts`'s `case "proposed":`, which IS join-gate
+ * `mcp/handlers/session.ts`'s `case "proposed":`, which IS held-writes
  * reachable (its service threads `agentUserId`). A guard that reports green
  * over ground it never scanned is the exact defect this file exists to catch,
  * one level up; and it falsified this file's own claim that "add a new
@@ -184,8 +176,7 @@ const PROSE_KEY = /\b(message|hint|note)\s*:\s*(?:\n\s*)?"([^"\\]{8,300})"/g;
  * (`proposalType: perm.proposalType`) is deliberately NOT accepted — that is
  * the exact shape of the defect.
  */
-const CONSULTS =
-  /proposedMessageFor\s*\(|isJoinGate\s*\(|JOIN_GATE_|proposalType\s*===/;
+const CONSULTS = /proposedMessageFor\s*\(|proposalType\s*===/;
 
 interface Violation {
   file: string;
@@ -237,8 +228,8 @@ const ACKNOWLEDGED: Ack[] = [
     reason:
       "Not a governed-write door: this is the APPROVAL executor, which calls " +
       "the skill insert with `agentUserId: undefined` (visible ~7 lines above " +
-      "the throw). `maybeCreateWorkspaceJoinProposal` returns null without an " +
-      "agentUserId, so this branch cannot receive a join gate; the string is a " +
+      "the throw). The held-writes ceiling holds only an agent's write, so " +
+      "without an agentUserId this branch cannot receive a pack; the string is a " +
       "defensive INTERNAL_SERVER_ERROR for a re-entrant propose that should be " +
       "impossible. Left as-is deliberately — this scanner cannot read the " +
       "`agentUserId: undefined` argument, so the entry, not the code, records " +
@@ -252,8 +243,8 @@ const ACKNOWLEDGED: Ack[] = [
       "Not a governed-write door: this is the APPROVAL executor of " +
       "`profile/create`. It calls `profilesRouter.create` with an input that " +
       "carries no `agentUserId` (create hands `input.agentUserId` to " +
-      "`checkPermissionOrPropose`), and `maybeCreateWorkspaceJoinProposal` " +
-      "returns null without one, so this branch cannot receive a join gate; " +
+      "`checkPermissionOrPropose`), and the held-writes ceiling holds only an " +
+      "agent's write, so this branch cannot receive a held-writes pack; " +
       "the string is a defensive INTERNAL_SERVER_ERROR for a re-entrant " +
       "propose that should be impossible, the twin of the skill.ts entry. " +
       "Surfaced 2026-10-15: the old regex comment strip hid 129 lines of this " +
@@ -268,7 +259,7 @@ const ACKNOWLEDGED: Ack[] = [
       "`entity/transition`. It calls `moveStatus` with `approvedProposalId: " +
       "input.proposalId`, and `moveStatus` (services/lifecycle/move-status.ts) " +
       "runs `checkPermissionOrPropose` only when `!input.approvedProposalId` — " +
-      "so neither a content proposal nor a join gate can come back here. The " +
+      "so neither a content proposal nor a held-writes pack can come back here. The " +
       "string is a defensive INTERNAL_SERVER_ERROR for that impossible case, " +
       "never prose an agent reads as a pending write. This scanner cannot read " +
       "the argument, so the entry records why. If the executor ever stops " +
@@ -279,9 +270,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces/invites.ts",
     message: "Member addition requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -293,9 +284,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces/invites.ts",
     message: "Member removal requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -307,9 +298,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces/invites.ts",
     message: "Role update requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -321,9 +312,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces.ts",
     message: "Workspace creation requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -335,9 +326,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces.ts",
     message: "Workspace update requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -349,9 +340,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces.ts",
     message: "Workspace start change requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -363,9 +354,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces.ts",
     message: "Intelligence service update requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -377,9 +368,9 @@ const ACKNOWLEDGED: Ack[] = [
     file: "routers/workspaces.ts",
     message: "Workspace deletion requires approval.",
     reason:
-      "Not join-gate reachable: `agentUserId` appears ZERO times in this file " +
-      "(verified by grep), and `maybeCreateWorkspaceJoinProposal` returns null " +
-      "without one — so this branch can only ever carry a CONTENT proposal and " +
+      "Not held-writes reachable: `agentUserId` appears ZERO times in this file " +
+      "(verified by grep), and the held-writes ceiling holds only an agent's " +
+      "write — so this branch can only ever carry a CONTENT proposal and " +
       "the sentence is true as written. Recorded rather than converted because " +
       "this scanner cannot see which arguments reach `checkPermissionOrPropose`. " +
       "NOT a claim that the wording is ideal, and NOT coverage: the moment this " +
@@ -460,10 +451,10 @@ describe("TRIPWIRE — governed-propose prose is derived, not hardcoded", () => 
       ),
       "A governed-propose branch hardcodes a sentence asserting a specific " +
         "write is pending, while nothing in the block consults `proposalType`. " +
-        "On a workspace-JOIN gate that sentence is FALSE — the write was never " +
-        "proposed. Derive it with `proposedMessageFor(perm.proposalType, …)` " +
-        "(utils/permission-check.ts), omit any pre-allocated id on the join " +
-        "path, or add an ACKNOWLEDGED entry saying why it is still open."
+        "On a held-writes pack that sentence is FALSE — the write was kept on " +
+        "today's pack, not proposed on its own. Derive it with " +
+        "`proposedMessageFor(perm.proposalType, …)` (utils/permission-check.ts), " +
+        "or add an ACKNOWLEDGED entry saying why it is still open."
     ).toEqual([]);
   });
 

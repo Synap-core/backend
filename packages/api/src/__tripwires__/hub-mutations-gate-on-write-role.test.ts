@@ -108,13 +108,17 @@ describe("tripwire: mutating Hub routes gate on the write role", () => {
       }
       offenders.push(...offendersIn(f.split("\\").join("/"), src));
     }
-    // Non-vacuity: ~300 non-GET handlers exist, and nine of them gate on the
-    // write check today (cells ×3, whiteboards ×2, entities ×4: attachments,
-    // /files, /files/uploads, finalize). On origin/main before this guard the
-    // scan flagged exactly those nine. A broken glob or splitter that sees no
-    // handler would pass the assertion below trivially.
+    // Non-vacuity: ~300 non-GET handlers exist, and eight of them call the
+    // write check in the handler today (cells ×1, whiteboards ×2, entities ×4:
+    // attachments, /files, /files/uploads, finalize). On origin/main before
+    // this guard the scan flagged nine; `/cells/install` and `DELETE
+    // /cells/:typeKey` now reach `canWrite` through `cellInstallRefusal` /
+    // `cellRetireRefusal` (`services/cells/marketplace-cell-lifecycle.ts`,
+    // shared with their approve executors), which this file-local scan cannot
+    // see. A broken glob or splitter that sees no handler would pass the
+    // assertion below trivially.
     expect(mutating).toBeGreaterThanOrEqual(200);
-    expect(writeGated).toBeGreaterThanOrEqual(8);
+    expect(writeGated).toBeGreaterThanOrEqual(7);
     expect(offenders).toEqual([]);
   });
 

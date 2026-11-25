@@ -44,8 +44,16 @@ export const CAPTURE_LIST_KINDS = [
  * the person KEPT, not their words. It lives in the Library.
  */
 export function ownCapturesWhere(userId: string) {
+  return and(eq(documents.userId, userId), liveCapturesWhere())!;
+}
+
+/**
+ * Live captures of EVERY owner: the same rule without the owner narrow, for a
+ * pod-side job that acts on each capture as its own owner (the degraded-capture
+ * sweep). Never a read a caller's request reaches.
+ */
+export function liveCapturesWhere() {
   return and(
-    eq(documents.userId, userId),
     isNull(documents.deletedAt),
     drizzleSql`${documents.metadata} ? ${INTAKE_SOURCE_METADATA_KEY}`,
     notStagedImportItemWhere(documents.metadata),

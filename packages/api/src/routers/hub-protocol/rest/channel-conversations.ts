@@ -22,6 +22,26 @@
  *        (not a LinkedIn connection) keeps the text as a HELD draft:
  *        `{status: 'held'}`, never an error that loses it.
  *
+ *   PUT  /channels/{channelId}/drafts/{draftId} {text, subject?,
+ *        expectedRevision?}
+ *        the PERSON saves the words of an open draft on their own channel.
+ *        It never sends and never approves: the words are one revision of
+ *        the draft (`mergeProposalRevision`, the one revise core, with its
+ *        own review authority, key check and space-key rule: a key limited
+ *        to spaces may reword a message's body and subject only). No send
+ *        grant is asked (saving is not sending), so a key that may not send
+ *        still keeps the person's edit. A failed send whose words are saved
+ *        is reopened as pending (decision fa6c8833). Same words: nothing is
+ *        recorded (`changed: false`).
+ *
+ *   GET  /channels/{channelId}/drafts/{draftId}/versions
+ *        the words of a draft over time, derived from its proposal row only
+ *        (`deriveDraftVersions`, services/channels/draft-versions.ts): the
+ *        first words (the agent's or the person's), then each change, by
+ *        whom. Readable in any status (after the send too). On the fence as
+ *        `NARROWED("proposal")`: the draft is read through the caller's
+ *        floor and the key's grant.
+ *
  *   POST /channels/linkedin-reach/{personId}
  *        measure one person's LinkedIn reach now (finding 491ba787): one
  *        profile read with the owner's LinkedIn account, the reach fact and
@@ -34,7 +54,7 @@
  */
 
 import { createRoute, z } from "@hono/zod-openapi";
-import { db, getRequestGrant } from "@synap/database";
+import { db, getRequestGrant, type ProposalRevision } from "@synap/database";
 import { permits } from "@synap/governance-policy/grants";
 import { isFencedGrant } from "../../../access/grant-door-fence.js";
 import { sendExternalMessage } from "../../../connectors/external-dispatch.js";
@@ -44,10 +64,16 @@ import {
 } from "../../../connectors/channel-send.js";
 import { canUserSeeChannel } from "../../../utils/channel-visibility.js";
 import { mergeProposalRevision } from "../../../services/proposals/proposals-service.js";
+import { assertReviewedRevision } from "../../../utils/reviewed-revision.js";
 import {
+  findDraftOnChannel,
   findOpenDraftOnChannel,
   readSendOutcome,
 } from "../../../services/channels/person-send.js";
+import {
+  DraftHistoryInconsistentError,
+  deriveDraftVersions,
+} from "../../../services/channels/draft-versions.js";
 import { listSpaceConversations } from "../../../services/channels/space-conversations.js";
 import { readLinkedinReach } from "../../../services/channels/linkedin-reach-read.js";
 import { proposalsRouter as mainProposalsRouter } from "../../proposals.js";
@@ -55,6 +81,9 @@ import { createHubProtocolCallerContext } from "../utils.js";
 import { ErrorSchema } from "./_codecs/_openapi.js";
 import { registerOpenApi } from "./_codecs/_register.js";
 import {
+  ChannelDraftSaveRequestSchema,
+  ChannelDraftSaveResponseSchema,
+  ChannelDraftVersionsResponseSchema,
   ChannelSendRequestSchema,
   ChannelSendResponseSchema,
   LinkedinReachResponseSchema,
@@ -381,6 +410,9 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
     if (blocked) return blocked;
     const userId = c.get("userId") as string | undefined;
     if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    // Past `rejectAgentReviewer` the caller is the person (their own token):
+    // the review ladder reads their sessions with the human doors' roster.
+    const personRoster = !c.get("agentUserId");
     const channelId = c.req.param("channelId");
     if (!z.string().uuid().safeParse(channelId).success) {
       return c.json({ error: "Invalid channelId" }, 400);
@@ -454,6 +486,7 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
               },
             },
             actorId: userId,
+            roster: personRoster,
             ...(expectedRevision !== undefined ? { expectedRevision } : {}),
           });
           const seen = Array.isArray(draft.revisionHistory)
@@ -503,9 +536,13 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
         userId,
         c.get("scopes") as string[]
       );
+      ctx.personRoster = personRoster;
       const caller = mainProposalsRouter.createCaller(
         ctx as Parameters<typeof mainProposalsRouter.createCaller>[0]
       );
+      // The row as it stands before this click: a held or failed outcome is
+      // this attempt's only when the approval wrote it.
+      const before = (await readSendOutcome(proposalId)).mark;
       try {
         await caller.approve({
           proposalId,
@@ -513,7 +550,10 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
         });
       } catch (err) {
         const outcome = await readSendOutcome(proposalId);
-        if (outcome.status === "held" || outcome.status === "failed") {
+        if (
+          (outcome.status === "held" || outcome.status === "failed") &&
+          outcome.mark !== before
+        ) {
           return c.json(
             {
               status: outcome.status,
@@ -550,4 +590,229 @@ export function registerChannelConversationsRoutes(app: HubHono): void {
       );
     }
   });
+
+  // ── PUT /channels/:channelId/drafts/:draftId ─────────────────────────────
+  const draftParams = z.object({
+    channelId: uuidPathParam,
+    draftId: uuidPathParam,
+  });
+  registerOpenApi(app, {
+    method: "put",
+    path: "/channels/:channelId/drafts/:draftId",
+    tags: ["Channels"],
+    summary: "Save the words of a draft on the person's own channel",
+    description:
+      "The person keeps their edit of an open draft (pending, held, or a " +
+      "failed send): `text` (and `subject`) become the draft's words, " +
+      "recorded as one revision by the person. Nothing is sent and nothing " +
+      "is approved; who it goes to stays pinned. A failed send whose words " +
+      "are saved is reopened as pending. The same words record nothing " +
+      "(`changed: false`). Does not need the right to send, only to revise " +
+      "(a key limited to spaces may change a message's body and subject " +
+      "only); an agent or integration key never saves the person's draft.",
+    request: { params: draftParams, body: ChannelDraftSaveRequestSchema },
+    responses: {
+      200: {
+        description: "The draft's words, saved",
+        schema: ChannelDraftSaveResponseSchema,
+      },
+      400: { description: "Invalid body", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: {
+        description: "No conversation or open draft the caller can read",
+        schema: ErrorSchema,
+      },
+      409: {
+        description: "The draft changed since it was read",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.put("/channels/:channelId/drafts/:draftId", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.write")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.write required" },
+        403
+      );
+    }
+    // The person's words: an agent (or a key pasted into another app) never
+    // rewrites the draft the person is about to send.
+    const blocked = rejectAgentReviewer(c, "approve");
+    if (blocked) return blocked;
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const params = draftParams.safeParse(c.req.param());
+    if (!params.success) {
+      return c.json({ error: "Invalid channelId or draftId" }, 400);
+    }
+    const { channelId, draftId } = params.data;
+    const jsonRead = await readJsonBody(c);
+    if (!jsonRead.ok) return jsonRead.res;
+    const parsed = ChannelDraftSaveRequestSchema.safeParse(jsonRead.body);
+    if (!parsed.success) {
+      return c.json(
+        { error: "Invalid body", issues: parsed.error.issues },
+        400
+      );
+    }
+    const { text, subject, expectedRevision } = parsed.data;
+
+    try {
+      const refused = await ownConversationRefusal(channelId, userId);
+      if (refused) return c.json({ error: refused.error }, refused.code);
+      // No send-grant verdict: saving words is not sending.
+      const draft = await findOpenDraftOnChannel({
+        userId,
+        draftId,
+        channelId,
+      });
+      if (!draft) return c.json({ error: "Draft not found" }, 404);
+      const data = (draft.data ?? {}) as Record<string, unknown>;
+      const changed =
+        data.body !== text ||
+        (subject !== undefined && data.subject !== subject);
+      if (changed) {
+        // The words only: who it goes to stays pinned (PROTECTED_FIELDS_BY_TYPE).
+        await mergeProposalRevision({
+          proposalId: draft.id,
+          patch: {
+            kind: "inner",
+            fields: {
+              body: text,
+              ...(subject !== undefined ? { subject } : {}),
+            },
+          },
+          actorId: userId,
+          // The person (past `rejectAgentReviewer`): the human doors' roster.
+          roster: !c.get("agentUserId"),
+          ...(expectedRevision !== undefined ? { expectedRevision } : {}),
+        });
+      } else {
+        // Nothing to record, but a stale read is still told so.
+        assertReviewedRevision(
+          expectedRevision,
+          draft.revisionHistory as ProposalRevision[] | null
+        );
+      }
+      const after = await findDraftOnChannel({ userId, draftId, channelId });
+      if (!after) return c.json({ error: "Draft not found" }, 404);
+      return c.json(
+        {
+          draftId,
+          revision: Array.isArray(after.revisionHistory)
+            ? after.revisionHistory.length
+            : 0,
+          changed,
+          status: after.status,
+        },
+        200
+      );
+    } catch (err) {
+      logger.error({ err, channelId, draftId }, "PUT /channels/:id/drafts/:id");
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+
+  // ── GET /channels/:channelId/drafts/:draftId/versions ────────────────────
+  registerOpenApi(app, {
+    method: "get",
+    path: "/channels/:channelId/drafts/:draftId/versions",
+    tags: ["Channels"],
+    summary: "Read the versions of a draft",
+    description:
+      "The words of a draft over time, oldest first: the words it was filed " +
+      "with (`ai` when an agent drafted it), then each change of its words, " +
+      "by whom and when. The last version is the draft's words now. Read " +
+      "from the draft itself, in any status (a sent draft keeps its history).",
+    request: { params: draftParams },
+    responses: {
+      200: {
+        description: "The draft's versions",
+        schema: ChannelDraftVersionsResponseSchema,
+      },
+      400: { description: "Invalid channelId or draftId", schema: ErrorSchema },
+      403: { description: "Forbidden", schema: ErrorSchema },
+      404: {
+        description: "No conversation or draft the caller can read",
+        schema: ErrorSchema,
+      },
+      500: { description: "Internal error", schema: ErrorSchema },
+    },
+  });
+
+  app.get("/channels/:channelId/drafts/:draftId/versions", async (c) => {
+    if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
+      return c.json(
+        { error: "Insufficient scope: hub-protocol.read required" },
+        403
+      );
+    }
+    const userId = c.get("userId") as string | undefined;
+    if (!userId) return c.json({ error: "Unauthenticated" }, 403);
+    const params = draftParams.safeParse(c.req.param());
+    if (!params.success) {
+      return c.json({ error: "Invalid channelId or draftId" }, 400);
+    }
+    const { channelId, draftId } = params.data;
+    try {
+      const refused = await ownConversationRefusal(channelId, userId);
+      if (refused) return c.json({ error: refused.error }, refused.code);
+      const draft = await findDraftOnChannel({ userId, draftId, channelId });
+      if (!draft) return c.json({ error: "Draft not found" }, 404);
+      const { revision, versions } = deriveDraftVersions(draft);
+      return c.json({ draftId, revision, versions }, 200);
+    } catch (err) {
+      if (err instanceof DraftHistoryInconsistentError) {
+        logger.error(
+          { channelId, draftId },
+          "a draft's revision history does not end at its words"
+        );
+        // A server fault (no refusal in its cause): the mapper answers 500.
+        return c.json(
+          { error: err.message },
+          httpStatusForTrpcError(err) as never
+        );
+      }
+      logger.error(
+        { err, channelId, draftId },
+        "GET /channels/:id/drafts/:id/versions"
+      );
+      return c.json(
+        { error: err instanceof Error ? err.message : "Unknown error" },
+        httpStatusForTrpcError(err) as never
+      );
+    }
+  });
+}
+
+/**
+ * The conversation a draft door acts on: one the caller reads, external,
+ * live, and theirs (the send door's own checks, minus the send grant).
+ */
+async function ownConversationRefusal(
+  channelId: string,
+  userId: string
+): Promise<{ code: 403 | 404; error: string } | null> {
+  const channel = await loadSendChannel(channelId);
+  if (
+    !channel ||
+    channel.channelType !== "external" ||
+    channel.status !== "active" ||
+    !(await canUserSeeChannel(db, channelId, userId))
+  ) {
+    return { code: 404, error: "Conversation not found" };
+  }
+  if (channel.userId !== userId) {
+    return {
+      code: 403,
+      error:
+        "Only the person whose conversation this is can change or read its drafts.",
+    };
+  }
+  return null;
 }

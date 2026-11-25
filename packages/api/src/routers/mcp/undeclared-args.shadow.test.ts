@@ -94,7 +94,37 @@ describe("undeclared tool arguments — shadow (W-C1)", () => {
     expect(h.shadowCalls).toEqual([
       ["synap_list_sessions", { bogusFilter: 1 }],
     ]);
-    // Shadow only: the call is not refused.
-    expect(res).toMatchObject({ content: [{ type: "text", text: "{}" }] });
+    // Not refused: the tool ran, and its reply SAYS what was ignored
+    // (`ignoredArgs`, call-notices.ts) instead of dropping it silently.
+    const out = res as { isError?: boolean; content: { text: string }[] };
+    expect(out.isError).toBeUndefined();
+    expect(JSON.parse(out.content[0]!.text)).toMatchObject({
+      ignoredArgs: { keys: ["bogusFilter"] },
+    });
+  });
+
+  it("a synap_call_tool call is shadowed on the tool it runs, with that tool's arguments", async () => {
+    const server = createMCPServer(undefined, "u1") as unknown as {
+      _requestHandlers: Map<string, Handler>;
+    };
+    const handler = server._requestHandlers.get("tools/call")!;
+    await handler(
+      {
+        method: "tools/call",
+        params: {
+          name: "synap_call_tool",
+          arguments: {
+            tool: "synap_list_sessions",
+            arguments: { bogusFilter: 1 },
+          },
+        },
+      },
+      { signal: new AbortController().signal, sendNotification: vi.fn() }
+    );
+    // Never the dispatcher's own `{tool, arguments}`: those keys are declared
+    // on IT and would hide the inner tool's undeclared ones.
+    expect(h.shadowCalls).toEqual([
+      ["synap_list_sessions", { bogusFilter: 1 }],
+    ]);
   });
 });

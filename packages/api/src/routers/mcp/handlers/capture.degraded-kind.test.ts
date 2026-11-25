@@ -198,9 +198,29 @@ describe("synap_capture degraded notice — the failure class the pod read (1c25
     h.structureResult = withDetail("quota");
     const out = await call({ text: "Call the accountant" });
 
-    expect(out.degradedNotice).toMatch(/out of credit/);
+    expect(out.degradedNotice).toMatch(/AI provider is having trouble/);
     expect(out.degradedNotice).toMatch(/do not tell them to try again/);
     expect(out.degradedNotice).not.toMatch(/could not be read/);
+  });
+
+  it("an account refusal ends with the payer action the IS stated", async () => {
+    h.structureResult = {
+      ...degraded("note"),
+      degradedReason: "credits_empty",
+      degradedDetail: {
+        cause: "http",
+        status: 402,
+        attempts: 1,
+        failureClass: "credits_empty",
+        action: "ask_admin",
+      },
+    };
+    const out = await call({ text: "Call the accountant" });
+
+    expect(out.degradedNotice).toMatch(
+      /out of AI credits.*Ask an admin to top up credits\./
+    );
+    expect(out.degradedNotice).toMatch(/do not tell them to try again/);
   });
 
   it("a server error the retries did not outlast says re-capturing may work", async () => {
@@ -211,11 +231,14 @@ describe("synap_capture degraded notice — the failure class the pod read (1c25
     expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
   });
 
-  it("no detail (a plan the IS marked degraded) keeps the reason mapping", async () => {
+  it("no detail (a plan the IS marked degraded) speaks the reason, as every capture door does", async () => {
     h.structureResult = degraded("note");
     const out = await call({ text: "Call the accountant" });
 
-    expect(out.degradedNotice).toMatch(/could not be read/);
+    expect(out.degradedNotice).toMatch(
+      /AI structuring failed upstream \(is_invalid_response\)/
+    );
+    expect(out.degradedNotice).toMatch(/re-capturing shortly may structure it/);
   });
 });
 

@@ -18,7 +18,10 @@ import { CatalogTab } from "./_lib/catalog-tab";
 import { SourcesTab } from "./_lib/sources-tab";
 import { tabLabel } from "./_lib/catalog-model";
 import { UpdatesTab } from "./updates/_lib/updates-tab";
-import { usePackageUpdateList } from "./updates/_lib/use-package-updates";
+import {
+  usePackageUpdateList,
+  useUpdateHolds,
+} from "./updates/_lib/use-package-updates";
 import { waitingUpdates } from "./updates/_lib/updates-model";
 import { useT } from "../../../lib/i18n/locale-provider";
 import { en, fr } from "./updates/_lib/copy";
@@ -38,6 +41,7 @@ export default function MarketplacePage() {
   // The updates waiting are counted from the same read the tab, the Review
   // page and Home use: the number on the tab is the number of rows waiting.
   const updates = usePackageUpdateList();
+  const { holds } = useUpdateHolds();
   const t = useT(UPDATES_CATALOGS);
 
   return (
@@ -55,7 +59,7 @@ export default function MarketplacePage() {
               label: tabLabel(
                 t("tab.updates"),
                 updates.data
-                  ? waitingUpdates(updates.data.updates).length
+                  ? waitingUpdates(updates.data.updates, holds).length
                   : undefined
               ),
               content: <UpdatesTab />,

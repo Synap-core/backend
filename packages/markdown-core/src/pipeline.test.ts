@@ -185,6 +185,13 @@ const NOT_READERS: Record<string, string> = {
   REQUIRED_REF: "data",
   readEmbed: "reads a node, not markdown",
   serializeEmbed: "writer",
+  scanAskDefinitions:
+    "line scan of SOURCE for a question definition (reads its props block; prose is returned as a slice)",
+  rewriteAskDefinitions:
+    "writer (source line splice, the prose kept as a slice)",
+  ASK_DEFINITION_UNMATERIALIZED: "data (a diagnostic sentence)",
+  opensFence: "predicate (one source line)",
+  closesFence: "predicate (one source line)",
   serializeAttributes: "writer",
   assertSelfContainedBody: "writer guard",
   EmbedSerializeError: "error class",

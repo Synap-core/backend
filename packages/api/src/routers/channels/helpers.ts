@@ -43,18 +43,14 @@ import {
   ChannelStatus,
   MessageRole,
   workspaceMembers,
-  workspaces,
   projects,
   projectMembers,
   mcpServers,
   agents,
 } from "@synap/database/schema";
 import { resolveIntelligenceService } from "../../utils/intelligence-routing.js";
-import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 
 import { validateExternalUrl, safePublicFetch } from "@synap/shared-utils";
-
-import { randomUUID } from "crypto";
 
 import type { Channel } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
@@ -493,61 +489,6 @@ export async function getMcpServersForWorkspace(
     out.push({ ...entry, headers: resolved.headers });
   }
   return out;
-}
-
-/**
- * Ensure a pod-wide personal AI agent user exists for this human.
- * One agent user is shared across all workspaces — it accumulates memory
- * and identity pod-wide rather than being fragmented per workspace.
- *
- * Flow:
- *   1. Look up by createdByUserId + isPersonalAgent (pod-wide, no workspace filter).
- *   2. If found: ensure membership in the current workspace if absent.
- *   3. If not found: create the agent user, then add membership.
- *
- * Role: "owner" in agent-governed workspaces (governanceMode='agent-owned'),
- *       "editor" in all other workspaces.
- */
-export async function ensureAgentUser(
-  userId: string,
-  workspaceId: string
-): Promise<string> {
-  // 1–2a. Find or create the pod-wide personal agent (no workspace filter).
-  const resolvedAgentId = await ensurePersonalAgentUser(userId);
-
-  // 2b. Ensure workspace membership (idempotent)
-  const [existingMembership] = await db
-    .select({ id: workspaceMembers.id })
-    .from(workspaceMembers)
-    .where(
-      and(
-        eq(workspaceMembers.userId, resolvedAgentId),
-        eq(workspaceMembers.workspaceId, workspaceId)
-      )
-    )
-    .limit(1);
-
-  if (!existingMembership) {
-    // Agent is owner in agent-governed workspaces, editor elsewhere
-    const [ws] = await db
-      .select({ settings: workspaces.settings })
-      .from(workspaces)
-      .where(eq(workspaces.id, workspaceId))
-      .limit(1);
-
-    const wsSettings = ws?.settings as { governanceMode?: string } | undefined;
-    const role =
-      wsSettings?.governanceMode === "agent-owned" ? "owner" : "editor";
-
-    await db.insert(workspaceMembers).values({
-      id: randomUUID(),
-      workspaceId,
-      userId: resolvedAgentId,
-      role,
-    });
-  }
-
-  return resolvedAgentId;
 }
 
 /**

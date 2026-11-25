@@ -6,7 +6,8 @@
  * Ported from the desktop's `VIEW_FRAME_QUERY_OPS` (synap-app
  * `packages/web/src/cell-runtime/ViewFrame.tsx`) and its param whitelist
  * (`INTENT_READS`, browser `cells/createViewFrameHandlers.ts`), plus
- * `documents.get` for a document's content. This is the ONE table: both
+ * `documents.get` for a document's content and `flow.of` for a kind's flow.
+ * This is the ONE table: both
  * desktop hosts import it instead of keeping their own list.
  *
  * The LENS is never a param: `workspaceId` and `projectId` are in no list, so
@@ -37,6 +38,12 @@ export const CELL_BRIDGE_READ_OPS = {
     "limit",
     "workedBy",
   ],
+  // A kind's or role's FLOW (`flow.of`, `services/lifecycle/flow-read.ts`):
+  // its states in declared order, the playbook stage that owns each, the
+  // things in each. What a board drawn from a playbook reads. Bounded like
+  // the board: `firstN` cards per state (at most 50), `windowDays` of done
+  // and lost; `properties` also carries each card's properties.
+  "flow.of": ["profileSlug", "trackId", "windowDays", "firstN", "properties"],
   "lifecycle.throughput": ["profileSlug", "trackId", "bucket", "count"],
   "attention.needsYou": ["profileSlug", "trackId", "limit"],
   "attention.count": ["profileSlug", "trackId"],
@@ -48,6 +55,29 @@ export const CELL_BRIDGE_READ_OPS = {
   // host makes): a space package's overview. The page may only bound
   // Happened (`since`, an ISO instant); the host stamps the space and project.
   "lens.page": ["since"],
+  // One object by id, read by the procedure its own page reads:
+  // `focusSessions.getLean`, `playbooks.process`, `playbooks.scorecard`,
+  // `projects.get` with its pillars (`projectPillarsAnswer`).
+  "sessions.get": ["id"],
+  "playbook.process": ["playbookId"],
+  "playbook.scorecard": ["playbookId"],
+  // `id`, not `projectId`: naming one project is not a lens; the pod floors it.
+  "project.pillars": ["id"],
+  // What a view adapter reads to draw (renderer bundles, decision c91d26dc):
+  // a view's definition and its rows (`views.get`, `views.execute`, the
+  // stored query only: no ephemeral filters; one PAGE of it with `limit` and
+  // `offset`, so a frame reads past the first 100 rows), a kind (`profiles.get`, by
+  // slug or id), its fields (`propertyDefs.list`: with a profileId the host
+  // asks `profileIds: [profileId]`, without one every field of its own
+  // space) and its declared
+  // lifecycle (`lifecycle.get`, in the host's space).
+  "views.get": ["id"],
+  "views.execute": ["id", "limit", "offset"],
+  // `fill`: how many of the kind's things carry each field, the tiebreaker a
+  // table's derived columns read (`useDerivedKindColumns`); opt-in, a boolean.
+  "profiles.get": ["identifier", "fill"],
+  "propertyDefs.list": ["profileId"],
+  "lifecycle.get": ["profileSlug"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;
@@ -80,6 +110,63 @@ export function cellBridgeReadRefusal(
 ): string | null {
   if (!CELL_BRIDGE_SPACE_READ_OPS.has(op) || lens.workspaceId) return null;
   return `"${op}" reads one space, and this page is not in a space`;
+}
+
+/**
+ * The `project.pillars` answer: the three pillar fields of a `projects.get`
+ * read made with `include: ["pillars"]` (`mainGoal`, `pillars`, `rootHealth`;
+ * a part that failed is `{ status: "unavailable" }`). An ALLOWLIST: the
+ * project row itself is not part of this op. Every host answers through it.
+ * An answer without the three fields was not a pillars read: it throws, so the
+ * page gets an error, never an empty project.
+ */
+export function projectPillarsAnswer(answer: unknown): {
+  mainGoal: unknown;
+  pillars: unknown;
+  rootHealth: unknown;
+} {
+  const read = answer as Record<string, unknown> | null;
+  if (
+    !read ||
+    typeof read !== "object" ||
+    !("mainGoal" in read) ||
+    !("pillars" in read) ||
+    !("rootHealth" in read)
+  ) {
+    throw new Error("The project's pillars could not be read.");
+  }
+  return {
+    mainGoal: read.mainGoal,
+    pillars: read.pillars,
+    rootHealth: read.rootHealth,
+  };
+}
+
+/** The largest page of a view's rows a frame reads at once (`views.execute` `limit`). */
+export const CELL_BRIDGE_VIEW_PAGE_MAX = 100;
+/** The deepest row a frame pages to (`views.execute` `offset`). */
+export const CELL_BRIDGE_VIEW_OFFSET_MAX = 100_000;
+
+/**
+ * The page a frame asked `views.execute` for, as every host forwards it:
+ * whole numbers CLAMPED into range (`limit` 1 to `CELL_BRIDGE_VIEW_PAGE_MAX`,
+ * `offset` 0 to `CELL_BRIDGE_VIEW_OFFSET_MAX`), a missing or non-number one
+ * left out so the view's stored pair applies.
+ */
+export function cellBridgeViewPage(params: Record<string, unknown>): {
+  limit?: number;
+  offset?: number;
+} {
+  const clamp = (v: unknown, min: number, max: number): number | undefined =>
+    typeof v === "number" && Number.isFinite(v)
+      ? Math.min(max, Math.max(min, Math.trunc(v)))
+      : undefined;
+  const limit = clamp(params.limit, 1, CELL_BRIDGE_VIEW_PAGE_MAX);
+  const offset = clamp(params.offset, 0, CELL_BRIDGE_VIEW_OFFSET_MAX);
+  return {
+    ...(limit !== undefined ? { limit } : {}),
+    ...(offset !== undefined ? { offset } : {}),
+  };
 }
 
 /** A param value a host forwards: a primitive, nothing nested. */

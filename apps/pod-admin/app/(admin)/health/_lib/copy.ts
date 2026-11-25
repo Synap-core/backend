@@ -90,7 +90,7 @@ export const en = {
   "action.pause.title": "Pause what is running",
   "action.pause.body":
     "Pausing an automation, a worker or an agent frees memory and connections at once. Resume it the same way.",
-  "action.pause.runs": "Open runs",
+  "action.pause.runs": "Open runs in the desktop app",
   "action.pause.rules": "Open automations",
   "action.pause.agents": "Open agents",
   "action.buildCache.title": "Trim the build cache",
@@ -250,7 +250,7 @@ export const fr: Catalog<typeof en> = {
   "action.pause.title": "Mettre en pause ce qui tourne",
   "action.pause.body":
     "Mettre en pause une automatisation, un worker ou un agent libère aussitôt mémoire et connexions. Vous la reprenez de la même façon.",
-  "action.pause.runs": "Ouvrir les exécutions",
+  "action.pause.runs": "Ouvrir les exécutions dans l’app de bureau",
   "action.pause.rules": "Ouvrir les automatisations",
   "action.pause.agents": "Ouvrir les agents",
   "action.buildCache.title": "Réduire le cache de build",

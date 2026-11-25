@@ -358,6 +358,8 @@ const run = (
       metadata: {},
       parameters,
       executionMode: "sync",
+      intent: null,
+      inputMap: null,
     },
     args,
     asAgent

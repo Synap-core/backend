@@ -11,6 +11,7 @@
  */
 
 import type {
+  SpaceKindAs,
   WorkspaceDefaultSource,
   WorkspaceLayoutDefinition,
   WorkspaceSettings,
@@ -24,6 +25,12 @@ export interface LifecycleAuthoring {
   property: string;
   /** `[{ key, label?, category, tone?, humanOnly? }]` — every option needs a category. */
   options: unknown[];
+  /**
+   * The option a new thing starts in when its creator names none (the
+   * lifecycle's initial status, `setLifecycleInitialStatus`). Filled on apply
+   * when the lifecycle has none yet; never replaces one already set.
+   */
+  initialStatus?: string;
 }
 
 /**
@@ -33,7 +40,8 @@ export interface LifecycleAuthoring {
  */
 export interface WorkspaceIntentDefinition {
   label: string;
-  produces?: { profile: string }[];
+  /** Each kind the space works; `as` (default `output`): see `SpaceKindAs`. */
+  produces?: { profile: string; as?: SpaceKindAs }[];
   /** The ONE output the space produces: one of `produces` (decision 3). */
   primary?: string;
 }
@@ -135,6 +143,12 @@ export interface WorkspaceDefinitionInput {
   /** Capability ids this workspace provides or consumes. */
   workspaceCapabilities?: string[];
   /**
+   * @deprecated 0426 (founder decisions D2 and D3): a space's needs are the
+   * `need:` refs its playbooks and automations name (`@synap-core/types/needs`
+   * `declaredNeedsOf`); the pod no longer persists this field and no runtime
+   * path reads it. Kept one release so templates that still send it install;
+   * removed with the catalog's `taskIntents`.
+   *
    * WHAT THIS WORKSPACE NEEDS TO FUNCTION — the abstract intents (closed
    * vocabulary, the pod's `capability_intents` table) its template declares it
    * requires. Distinct from `workspaceCapabilities`, which names what this space

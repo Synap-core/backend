@@ -966,6 +966,21 @@ describe("settings.exposurePolicy", () => {
     expect(await res.json()).toEqual(JSON.parse(JSON.stringify(after)));
   });
 
+  it("an agent principal reads the space its person owns; an agent nobody installed does not", async () => {
+    const installed = randomUUID();
+    await q(
+      `insert into users (id, email, user_type, created_by_user_id, agent_metadata) values ($1,$2,'agent',$3,'{}'::jsonb)`,
+      [installed, `${installed}@agents.test`, A]
+    );
+    const read = (userId: string) =>
+      hubApp({ userId, scopes: ["hub-protocol.read"] }).request(
+        `/shares/policy?workspaceId=${W}`
+      );
+    expect((await read(installed)).status).toBe(200);
+    // AG has no creator: it stands for nobody, so it is not the owner.
+    expect((await read(AG)).status).toBe(403);
+  });
+
   it("a PARTIAL payload cannot erase: missing fields / audience / kind is refused and nothing changes", async () => {
     const stored = async () =>
       (

@@ -64,15 +64,16 @@ export async function setSkillApproved(input: {
   /**
    * Proof of presence (W3, founder 4 Nov: turning a skill ON is sensitive).
    * The `skill/*` executor passes `presenceChecked` instead: the approval that
-   * runs it already checked the proof (`applyProposalApproval`).
+   * runs it already checked the proof (`applyProposalApproval`); so does
+   * `enableMany` (`capabilityBatch`): one proof named the whole set.
    */
   presence?: PresenceProof | null;
-  presenceChecked?: "applyProposalApproval";
+  presenceChecked?: "applyProposalApproval" | "capabilityBatch";
   door?: string;
 }) {
   refuseAgentApprover(input.agentUserId);
   // Turning OFF only takes power away; turning ON needs the person.
-  if (input.approved && input.presenceChecked !== "applyProposalApproval") {
+  if (input.approved && input.presenceChecked === undefined) {
     await assertPresenceForRequest({
       userId: input.userId,
       kind: "skill",

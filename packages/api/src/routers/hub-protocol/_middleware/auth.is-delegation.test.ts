@@ -478,17 +478,29 @@ describe("IS delegation naming the operator's Synap AI (act.sub)", () => {
     expect(r.status).toBe(403);
   });
 
-  it("(d) no ceiling set (none) or another agent (not-applicable): today's behaviour, unchanged", async () => {
+  it("(d) no ceiling set (none) or another agent (not-applicable): the person's own sessions keep today's behaviour", async () => {
     for (const status of ["none", "not-applicable"] as const) {
       resolveCeiling.mockResolvedValue({ status });
       const full = await callAt("GET", "/api/hub/anything-unlisted", {
         authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent" })}`,
       });
       expect(full.body.fullGrant, status).toBe(true);
-      const app = await callAt("GET", "/api/hub/messaging/accounts", {
-        authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent", appGrant: appGrantOf(["entity.read"]) })}`,
+    }
+    // Another agent behind an app: the app's claim still bounds it.
+    resolveCeiling.mockResolvedValue({ status: "not-applicable" });
+    const app = await callAt("GET", "/api/hub/messaging/accounts", {
+      authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent", appGrant: appGrantOf(["entity.read"]) })}`,
+    });
+    expect(app.status).toBe(403);
+  });
+
+  it("(d2) an app's turn on the personal agent stops when the person's grant is gone (revoked mid-turn): never the app's grant alone", async () => {
+    resolveCeiling.mockResolvedValue({ status: "none" });
+    for (const path of ["/api/hub/entities", "/api/hub/messaging/accounts"]) {
+      const r = await callAt("GET", path, {
+        authorization: `Bearer ${delegation({ agentUserId: "synap-ai-agent", appGrant: appGrantOf(["entity.read", "messaging.read"]) })}`,
       });
-      expect(app.status, status).toBe(403); // the app's claim still bounds it
+      expect(r.status, path).toBe(401);
     }
   });
 

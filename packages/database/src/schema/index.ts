@@ -58,6 +58,7 @@ export * from "./command-runs.js";
 // At-most-once receipt for a DIRECT-run WRITE/external capability verb (0219).
 export * from "./capability-run-receipts.js";
 export * from "./capability-intents.js";
+export * from "./needs.js";
 
 // NEW: Workspace system
 export * from "./workspaces.js";
@@ -199,7 +200,6 @@ export * from "./box-runs.js";
 export * from "./installations.js";
 export * from "./installation-bindings.js";
 export * from "./host-jobs.js";
-export * from "./intent-defaults.js";
 // API usage telemetry — calls per key / client / conversation, 5-min buckets (0364)
 export * from "./api-usage-buckets.js";
 // Server faults — the exact cause of each 5xx by errorId, pod admins only (0392)
@@ -227,6 +227,7 @@ export * from "./capabilities.js";
 export * from "./links.js";
 // Playbook run ledger (RUNTIME) — one row per playbook execution (executor spine, P3).
 export * from "./playbook-runs.js";
+export * from "./session-stage-runs.js";
 // Playbook → automations composition (CONFIG) — first-class editable join that
 // promotes the read-only `automation --member_of--> playbook` link edges (0179).
 export * from "./playbook-automations.js";
@@ -266,10 +267,15 @@ export type { ProvenanceKind } from "./provenance.js";
 // rung 2.8 wiring land in a separate wave.
 export * from "./governance-rules.js";
 export * from "./renderer-bindings.js";
+// Renderer bundles (0436): a bundle row + its one host-module set.
+export * from "./renderer-bundles.js";
 
 // Governance Ceilings (0236) — the store for NUMERIC governance limits (sibling
 // to governance_rules' verdicts). First axis: daily_write_count → rung 2.56.
 export * from "./governance-ceilings.js";
+export * from "./compute-leases.js";
+// Realtime room tickets (0438): a pod app opens a live Yjs room.
+export * from "./realtime-room-tickets.js";
 
 // Config Settings (0235) — a general, layered per-granularity config store that
 // MIRRORS governance_rules. Used first for GUIDELINES (natural-language intent

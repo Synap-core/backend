@@ -19,8 +19,8 @@
  * DECLARES — what `synap_create_playbook` tells agents to do ("omit
  * statusProperty: the process follows the lifecycle the kind declares"). It is
  * resolved HERE, where every runtime reader loads the process (the stage
- * write, the subject-first advance, the close door's end moves, the reverse
- * follow in `process-sync.ts`), never per caller. A named `statusProperty`
+ * write, the subject-first advance, the reverse follow in `process-sync.ts`),
+ * never per caller. A named `statusProperty`
  * keeps winning; a kind with no declared lifecycle stays `null` (each reader
  * reports its skip). The declaration is read live (a kind that declares its
  * lifecycle later is followed from then on), through `readSubjectProfile`,
@@ -37,11 +37,7 @@ import {
   desc,
   liveRunStatusWhere,
 } from "@synap/database";
-import {
-  readSubjectLifecycle,
-  type PlaybookOnEnd,
-  type PlaybookStage,
-} from "@synap/playbooks";
+import { readSubjectLifecycle, type PlaybookStage } from "@synap/playbooks";
 import { readSubjectProfile } from "./subject-profile.js";
 
 export interface SessionProcess {
@@ -58,12 +54,6 @@ export interface SessionProcess {
    */
   statusProperty: string | null;
   humanOnlyStatuses: string[];
-  /**
-   * What each session END moves the subject (and every target still open)
-   * to — `subjectProfile.onEnd`, frozen with the rest of the process. Read by
-   * the one close door BEFORE it settles the run, so it is the snapshot's.
-   */
-  onEnd: PlaybookOnEnd;
 }
 
 export async function loadSessionProcess(input: {
@@ -105,7 +95,7 @@ export async function loadSessionProcess(input: {
   }
   if (!stages) return null;
   const lifecycle = readSubjectLifecycle(subjectProfile);
-  const { profileSlug, humanOnlyStatuses, onEnd } = lifecycle;
+  const { profileSlug, humanOnlyStatuses } = lifecycle;
   let statusProperty = lifecycle.statusProperty;
   if (!statusProperty && profileSlug) {
     // The process names none: it follows the lifecycle the profile declares,
@@ -119,5 +109,5 @@ export async function loadSessionProcess(input: {
       await readSubjectProfile(profileSlug, session?.workspaceId ?? null)
     ).lifecycleProperty;
   }
-  return { stages, profileSlug, statusProperty, humanOnlyStatuses, onEnd };
+  return { stages, profileSlug, statusProperty, humanOnlyStatuses };
 }

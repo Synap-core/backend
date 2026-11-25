@@ -219,6 +219,8 @@ export type {
   HubWorkGraphPullRequest,
   HubWorkGraphHold,
   HubWorkGraphGoal,
+  HubWorkGraphDecision,
+  HubWorkGraphEntity,
   GetFocusSessionOptions,
   HubFocusSessionWithContinuation,
   HubSessionCriterion,

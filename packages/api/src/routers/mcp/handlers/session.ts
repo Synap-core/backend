@@ -10,6 +10,12 @@
 
 import { ASK_SKILL_HINT } from "../tools/ask-wire-schema.js";
 import { projectSessionRecall } from "@synap-core/types/focus-sessions";
+import {
+  readTrackStage,
+  stepDateRefusal,
+  stepTimePatch,
+} from "@synap-core/types/units";
+import { readRunCost } from "../../../services/runs/run-cost.js";
 import type { SessionOutcomesSection } from "../../../services/focus-sessions/session-outputs.js";
 import { db, focusSessions, eq, and, desc, inArray } from "@synap/database";
 import { proposedMessageFor } from "../../../utils/permission-check.js";
@@ -28,11 +34,17 @@ import {
   readCloseQuestionDispositions,
   type CloseQuestionDisposition,
 } from "../../../services/messaging/room-post-kind.js";
-import type { ExpectedOutput, SessionCriterion } from "@synap/playbooks";
+import type {
+  ExpectedOutput,
+  PlaybookRunner,
+  SessionCriterion,
+} from "@synap/playbooks";
+import { stageRunnerSchema } from "../../../schemas/playbook-runner.js";
 import { requestClientKey } from "../../../services/focus-sessions/resolve-work-session.js";
 import { newSessionClientKey } from "../../../services/focus-sessions/session-client-binding.js";
 import { refuseUndeclaredArgs } from "../undeclared-args.js";
 import { sessionWriteEcho } from "./session-write-echo.js";
+import { fitReply } from "./fit-reply.js";
 import {
   waitForConversationChanges,
   waitForSessionAnswers,
@@ -43,6 +55,7 @@ import { getRequestClientKey } from "@synap/database";
 import { parseSessionChangeKinds } from "../../../services/focus-sessions/session-changes.js";
 import {
   parseSessionReadDetail,
+  projectLeanSessionHeader,
   readLeanSession,
   readSessionDeploys,
   SESSION_READ_DETAIL_ERROR,
@@ -78,6 +91,11 @@ import {
 } from "./shared.js";
 import { moveHoldToolArgs } from "../../../services/lifecycle/hold-input.js";
 import { isUuid } from "@synap-core/types/property-render";
+import {
+  hasBlockerEdits,
+  parseBlockerEdits,
+  readBlockerIds,
+} from "./blocker-args.js";
 import { SESSION_TARGETS_MAX } from "../../../services/focus-sessions/session-targets-wire.js";
 
 /** One line, not a transcript — mirrors the tool schema's `maxLength`. */
@@ -182,45 +200,6 @@ async function parseOutcomesArg(raw: unknown): Promise<
   return { list: parsed.data };
 }
 
-/** At most this many ids per blocker list — the same bound start's `blockedBySessionIds` has. */
-const BLOCKER_IDS_MAX = 20;
-
-/**
- * The mid-flight blocker edits on `synap_update_session` — `addBlockedBySessionIds`
- * / `removeBlockedBySessionIds`, each an array of session UUIDs. Refused whole
- * (nothing changed) when malformed, or when one id is in both lists: an add
- * and a remove of the same edge in one call has no honest order.
- */
-function parseBlockerEdits(
-  args: Record<string, unknown>
-): { add: string[]; remove: string[] } | { error: string } {
-  const read = (key: string): string[] | { error: string } => {
-    const raw = args[key];
-    if (raw === undefined || raw === null) return [];
-    if (
-      !Array.isArray(raw) ||
-      raw.length > BLOCKER_IDS_MAX ||
-      !raw.every((id) => typeof id === "string" && isUuid(id))
-    ) {
-      return {
-        error: `${key} must be an array of at most ${BLOCKER_IDS_MAX} session UUIDs — NOTHING WAS CHANGED.`,
-      };
-    }
-    return raw as string[];
-  };
-  const add = read("addBlockedBySessionIds");
-  if ("error" in add) return add;
-  const remove = read("removeBlockedBySessionIds");
-  if ("error" in remove) return remove;
-  const both = add.filter((id) => remove.includes(id));
-  if (both.length > 0) {
-    return {
-      error: `${both.join(", ")} is in both addBlockedBySessionIds and removeBlockedBySessionIds — NOTHING WAS CHANGED. Send one of the two.`,
-    };
-  }
-  return { add, remove };
-}
-
 /**
  * Args that never ask `updateFocusSession` for anything: the target, the
  * blocker edits (their own door), and `workspaceId` — the MCP URL lens injects
@@ -231,7 +210,35 @@ const NOT_A_FIELD_UPDATE = new Set([
   "workspaceId",
   "addBlockedBySessionIds",
   "removeBlockedBySessionIds",
+  "addBlockedByEntityIds",
+  "removeBlockedByEntityIds",
+  "addBlockedByTrackIds",
+  "removeBlockedByTrackIds",
+  "alsoServesTrackIds",
 ]);
+
+/**
+ * `alsoServesTrackIds` on `synap_update_session`: the goals this session also
+ * serves, beside its `trackId` (ticket 3fb0e2c3). Refused whole (nothing
+ * changed) when malformed.
+ */
+function parseServesEdits(
+  args: Record<string, unknown>,
+  max: number
+): { add: string[] } | { error: string } {
+  const raw = args.alsoServesTrackIds;
+  if (raw === undefined || raw === null) return { add: [] };
+  if (
+    !Array.isArray(raw) ||
+    raw.length > max ||
+    !raw.every((id) => typeof id === "string" && isUuid(id))
+  ) {
+    return {
+      error: `alsoServesTrackIds must be an array of at most ${max} goal (track) UUIDs — NOTHING WAS CHANGED.`,
+    };
+  }
+  return { add: raw as string[] };
+}
 
 /**
  * The caller's answers to a template's declared params, off the MCP wire.
@@ -523,7 +530,7 @@ export const sessionHandlers: McpHandlerMap = {
       userId,
       apiKeyScopes,
       agentUserId,
-      lensWorkspaceId,
+      confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.write", toolName);
     // MCP tool schemas are ADVISORY — nothing validates the args server-side,
@@ -566,12 +573,24 @@ export const sessionHandlers: McpHandlerMap = {
           "blockedBySessionIds must be an array of at most 20 session UUIDs — sessions you own that this one waits on.",
       });
     }
+    // A decision (entity) or a goal it waits on: the cross-kind edge.
+    const blockedByEntityIds = readBlockerIds(
+      args,
+      "blockedByEntityIds",
+      "entity"
+    );
+    if ("error" in blockedByEntityIds) return ok(blockedByEntityIds);
+    const blockedByTrackIds = readBlockerIds(args, "blockedByTrackIds", "goal");
+    if ("error" in blockedByTrackIds) return ok(blockedByTrackIds);
     // The batch it works on: entity handles, refused here in words. The
     // visibility floor is the service's (`createFocusSession`).
     const targetsArg = readTargetsArg(args.targets);
     if (targetsArg === "invalid") {
       return ok({ error: TARGETS_ARG_ERROR });
     }
+    // The step's time (B5), refused in words before anything is read.
+    const stepTime = stepTimePatch(stepTimeArgs(args));
+    if (!stepTime.ok) return ok({ error: stepDateRefusal(stepTime.invalid) });
     const suspendedIntentArg = args.suspendedIntent;
     if (
       suspendedIntentArg !== undefined &&
@@ -581,6 +600,17 @@ export const sessionHandlers: McpHandlerMap = {
     ) {
       return ok({
         error: `suspendedIntent must be a string of at most ${SUSPENDED_INTENT_MAX} characters — ONE line naming what you were about to do.`,
+      });
+    }
+    const forOutputArg = args.forOutput;
+    if (
+      forOutputArg !== undefined &&
+      forOutputArg !== null &&
+      (typeof forOutputArg !== "string" || forOutputArg.length > 120)
+    ) {
+      return ok({
+        error:
+          "forOutput must be a string of at most 120 characters: the key of the parent's outcome this session delivers.",
       });
     }
     // `subjectRef` (W2): an identity naming the subject — the same
@@ -620,10 +650,10 @@ export const sessionHandlers: McpHandlerMap = {
     // call (the aliases first: they were said first).
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return ok(outcomes);
+    const { mergeOutcomesForStart, declaresVerify } =
+      await import("../../../services/focus-sessions/outcome-declarations.js");
     const declared = outcomes.list
-      ? (
-          await import("../../../services/focus-sessions/outcome-declarations.js")
-        ).mergeOutcomesForStart({
+      ? mergeOutcomesForStart({
           outcomes: outcomes.list,
           expectedOutputs: slots.expectedOutputs,
           criteria: args.criteria as SessionCriterion[] | undefined,
@@ -636,12 +666,12 @@ export const sessionHandlers: McpHandlerMap = {
     try {
       result = await createFocusSession({
         userId,
-        // The ambient lens (`?workspaceId=`, or the agent's workspace focus) is
-        // resolved and access-checked by the adapter; an EXPLICIT arg still wins.
-        // Same precedence as `synap_create_rule` (`rule.ts`). Without it a start
-        // ignored the focus its own captures were placed by (plan A2-a).
-        workspaceId:
-          (args.workspaceId as string | undefined) ?? lensWorkspaceId,
+        // Only what the caller PINNED is explicit: its `workspaceId` (or the
+        // connector's `?workspaceId=`), confined to a bound service key's
+        // space. The agent's workspace focus is NOT folded in here: it is the
+        // last rung of the space ladder (`resolveSessionWorkspacePlacement`,
+        // W3 D1 a), below the playbook, subject, parent and project home.
+        workspaceId: confinedWorkspaceId,
         projectId: args.projectId as string | undefined,
         trackId:
           typeof args.trackId === "string" && args.trackId.trim()
@@ -687,6 +717,8 @@ export const sessionHandlers: McpHandlerMap = {
         }),
         // An agent's NEW session declares what done means (F11, NO_CRITERIA).
         requireCriteria: !!agentUserId,
+        // An outcome with `verify` says what done means.
+        declaredVerify: declaresVerify(outcomes.list),
         // Validated by the service with the shared criteria schema.
         criteria: declared.criteria,
         // PARSED by the SHARED wire schema (see `parseSlotInputs`), never a
@@ -696,10 +728,17 @@ export const sessionHandlers: McpHandlerMap = {
         expectedOutputs: declared.expectedOutputs,
         parentSessionId: args.parentSessionId as string | undefined,
         suspendedIntent: args.suspendedIntent as string | undefined,
+        forOutput: (forOutputArg as string | null | undefined) ?? null,
         // Validated above (array of UUIDs), so this narrows nothing unchecked.
         blockedBySessionIds: Array.isArray(blockedByArg)
           ? (blockedByArg as string[])
           : [],
+        blockedByEntityIds,
+        blockedByTrackIds,
+        // P4: a step with blockers (or a date to come) is born planned unless
+        // it says startNow. B5: its window and deadline, checked by the service.
+        ...(args.startNow === true ? { startNow: true } : {}),
+        ...stepTimeArgs(args),
         ...(targetsArg ? { targets: targetsArg } : {}),
         forceCreate: args.forceCreate === true,
       });
@@ -772,6 +811,7 @@ export const sessionHandlers: McpHandlerMap = {
             stageKey: result.session.currentStage ?? null,
             stages: result.session.stages,
             userId,
+            subjectEntityId: result.session.subjectEntityId ?? null,
           })
         : undefined;
     // Recall runs in the background right after a start; this says so, and
@@ -913,10 +953,6 @@ export const sessionHandlers: McpHandlerMap = {
       // will finish, and what had already applied (undo it with a session
       // revert). Also kept on the session's `metadata.run.cancel`.
       ...(result.cancel ? { cancel: result.cancel } : {}),
-      // What the end moved (`subjectProfile.onEnd`): each thing moved,
-      // proposed, skipped or failed with why — absent when the process names
-      // nothing for this end.
-      ...(result.endMoves ? { endMoves: result.endMoves } : {}),
       ...(nudges ? { nudges } : {}),
       ...(leftOwed ? { leftOwed } : {}),
       note:
@@ -1044,6 +1080,50 @@ export const sessionHandlers: McpHandlerMap = {
     });
     return ok(result);
   },
+  /**
+   * CONTINUE AT <STAGE> — the same service and body as tRPC
+   * `focusSessions.continueRun` and Hub `POST /focus-sessions/:id/continue`.
+   * A person's move: an agent key is refused by the service with the reason.
+   */
+  synap_continue_session: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const sessionId = typeof args.sessionId === "string" ? args.sessionId : "";
+    if (!isUuid(sessionId)) {
+      return ok({ error: "sessionId must be a focus session UUID." });
+    }
+    const { continueStoppedRun } =
+      await import("../../../services/focus-sessions/continue-run.js");
+    return ok(
+      await continueStoppedRun({
+        sessionId,
+        userId,
+        agentUserId: agentUserId ?? null,
+      })
+    );
+  },
+  /**
+   * START AN ORCHESTRATOR (D5) — the same service and input schema as tRPC
+   * `focusSessions.startOrchestrator` and Hub `POST /focus-sessions/orchestrate`.
+   */
+  synap_start_orchestrator: async (
+    ctx: McpToolContext
+  ): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.write", toolName);
+    const { startOrchestrator } =
+      await import("../../../services/focus-sessions/start-orchestrator.js");
+    return ok(
+      await startOrchestrator({
+        userId,
+        agentUserId: agentUserId ?? null,
+        input: args,
+        boundWorkspaceId: ctx.keyWorkspaceId ?? null,
+      })
+    );
+  },
   synap_get_session: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
@@ -1059,6 +1139,14 @@ export const sessionHandlers: McpHandlerMap = {
       : await resolveAmbientSession(userId, agentUserId);
     const wantedId = explicitId ?? ambient?.sessionId;
     if (!wantedId) {
+      // This conversation started several open sessions — none is guessed.
+      if (ambient?.clientSessions) {
+        return ok({
+          session: null,
+          message: `This conversation has ${ambient.clientSessions.count} open sessions, so none is guessed — pass sessionId to read one.`,
+          sessions: ambient.clientSessions.sessions,
+        });
+      }
       const openCount = ambient?.unclaimedOpenCount ?? 0;
       return ok({
         session: null,
@@ -1105,11 +1193,18 @@ export const sessionHandlers: McpHandlerMap = {
     }
     if (detail === "lean") {
       const lean = await readLeanSession(session, { userId });
-      return ok({
-        session: await withParentSessionId(session),
-        ...lean,
-        ...(ambient?.sessionId ? { inferred: true, via: ambient.source } : {}),
-      });
+      // The session's own header, never its whole row (stages' goals,
+      // metadata.prompt and runTurns made a lean read 18,987 characters), and
+      // the reply fitted under the cap: a program reads it (finding 69fdd2e6).
+      return ok(
+        fitReply({
+          session: projectLeanSessionHeader(await withParentSessionId(session)),
+          ...lean,
+          ...(ambient?.sessionId
+            ? { inferred: true, via: ambient.source }
+            : {}),
+        })
+      );
     }
     // Detour lineage, DERIVED from the `spawned_from` edge — never a column, so
     // there is exactly one store for "what was this forked from". ONE
@@ -1128,6 +1223,8 @@ export const sessionHandlers: McpHandlerMap = {
       // RECALL — captures / notes the pod found that may help this session
       // (`session-recall.ts`): pending · ok · empty · failed, never folded.
       recall: projectSessionRecall(session.metadata),
+      // COST — what the session's latest run spent (the lean read's field).
+      cost: readRunCost(session.metadata),
       ...(ambient?.sessionId
         ? {
             inferred: true,
@@ -1268,6 +1365,22 @@ export const sessionHandlers: McpHandlerMap = {
     const rows = attachSessionKind(
       attachTriage(await attachParentSessionIds(sessions))
     );
+    // `fields`: columns the caller names, added WHOLE to each lean row, so a
+    // read across many sessions (e.g. one playbook's runs: stages, outcomes)
+    // costs what it needs, not the 62 KB `full` page. A name no row carries is
+    // said in `unknownFields`, never silently dropped.
+    const named = Array.isArray(args.fields)
+      ? [
+          ...new Set(
+            (args.fields as unknown[]).filter(
+              (f): f is string => typeof f === "string" && f !== ""
+            )
+          ),
+        ]
+      : [];
+    const known = new Set(rows.flatMap((r) => Object.keys(r)));
+    const extra = rows.length ? named.filter((f) => known.has(f)) : named;
+    const unknownFields = rows.length ? named.filter((f) => !known.has(f)) : [];
     return ok({
       // `lean` (default): the row an agent scans to pick a session — a full
       // row carries goal, criteria, stages and metadata, 62 KB for one page.
@@ -1284,7 +1397,11 @@ export const sessionHandlers: McpHandlerMap = {
               projectId: r.projectId,
               workspaceId: r.workspaceId,
               updatedAt: r.updatedAt,
+              ...Object.fromEntries(
+                extra.map((f) => [f, (r as Record<string, unknown>)[f]])
+              ),
             })),
+      ...(unknownFields.length ? { unknownFields } : {}),
       count: sessions.length,
       offset,
       ...(hasMore ? { nextOffset: offset + limit } : {}),
@@ -1332,9 +1449,15 @@ export const sessionHandlers: McpHandlerMap = {
     if (trackIdArg && rootArg) {
       return ok({ error: "Pass trackId or rootSessionId, not both." });
     }
+    const playbookIdArg =
+      typeof args.playbookId === "string" ? args.playbookId : "";
+    const subjectEntityIdArg =
+      typeof args.subjectEntityId === "string" ? args.subjectEntityId : "";
     for (const [name, value] of [
       ["trackId", trackIdArg],
       ["rootSessionId", rootArg],
+      ["playbookId", playbookIdArg],
+      ["subjectEntityId", subjectEntityIdArg],
     ] as const) {
       if (value && !isUuid(value)) {
         return ok({ error: `${name} is not a valid id: ${value}` });
@@ -1374,6 +1497,8 @@ export const sessionHandlers: McpHandlerMap = {
         : rootArg
           ? { rootSessionId: rootArg }
           : undefined,
+      playbookId: playbookIdArg || undefined,
+      subjectEntityId: subjectEntityIdArg || undefined,
     });
     return ok({
       // `lean` (default): enough to draw and to choose — a full node carries
@@ -1388,6 +1513,15 @@ export const sessionHandlers: McpHandlerMap = {
               kind: n.kind,
               parentSessionId: n.parentSessionId,
               trackId: n.trackId,
+              trackStage: n.trackStage,
+              playbookId: n.playbookId,
+              currentStage: n.currentStage,
+              // The stage's own name, from the session's stage snapshot (the
+              // stage reader every track surface uses); null = no stage.
+              currentStageName: n.currentStage
+                ? (readTrackStage(n.stages, n.currentStage)?.name ?? null)
+                : null,
+              playbookMatch: n.playbookMatch ?? null,
               projectId: n.projectId,
               workspaceId: n.workspaceId,
               updatedAt: n.updatedAt,
@@ -1402,6 +1536,8 @@ export const sessionHandlers: McpHandlerMap = {
       pullRequests: graph.pullRequests,
       holds: graph.holds,
       goals: graph.goals,
+      decisions: graph.decisions,
+      entities: graph.entities,
       sections: graph.sections,
       window: graph.window,
     });
@@ -1554,8 +1690,15 @@ export const sessionHandlers: McpHandlerMap = {
 
     const blockerEdits = parseBlockerEdits(args);
     if ("error" in blockerEdits) return reply(blockerEdits);
-    const editsBlockers =
-      blockerEdits.add.length > 0 || blockerEdits.remove.length > 0;
+    const { SERVES_TRACK_IDS_MAX, addSessionServes } =
+      await import("../../../services/focus-sessions/session-serves.js");
+    const servesEdits = parseServesEdits(args, SERVES_TRACK_IDS_MAX);
+    if ("error" in servesEdits) return reply(servesEdits);
+    // Blockers and served goals are both EDGES on the session, each through
+    // the dependency door with its own governance: applied together, after
+    // the owner floor, and reported per id.
+    const editsLinks =
+      hasBlockerEdits(blockerEdits) || servesEdits.add.length > 0;
 
     /**
      * BLOCKERS ON A RUNNING SESSION — "this session now waits on that one",
@@ -1565,38 +1708,73 @@ export const sessionHandlers: McpHandlerMap = {
      * `addCreateTimeBlockers` (owner floor on both sessions, cycle refused),
      * removes through `removeSessionBlockers` (the governed delete). Reported
      * per id, never folded: `blockerLinks` (linked | proposed | failed) and
-     * `blockerRemovals` (removed | absent | proposed | failed).
+     * `blockerRemovals` (removed | absent | proposed | failed). A decision
+     * (entity) or a goal it waits on goes through THE governed dependency
+     * door (`unit-blockers.ts`) and is reported in the same two lists.
      */
     const applyBlockerEdits = async (): Promise<Record<string, unknown>> => {
-      if (!editsBlockers) return {};
+      if (!editsLinks) return {};
       const { addCreateTimeBlockers, removeSessionBlockers } =
         await import("../../../services/focus-sessions/session-blocked-by.js");
+      const { applyUnitBlockerEdits } =
+        await import("../../../services/links/unit-blockers.js");
       const sessionId = args.sessionId as string;
-      const blockerLinks =
-        blockerEdits.add.length > 0
+      const sessionLinks =
+        blockerEdits.session.add.length > 0
           ? await addCreateTimeBlockers({
               sessionId,
-              blockerSessionIds: blockerEdits.add,
+              blockerSessionIds: blockerEdits.session.add,
               userId,
               agentUserId,
             })
-          : undefined;
-      const blockerRemovals =
-        blockerEdits.remove.length > 0
+          : [];
+      const sessionRemovals =
+        blockerEdits.session.remove.length > 0
           ? await removeSessionBlockers({
               sessionId,
-              blockerSessionIds: blockerEdits.remove,
+              blockerSessionIds: blockerEdits.session.remove,
               userId,
               agentUserId,
+            })
+          : [];
+      const units = await applyUnitBlockerEdits({
+        from: { type: "session", id: sessionId },
+        add: {
+          entity: blockerEdits.entity.add,
+          track: blockerEdits.track.add,
+        },
+        remove: {
+          entity: blockerEdits.entity.remove,
+          track: blockerEdits.track.remove,
+        },
+        userId,
+        agentUserId,
+        sessionId,
+        door: "mcp:synap_update_session",
+      });
+      const links = [...sessionLinks, ...units.links];
+      const removals = [...sessionRemovals, ...units.removals];
+      const blockerLinks = links.length > 0 ? links : undefined;
+      const blockerRemovals = removals.length > 0 ? removals : undefined;
+      // The goals it also serves (`session --serves--> track`).
+      const servesLinks =
+        servesEdits.add.length > 0
+          ? await addSessionServes({
+              sessionId,
+              trackIds: servesEdits.add,
+              userId,
+              agentUserId,
+              door: "mcp:synap_update_session",
             })
           : undefined;
       return {
         ...(blockerLinks ? { blockerLinks } : {}),
         ...(blockerRemovals ? { blockerRemovals } : {}),
+        ...(servesLinks ? { servesLinks } : {}),
       };
     };
 
-    if (editsBlockers) {
+    if (editsLinks) {
       // Owner floor first — the same one `updateFocusSession` applies — so a
       // session that is not the caller's is "not found", never half-edited.
       const [own] = await db
@@ -1629,7 +1807,7 @@ export const sessionHandlers: McpHandlerMap = {
           sessionId: args.sessionId,
           ...(await applyBlockerEdits()),
           message:
-            "Only this session's blockers were changed — read each id's outcome: linked / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
+            "Only this session's blockers or served goals were changed — read each id's outcome: linked / exists / removed / absent applied now; proposed was filed for review (success — do not retry); failed says why.",
         });
       }
     }
@@ -1648,6 +1826,10 @@ export const sessionHandlers: McpHandlerMap = {
     // `expectedOutputs` / `criteria` fields — one merge, one governance path.
     const outcomes = await parseOutcomesArg(args.outcomes);
     if ("error" in outcomes) return reply(outcomes);
+    // A fact outcome's owner/ask/blocker is not kept: said, never silent.
+    const outcomeWarnings = (
+      await import("../../../services/focus-sessions/outcome-declarations.js")
+    ).factOutcomeWarnings(outcomes.list);
     let outcomeLists:
       | { expectedOutputs: ExpectedOutput[]; criteria: SessionCriterion[] }
       | undefined;
@@ -1682,6 +1864,22 @@ export const sessionHandlers: McpHandlerMap = {
     if (updateTargets === "invalid") {
       return reply({ error: TARGETS_ARG_ERROR });
     }
+    // A runner for the stage being entered: only with that advance, and
+    // refused when misspelled rather than dropped.
+    if (args.stageRunner !== undefined && args.stageRunner !== null) {
+      if (typeof args.currentStage !== "string") {
+        return reply({
+          error:
+            "stageRunner names who works the stage you enter: send it with currentStage.",
+        });
+      }
+      const parsed = stageRunnerSchema.safeParse(args.stageRunner);
+      if (!parsed.success) {
+        return reply({
+          error: `stageRunner: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+        });
+      }
+    }
     const result = await updateFocusSession({
       sessionId: args.sessionId as string,
       userId,
@@ -1701,12 +1899,28 @@ export const sessionHandlers: McpHandlerMap = {
         : args.criteria !== undefined
           ? { criteria: args.criteria as SessionCriterion[] }
           : {}),
-      status: args.status as "active" | "paused" | undefined,
+      // `forming` plans a started step back (P1); the service refuses it on
+      // anything not started. Any other value is not a move this door makes.
+      status:
+        args.status === "active" ||
+        args.status === "paused" ||
+        args.status === "forming"
+          ? args.status
+          : undefined,
       ...(expectedStatus ? { expectedStatus } : {}),
+      // The step's time (B5): the service refuses a malformed date in words.
+      ...stepTimeArgs(args),
       // A pause's hold and the move's time (W4), checked by the service.
       ...moveHoldToolArgs(args),
       progress: args.progress as number | undefined,
       currentStage: args.currentStage as string | undefined,
+      // The stage the agent SAW (compare-and-set, W6): a string or null.
+      ...(typeof args.expectedStage === "string" || args.expectedStage === null
+        ? { expectedStage: args.expectedStage as string | null }
+        : {}),
+      ...(args.stageRunner !== undefined
+        ? { stageRunner: args.stageRunner as PlaybookRunner | null }
+        : {}),
       addOutput: slots.addOutput,
       completeOutput: args.completeOutput as string | undefined,
       ...(typeof args.retireOutput === "string"
@@ -1786,7 +2000,7 @@ export const sessionHandlers: McpHandlerMap = {
     });
     // The field patch was refused ⇒ the blocker edits riding with it are not
     // applied either (say so; both are idempotent, so the retry is safe).
-    const blockersNotApplied = editsBlockers
+    const blockersNotApplied = editsLinks
       ? {
           blockerEdits:
             "not applied — the rest of this update was refused; fix it and send the call again.",
@@ -1822,6 +2036,7 @@ export const sessionHandlers: McpHandlerMap = {
           reviewUrl: result.reviewUrl,
           // The filing was proposed on its own beside this proposal.
           ...(result.filing ? { filing: result.filing } : {}),
+          ...(outcomeWarnings.length > 0 ? { warnings: outcomeWarnings } : {}),
           session: null,
         });
       case "updated": {
@@ -1875,6 +2090,7 @@ export const sessionHandlers: McpHandlerMap = {
                   stageKey: result.session.currentStage ?? null,
                   stages: result.session.stages,
                   userId,
+                  subjectEntityId: result.session.subjectEntityId ?? null,
                 }),
               }
             : {}),
@@ -1891,9 +2107,16 @@ export const sessionHandlers: McpHandlerMap = {
           // subject status that did NOT move the subject (skipped, failed, or
           // waiting on a person) changes nothing the session row shows.
           ...(result.subjectMove ? { subjectMove: result.subjectMove } : {}),
+          // Who works the stage the advance entered (the stage runner).
+          ...(result.stageRun ? { stageRun: result.stageRun } : {}),
+          // The entered stage's check held and sent the run back: `session`
+          // is where it stands now, and this says why (f9c80d6f).
+          ...(result.sentBack ? { sentBack: result.sentBack } : {}),
           // Same reason as `completeOutput`: part of the patch the pod did not
           // keep as sent (an ask on a slot that is not the person's).
-          ...(result.warnings ? { warnings: result.warnings } : {}),
+          ...(result.warnings || outcomeWarnings.length > 0
+            ? { warnings: [...(result.warnings ?? []), ...outcomeWarnings] }
+            : {}),
           // Same reason as `completeOutput`: a hand-off to another agent that
           // is WAITING on a person is not on the roster yet, and the session
           // alone reads as if it were never asked for.
@@ -1914,3 +2137,20 @@ export const sessionHandlers: McpHandlerMap = {
 /** Test-only export of the wire coercion above. */
 export { readParamsArg as __readParamsArgForTest };
 export { readTemplateIdArg as __readTemplateIdArgForTest };
+
+/**
+ * `plannedFor` / `dueBy` off a session tool's args (B5): a string sets, `null`
+ * clears, anything else is left alone. Their shape is checked by the session
+ * service (`stepTimePatch`), which refuses a malformed date in words.
+ */
+function stepTimeArgs(args: Record<string, unknown>): {
+  plannedFor?: string | null;
+  dueBy?: string | null;
+} {
+  const out: { plannedFor?: string | null; dueBy?: string | null } = {};
+  for (const key of ["plannedFor", "dueBy"] as const) {
+    const v = args[key];
+    if (v === null || typeof v === "string") out[key] = v;
+  }
+  return out;
+}

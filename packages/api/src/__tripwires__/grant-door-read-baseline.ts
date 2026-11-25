@@ -48,8 +48,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /compacted-states/latest",
   "GET /connectors/broker-diagnostics",
   "GET /connectors/connections/:provider",
-  "GET /connectors/providers",
-  "GET /connectors/sync-status",
   "GET /discord/identity",
   "GET /discord/identity/members",
   "GET /entities/without-project/counts",
@@ -82,7 +80,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /messaging/conversations",
   "GET /messaging/conversations/:threadId/messages",
   "GET /messaging/service-config",
-  "GET /needs-you",
   "GET /observability/routing-health",
   "GET /openapi.json",
   "GET /pod-apps",
@@ -104,8 +101,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /routing/lanes",
   "GET /rules",
   "GET /runs",
-  "GET /runs/:id",
-  "GET /search",
   "GET /search/collection",
   "GET /search/documents",
   "GET /sessions",
@@ -117,8 +112,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /setup/status",
   "GET /shares",
   "GET /shares/policy",
-  "GET /shares/sites",
-  "GET /shares/sites/:id",
   "GET /skills",
   "GET /subscriptions",
   "GET /subscriptions/:eventId/fanout",
@@ -132,7 +125,6 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
   "GET /vault/secrets",
   "GET /vector-search",
   "GET /whiteboards/:viewId/state",
-  "GET /workers",
   "GET /workflows/:kind/:id/feed",
   "GET /workflows/:kind/:id/place",
   "GET /workspaces/:workspaceId",
@@ -143,4 +135,4 @@ export const UNCLASSIFIED_READ_ROUTES: readonly string[] = [
 ];
 
 /** The baseline's size when it was cut; it only goes down. */
-export const UNCLASSIFIED_READ_ROUTES_CAP = 123;
+export const UNCLASSIFIED_READ_ROUTES_CAP = 115;

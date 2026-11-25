@@ -28,7 +28,6 @@ const {
   mockGetDb,
   mockCheckPermission,
   mockPreviewDecision,
-  mockMaterializeCron,
   mockCreateLinks,
   insertReturning,
   selectLimit,
@@ -44,9 +43,15 @@ const {
   const insertChain = {
     values: vi.fn().mockReturnThis(),
     returning: insertReturning,
+    // The kept version (0416) rides in the create's transaction.
+    onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
   };
   const profilesFindMany = vi.fn();
   const mockDb = {
+    // The create's row and its kept version (0416) share one transaction.
+    transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> =>
+      fn(mockDb)
+    ),
     insert: vi.fn(() => insertChain),
     select: vi.fn(() => selectChain),
     query: {
@@ -64,7 +69,6 @@ const {
     profilesFindMany,
     insertReturning,
     selectLimit,
-    mockMaterializeCron: vi.fn().mockResolvedValue(undefined),
     mockCreateLinks: vi.fn().mockResolvedValue([]),
     mockCheckPermission: vi.fn().mockResolvedValue({ granted: true }),
     mockPreviewDecision: vi.fn().mockResolvedValue({ decision: "propose" }),
@@ -134,14 +138,6 @@ vi.mock("../utils/permission-check.js", async (importOriginal) => {
     checkPermissionOrPropose: mockCheckPermission,
     previewPermissionDecision: mockPreviewDecision,
   };
-});
-
-vi.mock("../services/playbooks/cron-automation.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<
-      typeof import("../services/playbooks/cron-automation.js")
-    >();
-  return { ...actual, materializePlaybookCronAutomation: mockMaterializeCron };
 });
 
 vi.mock("../services/links/links-service.js", () => ({

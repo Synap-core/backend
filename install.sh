@@ -12,7 +12,8 @@
 #      checked against the manifest's sha256, unpacked into --dir (/opt/synap)
 #   4. the CLI linked onto PATH (/usr/local/bin/synap), so an operator in a
 #      shell finds the same engine the systemd units run
-#   5. exec synap install --non-interactive --release <resolved id> [flags…]
+#   5. exec synap install --release <resolved id> [flags…] — with
+#      --non-interactive, unless a person is at a terminal (below)
 #
 # Images are pulled by digest by the engine, never built on the host.
 #
@@ -20,7 +21,17 @@
 #   curl -fsSL https://github.com/synap-core/backend/releases/download/<release>/install.sh \
 #     | sudo bash -s -- --release <release> --name <name> --register-token spr_…
 #
+# Or, with no code yet, at a terminal: the engine asks how the pod runs (linked to
+# your Synap account with a code, or standalone on a domain you own):
+#   curl -fsSL https://github.com/synap-core/backend/releases/download/channel-stable/install.sh \
+#     | sudo bash -s -- --release stable
+#
 # Flags it owns: --release <id|stable|fast>, --dir <path>, --help.
+# Questions: under `curl … | bash` stdin is this script, so a person answers on
+# the terminal (SYNAP_TTY, default /dev/tty). They are asked only when that
+# terminal opens, --non-interactive was not passed, and no --register-token,
+# --name or --domain decided the answer; otherwise (cloud-init, the account
+# page's command) nothing is ever asked, as before.
 # Every other flag goes to `synap install` unchanged (--name, --domain, --email,
 # --edge, --register-token, --control-plane, --intelligence-url, …; see
 # `synap install --help`). Flags of the retired installer are mapped below, or
@@ -45,11 +56,13 @@ info() { echo "→  $*"; }
 warn() { echo "⚠  $*" >&2; }
 
 usage() {
-  sed -n '2,35p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
+  awk '/^# ====/{n++; if (n == 3) exit; next} n {print}' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || true
   exit 0
 }
 
 ARGS=()
+NON_INTERACTIVE=""   # --non-interactive / --automated passed
+DECIDED=""           # a flag already answers how the pod runs
 # Environment overrides of the retired installer, kept as aliases.
 [ -n "${SYNAP_DOMAIN:-}" ] && ARGS+=(--domain "$SYNAP_DOMAIN")
 [ -n "${SYNAP_EMAIL:-}" ] && ARGS+=(--email "$SYNAP_EMAIL")
@@ -80,7 +93,9 @@ while [ $# -gt 0 ]; do
     --token)
       die "--token is not a flag: use --register-token <spr_…>." ;;
     --non-interactive|--automated)
-      shift ;;  # always non-interactive
+      NON_INTERACTIVE=1; shift ;;
+    --register-token|--name|--domain)
+      DECIDED=1; ARGS+=("$1"); shift ;;
     *)
       ARGS+=("$1"); shift ;;
   esac
@@ -145,6 +160,12 @@ SYNAP_COSIGN_IMAGE="ghcr.io/sigstore/cosign/cosign:v2.5.3@sha256:f1946d0f30fc8e3
 # /release/release.json: permission denied" (CP ticket 2e10228f). The two files
 # are copied into a world-readable directory of their own, whatever the
 # caller's directory mode or umask.
+docker_err_line() { # <docker output> — the line that says what went wrong, not the trailing usage hint
+  local l
+  l="$(printf '%s' "$1" | grep -iE 'error|denied|unable|failed|pull|no such|not found|timeout' | head -n 1)"
+  [ -n "$l" ] || l="$(printf '%s' "$1" | head -n 1)"
+  printf '%s' "$l"
+}
 cosign_verify() {
   local args=(verify-blob --certificate-identity-regexp "$SYNAP_RELEASE_SIGNER_RE"
               --certificate-oidc-issuer "$SYNAP_RELEASE_OIDC_ISSUER")
@@ -184,7 +205,7 @@ verify_manifest_sig() { # <release> <manifest> — non-zero only under enforce
       info "release manifest signature verified (Synap CI, keyless)"
       return 0
     elif ! command -v cosign >/dev/null 2>&1 && [ "$rc" -ge 125 ] && [ "$rc" -le 127 ]; then
-      why="could not run the signature check (docker exited ${rc}: $(printf '%s' "$out" | tail -1))"
+      why="could not run the signature check (docker exited ${rc}: $(docker_err_line "$out"); the cosign image ${SYNAP_COSIGN_IMAGE} must be pullable, so ghcr.io must be reachable)"
     else
       why="the signature does not verify as Synap CI ($(printf '%s' "$out" | tail -1))"
     fi
@@ -246,5 +267,14 @@ info "Running: synap install --non-interactive --release ${ID} (in ${INSTALL_DIR
 cd "$INSTALL_DIR"
 # SYNAP_DEPLOY_DIR: the bundle has no .git, so name the deploy dir explicitly —
 # the engine's project pin and update lock resolve it before any cd.
+# A person at a terminal with nothing decided: the engine asks, reading the
+# terminal (stdin here is the piped script). Opening it is the test: a device
+# that exists but cannot open (cloud-init, no controlling terminal) means nobody
+# is there to answer.
+TTY="${SYNAP_TTY:-/dev/tty}"
+if [ -z "$NON_INTERACTIVE" ] && [ -z "$DECIDED" ] && [ -z "${SYNAP_DOMAIN:-}" ] && { : <"$TTY"; } 2>/dev/null; then
+  SYNAP_DEPLOY_DIR="$INSTALL_DIR/deploy" \
+    exec bash "$INSTALL_DIR/synap" install --release "$ID" ${ARGS[@]+"${ARGS[@]}"} <"$TTY"
+fi
 SYNAP_DEPLOY_DIR="$INSTALL_DIR/deploy" \
   exec bash "$INSTALL_DIR/synap" install --non-interactive --release "$ID" ${ARGS[@]+"${ARGS[@]}"}

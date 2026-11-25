@@ -122,6 +122,8 @@ export interface SpaceProducedKindInput {
     status: string | null;
     reason: SpaceHeadlineReason;
   } | null;
+  /** `helper`: worked here to serve an output, not one (`SpaceKindAs`); absent = an output. */
+  as?: "helper";
 }
 
 /** One space of `lifecycle.home`. */

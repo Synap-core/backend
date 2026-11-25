@@ -16,10 +16,18 @@ import {
 } from "@synap/database";
 import { TRPCError } from "@trpc/server";
 import { createLogger } from "@synap-core/core";
+import { readRelationReactions } from "@synap-core/types/relations";
 import { auditLog } from "../utils/audit-log.js";
 import { assertProfileSchemaWrite } from "../utils/profile-schema-write-access.js";
 
 const logger = createLogger({ module: "profile-relations-router" });
+
+/** The reactions compile pass, off the request path (never throws). */
+async function reconvergeReactionRules(): Promise<void> {
+  const { convergeReactionRulesSafely } =
+    await import("../services/reactions/reaction-rules-compile.js");
+  await convergeReactionRulesSafely();
+}
 
 export const profileRelationsRouter = router({
   /**
@@ -55,6 +63,16 @@ export const profileRelationsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // The reactions a link declares (`metadata.reactions`) are a closed
+      // union: one that does not read is refused, never stored as a rule
+      // that silently never fires.
+      const declared = readRelationReactions(input.metadata);
+      if (declared.errors.length > 0) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: declared.errors.join(" "),
+        });
+      }
       const db = await getDb();
       const resolutionService = new ProfileResolutionService(db);
       const relDefRepo = new RelationDefRepository(db);
@@ -147,6 +165,10 @@ export const profileRelationsRouter = router({
         },
         "Profile relation linked"
       );
+      if (declared.declarations.length > 0 || alreadyLinked) {
+        // Its rules follow its declaration (created, updated or retired).
+        void reconvergeReactionRules().catch(() => undefined);
+      }
 
       return { link };
     }),
@@ -212,6 +234,8 @@ export const profileRelationsRouter = router({
         },
         "Profile relation unlinked"
       );
+      // A roll-up it declared is retired with it.
+      void reconvergeReactionRules().catch(() => undefined);
 
       return { success: true };
     }),

@@ -70,6 +70,7 @@ const APP: App = {
   templates: [],
   podWideKinds: [],
   ignoredScopes: [],
+  ask: null,
 };
 
 const html = (

@@ -382,3 +382,37 @@ export function resolveServiceWebUrl(
 export function resolveServiceName(raw: string | null | undefined): string {
   return resolveServiceMark(raw, "mono").name;
 }
+
+/** `claude-code`, `codex`, `chatgpt_desktop`: lower-case, no space. */
+const TOKEN_SHAPED = /^[a-z0-9]+(?:[-_.][a-z0-9]+)*$/;
+
+/**
+ * An AGENT's display name, at its source: its own name when a person gave it
+ * one, else its type as the rosters name it ("Claude Code", "Orchestrator").
+ * An agent registered with its type token as its name (`claude-code`, a
+ * client that named itself by slug) counts as unnamed, so no surface has to
+ * humanize a slug ("Claude-code"). Narrow on purpose, a real name is never
+ * replaced: only a name that IS the agent's type, or that is token-shaped AND
+ * a known service id. A type that is already a written name ("Claude
+ * (Web)") is kept as written. Undefined when there is nothing to name it by.
+ */
+export function resolveAgentName(agent: {
+  name?: string | null;
+  agentType?: string | null;
+}): string | undefined {
+  const own = agent.name?.trim() || "";
+  const type = agent.agentType?.trim() || "";
+  const ownIsToken =
+    own !== "" &&
+    ((type !== "" && own.toLowerCase() === type.toLowerCase()) ||
+      (TOKEN_SHAPED.test(own) && normalizeServiceId(own) !== null));
+  if (own && !ownIsToken) return own;
+  const token = type || own;
+  if (!token) return undefined;
+  // A type already written as a name ("Claude (Web)") is shown as written:
+  // only a token (`claude-code`, `orchestrator`) or a known service id is
+  // named through the registry, so a written name is never re-cased.
+  return TOKEN_SHAPED.test(token) || normalizeServiceId(token) !== null
+    ? resolveServiceName(token)
+    : token;
+}

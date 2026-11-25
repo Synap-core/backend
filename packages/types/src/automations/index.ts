@@ -125,12 +125,18 @@ export {
   readMaxRunsPerDay,
   DAILY_CAP_WINDOW_MS,
   AUTOMATION_SKIP_REASONS,
+  AUTOMATION_AUDIENCE_KEY,
+  AUTOMATION_AUDIENCES,
+  DEFAULT_AUTOMATION_AUDIENCE,
+  readAutomationAudience,
 } from "./rule-run-policy.js";
 export type {
   PlaybookRunMode,
   RuleActMode,
   MaxRunsPerDayRead,
   AutomationSkipReason,
+  AutomationAudience,
+  AutomationAudienceRead,
 } from "./rule-run-policy.js";
 
 // ── AI dispatch guardrails: per-run / per-day caps, required filter, cooldown ─

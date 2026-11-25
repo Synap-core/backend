@@ -20,6 +20,8 @@
  */
 
 import {
+  APP_PERSON_WRITE_UNSUPPORTED,
+  appPersonWriteAllowed,
   GRANT_DOOR_UNSUPPORTED,
   GRANT_OWNER_WIDE_UNSUPPORTED,
   isFencedGrant,
@@ -36,6 +38,7 @@ import {
   runWithActingAgent,
   runWithCallingKey,
   runWithClientKey,
+  runWithDelegatedTurnAgent,
   runWithGrant,
   clientKeyForApiKey,
   requestConversationId,
@@ -188,7 +191,11 @@ function logLegacyDelegation(keyId: string): void {
  *   - `act.sub` is verified but NOT entered as the request's acting agent:
  *     `getActingAgentUserId()` outranks the persona the IS names per write
  *     (`permission-check.ts`), so entering it would move every IS write onto a
- *     different governance lane — a separate, dogfooded step.
+ *     different governance lane — a separate, dogfooded step. It IS recorded
+ *     as the turn's delegated agent (`runWithDelegatedTurnAgent`), the proof
+ *     `resolveActorId` accepts when the IS names that same agent as a write's
+ *     persona: the pod chose it for this turn and signed it, so it needs no
+ *     act-as key (a house agent holds none).
  * Grant: the same explicit full access the `is_internal` key carries.
  */
 async function authenticateIsDelegation(
@@ -285,6 +292,18 @@ async function authenticateIsDelegation(
         message: "Synap AI is paused: it does nothing until it is resumed.",
       });
     }
+    // An app's turn that names the personal agent but finds NO live grant (the person revoked it, or the key, since
+    // the turn began) stops here: falling back to the app's grant alone would make the turn wider the moment the
+    // person narrowed it. Without an app claim (the person's own sessions) `none` keeps today's behaviour.
+    if (ceiling.status === "none" && appGrant !== null) {
+      logger.warn(
+        { jti: delegation.jti },
+        "IS delegation refused: Synap AI has no grant"
+      );
+      return authErrorResponse(c, "key_revoked", {
+        message: "Synap AI has no access: connect it on the Keys page.",
+      });
+    }
     if (ceiling.status === "ok") {
       grant = narrowedByApp(ceiling.grant, appGrant);
       bounded = true;
@@ -313,7 +332,16 @@ async function authenticateIsDelegation(
       { id: delegation.audience, keyType: "is_internal" },
       requestConversationId(c.req.header(CONVERSATION_HEADER))
     ),
-    () => runWithGrant(grant, () => next())
+    () =>
+      runWithGrant(grant, () =>
+        runWithDelegatedTurnAgent(
+          {
+            operatorUserId: delegation.operatorUserId,
+            agentUserId: delegation.agentUserId,
+          },
+          () => next()
+        )
+      )
   );
 }
 
@@ -631,8 +659,7 @@ export const hubAuthMiddleware = async (
         // personal agent here to stamp agentUserId — doing so would flip
         // `checkPermissionOrPropose` from the operator's RBAC + legacy
         // `source:"intelligence"` path onto the AGENT governance ladder, and a
-        // personal agent that isn't a member of the target workspace would then
-        // file a `workspace.join` proposal instead of the intended write
+        // personal agent's ladder would then decide the intended write
         // (outcome change). Attribution is instead resolved inside
         // `createProposal` (permission-check.ts) AFTER the ladder has already
         // decided on the operator — so the OUTCOME is unchanged and only the
@@ -660,6 +687,21 @@ export const hubAuthMiddleware = async (
           403
         );
       }
+    }
+    // A person's app token acts AS the person, so every owner check passes
+    // for it: it may not use a write nobody has classified against its grant
+    // yet (A1 step 1), whatever that grant is.
+    if (
+      keyRecord.keyType === APP_PERSON_KEY_TYPE &&
+      !appPersonWriteAllowed(c.req.method, rel)
+    ) {
+      return c.json(
+        {
+          error: APP_PERSON_WRITE_UNSUPPORTED,
+          code: "GRANT_DOOR_UNSUPPORTED",
+        },
+        403
+      );
     }
     // Owner-wide doors (webhooks, …; plus write-only owner-wide doors such as
     // capability credentials): no grant narrows their effect, so only an

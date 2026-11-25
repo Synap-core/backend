@@ -8,8 +8,11 @@ import {
   eq,
   inArray,
   getWorkspaceMembership,
+  setRunStatus,
   transitionProposal,
+  ownerOfProposal,
 } from "@synap/database";
+import { LIVE_RUN_STATUSES } from "@synap-core/types/units";
 // `createLinks` is the ONE link door and it lives in @synap/api, not
 // @synap/database — the database package's `ensure-external-channel.ts` says so
 // explicitly. Importing it from @synap/database is a compile error, which is how
@@ -18,8 +21,12 @@ import { createLinks } from "../../../services/links/links-service.js";
 import { ProposalStatus } from "@synap/database/schema";
 import { isLikelyUUID } from "@synap-core/types/proposals";
 import type { GuidanceDeclaration } from "@synap-core/types/guidance";
+import type { PlaybookRunner } from "@synap/playbooks";
 import type { Context } from "../../../context.js";
-import { registerProposalExecutor } from "../execution-registry.js";
+import {
+  registerProposalExecutor,
+  type ProposalEffect,
+} from "../execution-registry.js";
 import {
   assertApplied,
   dispatchExternalOnce,
@@ -28,6 +35,7 @@ import {
 import type { PlaybookStageInput } from "../../../schemas/playbook-stage.js";
 import { settleParentAutomationRunFromChild } from "@synap/jobs";
 import { readBatchSubjectIds } from "@synap/jobs/utils/automation-governance.js";
+import { findInFlightRunSession } from "@synap/jobs/utils/run-in-flight.js";
 
 /** Register the playbook/* approve executors. */
 /**
@@ -56,9 +64,20 @@ export function missingRunArgs(input: {
  * `playbooks.run`, shown after "Couldn't apply — ". Each one says what to do.
  */
 export function notStartedReason(result: {
-  status: "proposed" | "blocked" | "skipped" | "draft";
+  status: "proposed" | "blocked" | "skipped" | "draft" | "already_running";
   message: string;
+  session?: { id?: unknown } | null;
 }): string {
+  if (result.status === "already_running") {
+    // One live run per object: the person already has a live run of this
+    // playbook on this record, so approving would start a second one. The
+    // claim is released: approve again once that run has ended.
+    const id =
+      typeof result.session?.id === "string"
+        ? ` (session ${result.session.id})`
+        : "";
+    return `this playbook is already running on this record${id}, so approving did not start a second run — open that run, or approve again once it has ended`;
+  }
   if (result.status === "proposed") {
     // The approver's OWN check refused (the agent's policy is not consulted on
     // an approved replay), so this one really is about their role.
@@ -83,8 +102,9 @@ export function registerPlaybookExecutors(): void {
   // (object-proposal manifest W1) A gated playbook RAW create lands here on
   // approval (the promote path emits `playbook/promote` — its own executor
   // below — so this key materializes exactly one shape). Materializes via the
-  // SAME playbooksRouter.create the direct path uses — re-run as the APPROVER
-  // with NO agentUserId + no source, so the gate auto-grants for the operator.
+  // SAME playbooksRouter.create the direct path uses — re-run as the person
+  // the proposal was filed for (never the approver) with NO agentUserId + no
+  // source, so the gate grants on that person's role.
   // The propose gate widened `data` to the full create input (goalTemplate is
   // required by createInputSchema).
   //
@@ -132,13 +152,26 @@ export function registerPlaybookExecutors(): void {
           message: "No workspace access",
         });
       }
+      const owner = await ownerOfProposal(db, proposal, userId);
+      const ownerMembership =
+        owner.ownerId === userId
+          ? membership
+          : await getWorkspaceMembership(db, workspaceId, owner.ownerId);
+      if (!ownerMembership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "The person this playbook was proposed for is not a member of its space.",
+        });
+      }
       const { playbooksRouter } = await import("../../playbooks.js");
       const playbookCaller = playbooksRouter.createCaller({
         db,
         authenticated: true as const,
-        userId,
+        userId: owner.ownerId,
         workspaceId,
-        workspaceRole: membership.role,
+        workspaceRole: ownerMembership.role,
+        approvedAuthorAgentUserId: owner.agentUserId,
       } as unknown as Context);
       const createArgs = {
         ...(isLikelyUUID(proposal.targetId)
@@ -161,11 +194,13 @@ export function registerPlaybookExecutors(): void {
         stages: innerData.stages as PlaybookStageInput[] | undefined,
         // Re-validated by `playbooks.create` (`sessionCriteriaSchema`).
         criteria: innerData.criteria,
-        // What the playbook NEEDS the pod to do. Re-validated by
-        // `playbooks.create` (`playbookRequiredIntentsSchema`). Read back for
-        // the same reason `criteria` is: without it an APPROVED playbook
-        // materializes with an empty requirement list — the agent's declaration
-        // is silently dropped on the one path a human explicitly approved.
+        // What a run of it may use, "only these". Re-validated by
+        // `playbooks.create` (`playbookToolsSchema`). Read back for the same
+        // reason `criteria` is: without it an APPROVED playbook materializes
+        // with no tools — the declaration silently dropped on the one path a
+        // human explicitly approved. A proposal filed before 0419 carries
+        // `requiredIntents` instead: replayed too, and folded by the door.
+        tools: innerData.tools as string[] | undefined,
         requiredIntents: innerData.requiredIntents as string[] | undefined,
         // The rules the playbook follows. Re-validated by `playbooks.create`
         // (`playbookGuidanceSchema`); read back so an approved playbook keeps
@@ -179,7 +214,12 @@ export function registerPlaybookExecutors(): void {
         // when a human approves it.
         metadata: innerData.metadata as Record<string, unknown> | undefined,
         executor: innerData.executor,
-        status: innerData.status,
+        // An approval IS the activation: the approver saw this playbook and said
+        // yes, so an author who did not state a status gets `active`. An author
+        // who asked for `draft` (or paused) keeps exactly that — the proposal's
+        // stored data holds a status only when the author stated one
+        // (`playbooks.create` has no schema default).
+        status: innerData.status ?? "active",
         // 0240: a project-scoped BLUEPRINT approved without its scope would
         // materialize as a session template — the one field that decides what
         // the template even is.
@@ -192,6 +232,10 @@ export function registerPlaybookExecutors(): void {
         // approval genuinely covers it, and the executor will inject it.
         contextSkill: innerData.contextSkill as
           { name?: string; body: string } | undefined,
+        // Who runs it and the tools it needs (0416). Re-validated by
+        // `playbooks.create`; read back so an approved playbook keeps them.
+        runner: innerData.runner as PlaybookRunner | null | undefined,
+        requires: innerData.requires as string[] | undefined,
       };
       // The replay must APPLY, never re-propose — see `assertApplied`.
       const created = await playbookCaller.create(
@@ -300,6 +344,8 @@ export function registerPlaybookExecutors(): void {
         "expectedOutputs",
         "stages",
         "criteria",
+        "tools",
+        // A proposal filed before 0419: the update door folds it into `tools`.
         "requiredIntents",
         "guidance",
         "subjectProfile",
@@ -312,6 +358,8 @@ export function registerPlaybookExecutors(): void {
         "executor",
         "status",
         "scope",
+        "runner",
+        "requires",
         "metadata",
       ] as const;
       const patch: Record<string, unknown> = { id: playbookId };
@@ -430,11 +478,10 @@ export function registerPlaybookExecutors(): void {
   // path is reachable by construction, not by accident.
   //
   // ⚠️ Archiving is TWO writes, not one: `playbooks.status = 'archived'` AND
-  // `materializePlaybookCronAutomation`, which tears down the backing cron.
+  // the activator pass, which retires what fires it (its schedule included).
   // Setting the status alone would leave a live automation firing a playbook
-  // nothing surfaces (the S1 note at the direct call site says so explicitly).
-  // So this replays through `playbooksRouter.archive` rather than writing the
-  // column — ONE door, both effects, and it cannot drift from the direct path.
+  // nothing surfaces. So this replays through `playbooksRouter.archive` rather
+  // than writing the column — ONE door, both effects.
   //
   // Re-running the gated procedure does NOT re-propose: the caller ctx carries
   // no `agentUserId`, so `checkPermissionOrPropose` takes the human path and
@@ -569,9 +616,12 @@ export function registerPlaybookExecutors(): void {
   //
   // ⚠️ IDEMPOTENCY — verified, and the standard guard is NOT sufficient.
   // `runPlaybook` is NOT idempotent on this path: its `idempotentBySubject`
-  // reuse is OPT-IN and `playbooks.run` never sets it ("manual runs leave this
-  // false so each click starts fresh"). Two approvals would mint two sessions,
-  // two channels, two ledger rows and two executor dispatches. The sibling
+  // reuse is OPT-IN and `playbooks.run` never sets it. The door's ONE LIVE RUN
+  // PER OBJECT guard (`oneLivePerSubject`, founder 2026-11-16) answers a
+  // second run of the playbook on the same subject `already_running`, but a
+  // run with no subject or asked as "start another" still starts each time:
+  // two approvals would mint two sessions, two channels, two ledger rows and
+  // two executor dispatches. The sibling
   // `status === APPROVED` guard is a read-then-write and races a double-click,
   // so it is kept only as the cheap short-circuit; the real floor is
   // `dispatchExternalOnce`, this directory's CAS-claim primitive for an
@@ -653,12 +703,36 @@ export function registerPlaybookExecutors(): void {
       // arguments the gate discarded (see the ⚠️ note above).
       const playbook = await db.query.playbooks.findFirst({
         where: eq(playbooks.id, playbookId),
-        columns: { id: true, name: true, params: true, subjectProfile: true },
+        columns: {
+          id: true,
+          name: true,
+          params: true,
+          subjectProfile: true,
+          workspaceId: true,
+          status: true,
+        },
       });
       if (!playbook) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Playbook to run no longer exists",
+        });
+      }
+      // RESOLVED BEFORE THE DISPATCH CLAIM: a playbook the run door would
+      // refuse here (another space's, or retired since it was proposed) is
+      // refused by that same rule (`playbookRunRefusal`, what
+      // `resolveRunnablePlaybook` applies) BEFORE `dispatchExternalOnce`
+      // claims the proposal. Thrown inside the claim it kept the claim, and
+      // the next approval read "may already have reached the service" about
+      // a run that never started (ticket e93cf92b, same class as e74a086c).
+      // Imported lazily, as `resolveRunnablePlaybook` is above.
+      const { playbookRunRefusal } =
+        await import("../../../services/playbooks/playbook-lifecycle.js");
+      const notRunnable = await playbookRunRefusal(playbook, workspaceId, db);
+      if (notRunnable) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Cannot apply this approval: ${notRunnable} Nothing was started.`,
         });
       }
       const declaredParams = Array.isArray(playbook.params)
@@ -788,6 +862,17 @@ export function registerPlaybookExecutors(): void {
             : {}),
           // Synap AI asked for this run stays Synap AI once approved.
           ...(inner.runOn === "synap_ai" ? { runOn: "synap_ai" as const } : {}),
+          // Who works each step, as asked: re-validated by the run door.
+          ...(inner.stageRunners &&
+          typeof inner.stageRunners === "object" &&
+          !Array.isArray(inner.stageRunners)
+            ? {
+                stageRunners: inner.stageRunners as Record<
+                  string,
+                  PlaybookRunner
+                >,
+              }
+            : {}),
           // A trial (the rule lab) stays a trial once approved: re-validated
           // by the run door's own schema.
           ...(inner.trial && typeof inner.trial === "object"
@@ -797,7 +882,41 @@ export function registerPlaybookExecutors(): void {
                 },
               }
             : {}),
+          // A run asked as "start another" stays one once approved; without
+          // it the door answers `already_running` while a run is live on the
+          // subject (one live run per object).
+          ...(inner.startAnother === true ? { startAnother: true } : {}),
         });
+      // ONE RUN PER SUBJECT for a RULE's run (an activator's proposal): the
+      // filing step already files none while a run of this playbook is in
+      // flight on the subject (`steps/playbook-run.ts`); this is the same
+      // check at approval, for a proposal that was waiting when that run
+      // started (live: 100d7d65, filed while run 12dbd086 was open on Video
+      // 01). Approving it would start a DUPLICATE run, so nothing is started
+      // and the refusal names the open run. A person's own run proposal goes
+      // to the run door, which answers `already_running` while THEIR run of it
+      // is live on the subject (one live run per object, founder 2026-11-16)
+      // unless it was asked as "start another"; a batch keeps its own
+      // per-subject receipt.
+      const singleSubject =
+        subjects.length <= 1 ? (subjects[0] ?? carriedSubjectId) : undefined;
+      if (raw.source === "automation" && singleSubject) {
+        const inFlight = await findInFlightRunSession({
+          playbookId,
+          subjectId: singleSubject,
+        });
+        if (inFlight) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              `"${playbook.name}" is already running on this record ` +
+              `(${inFlight.title ? `"${inFlight.title}", ` : ""}session ${inFlight.id}). ` +
+              "Approving would start a second run, so nothing was started. " +
+              "Open that run, or reject this proposal.",
+          });
+        }
+      }
+
       let batch: BatchRunReceipt | undefined;
       // What this approval started — EVERY approval, not only a batch: the
       // session is the door the person opens next, and a single run used to
@@ -812,14 +931,32 @@ export function registerPlaybookExecutors(): void {
         // means nothing was started, so the claim is released (see below).
         const firstSubject = subjects[0] ?? carriedSubjectId;
         const result = await runFor(firstSubject);
-        if (result.status === "running" && subjects.length > 1) {
+        // A one-shot (`executor: "generate"`) run that filed its draft is a
+        // run that STARTED and finished at once: delivered like `running`.
+        const started =
+          result.status === "running" || result.status === "generated";
+        // A BATCH whose first subject already has its run live (one live run
+        // per object): that subject is skipped, never failed, and the rest of
+        // the batch still runs. A single proposal's `already_running` stays a
+        // refusal below (nothing started, the claim is released).
+        const firstSkipped =
+          !started &&
+          subjects.length > 1 &&
+          result.status === "already_running";
+        if ((started || firstSkipped) && subjects.length > 1) {
           batch = await runBatchRest(
             subjects.slice(1),
             runFor,
-            startedRun(subjects[0]!, result)
+            started
+              ? { started: [startedRun(subjects[0]!, result)], failed: [] }
+              : {
+                  started: [],
+                  failed: [],
+                  skipped: [skippedRun(subjects[0]!, result)],
+                }
           );
         }
-        if (result.status === "running") {
+        if (started || (batch && batch.started.length > 0)) {
           receipt = batch ?? {
             started: [startedRun(firstSubject, result)],
             failed: [],
@@ -827,7 +964,9 @@ export function registerPlaybookExecutors(): void {
           return { delivered: true as const };
         }
         // Nothing started, so the claim is released and the person can approve
-        // again once the reason is fixed.
+        // again once the reason is fixed. A batch whose first subject was
+        // already running and whose rest started nothing says the first
+        // subject's reason (approve again once that run has ended).
         return { delivered: false as const, reason: notStartedReason(result) };
       });
 
@@ -866,9 +1005,19 @@ export function registerPlaybookExecutors(): void {
       return {
         success: true,
         // The approve response's "what this created" (REST/CLI callers).
-        ...(firstSessionId ? { primaryId: firstSessionId } : {}),
+        ...(firstSessionId
+          ? { primaryId: firstSessionId, primaryKind: "session" }
+          : {}),
         ...(batch
-          ? { batch: { started: batch.started.length, failed: batch.failed } }
+          ? {
+              batch: {
+                started: batch.started.length,
+                failed: batch.failed,
+                ...(batch.skipped
+                  ? { skipped: batch.skipped.map((s) => s.subjectId) }
+                  : {}),
+              },
+            }
           : {}),
       };
     },
@@ -958,23 +1107,52 @@ export function registerPlaybookExecutors(): void {
         nextStatus === "failed" ||
         nextStatus === "proposed";
 
-      await db
-        .update(playbookRuns)
-        .set({
-          status: nextStatus,
+      // COMPARE-AND-SET: the approval replays the update only onto a run that
+      // is still LIVE, as the direct capture does (`applyRunCapture`). The
+      // run was read above without a status floor, and the person may approve
+      // long after it was filed: a run cancelled or finished since keeps its
+      // verdict, and the receipt says nothing was written.
+      const { rows: written } = await setRunStatus(db, {
+        runId,
+        from: LIVE_RUN_STATUSES,
+        to: nextStatus,
+        // The person approved the agent's capture: theirs, with its proposal.
+        actor: { kind: "human", userId },
+        proposalId: input.proposalId,
+        set: {
           summary: (inner.summary as string | undefined) ?? run.summary,
           error: (inner.error as string | undefined) ?? run.error,
           completedAt: terminal ? new Date() : run.completedAt,
-        })
-        .where(eq(playbookRuns.id, runId));
+        },
+      });
       // A failed child of an automation run settles its parent (never throws).
-      if (terminal)
+      if (terminal && written.length > 0)
         await settleParentAutomationRunFromChild({ playbookRunId: runId });
+      const effect: ProposalEffect =
+        written.length > 0
+          ? {
+              applied: "verified",
+              rows: written.length,
+              ids: written.map((r) => r.id),
+              subject: "playbook_run",
+            }
+          : {
+              applied: "none",
+              reason:
+                "The run had already ended (cancelled or finished) when this update was " +
+                "approved, so it keeps its verdict. The proposal is answered; nothing was changed.",
+            };
 
       // `session → produced → entity` provenance, workspace-validated and
-      // capped exactly as the direct path does.
+      // capped exactly as the direct path does — only onto the run the
+      // update landed on (an ended run's record is not rewritten).
       const producedEntityIds = inner.producedEntityIds as string[] | undefined;
-      if (run.sessionId && run.workspaceId && producedEntityIds?.length) {
+      if (
+        written.length > 0 &&
+        run.sessionId &&
+        run.workspaceId &&
+        producedEntityIds?.length
+      ) {
         const requested = producedEntityIds.slice(0, 100);
         const found = await db.query.entities.findMany({
           where: inArray(entities.id, requested),
@@ -1015,7 +1193,7 @@ export function registerPlaybookExecutors(): void {
         "approved",
         userId
       );
-      return { success: true };
+      return { success: true, effect };
     },
   });
 
@@ -1099,10 +1277,24 @@ export interface StartedRun {
   runId?: string;
 }
 
+/**
+ * A subject of a batch approval that started nothing because the person
+ * already has a live run of the playbook on it (the run door's
+ * `already_running`, one live run per object): skipped, never failed. The
+ * live session is the run to open.
+ */
+export interface SkippedRun {
+  subjectId: string;
+  sessionId?: string;
+  reason: "already_running";
+}
+
 /** What a run approval started — stamped on the proposal as `data.runResult`. */
 export interface BatchRunReceipt {
   started: StartedRun[];
   failed: string[];
+  /** Present only when a subject was skipped (its run was already live). */
+  skipped?: SkippedRun[];
 }
 
 function startedRun(
@@ -1120,26 +1312,43 @@ function startedRun(
   };
 }
 
+function skippedRun(subjectId: string, result: unknown): SkippedRun {
+  const r = result as { session?: { id?: unknown } | null };
+  return {
+    subjectId,
+    ...(typeof r.session?.id === "string" ? { sessionId: r.session.id } : {}),
+    reason: "already_running",
+  };
+}
+
 /**
- * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time.
- * A subject whose run fails (deleted since, no longer visible) is reported,
- * never allowed to stop its siblings: the approval stands for every subject
- * that can still run. Every started run is returned with its session.
+ * Start the rest of a batch's runs, {@link BATCH_RUN_CONCURRENCY} at a time,
+ * on top of what the first subject did (`seed`). A subject whose run fails
+ * (deleted since, no longer visible) is reported, never allowed to stop its
+ * siblings: the approval stands for every subject that can still run. A
+ * subject whose run is already live (`already_running`) is SKIPPED with that
+ * session, never counted as failed. Every started run is returned with its
+ * session.
  */
 export async function runBatchRest(
   subjects: string[],
   runFor: (subjectId: string) => Promise<{ status: string }>,
-  first: StartedRun
+  seed: BatchRunReceipt
 ): Promise<BatchRunReceipt> {
-  const started: StartedRun[] = [first];
-  const failed: string[] = [];
+  const started: StartedRun[] = [...seed.started];
+  const failed: string[] = [...seed.failed];
+  const skipped: SkippedRun[] = [...(seed.skipped ?? [])];
   let next = 0;
   const worker = async () => {
     while (next < subjects.length) {
       const subjectId = subjects[next++]!;
       try {
         const r = await runFor(subjectId);
-        if (r.status === "running") started.push(startedRun(subjectId, r));
+        // `generated`: a one-shot run filed its draft (it has no session).
+        if (r.status === "running" || r.status === "generated")
+          started.push(startedRun(subjectId, r));
+        else if (r.status === "already_running")
+          skipped.push(skippedRun(subjectId, r));
         else failed.push(subjectId);
       } catch {
         failed.push(subjectId);
@@ -1152,5 +1361,5 @@ export async function runBatchRest(
       worker
     )
   );
-  return { started, failed };
+  return { started, failed, ...(skipped.length > 0 ? { skipped } : {}) };
 }

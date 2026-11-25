@@ -6,6 +6,7 @@
  */
 
 export type { Relation, NewRelation } from "./rows.js";
+export * from "./reactions.js";
 
 /** Relation type — any string slug from workspace relation_defs */
 export type RelationType = string;

@@ -30,7 +30,7 @@
  * code (an unresolvable `require` dependency never throws; an unresolvable
  * entityLink is a soft `report.entityLinks.unresolved` entry). A target that
  * cannot be resolved — because the profile is owned by a template that is not
- * installed, or is `shared` without a `profile_workspace_access` grant for this
+ * installed, or is `shared` without a `space_access` grant for this
  * workspace — leaves `target_profile_id` NULL (exactly today's behaviour) and is
  * recorded in `unresolved` with a reason. Nothing throws.
  *
@@ -108,7 +108,7 @@ export async function resolvePropertyTargetProfiles(
   // Targets not declared in THIS definition (a sibling template's kind, e.g.
   // `audience` owned by `foundation`) fall back to the live workspace lens via
   // the canonical resolver — which honours profile scoping: a `shared` profile
-  // resolves only through a `profile_workspace_access` grant, a `workspace` one
+  // resolves only through a `space_access` grant, a `workspace` one
   // only when it belongs to this workspace. Never a raw slug query.
   const targetCache = new Map<string, string | null>();
   const resolveTargetId = async (slug: string): Promise<string | null> => {

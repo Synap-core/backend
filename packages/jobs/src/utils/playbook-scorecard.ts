@@ -35,17 +35,27 @@ import {
   focusSessions,
   sessionEvaluations,
   events,
+  links,
+  tools,
+  skills,
 } from "@synap/database";
 import type { db as Db } from "@synap/database";
 import {
   CRITERION_SLOT_KIND,
+  isTerminalSessionStatus,
   latestEvaluationPerCriterion,
   type EvaluationRowLike,
 } from "@synap-core/types/focus-sessions";
 import { isCriterionRequired, readCriteria } from "@synap/playbooks";
+import { isUuid } from "@synap-core/types/property-render";
 import { FOCUS_SESSION_CLOSED_EVENT_TYPE } from "../workers/automation-trigger-matcher.js";
 
-const TERMINAL = new Set(["closed", "cancelled", "failed"]);
+/**
+ * How far back the runs that teach a playbook are read (the lessons scanner's
+ * evidence window, and the precedents an agent is shown). Older runs are
+ * stale.
+ */
+export const PLAYBOOK_LEARNING_WINDOW_DAYS = 90;
 
 export interface ScorecardSessionRow {
   id: string;
@@ -223,7 +233,8 @@ export function projectPlaybookScorecard(
       evaluated: closed.filter((s) => bySession.has(s.id)).length,
       reopened: sessions.filter(
         (s) =>
-          s.closeEvents >= 2 || (s.closeEvents >= 1 && !TERMINAL.has(s.status))
+          s.closeEvents >= 2 ||
+          (s.closeEvents >= 1 && !isTerminalSessionStatus(s.status))
       ).length,
       instantiated: sessions.filter((s) => !s.attached).length,
       attached: sessions.filter((s) => s.attached).length,
@@ -235,13 +246,121 @@ export function projectPlaybookScorecard(
 }
 
 /**
+ * The SUCCESSFUL runs, what a precedent is made of: closed sessions
+ * whose every REQUIRED criterion's current verdict is `pass`. A run that
+ * declared no required criterion, or left one unmeasured, is not counted:
+ * success is graded, never assumed. Pure, over the same rows the scorecard
+ * reads.
+ */
+export function successfulRunIds(
+  sessions: readonly ScorecardSessionRow[],
+  evaluations: readonly ScorecardEvaluationRow[]
+): string[] {
+  const bySession = new Map<string, ScorecardEvaluationRow[]>();
+  for (const r of evaluations) {
+    bySession.set(r.sessionId, [...(bySession.get(r.sessionId) ?? []), r]);
+  }
+  return sessions
+    .filter((s) => {
+      if (s.status !== "closed") return false;
+      const required = readCriteria(s.criteria).filter(isCriterionRequired);
+      if (required.length === 0) return false;
+      const current = new Map(
+        latestEvaluationPerCriterion(bySession.get(s.id) ?? []).map((r) => [
+          r.criterionKey,
+          r.verdict,
+        ])
+      );
+      return required.every((c) => current.get(c.key) === "pass");
+    })
+    .map((s) => s.id);
+}
+
+/** A tool or skill a run recorded using (`session --used--> tool|skill`). */
+export interface RunUsedPart {
+  kind: "tool" | "skill";
+  id: string;
+  name: string;
+}
+
+/**
+ * What each run USED, from the `session --used--> tool|skill` edges the IS
+ * tool-wrapper and `runs.capture` write at the moment of use (the RECORDED
+ * part of `readSessionUsage`). Named by the tool's or skill's own row; an
+ * edge whose target no longer exists is left out. A run with no edge maps to
+ * `[]`. THROWS on a failed read.
+ */
+export async function loadRunsUsedParts(
+  database: typeof Db,
+  sessionIds: readonly string[]
+): Promise<Map<string, RunUsedPart[]>> {
+  const out = new Map<string, RunUsedPart[]>(sessionIds.map((id) => [id, []]));
+  if (sessionIds.length === 0) return out;
+  const edges = await database
+    .select({ fromId: links.fromId, toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, "session"),
+        inArray(links.fromId, [...sessionIds]),
+        eq(links.linkType, "used"),
+        inArray(links.toType, ["tool", "skill"])
+      )
+    );
+  const idsOf = (kind: string) => [
+    ...new Set(
+      edges
+        .filter((e) => e.toType === kind && isUuid(e.toId))
+        .map((e) => e.toId)
+    ),
+  ];
+  const toolIds = idsOf("tool");
+  const skillIds = idsOf("skill");
+  const names = new Map<string, string>();
+  if (toolIds.length > 0) {
+    for (const t of await database
+      .select({ id: tools.id, name: tools.name })
+      .from(tools)
+      .where(inArray(tools.id, toolIds))) {
+      names.set(`tool:${t.id}`, t.name);
+    }
+  }
+  if (skillIds.length > 0) {
+    for (const s of await database
+      .select({ id: skills.id, slug: skills.slug, name: skills.name })
+      .from(skills)
+      .where(inArray(skills.id, skillIds))) {
+      // The slug is what `synap_load_skill` takes; the name when it has none.
+      names.set(`skill:${s.id}`, s.slug ?? s.name);
+    }
+  }
+  for (const e of edges) {
+    const kind = e.toType as RunUsedPart["kind"];
+    const name = names.get(`${kind}:${e.toId}`);
+    if (!name) continue;
+    const list = out.get(e.fromId) ?? [];
+    if (!list.some((p) => p.kind === kind && p.id === e.toId)) {
+      list.push({ kind, id: e.toId, name });
+    }
+    out.set(e.fromId, list);
+  }
+  return out;
+}
+
+/**
  * The rows the projection reads: every session of `playbookId` owned by
  * `userId` (optionally only those closed after `closedAfter`), with its close-
  * event count, and every evaluation row of those sessions.
  */
 export async function loadPlaybookScorecardRows(
   database: typeof Db,
-  params: { playbookIds: string[]; userId: string; closedAfter?: Date | null }
+  params: {
+    playbookIds: string[];
+    userId: string;
+    closedAfter?: Date | null;
+    /** At most this many sessions, the most recently closed first. */
+    limit?: number;
+  }
 ): Promise<{
   sessions: ScorecardSessionRow[];
   evaluations: ScorecardEvaluationRow[];
@@ -280,7 +399,9 @@ export async function loadPlaybookScorecardRows(
       >`${focusSessions.metadata} #>> '{followedVia}'`,
     })
     .from(focusSessions)
-    .where(where);
+    .where(where)
+    .orderBy(drizzleSql`${focusSessions.closedAt} desc nulls last`)
+    .limit(params.limit ?? Number.MAX_SAFE_INTEGER);
   const sessions = rows.map((r) => ({
     ...r,
     status: String(r.status),

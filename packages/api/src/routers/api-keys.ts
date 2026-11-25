@@ -86,7 +86,12 @@ import {
   decideOAuthAuthorization,
   getOAuthConsentContext,
 } from "./oauth/consent.js";
+import {
+  AccessWritePlaceInputSchema,
+  AppAccessInputSchema,
+} from "../services/app-access-input.js";
 import { OAuthError } from "./oauth/protocol.js";
+import { CIMD_MAX_BYTES } from "./oauth/client-metadata.js";
 import { readKeyDetail } from "../services/key-detail.js";
 import { logOAuthRefusal } from "./oauth/refusal-log.js";
 import { isPodAdminOrigin } from "../utils/pod-admin-origin.js";
@@ -204,7 +209,12 @@ const oauthAuthorizeParamsSchema = z.object({
   clientId: z.string().min(1).max(512),
   redirectUri: z.string().min(1).max(2048),
   responseType: z.string().max(64).optional(),
-  scope: z.string().max(1024).optional(),
+  // The scope /authorize forwards is the app's declared permissions joined
+  // (routes.ts), and they all come from its description of at most
+  // CIMD_MAX_BYTES: the bound follows that limit, never a number of its own.
+  // A fixed 1024 refused Content Studio's 48 permissions (1046 characters)
+  // once the description limits were raised (1ecd985fa).
+  scope: z.string().max(CIMD_MAX_BYTES).optional(),
   state: z.string().max(2048).optional(),
   codeChallenge: z.string().max(256).optional(),
   codeChallengeMethod: z.string().max(64).optional(),
@@ -217,6 +227,9 @@ const oauthAuthorizeParamsSchema = z.object({
   // /authorize's signed request time (`auth_req`), for
   // `prompt=login` / `max_age=0`.
   authRequest: z.string().max(128).optional(),
+  // A pod app's `synap_ask` (the short consent, plan 647ebfd4 option C):
+  // at most 16 pairs of a permission and a space id or template slug.
+  synapAsk: z.string().max(4096).optional(),
 });
 
 /**
@@ -1627,6 +1640,11 @@ export const apiKeysRouter = router({
           )
           .max(512)
           .optional(),
+        // A pod app (W3d): the person's AppAccess v2. Untrusted — the pod's
+        // ceiling bounds it (`connectOAuthAppAccess`). Wins over `approved`.
+        access: AppAccessInputSchema.optional(),
+        // The short ask (W3d, Q4): where its first change lands.
+        askWritePlace: AccessWritePlaceInputSchema.optional(),
         // "Sign in with Synap": the `appSignIn.fingerprint` the screen
         // rendered — an approval is only for exactly what was shown.
         appSignInFingerprint: z.string().max(128).optional(),

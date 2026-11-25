@@ -660,6 +660,9 @@ importers:
       '@synap/governance-policy':
         specifier: workspace:*
         version: link:../governance-policy
+      '@synap/shared-utils':
+        specifier: workspace:*
+        version: link:../shared-utils
       '@synap/storage':
         specifier: workspace:*
         version: link:../storage
@@ -756,7 +759,14 @@ importers:
         specifier: ^4.0.7
         version: 4.0.17(@opentelemetry/api@1.9.0)(@types/node@25.0.7)(@vitest/ui@4.0.17)(jiti@2.6.1)(lightningcss@1.32.0)(tsx@4.21.0)(yaml@2.9.1)
 
-  packages/external-connect-client: {}
+  packages/external-connect-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.28
+      typescript:
+        specifier: ^5.3.3
+        version: 5.9.3
 
   packages/feed-service:
     dependencies:
@@ -913,9 +923,6 @@ importers:
       ai:
         specifier: ^4.0.0
         version: 4.3.19(react@19.2.3)(zod@4.6.7)
-      cron-parser:
-        specifier: ^4.9.0
-        version: 4.9.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@cloudflare/workers-types@4.20260113.0)(@electric-sql/pglite@0.5.8)(@opentelemetry/api@1.9.0)(@types/pg@8.16.0)(pg@8.16.3)(postgres@3.4.8)

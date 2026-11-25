@@ -189,7 +189,12 @@ function showApprovalOutcomeToast(run: ApprovalRun): void {
             {copy.detail}
           </span>
         )}
-        {door && <ExitLink exit={door} label={approvalProgressT()("door")} />}
+        {door && (
+          <ExitLink
+            exit={door}
+            label={copy.doorLabel ?? approvalProgressT()("door")}
+          />
+        )}
         {copy.resumable && (
           <ResumeButton
             proposalId={run.proposalId}

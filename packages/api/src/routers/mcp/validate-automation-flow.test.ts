@@ -74,7 +74,7 @@ describe("validateFlowCapabilities", () => {
   });
 
   it("accepts a VERB-ONLY node (no capabilityId) — the first-party shape", async () => {
-    // ensure-report-automation.ts emits exactly this: { verbId: "ai.generate" }
+    // The base.yaml report automation emits exactly this: { verbId: "ai.generate" }
     // with no capabilityId. A missing capabilityId is NORMAL, never invalid.
     const r = await validateFlowCapabilities(
       [capNode("analyze", { verbId: "ai.generate", verbKind: "read" })],

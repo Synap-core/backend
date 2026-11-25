@@ -5,7 +5,7 @@
  * unit boundary: each caller is the seam where the real code routes to an
  * existing canonical door (skills service / automations materializer / rule
  * service). What these tests pin is the materializer's own contract —
- * ordering, ref resolution, the forced-disabled guarantee, and per-op
+ * ordering, ref resolution, the asked status handed to the door, and per-op
  * resilience — not the doors' internals.
  */
 
@@ -58,7 +58,7 @@ const ruleOp: CompositeProposalOperation = {
 };
 
 describe("Rule Loop composite ops", () => {
-  it("a create_automation op materialises DISABLED even when it says enabled:true", async () => {
+  it("a create_automation op hands the status it asked for to the door", async () => {
     const automationCaller = stubAutomationCaller();
     const result = await materializeCompositeGraph(
       [{ ...automationOp, enabled: true } as CompositeProposalOperation],
@@ -69,16 +69,28 @@ describe("Rule Loop composite ops", () => {
     );
 
     expect(automationCaller.create).toHaveBeenCalledWith(
-      expect.objectContaining({ enabled: false })
+      expect.objectContaining({ enabled: true })
     );
     expect(result.automations).toEqual([
       expect.objectContaining({
         automationId: "auto-1",
-        enabled: false,
         enabledRequested: true,
-        enabledOverridden: true,
       }),
     ]);
+  });
+
+  it("a create_automation op that states nothing leaves the status to the door", async () => {
+    const automationCaller = stubAutomationCaller();
+    await materializeCompositeGraph(
+      [automationOp],
+      noopEntityCaller,
+      noopRelationCaller,
+      undefined,
+      { automationCaller }
+    );
+    expect(
+      (automationCaller.create as ReturnType<typeof vi.fn>).mock.calls[0]![0]
+    ).not.toHaveProperty("enabled");
   });
 
   it("ONE approval materialises skill + automation + rule together, refs resolved in-batch", async () => {

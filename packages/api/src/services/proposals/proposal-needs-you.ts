@@ -46,6 +46,7 @@ import {
   type ProposalWaitsRow,
 } from "./proposal-waits.js";
 import { isUuid } from "@synap-core/types/property-render";
+import { cannotApplyYet } from "@synap-core/types/proposals/cannot-apply";
 import { sessionIdsBlockingOpenPr } from "../dev-loop/open-pr-blocking.js";
 
 export interface ProposalNeedsYouRow extends ProposalWaitsRow {
@@ -137,6 +138,7 @@ export async function classifyPendingProposals(
         sessionClass: session?.sessionClass ?? null,
         snoozedUntil: snoozedUntilOf.get(row.id) ?? null,
         blocksOpenPr: sessionId !== null && blocking.has(sessionId),
+        held: cannotApplyYet({ status: row.status, data: row.data }, now)?.held,
       },
       now
     );

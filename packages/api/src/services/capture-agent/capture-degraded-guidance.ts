@@ -35,6 +35,17 @@
  * guessed into the transient bucket, which is where a hardcoded string puts it.
  */
 
+import type { IsFailureAction } from "@synap-core/types";
+import {
+  describeAiFailure,
+  type AiFailureClass,
+} from "../../utils/ai-failure.js";
+import {
+  aiAvailabilityCopy,
+  resolveAiFailureState,
+  resolveAiRefusal,
+} from "@synap-core/types/ai-availability";
+
 /**
  * How a degraded reason behaves under retry.
  *
@@ -49,13 +60,22 @@
  *   permanent either: it frees when the month rolls over or an operator raises
  *   the budget. Folding it into `unknown` told an agent "may be permanent"
  *   about a state with a named cause and a named fix.
+ * - `availability` — the Intelligence Service refused the call for an AI
+ *   availability state of this pod (credits, plan, payment, a provider or
+ *   service state): the reason is the IS's refusal code. Retrying never helps
+ *   until AI is available again; the words are the copy deck's.
  * - `unknown` — the reason is not one this pod has been taught, or the IS said
  *   nothing at all. Explicitly NOT a synonym for `transient`: claiming a
  *   reason we do not understand is temporary is the defect this module exists
  *   to prevent.
  */
 export type DegradedPermanence =
-  "configuration" | "input" | "transient" | "budget" | "unknown";
+  | "configuration"
+  | "input"
+  | "transient"
+  | "budget"
+  | "availability"
+  | "unknown";
 
 /** Missing capability or credential — an operator must act. */
 const CONFIGURATION_REASONS = new Set([
@@ -114,8 +134,24 @@ export function classifyDegradedReason(
   if (INPUT_REASONS.has(trimmed)) return "input";
   if (TRANSIENT_REASONS.has(trimmed)) return "transient";
   if (BUDGET_REASONS.has(trimmed)) return "budget";
+  // Derived from the one classification, never a hand list: a refusal code
+  // the deck maps to a state is a refusal reason here too.
+  if (resolveAiFailureState(trimmed) !== null) return "availability";
   return "unknown";
 }
+
+/**
+ * The degraded reasons that mean the AI did not ANSWER (unreachable, refused
+ * the pod's credentials, out of budget or quota), as opposed to an input it
+ * could not read or a configuration the pod lacks: a capture saved raw for one
+ * of these is re-structured once the AI answers again
+ * (`services/captures/restructure-degraded-captures.ts`).
+ */
+export const AI_UNAVAILABLE_DEGRADED_REASONS: readonly string[] = [
+  ...TRANSIENT_REASONS,
+  ...BUDGET_REASONS,
+  "is_auth_error",
+];
 
 /** `true` only when retrying the identical call could plausibly succeed. */
 export function isDegradedReasonRetryable(
@@ -128,10 +164,13 @@ export function isDegradedReasonRetryable(
  * The agent-facing sentence. Built from the CLASS, with the raw reason token
  * echoed verbatim so the agent can report or branch on the real value — never
  * a per-reason sentence, and never the word "temporarily" outside the one
- * class that has earned it.
+ * class that has earned it. An `availability` refusal speaks the copy deck's
+ * words for its state, closed by `action` (`degradedDetail.action`, what the
+ * IS stated for this caller) when there is one.
  */
 export function describeDegradedForAgent(
-  reason: string | undefined | null
+  reason: string | undefined | null,
+  action?: IsFailureAction | null
 ): string {
   const trimmed = typeof reason === "string" ? reason.trim() : "";
   const token = trimmed.length > 0 ? trimmed : "unspecified";
@@ -160,6 +199,15 @@ export function describeDegradedForAgent(
         `as an operator raises the budget (TOKEN_ALERT_THRESHOLD / ` +
         `LLM_BUDGET_STOP_STRUCTURE) or exempts this pod's owner.`
       );
+    case "availability": {
+      const refusal = resolveAiRefusal(trimmed, action);
+      const copy = refusal ? aiAvailabilityCopy(refusal) : null;
+      return (
+        `AI structuring could not run (${token}).` +
+        (copy ? ` ${copy.detail}` : "") +
+        ` Retrying will not help until AI is available again.`
+      );
+    }
     case "unknown":
       return (
         `AI structuring produced no plan and did not say why (${token}). Do not ` +
@@ -167,6 +215,36 @@ export function describeDegradedForAgent(
         `state this pod has not been taught to name.`
       );
   }
+}
+
+/**
+ * THE words of a degraded capture, for every door that reports one (Hub
+ * `/capture`, MCP `synap_capture`, `message.interpret`): the sentence and
+ * whether the identical call may succeed again.
+ *
+ * `detail` is the pod's own read of the failure (`DegradedCaptureDetail`):
+ * its `failureClass` is better evidence than the reason token (a 402 under
+ * `is_invalid_response` is a refusal, never a transient fault), so when it is
+ * there the one failure door words it, closed by `detail.action`. Without
+ * it, the reason token decides.
+ */
+export function describeDegradedCapture(
+  reason: string | undefined | null,
+  detail?: {
+    failureClass?: AiFailureClass;
+    action?: IsFailureAction;
+  } | null
+): { message: string; retryable: boolean } {
+  if (detail?.failureClass) {
+    const failure = describeAiFailure(detail.failureClass, {
+      action: detail.action,
+    });
+    return { message: failure.message, retryable: failure.retryable };
+  }
+  return {
+    message: describeDegradedForAgent(reason, detail?.action),
+    retryable: isDegradedReasonRetryable(reason),
+  };
 }
 
 /**

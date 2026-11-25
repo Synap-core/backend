@@ -1,23 +1,14 @@
 /**
- * Write-door contract test for a playbook's `schedule`.
+ * Write-door contract for the RETIRED `schedule` input: still parsed (older
+ * producers keep their schedule), its `mode` intact, and the activator it
+ * folds into refuses what no schedule activator can say. What the fold
+ * produces is `schemas/playbook-schedule.test.ts`.
  *
- * `schedule` was `z.unknown()` at both doors, so `PlaybookSchedule.mode`
- * ("run" | "appointment") — the one input that makes a schedule materialize an
- * APPOINTMENT (a `scheduled` session waiting for the human) instead of an agent
- * run — had no declared writer, and a misspelled mode was stored silently and
- * then read back as "run".
- *
- * Asserts the DOORS (not just the schema module): the parsed input IS what the
- * router stores (`set.schedule = input.schedule` / `schedule: input.schedule`),
- * so `mode` surviving the parse is `mode` surviving the write.
- *
- * Does NOT cover: that the stored mode reaches the flow node — that seam is
- * `cron-automation.test.ts` ("appointment mode") + `normalizePlaybookScheduleMode`.
- *
- * No DB — these are pure zod input schemas.
+ * No DB — pure zod input schemas.
  */
 import { describe, expect, it } from "vitest";
 import { createInputSchema, updateInputSchema } from "./playbooks.js";
+import { retiredScheduleRefusal } from "../schemas/playbook-schedule.js";
 
 const PLAYBOOK_ID = "00000000-0000-4000-8000-000000000001";
 const CREATE_BASE = { name: "Weekly review", goalTemplate: "Review the week" };
@@ -69,7 +60,7 @@ describe("playbooks doors — schedule.mode survives the write", () => {
     });
   });
 
-  it("handToAgentId survives a run schedule and is REFUSED beside an appointment", () => {
+  it("handToAgentId survives a run schedule; its fold REFUSES it beside an appointment", () => {
     const AGENT = "22222222-2222-4222-8222-222222222222";
     const run = updateInputSchema.safeParse({
       id: PLAYBOOK_ID,
@@ -77,19 +68,19 @@ describe("playbooks doors — schedule.mode survives the write", () => {
     });
     expect(run.success).toBe(true);
     expect(run.data?.schedule?.handToAgentId).toBe(AGENT);
-    // An appointment waits for the person: handing it to an agent is refused
-    // at the write, not stored and failed at every slot.
+    // An appointment waits for the person: handing it to an agent cannot
+    // become an activator, so the door refuses it.
     expect(
-      createInputSchema.safeParse({
-        ...CREATE_BASE,
-        schedule: {
-          cron: "0 9 * * MON",
+      retiredScheduleRefusal(
+        {
+          cron: "0 9 * * 1",
           enabled: true,
           mode: "appointment",
           handToAgentId: AGENT,
         },
-      }).success
-    ).toBe(false);
+        null
+      )
+    ).toContain("handToAgentId");
     // A blank id is not an agent.
     expect(
       updateInputSchema.safeParse({

@@ -33,6 +33,7 @@ const h = vi.hoisted(() => ({
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     workspaceId: "11111111-1111-4111-8111-111111111111",
     createdBy: "user-1",
+    status: "draft",
     version: 1,
     flowDefinition: { nodes: [], edges: [] },
     triggerType: "manual",
@@ -50,6 +51,14 @@ vi.mock("@synap/database", async (importOriginal) => {
   };
   return {
     ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: vi.fn(
+      async (_db: unknown, ownerId: string, agentUserId?: string | null) => ({
+        ownerId,
+        agentUserId: agentUserId ?? null,
+      })
+    ),
     getDb: vi.fn(async () => ({
       select: vi.fn(() => readChain),
       query: {
@@ -68,7 +77,14 @@ vi.mock("@synap/database", async (importOriginal) => {
       update: vi.fn(() => ({
         set: vi.fn((values: Record<string, unknown>) => {
           h.updateSets.push(values);
-          return { where: vi.fn(async () => undefined) };
+          // Awaited directly, or with `.returning()` (the status door).
+          return {
+            where: vi.fn(() =>
+              Object.assign(Promise.resolve(undefined), {
+                returning: async () => [{ id: "auto-1" }],
+              })
+            ),
+          };
         }),
       })),
     })),

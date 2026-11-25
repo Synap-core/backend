@@ -95,7 +95,10 @@ describe("entry-key MCP instructions", () => {
     const text = liveInstructions("entry");
     for (const g of TOOL_GROUP_NAMES) expect(text).toContain(toolGroupRef(g));
     expect(text).toContain(BUILDER_REF);
-    expect(text).toContain("reconnect");
+    // An unlocked tool runs at once through the dispatcher (an entry tool):
+    // no client is told to reconnect.
+    expect(text).toContain("`call_tool({tool, arguments})`");
+    expect(text).not.toMatch(/reconnect|next conversation/i);
   });
 
   it("teach the question protocol: `Q-<id8>` in chat, `relay_answer` verbatim, close open asks before complete", () => {

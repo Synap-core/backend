@@ -152,7 +152,10 @@ describe("view filter grammar (@synap-core/types/views)", () => {
     });
   });
 
-  it("field: core columns or properties.<slug>, nothing else", () => {
+  it("field: core columns, the status primitive or properties.<slug>, nothing else", () => {
+    expect(VIEW_FILTER_CORE_FIELDS).toEqual(
+      expect.arrayContaining(["status", "statusCategory"])
+    );
     for (const field of [...VIEW_FILTER_CORE_FIELDS, "properties.status"]) {
       expect(isViewFilterField(field), field).toBe(true);
       expect(
@@ -161,7 +164,7 @@ describe("view filter grammar (@synap-core/types/views)", () => {
       ).toBe(true);
     }
     for (const field of [
-      "status",
+      "priority",
       "metadata.status",
       "properties.",
       "properties.a.b",
@@ -172,6 +175,47 @@ describe("view filter grammar (@synap-core/types/views)", () => {
         ViewFilterSchema.safeParse({ field, operator: "is_empty" }).success,
         field
       ).toBe(false);
+    }
+  });
+});
+
+describe("the status primitive (status, statusCategory)", () => {
+  it("status takes any value: a value is declared per lifecycle", () => {
+    for (const filter of [
+      { field: "status", operator: "equals", value: "qualified" },
+      { field: "status", operator: "in", value: ["new", "nonsense"] },
+      { field: "status", operator: "is_empty" },
+    ]) {
+      expect(ViewFilterSchema.safeParse(filter).success, filter.operator).toBe(
+        true
+      );
+    }
+  });
+
+  it("statusCategory is a closed set: an unknown category is refused", () => {
+    expect(
+      ViewFilterSchema.safeParse({
+        field: "statusCategory",
+        operator: "in",
+        value: ["open", "active", "paused", "done", "lost"],
+      }).success
+    ).toBe(true);
+    expect(
+      ViewFilterSchema.safeParse({
+        field: "statusCategory",
+        operator: "is_empty",
+      }).success
+    ).toBe(true);
+    for (const value of ["closed", ["open", "wip"]]) {
+      const parsed = ViewFilterSchema.safeParse({
+        field: "statusCategory",
+        operator: Array.isArray(value) ? "in" : "equals",
+        value,
+      });
+      expect(parsed.success, JSON.stringify(value)).toBe(false);
+      expect(parsed.error?.issues[0]?.message).toMatch(
+        /statusCategory is one of open, active, paused, done, lost/
+      );
     }
   });
 });
@@ -224,7 +268,7 @@ describe("stored-filter repair (legacy rows)", () => {
 
   it("drops (with a reason) what it cannot repair, keeping the rest", () => {
     const keep = { field: "title", operator: "equals", value: "a" };
-    const bare = { field: "status", operator: "equals", value: "a" };
+    const bare = { field: "priority", operator: "equals", value: "a" };
     const bogus = { field: "title", operator: "bogus", value: "a" };
     const out = sanitizeStoredViewFilters([keep, bare, bogus]);
     expect(out.filters).toEqual([keep]);
@@ -243,7 +287,7 @@ describe("stored-filter repair (legacy rows)", () => {
       value: [1, 5],
       field: "properties.n",
     };
-    const storedBare = { field: "status", operator: "equals", value: "a" };
+    const storedBare = { field: "priority", operator: "equals", value: "a" };
     const stored = [storedBetween, storedBare];
     const valid = { field: "title", operator: "contains", value: "x" };
     const newBad = { field: "properties.s", operator: "in", value: "open" };

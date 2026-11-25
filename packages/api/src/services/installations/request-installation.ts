@@ -45,12 +45,16 @@ import {
 import { listMachines } from "../machine-roster.js";
 import {
   applyInstallationRequest,
+  computerRefOf,
   InstallationRequestError,
   installRefusal,
   loadInstallableCapability,
   loadLiveInstallation,
   reconcileInstallation,
+  repairKindFor,
   requestNeedsApproval,
+  definitionChange,
+  type DefinitionChange,
   type ComputerRef,
   type InstallableCapability,
   type InstallationRequestAction,
@@ -193,14 +197,7 @@ export async function listPersonsComputers(
   personId: string
 ): Promise<ComputerRef[]> {
   return (await listMachines(personId))
-    .map((m) => ({
-      id: m.id,
-      ownerUserId: personId,
-      name: m.name,
-      os: m.platform,
-      arch: m.arch,
-      installsFromPod: m.hostsServices,
-    }))
+    .map((m) => computerRefOf(personId, m))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -481,12 +478,21 @@ export interface InstallationAskInput {
   action: InstallationRequestAction;
   version?: string | null;
   sessionId?: string;
+  /** The asker's own WHY, appended to the card's sentence. */
+  reasoning?: string;
   /**
    * The pod does not have the capability yet: check it against Synap's
    * catalog definition, and add it from the catalog when the install is
    * approved (one proposal). Off for the computer's own REST ask.
    */
   fromCatalog?: boolean;
+  /**
+   * The POD files this ask on its own (self-heal: "try again" once its
+   * retries stopped, or a prerequisite nobody approved): always ONE proposal
+   * for the person, one tap, even for a repair that would otherwise ask
+   * nobody; authored by `author`, with this sentence on the card.
+   */
+  filedByPod?: { author: `system:${string}`; reasoning: string };
 }
 
 /** What the proposal carries to add a catalog capability on approval. */
@@ -511,7 +517,8 @@ function readableVersion(version: string | null): string | null {
 function reasoningFor(
   input: InstallationAskInput,
   live: boolean,
-  addition: CatalogAddition | null
+  addition: CatalogAddition | null,
+  change: DefinitionChange | null = null
 ): string {
   const { capabilityKey: key, computer } = input;
   if (input.action === "remove")
@@ -522,6 +529,17 @@ function reasoningFor(
       addition.licence ? `licence ${addition.licence}` : null,
     ].filter(Boolean);
     return `Add "${addition.name}" (${key}${what.length ? `, ${what.join(", ")}` : ""}) from the marketplace to the pod, then install it on ${computer.name}: its install steps run on that computer, then it is checked.`;
+  }
+  if (live && change) {
+    const what = [
+      change.recipesAdded.length
+        ? `adds ${change.recipesAdded.length === 1 ? "recipe" : "recipes"}: ${change.recipesAdded.join(", ")}`
+        : null,
+      change.recipesRemoved.length
+        ? `removes ${change.recipesRemoved.length === 1 ? "recipe" : "recipes"}: ${change.recipesRemoved.join(", ")}`
+        : null,
+    ].filter(Boolean);
+    return `Update ${key} on ${computer.name} to the pod's current definition${what.length ? ` (${what.join("; ")})` : ""}: its install steps run again on that computer, then it is checked.`;
   }
   return live
     ? `Change ${key} on ${computer.name} to version ${input.version ?? "latest"}: its install steps run again on that computer.`
@@ -645,13 +663,21 @@ export async function requestInstallation(
       );
   }
 
-  // Approved once for this pair at this version: a repair asks nobody.
-  if (live && !requestNeedsApproval(live, input)) {
+  // An update moves the snapshot to the pod's CURRENT definition: what it
+  // changes is said on the card, and approving checks it is still that one.
+  const change =
+    live && capability && input.action === "update" && !input.version
+      ? definitionChange(live.manifest ?? {}, capability.manifest)
+      : null;
+
+  // Approved once for this pair at this definition: a repair asks nobody.
+  if (
+    live &&
+    !input.filedByPod &&
+    !requestNeedsApproval(live, input, capability?.manifest)
+  ) {
     const jobId = await reconcileInstallation(live, {
-      kind:
-        live.status === "installed" || live.status === "failed"
-          ? "install"
-          : undefined,
+      kind: repairKindFor(live),
     });
     return { status: "approved", installationId: live.id, jobId };
   }
@@ -669,7 +695,20 @@ export async function requestInstallation(
     // agent's ask would be refused, never filed.
     proposeBeyondGrant: true,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-    reasoning: reasoningFor(input, !!live, addition),
+    // An agent never installs by itself (decision c78d8bcf): its ask is a
+    // proposal whatever rule or grant would widen it, so approving it runs
+    // the executor and its fresh sign-in (`widensCredential`); a grant here
+    // would apply it below with neither (ticket 370ee329).
+    ...(input.agentUserId || input.filedByPod ? { forcePropose: true } : {}),
+    ...(input.filedByPod ? { machineAuthor: input.filedByPod.author } : {}),
+    // The pod's own sentence; a marketplace addition still says so.
+    reasoning: input.filedByPod
+      ? addition
+        ? `${input.filedByPod.reasoning} ${reasoningFor(input, !!live, addition, change)}`
+        : input.filedByPod.reasoning
+      : input.reasoning
+        ? `${reasoningFor(input, !!live, addition, change)} Why: ${input.reasoning}`
+        : reasoningFor(input, !!live, addition, change),
     data: {
       id: computer.id,
       computerId: computer.id,
@@ -678,6 +717,17 @@ export async function requestInstallation(
       kind,
       action: input.action,
       ...(input.version ? { version: input.version } : {}),
+      // The definition the card showed: approving refuses another one.
+      ...(change && capability
+        ? {
+            definition: {
+              from: live?.capabilityVersion ?? null,
+              to: capability.version,
+              recipesAdded: change.recipesAdded,
+              recipesRemoved: change.recipesRemoved,
+            },
+          }
+        : {}),
       // Approving adds it from the catalog first (the executor re-reads the
       // catalog definition and checks the computer again).
       ...(addition ? { catalog: addition } : {}),

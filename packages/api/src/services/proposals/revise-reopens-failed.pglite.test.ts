@@ -31,6 +31,7 @@ vi.mock("@synap/database", async (importOriginal) => {
 
 import { getTableConfig, type PgTable } from "drizzle-orm/pg-core";
 import * as schema from "@synap/database/schema";
+import { computeProposalDedupHash } from "@synap/database";
 import { buildHandlers } from "../../routers/mcp/handlers/build.js";
 import type { McpToolContext } from "../../routers/mcp/handlers/shared.js";
 
@@ -139,6 +140,12 @@ beforeAll(async () => {
   );
   const byName = new Map(tables.map((t) => [getTableConfig(t).name, t]));
   for (const t of byName.values()) await h.client!.exec(ddlFor(t));
+  // The partial unique index of migration 0208, as on a pod: one PENDING
+  // agent row per change. PGlite tables are built from the schema without it.
+  await h.client!.exec(
+    `CREATE UNIQUE INDEX proposals_agent_dedup_uq ON proposals (dedup_hash)
+       WHERE status = 'pending' AND agent_user_id IS NOT NULL AND dedup_hash IS NOT NULL`
+  );
   await q(`insert into users (id, email) values ($1, 'o@x.test')`, [OWNER]);
   await q(
     `insert into workspaces (id, name, owner_id, settings) values ($1,'Builder',$2,'{}'::jsonb)`,
@@ -203,5 +210,83 @@ describe("revising a proposal whose approval failed reopens it (decision fa6c883
       });
       expect((await rowOf(id)).status).toBe(status);
     }
+  });
+});
+
+/**
+ * REOPEN vs the dedup index (plan 8032a127 D2, reproduced before the fix: the
+ * revise died on the raw unique violation of `proposals_agent_dedup_uq`). A
+ * failed row is outside that partial index; the same request filed again by
+ * another agent is a PENDING row with the same `dedup_hash` (the founder's pod
+ * holds two failed copies of one hash, c6ba64e6 and f85b7119). Reopening the
+ * failed row with the hash it was FILED with collided with that twin.
+ */
+describe("reopening a failed proposal whose request is already waiting again", () => {
+  const OTHER_AGENT = randomUUID();
+
+  /** The failed row and a pending twin of the SAME request, both hashed as filed. */
+  async function failedWithPendingTwin() {
+    const failed = await insertFailed("approval_failed");
+    const { data, target_id, workspace_id } = (
+      await q(
+        `select data, target_id, workspace_id from proposals where id = $1`,
+        [failed]
+      )
+    ).rows[0] as {
+      data: Record<string, unknown>;
+      target_id: string;
+      workspace_id: string;
+    };
+    const { failure: _failure, ...asFiled } = data;
+    const hash = computeProposalDedupHash({
+      workspaceId: workspace_id,
+      proposalType: "create",
+      targetType: "entity",
+      targetId: target_id,
+      data: asFiled,
+    });
+    await q(`update proposals set dedup_hash = $2 where id = $1`, [
+      failed,
+      hash,
+    ]);
+    const twin = randomUUID();
+    await q(
+      `insert into proposals (id, workspace_id, target_type, target_id, status, proposal_type, data, agent_user_id, created_by, subject_user_id, dedup_hash)
+       values ($1,$2,'entity',$3,'pending','create',$4::jsonb,$5,$5,$6,$7)`,
+      [twin, WS, target_id, JSON.stringify(asFiled), OTHER_AGENT, OWNER, hash]
+    );
+    return { failed, twin, hash };
+  }
+
+  it("a repair that changes the request reopens it under the hash of what it now asks", async () => {
+    const { failed, hash } = await failedWithPendingTwin();
+    await fixCategory(failed);
+    const { rows } = await q(
+      `select status, dedup_hash from proposals where id = $1`,
+      [failed]
+    );
+    const row = rows[0] as { status: string; dedup_hash: string };
+    expect(row.status).toBe("pending");
+    expect(row.dedup_hash).not.toBe(hash);
+  });
+
+  it("a revision that leaves it the SAME request is refused, naming the one already waiting", async () => {
+    const { failed, twin } = await failedWithPendingTwin();
+    await expect(
+      // A patch that leaves the record as it was filed: the same change.
+      revise({
+        proposalId: failed,
+        patch: {
+          kind: "inner",
+          fields: {
+            properties: { uo_category: "preference", uo_observation: "x" },
+          },
+        },
+      })
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      message: expect.stringContaining(twin),
+    });
+    expect((await rowOf(failed)).status).toBe("approval_failed");
   });
 });

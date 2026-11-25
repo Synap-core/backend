@@ -4,7 +4,7 @@
 
 A process = `synap_create_playbook` with `subjectProfileSlug`; it FOLLOWS the
 lifecycle the kind or role declares (omit `statusProperty`, or name that same
-property). Each stage's `subjectStatus` is an EXISTING option of it (read it
+property). Each stage's `subjectStatus` (entered) and `onApproved` (reached when its work is approved) is an EXISTING option of it (read it
 with `synap_list_profiles` first — never invent one); `gate: {kind: 'human'}` at
 every commitment, `onFail: {toStage}` for rework; typed `expectedOutputs`
 (`kind`, `label`, `relationToSubject`); workers = `activators` (`on`, `size`,
@@ -12,6 +12,18 @@ default `mode: 'propose'`). What you create is POD-LOCAL, never an official
 template.
 
 <!-- brief:end -->
+
+## Reading a process whole
+
+`synap_list_playbooks({ playbookId })` returns the playbook in full (goal
+template, stages, criteria, expected outputs) plus `process`, the playbook seen
+whole: what starts it (its automations and workers), its steps, its checks, what
+it moves (the subject kind's states and the step that owns each), its needs (each
+`filled`, `empty` or `unknown` against the space's tools), its skills, its runs
+(counts, recent sessions) and its health (a state and a reason code). A part the
+pod could not read is named in `unavailable` and reads null or `unknown`, never
+empty. `processWithheld` replaces it when your key's grant does not read every
+part (automations, sessions, skills, tools).
 
 ## Writing a process (a playbook that follows a kind's lifecycle)
 
@@ -42,20 +54,21 @@ playbook, kind or automation an agent creates on a pod (`synap_create_playbook`,
 on main. A pod draft proposal mirrored into the catalog is a second copy: once the file lands, withdraw the
 proposal; the review is the catalog commit.
 
-| Field                           | Where                          | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                  |
-| `stages[].subjectStatus`        | stage                          | Entering the stage moves the subject to this option, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                                            |
-| `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                |
-| `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                               |
-| `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                 |
-| `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                  |
-| Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`. |
-| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, UTC) · `manual`. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` only when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to a governed rule the owner can pause; it fires once per thing per transition.                          |
-| `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                 |
-| `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                  |
-| `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                   |
+| Field                           | Where                          | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subjectProfile.profileSlug`    | playbook                       | The kind or role the process works.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `subjectProfile.statusProperty` | playbook                       | Omit it: the pod follows the profile's declared lifecycle. If you name it, name that same property. A status worker on a role with no declared lifecycle is refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `stages[].subjectStatus`        | stage                          | The IN-PROGRESS status (In Draft, Review): entering the stage moves the subject to it, through the door. Must be an **existing option** of the lifecycle — never invent one.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `stages[].onApproved`           | stage                          | The RESULT status (Scripted, Published, sent, won): reached when the stage's work is APPROVED — its `expectedOutputs` all delivered, else the next stage's gate passing. The subject holding it means the run stands at the NEXT stage. With neither, nothing writes it: whoever finishes the stage moves the subject. Must be an **existing option**.                                                                                                                                                                                                                                                              |
+| `stages[].gate`                 | stage                          | `{kind: human}` at every commitment: send to a client, sign, pay, publish, won/lost, anything irreversible. `{kind: check}` only where the stage's own criteria can be verified. A gated stage writes its status only when the gate passes. A check gate judges the stage being LEFT, so never use it to guard an irreversible status.                                                                                                                                                                                                                                                                              |
+| `stages[].onFail`               | stage                          | `{toStage: <key>}` — where a rejected gate sends the run (rework loop).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `stages[].criteria`             | stage                          | 2–5 binary statements; `check.kind` evidence (cheapest) · capability · judge · human.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `expectedOutputs[]`             | stage or playbook              | What the step must produce: `kind` + `label` + `relationToSubject` (an existing relation slug, or `none`). The UI shows what was produced from this.                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Slot blocker fields             | session slot, not the playbook | An agent declares them on a session's outcome (`start_session` / `update_session`), not in an `expectedOutputs` entry: `blocks: {entityId?, to?}` (the thing held up, default the subject; the status it cannot reach yet, default its next), `blockerKey` (snake_case), `clearedBy` (exactly one of `{answer: true}` · `{intent}` · `{playbookId}` · `{capability}`). The thing stays in its status, marked blocked. Shapes: `asks`.                                                                                                                                                                               |
+| `activators[]` (workers)        | playbook                       | `on`: `created` · `enters_status` (+ `status`) · `count` (+ `status`, `min` ≥ 2) · `schedule` (+ `cron`, `timezone`) · `manual` · `run_ended` (+ `playbook`, by name; `outcome`: `done` · `not_done`): a LINK, the next playbook starts on the same subject when the owner's run of that one ends; a loop of links or steps is refused. `size`: `per_thing` (default) · `per_moment` (count and schedule always are). `mode`: `propose` (default) · `run` when cheap and safe. `maxPendingApprovals` (default 20) throttles. Compiled to an automation the owner can pause; it fires once per thing per transition. |
+| `humanOnlyStatuses`             | playbook                       | Legacy: the options no stage owns. Mark a person-only option `humanOnly` on the lifecycle instead; while `statusProperty` is set, `synap catalog validate` still checks that stages and this list cover every option.                                                                                                                                                                                                                                                                                                                                                                                               |
+| `goalTemplate`                  | playbook                       | Placeholders are `{paramName}`. Never `@{arg:…}` (read-only legacy).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `params`                        | playbook                       | The subject is a `type: entity` param. A required param left unanswered becomes a question owed by the person, not an empty string.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Human moments use an `ask` on an owed slot: `confirm` / `choose` (one `recommended`) / `form` / `act` / `provide`
 (connection, file or secret through the vault). Never ask for a secret in a form.
@@ -67,8 +80,8 @@ lifecycle kinds with no process may only go down).
 
 `synap_create_playbook` takes the contract as-is. Before calling it, read the
 subject kind (`synap_list_profiles`) and copy the options of its lifecycle
-property exactly. Over MCP you cannot declare or change a lifecycle; it comes
-with the kind's template.
+property exactly. A kind with no lifecycle yet: `synap_declare_lifecycle`, or a
+`lifecycles[]` step in the same `synap_capture` plan as the kind and playbook.
 
 ```json
 {
@@ -111,10 +124,63 @@ with the kind's template.
 ```
 
 These are the Content OS post options; use the ones the kind really has. A
-batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "status":
-"Idea", "mode": "propose" }` (one session over every post in Idea, weekly) or
+batch worker looks like `{ "on": "schedule", "cron": "0 8 * * 1", "timezone":
+"Europe/Paris", "status": "Idea", "mode": "propose" }` (one session over every
+post in Idea, Mondays at 8:00 Paris time; without `timezone` the cron is read in
+the playbook owner's zone) or
 `{ "on": "count", "status": "Review", "min": 5, "mode": "propose" }`.
 An agent call lands as a proposal (`status: "proposed"` is success). The
 playbook lives on this pod only; to make it an official template, a developer
 writes it into the catalog (`synap-app/packages/workspace-templates`); landing it
 on app-bases main publishes it.
+
+## Who runs it, the tools it needs, a step that is a playbook
+
+A playbook, and each of its stages, can name WHO works it (`runner`) and the
+TOOLS it needs (`requires`); a stage can also BE another playbook (`uses`).
+All three are optional: without them a playbook runs exactly as before.
+
+- `runner`: one choice, or an ordered list where each later choice is a
+  fallback (at most 4):
+  - `"synap_ai"`, or `{ "synapAi": { "persona": "<agents slug>" } }`;
+  - `{ "agentId": "<id from synap_list_agents>", "preset"?: "<preset key>" }`
+    (one agent of this pod: never in a catalog package);
+  - `{ "role": "<agent role or preset key>", "computer"?: "<name or id>" }`;
+  - `{ "engine": "<e.g. claude-code>", "computer"?: "<name or id>" }`;
+  - on a stage only, `"self"`: the run's own agent (the default).
+    Example: render on the Mac, else the devbox:
+    `[{ "role": "video-render", "computer": "mac" }, { "role": "video-render", "computer": "devbox" }]`.
+    `null` clears a playbook's runner. A choice made when running it comes
+    first (`synap_run_playbook { runner }`, the same shapes: a role, engine or
+    list is resolved then, and nobody it names → refused), then the playbook's
+    runner, then the person's remembered choice.
+    A stage's runner can be chosen too: for a whole run,
+    `synap_run_playbook { stageRunners: { "<stage key>": <runner> } }`; while
+    working, `synap_update_session { currentStage, stageRunner }` for the stage
+    you enter (`"self"` = you do it; naming another agent asks the person
+    first). A step with another runner gives that agent a turn on the same
+    session; the reply's `stageRun` says who has it and whether it waits on
+    tools.
+- `requires`: capability keys (`["media-ffmpeg"]`), at most 16; a stage needs
+  its own plus the playbook's. They are checked on the runner's computer
+  before a step is handed over.
+- `tools`: what a RUN of it may use beyond the floor of its class, and ONLY
+  these (a one-shot `generate` playbook gets no tools; a run of at most 2
+  stages and no gate gets 6 reads; a longer one 26: the pod's core tools,
+  the relation read, its own session tools `update_run`, `post_in_room`,
+  `get_brand_kit`, and `list_playbooks`, `list_sessions`, `get_session`).
+  Each entry is a run tool (`update_document`, `web_search`; the MCP
+  spelling synap_web_search reads the same), an intent slug
+  (such as search_external) or a capability name. A stage's `tools` narrows the
+  playbook's while it is active and must be a subset (refused otherwise).
+  A run on the pod's AI whose tools lack what a stage declares does not
+  start; a stage with no `tools` of its own declares the playbook's run
+  tools. A run writes only its OWN session and room (`update_run`,
+  `post_in_room`, long runs); the pod closes its session when the turn ends
+  and raises a stage's `endAsk`.
+- `uses` (a stage): `{ "playbookId": "<id>", "version"?: n, "with"?: { "<its
+param>": "<this run's param or subject path>" }, "outputs"?: { "<this
+stage's slot label>": "<its output label>" } }`. Omit `version` to pin
+  the playbook's current one: the pin holds when that playbook changes. The
+  used playbook must be in the same space or pod-wide; a chain of steps that
+  are playbooks has no loop and is at most 3 deep.

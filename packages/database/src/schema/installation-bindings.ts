@@ -17,7 +17,18 @@
  * revokes the old one, so a need may hold two non-revoked bindings for a
  * moment: there is no unique index on (installation, need).
  *
- * Read floor = the owner within the workspace lens, as `installations`.
+ * A SPACE'S NEED BINDING (0426, founder decision D3): a row with NO
+ * installation. `workspace_id` = the space, `need_key` = the need slug
+ * (`needs`), `provider_capability_id` = the provider that fills it, `state`
+ * live or revoked, `intent` null (a need groups several intents). One live
+ * binding per (space, need) (`uq_installation_bindings_space_need`); a rebind
+ * revokes the old row and writes a new one. Filled once per space, shared by
+ * its members: its read floor is the space, not the person who set it
+ * (`access/registry.ts`). The `installation_bindings_scope_check` CHECK keeps
+ * the two shapes apart.
+ *
+ * Read floor = the owner within the workspace lens, as `installations`, for an
+ * installation's binding; the space's members for a space's binding.
  */
 
 import {
@@ -28,7 +39,9 @@ import {
   boolean,
   timestamp,
   index,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { installations } from "./installations.js";
 import { capabilities } from "./capabilities.js";
 import { apiKeys } from "./api-keys.js";
@@ -44,20 +57,26 @@ export const INSTALLATION_BINDING_STATES = [
 export type InstallationBindingState =
   (typeof INSTALLATION_BINDING_STATES)[number];
 
+/** Who chose a space need binding's provider (0426). */
+export const INSTALLATION_BINDING_ORIGINS = ["person", "automatic"] as const;
+export type InstallationBindingOrigin =
+  (typeof INSTALLATION_BINDING_ORIGINS)[number];
+
 export const installationBindings = pgTable(
   "installation_bindings",
   {
     id: uuid("id").defaultRandom().primaryKey(),
-    installationId: uuid("installation_id")
-      .notNull()
-      .references(() => installations.id, { onDelete: "cascade" }),
+    /** The installation; null for a space's need binding (0426). */
+    installationId: uuid("installation_id").references(() => installations.id, {
+      onDelete: "cascade",
+    }),
     /** The owner (read floor), as on the installation. */
     userId: text("user_id").notNull(),
     workspaceId: uuid("workspace_id"),
-    /** Which need of the installation (`studio_url`). */
+    /** Which need of the installation (`studio_url`), or the need slug of a space's binding. */
     needKey: text("need_key").notNull(),
-    /** The intent slug the need asks for (open vocabulary, no enum). */
-    intent: text("intent").notNull(),
+    /** The intent slug the need asks for (open vocabulary, no enum); null for a space's binding. */
+    intent: text("intent"),
     /** The provider capability; null once that capability row is deleted. */
     providerCapabilityId: uuid("provider_capability_id").references(
       () => capabilities.id,
@@ -81,6 +100,14 @@ export const installationBindings = pgTable(
     public: boolean("public").notNull().default(false),
     expiresAt: timestamp("expires_at", { mode: "date", withTimezone: true }),
     checkedAt: timestamp("checked_at", { mode: "date", withTimezone: true }),
+    /**
+     * Who chose the provider of a space's need binding (0426): `person` (a
+     * person or an approved proposal) or `automatic` (the pod bound the
+     * space's one installed filling provider). Installation bindings: `person`.
+     */
+    origin: text("origin", { enum: INSTALLATION_BINDING_ORIGINS })
+      .notNull()
+      .default("person"),
     /** The last health result, in plain words. */
     detail: text("detail"),
     revokedAt: timestamp("revoked_at", { mode: "date", withTimezone: true }),
@@ -99,6 +126,11 @@ export const installationBindings = pgTable(
     providerIdx: index("idx_installation_bindings_provider").on(
       table.providerCapabilityId
     ),
+    spaceNeedUnique: uniqueIndex("uq_installation_bindings_space_need")
+      .on(table.workspaceId, table.needKey)
+      .where(
+        sql`${table.installationId} IS NULL AND ${table.state} <> 'revoked'`
+      ),
   })
 );
 

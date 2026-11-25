@@ -29,6 +29,7 @@ import {
   useDetachPackage,
   usePackageUpdateList,
   usePackageUpdatePlan,
+  useUpdateHolds,
 } from "./use-package-updates";
 
 const CATALOGS = { en, fr };
@@ -37,7 +38,8 @@ export function InstalledState({ slug }: { slug: string }) {
   const t = useT(CATALOGS);
   const list = usePackageUpdateList();
   const summary = list.data?.updates.find((s) => s.slug === slug);
-  const group = summary ? updateGroupOf(summary) : null;
+  const { holds } = useUpdateHolds();
+  const group = summary ? updateGroupOf(summary, holds) : null;
   // "Stop updates" detaches every installed row: they are in the plan.
   const plan = usePackageUpdatePlan(slug, { enabled: group === "nothing" });
   const detach = useDetachPackage();

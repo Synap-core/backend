@@ -1,5 +1,6 @@
 {
   "name": "@synap/pod-agent",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "private": true,
   "type": "commonjs"
 }

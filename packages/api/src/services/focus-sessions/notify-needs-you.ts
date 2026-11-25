@@ -43,7 +43,10 @@ import {
   focusSessionWaitsOnPersonWhere,
 } from "@synap/database";
 import type { ExpectedOutput } from "@synap/playbooks";
-import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
+import {
+  isPlannedSessionStatus,
+  resolveSessionTitle,
+} from "@synap-core/types/focus-sessions";
 import {
   ASK_COPY,
   askCardSlotOf,
@@ -167,17 +170,19 @@ export function newlyOwedSlots(
   after: readonly ExpectedOutput[] | null | undefined
 ): ExpectedOutput[] {
   const owedBefore = new Set<string>();
-  for (const o of before ?? []) {
-    if (o && typeof o === "object" && isOwedSlot(o)) {
+  const was = before ?? [];
+  const now = after ?? [];
+  for (const o of was) {
+    if (o && typeof o === "object" && isOwedSlot(o, was)) {
       const key = normalizeExpectedLabel(o.label);
       if (key) owedBefore.add(key);
     }
   }
-  return (after ?? []).filter(
+  return now.filter(
     (o) =>
       !!o &&
       typeof o === "object" &&
-      isOwedSlot(o) &&
+      isOwedSlot(o, now) &&
       !owedBefore.has(normalizeExpectedLabel(o.label) ?? "")
   );
 }
@@ -332,9 +337,13 @@ export async function notifySessionNeedsYou(p: {
         workspaceId: true,
         title: true,
         goal: true,
+        status: true,
       },
     });
     if (!session) return false;
+    // A planned step owes nothing until it starts (P2): no push for it. When
+    // it wakes, `session.unblocked` is the news (session-unblock-reactor).
+    if (isPlannedSessionStatus(session.status)) return false;
 
     const asked = fresh.length > 0 ? needsYouPush(session.id, fresh) : null;
     // A relay's push says the relay and asks for the tap: the ask's own quick

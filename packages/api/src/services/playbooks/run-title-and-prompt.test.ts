@@ -61,7 +61,10 @@ const PLAYBOOK = {
 const ENTITY = { id: "ent-1", title: "Acme Corp", type: "company" };
 
 function makeDb() {
-  return {
+  const fake = {
+    // A promoted playbook's row and its kept version (0416) share one
+    // transaction.
+    transaction: async <T>(fn: (tx: unknown) => Promise<T>) => fn(fake),
     query: {
       playbooks: { findFirst: async () => PLAYBOOK },
       entities: { findFirst: async () => ENTITY },
@@ -88,6 +91,10 @@ function makeDb() {
         },
       };
     },
+    // The run birth's owner read: no users row, so the writer owns it.
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [] }) }),
+    }),
     update() {
       // `.set().where()` is awaited on its own in one place and chained into
       // `.returning()` in another, so `where` must be BOTH a thenable and a
@@ -100,6 +107,7 @@ function makeDb() {
       return { set: () => ({ where }) };
     },
   };
+  return fake;
 }
 
 let db = makeDb();
@@ -110,7 +118,26 @@ let db = makeDb();
 // which is what makes the table-identity dispatch above meaningful.
 vi.mock("@synap/database", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@synap/database")>();
-  return { ...actual, getDb: async () => db };
+  return {
+    ...actual,
+    // The owner door's users read is not this suite's subject (the journey
+    // tests run the real one): the writer stands for itself.
+    ownerAndActor: async (
+      _db: unknown,
+      ownerId: string,
+      agentUserId?: string | null
+    ) => ({ ownerId, agentUserId: agentUserId ?? null }),
+    getDb: async () => db,
+    // The run status door is pinned on PGlite (run-status.pglite.test.ts); here
+    // a recorded result is the run as moved.
+    setRunStatus: async (
+      _db: unknown,
+      input: { runId?: string; to: string }
+    ) => ({
+      rows: [{ id: input.runId, status: input.to }],
+      transitions: [],
+    }),
+  };
 });
 vi.mock("@synap-core/core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@synap-core/core")>()),
@@ -274,6 +301,35 @@ describe("runPlaybook seam: the row gets a title, the agent gets the prompt", ()
     expect(metadata.automationRunId).toBe("arun-1");
     expect(typeof metadata[RUN_PROMPT_METADATA_KEY]).toBe("string");
     // No subject bound ⇒ the title is the bare playbook name.
+    expect(session.goal).toBe("CRM hygiene");
+  });
+
+  it("a run with no subject is NAMED by what it works on; its goal is unchanged", async () => {
+    const RECIPE_ID = "1b91229e-f202-4a7a-9b57-1d6f5a48ec7c";
+    const withParam = {
+      ...PLAYBOOK,
+      params: [{ name: "recipe", type: "text", required: true }],
+    };
+    db.query.playbooks.findFirst = async () => withParam as typeof PLAYBOOK;
+    // The param's id resolves to a playbook the starter can see (no entity).
+    (db as unknown as Record<string, unknown>).select = () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () =>
+            table === playbooks ? [{ name: "Consolidate findings" }] : [],
+        }),
+      }),
+    });
+    await runPlaybook({
+      playbookId: PLAYBOOK.id,
+      workspaceId: "ws-1",
+      userId: "user-1",
+      params: { recipe: RECIPE_ID },
+    });
+
+    const session = inserted.filter((i) => i.table === focusSessions)[0].values;
+    expect(session.title).toBe("CRM hygiene · Consolidate findings");
+    // `goal` is the dedup/proposal key: it stays the bare playbook name.
     expect(session.goal).toBe("CRM hygiene");
   });
 

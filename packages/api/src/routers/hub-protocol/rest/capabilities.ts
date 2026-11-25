@@ -26,6 +26,7 @@ import {
 } from "@synap-core/types/capability-manifest";
 
 import { loadCapabilityTemplate } from "../../../services/capabilities/create-from-definition.js";
+import { ParamObtainSchema } from "../../../services/capabilities/param-obtain.js";
 import {
   applyCapabilityDefinition,
   capabilityInstallParamsSchema,
@@ -85,6 +86,9 @@ export const ParamSpecSchema = z.object({
   required: z.boolean().optional(),
   default: z.unknown().optional(),
   description: z.string().optional(),
+  // How a person gets this value: numbered steps + an https page, the act
+  // ask's bounds (`services/capabilities/param-obtain.ts`).
+  obtain: ParamObtainSchema.optional(),
 });
 
 export const VaultDefSchema = z.object({

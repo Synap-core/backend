@@ -14,6 +14,12 @@ import {
   podAppActsAs,
 } from "./config.js";
 
+describe("podAppActsAs — every pod app acts as the person (founder 12 Nov 2026)", () => {
+  it("is the person, whatever the app's origin", () => {
+    expect(podAppActsAs()).toBe("person");
+  });
+});
+
 // ─── scope-grammar mapping ────────────────────────────────────────────────
 
 describe("mapCpScopesToPodScopes", () => {
@@ -108,7 +114,7 @@ describe("oauthKeyInstanceId / parseOauthKeyInstanceId", () => {
 
 // ─── who a pod app's token acts as ────────────────────────────────────────
 
-describe("isSynapApp / podAppActsAs — the person path is origin-exact", () => {
+describe("isSynapApp — the Synap label (and the review verbs) is origin-exact", () => {
   const DOC = "/.well-known/synap-client.json";
 
   it("a Synap app on its exact https origin, any path on it, acts as the person", () => {
@@ -118,7 +124,6 @@ describe("isSynapApp / podAppActsAs — the person path is origin-exact", () => 
       `https://studio.synap.live${DOC}`,
     ]) {
       expect(isSynapApp(id)).toBe(true);
-      expect(podAppActsAs(id)).toBe("person");
     }
   });
 
@@ -140,7 +145,6 @@ describe("isSynapApp / podAppActsAs — the person path is origin-exact", () => 
       "not a url",
     ]) {
       expect(isSynapApp(id), id).toBe(false);
-      expect(podAppActsAs(id), id).toBe("agent");
     }
   });
 });

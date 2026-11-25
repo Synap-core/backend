@@ -33,7 +33,10 @@
 
 import { parseProfilePresentation } from "@synap-core/types/presentation";
 import { readSpaceBrief } from "@synap-core/types/space-brief";
-import type { GuidanceDeclaration } from "@synap-core/types/guidance";
+import {
+  podLocalGuidanceProblem,
+  type GuidanceDeclaration,
+} from "@synap-core/types/guidance";
 import { RULE_CATEGORY, readRuleMetadata } from "./rules/index.js";
 import {
   getDb,
@@ -747,14 +750,30 @@ export function playbookRowToPackagePlaybook(
   const criteria = (p.criteria as Array<Record<string, unknown>> | null) ?? [];
   const expectedOutputs =
     (p.expectedOutputs as Array<Record<string, unknown>> | null) ?? [];
-  // Refs, never ids: the rules a playbook follows travel as declared.
-  const guidance = (p.guidance as GuidanceDeclaration[] | null) ?? [];
-  // Never export another package's source-link: the installing pod stamps
-  // its own. Every other metadata key (e.g. the propose-only governance
-  // marker) travels.
-  const metadata = detachMarketSource(
-    p.metadata as Record<string, unknown> | null
+  // Refs, never ids: the rules a playbook follows travel as declared, minus
+  // a pod-local `entity:<id>` ref (an id means nothing on another pod; the
+  // install door refuses it), as the brief's anchors drop their ids.
+  const guidance = ((p.guidance as GuidanceDeclaration[] | null) ?? []).filter(
+    (g) => podLocalGuidanceProblem(g) === null
   );
+  // Likewise the one record a playbook is dedicated to.
+  let subjectProfile = p.subjectProfile;
+  if (subjectProfile && typeof subjectProfile === "object") {
+    const { entityId: _record, ...portable } = subjectProfile as Record<
+      string,
+      unknown
+    >;
+    subjectProfile = portable;
+  }
+  // Never export another package's source-link: the installing pod stamps
+  // its own. Nor what this pod's runs taught it (`lessons`, `whatWorked`):
+  // they are distilled from the owner's private sessions. Every other
+  // metadata key (e.g. the propose-only governance marker) travels.
+  const {
+    lessons: _lessons,
+    whatWorked: _whatWorked,
+    ...metadata
+  } = detachMarketSource(p.metadata as Record<string, unknown> | null);
   return {
     name: p.name,
     description: p.description ?? undefined,
@@ -762,7 +781,8 @@ export function playbookRowToPackagePlaybook(
     params: p.params as NonNullable<
       PackageDefinition["playbooks"]
     >[number]["params"],
-    executor: p.executor as "is-agent" | "external-agent" | "hybrid",
+    executor: p.executor as
+      "is-agent" | "external-agent" | "hybrid" | "generate",
     // The stored object, not its bare `kind` string — no apply door's
     // schema accepts a string here, so the old export could not round-trip.
     inputStrategy:
@@ -771,7 +791,7 @@ export function playbookRowToPackagePlaybook(
       PackageDefinition["playbooks"]
     >[number]["channelSpec"],
     schedule: p.schedule as { cron: string } | null,
-    subjectProfile: p.subjectProfile as
+    subjectProfile: subjectProfile as
       { profileSlug: string; filter?: Record<string, unknown> } | undefined,
     grants,
     status: p.status as "draft" | "active" | "paused" | undefined,

@@ -56,6 +56,7 @@ import {
   or,
   drizzleSql,
   runWithActingAgent,
+  getWorkspaceMembership,
   resolveIdentity as resolveIdentityReal,
   extractIdentitySignals,
   IDENTITY_SIGNAL_PROPERTY_KEYS,
@@ -63,7 +64,6 @@ import {
 import {
   tools,
   users,
-  workspaceMembers,
   profiles,
   proposals,
   ProposalStatus,
@@ -512,17 +512,8 @@ export async function assertFormActor(loaded: LoadedForm): Promise<boolean> {
   ) {
     return false;
   }
-  const [member] = await db
-    .select({ id: workspaceMembers.id })
-    .from(workspaceMembers)
-    .where(
-      and(
-        eq(workspaceMembers.workspaceId, loaded.workspaceId),
-        eq(workspaceMembers.userId, actor.id)
-      )
-    )
-    .limit(1);
-  return !!member;
+  // The actor holds no seat: it writes through its owner's membership.
+  return !!(await getWorkspaceMembership(db, loaded.workspaceId, actor.id));
 }
 
 async function resolveIdentityForForm(

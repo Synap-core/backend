@@ -27,6 +27,7 @@ import { dirname, join } from "node:path";
 
 import {
   RE_APPROVAL_FIELDS,
+  changedExecFieldNames,
   skillExecFieldsChanged,
 } from "./skill-exec-fields.js";
 
@@ -136,11 +137,38 @@ describe("skillExecFieldsChanged — value semantics", () => {
   it("an absent key is not a change", () => {
     expect(skillExecFieldsChanged({}, liveRowSameContent)).toBe(false);
   });
+
+  // The NAMES a held update reports to its owner come from the same rule: the
+  // boolean is derived from this list, so a name can never be reported for a
+  // field the boolean calls unchanged, nor missed for one it calls changed.
+  it("names exactly the changed fields, in RE_APPROVAL_FIELDS order", () => {
+    expect(
+      changedExecFieldNames(
+        RE_APPROVAL_FIELDS,
+        definitionPatch,
+        liveRowSameContent
+      )
+    ).toEqual([]);
+    expect(
+      changedExecFieldNames(
+        RE_APPROVAL_FIELDS,
+        {
+          ...definitionPatch,
+          inputMap: { params: { title: "$.text" } },
+          code: "return 2;",
+        },
+        liveRowSameContent
+      )
+    ).toEqual(["code", "inputMap"]);
+    expect(
+      changedExecFieldNames(RE_APPROVAL_FIELDS, {}, liveRowSameContent)
+    ).toEqual([]);
+  });
 });
 
 describe("create-from-definition applier uses the ONE shared rule", () => {
   const WHY =
-    "The template applier must decide demotion via skillExecFieldsChanged over a " +
+    "The template applier must decide demotion via changedExecFieldNames(RE_APPROVAL_FIELDS, ...) over a " +
     "patch covering every RE_APPROVAL_FIELDS key. Re-listing the fields inline is " +
     "how kind/code/providerSpec drifted apart from the router's six-field rule and " +
     "left parameters/executionMode/timeoutSeconds swappable under an approval.";
@@ -152,13 +180,18 @@ describe("create-from-definition applier uses the ONE shared rule", () => {
   // fails on reformatting is not measuring the invariant it names — and the
   // false red is the dangerous half, because the cheap way to clear it is to
   // "fix" correct source. Match the CALL, not its line breaks.
+  //
+  // Since 2026-11-13 the applier asks the rule for the changed field NAMES
+  // (`definitionSkillExecChanges`, which a held update reports to its owner)
+  // and derives the boolean from them: the anchor is that call, over the same
+  // shared list.
   const callMatch =
-    /const\s+execContentChanged\s*=\s*skillExecFieldsChanged\s*\(/.exec(
+    /const\s+changed\s*=\s*changedExecFieldNames\s*\(\s*RE_APPROVAL_FIELDS\s*,/.exec(
       applierSrc
     );
   const callIdx = callMatch ? callMatch.index : -1;
 
-  it("computes execContentChanged through skillExecFieldsChanged", () => {
+  it("computes the changed fields through changedExecFieldNames(RE_APPROVAL_FIELDS)", () => {
     expect(callIdx, WHY).toBeGreaterThan(-1);
   });
 

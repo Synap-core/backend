@@ -98,6 +98,18 @@ export const SYSTEM_LIFECYCLES: ReadonlyArray<{
       { key: "wont_fix", category: "lost" },
     ],
   },
+  // Snippet — stored text with variables. A draft is whatever an agent or a
+  // person just wrote; `current` is a person's call (humanOnly, like the CRM
+  // `outreach-angle` row): only `current` snippets reach a playbook's prompt.
+  {
+    profileSlug: "snippet",
+    propertySlug: "snippetStatus",
+    options: [
+      { key: "draft", category: "open" },
+      { key: "current", category: "done", humanOnly: true },
+      { key: "retired", category: "lost", humanOnly: true },
+    ],
+  },
 ];
 
 /**

@@ -1,7 +1,8 @@
 /**
- * The console's ONE image door, as pure rules: which pod door signs a stored
+ * The console's ONE media door, as pure rules: which pod door signs a stored
  * media reference, what the signing answered, and what the reader is shown —
- * an image, a file to download, a link out, a labelled failure, or nothing.
+ * an image, a video or an audio file to play, a file to download, a link out,
+ * a labelled failure, or nothing.
  *
  * WHAT is an entity's media is not decided here: `resolveEntityMedia`
  * (`@synap-core/types/presentation`) answers it for every surface, from what
@@ -12,9 +13,14 @@
  *   · bytes are signed by the pod on the viewer's own floor
  *     (`GET /api/files/documents/:id/url`, `GET /api/files/:entityId/url`,
  *     Kratos cookie) — never an admin door, never a bucket URL;
- *   · only `INLINE_IMAGE_MIME_TYPES` reach an `<img>`. An SVG is a
- *     script-capable document on the storage origin, so it — and any type the
- *     pod did not name — is a file to download, never drawn;
+ *   · only `INLINE_IMAGE_MIME_TYPES` reach an `<img>`, only
+ *     `INLINE_VIDEO_MIME_TYPES` a `<video>` and only `INLINE_AUDIO_MIME_TYPES`
+ *     an `<audio>`: three lists that never overlap, and a media element only
+ *     DECODES its bytes, so the two newer ones cannot reopen the SVG hole. An
+ *     SVG is a script-capable document on the storage origin, so it — and any
+ *     type the pod did not name — is a file to download, never drawn. The type
+ *     that decides is the one the pod SIGNED (what the storage origin will
+ *     serve), not what a reference claims;
  *   · an external URL is never loaded (an `<img>` on a third-party address
  *     tells it who is reading); it stays a link the reader chooses to follow;
  *   · a failed signing is never folded into "no image": it says why, and
@@ -22,7 +28,9 @@
  */
 
 import {
+  INLINE_AUDIO_MIME_TYPES,
   INLINE_IMAGE_MIME_TYPES,
+  INLINE_VIDEO_MIME_TYPES,
   type MediaRef,
 } from "@synap-core/types/presentation";
 
@@ -55,12 +63,33 @@ export function signingPath(
   return null;
 }
 
+function bareMime(mime: string | null | undefined): string {
+  return mime?.split(";")[0]?.trim().toLowerCase() ?? "";
+}
+
 /** True only for the raster types an `<img>` may ever load. */
 export function isInlineImage(mime: string | null | undefined): boolean {
-  const type = mime?.split(";")[0]?.trim().toLowerCase();
+  const type = bareMime(mime);
   return (
     !!type && (INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(type)
   );
+}
+
+/** The element a mime may ever reach: one of three allowlists, or none. */
+export type InlineMediaKind = "image" | "video" | "audio";
+
+export function inlineMediaKind(
+  mime: string | null | undefined
+): InlineMediaKind | null {
+  const type = bareMime(mime);
+  if (!type) return null;
+  if ((INLINE_IMAGE_MIME_TYPES as readonly string[]).includes(type))
+    return "image";
+  if ((INLINE_VIDEO_MIME_TYPES as readonly string[]).includes(type))
+    return "video";
+  if ((INLINE_AUDIO_MIME_TYPES as readonly string[]).includes(type))
+    return "audio";
+  return null;
 }
 
 /** What one signing answered. */
@@ -108,18 +137,25 @@ export function freshFor(
   return Math.max(MIN_FRESH_MS, at - now - EXPIRY_SKEW_MS);
 }
 
-/** Why an image is not shown, in the reader's words. */
-export function signFailureMessage(error: unknown): string {
+/**
+ * Why a stored file is not shown, in the reader's words. `kind` names what it
+ * is when that is known (an image when it is not).
+ */
+export function signFailureMessage(
+  error: unknown,
+  kind: InlineMediaKind = "image"
+): string {
   const status = error instanceof MediaSignError ? error.status : -1;
+  const sees = kind === "image" ? "see" : "play";
   switch (status) {
     case 401:
-      return "Sign in again to see this image.";
+      return `Sign in again to ${sees} this ${kind}.`;
     case 403:
-      return "This image isn’t visible to you.";
+      return `This ${kind} isn’t visible to you.`;
     case 404:
-      return "This image is no longer stored.";
+      return `This ${kind} is no longer stored.`;
     default:
-      return "The image couldn’t be loaded.";
+      return `The ${kind} couldn’t be loaded.`;
   }
 }
 
@@ -143,10 +179,20 @@ export type ImageDraw =
   /** Not held by the pod: a link out, never loaded. */
   | { state: "external"; href: string }
   | { state: "loading" }
-  | { state: "failed"; message: string; retryable: boolean }
-  /** Held by the pod but not a drawable raster: download it. */
+  | {
+      state: "failed";
+      message: string;
+      retryable: boolean;
+      /** A signed file the browser could not play: still the reader's to take. */
+      downloadHref?: string;
+    }
+  /** Held by the pod but not playable or drawable inline: download it. */
   | { state: "file"; href: string | null; mime: string | null }
-  | { state: "image"; src: string };
+  | { state: "image"; src: string }
+  /** Played in a `<video>`; `src` is the pod's signed URL. */
+  | { state: "video"; src: string }
+  /** Played in an `<audio>`; `src` is the pod's signed URL. */
+  | { state: "audio"; src: string };
 
 /**
  * `media` + its signing → the one thing to draw. A ref whose own mime is
@@ -173,7 +219,7 @@ export function imageDraw(
     };
   }
   const ownMime = media.mime ?? null;
-  const knownFile = ownMime !== null && !isInlineImage(ownMime);
+  const knownFile = ownMime !== null && inlineMediaKind(ownMime) === null;
   if (!sign || sign.status === "loading") {
     return knownFile
       ? { state: "file", href: null, mime: ownMime }
@@ -182,44 +228,71 @@ export function imageDraw(
   if (sign.status === "error" || !sign.data) {
     return {
       state: "failed",
-      message: signFailureMessage(sign.error),
+      message: signFailureMessage(
+        sign.error,
+        inlineMediaKind(ownMime) ?? "image"
+      ),
       retryable: isRetryable(sign.error),
     };
   }
+  // The type the pod SIGNED decides (what the storage origin will serve); a
+  // reference's own claim only fills in when the pod named none.
   const mime = sign.data.mimeType ?? ownMime;
-  return isInlineImage(mime)
-    ? { state: "image", src: sign.data.url }
+  const kind = inlineMediaKind(mime);
+  return kind
+    ? { state: kind, src: sign.data.url }
     : { state: "file", href: sign.data.url, mime };
 }
 
 /**
- * A signed image the browser then failed to load (the URL expired while the
- * page sat open, the storage origin did not answer) is a FAILED read too —
- * never an empty frame. `brokenSrc` is the `src` whose `<img>` errored.
+ * A signed file the browser then failed to load (the URL expired while the
+ * page sat open, the storage origin did not answer, a video codec this
+ * browser cannot decode) is a FAILED read too — never an empty frame.
+ * `brokenSrc` is the `src` whose element errored. A video or audio file that
+ * will not play keeps its `downloadHref`: asking again may help (an expired
+ * URL), and if it does not the reader can still take the file.
  */
 export function withLoadFailure(
   draw: ImageDraw,
   brokenSrc: string | null
 ): ImageDraw {
-  return draw.state === "image" && brokenSrc !== null && draw.src === brokenSrc
-    ? {
-        state: "failed",
-        message: "The image couldn’t be loaded.",
-        retryable: true,
-      }
-    : draw;
+  if (brokenSrc === null) return draw;
+  switch (draw.state) {
+    case "image":
+      return draw.src === brokenSrc
+        ? {
+            state: "failed",
+            message: "The image couldn’t be loaded.",
+            retryable: true,
+          }
+        : draw;
+    case "video":
+    case "audio":
+      return draw.src === brokenSrc
+        ? {
+            state: "failed",
+            message: `This ${draw.state} couldn’t be played here.`,
+            retryable: true,
+            downloadHref: draw.src,
+          }
+        : draw;
+    default:
+      return draw;
+  }
 }
 
 /**
- * A stored document's own media: an image (or video) file is drawn through the
- * door, signed on the document's own floor; anything else is not media.
+ * A stored document's own media: an image, video or audio file is drawn
+ * through the door, signed on the document's own floor; anything else is not
+ * media. The type is only a first guess: the door decides on what the pod
+ * signs.
  */
 export function documentFileMedia(
   documentId: string,
   mimeType: string | null | undefined
 ): MediaRef | null {
-  const mime = mimeType?.split(";")[0]?.trim().toLowerCase() ?? "";
-  return /^(image|video)\//.test(mime)
+  const mime = bareMime(mimeType);
+  return /^(image|video|audio)\//.test(mime)
     ? { via: "stored", documentId, mime }
     : null;
 }

@@ -36,6 +36,23 @@ export interface AiUsageSample {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  /** The model that answered, when the IS names it. */
+  model?: string;
+  /** Prompt tokens served from the provider's cache, when the IS reports them. */
+  cachedPromptTokens?: number;
+  /** Real cost in USD, when the IS reports it. */
+  costUsd?: number;
+}
+
+/**
+ * What a ONE-SHOT run records beyond the step totals (`playbook_runs.generation`,
+ * the `generate` executor): the model and the cache / cost numbers. Kept out of
+ * {@link AiUsageTotals} so the step ledger's shape is unchanged. Absent = NULL.
+ */
+export interface AiUsageDetail {
+  model: string | null;
+  cachedPromptTokens: number | null;
+  costUsd: number | null;
 }
 
 /** Accumulated telemetry for ONE step. A step may make several IS calls (a
@@ -63,6 +80,9 @@ export class AiUsageCollector {
   private promptTokens: number | null = null;
   private completionTokens: number | null = null;
   private totalTokens: number | null = null;
+  private model: string | null = null;
+  private cachedPromptTokens: number | null = null;
+  private costUsd: number | null = null;
   private samples = 0;
 
   record(sample: AiUsageSample): void {
@@ -83,6 +103,25 @@ export class AiUsageCollector {
     if (Number.isFinite(sample.totalTokens)) {
       this.totalTokens = (this.totalTokens ?? 0) + (sample.totalTokens ?? 0);
     }
+    if (typeof sample.model === "string" && sample.model) {
+      this.model = sample.model;
+    }
+    if (Number.isFinite(sample.cachedPromptTokens)) {
+      this.cachedPromptTokens =
+        (this.cachedPromptTokens ?? 0) + (sample.cachedPromptTokens ?? 0);
+    }
+    if (Number.isFinite(sample.costUsd)) {
+      this.costUsd = (this.costUsd ?? 0) + (sample.costUsd ?? 0);
+    }
+  }
+
+  /** The model (last reported) and the cache / cost numbers, NULL when unreported. */
+  detail(): AiUsageDetail {
+    return {
+      model: this.model,
+      cachedPromptTokens: this.cachedPromptTokens,
+      costUsd: this.costUsd,
+    };
   }
 
   /** How many IS generations this step made. 0 = no AI call, so nothing to write. */

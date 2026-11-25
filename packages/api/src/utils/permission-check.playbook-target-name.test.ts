@@ -12,6 +12,7 @@
  * the playbook row keyed by the table it was asked about.
  */
 import { describe, expect, it, vi } from "vitest";
+import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 
 const PLAYBOOK_ID = "0b8f5d2e-4c1a-4f7e-9a3b-2d6c8e1f0a55";
 
@@ -54,7 +55,7 @@ describe("playbook update proposals name the playbook", () => {
         steps: [],
         targetName,
       })
-    ).toBe('Update Template "Business Model (GRP)"');
+    ).toBe(`Update ${resolveObjectNoun("playbook")} "Business Model (GRP)"`);
   });
 
   it("a rename still titles with the name the patch carries", async () => {

@@ -316,6 +316,10 @@ const CALLABLE = ALL.filter((s) => s.kind !== "instruction");
  * intent fails here, and deleting an entry from this table without adding the
  * intent also fails here. Neither direction can drift silently.
  */
+/** One reason for the nine PDF transform verbs (they share it exactly). */
+const PDF_TRANSFORM_UNROUTABLE =
+  "File transforms are reached by name until a transform intent exists (PDF tools W1): it reads a pod file and writes a new pod file on the pod's own engine. manage_file is external storage, so it would be a false claim.";
+
 const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   // ── channel plumbing: the internal machinery UNDER send_message ─────────
   "channel.create":
@@ -334,6 +338,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Reads a person's conversations already stored in the pod (messages and proposed messages). No external record is fetched and no kind's records are listed, so neither fetch_record nor list_records describes it.",
   "messaging.accounts":
     "Lists the person's connected messaging accounts: the account source of messaging.send's input map (send_message). Pod bookkeeping, not a record of any kind and nothing fetched from outside.",
+  "snippet.render":
+    "Renders a snippet already in the pod into text and returns it. Considered and rejected: fetch_record (nothing is fetched from an external system; the snippet and its subject are pod rows read through the caller's floor), list_records (it returns one rendered text, not a list of a kind's records) and send_message (it sends nothing; the person sends the text through messaging.send). Pod-local, writes nothing.",
   // ── graph + facet bookkeeping: pod-internal structure ──────────────────
   "graph.relations": "Reads relation edges already in the pod graph.",
   "graph.link":
@@ -356,6 +362,8 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Writes an advisory diagnostics stamp onto a pod-local document.",
   "lens.page":
     "Reads the lens page the pod already computes for a scope. Pod-local, writes nothing, no artifact produced for a consumer.",
+  "measure.check":
+    "Counts what one pod read op answers and compares it with a criterion's bar. Pod-local, writes nothing; reached by name from a capability criterion, never by intent.",
   // ── configuration revision: the pod administering itself ───────────────
   "playbook.update": "Revises a playbook definition stored in the pod.",
   "playbook.archive": "Retires a playbook stored in the pod.",
@@ -380,10 +388,17 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
   "market.scaffold":
     "Authors a new marketplace package as a local draft document. It installs nothing and connects nothing, so connect_account would be a false claim.",
   // ── connection PROBING: repair is a human act, not a connect ──────────
+  // ── hosted verbs: the door every computer recipe runs through ───────────
+  "computer.run_recipe":
+    "The generic door that runs ANY recipe of a tool installed on a computer. What it does is the recipe's (cut, normalise, transcribe, …), so one intent on the door would be a false claim for every other recipe: discovery names each installed recipe under its own intent, and its run is this door.",
   "connector.health_check":
     "Probes an EXISTING connection and nudges a human to repair it. connect_account establishes a NEW authorization; this verb never does.",
+  "inbound_source.connect":
+    "Files a proposal to mint a space's inbound source and set its URL and secret on a host. It authorizes no account (connect_account would be a false claim) and runs no outside job itself: the person's approval does, so an intent would route an agent to a door that only asks.",
   "capability.rotate_key":
     "Replaces the value of a key an installed capability already uses, from a secret the person handed over. No new account is authorized, so connect_account would be a false claim.",
+  "http.allow_host":
+    "Adds a host to the pod's own allow-list for http.get_json (pod config; an agent's run is always a proposal). It reaches nothing outside the pod and fetches no record, so no member of the vocabulary describes it.",
   // ── governance calibration: pod-internal, no external world ───────────
   "governance.recommend_tighten":
     "Scans rejected proposals in the pod and files an internal calibration proposal.",
@@ -395,6 +410,16 @@ const INTENTIONALLY_UNROUTABLE: Record<string, string> = {
     "Scans rejected proposals by channel in the pod and files an internal posture proposal.",
   "automation.recommend_health":
     "Scans automations that have never produced a run row and files an advisory proposal.",
+  // ── PDF tools (W1): pod file in, NEW pod file out, on the pod's engine ──
+  "pdf.ocr": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.compress": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.merge": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.split": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.redact": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.to_pdf": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.to_markdown": PDF_TRANSFORM_UNROUTABLE,
+  "pdf.info":
+    "Reads a pod PDF's facts on the pod's own engine. No outside record is fetched (fetch_record) and no file is managed; reached by name until a transform intent exists (PDF tools W1).",
 };
 
 // ---------------------------------------------------------------------------

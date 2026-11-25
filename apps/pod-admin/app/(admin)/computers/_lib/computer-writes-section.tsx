@@ -37,7 +37,7 @@ import { WriteModeChoice } from "../../../_lib/write-mode-choice";
 import { useSetAgentPosture } from "../../../_lib/presence/use-sensitive-actions";
 import { ConfirmModal } from "../../components/confirm-modal";
 import { SectionCard } from "../../components/section-card";
-import { toneTextClass } from "../../governance/agents/_lib/mark-tone";
+import { toneTextClass } from "../../approvals/_lib/matrix/mark-tone";
 import { en, fr } from "./copy";
 import {
   agentsChangedBy,

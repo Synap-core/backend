@@ -73,6 +73,12 @@ import {
 import { fetchCPCapabilityTemplate } from "./cp-template-client.js";
 import { mergeVerbCatalog } from "./verb-catalog.js";
 import { findContainerByAddress } from "./container-address.js";
+import {
+  catalogueAddOnVerbsOnBaseTool,
+  resolveAddOnBase,
+  skillsStillInBase,
+  writeExtendsEdge,
+} from "./addon.js";
 
 import { createLogger } from "@synap-core/core";
 // Validate DECLARED emit patterns before persisting them to `metadata.emits` —
@@ -80,6 +86,7 @@ import { createLogger } from "@synap-core/core";
 // import for the same tsup code-splitting reason routers/automations.ts cites.
 import { validateEventPattern } from "@synap-core/types/events/unified";
 import { pickComputerSpec } from "@synap-core/types/capability-manifest";
+import { canonicalNeedSlug } from "@synap-core/types/needs";
 import { playbooksRouter } from "../../routers/playbooks.js";
 import { automationsRouter } from "../../routers/automations.js";
 import { toolsRouter } from "../../routers/tools.js";
@@ -92,11 +99,13 @@ import {
   skillRequiresEdges,
 } from "../../routers/skills.js";
 import {
-  skillExecFieldsChanged,
+  changedExecFieldNames,
+  RE_APPROVAL_FIELDS,
   execFieldsChanged,
   MCP_SERVER_RE_APPROVAL_FIELDS,
   allowedHostsChanged,
   boxDeclarationChanged,
+  proposeOnlyLoosened,
   readOnlyWidened,
 } from "./skill-exec-fields.js";
 import {
@@ -142,15 +151,48 @@ const MCP_EXEC_COLUMNS = Object.fromEntries(
  * verbatim, where an installation request reads them
  * (`services/installations`). A definition with no computer block leaves any
  * stored one alone.
+ *
+ * And the NEEDS it fills (`fills`, 0426) under `fills`, as canonical need
+ * slugs ({@link declaredNeedFills}): what the space binding reads to find an
+ * installed provider for an empty need. One projection for the applier and
+ * the reconcile's stamp, so a template that starts declaring `fills` (its
+ * content hash changes) reaches every installed container on the next
+ * reconcile.
  */
 export function declaredContainerMetadata(
-  def: Pick<CapabilityDefinition, "metadata">
+  def: Pick<CapabilityDefinition, "metadata" | "fills">
 ): Record<string, unknown> {
   const computer = pickComputerSpec(def as Record<string, unknown>);
+  const fills = declaredNeedFills(def.fills);
   return {
     ...(def.metadata ?? {}),
     ...(computer ? { computer } : {}),
+    ...(fills !== undefined ? { fills } : {}),
   };
+}
+
+/**
+ * A definition's declared `fills`, as canonical need slugs (an alias becomes
+ * its slug), deduped. `undefined` when the definition declares none (a stored
+ * value is then left alone). An unknown slug is dropped and logged: the
+ * catalog and the control plane refuse it before publish, so one reaching
+ * the pod is a stale cache, never a reason to fail an install.
+ */
+export function declaredNeedFills(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const v of raw) {
+    const slug = canonicalNeedSlug(v);
+    if (!slug) {
+      logger.warn(
+        { fill: v },
+        "capability fills a need the pod does not know — not stamped"
+      );
+      continue;
+    }
+    if (!out.includes(slug)) out.push(slug);
+  }
+  return out;
 }
 
 /**
@@ -294,7 +336,7 @@ export interface CapabilityPlaybookDef {
   schedule?: unknown;
   /** Free-form playbook metadata → `playbooks.metadata` (e.g. propose-only governance marker). */
   metadata?: Record<string, unknown>;
-  executor?: "is-agent" | "external-agent" | "hybrid";
+  executor?: "is-agent" | "external-agent" | "hybrid" | "generate";
   status?: "draft" | "active" | "paused" | "archived";
   /**
    * What this template instantiates (0240): `session` (a template of ONE focus
@@ -306,6 +348,14 @@ export interface CapabilityPlaybookDef {
    * a capability seeded was forced session-scoped regardless of what it authored.
    */
   scope?: "session" | "project";
+  /**
+   * What a run of it may use beyond its class floor, "only these" (0419): run
+   * tools, intent slugs, capabilities. `playbooks.create` validates it and
+   * refuses a stage list outside it.
+   */
+  tools?: string[];
+  /** DEPRECATED input: `playbooks.create` folds it into `tools`. */
+  requiredIntents?: string[];
 }
 
 // Mirrors the `automations.create` tRPC input (routers/automations.ts:164). An
@@ -394,6 +444,13 @@ export interface CreateCapabilityResult {
        * complete install that is missing its membership edges.
        */
       partsNotAttached: number;
+      /**
+       * ADD-ON only: the base it extends, and its actions that are still
+       * members of the base because `removePart` refused (reported, like
+       * `partsNotAttached`: they show on both pages until a pod admin re-runs
+       * the install).
+       */
+      addOnOf?: { id: string; name: string; partsNotMoved: number };
     } | null;
     vault: { ref: string; vaultRef: string; secretId: string }[];
     mcpServers: {
@@ -493,13 +550,34 @@ async function stampSourceCapability(
  *
  * The patch mirrors the applier's `.set({...})` projection exactly — a field
  * this comparator reads must be a field that update actually writes.
+ *
+ * Derived from {@link definitionSkillExecChanges}, so "does it change what
+ * runs" and "which fields change it" are one rule, never two lists.
  */
 export function definitionSkillChangesExecution(
   s: CapabilitySkillDef,
   existing: Record<string, unknown>,
   readerTrust: { officialSource: boolean }
 ): boolean {
-  const execContentChanged = skillExecFieldsChanged(
+  return definitionSkillExecChanges(s, existing, readerTrust).length > 0;
+}
+
+/**
+ * The execution fields applying `s` would change on its installed row, by
+ * name: the `RE_APPROVAL_FIELDS` columns (`code`, `inputMap`, ...) in that
+ * order, then the `metadata` keys the same rule reads, as
+ * `metadata.allowedHosts`, `metadata.box`, `metadata.readOnly` and
+ * `metadata.proposeOnly`. Empty =
+ * the update leaves what the skill runs alone. A held update names these to
+ * the owner (`reconcile-capabilities-to-templates.ts`).
+ */
+export function definitionSkillExecChanges(
+  s: CapabilitySkillDef,
+  existing: Record<string, unknown>,
+  readerTrust: { officialSource: boolean }
+): string[] {
+  const changed = changedExecFieldNames(
+    RE_APPROVAL_FIELDS,
     {
       kind: s.kind ?? "code",
       code: s.code ?? null,
@@ -513,37 +591,58 @@ export function definitionSkillChangesExecution(
     existing
   );
   const box = declaredBox(s.metadata);
-  return (
-    execContentChanged ||
-    // Widening (or narrowing) the sandbox's egress allowlist is an
-    // execution change — `metadata.allowedHosts` is the ONE thing deciding
-    // which hosts an approved skill may reach. It cannot ride in
-    // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
-    // spread column, so the field comparison literally cannot see it. This
-    // is the SAME rule `routers/skills.ts` applies on the human/agent edit
-    // door — the two doors drifted once, which is why the rule lives in
-    // `skill-exec-fields.ts` and both doors call it.
+  // Widening (or narrowing) the sandbox's egress allowlist is an
+  // execution change — `metadata.allowedHosts` is the ONE thing deciding
+  // which hosts an approved skill may reach. It cannot ride in
+  // `RE_APPROVAL_FIELDS`: `metadata` is a shallow-merged bag, not a
+  // spread column, so the field comparison literally cannot see it. This
+  // is the SAME rule `routers/skills.ts` applies on the human/agent edit
+  // door — the two doors drifted once, which is why the rule lives in
+  // `skill-exec-fields.ts` and both doors call it.
+  if (
     allowedHostsChanged(
       s.metadata as Record<string, unknown> | undefined,
       existing.metadata as Record<string, unknown> | null
-    ) ||
-    // A box skill's declaration (packages, hosts, limits) is what the person
-    // approved besides the code: a changed one re-earns approval, by the same
-    // `boxDeclarationChanged` the skill edit door applies. Compared on the
-    // NORMALISED declaration, as stored.
+    )
+  ) {
+    changed.push("metadata.allowedHosts");
+  }
+  // A box skill's declaration (packages, hosts, limits) is what the person
+  // approved besides the code: a changed one re-earns approval, by the same
+  // `boxDeclarationChanged` the skill edit door applies. Compared on the
+  // NORMALISED declaration, as stored.
+  if (
     boxDeclarationChanged(
       box !== undefined ? { box } : undefined,
       existing.metadata as Record<string, unknown> | null
-    ) ||
-    // Same blind spot, same bag, same both-doors rule: turning
-    // `metadata.readOnly` ON makes the capability gate auto-run this verb
-    // before any grant rung, converting a reviewed action into an
-    // unattended one. Widening it must re-earn approval.
+    )
+  ) {
+    changed.push("metadata.box");
+  }
+  // Same blind spot, same bag, same both-doors rule: turning
+  // `metadata.readOnly` ON makes the capability gate auto-run this verb
+  // before any grant rung, converting a reviewed action into an
+  // unattended one. Widening it must re-earn approval.
+  if (
     readOnlyWidened(
       s.metadata as Record<string, unknown> | undefined,
       existing.metadata as Record<string, unknown> | null
     )
-  );
+  ) {
+    changed.push("metadata.readOnly");
+  }
+  // The mirror image: turning a declared `metadata.proposeOnly` OFF lets an
+  // auto grant or rule run a verb that always asked. Turning it on tightens
+  // and keeps the approval.
+  if (
+    proposeOnlyLoosened(
+      s.metadata as Record<string, unknown> | undefined,
+      existing.metadata as Record<string, unknown> | null
+    )
+  ) {
+    changed.push("metadata.proposeOnly");
+  }
+  return changed;
 }
 
 /** How far the applier trusts where a definition came from. */
@@ -806,6 +905,12 @@ export async function createCapabilityFromDefinition(
     await requireServerManager(userId, connWorkspaceId ?? null);
   }
 
+  // ADD-ON (founder decision D6): refused before ANY write unless its base is
+  // installed in a scope that covers it, and it declares no tool or credential
+  // of its own. Its skills then `require` the BASE's tools by name, so they run
+  // through the base's tool rows (services/capabilities/addon.ts).
+  const addOnBase = await resolveAddOnBase(db, rawDef, connWorkspaceId ?? null);
+
   const proposals: string[] = [];
 
   // 1. Vault secrets — reuse the SAME server-side encryption the
@@ -957,6 +1062,11 @@ export async function createCapabilityFromDefinition(
   //    capability-matrix axis, source-of-truth = this CapabilityDefinition.
   const toolsCaller = toolsRouter.createCaller(ctx as never);
   const toolIdByName = new Map<string, string>();
+  // A skill's `requires` names a tool of THIS definition or, for an add-on, of
+  // its base. Kept apart from `toolIdByName`, which is also the list of tools
+  // this container owns (they become its members below).
+  const requiredToolId = (name: string): string | undefined =>
+    toolIdByName.get(name) ?? addOnBase?.toolIdByName.get(name);
   const createdTools: CreateCapabilityResult["created"]["tools"] = [];
   const knownIntents = await knownIntentSetFor(
     def.skills.map((s) => (s as { intent?: unknown }).intent)
@@ -1035,8 +1145,8 @@ export async function createCapabilityFromDefinition(
     if (result.proposalId) proposals.push(result.proposalId);
     // Seed the ENFORCEMENT grant so an APPROVED tool is runnable by agents once
     // the born-draft tool is approved (Wave 2 + 3b: seed(draft) → approve →
-    // grant → agent run is governed). Conservative `execMode: "propose"` for a
-    // side-effecting tool — an agent run routes to review unless re-granted auto.
+    // grant → agent run is governed). No approval row: an agent run of a
+    // side-effecting tool asks first until a person writes an auto row.
     if (result.status === "created" && toolId) {
       await issueCapabilityGrant(
         "tool",
@@ -1045,8 +1155,7 @@ export async function createCapabilityFromDefinition(
         connWorkspaceId ?? null
       );
       // Derive + persist the verb catalog from the skills that require this tool.
-      // `govDefault` aligns to the exec-mode `issueCapabilityGrant` just seeded
-      // ("propose") so the verb never bypasses the approved+grant model.
+      // `govDefault` is "propose": with no approval row the gate asks first.
       const verbs = deriveToolVerbs(
         t.name,
         def.skills,
@@ -1178,7 +1287,7 @@ export async function createCapabilityFromDefinition(
       // `POST /api/hub/capabilities/apply` grew an approved skill's scope with
       // no proposal (review of #199, R2).
       const requiredToolIds = (s.requires ?? [])
-        .map((name) => toolIdByName.get(name))
+        .map((name) => requiredToolId(name))
         .filter((id): id is string => !!id);
       let requiresWidened = false;
       if (existingSkill.approved && requiredToolIds.length > 0) {
@@ -1338,7 +1447,7 @@ export async function createCapabilityFromDefinition(
     // referenced tools resolved to real ids (proposed tools have no id yet).
     if (result.status === "created" && s.requires && s.requires.length > 0) {
       const toolIds = s.requires
-        .map((name) => toolIdByName.get(name))
+        .map((name) => requiredToolId(name))
         .filter((id): id is string => !!id);
       if (toolIds.length > 0) {
         await skillsCaller.setRequiredTools({ skillId: result.id, toolIds });
@@ -1346,7 +1455,7 @@ export async function createCapabilityFromDefinition(
     }
 
     // Seed the enforcement grant for a created skill (same conservative policy
-    // as tools — approved skill runnable by agents, execMode propose by default).
+    // as tools — approved skill usable by agents, asking first with no approval row).
     if (result.status === "created") {
       await issueCapabilityGrant(
         "skill",
@@ -1427,6 +1536,12 @@ export async function createCapabilityFromDefinition(
           executor: p.executor ?? "is-agent",
           status: p.status ?? "draft",
           scope: p.scope,
+          // The ONE tools list (0419) and its deprecated input: the door folds
+          // them; dropping them gave every capability playbook its floor only.
+          ...(p.tools !== undefined ? { tools: p.tools } : {}),
+          ...(p.requiredIntents !== undefined
+            ? { requiredIntents: p.requiredIntents }
+            : {}),
           // D2: an agent applying a capability (hub /capabilities/apply) gets
           // the playbook gate, not the operator path this ctx would take.
           agentUserId: getActingAgentUserId(),
@@ -1535,6 +1650,23 @@ export async function createCapabilityFromDefinition(
           message,
         });
       }
+    }
+  }
+
+  // ADD-ON: list its actions on the base tools they run through, so an agent
+  // finds them under that connection (the catalogue merge is additive).
+  if (addOnBase) {
+    for (const [toolName, toolId] of addOnBase.toolIdByName) {
+      await catalogueAddOnVerbsOnBaseTool(
+        db,
+        toolId,
+        deriveToolVerbs(
+          toolName,
+          def.skills,
+          GRANT_DEFAULT_EXEC_MODE,
+          knownIntents
+        )
+      );
     }
   }
 
@@ -1684,7 +1816,48 @@ export async function createCapabilityFromDefinition(
       await attachPart("automation", a.automationId);
       await stampSourceCapability(automationsTable, a.automationId, def.key);
     }
-    container = { ...container, partsNotAttached };
+    // ADD-ON: its actions belong to it, never to its base. A skill this install
+    // reused by name that is still a member of the base (today's Apify verbs)
+    // is MOVED: same row, same id, same action id. Then the relation itself.
+    let addOnOf:
+      { id: string; name: string; partsNotMoved: number } | undefined;
+    if (addOnBase) {
+      let partsNotMoved = 0;
+      const ownSkillIds = createdSkills.flatMap((s) =>
+        s.skillId ? [s.skillId] : []
+      );
+      for (const skillId of await skillsStillInBase(
+        db,
+        addOnBase.id,
+        ownSkillIds
+      )) {
+        try {
+          await containersCaller.removePart({
+            capabilityId: addOnBase.id,
+            partType: "skill",
+            partId: skillId,
+          });
+        } catch (err) {
+          partsNotMoved += 1;
+          logger.warn(
+            { containerId, baseId: addOnBase.id, skillId, err },
+            "createFromDefinition: could not move an add-on action out of its base"
+          );
+        }
+      }
+      await writeExtendsEdge(db, {
+        addOnId: containerId,
+        baseId: addOnBase.id,
+        workspaceId: connWorkspaceId ?? null,
+        userId,
+      });
+      addOnOf = { id: addOnBase.id, name: addOnBase.name, partsNotMoved };
+    }
+    container = {
+      ...container,
+      partsNotAttached,
+      ...(addOnOf ? { addOnOf } : {}),
+    };
 
     // W3: the vault IS the connection registry. Stamp the secrets this applier
     // created as THIS capability's connections (`capability_id`), promoting one to
@@ -1736,9 +1909,9 @@ export async function createCapabilityFromDefinition(
 
 // ── Verb-catalog derivation (the capability-matrix axis) ──────────────────────
 //
-// The exec-mode the applier seeds on every tool/skill grant (`issueCapabilityGrant`
-// below). The verb catalog's `govDefault` reuses this SAME constant so a verb's
-// governance default can never drift from the grant the gate actually enforces.
+// A verb's governance default in the catalog (`govDefault`): `propose`, what
+// the gate applies to a tool run no approval row names. (Before 0435 the
+// applier also seeded it as each grant's exec_mode; a grant now carries none.)
 export const GRANT_DEFAULT_EXEC_MODE = "propose" as const;
 
 const VERB_WRITE_SIGNALS = [
@@ -1905,13 +2078,14 @@ export function deriveToolVerbs(
 // ── Capability-grant seeding (Wave 3b applier grant) ──────────────────────────
 //
 // Issue a `capability_grants` (vault_grants) row for a freshly-created tool/skill
-// so that — once the born-draft capability is approved — an agent can RUN it
-// under governance. Workspace-scoped when a workspace is present (grantedTo null,
-// runnable by any agent in that workspace); otherwise pod-wide, bound to the
-// acting user (grantedTo = userId) so the canonical wildcard firewall
-// (`assertGrantScoped`: never both null) is satisfied. `execMode: "propose"` is
-// the conservative default for a side-effecting tool/skill — the capability
-// runs through review unless an explicit auto grant is later issued.
+// so that — once the born-draft capability is approved — an agent MAY USE it.
+// Workspace-scoped when a workspace is present (grantedTo null, any agent in
+// that workspace); otherwise pod-wide, bound to the acting user (grantedTo =
+// userId) so the canonical wildcard firewall (`assertGrantScoped`: never both
+// null) is satisfied. It writes no approval row: with none, a run asks first,
+// the conservative default for a side-effecting tool/skill, until a person
+// writes an "auto" approval row (decision D2: the grant's exec_mode, always
+// "propose" here, is no longer read or written since 0435).
 export async function issueCapabilityGrant(
   grantableType: "tool" | "skill",
   grantableId: string,
@@ -1928,7 +2102,6 @@ export async function issueCapabilityGrant(
   await db.insert(vaultGrants).values({
     grantableType,
     grantableId,
-    execMode: GRANT_DEFAULT_EXEC_MODE,
     grantedTo,
     workspaceId,
     // `permanent` (not `session`): a seeded capability grant persists beyond any

@@ -96,7 +96,18 @@ export function collectCapabilitySteps(nodes: unknown[]): CapabilityStepRef[] {
     const data = (n.data && typeof n.data === "object" ? n.data : {}) as {
       verbId?: unknown;
       capabilityId?: unknown;
+      need?: unknown;
     };
+    // A node that names a NEED and no verb (0426) is resolved at run time
+    // against the space's binding: no verb to check against the registry here
+    // (its ref is checked by `validateFlow`).
+    if (
+      !(typeof data.verbId === "string" && data.verbId.trim() !== "") &&
+      typeof data.need === "string" &&
+      data.need.trim() !== ""
+    ) {
+      return;
+    }
     refs.push({
       nodeId: typeof n.id === "string" && n.id ? n.id : `#${i}`,
       verbId:
@@ -104,7 +115,7 @@ export function collectCapabilitySteps(nodes: unknown[]): CapabilityStepRef[] {
           ? data.verbId
           : null,
       // Genuinely optional and absent in the wild — first-party report
-      // automations emit verb-only capability nodes (ensure-report-automation.ts).
+      // automations emit verb-only capability nodes (base.yaml's report automation).
       // Absence is NORMAL, never a validation failure.
       capabilityId:
         typeof data.capabilityId === "string" && data.capabilityId.trim() !== ""

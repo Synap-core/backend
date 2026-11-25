@@ -12,6 +12,7 @@
  * verbatim) plus re-exports of everything an external importer needs.
  */
 
+import { withProposalTargetPlace } from "../access/proposal-target-place.js";
 import {
   isPresenceCode,
   presenceProofSchema,
@@ -19,6 +20,11 @@ import {
 } from "@synap-core/types/presence";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 import { readLatestApprovalRun } from "../services/proposals/approval-runs.js";
+import {
+  allowVerbWithoutReview,
+  assertMayAllowVerbWithoutReview,
+  verbAllowOffer,
+} from "../services/governance/verb-allow.js";
 import { reviewLaterProposalWhere } from "../services/proposals/proposal-fate.js";
 import { z } from "zod";
 import { randomUUID } from "crypto";
@@ -47,6 +53,7 @@ import {
   drizzleSql,
   type MergeMaterializedStamp,
   transitionProposal,
+  UNDECIDED_PROPOSAL_STATUSES,
 } from "@synap/database";
 import { resolveSessionTitle } from "@synap-core/types/focus-sessions";
 import { readItemPackRefs } from "@synap-core/types/proposals/item-pack";
@@ -69,6 +76,7 @@ import {
   PROPOSAL_STATUSES,
   SESSION_BOOKKEEPING_PROPOSAL_TYPES,
   SESSION_BOOKKEEPING_TARGET_TYPE,
+  isProposalUndecided,
   resolveProposalAttention,
 } from "@synap-core/types/proposals/attention";
 import { mergeProposalRevision } from "../services/proposals/proposals-service.js";
@@ -78,8 +86,22 @@ import {
   findEffectiveField,
   isRepairableKind,
 } from "../services/proposals/repair-options.js";
+import {
+  buildSetupRepair,
+  setupRepairCreatesSecret,
+  setupRepairInputSchema,
+  setupRepairKind,
+} from "../services/proposals/repair-setup.js";
 import { updatePropertyDef } from "../services/profiles/update-property-def.js";
-import { addEnumOptionRefusal, withAddedEnumOption } from "@synap/database";
+import {
+  addEnumOptionRefusal,
+  withAddedEnumOption,
+  getActingAgentUserId,
+  getRequestGrant,
+  workUnitActorOf,
+} from "@synap/database";
+import type { ProposalRevision } from "@synap/database";
+import { assertFreshAuthentication } from "../utils/device-session.js";
 import { scanApprovalPatterns } from "../services/proposals/approval-patterns.js";
 import { pauseRuleOfUndoneReceipt } from "../services/proposals/recommend-tighten.js";
 import {
@@ -421,6 +443,185 @@ function pageOnlyFailureFields(error: unknown): {
 /** Rows a `package` filter on `list` scans (the `groups` default scan). */
 const PACKAGE_SCAN_LIMIT = 1000;
 
+/**
+ * Who a REJECTION is recorded as. `reviewedBy` is the person who decided
+ * (#1089: an agent's automatic receipt names no reviewer). An agent key that
+ * rejects (an agent withdrawing its own proposal through the CLI) is remapped
+ * to its person (`userId`), so stamping `userId` recorded and announced the
+ * agent's act as the person's decision (ticket 006ce859). For an agent caller
+ * — `ctx.agentUserId`, or the acting-agent ALS every key door enters — the
+ * row names no reviewer and the transition names the agent.
+ */
+function rejectionReviewer(
+  ctx: { agentUserId?: string | null },
+  userId: string
+) {
+  const agentUserId = ctx.agentUserId ?? getActingAgentUserId() ?? null;
+  return {
+    reviewedBy: agentUserId ? null : userId,
+    actor: workUnitActorOf(userId, agentUserId),
+  };
+}
+
+/**
+ * THE ONE WITHDRAW DOOR: the author of an undecided proposal takes it back
+ * (`proposals.withdraw`, and a replace rerun taking back the run it replaces).
+ * `end` says why: an author's own words ride `withdrawReason`; a helper
+ * that ends a proposal names its reason (`superseded`), never English stored
+ * as if its author wrote it (finding 156068a6). Authority is the procedure's
+ * (see `proposals.withdraw`).
+ */
+export type OwnWithdrawEnd =
+  | { reason: "author"; withdrawReason?: string }
+  | { reason: "superseded"; supersededBy?: string };
+
+export async function withdrawOwnProposal(
+  ctx: Pick<Context, "userId" | "agentUserId">,
+  proposalId: string,
+  end: OwnWithdrawEnd
+): Promise<{ success: boolean }> {
+  const userId = requireUserId(ctx.userId);
+
+  const proposal = await db.query.proposals.findFirst({
+    where: eq(proposals.id, proposalId),
+    columns: {
+      targetType: true,
+      subjectUserId: true,
+      status: true,
+      workspaceId: true,
+      proposedByUserId: true,
+      agentUserId: true,
+      createdBy: true,
+      // Needed only to discard a staged source blob on withdrawal — see below.
+      data: true,
+    },
+  });
+  // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
+  if (proposal) assertNotForeignLibraryProposal(proposal, userId);
+  if (!proposal) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Proposal not found",
+    });
+  }
+  // A failed approval is as undecided as a pending one: its author may
+  // take it back (plan 8032a127 D2).
+  const from = proposal.status as ProposalStatus;
+  if (!UNDECIDED_PROPOSAL_STATUSES.includes(from)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Only a proposal still waiting for a decision (pending, or whose approval failed) can be withdrawn.",
+    });
+  }
+
+  const isHumanProposer =
+    !!proposal.proposedByUserId && proposal.proposedByUserId === userId;
+  // RENAMED 2026-09-07 (was `isAgentOwner`) — BEHAVIOUR UNCHANGED, the name
+  // was lying. It reads "the human who OWNS the agent", but the predicate
+  // tests `proposal.createdBy === userId`, and on every agent-authored path
+  // `createdBy` IS the agent's own user row
+  // (`services/proposals/dev-approval.ts:210`,
+  // `services/playbooks/stage-gate.ts:223` both write
+  // `createdBy: input.agentUserId ?? input.userId`). So this rung fires for
+  // the ACTING AGENT itself, not for its owner.
+  //
+  // ⚠️ Do not confuse it with `isAgentOwner` in
+  // `routers/proposals/review-authority.ts:163` — that one resolves
+  // `users.createdByUserId` off the acting agent and genuinely DOES mean
+  // "the human who owns the agent". Two different principals, one name,
+  // until this rename. See the `data.sourceId` contract note in
+  // `@synap-core/types` for the full actor table.
+  //
+  // The predicate is CORRECT as-is, but it does NOT have the same REACH as
+  // the revise author rung, and the two must not be conflated:
+  //   · here      — matches `proposal.createdBy === ctx.userId`. For the
+  //     ORDINARY agent key `ctx.userId` is the HUMAN (the key's
+  //     `linkedUserId`), so this rung fires ONLY for an UNLINKED agent
+  //     principal acting as itself.
+  //   · revise    — matches `ctx.agentUserId === proposals.agentUserId`,
+  //     which DOES fire for the ordinary agent key.
+  // The ordinary agent key withdraws its own proposal through the
+  // author-agent rung below (plan 8032a127 D2), not through this one.
+  const isActingAgent = !!proposal.agentUserId && proposal.createdBy === userId;
+  // The human CREATOR of an agent-less proposal: most capture/import doors
+  // file through `createEventBackedProposal`, which stamps `createdBy` but
+  // never `proposedByUserId`, so the creator failed both rungs above. With
+  // no agent on the row, `createdBy === userId` is the same person as the
+  // proposer — not a widening to other users or to session owners.
+  const isHumanCreator = !proposal.agentUserId && proposal.createdBy === userId;
+  // THE AUTHOR AGENT (plan 8032a127 D2): the agent IDENTITY (the key's
+  // agent), never the session, matched as the revise author rung matches.
+  const actingAgentUserId = getActingAgentUserId() ?? ctx.agentUserId ?? null;
+  const isAuthorAgent =
+    !!actingAgentUserId && proposal.agentUserId === actingAgentUserId;
+
+  if (!isHumanProposer && !isActingAgent && !isHumanCreator && !isAuthorAgent) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the proposer can withdraw this proposal.",
+    });
+  }
+
+  const now = new Date();
+  // WHO withdraws, named to the door (wave-2 code review 6): an agent
+  // key's call is the agent's act, whichever rung let it in. Its
+  // `ctx.userId` is the key's HUMAN, so the human-proposer rung matches an
+  // agent row a person was stamped proposer of (`permission-check`), and
+  // the door's default (the reviewer, else the request's acting agent)
+  // then stamped `ended.by: person` for an agent's withdrawal.
+  const actor = workUnitActorOf(userId, actingAgentUserId);
+  const withdrawn = await transitionProposal(db, {
+    to: ProposalStatus.WITHDRAWN,
+    // The status it was read and authorized in: a proposal decided, or
+    // retried into another status, meanwhile keeps that.
+    from: [from],
+    actor,
+    ended: end,
+    set: {
+      // An agent taking it back names no person (decision F2); a person
+      // withdrawing is named.
+      reviewedBy: actor.kind === "agent" ? null : userId,
+      reviewedAt: now,
+      updatedAt: now,
+      // An author's own words also on `data.withdrawReason` (the
+      // `data.revertReason` precedent), NEVER `rejectionReason`: the agent
+      // scorecard buckets that column for every row, so a withdrawal would
+      // read as a "top rejection reason". Only an author's: a helper's end is
+      // its `ended.reason`, never words stored as if someone wrote them.
+      ...(end.reason === "author" && end.withdrawReason
+        ? {
+            data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${end.withdrawReason}::text)`,
+          }
+        : {}),
+    },
+    where: eq(proposals.id, proposalId),
+  }).returning({ id: proposals.id });
+  if (withdrawn.length === 0) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This proposal was decided while you were withdrawing it, so it was left as it is.",
+    });
+  }
+
+  // WITHDRAWN is terminal — so no reject can ever follow to clean up
+  // after it. A staged source blob left here is orphaned
+  // permanently, exactly as it would be after a rejection. Same one door
+  // `reject`/`batchReject`/the expiry scanners use.
+  await discardProposalSourceBlob({
+    database: db,
+    userId,
+    proposalData: proposal.data,
+  });
+
+  // Realtime + notification clear only (no approve/reject automation side
+  // effects — see emitProposalReviewed): removes it from the pending queue.
+  emitProposalReviewed(proposalId, proposal.workspaceId, "withdrawn", userId);
+
+  return { success: true };
+}
+
 export const proposalsRouter = router({
   /**
    * List proposals (Inbox)
@@ -589,10 +790,7 @@ export const proposalsRouter = router({
         // can't see. Terminal states (approved/rejected/reverted/withdrawn) are
         // excluded as before.
         conditions.push(
-          inArray(proposals.status, [
-            ProposalStatus.PENDING,
-            ProposalStatus.APPROVAL_FAILED,
-          ])
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
         );
       } else if (input.status === "validated") {
         // "Approved" tab = applied proposals: BOTH human-approved AND
@@ -941,10 +1139,7 @@ export const proposalsRouter = router({
         // `status: "pending"` branch (PENDING keeps a user's Approve intent
         // visible even when execution later failed).
         conditions.push(
-          inArray(proposals.status, [
-            ProposalStatus.PENDING,
-            ProposalStatus.APPROVAL_FAILED,
-          ])
+          inArray(proposals.status, [...UNDECIDED_PROPOSAL_STATUSES])
         );
       }
       // NOTE: no expiry filter — see the matching note in `list` (C2 fix).
@@ -1383,6 +1578,9 @@ export const proposalsRouter = router({
         revertable,
         viewerCanReview,
         viewerCanReviewReason,
+        // The "allow without review" tick the card may offer (an agent-made
+        // verb's own pending proposal): the ONE derivation `approve` enforces.
+        allowWithoutReview: verbAllowOffer(proposal),
       };
     }),
 
@@ -1757,6 +1955,17 @@ export const proposalsRouter = router({
          * lift: a plain approve, and the answer carries no `allowedToday`.
          */
         allowToday: z.boolean().optional(),
+        /**
+         * "Allow without review" (founder, 21 Nov 2026; report 64a2f36b) —
+         * the pending proposal of a verb an AI made (`create_verb`) only.
+         * With `true`, approving it ALSO sets that verb to run on its own for
+         * every AI (`services/governance/verb-allow.ts`): the person's act,
+         * refused for an agent or an app's sign-in, a pod admin's (the row is
+         * pod-wide), never for a verb whose request writes outside the pod or
+         * that publishes in public. Refused (BAD_REQUEST) before anything is
+         * approved when it does not apply. Taken back on the tool's page.
+         */
+        allowWithoutReview: z.boolean().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -1859,6 +2068,15 @@ export const proposalsRouter = router({
         }
         await assertCanAllowAgentToday(userId, proposal.agentUserId);
       }
+      // "Allow without review" rides ONLY the pending proposal of a verb an
+      // AI made, and the person who may set it: checked BEFORE anything is
+      // approved, so it is never half done. It writes a run-mode rule (a
+      // credential): an app's device token needs a fresh sign-in, as
+      // `governanceRules.setActionMode` (credentialProcedure) does.
+      if (input.allowWithoutReview) assertFreshAuthentication(ctx);
+      const allowVerb = input.allowWithoutReview
+        ? await assertMayAllowVerbWithoutReview({ ...ctx, userId }, proposal)
+        : null;
 
       const approved = await applyProposalApproval({
         proposal,
@@ -1868,7 +2086,24 @@ export const proposalsRouter = router({
         background: true,
         presence: input.presence ?? null,
         door: "trpc.proposals.approve",
+        setsActionMode: allowVerb !== null,
       });
+      if (allowVerb) {
+        const allowed = await allowVerbWithoutReview({
+          userId,
+          verb: allowVerb,
+          proposalId: proposal.id,
+        });
+        // A tick that did not land is said where every receipt reads what
+        // did not land (`refusals`): the approval stands, the verb still asks.
+        return "failed" in allowed
+          ? {
+              ...approved,
+              allowedWithoutReview: allowed,
+              refusals: [...(approved.refusals ?? []), allowed.failed],
+            }
+          : { ...approved, allowedWithoutReview: allowed };
+      }
       if (!input.allowToday || !proposal.agentUserId) return approved;
       const allowedToday = await allowAgentForRestOfUtcDay({
         userId,
@@ -1930,6 +2165,13 @@ export const proposalsRouter = router({
    * approves through `approve` with exactly that `expectedRevision`, so every
    * approval gate runs and a revise landing in between is refused.
    * Requires the approve right: what it grows is the kind's schema.
+   *
+   * SETUP arm (`setup`, finding 91a3bfd3): hand over what a proposal needs
+   * before it can apply, row by row as `repairOptions.setup` lists them (an
+   * install's key, a requested secret): an existing vault secret of yours, a
+   * NEW key (created in the vault first; only its `vault://` ref reaches the
+   * proposal), or a plain value. A person's act only: an agent or a key is
+   * refused, and typing a new key needs a recent sign-in.
    */
   repair: protectedProcedure
     .input(
@@ -1941,6 +2183,11 @@ export const proposalsRouter = router({
         addOption: z
           .object({ key: z.string().min(1), value: z.string().min(1).max(200) })
           .optional(),
+        /**
+         * Setup row name → what the person hands over (`repair-setup.ts`):
+         * `{kind:"existing", ref}` | `{kind:"new", value}` | `{kind:"value", value}`.
+         */
+        setup: setupRepairInputSchema.optional(),
         /**
          * The `revisionHistory.length` the reader saw (as `approve` takes it).
          * Required: a revise that landed after the card drew refuses the
@@ -1976,17 +2223,26 @@ export const proposalsRouter = router({
           message: reviewRefusalMessage(reason, "approve"),
         });
       }
+      if (input.setup) {
+        return repairProposalSetup({
+          ctx,
+          proposal,
+          userId,
+          setup: input.setup,
+          fieldEdits:
+            Object.keys(input.set).length > 0 || input.addOption !== undefined,
+          expectedRevision: input.expectedRevision,
+        });
+      }
       if (!isRepairableKind(proposal)) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
+          message: setupRepairKind(proposal)
+            ? "This proposal needs an input, not a field fix: hand it over in its setup rows."
+            : "Only a record's create or update can be repaired here. Ask the AI to redo this one, or dismiss it.",
         });
       }
-      if (
-        proposal.status !== ProposalStatus.APPROVAL_FAILED &&
-        proposal.status !== ProposalStatus.PENDING
-      ) {
+      if (!isProposalUndecided(proposal.status)) {
         throw new TRPCError({
           code: "CONFLICT",
           message:
@@ -2092,6 +2348,13 @@ export const proposalsRouter = router({
          */
         workspaceId: z.string().nullable().optional(),
         projectId: z.string().nullable().optional(),
+        /**
+         * The revision the reviewer's edit was made against (the length of
+         * `revisionHistory` the page rendered). A change made on top of a
+         * version someone else has since revised is refused (CONFLICT), so
+         * "Approve with your changes" never overwrites an unseen edit.
+         */
+        expectedRevision: z.number().int().nonnegative().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -2166,6 +2429,7 @@ export const proposalsRouter = router({
         patch: { kind: "envelope", fields: input.data },
         workspaceId: input.workspaceId,
         projectId: input.projectId,
+        expectedRevision: input.expectedRevision,
         roster: rosterReadFor(ctx),
       });
 
@@ -2237,6 +2501,7 @@ export const proposalsRouter = router({
         });
       }
 
+      const reviewer = rejectionReviewer(ctx, userId);
       const rejected = await transitionProposal(db, {
         to: ProposalStatus.REJECTED,
         set: {
@@ -2244,10 +2509,11 @@ export const proposalsRouter = router({
           // Structured cause (0232) persisted ALONGSIDE the free-text reason —
           // null when the caller omits it (back-compat).
           reasonCode: input.reasonCode ?? null,
-          reviewedBy: userId,
+          reviewedBy: reviewer.reviewedBy,
           reviewedAt: new Date(),
           updatedAt: new Date(),
         },
+        actor: reviewer.actor,
         where: eq(proposals.id, input.proposalId),
       }).returning({ id: proposals.id });
       // The status door matched nothing: the proposal was already approved,
@@ -2265,14 +2531,11 @@ export const proposalsRouter = router({
       // A rejected PUBLIC-FORM submission keeps no answers: the owner said no,
       // so the stranger's personal data has nothing left to be reviewed for.
       await scrubRejectedGuestPayloads([input.proposalId]);
-      // A rejected JOIN (or held-writes pack) drops the writes it was
-      // keeping: each one is recorded as `rejected` so the agent reading it
-      // sees why it never ran.
+      // A rejected held-writes pack drops the writes it was keeping: each one
+      // is recorded as `rejected` so the agent reading it sees why it never ran.
       if (
-        (proposal?.targetType === "workspace" &&
-          proposal.proposalType === "join") ||
-        (proposal?.targetType === "agent" &&
-          proposal.proposalType === "held_writes")
+        proposal?.targetType === "agent" &&
+        proposal.proposalType === "held_writes"
       ) {
         const { recordRejectedDeferredWrites } =
           await import("../services/governance/deferred-writes.js");
@@ -2638,9 +2901,12 @@ export const proposalsRouter = router({
    *     agent's still-pending request.
    *   - the human creator of an agent-less proposal (`agentUserId` NULL AND
    *     `createdBy === userId`) — the intake doors stamp no proposedByUserId.
+   *   - the AGENT that authored it (`agentUserId` = the acting agent): it
+   *     takes back its own request, pending or failed, and nothing scores it
+   *     (plan 8032a127 D2; it used to have only `reject`, which scores).
    * Anyone else — including a workspace owner/admin who is NOT the proposer —
-   * must use `reject`, not `withdraw`. Pending-only: an already
-   * approved/rejected/withdrawn proposal cannot be withdrawn.
+   * must use `reject`, not `withdraw`. Undecided only (pending, or its approval
+   * failed): an approved/rejected/withdrawn proposal cannot be withdrawn.
    */
   withdraw: protectedProcedure
     .input(
@@ -2650,130 +2916,12 @@ export const proposalsRouter = router({
         reason: z.string().max(2000).optional(),
       })
     )
-    .mutation(async ({ ctx, input }) => {
-      const userId = requireUserId(ctx.userId);
-
-      const proposal = await db.query.proposals.findFirst({
-        where: eq(proposals.id, input.proposalId),
-        columns: {
-          targetType: true,
-          subjectUserId: true,
-          status: true,
-          workspaceId: true,
-          proposedByUserId: true,
-          agentUserId: true,
-          createdBy: true,
-          // Needed only to discard a staged source blob on withdrawal — see below.
-          data: true,
-        },
-      });
-      // A Library proposal is its person's alone: anyone else gets NOT_FOUND.
-      if (proposal) assertNotForeignLibraryProposal(proposal, userId);
-      if (!proposal) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Proposal not found",
-        });
-      }
-      if (proposal.status !== ProposalStatus.PENDING) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Only a pending proposal can be withdrawn.",
-        });
-      }
-
-      const isHumanProposer =
-        !!proposal.proposedByUserId && proposal.proposedByUserId === userId;
-      // RENAMED 2026-09-07 (was `isAgentOwner`) — BEHAVIOUR UNCHANGED, the name
-      // was lying. It reads "the human who OWNS the agent", but the predicate
-      // tests `proposal.createdBy === userId`, and on every agent-authored path
-      // `createdBy` IS the agent's own user row
-      // (`services/proposals/dev-approval.ts:210`,
-      // `services/playbooks/stage-gate.ts:223` both write
-      // `createdBy: input.agentUserId ?? input.userId`). So this rung fires for
-      // the ACTING AGENT itself, not for its owner.
-      //
-      // ⚠️ Do not confuse it with `isAgentOwner` in
-      // `routers/proposals/review-authority.ts:163` — that one resolves
-      // `users.createdByUserId` off the acting agent and genuinely DOES mean
-      // "the human who owns the agent". Two different principals, one name,
-      // until this rename. See the `data.sourceId` contract note in
-      // `@synap-core/types` for the full actor table.
-      //
-      // The predicate is CORRECT as-is, but it does NOT have the same REACH as
-      // the revise author rung, and the two must not be conflated:
-      //   · here      — matches `proposal.createdBy === ctx.userId`. For the
-      //     ORDINARY agent key `ctx.userId` is the HUMAN (the key's
-      //     `linkedUserId`), so this rung fires ONLY for an UNLINKED agent
-      //     principal acting as itself.
-      //   · revise    — matches `ctx.agentUserId === proposals.agentUserId`,
-      //     which DOES fire for the ordinary agent key.
-      // So today an ordinary agent key can amend its own proposal but cannot
-      // withdraw it. That divergence is KNOWN and deliberately left in place:
-      // withdraw is TERMINAL and revise is not. A revise leaves the proposal
-      // pending with `revisionHistory` appended, so the human still decides on
-      // a request they can see changed; a withdraw removes it from the queue
-      // outright, and a human about to approve simply loses it with no
-      // equivalent trace. "Still asking, not deciding" justifies the revise
-      // rung and does not transfer to a terminal state change.
-      // Aligning them would WIDEN withdraw — a separate decision needing its
-      // own evidence (how many pending proposals are agent-authored, and
-      // whether any surface treats `withdrawn` differently from `rejected`).
-      const isActingAgent =
-        !!proposal.agentUserId && proposal.createdBy === userId;
-      // The human CREATOR of an agent-less proposal: most capture/import doors
-      // file through `createEventBackedProposal`, which stamps `createdBy` but
-      // never `proposedByUserId`, so the creator failed both rungs above. With
-      // no agent on the row, `createdBy === userId` is the same person as the
-      // proposer — not a widening to other users or to session owners.
-      const isHumanCreator =
-        !proposal.agentUserId && proposal.createdBy === userId;
-      if (!isHumanProposer && !isActingAgent && !isHumanCreator) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Only the proposer can withdraw this proposal.",
-        });
-      }
-
-      await transitionProposal(db, {
-        to: ProposalStatus.WITHDRAWN,
-        set: {
-          reviewedBy: userId,
-          reviewedAt: new Date(),
-          updatedAt: new Date(),
-          // On `data.withdrawReason` (the `data.revertReason` precedent), NEVER
-          // `rejectionReason`: the agent scorecard buckets that column for every
-          // row, so a withdrawal would read as a "top rejection reason".
-          ...(input.reason
-            ? {
-                data: drizzleSql`COALESCE(${proposals.data}, '{}'::jsonb) || jsonb_build_object('withdrawReason', ${input.reason}::text)`,
-              }
-            : {}),
-        },
-        where: eq(proposals.id, input.proposalId),
-      });
-
-      // WITHDRAWN is terminal, and it is PENDING-only — so no reject can ever
-      // follow to clean up after it. A staged source blob left here is orphaned
-      // permanently, exactly as it would be after a rejection. Same one door
-      // `reject`/`batchReject`/the expiry scanners use.
-      await discardProposalSourceBlob({
-        database: db,
-        userId,
-        proposalData: proposal.data,
-      });
-
-      // Realtime + notification clear only (no approve/reject automation side
-      // effects — see emitProposalReviewed): removes it from the pending queue.
-      emitProposalReviewed(
-        input.proposalId,
-        proposal.workspaceId,
-        "withdrawn",
-        userId
-      );
-
-      return { success: true };
-    }),
+    .mutation(({ ctx, input }) =>
+      withdrawOwnProposal(ctx, input.proposalId, {
+        reason: "author",
+        ...(input.reason ? { withdrawReason: input.reason } : {}),
+      })
+    ),
 
   /**
    * Revert an APPROVED / AUTO-APPROVED proposal — the undo half of
@@ -2835,7 +2983,11 @@ export const proposalsRouter = router({
         });
       }
       // D3: undo executes with the reviewer's authority — where the key reaches.
-      assertMayDecideProposalAt("approve", "undo", proposal);
+      assertMayDecideProposalAt(
+        "approve",
+        "undo",
+        await withProposalTargetPlace(proposal)
+      );
 
       // Recovery: a proposal already in the TERMINAL `reverted` status can be
       // re-proposed back to PENDING — but ONLY via reopen (a plain `revert({})`
@@ -3831,10 +3983,7 @@ export const proposalsRouter = router({
           // exists to send. `CONFLICT` here is the revision guard OR a weak
           // same-name create (`reasonCode: "ENTITY_WEAK_DEDUP"` on the item).
           // Clients must branch on reasonCode, not on CONFLICT alone.
-          if (
-            proposal.status !== ProposalStatus.PENDING &&
-            proposal.status !== ProposalStatus.APPROVAL_FAILED
-          ) {
+          if (!isProposalUndecided(proposal.status)) {
             throw new TRPCError({
               code: "PRECONDITION_FAILED",
               message: `Already ${proposal.status}`,
@@ -3979,6 +4128,7 @@ export const proposalsRouter = router({
     .mutation(async ({ ctx, input }) => {
       assertMayDecideProposal("reject");
       const userId = requireUserId(ctx.userId);
+      const reviewer = rejectionReviewer(ctx, userId);
       /** Proposals this call actually moved to REJECTED — see the batched
        *  `markProposalNotificationsActioned` after the loop. */
       const actionedIds: string[] = [];
@@ -4049,10 +4199,11 @@ export const proposalsRouter = router({
             // scorecard histogram, any reason-keyed tightening) silently
             // under-counted — invisibly, because the event path looked right.
             reasonCode: input.reasonCode ?? null,
-            reviewedBy: userId,
+            reviewedBy: reviewer.reviewedBy,
             reviewedAt: new Date(),
             updatedAt: new Date(),
           },
+          actor: reviewer.actor,
           where: and(
             eq(proposals.id, proposalId),
             eq(proposals.status, ProposalStatus.PENDING)
@@ -4075,13 +4226,11 @@ export const proposalsRouter = router({
             userId,
             proposalData: target.data,
           });
-          // Parity with the single `reject` door: a rejected JOIN (or
-          // held-writes pack) records its kept writes as `rejected`.
+          // Parity with the single `reject` door: a rejected held-writes
+          // pack records its kept writes as `rejected`.
           if (
-            (target.targetType === "workspace" &&
-              target.proposalType === "join") ||
-            (target.targetType === "agent" &&
-              target.proposalType === "held_writes")
+            target.targetType === "agent" &&
+            target.proposalType === "held_writes"
           ) {
             const { recordRejectedDeferredWrites } =
               await import("../services/governance/deferred-writes.js");
@@ -4285,4 +4434,84 @@ function addOptionRefusalMessage(
     default:
       return `${key} has no list of allowed values to add '${value}' to.`;
   }
+}
+
+/**
+ * `proposals.repair`'s SETUP arm (`repair-setup.ts`): the person hands over
+ * what the proposal needs (finding 91a3bfd3). Called after the door's own
+ * visibility and approve-ladder checks.
+ *
+ * PERSON-ONLY: an acting agent or a key's grant is refused (a key handed over
+ * is the person's act; an agent never plants the credential it then uses).
+ * A NEW key needs a recent sign-in, the step-up of credential doors
+ * (`assertFreshAuthentication`). VAULT FIRST: each new key is created through
+ * the vault's own create door, and the revision carries refs only, never a
+ * value. A revision reopens an `approval_failed` row as pending
+ * (`mergeProposalRevision`); it does not approve: the card approves exactly
+ * the revision returned, as for a field repair.
+ */
+async function repairProposalSetup(args: {
+  ctx: Context;
+  proposal: {
+    id: string;
+    status: string;
+    targetType: string;
+    proposalType: string;
+    data: unknown;
+    revisionHistory: ProposalRevision[] | null;
+  };
+  userId: string;
+  setup: z.infer<typeof setupRepairInputSchema>;
+  fieldEdits: boolean;
+  expectedRevision: number;
+}): Promise<{ revision: number; secretsCreated: number }> {
+  const { ctx, proposal, userId, setup, expectedRevision } = args;
+  if (getActingAgentUserId() || ctx.agentUserId || getRequestGrant()) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Handing over a key or a value on a proposal is a person's act, on the proposal's page. An agent or a key cannot do it.",
+    });
+  }
+  if (args.fieldEdits) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Hand over the setup, or fix fields: one at a time.",
+    });
+  }
+  if (!setupRepairKind(proposal)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "This proposal takes no key or value to hand over. Ask the AI to redo it, or dismiss it.",
+    });
+  }
+  if (!isProposalUndecided(proposal.status)) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message:
+        "This proposal was already decided, so there is nothing to hand over.",
+    });
+  }
+  // The version the reader saw, before anything is created in the vault.
+  assertReviewedRevision(expectedRevision, proposal.revisionHistory);
+  if (setupRepairCreatesSecret(setup)) assertFreshAuthentication(ctx);
+
+  const { secretsVaultRouter } = await import("./secrets-vault.js");
+  const vault = secretsVaultRouter.createCaller(ctx);
+  const { fields, secretsCreated } = await buildSetupRepair({
+    source: proposal,
+    userId,
+    entries: setup,
+    createSecret: (input) => vault.create(input),
+  });
+  await mergeProposalRevision({
+    proposalId: proposal.id,
+    actorId: userId,
+    patch: { kind: "inner", fields },
+    roster: rosterReadFor(ctx),
+    // Under the row lock: a revise between the card and the press wins.
+    expectedRevision,
+  });
+  return { revision: expectedRevision + 1, secretsCreated };
 }

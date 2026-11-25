@@ -44,6 +44,7 @@ import {
   chatTurns,
   workspaces,
   workspaceMembers,
+  apiKeys,
   artifacts,
   links,
   entities,
@@ -169,6 +170,7 @@ beforeAll(async () => {
     chatTurns,
     workspaces,
     workspaceMembers,
+    apiKeys,
     artifacts,
     links,
     entities,
@@ -360,6 +362,8 @@ describe("getProjectPath", () => {
           title: "Price the plans",
           status: "active",
           statusLabel: expect.any(String),
+          // How it ended (`sessionClosedAs`): not ended.
+          closedAs: null,
         },
       ],
     });
@@ -378,6 +382,7 @@ describe("getProjectPath", () => {
           title: "Wire billing",
           status: "active",
           statusLabel: expect.any(String),
+          closedAs: null,
         },
       ],
     });

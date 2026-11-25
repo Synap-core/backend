@@ -74,8 +74,9 @@ export interface CreateProjectGovernedInput {
   /**
    * An EXPLICITLY chosen home (the setup page's "parts of the job"). Wins
    * over `workspaceId`, must be live and writable by the caller (checked
-   * before the gate, same helper as `projects.update`), and is stamped as a
-   * `uses` domain once the project exists.
+   * before the gate, same helper as `projects.update`). The effective home
+   * (this, else `workspaceId`) is stamped as a `uses` domain once the project
+   * exists.
    */
   homeWorkspaceId?: string;
   /** The spaces the project uses — each linked through the governed door. */
@@ -368,11 +369,13 @@ export async function createProjectGoverned(
     };
   }
 
-  // 5. The place's parts.
-  if (homeWorkspaceId) {
+  // 5. The place's parts. The home is a pillar whichever way it was named
+  // (explicit `homeWorkspaceId` or the caller's `workspaceId`): stamped from
+  // the EFFECTIVE home, the one the row was written with (ticket d6636ed2).
+  if (workspaceId) {
     await stampProjectHomeUse(db, {
       projectId: written.projectId,
-      homeWorkspaceId,
+      homeWorkspaceId: workspaceId,
       userId,
     });
   }

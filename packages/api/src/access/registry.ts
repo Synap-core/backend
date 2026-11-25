@@ -46,7 +46,6 @@ import {
   installations,
   installationBindings,
   hostJobs,
-  intentDefaults,
   inboundDeliveries,
   userPreferences,
   userResourceState,
@@ -75,7 +74,10 @@ import {
 import { eventVisibleWhere } from "./event-visibility.js";
 import { accessScopeWhere } from "../utils/project-scope.js";
 import { viewReadableWhere } from "../utils/view-visibility.js";
-import { workspaceLensWhere } from "../utils/user-visible-where.js";
+import {
+  ownerPrivateVisibleWhere,
+  workspaceLensWhere,
+} from "../utils/user-visible-where.js";
 
 // ── Workspace-scoped: visible = pod-wide (NULL) OR a workspace the user is in ──
 registerVisibility({
@@ -153,16 +155,11 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(artifacts.workspaceId),
-          workspaceLensWhere(
-            artifacts.workspaceId,
-            access.userId,
-            access.workspaceLens
-          )
-        ),
-        and(isNull(artifacts.workspaceId), eq(artifacts.userId, access.userId))
+      ownerPrivateVisibleWhere(
+        artifacts.workspaceId,
+        artifacts.userId,
+        access.userId,
+        { lens: access.workspaceLens }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -186,6 +183,7 @@ registerVisibility({
     kind: "workspace",
     workspaceColumn: playbooks.workspaceId,
     nullWorkspaceMeans: "podGlobalConfig",
+    sharedAs: { type: "playbook", id: playbooks.id },
   },
 });
 registerVisibility({
@@ -402,16 +400,11 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(relations.workspaceId),
-          workspaceLensWhere(
-            relations.workspaceId,
-            access.userId,
-            access.workspaceLens
-          )
-        ),
-        and(isNull(relations.workspaceId), eq(relations.userId, access.userId))
+      ownerPrivateVisibleWhere(
+        relations.workspaceId,
+        relations.userId,
+        access.userId,
+        { lens: access.workspaceLens }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -446,23 +439,14 @@ registerVisibility({
   rule: {
     kind: "custom",
     predicate: (access) =>
-      or(
-        and(
-          isNotNull(entityFacets.workspaceId),
-          workspaceLensWhere(
-            entityFacets.workspaceId,
-            access.userId,
-            access.workspaceLens,
-            { includeGlobals: false }
-          )
-        ),
-        and(
-          isNull(entityFacets.workspaceId),
-          or(
-            eq(entityFacets.userId, access.userId),
-            podSharedFacetGrantWhere(access.userId)
-          )
-        )
+      ownerPrivateVisibleWhere(
+        entityFacets.workspaceId,
+        entityFacets.userId,
+        access.userId,
+        {
+          lens: access.workspaceLens,
+          sharedPodWide: podSharedFacetGrantWhere(access.userId),
+        }
       ),
     nullWorkspaceMeans: "ownerPrivate",
   },
@@ -619,13 +603,38 @@ registerVisibility({
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
+// Two shapes on one table (0426): an installation's binding is the OWNER's
+// within the workspace lens (as installations); a space's need binding (no
+// installation, founder decision D3: filled once per space, shared by its
+// members) follows the space's membership, never the person who set it. The
+// `installation_bindings_scope_check` CHECK guarantees a space binding has a
+// workspace, so the NULL-workspace branch only ever sees installation rows.
 registerVisibility({
   table: installationBindings,
   query: () => db.query.installationBindings,
   rule: {
-    kind: "workspaceOwned",
-    workspaceColumn: installationBindings.workspaceId,
-    userColumn: installationBindings.userId,
+    kind: "custom",
+    predicate: (access) =>
+      or(
+        and(
+          isNotNull(installationBindings.installationId),
+          eq(installationBindings.userId, access.userId),
+          workspaceLensWhere(
+            installationBindings.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        ),
+        and(
+          isNull(installationBindings.installationId),
+          isNotNull(installationBindings.workspaceId),
+          workspaceLensWhere(
+            installationBindings.workspaceId,
+            access.userId,
+            access.workspaceLens
+          )
+        )
+      ),
     nullWorkspaceMeans: "ownerPrivate",
   },
 });
@@ -638,13 +647,6 @@ registerVisibility({
     userColumn: hostJobs.userId,
     nullWorkspaceMeans: "ownerPrivate",
   },
-});
-// A remembered provider choice (0409) is a PREFERENCE: the person's alone,
-// whatever space it was made for.
-registerVisibility({
-  table: intentDefaults,
-  query: () => db.query.intentDefaults,
-  rule: { kind: "user", userColumn: intentDefaults.userId },
 });
 // A focus session is one person's goal-bound work room, READABLE by its owner
 // and by the HUMAN roster of its own minted room (founder decision C,

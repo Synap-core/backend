@@ -3,7 +3,6 @@ import {
   deriveForceProposeWrites,
   buildRunSessionMetadata,
   buildDefinitionSnapshot,
-  IDEMPOTENCY_TERMINAL_SESSION_STATUSES,
   IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES,
   type RunChainContext,
 } from "./run-playbook.js";
@@ -178,41 +177,21 @@ describe("buildDefinitionSnapshot (D3c run snapshot)", () => {
   });
 });
 
-describe("IDEMPOTENCY_TERMINAL_SESSION_STATUSES (subject-idempotency reuse gate)", () => {
-  // Every focus_sessions.status enum value (schema/focus-sessions.ts), split into
-  // the states that mean a run is still IN FLIGHT (reuse → no re-dispatch) vs
-  // TERMINALLY done (a fresh run is allowed again). The idempotency-by-subject
-  // check reuses a session iff its status is NOT in the terminal set.
-  // `scheduled` is neither: an appointment has executed nothing, so it is not
-  // reused (see IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES) — but it is not
-  // terminal either.
+describe("IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES (subject-idempotency reuse gate)", () => {
+  // A session is reused iff its status is NOT in this set: in flight is reused
+  // (no daily re-dispatch, the Stellar runaway), terminal or an appointment is not.
   const IN_FLIGHT = ["active", "paused", "stale", "forming"] as const;
   const TERMINAL = ["closed", "failed", "cancelled"] as const;
 
-  it("treats NO in-flight state as terminal, so a stuck/aged subject is REUSED (Stellar-runaway regression)", () => {
-    // Regression: keying reuse on 'active' alone re-spawned a fresh run daily once
-    // the focus-session reaper aged the session active→'stale'. 'stale' (and
-    // paused/forming) must NOT count as terminal — otherwise the next daily cron
-    // re-dispatches a duplicate run for the same subject.
+  it("reuses every in-flight state, so a stuck or aged subject is not re-dispatched", () => {
     for (const status of IN_FLIGHT) {
-      expect(IDEMPOTENCY_TERMINAL_SESSION_STATUSES).not.toContain(status);
       expect(IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES).not.toContain(status);
     }
   });
 
-  it("does not reuse a scheduled appointment, and stays a superset of the terminal set", () => {
+  it("does not reuse a terminal session or a scheduled appointment", () => {
     expect([...IDEMPOTENCY_NON_REUSABLE_SESSION_STATUSES].sort()).toEqual(
       [...TERMINAL, "scheduled"].sort()
-    );
-  });
-
-  it("lists EXACTLY the terminal states, so a properly-closed subject is eligible again (no permanent lockout)", () => {
-    // Once the playbook-run reaper force-fails the run and closes the session
-    // (→ closed|failed|cancelled) — or the run completes (session → closed) — a
-    // NEW run is allowed. If this set ever narrowed, a subject could re-spawn
-    // daily again; if it widened, a subject could be locked out forever.
-    expect([...IDEMPOTENCY_TERMINAL_SESSION_STATUSES].sort()).toEqual(
-      [...TERMINAL].sort()
     );
   });
 });

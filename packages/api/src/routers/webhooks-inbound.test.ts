@@ -191,6 +191,7 @@ vi.mock("../services/connectors/linkedin-reach-sync.js", () => ({
     recordAcceptedRelationMock(...args),
 }));
 const submitCaptureGraphMock = vi.fn();
+const captureAgentId = vi.fn(async (): Promise<string | null> => null);
 // The raw door's own behaviour is proven on PGlite (intake/__tests__); here only
 // that the Cal.com lane reaches it — with what — BEFORE anything is filed.
 const stageCaptureSourcesMock = vi.fn();
@@ -201,7 +202,7 @@ vi.mock("../services/capture-agent/submit-capture-graph.js", () => ({
   submitCaptureGraph: (...args: unknown[]) => submitCaptureGraphMock(...args),
 }));
 vi.mock("../services/capture-agent/ensure-capture-agent.js", () => ({
-  getCaptureAgentUserId: () => Promise.resolve(null),
+  getCaptureAgentUserId: () => captureAgentId(),
 }));
 vi.mock("../services/calcom/map-booking-to-graph.js", () => ({
   mapBookingToGraph: () => ({ entities: [], relations: [] }),
@@ -922,6 +923,22 @@ describe("cal.com inbound webhook", () => {
         }
       ).sourceDocumentIds
     ).toEqual(["raw-1"]);
+  });
+
+  it("Capture files the booking for the tool's person: their membership, Capture's governance", async () => {
+    captureAgentId.mockResolvedValueOnce("capture-agent");
+    const body = JSON.stringify({
+      triggerEvent: "BOOKING_CREATED",
+      payload: { uid: "bk-capture", title: "Intro call" },
+    });
+
+    expect((await postCalcom(CAL_TOKEN, body)).status).toBe(200);
+
+    expect(submitCaptureGraphMock.mock.calls[0]![0]).toMatchObject({
+      userId: OWNER_ID,
+      agentUserId: "capture-agent",
+      workspaceId: WS_ID,
+    });
   });
 
   it("a body whose raw could NOT be kept files nothing and is deferred, never marked handled", async () => {

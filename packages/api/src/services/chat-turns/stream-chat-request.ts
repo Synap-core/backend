@@ -14,6 +14,7 @@ import type { Context, Env } from "hono";
 import { z } from "zod";
 import {
   db,
+  agentOverridesForTurn,
   isDelegationHeaders,
   mintIsDelegationToken,
   IS_DELEGATION_HEADER,
@@ -36,6 +37,7 @@ import {
 import { resolveChatTarget } from "../../utils/resolve-chat-target.js";
 import { ensurePersonalAgentUser } from "../../utils/personal-agent-user.js";
 import { synapAiGate } from "../synap-ai-ceiling.js";
+import { listEnabledModels } from "./enabled-models.js";
 
 const logger = createLogger({ module: "external-chat" });
 
@@ -46,6 +48,11 @@ export const streamBodySchema = z.object({
   agentType: z.string().optional(),
   /** Client idempotency key (UUID). Also accepted via X-Request-Id header. */
   requestId: z.string().uuid().optional(),
+  /**
+   * One of the pod's enabled models (`<providerId>/<model id>`, as
+   * `GET /ai-providers/available` lists them). Pins the model for this turn only.
+   */
+  model: z.string().min(1).max(300).optional(),
 });
 
 export interface ChatStreamTarget {
@@ -68,15 +75,17 @@ export interface ChatStreamOptions {
 }
 
 /**
- * The delegation headers of one chat turn. An app's turn (`appGrant`) names the person's own Synap AI (their personal
- * agent) as the acting agent: the hub then bounds the turn by the standing grant they gave it
- * (`resolveSynapAiCeiling`), narrowed by the app's. With no such grant set the hub behaves as before (the app's claim
- * bounds the turn). A turn with no app grant (an API key) is the person's own token, as the external door always did.
- * Throws when the token cannot be signed: the caller refuses the turn, the AI service never falls back to a stored key.
+ * The delegation headers of one chat turn. Every turn acts as the person's ONE personal AI (decision 6b45c6c3), so
+ * every token names it as the acting agent (`act.sub`): the hub accepts it as the persona of the turn's writes
+ * (`resolveActorId`) and bounds the turn by the standing grant the person gave it (`resolveSynapAiCeiling`). An app's
+ * turn (`appGrant`) also carries the app's claim, which narrows that further, and THROWS when the token cannot be
+ * signed: the caller refuses the turn, the AI service never falls back to a stored key. A turn with no app grant keeps
+ * the transition fallback of `isDelegationHeaders` (no token on a pod that cannot sign yet).
  */
 export async function chatTurnDelegation(opts: {
-  userId: string;
   appGrant?: Record<string, unknown> | null;
+  /** The person's personal AI (`ensurePersonalAgentUser`), resolved by the caller. */
+  agentUserId: string;
   turn: {
     isUrl: string;
     operatorUserId: string;
@@ -84,16 +93,16 @@ export async function chatTurnDelegation(opts: {
     runId: string;
   };
 }): Promise<Record<string, string>> {
-  const { userId, appGrant, turn } = opts;
+  const { appGrant, agentUserId, turn } = opts;
   return appGrant
     ? {
         [IS_DELEGATION_HEADER]: mintIsDelegationToken({
           ...turn,
           appGrant,
-          agentUserId: await ensurePersonalAgentUser(userId),
+          agentUserId,
         }),
       }
-    : isDelegationHeaders(turn);
+    : isDelegationHeaders({ ...turn, agentUserId });
 }
 
 export async function handleChatStream<E extends Env>(
@@ -142,8 +151,46 @@ export async function handleChatStream<E extends Env>(
   // An app's turn runs through the person's connected Synap AI (the grant they set once on the Keys page): not
   // connected (or paused) is refused BEFORE the turn starts, with the page where they connect it.
   if (appGrant) {
-    const gate = await synapAiGate(userId, new URL(c.req.url).origin);
+    const gate = await synapAiGate(
+      userId,
+      process.env.PUBLIC_URL || new URL(c.req.url).origin
+    );
     if (!gate.open) return c.json(gate.body, gate.status);
+  }
+
+  // A chosen model is checked against the models the pod has enabled and the person's own agent overrides are read
+  // BEFORE a turn is reserved, so a refusal leaves no turn row. The request's `agentOverrides` REPLACES what the IS would
+  // read itself, so the person's other overrides ride along and only `modelOverride` is set; a failed read is never sent
+  // as "no overrides" (`agentOverridesForTurn` → undefined): the turn is refused rather than run on a wrong config.
+  let turnOverrides: Awaited<ReturnType<typeof agentOverridesForTurn>>;
+  if (input.model) {
+    let enabled: Awaited<ReturnType<typeof listEnabledModels>>;
+    try {
+      enabled = await listEnabledModels();
+    } catch (err) {
+      logger.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        "Failed to read the enabled models"
+      );
+      return c.json({ error: "Could not check the requested model" }, 503);
+    }
+    if (!enabled.some((m) => m.id === input.model)) {
+      return c.json(
+        {
+          error:
+            "model is not enabled on this pod; choose one from GET /api/hub/ai-providers/available",
+        },
+        400
+      );
+    }
+    turnOverrides = await agentOverridesForTurn({
+      userId,
+      workspaceId: resolvedWorkspaceId,
+      agentType: input.agentType ?? "meta",
+    });
+    if (turnOverrides === undefined) {
+      return c.json({ error: "Could not read this agent's settings" }, 503);
+    }
   }
 
   // ── Step 3: Reserve durable chat_turn ────────────────────────────────────
@@ -308,14 +355,50 @@ export async function handleChatStream<E extends Env>(
   }
 
   // ── Step 5: Build IS request body ────────────────────────────────────────
+  // The person's ONE personal AI (decision 6b45c6c3): the turn acts as it,
+  // named here and signed below. No agent ⇒ the turn is refused, never run as
+  // the person.
+  let actingAgentUserId: string;
+  try {
+    actingAgentUserId = await ensurePersonalAgentUser(userId);
+  } catch (err) {
+    logger.error(
+      { err: err instanceof Error ? err.message : String(err) },
+      "Failed to resolve the person's Synap AI"
+    );
+    await safeFinishExternalTurn({
+      turnId: durableTurn.id,
+      status: "failed",
+      error: "Intelligence service agent unavailable",
+    });
+    return c.json(
+      { error: "Intelligence service unavailable", turnId: durableTurn.id },
+      503,
+      { [SYNAP_TURN_ID_HEADER]: durableTurn.id }
+    );
+  }
   const isBody = {
     query: input.query,
     threadId: resolvedChannelId, // IS calls channels "threads"
     userId,
+    agentUserId: actingAgentUserId,
     workspaceId: resolvedWorkspaceId,
     agentType: input.agentType ?? "meta",
     ...getPodCallback(),
     stream: true,
+    ...(input.model
+      ? {
+          agentOverrides: {
+            // `null` = the person has no row: the IS defaults for the rest.
+            promptAppend: null,
+            extraToolIds: [],
+            disabledToolIds: [],
+            maxStepsOverride: null,
+            ...turnOverrides,
+            modelOverride: input.model,
+          },
+        }
+      : {}),
   };
 
   // The turn's delegation headers. An app's token throws when it cannot be
@@ -330,7 +413,11 @@ export async function handleChatStream<E extends Env>(
       channelId: resolvedChannelId,
       runId: durableTurn.id,
     };
-    delegationHeaders = await chatTurnDelegation({ userId, appGrant, turn });
+    delegationHeaders = await chatTurnDelegation({
+      appGrant,
+      agentUserId: actingAgentUserId,
+      turn,
+    });
   } catch (err) {
     logger.error(
       { err: err instanceof Error ? err.message : String(err) },

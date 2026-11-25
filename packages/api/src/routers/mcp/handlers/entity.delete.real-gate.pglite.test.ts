@@ -255,4 +255,23 @@ describe("synap_delete_entity through the real gate (B9b)", () => {
     expect(rows).toEqual([{ status: "pending", agent_user_id: null }]);
     expect(await deletedAt(id)).toBeNull();
   });
+
+  it("a second delete of an entity with a pending delete proposal returns the SAME proposal (no duplicate in the inbox)", async () => {
+    const id = await seedNote("Retried delete");
+
+    const first = await callDelete(AGENT, id);
+    const second = await callDelete(AGENT, id);
+    const third = await callDelete(AGENT, id);
+
+    expect(second).toMatchObject({ status: "proposed" });
+    expect(second.proposalId).toBe(first.proposalId);
+    expect(third.proposalId).toBe(first.proposalId);
+    const { rows } = await q<{ n: number }>(
+      `select count(*)::int as n from proposals
+       where target_id = $1 and proposal_type = 'delete' and status = 'pending'`,
+      [id]
+    );
+    expect(rows[0]!.n).toBe(1);
+    expect(await deletedAt(id)).toBeNull();
+  });
 });

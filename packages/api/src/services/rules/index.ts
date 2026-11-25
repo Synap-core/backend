@@ -192,7 +192,28 @@ export interface RuleMetadata {
    * does not was edited by its owner and is never overwritten.
    */
   seed?: RuleSeed;
+  /**
+   * A REACTION's rule (decision D1): the row that makes a rule the reactions
+   * reactor applies (a built-in one, or one a relation declares) visible and
+   * pausable in the ONE rule list. It has no automation half: the reactor runs
+   * it, never the matcher. Draft = paused. Seeded by the compile pass
+   * (`services/reactions/reaction-rules-compile.ts`).
+   */
+  reaction?: RuleReaction;
   createdAt: string;
+}
+
+/** See {@link RuleMetadata.reaction}. */
+export interface RuleReaction {
+  /** The reaction's stable id (`builtin:…`, `declared:rollup:…`). */
+  id: string;
+}
+
+/** Re-validate a stored reaction blob — stored JSONB is data. */
+export function readRuleReaction(raw: unknown): RuleReaction | null {
+  if (!raw || typeof raw !== "object") return null;
+  const id = (raw as { id?: unknown }).id;
+  return typeof id === "string" && id ? { id } : null;
 }
 
 /** See {@link RuleMetadata.seed}. */
@@ -276,8 +297,162 @@ export function readRuleMetadata(
     ...(readRuleSeed(candidate.seed)
       ? { seed: readRuleSeed(candidate.seed)! }
       : {}),
+    ...(readRuleReaction(candidate.reaction)
+      ? { reaction: readRuleReaction(candidate.reaction)! }
+      : {}),
     createdAt: candidate.createdAt ?? new Date(0).toISOString(),
   };
+}
+
+/**
+ * How a rule row is held (decision D1, founder, 20 Nov 2026, proposal
+ * 8d04d49e: a rule is a guideline PUSHED into every piece of work in its
+ * scope; one store, `skills`, `category: "rule"`).
+ *
+ *   - `loop`  — written by the rule loop (`createRuleGoverned`): `metadata.rule`
+ *     carries intent, scope, lineage, and maybe a sentence it compiled into an
+ *     automation, a seed, a reaction.
+ *   - `prose` — a skill marked `category: "rule"` with NO `metadata.rule`
+ *     (`rules/start-here`, `rules/ui-rules`…): its words are its body, its scope
+ *     is the row's own `scope` / `workspaceId`. It has no automation, no
+ *     reaction, no seed and no worker, so the rule-loop readers that compile,
+ *     activate or run rules skip it; the list and read doors show it as a rule.
+ *
+ * Every reader of `category: "rule"` is classified in
+ * `__tripwires__/prose-rule-readers.test.ts`.
+ */
+export type RuleForm = "loop" | "prose";
+
+/** The columns a rule reader needs to tell the two forms apart. */
+export interface RuleRowLike {
+  category: string | null;
+  metadata: unknown;
+  name: string;
+  body?: string | null;
+  description?: string | null;
+  scope: "pod" | "user" | "workspace";
+  workspaceId: string | null;
+  createdAt?: Date | string | null;
+}
+
+/**
+ * A PROSE rule: `category: "rule"` and no `metadata.rule` key at all. A row
+ * whose `metadata.rule` is present but malformed is a broken LOOP rule, never a
+ * prose one: it stays unreadable (`readRuleMetadata` → null), as before.
+ */
+export function isProseRule(
+  row: Pick<RuleRowLike, "category" | "metadata">
+): boolean {
+  if (row.category !== RULE_CATEGORY) return false;
+  const bag = row.metadata as Record<string, unknown> | null | undefined;
+  const blob = bag?.[RULE_METADATA_KEY];
+  return blob === undefined || blob === null;
+}
+
+/**
+ * THE read of a rule row for a door that LISTS or SHOWS rules: the loop blob
+ * when there is one, else the prose rule's view (its words, its scope, no
+ * behaviour). Null for a row that is not a rule, or a loop rule whose blob
+ * does not parse. A door that compiles, activates or runs rules reads
+ * `readRuleMetadata` instead, which a prose rule never satisfies.
+ */
+export function readRuleView(
+  row: RuleRowLike
+): { form: RuleForm; rule: RuleMetadata } | null {
+  if (isProseRule(row)) {
+    const intent =
+      row.body?.trim() || row.description?.trim() || row.name.trim();
+    const createdAt =
+      row.createdAt instanceof Date
+        ? row.createdAt.toISOString()
+        : (row.createdAt ?? new Date(0).toISOString());
+    return {
+      form: "prose",
+      rule: {
+        v: 1,
+        intent,
+        scope: {
+          kind: row.scope,
+          ...(row.scope === "workspace" && row.workspaceId
+            ? { workspaceId: row.workspaceId }
+            : {}),
+        },
+        behaviours: [],
+        createdAt,
+      },
+    };
+  }
+  const loop = readRuleMetadata(
+    row.metadata as Record<string, unknown> | null | undefined
+  );
+  return loop ? { form: "loop", rule: loop } : null;
+}
+
+/**
+ * What a rule-loop edit door answers for a prose rule: its words are its skill
+ * body, and it has no review date, automation or draft state to change.
+ */
+export const PROSE_RULE_EDIT_MESSAGE =
+  "This is a prose rule: its words are its skill body, and it has no review date, automation or draft state. Change its words with synap_update_skill.";
+
+/**
+ * Why a `category` change on a skill is refused, or null when it is fine. One
+ * rule for every door that writes `skills.category` (tRPC `skills.update`, and
+ * `updateSkillGoverned` behind MCP `synap_update_skill`):
+ *   - a rule is a guideline in words, so only an `instruction` skill becomes
+ *     one (a code skill is never pushed into an agent's context);
+ *   - a LOOP rule keeps its category: dropping it would hide the rule from
+ *     every rule door while its automation keeps running.
+ */
+export function skillCategoryChangeProblem(input: {
+  /** The category the write sends; undefined = left alone. */
+  nextCategory: string | undefined;
+  currentCategory: string | null;
+  metadata: unknown;
+  /** The kind the write leaves the skill with. */
+  kind: string;
+  currentKind: string;
+}): string | null {
+  const { nextCategory, currentCategory } = input;
+  const categoryChanges =
+    nextCategory !== undefined && nextCategory !== currentCategory;
+  if (!categoryChanges && input.kind === input.currentKind) return null;
+  if (
+    (nextCategory ?? currentCategory) === RULE_CATEGORY &&
+    input.kind !== "instruction"
+  ) {
+    return "Only a documentation skill (kind instruction) can be a rule: a rule is a guideline in words, pushed into the work in its scope.";
+  }
+  if (
+    categoryChanges &&
+    currentCategory === RULE_CATEGORY &&
+    !isProseRule({ category: currentCategory, metadata: input.metadata })
+  ) {
+    return "This rule was made by the rule loop (it carries an intent and may run an automation), so its category stays 'rule'. Change it with synap_update_rule.";
+  }
+  return null;
+}
+
+/**
+ * The IS STANDING RULES tier, in tokens: MIRROR of
+ * `DEFAULT_SKILL_BLOCK_TOKENS.RULES` (synap-intelligence-service
+ * `apps/intelligence-hub/src/tools/dynamic-skill-loader.ts`), pinned there by
+ * `dynamic-skill-loader.budget-mirror.tripwire.test.ts`. A rule over it is
+ * never pushed whole: the IS skips it and names it. Authoring only WARNS.
+ */
+export const STANDING_RULES_TIER_TOKENS = 2_000;
+
+/**
+ * The warning for a rule whose words are over the tier, or null when it fits.
+ * Same estimate the IS budgets with (`estimateSkillTokens`, ceil(chars / 4)).
+ */
+export function ruleOverTierWarning(
+  name: string,
+  words: string | null | undefined
+): string | null {
+  const tokens = Math.ceil((words ?? "").length / 4);
+  if (tokens <= STANDING_RULES_TIER_TOKENS) return null;
+  return `The rule "${name}" is ~${tokens} tokens, over the ~${STANDING_RULES_TIER_TOKENS}-token standing-rules tier: agents will see it named as skipped, not its words. Shorten it, or split it into smaller rules.`;
 }
 
 /**
@@ -336,6 +511,8 @@ export function buildRuleMetadata(input: {
   sentence?: unknown;
   /** Template provenance + three-way marker (template-installed rules only). */
   seed?: RuleSeed;
+  /** The reaction this rule makes visible and pausable (no automation). */
+  reaction?: RuleReaction;
   now?: Date;
 }): RuleMetadata {
   const expiresAt = normalizeExpiresAt(input.expiresAt);
@@ -357,6 +534,7 @@ export function buildRuleMetadata(input: {
       ? { sentence: input.sentence }
       : {}),
     ...(input.seed ? { seed: input.seed } : {}),
+    ...(input.reaction ? { reaction: input.reaction } : {}),
     createdAt: (input.now ?? new Date()).toISOString(),
   };
 }

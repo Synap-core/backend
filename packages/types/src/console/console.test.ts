@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CONSOLE_DOORS_PATH,
+  CONSOLE_FEATURE_MARKS,
+  CONSOLE_PAGE_FEATURES,
   CONSOLE_PAGES,
   DESKTOP_PLACE_CONSOLE_PAGE,
   POD_ADMIN_SYSTEM_SLUG,
@@ -10,6 +12,7 @@ import {
   desktopPlaceConsoleTarget,
   isPodAdminMembership,
   consoleHref,
+  consolePageServed,
   consolePath,
   consoleTargetAudience,
   consoleTargetVisibleTo,
@@ -51,7 +54,7 @@ describe("consoleHref", () => {
   it("builds page links on the origin", () => {
     expect(consoleHref(ORIGIN, { page: "members" })).toBe(`${ORIGIN}/members`);
     expect(consoleHref(`${ORIGIN}/`, { page: "governance" })).toBe(
-      `${ORIGIN}/governance/agents`
+      `${ORIGIN}/approvals`
     );
     expect(consoleHref(ORIGIN, { page: "accountSecurity" })).toBe(
       `${ORIGIN}/settings/security`
@@ -347,5 +350,46 @@ describe("isPodAdminMembership / consoleRoleFromWorkspaces", () => {
         { systemSlug: "pod-admin", role: "admin" },
       ])
     ).toBe("admin");
+  });
+});
+
+describe("console page feature marks (an older pod does not serve every page)", () => {
+  it("keeps the wire names a client compares", () => {
+    expect(CONSOLE_PAGE_FEATURES).toEqual({
+      governance: "approvals-page",
+      writeLimits: "approvals-limits-calibration",
+      calibration: "approvals-limits-calibration",
+    });
+    expect([...CONSOLE_FEATURE_MARKS].sort()).toEqual([
+      "approvals-limits-calibration",
+      "approvals-page",
+    ]);
+  });
+
+  it("names Approvals' tuning pages and the review settings", () => {
+    expect(consolePath({ page: "writeLimits" })).toBe("/approvals/limits");
+    expect(consolePath({ page: "calibration" })).toBe("/approvals/calibration");
+    expect(consolePath({ page: "reviewSettings" })).toBe("/settings/review");
+    expect(CONSOLE_PAGES.reviewSettings.audience).toBe("member");
+  });
+
+  it("serves a marked page only where the pod lists its mark", () => {
+    const newer = ["agent-seats", "approvals-page"];
+    expect(consolePageServed("governance", newer)).toBe(true);
+    expect(consolePageServed("writeLimits", newer)).toBe(false);
+    expect(
+      consolePageServed("calibration", [
+        ...newer,
+        "approvals-limits-calibration",
+      ])
+    ).toBe(true);
+    // An older pod: no `features`, or only the agent seats.
+    expect(consolePageServed("governance", undefined)).toBe(false);
+    expect(consolePageServed("governance", ["agent-seats"])).toBe(false);
+  });
+
+  it("serves an unmarked page on every pod", () => {
+    expect(consolePageServed("reviewSettings", undefined)).toBe(true);
+    expect(consolePageServed("tools", null)).toBe(true);
   });
 });

@@ -21,6 +21,7 @@ import {
   isNotNull,
   inArray,
   desc,
+  ownerAndActor,
 } from "@synap/database";
 import {
   tools,
@@ -41,28 +42,13 @@ import { getLinksFor } from "../services/links/links-service.js";
 import { execFieldsChanged } from "../services/capabilities/skill-exec-fields.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { refuseAgentApprover } from "../services/capabilities/set-skill-approved.js";
+import {
+  refuseFormRow,
+  setToolApproved,
+} from "../services/capabilities/set-tool-approved.js";
 import { emitSideEffects } from "@synap/events";
-import { isFormToolMetadata } from "../services/forms/form-definition.js";
 import { provisionInboundWebhook } from "../services/webhooks/provision-inbound-webhook.js";
 import { inboundWebhookProviderForTool } from "../services/webhooks/inbound-webhook-providers.js";
-
-/**
- * A PUBLIC FORM is a `tools` row whose `metadata.form` holds its definition,
- * token hash and actor (Sites W4). `update` below edits metadata with NO
- * governance check (the config-only carve-out), so a generic door could swap a
- * form's kind, actor or token hash. Every mutating door here refuses a form
- * row — and refuses to CREATE one — the forms door
- * (`services/forms/form-service.ts`) is its only writer.
- */
-function refuseFormRow(metadata: unknown): void {
-  if (isFormToolMetadata(metadata)) {
-    throw new TRPCError({
-      code: "FORBIDDEN",
-      message:
-        "This tool is a public form. Manage it through the forms door (forms.*), not the generic tool doors.",
-    });
-  }
-}
 
 const TOOL_KINDS = [
   "builtin",
@@ -229,11 +215,13 @@ export const toolsRouter = router({
           proposalId: perm.proposalId,
         };
 
+      const owner = await ownerAndActor(db, userId, input.agentUserId);
       const [tool] = await db
         .insert(tools)
         .values({
           workspaceId: input.workspaceId ?? null,
-          createdBy: input.agentUserId ?? userId,
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
           name: input.name,
           description: input.description,
           kind: input.kind,
@@ -423,34 +411,12 @@ export const toolsRouter = router({
           door: "trpc.tools.setApproved",
         });
       }
-      const existing = await db.query.tools.findFirst({
-        where: eq(tools.id, input.id),
+      const tool = await setToolApproved({
+        userId,
+        toolId: input.id,
+        approved: input.approved,
       });
-      if (!existing)
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: `Tool ${input.id} not found`,
-        });
-      refuseFormRow(existing.metadata);
-      if (existing.workspaceId) {
-        const role = await getWorkspaceRole(userId, existing.workspaceId);
-        if (role !== "owner") {
-          throw new TRPCError({
-            code: "FORBIDDEN",
-            message: "Only workspace owners can approve tool execution.",
-          });
-        }
-      } else {
-        // Pod-wide (null-workspace) tool — pod-level privileged action.
-        await requirePodAdmin(userId);
-      }
-
-      const [tool] = await db
-        .update(tools)
-        .set({ approved: input.approved, updatedAt: new Date() })
-        .where(eq(tools.id, input.id))
-        .returning();
-      return { tool: tool as Tool };
+      return { tool };
     }),
 
   /**

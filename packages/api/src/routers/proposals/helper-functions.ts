@@ -8,7 +8,7 @@
 // (`routers/proposals.ts`, `services/focus-sessions/participants.ts`) is
 // unaffected.
 import { isLikelyUUID } from "@synap-core/types/proposals";
-import { resolveServiceName } from "@synap-core/types/service-marks";
+import { resolveAgentName } from "@synap-core/types/service-marks";
 import {
   actorComputer,
   nameWithComputer,
@@ -28,10 +28,19 @@ export function displayNameForUser(row: {
   userType: string;
   agentMetadata: { agentType?: string; description?: string } | null;
 }): string | undefined {
-  if (row.name) return row.name;
   if (row.userType === "agent") {
-    return row.agentMetadata?.agentType ?? row.agentMetadata?.description;
+    // Named at the source (`resolveAgentName`): an agent whose name is its
+    // type token ("claude-code") reads "Claude Code", so no surface has to
+    // humanize a slug.
+    return (
+      resolveAgentName({
+        name: row.name,
+        agentType: row.agentMetadata?.agentType,
+      }) ??
+      (row.agentMetadata?.description || undefined)
+    );
   }
+  if (row.name) return row.name;
   return row.email || undefined;
 }
 
@@ -42,9 +51,10 @@ export function displayNameForUser(row: {
  * the same as its twin on another computer; else the filing key's label,
  * "Claude Code, last seen on MacBook". `hostNames` is `loadMachineNames`
  * (`services/machine-roster.ts`) over the rows' `hostUserId`s; a computer it
- * could not name leaves the agent's own name. An agent with no name of its own
- * is named from its type the way the rosters name it (`resolveServiceName`:
- * "Claude Code", "Orchestrator"), never the raw token.
+ * could not name leaves the agent's own name. An agent with no name of its own,
+ * or whose name is its type token, is named from its type the way the rosters
+ * name it (`resolveAgentName`: "Claude Code", "Orchestrator"), never the raw
+ * token.
  */
 export function actorDisplayName(
   row: Parameters<typeof displayNameForUser>[0] & {
@@ -58,13 +68,7 @@ export function actorDisplayName(
    */
   keyComputer?: string | null
 ): string | undefined {
-  const unnamedType =
-    row.userType === "agent" && !row.name?.trim()
-      ? row.agentMetadata?.agentType
-      : undefined;
-  const name = unnamedType
-    ? resolveServiceName(unnamedType)
-    : displayNameForUser(row);
+  const name = displayNameForUser(row);
   if (row.userType !== "agent") return name;
   const computer = actorComputer({
     hostName: row.hostUserId ? hostNames.get(row.hostUserId)?.name : undefined,

@@ -64,7 +64,7 @@ import {
 } from "./computer-modals";
 import { ComputerWrites, useAgentsOnComputer } from "./computer-writes-section";
 import { agentModeOnComputer } from "./computer-writes";
-import { en, fr } from "./copy";
+import { computersT, en, fr } from "./copy";
 import {
   RECONNECT_COMMAND,
   activityLine,
@@ -130,6 +130,7 @@ export function ComputerObject({
   podDefaultDays?: number | null;
 }) {
   const router = useRouter();
+  const tc = computersT();
   const utils = trpc.useUtils();
   const [dialog, setDialog] = useState<null | "rename" | "lifetime">(null);
   const [proposalId, setProposalId] = useState<string | null>(null);
@@ -343,7 +344,7 @@ export function ComputerObject({
               color="primary"
               onPress={() => setDialog("rename")}
             >
-              Rename
+              {tc("obj.rename")}
             </Button>
           ),
           secondaryActions: revoked ? undefined : (
@@ -353,7 +354,7 @@ export function ComputerObject({
               variant="flat"
               onPress={() => setDialog("lifetime")}
             >
-              Change key lifetime
+              {tc("obj.lifetime")}
             </Button>
           ),
         },
@@ -390,8 +391,7 @@ export function ComputerObject({
         children: proposalId ? (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-status-stale/10 px-3 py-2.5 ring-1 ring-inset ring-status-stale/30">
             <p className="min-w-0 flex-1 text-[12.5px] text-foreground">
-              Revoking {c.name} is waiting for review. Nothing has been revoked
-              yet.
+              {tc("obj.revokingWaiting", { name: c.name })}
             </p>
             <Button
               as={Link}
@@ -401,7 +401,7 @@ export function ComputerObject({
               radius="md"
               endContent={<ArrowRight className="h-3.5 w-3.5" />}
             >
-              Open in Review
+              {tc("obj.openReview")}
             </Button>
           </div>
         ) : undefined,
@@ -412,7 +412,7 @@ export function ComputerObject({
             content: (
               <div className="flex flex-col gap-5">
                 <SectionCard
-                  title="Agents on this computer"
+                  title={tc("obj.agentsTitle")}
                   actions={
                     c.agents.length > AGENTS_PREVIEW ? (
                       <Link
@@ -420,7 +420,7 @@ export function ComputerObject({
                         scroll={false}
                         className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 text-[12px] text-foreground/65 hover:text-foreground hover:underline"
                       >
-                        Show all {c.agents.length} agents
+                        {tc("obj.showAllAgents", { n: c.agents.length })}
                       </Link>
                     ) : undefined
                   }
@@ -530,7 +530,7 @@ export function ComputerObject({
                   <SectionCard title="Whose computer it is">
                     {!c.belongsTo && (
                       <p className="mb-2 text-[12.5px] text-foreground/65">
-                        Not set yet. Choose one.
+                        {tc("obj.belongsUnset")}
                       </p>
                     )}
                     <RadioGroup
@@ -632,7 +632,7 @@ export function ComputerObject({
             key: "agents",
             label: `Agents (${c.agents.length})`,
             content: (
-              <SectionCard title="Agents on this computer">
+              <SectionCard title={tc("obj.agentsTitle")}>
                 <AgentRows computer={c} agentHref={links.agentHref} />
               </SectionCard>
             ),

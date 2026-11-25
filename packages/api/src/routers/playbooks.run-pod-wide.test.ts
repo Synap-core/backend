@@ -50,6 +50,14 @@ const {
     mockWorkspacesFindFirst: workspacesFindFirst,
     mockGetDb: vi.fn(),
     mockDb: {
+      // `space_access`: the playbook is shared with no space.
+      select: () => {
+        const q: { from: () => unknown; where: () => Promise<never[]> } = {
+          from: () => q,
+          where: async () => [],
+        };
+        return q;
+      },
       query: {
         workspaceMembers: {
           findFirst: vi.fn().mockResolvedValue({ role: "editor" }),
@@ -98,6 +106,13 @@ vi.mock("../services/playbooks/run-playbook.js", async (importOriginal) => ({
   runPlaybook: mockRunPlaybook,
 }));
 
+// The subject floor is SQL the mocked `findFirst` cannot apply: the test
+// reads WHICH floor the door asked for, and answers as that floor would.
+const mockReadFloor = vi.hoisted(() => vi.fn((userId: string) => ({ userId })));
+vi.mock("../access/entity-read-floor.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  entityReadVisibleWhere: mockReadFloor,
+}));
 const mockResolveTrackFiling = vi.hoisted(() =>
   vi.fn(async () => ({ projectId: "00000000-0000-4000-8000-0000000000f1" }))
 );
@@ -224,11 +239,10 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
   });
 
   it("(f) subject IDOR guard runs against the RESOLVED workspace", async () => {
-    // Subject lives in B; the run resolves to A → the subject must be rejected.
-    mockEntitiesFindFirst.mockResolvedValue({
-      id: "00000000-0000-4000-8000-0000000000e1",
-      workspaceId: WS_B,
-    });
+    // Subject lives in B; the run resolves to A → the person's read floor is
+    // asked, with A as the space, and the subject is not admitted.
+    mockReadFloor.mockClear();
+    mockEntitiesFindFirst.mockResolvedValue(undefined);
     const caller = playbooksRouter.createCaller(ctxWith(WS_B));
 
     await expect(
@@ -237,6 +251,7 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
         subjectId: "00000000-0000-4000-8000-0000000000e1",
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(mockReadFloor).toHaveBeenCalledWith("user-1");
     expect(mockRunPlaybook).not.toHaveBeenCalled();
   });
 
@@ -263,8 +278,12 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
     expect(mockRunPlaybook).not.toHaveBeenCalled();
   });
 
-  it("(g) explicit input.workspaceId outranks the playbook's home", async () => {
-    const caller = playbooksRouter.createCaller(ctxWith(null));
+  it("(g) explicit input.workspaceId outranks the ambient one for a pod-wide playbook", async () => {
+    mockScopedFindFirst.mockResolvedValue({
+      ...PLAYBOOK_IN_A,
+      workspaceId: null,
+    });
+    const caller = playbooksRouter.createCaller(ctxWith(WS_A));
     await caller.run({ playbookId: PB_ID, workspaceId: WS_B });
 
     expect(mockRunPlaybook).toHaveBeenCalledWith(
@@ -275,6 +294,33 @@ describe("playbooks.run — pod-wide door parity with runPlaybookDoor", () => {
       "user-1",
       { workspaceId: WS_B }
     );
+  });
+
+  it("(g2) explicit workspaceId naming ANOTHER space than the playbook's home is refused at filing, naming the fix (e93cf92b)", async () => {
+    // Refused before the gate, by `resolveRunnablePlaybook`'s own rule: a run
+    // in B of a playbook that lives in A could only fail once approved.
+    const caller = playbooksRouter.createCaller(ctxWith(null));
+    await expect(
+      caller.run({ playbookId: PB_ID, workspaceId: WS_B })
+    ).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: `Playbook "Weekly review" (${PB_ID}) lives in space ${WS_A}, so it is not visible in space ${WS_B}: run it in space ${WS_A}, or move or share it (synap_move_entities playbookIds / synap_grant_profile_access playbookId).`,
+    });
+    expect(mockCheckPermission).not.toHaveBeenCalled();
+    expect(mockRunPlaybook).not.toHaveBeenCalled();
+  });
+
+  it("(g3) a PAUSED playbook is refused at filing, before any proposal", async () => {
+    mockScopedFindFirst.mockResolvedValue({
+      ...PLAYBOOK_IN_A,
+      status: "paused",
+    });
+    const caller = playbooksRouter.createCaller(ctxWith(null));
+    await expect(caller.run({ playbookId: PB_ID })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: expect.stringContaining("is paused"),
+    });
+    expect(mockCheckPermission).not.toHaveBeenCalled();
   });
 
   describe("track STAGE filing (0274)", () => {

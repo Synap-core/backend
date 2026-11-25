@@ -78,8 +78,11 @@ import {
   db,
   focusSessions,
   eq,
+  sessionStageIs,
   setSessionStatus,
+  type StatusMoveActor,
 } from "@synap/database";
+import type { TransitionCause } from "@synap-core/types/lifecycle";
 import { emitSideEffects } from "@synap/events";
 import { createLogger } from "@synap-core/core";
 import {
@@ -95,9 +98,13 @@ import {
 import { applyStageGateOnAdvance } from "../playbooks/stage-gate.js";
 import { mergeEnteredStageSlots } from "./stage-slots.js";
 import {
+  writeGatePassStatuses,
   writeStageSubjectStatus,
   type StageSubjectStatusOutcome,
 } from "./stage-subject-status.js";
+
+import type { PlaybookRunner } from "@synap/playbooks";
+import type { EnterStageResult } from "../playbooks/stage-runner.js";
 
 const logger = createLogger({ module: "focus-sessions/advance-stage" });
 
@@ -142,11 +149,48 @@ export interface AdvanceSessionStageInput {
    * A follow that wrote back re-fired on every stale event and ping-ponged.
    */
   skipSubjectWrite?: boolean;
+  /**
+   * Who works the stage being entered, named for THIS entry
+   * (`synap_update_session { stageRunner }`): the stage runner's first rung
+   * (`enterStage`, spec 7111934d §2.4).
+   */
+  stageRunner?: PlaybookRunner | null;
+  /**
+   * COMPARE-AND-SET on `current_stage` (W6): the stage the mover READ (null:
+   * none). A `"door"` write lands only while the session still stands there;
+   * a session whose step moved meanwhile answers `stale` and nothing is
+   * written, emitted or gated, so a manual advance and a step that advanced
+   * by itself never jump two steps. A `"caller"` door checks it in its own
+   * UPDATE. Absent: no check (the door's historical callers).
+   */
+  expectedStage?: string | null;
+  /**
+   * The step advances BY ITSELF (W6, `advance-if-stage-met.ts`): nobody
+   * asked, so the subject moves as the `system` — never as the session's
+   * owner, who decided nothing — with the move that caused it. Such a move
+   * also needs the session `active` (its compare-and-set holds the status
+   * too: a person's pause or a close between the plan and the write wins),
+   * and writes the COLUMN FIRST, under that compare-and-set, then the
+   * subject: two triggers racing for one step write it once, and only the
+   * one that wrote it reports `changed` (its log row is the only one). The
+   * follow that the subject's move fires finds the stage already there.
+   */
+  bySystem?: { cause?: TransitionCause | null };
 }
 
 export interface AdvanceSessionStageResult {
   /** False when `toStage` equals the stage the session was already on. */
   changed: boolean;
+  /**
+   * The `expectedStage` no longer held: the session's step moved meanwhile.
+   * Nothing was written; re-read it and decide again.
+   */
+  stale?: {
+    expectedStage: string | null;
+    currentStage: string | null;
+    /** Set when the session stood in another status than `active` (`bySystem`). */
+    status?: string;
+  };
   /** True when the stage entered declares a gate (human or check). */
   gated: boolean;
   /**
@@ -162,7 +206,18 @@ export interface AdvanceSessionStageResult {
    * A `check` gate's outcome: whether the left stage's required criteria pass,
    * and which do not. Present only when the stage entered is check-gated.
    */
-  check?: { passed: boolean; failing: string[] };
+  check?: {
+    passed: boolean;
+    failing: string[];
+    /**
+     * Held only because the AI judge could not run (`CheckMeasure.notJudged`):
+     * nothing failed. `reason` then says why in words and how the owner moves
+     * it on, so a door that reports the hold does not call it a failed check.
+     */
+    notJudged?: true;
+    /** Why the check held, in words, when the gate said (`CheckGateResult.reason`). */
+    reason?: string;
+  };
   /**
    * The forward half of stage ↔ subject status: what happened to the entered
    * stage's `subjectStatus` (written / proposed / skipped + why / failed).
@@ -170,6 +225,12 @@ export interface AdvanceSessionStageResult {
    * when the advance followed the subject (`skipSubjectWrite`).
    */
   subjectStatus?: StageSubjectStatusOutcome;
+  /**
+   * The stage LEFT reached its `onApproved` because the entered stage's check
+   * gate passed on this advance (approval signal 2, decision D2), written
+   * BEFORE `subjectStatus`. Absent when nothing was reached.
+   */
+  subjectReached?: StageSubjectStatusOutcome;
   /** Set when a failed check gate returned the run to its `onFail` stage. */
   onFail?: { toStage: string };
   /**
@@ -190,6 +251,31 @@ export interface AdvanceSessionStageResult {
    * `changed` is false. A session with no stages is never refused.
    */
   refused?: UndeclaredStageRefusal;
+  /**
+   * The stage runner's report (`enterStage`): who works the stage entered,
+   * and whether it waits on tools. Absent while a gate holds the stage (its
+   * pass enters it) and on a subject-first move (the follow enters it).
+   */
+  stageRun?: EnterStageResult;
+}
+
+/**
+ * Enter the stage that now stands and runs (no gate holds it): THE stage
+ * runner (`services/playbooks/stage-runner.ts`). Never throws.
+ */
+async function enterStandingStage(
+  input: AdvanceSessionStageInput
+): Promise<EnterStageResult> {
+  const { enterStage } = await import("../playbooks/stage-runner.js");
+  return enterStage({
+    sessionId: input.session.id,
+    stageKey: input.toStage,
+    cause: {
+      kind: "advance",
+      stageRunner: input.stageRunner ?? null,
+      agentUserId: input.agentUserId ?? null,
+    },
+  });
 }
 
 const UNCHANGED: AdvanceSessionStageResult = {
@@ -235,9 +321,26 @@ export async function advanceSessionStage(
     return { ...UNCHANGED, refused };
   }
 
+  // COMPARE-AND-SET (W6): read before the subject leads, so a stale mover
+  // moves nothing; the column write below holds it again.
+  if (input.expectedStage !== undefined && input.stageWrite === "door") {
+    const stale = await staleStage(
+      session.id,
+      input.expectedStage,
+      !!input.bySystem
+    );
+    if (stale) return { ...UNCHANGED, stale };
+  }
+
   // STEP = STATUS (see the header): the subject moves, the run follows it.
+  // Not for a step that advanced by itself: its column is written first
+  // (`bySystem`).
   let subjectFirst: StageSubjectStatusOutcome | undefined;
-  if (input.stageWrite === "door" && !input.skipSubjectWrite) {
+  if (
+    input.stageWrite === "door" &&
+    !input.skipSubjectWrite &&
+    !input.bySystem
+  ) {
     subjectFirst = await moveSubjectFirst(input);
     if (
       (subjectFirst?.status === "written" ||
@@ -268,14 +371,31 @@ export async function advanceSessionStage(
     via: "advance" as const,
   };
   if (input.stageWrite === "door") {
-    await db
+    const written = await db
       .update(focusSessions)
       .set({
         currentStage: toStage,
         stageHistory: appendSessionStageHistory(move),
         updatedAt: new Date(),
       })
-      .where(eq(focusSessions.id, session.id));
+      .where(
+        and(
+          eq(focusSessions.id, session.id),
+          input.expectedStage === undefined
+            ? undefined
+            : sessionStageIs(input.expectedStage),
+          input.bySystem ? eq(focusSessions.status, "active") : undefined
+        )
+      )
+      .returning({ id: focusSessions.id });
+    if (written.length === 0 && input.expectedStage !== undefined) {
+      const stale = await staleStage(
+        session.id,
+        input.expectedStage,
+        !!input.bySystem
+      );
+      return { ...UNCHANGED, ...(stale ? { stale } : {}) };
+    }
   } else {
     await db
       .update(focusSessions)
@@ -332,6 +452,7 @@ export async function advanceSessionStage(
     projectId: session.projectId,
     channelId: session.channelId,
     playbookId: session.playbookId,
+    subjectEntityId: session.subjectEntityId,
     toStage,
     fromStage,
   });
@@ -339,6 +460,8 @@ export async function advanceSessionStage(
   // An UNGATED stage writes its `subjectStatus` on entry; a GATED stage writes
   // it when its gate passes (a check that passes now, a check resumed later by
   // `resumeCheckGateIfMet`, a human gate on approval) — never while it holds.
+  // A gate's pass ALSO reaches the stage left's `onApproved`, first (D2,
+  // `writeGatePassStatuses`); an ungated entry approves nothing.
   const writeSubject = (): Promise<StageSubjectStatusOutcome> | undefined =>
     input.skipSubjectWrite
       ? undefined
@@ -350,18 +473,21 @@ export async function advanceSessionStage(
             toStage,
             userId,
             agentUserId: input.agentUserId ?? null,
+            ...subjectMover(input),
           });
 
   const slots = stageSlots ? { stageSlots } : {};
 
   if (!gate) {
     const subjectStatus = await writeSubject();
+    const stageRun = await enterStandingStage(input);
     return {
       changed: true,
       gated: false,
       paused: false,
       ...(subjectStatus ? { subjectStatus } : {}),
       ...slots,
+      stageRun,
     };
   }
 
@@ -370,18 +496,42 @@ export async function advanceSessionStage(
       changed: true,
       gated: true,
       paused: gate.paused,
-      check: { passed: gate.passed, failing: gate.failing },
+      check: {
+        passed: gate.passed,
+        failing: gate.failing,
+        ...(gate.notJudged ? { notJudged: true as const } : {}),
+        ...(gate.reason ? { reason: gate.reason } : {}),
+      },
       ...slots,
     };
     if (!gate.paused) {
-      const subjectStatus = await writeSubject();
-      if (subjectStatus) result.subjectStatus = subjectStatus;
+      // The check judged the stage LEFT and it passed: that stage's
+      // `onApproved` is reached first, then the entered status (D2).
+      if (!input.skipSubjectWrite && !subjectFirst) {
+        const pass = await writeGatePassStatuses({
+          session,
+          gatedStage: toStage,
+          fromStage,
+          userId,
+          agentUserId: input.agentUserId ?? null,
+          ...subjectMover(input),
+        });
+        if (pass.reached) result.subjectReached = pass.reached;
+        result.subjectStatus = pass.entered;
+      } else {
+        const subjectStatus = await writeSubject();
+        if (subjectStatus) result.subjectStatus = subjectStatus;
+      }
+      result.stageRun = await enterStandingStage(input);
       return result;
     }
     // A HOLDING check gate whose stage declares `onFail` returns the run there
     // (un-paused, through this same door) instead of leaving it parked. The
     // hold's `metadata.checkGate` record stays — it is why the run went back.
-    if (!input.viaOnFail) {
+    // Not when the AI judge could not run (`notJudged`): nothing failed, so
+    // the run stays held at the gate until the owner grades or a later
+    // evaluation passes (founder, 20 Nov 2026: hold, never send back).
+    if (!input.viaOnFail && !gate.notJudged) {
       const back = await returnToOnFailStage({ ...input, fromStage });
       if (back) result.onFail = { toStage: back };
     }
@@ -400,8 +550,54 @@ export async function advanceSessionStage(
   };
 }
 
-/** Session statuses process-sync's follow moves (`FOLLOWING_SESSION_STATUSES`). */
-const SUBJECT_LEADS_STATUSES = new Set(["active", "forming"]);
+/**
+ * Who moves the subject when the step advanced by itself: the `system`, with
+ * the move that caused it (`bySystem`). Otherwise nothing: the writer moves
+ * it as the agent or the person who advanced.
+ */
+function subjectMover(input: AdvanceSessionStageInput): {
+  actor?: StatusMoveActor;
+  cause?: TransitionCause;
+} {
+  if (!input.bySystem) return {};
+  return {
+    actor: { kind: "system", userId: input.userId },
+    ...(input.bySystem.cause ? { cause: input.bySystem.cause } : {}),
+  };
+}
+
+/**
+ * Where the session stands when it is not where the mover read it (`expected`
+ * stage, and `active` for the system's move); else null.
+ */
+async function staleStage(
+  sessionId: string,
+  expected: string | null,
+  needsActive: boolean
+): Promise<AdvanceSessionStageResult["stale"] | null> {
+  const [row] = await db
+    .select({
+      currentStage: focusSessions.currentStage,
+      status: focusSessions.status,
+    })
+    .from(focusSessions)
+    .where(eq(focusSessions.id, sessionId))
+    .limit(1);
+  if (!row) return null;
+  const currentStage = row.currentStage ?? null;
+  if (currentStage !== expected)
+    return { expectedStage: expected, currentStage };
+  return needsActive && row.status !== "active"
+    ? { expectedStage: expected, currentStage, status: row.status as string }
+    : null;
+}
+
+/**
+ * The status in which an entered stage moves the subject first: a RUNNING
+ * session. Not `paused` (a held run moves nothing), and not `forming` — a
+ * planned step has not started (P1, 21 Nov 2026).
+ */
+const SUBJECT_LEADS_STATUS = "active";
 
 /**
  * STEP = STATUS: when the entered stage is one the subject's status leads,
@@ -436,13 +632,13 @@ async function moveSubjectFirst(
       .from(focusSessions)
       .where(eq(focusSessions.id, session.id))
       .limit(1);
-    if (!row || !SUBJECT_LEADS_STATUSES.has(row.status as string))
-      return undefined;
+    if (!row || row.status !== SUBJECT_LEADS_STATUS) return undefined;
     return await writeStageSubjectStatus({
       session,
       toStage,
       userId: input.userId,
       agentUserId: input.agentUserId ?? null,
+      ...subjectMover(input),
     });
   } catch (err) {
     logger.warn(
@@ -485,9 +681,11 @@ async function mergeStageSlotsOnEntry(
  * The `onFail` return for a check gate that held: resolve the entered stage's
  * `onFail.toStage` (key or name), un-pause the run (guarded on `paused`), and
  * advance it there through THIS door with `viaOnFail` set. Returns the stage it
- * went to, or null when the stage declares no (resolvable) `onFail`.
+ * went to, or null when the stage declares no (resolvable) `onFail`. Also the
+ * re-graded AI hold's way back (`ai-held-gate.ts`): a check that held while AI
+ * was out and really fails once it is back goes where a fresh fail goes.
  */
-async function returnToOnFailStage(
+export async function returnToOnFailStage(
   input: AdvanceSessionStageInput & { fromStage: string | null }
 ): Promise<string | null> {
   const { session, toStage } = input;

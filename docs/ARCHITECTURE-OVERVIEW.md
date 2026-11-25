@@ -9,7 +9,8 @@
 > file in the same commit.
 
 Synap is a **sovereign data pod** with a **governed agent runtime** on it. It is
-open source, self-hostable, and it is deliberately not a product that owns your
+source-available (PolyForm Noncommercial 1.0.0; commercial use needs a license),
+self-hostable, and it is deliberately not a product that owns your
 data. Three claims carry the whole thing:
 
 1. **You own the data.** A pod is your own PostgreSQL. Export it, `pg_dump` it,
@@ -114,7 +115,7 @@ works a thing by following a **playbook**, and each stage of the playbook can
 **own** one status of the thing (`stages[].subjectStatus`). So the session's step
 and the thing's status are the same fact, both ways: entering a stage moves the
 thing, and moving the thing moves the session to the stage that owns the new
-status. A stage with no `subjectStatus` leaves the thing where it is. Every move
+status. A stage with no `subjectStatus` leaves the thing where it is; a stage's `onApproved` is the status its APPROVED work reaches (the step then stands at the next stage). Every move
 goes through the one status door (`moveStatus`), which classifies it, governs it
 and writes it with the transition; an agent passes `expectedStatus` and gets
 `conflict` if the thing moved meanwhile.
@@ -241,7 +242,7 @@ If you want your own app, the public TypeScript SDK is on npm:
 npm i @synap-core/sdk
 ```
 
-`@synap-core/sdk` is MIT, published, and exposes a typed tRPC client for your
+`@synap-core/sdk` is MIT (as are the contract packages), published, and exposes a typed tRPC client for your
 pod. See [`docs/DEVELOPER.md`](./DEVELOPER.md) for a worked example.
 
 ---

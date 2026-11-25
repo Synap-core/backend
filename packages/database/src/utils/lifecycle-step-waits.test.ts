@@ -104,6 +104,20 @@ describe("parity: every LifecycleOption field survives the stored mapper", () =>
       stuckAfterDays: 14,
       dateBinding: "dueDate",
       waits,
+      requires: [
+        {
+          kind: "link",
+          blockerKey: "no_contact",
+          label: "A contact at the company",
+          relation: "works_at",
+          direction: "in",
+          min: 2,
+          owner: "agent",
+          clearedBy: { playbookId: "find-right-contact" },
+          forKinds: ["company"],
+        },
+        { kind: "property", blockerKey: "no_amount", property: "amount" },
+      ],
     };
     const [stored] = normalizeEnumOptions([full])!;
     expect(stored).toEqual(full);

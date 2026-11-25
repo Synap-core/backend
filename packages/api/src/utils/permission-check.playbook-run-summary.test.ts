@@ -19,9 +19,9 @@ describe("buildProposalSummary — running a playbook", () => {
     params: { target: "x" },
   };
 
-  it('reads "Run Template", the user word', () => {
+  it("reads the user word for a playbook (D1: Process)", () => {
     expect(buildProposalSummary("playbook", "run", data)).toBe(
-      'Run Template "Stage Gate Probe"'
+      `Run ${resolveObjectNoun("playbook")} "Stage Gate Probe"`
     );
   });
 

@@ -92,6 +92,19 @@ export interface SideEffectPayload {
    * feeds the event fingerprint.
    */
   origin?: "sync" | "merge";
+  /**
+   * The SUBJECT is pod-wide although the event names a workspace: a shared
+   * role (a facet with no workspace, e.g. `client`) attached from inside a
+   * space. `workspaceId` is then only the lens it was written from, not where
+   * the subject lives. The automation matcher matches such an event in that
+   * lens AND across the actor's accessible spaces, each match running in its
+   * own space — so a client attached from the CRM also starts the Operations
+   * process that declares the client role. Set by the facet attach
+   * announcement (`registerFacetAttachEmitter`, @synap/api) only.
+   *
+   * TOP-LEVEL, never in `data` (`data` feeds the event fingerprint).
+   */
+  podWideSubject?: boolean;
 }
 
 // Re-export the reactor registry surface so future reactions can register
@@ -231,6 +244,9 @@ const automationTriggerMatchReactor: Reactor = {
       // Sync-origin payloads reach the matcher (so an opted-in automation can
       // still fire); the matcher, not this reactor, decides who skips.
       ...(payload.origin ? { origin: payload.origin } : {}),
+      // A pod-wide subject announced from a space (a shared role attached
+      // from the CRM): the matcher fans it out beyond that space.
+      ...(payload.podWideSubject ? { podWideSubject: true } : {}),
       // CONFUSED-DEPUTY GUARD: carry the event's ACTOR as the causal-chain
       // producer. Agent-authored governed writes emit with `userId = agentUserId`
       // (the Hub write door collapses the two), so this IS the producing agent
@@ -294,40 +310,29 @@ const sessionRecapReactor: Reactor = {
 
 // 8. Connection sync approval — approving a connection's
 // first `import.graph` with "keep syncing" on mints the connection's `auto`
-// governance rule. Hangs off the ONE approved-proposal emit
-// (`emitProposalReviewed`), so no approval door needs to know about sync. The
-// payload carries no proposal type, so every approval enqueues; the worker loads
-// the row and no-ops for anything that is not a connection sync. Idempotent
-// (`ensureConnectionAutoRule`), so a redelivered job cannot mint a second rule.
+// governance rule. Hangs off the proposal's TRANSITION into `approved` (the
+// proposal door owes one per move, a pod-wide proposal's too), so no approval
+// door needs to know about sync, and a re-stamp owes nothing. The old
+// `proposal.approved` event the review door still sends is for rules and
+// webhooks; this reactor does not read it, so an approval reaches it once.
+// The payload carries no proposal type, so every approval enqueues; the
+// worker loads the row and no-ops for anything that is not a connection sync.
+// Idempotent (`ensureConnectionAutoRule`), so a redelivered job cannot mint a
+// second rule.
 const connectionSyncApprovalReactor: Reactor = {
   id: "connection-sync-approval",
   match: (payload) =>
-    payload.subjectType === "proposal" && payload.action === "approved",
+    payload.subjectType === "proposal" &&
+    payload.action === "transition" &&
+    payload.data?.to === "approved",
   async handler(payload, { boss }) {
-    await enqueueConnectionSyncApproval(
+    await boss.send(
+      "connection-sync-approval",
       { proposalId: payload.subjectId, userId: payload.userId },
-      boss
+      { singletonKey: `connection-sync-approval:${payload.subjectId}` }
     );
   },
 };
-
-/**
- * THE one enqueue for the connection-sync-approval job — used by the reactor
- * above AND by the approval path for a pod-wide (workspace-less) proposal, which
- * `emitProposalReviewed` does not fan out. Same job shape + same singletonKey on
- * both, so a proposal reached by both can never be processed twice concurrently,
- * and `ensureConnectionAutoRule` is idempotent behind it.
- */
-export async function enqueueConnectionSyncApproval(
-  input: { proposalId: string; userId: string },
-  boss: Pick<ReturnType<typeof getBoss>, "send"> = getBoss()
-): Promise<void> {
-  await boss.send(
-    "connection-sync-approval",
-    { proposalId: input.proposalId, userId: input.userId },
-    { singletonKey: `connection-sync-approval:${input.proposalId}` }
-  );
-}
 
 // 9. Document passages (recall plan A-W2): a document's create or update
 // rebuilds its recall passages, once the burst of saves is over. Skipped

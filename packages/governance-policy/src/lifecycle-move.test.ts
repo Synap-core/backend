@@ -73,54 +73,26 @@ describe("lifecycle move governance", () => {
     }
   });
 
-  // Founder, 2026-11-05 (plan b38e5e64 §7.2): a session END move is governed
-  // like any write of the closer; the session having to end is its guardrail,
-  // so the done/lost default does not apply — but a `propose` rule (an "ask
-  // first" agent) and the humanOnly floor still do.
-  it("a session END move into done/lost skips the 2.85 default, and nothing else", () => {
-    const endMove = {
+  // A session's end moves nothing (decision 5e377b06; plan 73fa04b5 D1), so
+  // no move skips the done/lost floor any more: the retired `atSessionEnd`
+  // exemption is gone, and a caller that still sends it is not obeyed.
+  it("the done/lost floor holds at a session's close too (no end-move exemption)", () => {
+    const staleEndMove = {
       intoTerminal: true,
       humanOnly: false,
       atSessionEnd: true,
-    };
-    expect(decideAgentPolicy({ ...base, lifecycleMove: endMove })).toEqual({
-      verdict: "execute",
-    });
-    // an "ask first" agent: a propose rule still proposes
+    } as unknown as { intoTerminal: boolean; humanOnly: boolean };
+    expect(
+      decideAgentPolicy({ ...base, lifecycleMove: staleEndMove })
+    ).toMatchObject({ verdict: "propose", reasonCode: "LIFECYCLE_TERMINAL" });
+    // a broad auto rule does not widen it either (2.85 holds)
     expect(
       decideAgentPolicy({
         ...base,
-        lifecycleMove: endMove,
-        governanceRuleVerdict: "propose",
-        governanceRuleId: "rule-ask-first",
-      })
-    ).toMatchObject({ verdict: "propose", reasonCode: "GOVERNANCE_RULE" });
-    // a broad auto rule applies like on any other write
-    expect(
-      decideAgentPolicy({
-        ...base,
-        lifecycleMove: endMove,
+        lifecycleMove: staleEndMove,
         governanceRuleVerdict: "auto",
         governanceRuleId: "rule-reversible-class",
         governanceRuleNamesWrite: false,
-      })
-    ).toEqual({
-      verdict: "execute",
-      governanceRuleId: "rule-reversible-class",
-    });
-    // the humanOnly floor holds, whatever the rule
-    expect(
-      decideAgentPolicy({
-        ...base,
-        lifecycleMove: { ...endMove, humanOnly: true },
-        governanceRuleVerdict: "auto",
-      })
-    ).toMatchObject({ verdict: "propose", reasonCode: "HUMAN_ONLY_STATUS" });
-    // the same move WITHOUT the flag still proposes (stage moves keep 2.85)
-    expect(
-      decideAgentPolicy({
-        ...base,
-        lifecycleMove: { intoTerminal: true, humanOnly: false },
       })
     ).toMatchObject({ verdict: "propose", reasonCode: "LIFECYCLE_TERMINAL" });
   });

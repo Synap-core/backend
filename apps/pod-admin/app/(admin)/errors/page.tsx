@@ -13,6 +13,7 @@
 
 import { Button, Input } from "@heroui/react";
 import { Bug } from "lucide-react";
+import { keepPreviousData } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { trpc } from "../../../lib/trpc";
@@ -47,7 +48,8 @@ function ServerErrorsInner() {
   const [limit, setLimit] = useState(PAGE);
   const list = trpc.system.listServerFaults.useQuery(
     { limit },
-    { staleTime: 30_000, retry: false }
+    // "Load more" asks with a bigger limit: keep the rows already shown.
+    { placeholderData: keepPreviousData, staleTime: 30_000, retry: false }
   );
 
   useEffect(() => {

@@ -504,6 +504,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     blockedReason: "credential",
     why: "The Stripe restricted key for the live account",
     unblocks: "Live payments start",
+    unblocksTarget: { output: "deploy" },
     blocks: { entityId: "55555555-5555-4555-8555-555555555555", to: "live" },
     blockerKey: "no_live_key",
     clearedBy: { answer: true },
@@ -511,6 +512,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     ask: { mode: "confirm", prompt: "Use the live account?" },
     owedSince: "2026-09-08T09:00:00.000Z",
     criterionKey: "no-stale",
+    outputKey: "the-dossier",
     paramName: "channel",
     status: "done",
     claimedDone: true,
@@ -534,6 +536,7 @@ describe("joinSessionOutputs — a matched slot is projected WHOLE", () => {
     ],
     decisionId: "66666666-6666-6666-6666-666666666666",
     relationToSubject: "made_for",
+    lands: { target: "subject_document_section", section: "Dossier" },
     optional: true,
     subjectEdge: {
       status: "skipped",

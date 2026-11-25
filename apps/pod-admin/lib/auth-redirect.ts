@@ -1,4 +1,5 @@
 import { browserSessionState } from "./kratos-flow";
+import { clearPersistedQueryCache } from "./query-persist";
 
 /**
  * Reactive auth fallback.
@@ -36,8 +37,10 @@ export function redirectToLogin(): boolean {
   const returnTo = currentPath();
   // One check (and at most one navigation) for a burst of failing queries.
   pendingCheck ??= browserSessionState()
-    .then((state) => {
+    .then(async (state) => {
       if (state === "none") {
+        // The session is gone: so is what this browser kept of the pod.
+        await clearPersistedQueryCache();
         window.location.assign(`/login?return=${encodeURIComponent(returnTo)}`);
       }
     })

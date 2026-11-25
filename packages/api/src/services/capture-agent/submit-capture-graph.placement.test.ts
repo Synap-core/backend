@@ -56,9 +56,7 @@ function seedPlacementReads(kindHome: Record<string, string>) {
         workspaceId,
       }));
   }) as never);
-  vi.spyOn(db.query.profileWorkspaceAccess, "findMany").mockResolvedValue(
-    [] as never
-  );
+  vi.spyOn(db.query.spaceAccess, "findMany").mockResolvedValue([] as never);
   vi.spyOn(db.query.focusSessions, "findFirst").mockResolvedValue({
     workspaceId: WS_BRAND,
   } as never);

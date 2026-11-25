@@ -3,10 +3,10 @@
  *
  *   subjectProfile: { profileSlug, filter?, statusProperty? }
  *   activators?:        [{ on: "created" | "enters_status" | "count" |
- *                          "schedule" | "manual", status?, cron?, min?,
- *                          size?, mode, maxPendingApprovals? }]
+ *                          "schedule" | "manual" | "run_ended", status?,
+ *                          cron?, min?, playbook?, outcome?, size?, mode,
+ *                          maxPendingApprovals? }]
  *   humanOnlyStatuses?: string[]
- *   subjectProfile.onEnd?: { closed?, cancelled?, failed? }  (a status each)
  *
  * ── WHERE IT IS STORED, AND WHY ONE FOLD ────────────────────────────────────
  * `activators` and `humanOnlyStatuses` are TOP-LEVEL on the wire (the process
@@ -23,16 +23,14 @@
  */
 
 import { z } from "zod";
-import {
-  readSubjectLifecycle,
-  type PlaybookActivator,
-  type PlaybookOnEnd,
-  type PlaybookOnEndStatus,
-} from "@synap/playbooks";
+import { readSubjectLifecycle, type PlaybookActivator } from "@synap/playbooks";
 import { isSentenceCron } from "@synap-core/types/automations";
+import { isCronTimezone } from "@synap/shared-utils";
 import {
+  type WorkerActivatorTrigger,
   WORKER_COUNT_MIN_FLOOR,
   WORKER_MAX_PENDING_APPROVALS_CEILING,
+  WORKER_RUN_OUTCOMES,
   WORKER_SIZES,
   workerActivatorKey,
   type WorkerActivator,
@@ -43,16 +41,46 @@ const statusValueSchema = z.string().trim().min(1).max(200);
 /** One declared activator — see `PlaybookActivator` (@synap/playbooks). */
 export const playbookActivatorSchema = z
   .strictObject({
-    on: z.enum(["created", "enters_status", "count", "schedule", "manual"]),
-    status: statusValueSchema.optional(),
+    // Spelled out (the catalog mirror tripwire reads this literal list); held
+    // to `WORKER_ACTIVATOR_TRIGGERS` by the type checks below.
+    on: z.enum([
+      "created",
+      "enters_status",
+      "count",
+      "schedule",
+      "manual",
+      "run_ended",
+    ]),
+    status: z
+      .union([statusValueSchema, z.array(statusValueSchema).min(1).max(20)])
+      .optional(),
     cron: z.string().trim().min(1).max(120).optional(),
+    timezone: z
+      .string()
+      .trim()
+      .min(1)
+      .max(64)
+      .refine(
+        isCronTimezone,
+        "timezone must be an IANA zone (e.g. Europe/Paris)"
+      )
+      .optional(),
+    startsPaused: z.literal(true).optional(),
+    handToAgentId: z.string().trim().min(1).max(64).optional(),
     min: z.number().int().min(WORKER_COUNT_MIN_FLOOR).max(10_000).optional(),
+    // A LINK (`run_ended`): the playbook whose run ending starts this one, by
+    // name or id; resolved in the same space (or pod-wide) when the rule is
+    // compiled (`services/playbooks/playbook-links.ts`).
+    playbook: z.string().trim().min(1).max(200).optional(),
+    outcome: z.enum(WORKER_RUN_OUTCOMES).optional(),
     // No default: an activator declared before sizes existed parses to the
     // SAME object (its compiled rule's seed hash does not move).
     size: z.enum(WORKER_SIZES).optional(),
     // `propose` is the default for public templates: a process starts only
     // when a person says so, unless the author explicitly chose `run`.
-    mode: z.enum(["run", "propose"]).default("propose"),
+    // Spelled out for the catalog mirror tripwire; held to
+    // `WORKER_ACTIVATOR_MODES` by the type checks below.
+    mode: z.enum(["run", "propose", "appointment"]).default("propose"),
     maxPendingApprovals: z
       .number()
       .int()
@@ -86,18 +114,62 @@ export const playbookActivatorSchema = z
       })
       .optional(),
   })
+  .refine(
+    (a) =>
+      a.on === "schedule" ||
+      (a.timezone === undefined &&
+        a.startsPaused === undefined &&
+        a.handToAgentId === undefined &&
+        a.mode !== "appointment"),
+    {
+      message:
+        'timezone, startsPaused, handToAgentId and mode "appointment" belong to on: "schedule"',
+      path: ["on"],
+    }
+  )
+  .refine((a) => typeof a.status !== "object" || a.on === "schedule", {
+    message: 'a list of statuses is read by on: "schedule" only',
+    path: ["status"],
+  })
+  .refine((a) => !a.handToAgentId || a.mode === "run", {
+    message:
+      'handToAgentId hands each run to an agent: it needs mode "run" (an appointment waits for a person)',
+    path: ["handToAgentId"],
+  })
+  .refine((a) => a.mode !== "appointment" || a.size !== "per_thing", {
+    message:
+      "an appointment opens one session for a person at each tick, never one per thing",
+    path: ["size"],
+  })
   .refine((a) => (a.on !== "enters_status" && a.on !== "count") || !!a.status, {
     message:
       'An activator with on: "enters_status" or "count" needs the status it reads',
     path: ["status"],
   })
   .refine(
-    (a) => (a.on !== "created" && a.on !== "manual") || a.status === undefined,
+    (a) =>
+      (a.on !== "created" && a.on !== "manual" && a.on !== "run_ended") ||
+      a.status === undefined,
     {
-      message: 'An activator with on: "created" or "manual" takes no status',
+      message:
+        'An activator with on: "created", "manual" or "run_ended" takes no status',
       path: ["status"],
     }
   )
+  .refine((a) => (a.on === "run_ended") === (a.playbook !== undefined), {
+    message:
+      'on: "run_ended" needs the playbook whose run ends, and only a run_ended takes one',
+    path: ["playbook"],
+  })
+  .refine((a) => a.outcome === undefined || a.on === "run_ended", {
+    message: 'outcome is read by on: "run_ended" only',
+    path: ["outcome"],
+  })
+  .refine((a) => a.on !== "run_ended" || a.size !== "per_moment", {
+    message:
+      "a run_ended link starts one run on the ended run's subject (per_thing)",
+    path: ["size"],
+  })
   .refine((a) => (a.on === "schedule") === (a.cron !== undefined), {
     message: 'on: "schedule" needs a cron, and only a schedule takes one',
     path: ["cron"],
@@ -111,36 +183,29 @@ export const playbookActivatorSchema = z
     message: `on: "count" needs min (≥ ${WORKER_COUNT_MIN_FLOOR}), and only a count takes one`,
     path: ["min"],
   })
-  .refine(
-    (a) => (a.on !== "count" && a.on !== "schedule") || a.size !== "per_thing",
-    {
-      message:
-        "a count or schedule worker runs once for the whole set (per_moment) — per_thing has no single thing to run on",
-      path: ["size"],
-    }
-  )
-  .refine(
-    (a) =>
-      a.unless === undefined ||
-      ((a.on === "created" || a.on === "enters_status") &&
-        a.size !== "per_moment"),
-    {
-      message:
-        'unless leaves out ONE thing: only a per_thing "created" or "enters_status" activator takes it',
-      path: ["unless"],
-    }
-  )
-  .refine(
-    (a) =>
-      a.only === undefined ||
-      ((a.on === "created" || a.on === "enters_status") &&
-        a.size !== "per_moment"),
-    {
-      message:
-        'only keeps ONE thing by its value: only a per_thing "created" or "enters_status" activator takes it',
-      path: ["only"],
-    }
+  .refine((a) => a.on !== "count" || a.size !== "per_thing", {
+    message:
+      "a count worker runs once for the whole set (per_moment) — per_thing has no single thing to run on",
+    path: ["size"],
+  })
+  .refine((a) => a.unless === undefined || perThingFilterable(a), {
+    message:
+      'unless leaves out ONE thing: only a per_thing "created", "enters_status" or "schedule" activator takes it',
+    path: ["unless"],
+  })
+  .refine((a) => a.only === undefined || perThingFilterable(a), {
+    message:
+      'only keeps ONE thing by its value: only a per_thing "created", "enters_status" or "schedule" activator takes it',
+    path: ["only"],
+  });
+
+/** `unless` / `only` read one thing: a per_thing event, or a per_thing tick. */
+function perThingFilterable(a: { on: string; size?: string }): boolean {
+  if (a.on === "schedule") return a.size === "per_thing";
+  return (
+    (a.on === "created" || a.on === "enters_status") && a.size !== "per_moment"
   );
+}
 
 // The three spellings of one activator cannot drift: the wire (this schema),
 // the dependency-free mirror (`PlaybookActivator`) and the shared vocabulary
@@ -149,6 +214,11 @@ type ActivatorWire = z.infer<typeof playbookActivatorSchema>;
 const _wireIsMirror: PlaybookActivator = {} as ActivatorWire;
 const _mirrorIsWire: ActivatorWire = {} as PlaybookActivator;
 const _wireIsWorker: WorkerActivator = {} as ActivatorWire;
+// …and the `on` list is the vocabulary's, both ways.
+const _onIsTrigger: WorkerActivatorTrigger = {} as ActivatorWire["on"];
+const _triggerIsOn: ActivatorWire["on"] = {} as WorkerActivatorTrigger;
+void _onIsTrigger;
+void _triggerIsOn;
 void _wireIsMirror;
 void _mirrorIsWire;
 void _wireIsWorker;
@@ -174,43 +244,55 @@ export const playbookActivatorsSchema = z
 export const humanOnlyStatusesSchema = z.array(statusValueSchema).max(50);
 
 /**
- * `subjectProfile.onEnd` — the status a session END moves what the process
- * worked on to, per terminal status (`PlaybookOnEnd`, @synap/playbooks). It
- * lives ONLY inside `subjectProfile` (no top-level spelling: it has no
- * second door to fold from), so it is frozen in every run's snapshot with the
- * rest of the process. Each value must be an option of the subject's declared
- * lifecycle — the definition check refuses one that is not
- * (`assertOnEndOptionsDeclared`, routers/playbooks.ts).
+ * `subjectProfile.onEnd` is RETIRED (founder, 6 Nov 2026, decision 5e377b06;
+ * 9 Nov, plan 73fa04b5 D1): a session end moves nothing. A write that still
+ * sends it is refused with the catalog's own words (synap-app
+ * `workspace-templates` rule `playbook-field-retired`), never stored.
  */
-export const playbookOnEndSchema = z.strictObject({
-  closed: statusValueSchema.optional(),
-  cancelled: statusValueSchema.optional(),
-  failed: statusValueSchema.optional(),
-});
-
-// The wire keys ARE the terminal statuses the reader reads
-// (`PlaybookOnEndStatus`): a status added on one side only stops the build.
-type _OnEndWireKey = keyof z.infer<typeof playbookOnEndSchema>;
-const _onEndKeysAgree: [_OnEndWireKey] extends [PlaybookOnEndStatus]
-  ? [PlaybookOnEndStatus] extends [_OnEndWireKey]
-    ? true
-    : never
-  : never = true;
-void _onEndKeysAgree;
+export const ON_END_RETIRED_MESSAGE =
+  "subjectProfile.onEnd — retired: the process follows the kind's declared lifecycle, and a session end moves nothing. Remove onEnd.";
 
 /**
  * `subjectProfile` — loose (unknown keys survive a round-trip), with the keys
  * this contract owns typed. `profileSlug` stays optional: a subject-less
  * playbook may still store `{}` and the existing doors already accept it.
+ *
+ * The retired `onEnd` is refused by a CHECK on the object, not by a key in its
+ * shape: the Hub's OpenAPI generator (zod-to-openapi) cannot render `z.never`,
+ * and one unrenderable key drops every route that embeds this schema from the
+ * served reference. The check renders as nothing; the key is not advertised.
  */
-export const playbookSubjectProfileSchema = z.looseObject({
-  profileSlug: z.string().min(1).optional(),
-  /** The subject kind's property slug holding its lifecycle (e.g. "post-status"). */
-  statusProperty: z.string().trim().min(1).max(120).optional(),
-  activators: playbookActivatorsSchema.optional(),
-  humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
-  onEnd: playbookOnEndSchema.optional(),
-});
+export const playbookSubjectProfileSchema = z
+  .looseObject({
+    profileSlug: z.string().min(1).optional(),
+    /** The subject kind's property slug holding its lifecycle (e.g. "post-status"). */
+    statusProperty: z.string().trim().min(1).max(120).optional(),
+    activators: playbookActivatorsSchema.optional(),
+    humanOnlyStatuses: humanOnlyStatusesSchema.optional(),
+    /**
+     * The one record of `profileSlug` this playbook is dedicated to: it binds
+     * and runs on that record only, and takes no activator. Pod-local: a package
+     * install and the catalog refuse it.
+     */
+    entityId: z.uuid().optional(),
+  })
+  .superRefine((sp, ctx) => {
+    if (sp.entityId !== undefined && !sp.profileSlug) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["entityId"],
+        message:
+          "subjectProfile.entityId needs subjectProfile.profileSlug: name the record's kind too",
+      });
+    }
+    if (sp.onEnd !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["onEnd"],
+        message: ON_END_RETIRED_MESSAGE,
+      });
+    }
+  });
 
 /**
  * The stable identity of an activator within one playbook — the ONE
@@ -226,9 +308,10 @@ export const activatorKey = workerActivatorKey;
  * silent stays silent). A top-level value WINS over a nested one — it is the
  * explicit contract spelling.
  *
- * Refuses (throws) activators without a subject kind: an activator fires on
- * the subject kind's events, and one with no kind could only compile into a
- * rule that fires on every entity.
+ * Refuses (throws) activators without a subject kind, except a `schedule`
+ * (one run per tick over nothing): an event activator fires on the subject
+ * kind's events, and one with no kind could only compile into a rule that
+ * fires on every entity.
  */
 export function foldProcessIntoSubjectProfile(def: {
   subjectProfile?: Record<string, unknown> | null;
@@ -248,11 +331,11 @@ export function foldProcessIntoSubjectProfile(def: {
   const acts = base.activators;
   if (
     Array.isArray(acts) &&
-    acts.length > 0 &&
+    acts.some((a) => (a as { on?: unknown } | null)?.on !== "schedule") &&
     typeof base.profileSlug !== "string"
   ) {
     throw new ProcessDeclarationError(
-      "activators need subjectProfile.profileSlug — an activator fires on the subject kind's events"
+      "activators need subjectProfile.profileSlug — an activator fires on the subject kind's events (only a schedule runs with no subject)"
     );
   }
   return base;
@@ -263,7 +346,6 @@ export const SUBJECT_PROFILE_PROCESS_KEYS = [
   "statusProperty",
   "activators",
   "humanOnlyStatuses",
-  "onEnd",
 ] as const;
 
 /**
@@ -294,6 +376,36 @@ export function carryProcessOver(
   return out;
 }
 
+/**
+ * A re-declared schedule that names no `timezone` keeps the one stored on the
+ * installed activator of the same key (a folded schedule's UTC, a zone the
+ * person set): only a declaration that names a zone changes it, so a template
+ * reconcile never moves when a schedule fires. A new activator names none and
+ * compiles in its owner's zone.
+ */
+export function keepDeclaredZones(
+  next: Record<string, unknown> | null,
+  stored: unknown
+): Record<string, unknown> | null {
+  const acts = next?.activators;
+  if (!Array.isArray(acts)) return next;
+  const zones = new Map(
+    readPlaybookProcess(stored)
+      .activators.filter((a) => a.on === "schedule" && a.timezone)
+      .map((a) => [activatorKey(a), a.timezone!])
+  );
+  if (zones.size === 0) return next;
+  return {
+    ...next,
+    activators: acts.map((a) => {
+      const act = a as { on?: unknown; timezone?: unknown };
+      if (act?.on !== "schedule" || act.timezone !== undefined) return a;
+      const zone = zones.get(activatorKey(a as PlaybookActivator));
+      return zone ? { ...act, timezone: zone } : a;
+    }),
+  };
+}
+
 export class ProcessDeclarationError extends Error {
   constructor(message: string) {
     super(message);
@@ -307,8 +419,6 @@ export interface PlaybookProcess {
   statusProperty: string | null;
   activators: PlaybookActivator[];
   humanOnlyStatuses: string[];
-  /** `subjectProfile.onEnd`, read tolerantly (junk dropped). */
-  onEnd: PlaybookOnEnd;
   /**
    * True when a STORED `activators` value failed to parse. Distinct from "no
    * activators": the compiler must not read a corrupt declaration as an empty

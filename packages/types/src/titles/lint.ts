@@ -128,6 +128,24 @@ function namesAFile(text: string): boolean {
   return false;
 }
 
+const HEX_RUN = /\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/gi;
+/**
+ * The words that announce a document NUMBER (an invoice's, a quote's, an
+ * order's), right before it: `Facture FFA2CF1B`, `Invoice #a3f9c2d1`,
+ * `Devis n° 7E4B2A9C`. Issuers print hex-looking numbers, and such a number
+ * is the document's real name, not machinery (ticket dc53c247).
+ */
+const DOCUMENT_NUMBER_MARKER =
+  /(?:\b(?:facture|invoice|receipt|re[çc]u|devis|quote|quotation|bill|order|commande|avoir)|\bn[°º]|#)\s*[:#.-]?\s*$/iu;
+
+/** A hash or id: a hex run with digits and letters, not a document number. */
+function namesAnId(text: string): boolean {
+  for (const m of text.matchAll(HEX_RUN)) {
+    if (!DOCUMENT_NUMBER_MARKER.test(text.slice(0, m.index))) return true;
+  }
+  return false;
+}
+
 /** Each machinery pattern, with the words a writer recognises it by. */
 const MACHINERY: ReadonlyArray<
   readonly [{ test(text: string): boolean }, string]
@@ -136,7 +154,7 @@ const MACHINERY: ReadonlyArray<
   [/\*\*/, "markdown bold"],
   [/\[\[/, "a wiki link"],
   [URL_LIKE, "a URL"],
-  [/\b(?=[0-9a-f]*\d)(?=[0-9a-f]*[a-f])[0-9a-f]{7,}\b/i, "a hash or id"],
+  [{ test: namesAnId }, "a hash or id"],
   [{ test: namesAFile }, "a file name"],
   [/\w\.\w+:\d+\b/, "a line number"],
 ];

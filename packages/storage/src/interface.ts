@@ -47,6 +47,12 @@ export interface FileInfo {
   contentType: string;
 }
 
+/** What {@link IFileStorage.getSignedUrl} must know of the object it signs. */
+export interface SignedGetObject {
+  /** The Content-Type recorded for it at upload; `null` when none was. */
+  contentType: string | null;
+}
+
 /** Options for {@link IFileStorage.getSignedUploadUrl}. */
 export interface SignedUploadOptions {
   /** Signed — the PUT must send exactly this Content-Type. */
@@ -106,6 +112,32 @@ export class StorageObjectNotFoundError extends Error {
     super(`File not found: ${path}`);
     this.name = "StorageObjectNotFoundError";
   }
+}
+
+/**
+ * Is `err` a definite "this KEY names no object", whatever the provider?
+ * `StorageObjectNotFoundError` (the local provider, stream downloads), or the
+ * S3 `NoSuchKey` a MinIO / R2 `GetObject` throws for a missing key (its error
+ * `name` or `Code`). NARROW ON PURPOSE: a bare HTTP 404, `NotFound` (a HEAD
+ * reply, no code) or `NoSuchBucket` also come from a missing bucket or a proxy
+ * in front of S3 while it restarts, and a reader that took those for "empty"
+ * would let a first stroke overwrite a board that exists. Anything else is NOT
+ * "missing" and must never be read as an empty object.
+ *
+ * Two older, wider copies are left as they are, with their own tests:
+ * `@synap/api` `file-upload-presign.ts` `isNotFound` serves a HEAD
+ * (`getMetadata`), whose not-found carries no code; `s3-stream-download.ts`
+ * `isNotFound` turns a GetObject `NotFound` or bare 404 into a
+ * `StorageObjectNotFoundError`, so a `downloadStream` caller's "missing" is
+ * still WIDER than this one (narrowing it is a follow-up). The whiteboard
+ * readers (realtime `bindState` / `writeState`, the board read door) use
+ * `downloadBuffer`, which lets the raw S3 error through to this predicate.
+ */
+export function isStorageObjectNotFound(err: unknown): boolean {
+  if (err instanceof StorageObjectNotFoundError) return true;
+  if (!err || typeof err !== "object") return false;
+  const e = err as { name?: unknown; Code?: unknown };
+  return e.name === "NoSuchKey" || e.Code === "NoSuchKey";
 }
 
 /**
@@ -266,19 +298,29 @@ export interface IFileStorage {
   getMetadata(path: string): Promise<FileInfo>;
 
   /**
-   * Generate a signed URL for temporary access
+   * Generate a signed GET URL for temporary access. It is always `attachment`
+   * (`attachmentDisposition`), and a script or style object is served as
+   * `text/plain; charset=utf-8` (`servedContentTypeOverride`), so a stored
+   * file never runs as the pod's own script or style.
    *
    * @param path - Storage path/key
-   * @param expiresIn - Expiration time in seconds (default: 3600 = 1 hour)
+   * @param expiresIn - Expiration time in seconds
+   * @param object - The object's stored type: REQUIRED so no caller can sign
+   *   without saying it (`contentType: null` only when nothing recorded one)
    * @returns Signed URL valid for the specified duration
    *
    * @example
    * ```typescript
-   * const url = await storage.getSignedUrl('users/123/private/doc.pdf', 3600);
-   * // URL valid for 1 hour
+   * const url = await storage.getSignedUrl('users/123/private/doc.pdf', 3600, {
+   *   contentType: 'application/pdf',
+   * });
    * ```
    */
-  getSignedUrl(path: string, expiresIn?: number): Promise<string>;
+  getSignedUrl(
+    path: string,
+    expiresIn: number,
+    object: SignedGetObject
+  ): Promise<string>;
 
   /**
    * The canonical (unsigned) storage URL of an object — the same value

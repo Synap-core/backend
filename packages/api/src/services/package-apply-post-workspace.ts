@@ -25,6 +25,7 @@ import {
 } from "./cells/install-cell-from-definition.js";
 import type { WorkspaceSettings } from "@synap/database";
 import { playbookStagesSchema } from "../schemas/playbook-stage.js";
+import { capabilityEntriesOf } from "../schemas/playbook-definition.js";
 import {
   projectPlaybookDefinition,
   stampPlaybookMarketSource,
@@ -115,6 +116,18 @@ async function resolveGrantRefs(
  * (from_type, from_id, to_type, to_id, link_type), so calling this on BOTH the
  * newly-created AND the reused-playbook path never duplicates an edge.
  */
+/**
+ * The names a package playbook's governance `grants` links are made from: its
+ * deprecated `grants`, then the capabilities its ONE `tools` list names
+ * (`capabilityEntriesOf`). A name no tool or skill row carries links nothing.
+ */
+function governanceGrantsOf(p: {
+  grants?: string[];
+  tools?: string[];
+}): string[] {
+  return [...new Set([...(p.grants ?? []), ...capabilityEntriesOf(p.tools)])];
+}
+
 async function grantPlaybookLinks(
   playbookId: string,
   grants: string[] | undefined,
@@ -405,7 +418,18 @@ export interface PackagePostWorkspaceBody {
      * making it matchable by `playbooks.matchForEntity`.
      */
     subjectProfile?: Record<string, unknown>;
-    /** tool/skill keys this playbook grants (see materialization note below). */
+    /**
+     * What a run of it may use, "only these" (0419): run tools, intents,
+     * capabilities. Its capability entries also make the governance `grants`
+     * links (`governanceGrantsOf`).
+     */
+    tools?: string[];
+    /** DEPRECATED: folded into `tools` by the projection. */
+    requiredIntents?: string[];
+    /**
+     * DEPRECATED tool/skill keys this playbook grants: folded into `tools`,
+     * and still made into `grants` links (see the materialization note below).
+     */
     grants?: string[];
     /**
      * Free-form playbook metadata → `playbooks.metadata`. Carries the propose-only
@@ -503,17 +527,6 @@ export interface ApplyPackagePostWorkspaceInput {
   body: PackagePostWorkspaceBody;
   userId: string;
   agentUserId?: string;
-  /**
-   * An agent to ENROLL in the workspace without making it the acting identity
-   * of the layer writes. The approve executor passes the proposing agent here
-   * and NO `agentUserId`: a person approved the package — its capabilities,
-   * playbooks and automations included — so the layers apply under that
-   * approval instead of each re-filing a proposal of its own (which left an
-   * approved template update with its new playbook still pending). The agent
-   * is still enrolled, so its follow-on writes do not collapse to join
-   * proposals. Defaults to `agentUserId`.
-   */
-  enrollAgentUserId?: string;
   /** Hub API scopes; approve path may pass []. */
   scopes?: string[];
 }
@@ -531,40 +544,8 @@ export async function applyPackagePostWorkspace(
   input: ApplyPackagePostWorkspaceInput
 ): Promise<Record<string, unknown>> {
   const { workspaceId, body, userId, agentUserId } = input;
-  const enrollAgentUserId = input.enrollAgentUserId ?? agentUserId;
   const scopes = input.scopes ?? [];
   const result: Record<string, unknown> = {};
-
-  // ── Enroll acting agent ─────────────────────────────────────────────────
-  // createWorkspaceFromDefinition adds ONLY the human owner. Without this,
-  // the agent's follow-on writes collapse into contentless workspace.join
-  // proposals. Idempotent; only for the brand-new workspace this apply owns.
-  if (enrollAgentUserId) {
-    try {
-      const { db, workspaces, eq } = await import("@synap/database");
-      const [ws] = await db
-        .select({ settings: workspaces.settings })
-        .from(workspaces)
-        .where(eq(workspaces.id, workspaceId))
-        .limit(1);
-      const governanceMode = (
-        ws?.settings as { governanceMode?: string } | undefined
-      )?.governanceMode;
-      const role = governanceMode === "agent-owned" ? "owner" : "editor";
-      const { enrollAgentInWorkspace } =
-        await import("./enroll-agent-in-workspace.js");
-      result.agentMembership = await enrollAgentInWorkspace({
-        workspaceId,
-        agentUserId: enrollAgentUserId,
-        role,
-      });
-    } catch (e) {
-      result.agentMembership = {
-        status: "error",
-        message: (e as Error).message,
-      };
-    }
-  }
 
   const ctx = await createHubProtocolCallerContext(
     userId,
@@ -839,7 +820,7 @@ export async function applyPackagePostWorkspace(
       scope: string;
       reconcile?: Pick<
         InstalledPlaybookReconcileResult,
-        "kind" | "applied" | "ownerOwned" | "proposalId"
+        "kind" | "applied" | "ownerOwned" | "held" | "proposalId"
       > & { error?: string };
     }> => {
       const [row] = await db
@@ -864,6 +845,8 @@ export async function applyPackagePostWorkspace(
             kind: r.kind,
             applied: r.applied,
             ownerOwned: r.ownerOwned,
+            // Who-runs-it changes the template made, held for a person.
+            held: r.held,
             ...(r.proposalId ? { proposalId: r.proposalId } : {}),
           },
         };
@@ -874,6 +857,7 @@ export async function applyPackagePostWorkspace(
             kind: "up-to-date",
             applied: [],
             ownerOwned: [],
+            held: [],
             error: (e as Error).message,
           },
         };
@@ -900,7 +884,11 @@ export async function applyPackagePostWorkspace(
           if (existing) {
             // Reuse still ensures grants idempotently — a re-applied package
             // must not leave a pre-existing playbook's grants unwired.
-            await grantPlaybookLinks(existing.id, p.grants, workspaceId);
+            await grantPlaybookLinks(
+              existing.id,
+              governanceGrantsOf(p),
+              workspaceId
+            );
             // A re-install / version update REACHES the reused row: converge its
             // managed fields to this definition (3-way merge; owner edits are
             // reported, never overwritten; an unstamped row is adopted). Before
@@ -986,7 +974,18 @@ export async function applyPackagePostWorkspace(
             : p.metadata,
           status: p.status as PlaybookCreateInput["status"],
           agentUserId,
-          source: "intelligence",
+          // AI provenance only when an agent acts. With no agent the write is
+          // the person's: a person applying on pod admin, or the approver of
+          // an agent's update (no `agentUserId`). Branded
+          // "intelligence" anyway, `playbooks.create` took it for an
+          // unattributed AI write, and the gate's anonymous path floored it
+          // (2.09 AGENT_STRUCTURE_WRITE): the template's NEW playbook was
+          // re-filed as a proposal, the apply held at awaiting-approval and
+          // the version never stamped (perso pod, 18 Nov 2026: Operations'
+          // "Onboard a client"). The playbook and automation updates here
+          // carry no source, and the automations door gates on the acting
+          // agent, never on `source`.
+          ...(agentUserId ? { source: "intelligence" } : {}),
         });
         // `playbooksRouter.create` does not accept/materialize grants — they
         // become `playbook --grants--> {tool|skill}` link edges via
@@ -999,7 +998,11 @@ export async function applyPackagePostWorkspace(
           proposalId?: string;
         };
         if (rr.playbook?.id) {
-          await grantPlaybookLinks(rr.playbook.id, p.grants, workspaceId);
+          await grantPlaybookLinks(
+            rr.playbook.id,
+            governanceGrantsOf(p),
+            workspaceId
+          );
         }
         pbs.push({
           name: p.name,
@@ -1280,10 +1283,26 @@ export async function applyPackagePostWorkspace(
         workspaceId,
         userId,
       });
-      const rows = await db
+      const spaceRows = await db
         .select({ id: entities.id })
         .from(entities)
         .where(eq(entities.workspaceId, workspaceId));
+      // THE FILING RULE (app-permission plan 8189ae7c, W1): filing a record
+      // into a project needs a write on it where it lives now; a project
+      // write never covers the edge. The `uses` door refused an app
+      // (`app_grant`): honour it and file nothing. Under any other key's
+      // grant, only the records it may write where they are now
+      // (`existingEntitiesGrantMayFile`). A person (no grant) files them all.
+      const { existingEntitiesGrantMayFile } =
+        await import("./projects/file-entities.js");
+      const fileable =
+        !uses.linked && uses.reason === "app_grant"
+          ? new Set<string>()
+          : new Set(
+              await existingEntitiesGrantMayFile(spaceRows.map((r) => r.id))
+            );
+      const rows = spaceRows.filter((r) => fileable.has(r.id));
+      const withheld = spaceRows.length - rows.length;
       // Count what the DOOR actually did, never the loop iterations.
       // `linkEntityToProject` can REFUSE (`{linked:false}`) when the project is
       // gone or invisible — it stopped writing ghost edges. Incrementing
@@ -1313,6 +1332,7 @@ export async function applyPackagePostWorkspace(
               projectId: body.projectId,
               entities: linked,
               ...(refused > 0 ? { refused } : {}),
+              ...(withheld > 0 ? { withheldByGrant: withheld } : {}),
             }
           : {
               status: "not_linked",
@@ -1322,8 +1342,10 @@ export async function applyPackagePostWorkspace(
               message:
                 !uses.linked && uses.reason === "workspace_not_found"
                   ? `Workspace ${workspaceId} does not exist — the project was not indexed to it.`
-                  : `Project ${body.projectId} is not visible or no longer exists — ` +
-                    `no entity was filed into it.`,
+                  : !uses.linked && uses.reason === "app_grant"
+                    ? `An app cannot add a space to a project: the person files project ${body.projectId} into this space.`
+                    : `Project ${body.projectId} is not visible or no longer exists — ` +
+                      `no entity was filed into it.`,
             };
     } catch (e) {
       result.projectLink = { status: "error", message: (e as Error).message };

@@ -1,19 +1,11 @@
 /**
- * DEFERRED WRITES — the writes an agent made into a space it had not joined.
+ * DEFERRED WRITES — the writes an agent made past its daily write ceiling.
  *
- * An agent that is not a member of a workspace does not write there: the gate
- * files ONE `workspace.join` proposal instead. A write whose (subjectType,
- * action) pair is REPLAYABLE is not dropped: it is appended to that join's
- * `data.deferredWrites`, also when the join already exists (every later write
- * lands on the same pending join). Approving the join creates the membership
- * and then replays each write through its own door AS THE AGENT, so the normal
- * governance ladder decides it (it executes, or files its own proposal) —
- * approving access never approves content. What each replay did is recorded
- * on `data.deferredOutcomes[ref]`.
- *
- * The same writes are kept on a HELD-WRITES pack (W-B1, `agent/held_writes`):
- * past its daily write ceiling an agent's writes wait on one proposal per
- * (agent, UTC day), and approving it replays each the same way.
+ * They wait on a HELD-WRITES pack (W-B1, `agent/held_writes`): one proposal
+ * per (agent, UTC day), `data.deferredWrites`. Approving it replays each write
+ * through its own door AS THE AGENT, so the normal governance ladder decides
+ * it (it executes, or files its own proposal). What each replay did is
+ * recorded on `data.deferredOutcomes[ref]`.
  *
  * Pure + dependency-free (same contract as `../vocabulary`, the one door its
  * words come through).
@@ -27,11 +19,8 @@ import {
 import { proposalsT } from "./copy.js";
 import { isItemRejected } from "./item-pack.js";
 
-/** Writes one join may hold. The next one is refused, in words. */
-export const DEFERRED_WRITES_MAX = 50;
-
 /**
- * The (subjectType, action) pairs a join may defer — founder D7, v1. A pair
+ * The (subjectType, action) pairs a pack may defer — founder D7, v1. A pair
  * joins this list only with a replay door: the pod's replay table is a
  * `Record` over this union, so a pair without one does not compile.
  */
@@ -40,9 +29,6 @@ export const REPLAYABLE_DEFERRED_PAIRS = [
   "entity/update",
   "focus_session/create",
   "document/create",
-  // A whole capture graph, kept as ONE write so it lands all-or-none: its
-  // door checks membership before writing anything (finding 590ca76a).
-  "entity/capture.graph",
 ] as const;
 export type ReplayableDeferredPair = (typeof REPLAYABLE_DEFERRED_PAIRS)[number];
 
@@ -66,9 +52,9 @@ export interface DeferredWriteGrant {
   clientId: string | null;
 }
 
-/** One blocked write, stored on the join proposal's `data.deferredWrites`. */
+/** One held write, stored on the pack's `data.deferredWrites`. */
 export interface DeferredWrite {
-  /** Unique in its join; the `rejectItem` key and the `deferredOutcomes` key. */
+  /** Unique in its pack; the `rejectItem` key and the `deferredOutcomes` key. */
   ref: string;
   subjectType: string;
   action: string;
@@ -83,8 +69,8 @@ export interface DeferredWrite {
   /** Identity of the change: a resend of the same write is not queued twice. */
   fingerprint: string;
   /**
-   * The space the write was made in. A join replays in its own space; a
-   * held-writes pack (W-B1) spans spaces, so each write replays in its own.
+   * The space the write was made in. A pack spans spaces, so each write
+   * replays in its own.
    */
   workspaceId?: string | null;
   projectId?: string | null;
@@ -102,9 +88,9 @@ export const DEFERRED_OUTCOMES = [
   "proposed",
   /** Its door said no (`reason`). */
   "refused",
-  /** The reviewer dropped it before approving the join. */
+  /** The reviewer dropped it before approving the pack. */
   "skipped_by_reviewer",
-  /** The join was rejected, so it never ran. */
+  /** The pack was rejected, so it never ran. */
   "rejected",
 ] as const;
 export type DeferredOutcome = (typeof DEFERRED_OUTCOMES)[number];
@@ -127,7 +113,7 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * The deferred writes on a join proposal's `data`. Entries that do not parse
+ * The deferred writes on a pack's `data`. Entries that do not parse
  * are counted in `unreadable`, never dropped silently.
  */
 export function readDeferredWrites(data: unknown): {
@@ -226,8 +212,7 @@ function nameOf(data: Record<string, unknown>): string | null {
 }
 
 /**
- * THE reading of a proposal's kept writes (a workspace join's, a held-writes
- * pack's): one row per write, titled with what replaying it does, beside the
+ * THE reading of a held-writes pack's kept writes: one row per write, titled with what replaying it does, beside the
  * outcome its replay recorded. `data` is the proposal row's `data`. Null when
  * it carries no `deferredWrites` at all — there is nothing to list.
  *

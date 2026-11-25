@@ -75,7 +75,7 @@ import {
   OPEN_SESSION_STATUSES,
   SESSION_TITLE_MAX,
 } from "@synap-core/types/focus-sessions";
-import { isOwedSlot } from "../focus-sessions/owed-outputs.js";
+import { stampDefaultOptionAuthor } from "./decision-timeout.js";
 import { reconcileOwedSince } from "../focus-sessions/update-session.js";
 import { updateExpectedOutputsLocked } from "../focus-sessions/delegate-output.js";
 import {
@@ -84,7 +84,10 @@ import {
 } from "../focus-sessions/slot-asked-event.js";
 import { normalizeExpectedLabel } from "../focus-sessions/expected-label.js";
 import { mergeSessionMetadata } from "../focus-sessions/session-metadata.js";
-import { isDeliverableOutstanding } from "@synap-core/types/units";
+import {
+  deliverableOwedBy,
+  isDeliverableOutstanding,
+} from "@synap-core/types/units";
 import { resolveStatusLabel } from "@synap-core/types/vocabulary";
 
 const logger = createLogger({ module: "decision-ask-reactor" });
@@ -236,7 +239,13 @@ export function isOpenDecisionAsk(
   slot: ExpectedOutput,
   decisionId: string
 ): boolean {
-  return slot?.decisionId === decisionId && isOwedSlot(slot) && !slot.answer;
+  // The slot alone: a decision ask is never a criterion's grade, the one
+  // slot whose owed-ness reads its session's other outputs.
+  return (
+    slot?.decisionId === decisionId &&
+    deliverableOwedBy(slot) === "you" &&
+    !slot.answer
+  );
 }
 
 /**
@@ -598,6 +607,14 @@ export const decisionAskReactor: Reactor = {
     try {
       const decision = await loadDecision(payload.subjectId);
       if (!decision) return;
+      // Who set its default (the timeout arm, P5): the pod's own fact, read
+      // off this write's `events` row.
+      if (
+        payload.action === "create" ||
+        payload.data?.["changed.defaultOption"] === true
+      ) {
+        await stampDefaultOptionAuthor(decision.id, payload.eventId);
+      }
       if (decision.properties.decisionStatus === "proposed") {
         if (entersProposed(payload) && decisionHasAgentAuthor(decision)) {
           await ensureDecisionAsk(decision, payload.sessionId ?? null);

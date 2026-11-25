@@ -11,7 +11,9 @@
  * tool run. Nothing new is stored and no rung moves: a more specific rule (one
  * agent, one space) still outranks it, the floors above rung 2.8 (untrusted
  * origin, a pod file leaving, an app's outward run) still propose, and the
- * public-post actions (`PROPOSE_ONLY_CAPABILITY_VERBS`) never run on their own.
+ * propose-only actions (`capabilityVerbAllowsRuleWiden`: a verb declaring
+ * `metadata.proposeOnly`, every verb serving a propose-only intent, and the
+ * legacy Postiz names) never run on their own.
  *
  * WHO: a person who is a pod admin (a pod-wide rule), never an agent's
  * credential and never a scoped key (an app's sign-in): an AI does not loosen
@@ -26,16 +28,22 @@ import {
   eq,
   inArray,
   isNull,
+  or,
   authoredCreatedBy,
   getRequestGrant,
   isFullAccessGrant,
 } from "@synap/database";
 import { governanceRules, proposals, skills } from "@synap/database/schema";
-import { capabilityVerbAllowsRuleWiden } from "@synap/governance-policy";
+import {
+  capabilityRuleRank,
+  capabilityVerbAllowsRuleWiden,
+  decidingCapabilityRule,
+} from "@synap/governance-policy";
 import {
   actionRunModeOf,
   type ActionRunMode,
 } from "@synap-core/types/governance-rules";
+import { isUuid } from "@synap-core/types/property-render";
 import { activeRulePredicate } from "../../utils/governance-rule-reads.js";
 import { assertProposalVisibleTo } from "../../utils/proposal-visibility.js";
 import { isAgentCaller } from "../library/agent-door.js";
@@ -55,7 +63,8 @@ export interface ActionModeRow {
   mode: ActionRunMode;
   /** The rule that sets it; `null` when it asks first (no rule). */
   ruleId: string | null;
-  /** False for an action no rule may run on its own (a public post). */
+  /** False for an action no rule may run on its own (a public post, a
+   * verb declaring `metadata.proposeOnly`). */
   mayRunOnItsOwn: boolean;
 }
 
@@ -77,12 +86,59 @@ interface ModeRuleRow {
   verdict: "auto" | "propose" | "deny";
 }
 
-/** Which row decides: a deny wins, as it wins a tie at the resolver. */
+/**
+ * Which row decides: these rows share one rank (every AI × the pod × this
+ * action), so the gate's own tie rule picks it: the stricter verdict, never >
+ * asks first > runs on its own (`decidingCapabilityRule`, the one ranking).
+ * It used to prefer "auto" over "propose", so the tool page read "runs on its
+ * own" where the gate asked first (finding ac28928c).
+ */
 function decidingRow(rows: readonly ModeRuleRow[]): ModeRuleRow | undefined {
-  return (
-    rows.find((r) => r.verdict === "deny") ??
-    rows.find((r) => r.verdict === "auto") ??
-    rows[0]
+  return decidingCapabilityRule(
+    rows.map((rule) => ({
+      rule,
+      rank: capabilityRuleRank(
+        { principalKind: "any", scopeKind: "pod" },
+        "action"
+      ),
+    }))
+  );
+}
+
+/**
+ * May each action run on its own? The ONE derivation the gate reads
+ * (`capabilityVerbAllowsRuleWiden`), with the intent and metadata of the
+ * skills it names, by name or by row id (a capability rule matches either):
+ * one serving a public post, or declaring `metadata.proposeOnly`, never may,
+ * whatever its name. Also the refusal of `governanceRules.create`.
+ */
+export async function actionsMayRunOnTheirOwn(
+  actions: readonly string[]
+): Promise<Map<string, boolean>> {
+  const ids = actions.filter((a) => isUuid(a));
+  const rows = await db
+    .select({
+      id: skills.id,
+      name: skills.name,
+      intent: skills.intent,
+      metadata: skills.metadata,
+    })
+    .from(skills)
+    .where(
+      ids.length > 0
+        ? or(inArray(skills.name, [...actions]), inArray(skills.id, ids))
+        : inArray(skills.name, [...actions])
+    );
+  return new Map(
+    actions.map((action) => [
+      action,
+      capabilityVerbAllowsRuleWiden(action) &&
+        rows
+          .filter((r) => r.name === action || r.id === action)
+          .every((r) =>
+            capabilityVerbAllowsRuleWiden(r.name, r.intent, r.metadata)
+          ),
+    ])
   );
 }
 
@@ -100,6 +156,7 @@ export async function readActionModes(
     })
     .from(governanceRules)
     .where(podWideModeRows(wanted))) as ModeRuleRow[];
+  const mayRun = await actionsMayRunOnTheirOwn(wanted);
   return wanted.map((action) => {
     const rule = decidingRow(rows.filter((r) => r.targetPattern === action));
     const mode = actionRunModeOf(rule?.verdict);
@@ -107,7 +164,7 @@ export async function readActionModes(
       action,
       mode,
       ruleId: mode === "ask" ? null : (rule?.id ?? null),
-      mayRunOnItsOwn: capabilityVerbAllowsRuleWiden(action),
+      mayRunOnItsOwn: mayRun.get(action) ?? false,
     };
   });
 }
@@ -150,8 +207,10 @@ async function assertActionExists(action: string): Promise<void> {
 
 /**
  * "Approve always" names the request it came from: it must be a request the
- * person can see, to run THIS action. Anything else is refused, so a rule's
- * lineage never points at an unrelated request.
+ * person can see, to run THIS action, or to MAKE it (the verb's own
+ * `skill/create` proposal, whose approval may carry "allow without review",
+ * `verb-allow.ts`). Anything else is refused, so a rule's lineage never
+ * points at an unrelated request.
  */
 async function assertSourceRequest(
   sourceProposalId: string,
@@ -169,12 +228,17 @@ async function assertSourceRequest(
     .where(eq(proposals.id, sourceProposalId))
     .limit(1);
   const verbId = (row?.data as { verbId?: unknown } | null)?.verbId;
-  if (
-    !row ||
-    row.targetType !== "capability" ||
-    row.proposalType !== CAPABILITY_RUN_PROPOSAL_TYPE ||
-    verbId !== action
-  ) {
+  const madeName = (row?.data as { data?: { name?: unknown } } | null)?.data
+    ?.name;
+  const runsIt =
+    row?.targetType === "capability" &&
+    row.proposalType === CAPABILITY_RUN_PROPOSAL_TYPE &&
+    verbId === action;
+  const makesIt =
+    row?.targetType === "skill" &&
+    row.proposalType === "create" &&
+    madeName === action;
+  if (!row || !(runsIt || makesIt)) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `That request does not run "${action}".`,
@@ -203,10 +267,13 @@ export async function writeActionMode(input: {
   sourceProposalId?: string;
 }): Promise<WriteActionModeResult> {
   const { userId, action, mode } = input;
-  if (mode === "auto" && !capabilityVerbAllowsRuleWiden(action)) {
+  if (
+    mode === "auto" &&
+    !(await actionsMayRunOnTheirOwn([action])).get(action)
+  ) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: `"${action}" publishes in public: it always asks you first.`,
+      message: `"${action}" publishes in public or cannot be undone: it always asks you first.`,
       cause: { reasonCode: ACTION_ALWAYS_ASKS },
     });
   }

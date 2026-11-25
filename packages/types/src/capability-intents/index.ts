@@ -20,8 +20,10 @@
  * `0283_capability_intents.sql` (the 13), `0284_publish_post_intent.sql`
  * (`publish_post`), `0314_delegate_agent_task_intent.sql` (`delegate_agent_task`),
  * `0329_read_webpage_intent.sql` (`read_webpage`), `0360_search_web_intent.sql`
- * (`search_web`) and `0370_edit_video_intent.sql` (`edit_video`). Slugs live in
- * ROWS, not in a TypeScript union.
+ * (`search_web`), `0370_edit_video_intent.sql` (`edit_video`) and
+ * `0413_media_intents.sql` (`transcribe_media`, `download_media`) and
+ * `0429_compute_intents.sql` (`provision_compute`, `release_compute`). Slugs
+ * live in ROWS, not in a TypeScript union.
  *
  * The pod reads THIS file: `ABSTRACT_VERBS` (`@synap/database`
  * `schema/tools.ts`) is `ABSTRACT_INTENTS`, re-exported.
@@ -31,7 +33,7 @@
  * seed migration SQL and fails the build the moment these two disagree.
  *
  * ⚠️ MIRRORED IN LOCKSTEP with:
- *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`, `0360`, `0370`
+ *   - the `INSERT` slugs — migrations `0283`, `0284`, `0314`, `0329`, `0360`, `0370`, `0413`, `0429`
  *   - `CAPABILITY_INTENTS` — synap-control-plane-api
  *       `src/seeds/capability-intent-vocabulary.ts`
  *
@@ -108,6 +110,10 @@ export const REGISTERED_EXTRAS = [
   "read_webpage",
   "search_web",
   "edit_video",
+  "transcribe_media",
+  "download_media",
+  "provision_compute",
+  "release_compute",
 ] as const;
 
 /**
@@ -206,6 +212,10 @@ const INTENT_RUN_LABELS: Readonly<Record<string, string>> = {
   read_webpage: "Read web pages with your tools",
   search_web: "Search the web with your tools",
   edit_video: "Edit videos with your tools",
+  transcribe_media: "Transcribe videos and audio with your tools",
+  download_media: "Download videos and audio with your tools",
+  provision_compute: "Start cloud machines with your tools",
+  release_compute: "Stop cloud machines with your tools",
 };
 
 export function intentRunLabel(slug: CapabilityIntentSlug): string {

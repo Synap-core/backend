@@ -13,6 +13,13 @@
  * brand uses (`design-systems/default/tokens.css`). A test pins the names.
  */
 import type { BrandKitInput } from "./index.js";
+import {
+  activeTokenSets,
+  cssValue,
+  dtcgLeaves,
+  dtcgText,
+  isDtcg,
+} from "./dtcg.js";
 
 export type OdTokenLayer = "A1-identity" | "A1-structure" | "A2" | "B-slot";
 
@@ -216,53 +223,6 @@ const DTCG_TO_OD: ReadonlyArray<readonly [path: string, token: string]> = [
   ["radius.pill", "--radius-pill"],
 ];
 
-function isDtcg(node: unknown): boolean {
-  if (!node || typeof node !== "object") return false;
-  if (Array.isArray(node)) return false;
-  const o = node as Record<string, unknown>;
-  return (
-    "$value" in o ||
-    Object.entries(o).some(([k, v]) => !k.startsWith("$") && isDtcg(v))
-  );
-}
-
-function dtcgLeaves(
-  node: unknown,
-  path: string[],
-  out: Map<string, unknown>
-): void {
-  if (!node || typeof node !== "object" || Array.isArray(node)) return;
-  const o = node as Record<string, unknown>;
-  if ("$value" in o) {
-    out.set(path.join("."), o["$value"]);
-    return;
-  }
-  for (const [k, v] of Object.entries(o))
-    if (!k.startsWith("$")) dtcgLeaves(v, [...path, k], out);
-}
-
-/** A DTCG value as CSS text; `{a.b}` references are followed (depth-limited). */
-function dtcgText(
-  value: unknown,
-  leaves: Map<string, unknown>,
-  depth = 0
-): string | undefined {
-  if (depth > 5) return undefined;
-  if (typeof value === "number") return String(value);
-  if (Array.isArray(value)) {
-    const parts = value
-      .map((v) => dtcgText(v, leaves, depth + 1))
-      .filter((v): v is string => !!v);
-    // A font stack: quote a family name that has a space.
-    return parts
-      .map((p) => (/\s/.test(p) && !/^["']/.test(p) ? `"${p}"` : p))
-      .join(", ");
-  }
-  if (typeof value !== "string") return undefined;
-  const ref = /^\{([^}]+)\}$/.exec(value.trim());
-  return ref ? dtcgText(leaves.get(ref[1]!), leaves, depth + 1) : value.trim();
-}
-
 function odTokensFromDtcg(parsed: unknown): OdTokenOverrides {
   const leaves = new Map<string, unknown>();
   dtcgLeaves(parsed, [], leaves);
@@ -318,37 +278,14 @@ export function odTokensFromEntities(
     properties: Record<string, unknown>;
   }>
 ): OdTokenOverrides | undefined {
-  const rows = entities
-    .filter((e) => e.profileSlug === "brand-token-set")
-    .filter((e) => {
-      const s = e.properties?.["token-status"];
-      return s === undefined || s === null || s === "" || s === "active";
-    })
-    .map((e) => ({
-      mode:
-        e.properties?.["token-mode"] === "base" || !e.properties?.["token-mode"]
-          ? 0
-          : 1,
-      title: e.title ?? "",
-      tokens: odTokensFromTokenJson(e.properties?.["token-json"]),
-    }))
-    .filter((r) => Object.keys(r.tokens).length)
-    .sort(
-      (a, b) =>
-        a.mode - b.mode || (a.title < b.title ? -1 : a.title > b.title ? 1 : 0)
-    );
-  return rows[0]?.tokens;
+  for (const set of activeTokenSets(entities)) {
+    const tokens = odTokensFromTokenJson(set.tokenJson);
+    if (Object.keys(tokens).length) return tokens;
+  }
+  return undefined;
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-
-/** A CSS value that cannot close a declaration or block, or open markup. */
-function cssValue(value: string): string {
-  return value
-    .replace(/[;{}<>\\\n\r]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
 
 function oneLine(value: string): string {
   return value.replace(/\s*[\r\n]+\s*/g, " ").trim();

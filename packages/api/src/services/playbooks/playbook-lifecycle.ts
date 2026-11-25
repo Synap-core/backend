@@ -32,9 +32,12 @@
  *   semantics. The run's granted capabilities are read from the playbook's
  *   `grants` links at run time — not copied here.
  * - promoteSessionToPlaybook: snapshot a validated session into a reusable
- *   Playbook. Captures goal + expectedOutputs and re-grants the capabilities the
- *   session USED (its `used` links) as the new playbook's `grants` links; writes
- *   the `session → promoted_to → playbook` lineage edge.
+ *   Playbook. Captures goal + expectedOutputs, declares in its ONE `tools` list
+ *   what the session's work had (the origin playbook's tools, the capabilities
+ *   the session USED by name, and the core's write tools: the promoted playbook
+ *   is short-class, whose floor is reads only), keeps the used capabilities as
+ *   `grants` links for governance, and writes the `session → promoted_to →
+ *   playbook` lineage edge.
  *
  * GOVERNANCE: these are pure domain operations — the caller (tRPC router / Hub
  * REST) MUST run `checkPermissionOrPropose` before invoking them. The link
@@ -47,6 +50,9 @@
 
 import {
   getDb,
+  isUsableInSpace,
+  usableInSpaceWhere,
+  notUsableInSpaceReason,
   eq,
   and,
   isNull,
@@ -55,9 +61,13 @@ import {
   drizzleSql,
   entities,
   focusSessions,
+  inArray,
   isUniqueViolation,
   playbooks,
+  skills,
+  tools,
   insertFocusSessionRow,
+  ownerAndActor,
 } from "@synap/database";
 import type { Playbook, FocusSession } from "@synap/database/schema";
 import {
@@ -68,6 +78,10 @@ import {
 import {
   collectPlaybookCriteria,
   describeMissingParams,
+  LONG_RUN_WRITES,
+  readToolsList,
+  fillParamsFromSubject,
+  needsSubjectKinds,
   readCriteria,
   readPlaybookParams,
   validatePlaybookParams,
@@ -82,6 +96,14 @@ import {
   PARAM_SLOT_CIRCUMSTANCE,
 } from "../focus-sessions/param-slots.js";
 import { createLogger } from "@synap-core/core";
+import { isUuid } from "@synap-core/types/property-render";
+import { entityReadVisibleWhere } from "../../access/entity-read-floor.js";
+import { AccessContext, scopedDb } from "../../access/index.js";
+import {
+  playbookAtVersion,
+  recordPlaybookVersion,
+} from "./playbook-versions.js";
+import { subjectKindSlugs } from "./assert-subject-kind.js";
 import { sanitizeDeclaredOutputs } from "../focus-sessions/update-session.js";
 import {
   withBirthStageSlots,
@@ -96,6 +118,7 @@ import {
 } from "../links/links-service.js";
 import { emitSideEffects } from "@synap/events";
 import { enqueueSessionRecall } from "../focus-sessions/session-recall.js";
+import { scopePlaybookToStage } from "./stage-of.js";
 import { logEvent } from "../../lib/event-helpers.js";
 import {
   recordConversion,
@@ -154,39 +177,6 @@ export function withDeclaredParamsDefaulted(
     if (out[p.name] === undefined || out[p.name] === null) out[p.name] = "";
   }
   return out;
-}
-
-/**
- * The run's bound SUBJECT answers the playbook's entity param when the caller
- * left it unanswered.
- *
- * A subject-bound run already says WHICH entity it is about, and a playbook that
- * declares exactly one `entity` param ("Company — the session subject") is
- * asking for that same thing. Without this, every scheduled run over a subject
- * rendered `@{arg:company:entity}` as `""` ("Advance  through the Stellar grant
- * process") AND, on the `owe` path, filed an owed slot asking a person for the
- * entity the run was already bound to.
- *
- * Deliberately narrow: a caller-supplied value always wins, and a playbook with
- * two or more entity params is left alone — which of them is the subject is not
- * derivable, and guessing would bind the wrong one silently.
- */
-export function subjectAnswersEntityParam(
-  declared: readonly PlaybookParam[],
-  supplied: Record<string, unknown> | undefined,
-  subjectId: string | null | undefined
-): Record<string, unknown> {
-  const given = supplied ?? {};
-  if (!subjectId) return given;
-  const entityParams = declared.filter((p) => p.type === "entity");
-  if (entityParams.length !== 1) return given;
-  const name = entityParams[0]!.name;
-  const current = given[name];
-  const answered =
-    current !== undefined &&
-    current !== null &&
-    !(typeof current === "string" && current.trim() === "");
-  return answered ? given : { ...given, [name]: subjectId };
 }
 
 /**
@@ -321,6 +311,70 @@ export function buildRunSessionName(
 }
 
 /**
+ * What a run with NO subject works on, for its name (plan fbfadf54 5b): six
+ * runs all named "Improve a recipe (from its runs) — 9 Nov" could not be told
+ * apart. In order: the first declared param whose value is the id of a pod
+ * object the starter can see (its title); else the first required text or
+ * choice param's own value; else null (the date names the run, as before).
+ * An id never names a run: one that resolves to nothing is skipped.
+ */
+export async function runWorksOnLabel(
+  declared: readonly PlaybookParam[],
+  values: Record<string, unknown>,
+  nameOf: (id: string) => Promise<string | null>
+): Promise<string | null> {
+  for (const p of declared) {
+    const v = values[p.name];
+    const id = typeof v === "string" ? v.trim() : "";
+    if (!isUuid(id)) continue;
+    const name = (await nameOf(id))?.trim();
+    if (name) return name;
+  }
+  const first = declared.find((p) => p.required);
+  if (!first || (first.type !== "text" && first.type !== "choice")) {
+    return null;
+  }
+  const v = values[first.name];
+  const text = typeof v === "string" ? v.trim() : "";
+  return text && !isUuid(text) ? text : null;
+}
+
+/**
+ * The title of an entity or a playbook the user can see, by id; null = none
+ * visible. The floor matters: a param id was not checked by the run door (only
+ * the subject is), so naming it unread would leak a title past it.
+ */
+async function visibleObjectName(
+  db: Awaited<ReturnType<typeof getDb>>,
+  userId: string,
+  id: string
+): Promise<string | null> {
+  const [entity] = await db
+    .select({ title: entities.title })
+    .from(entities)
+    .where(
+      and(
+        eq(entities.id, id),
+        isNull(entities.deletedAt),
+        entityReadVisibleWhere(userId)
+      )
+    )
+    .limit(1);
+  if (entity?.title) return entity.title;
+  const [playbook] = await db
+    .select({ name: playbooks.name })
+    .from(playbooks)
+    .where(
+      and(
+        eq(playbooks.id, id),
+        scopedDb(AccessContext.from({ userId })).predicate(playbooks)
+      )
+    )
+    .limit(1);
+  return playbook?.name ?? null;
+}
+
+/**
  * The instruction to hand an agent for this session: the rendered prompt when
  * one was stored, else the goal. The fallback is what keeps every session
  * created BEFORE this change dispatching exactly as it did — their paragraph
@@ -337,6 +391,17 @@ export function runPromptFor(session: {
 
 export interface InstantiateInput {
   playbookId: string;
+  /**
+   * Born from this KEPT version of the playbook, not its live definition (a
+   * step that `uses` it is pinned, spec 7111934d §3.2): its stages, slots,
+   * criteria, params and goal template. Absent ⇒ the live definition.
+   */
+  pinnedVersion?: number;
+  /**
+   * Born from ONE stage of the playbook (`scopePlaybookToStage`): a child run
+   * of a `forEach` step. Absent ⇒ every stage.
+   */
+  stageOnly?: string;
   /** The workspace the session runs in (verified membership upstream). */
   workspaceId: string;
   /** The human/agent starting the run. */
@@ -386,21 +451,24 @@ export interface InstantiateInput {
    */
   metadata?: Record<string, unknown>;
   /**
-   * The lifecycle state the session is BORN in. Two values only, and the choice
-   * is about WHO the session is waiting for:
+   * The lifecycle state the session is BORN in. Three values, and the choice
+   * is about WHAT the session is waiting for:
    *
    * - `"active"` (DEFAULT — every pre-existing caller, unchanged) — the session
    *   is live now. The caller is expected to dispatch an agent / open a channel.
    * - `"scheduled"` — an APPOINTMENT. The session materialized ahead of time and
    *   is waiting for a HUMAN to open it. The caller MUST NOT kick off an agent.
+   * - `"forming"` — a PLANNED plan step (P4): it waits on its blockers or its
+   *   date, and the pod wakes it (`planned-wake.ts`). No agent kick-off.
    *
-   * Deliberately narrowed to these two rather than the whole status union: this
+   * Deliberately narrowed to the birth statuses (live, an appointment, a
+   * planned step: P4) rather than the whole status union: this
    * function births sessions, and `closed`/`failed`/`stale` are exits that have
    * their own doors (`completeFocusSession`, the reaper). `scheduled` is already
    * in OPEN_SESSION_STATUSES and UPDATABLE_SESSION_STATUSES, so the human's
    * scheduled → active transition needs no new door.
    */
-  status?: "active" | "scheduled";
+  status?: "active" | "scheduled" | "forming";
   /**
    * WHO AUTHORED this session — `focus_sessions.origin`. Defaults to
    * `"playbook"`, which is what every pre-existing caller gets and what this
@@ -411,6 +479,12 @@ export interface InstantiateInput {
    * of value the next reader will assume is a bug.
    */
   origin?: "playbook" | "automation" | "agent" | "human";
+  /**
+   * The run holds its object's ONE live slot (0427): only `runPlaybook`, for
+   * a person's run through the run door (`RunPlaybookInput.oneLivePerSubject`).
+   * A second live slot-holder makes the insert throw on `ONE_LIVE_RUN_INDEX`.
+   */
+  oneLivePerSubject?: boolean;
   /**
    * The agent that started the run, when one did. The birth stage's subject
    * move (`writeSessionBirthSubjectMove`) is governed as this agent; absent,
@@ -504,18 +578,17 @@ export async function resolveRunnablePlaybook(input: {
       })) as Playbook | undefined)
     : undefined;
   if (!playbook && input.playbookName) {
-    playbook = ((await db.query.playbooks.findFirst({
+    // By name: the space's own, then one shared with it, then a pod-wide one.
+    playbook = (await db.query.playbooks.findFirst({
       where: and(
         eq(playbooks.name, input.playbookName),
-        eq(playbooks.workspaceId, input.workspaceId)
+        usableInSpaceWhere(playbooks.workspaceId, input.workspaceId, {
+          type: "playbook",
+          id: playbooks.id,
+        })
       ),
-    })) ??
-      (await db.query.playbooks.findFirst({
-        where: and(
-          eq(playbooks.name, input.playbookName),
-          isNull(playbooks.workspaceId)
-        ),
-      }))) as Playbook | undefined;
+      orderBy: drizzleSql`case when ${playbooks.workspaceId} = ${input.workspaceId} then 0 when ${playbooks.workspaceId} is null then 2 else 1 end`,
+    })) as Playbook | undefined;
   }
   if (!playbook) {
     throw new Error(
@@ -525,22 +598,33 @@ export async function resolveRunnablePlaybook(input: {
     );
   }
 
-  if (playbook.workspaceId && playbook.workspaceId !== input.workspaceId) {
-    throw new Error(
-      // Named for THIS function, not for `runPlaybook`: since the appointment
-      // producer (`materializeScheduledSession`) started sharing this door,
-      // that prefix sent whoever read the log looking at the wrong caller.
-      `resolveRunnablePlaybook: playbook ${playbook.id} not visible in workspace ${input.workspaceId}`
-    );
-  }
-
-  if (playbook.status === "archived" || playbook.status === "paused") {
-    throw new Error(
-      `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`
-    );
-  }
+  const refusal = await playbookRunRefusal(playbook, input.workspaceId, db);
+  if (refusal) throw new Error(refusal);
 
   return playbook;
+}
+
+/**
+ * Why a run of `playbook` in `workspaceId` (`null` = no space) would be
+ * refused at the run door, or `null` when it runs: the one usable-in-space
+ * rule (`usableInSpace`: its home, the spaces it is shared with, or anywhere
+ * when pod-wide),
+ * then a retired playbook (archived or paused). Exported so a door that
+ * already holds the row asks it BEFORE it files anything (`playbooks.run`
+ * before its gate, the `playbook/run` approval before its dispatch claim).
+ */
+export async function playbookRunRefusal(
+  playbook: Pick<Playbook, "id" | "name" | "workspaceId" | "status">,
+  workspaceId: string | null,
+  db: Awaited<ReturnType<typeof getDb>>
+): Promise<string | null> {
+  if (!(await isUsableInSpace(db, "playbook", playbook, workspaceId))) {
+    return notUsableInSpaceReason("Playbook", playbook, workspaceId);
+  }
+  if (playbook.status === "archived" || playbook.status === "paused") {
+    return `Playbook "${playbook.name}" is ${playbook.status}, so it does not run. Set it active to run it again.`;
+  }
+  return null;
 }
 
 /**
@@ -568,12 +652,19 @@ export async function instantiateSessionRow(
   input: InstantiateInput
 ): Promise<FocusSession | null> {
   const db = await getDb();
-  const playbook = await db.query.playbooks.findFirst({
+  const live = await db.query.playbooks.findFirst({
     where: eq(playbooks.id, input.playbookId),
   });
-  if (!playbook) {
+  if (!live) {
     throw new Error(`Playbook ${input.playbookId} not found`);
   }
+  const pinned =
+    input.pinnedVersion !== undefined
+      ? await playbookAtVersion(db, live, input.pinnedVersion)
+      : live;
+  const playbook = input.stageOnly
+    ? scopePlaybookToStage(pinned, input.stageOnly)
+    : pinned;
 
   // PARAMS — validated HERE and nowhere else. This function is the single
   // funnel behind every run door (playbooks.run, the Hub run door, MCP
@@ -584,10 +675,48 @@ export async function instantiateSessionRow(
   // Until this existed the declaration was decorative: nothing read `required`,
   // `default` or `type` on any run path, so a missing required param rendered
   // as `""` and a default never reached the prompt at all.
+  //
+  // The run's bound SUBJECT answers what the playbook declares it answers
+  // (`fillParamsFromSubject`, @synap/playbooks): an entity param that is the
+  // subject, and a `from: "subject.<field>"` param from that field. Done HERE,
+  // in the one funnel, so every door fills the same way — an activator's
+  // proposal carries no params (it names only its subject), and its approval
+  // replay used to be refused for a value the subject already held (Produce
+  // Content's `platform`, live 2026-11-09, proposal bff02fbb). The subject's
+  // visibility was enforced by the caller; this reads it to fill, never to
+  // widen what the run may see.
   const declaredParams = readPlaybookParams(playbook.params);
+  const subjectRow = input.subjectId
+    ? await db.query.entities.findFirst({
+        columns: { title: true, preview: true, properties: true },
+        where: eq(entities.id, input.subjectId),
+      })
+    : undefined;
+  const subjectKinds =
+    input.subjectId && subjectRow && needsSubjectKinds(declaredParams)
+      ? ((await subjectKindSlugs({
+          subjectId: input.subjectId,
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+        })) ?? [])
+      : [];
+  const subjectFill = fillParamsFromSubject(
+    declaredParams,
+    input.params,
+    input.subjectId
+      ? {
+          id: input.subjectId,
+          title: subjectRow?.title ?? null,
+          preview: subjectRow?.preview ?? null,
+          properties:
+            (subjectRow?.properties as Record<string, unknown> | null) ?? null,
+          kinds: subjectKinds,
+        }
+      : null
+  );
   const paramResolution = validatePlaybookParams(
     declaredParams,
-    subjectAnswersEntityParam(declaredParams, input.params, input.subjectId)
+    subjectFill.values
   );
   const onMissingRequired = input.onMissingRequired ?? "refuse";
   if (
@@ -613,18 +742,11 @@ export async function instantiateSessionRow(
   // Substituted against the RESOLVED values, so a declared `default` finally
   // reaches the agent's instruction.
   //
-  // Title = playbook name + the bound subject's own title. Read the entity here
-  // rather than trusting a caller-passed name: `instantiateSession` has three
+  // Title = playbook name + the bound subject's own title. The entity read
+  // above (the param fill's), never a caller-passed name: `instantiateSession` has three
   // callers and only one of them resolves the subject. The same title is what
   // an entity param holding the subject renders as in the prompt.
-  let subjectTitle: string | null = null;
-  if (input.subjectId) {
-    const subject = await db.query.entities.findFirst({
-      columns: { title: true },
-      where: eq(entities.id, input.subjectId),
-    });
-    subjectTitle = subject?.title ?? null;
-  }
+  const subjectTitle: string | null = subjectRow?.title ?? null;
   const prompt =
     input.goalOverride ??
     resolveGoal(
@@ -646,7 +768,19 @@ export async function instantiateSessionRow(
   // beside it, marked `derived` so the background titler may improve it. A
   // proposer's own title (`ownTitle`) wins, marked `agent`.
   const ownTitle = input.ownTitle?.trim() || null;
-  const title = ownTitle ?? buildRunSessionName(playbook.name, subjectTitle);
+  const title =
+    ownTitle ??
+    buildRunSessionName(
+      playbook.name,
+      subjectTitle ??
+        (input.subjectId
+          ? null
+          : await runWorksOnLabel(
+              declaredParams,
+              paramResolution.values,
+              (id) => visibleObjectName(db, input.userId, id)
+            ))
+    );
   // Through the ONE declaration sanitizer, like every other door that births
   // slots: a template's stored JSON must not carry a server-stamped receipt
   // or an unparsed `ask` into a live session.
@@ -701,6 +835,7 @@ export async function instantiateSessionRow(
       channelId: input.channelId ?? null,
       agentIds: input.agentIds ?? [],
       status: input.status ?? "active",
+      ...(input.oneLivePerSubject ? { oneLivePerSubject: true } : {}),
       metadata: {
         ...(input.metadata ?? {}),
         [RUN_PROMPT_METADATA_KEY]: prompt,
@@ -758,8 +893,10 @@ export async function instantiateSessionRow(
 
   await createLinks(edges);
 
-  // Recall for the run that just started (the ONE funnel behind every run
-  // door). Background, never fails the run; the sweep is the floor.
+  // The ONE funnel behind every run door. The runner skips a playbook run
+  // (`skipped: playbook_run`, founder 9 Nov 2026: runs recall on demand), so
+  // this only stamps the skip: no retrieval, no room post. Background, never
+  // fails the run; the sweep is the floor.
   void enqueueSessionRecall(session.id, "start");
 
   return session as FocusSession;
@@ -863,6 +1000,16 @@ export async function promoteSessionToPlaybook(
     ];
   }
 
+  // WHAT A RUN OF IT MAY USE (0419, "only these"): what the session's work
+  // had. A promoted playbook has no stages, so it is SHORT-class and its floor
+  // is 6 reads: without the core's writes declared here, its runs could not
+  // write what the session wrote. Then the origin playbook's own list (the
+  // session followed it), then each capability the session USED, by name.
+  const declaredTools = await promotedTools(db, {
+    originPlaybookId: session.playbookId,
+    used: grantedCaps,
+  });
+
   // The session's NAME (its title, else the goal's first line) — not the
   // goal clipped mid-paragraph.
   const name =
@@ -883,33 +1030,40 @@ export async function promoteSessionToPlaybook(
     const slug = subject?.type?.trim();
     if (slug) subjectProfile = { profileSlug: slug };
   }
+  const owner = await ownerAndActor(db, input.userId, input.agentUserId);
   let playbook: Playbook;
   let reused = false;
   try {
-    const [row] = await db
-      .insert(playbooks)
-      .values({
-        workspaceId: session.workspaceId,
-        createdBy: input.userId,
-        name,
-        description: input.description ?? null,
-        goalTemplate,
-        expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
-        // The session's criteria become the playbook's own — STRUCTURE only
-        // (key/statement/required/check). Evaluations are this run's verdicts,
-        // not the template's; `stageKey` is dropped because promote copies no
-        // stages, so a stage-bound criterion would point at nothing.
-        criteria: readCriteria(session.criteria).map(
-          ({ stageKey: _stageKey, ...structure }) => structure
-        ),
-        executor: "is-agent",
-        status: "draft",
-        subjectProfile,
-        // Lineage lives in the `session → promoted_to → playbook` edge below — the
-        // single source of truth — not duplicated here.
-      })
-      .returning();
-    playbook = row as Playbook;
+    playbook = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .insert(playbooks)
+        .values({
+          workspaceId: session.workspaceId,
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
+          name,
+          description: input.description ?? null,
+          goalTemplate,
+          expectedOutputs: (session.expectedOutputs as ExpectedOutput[]) ?? [],
+          // The session's criteria become the playbook's own — STRUCTURE only
+          // (key/statement/required/check). Evaluations are this run's verdicts,
+          // not the template's; `stageKey` is dropped because promote copies no
+          // stages, so a stage-bound criterion would point at nothing.
+          criteria: readCriteria(session.criteria).map(
+            ({ stageKey: _stageKey, ...structure }) => structure
+          ),
+          executor: "is-agent",
+          status: "draft",
+          subjectProfile,
+          tools: declaredTools,
+          // Lineage lives in the `session → promoted_to → playbook` edge below — the
+          // single source of truth — not duplicated here.
+        })
+        .returning();
+      // Version 1 is kept with the row (0416): a step may pin it.
+      await recordPlaybookVersion(tx, row as Playbook, input.userId);
+      return row as Playbook;
+    });
   } catch (err) {
     // 0227: concurrent promote / same-name race — return the surviving non-archived
     // playbook instead of failing the promote door.
@@ -1020,4 +1174,49 @@ export async function promoteSessionToPlaybook(
   });
 
   return { status: "promoted", playbook, reused, receipt };
+}
+
+/**
+ * The `tools` of a promoted playbook (see `promoteSessionToPlaybook`): the
+ * core's write tools, the origin playbook's list, then each USED capability
+ * by its row's name (its id when the row is gone: the resolver matches both).
+ * PURE but for the reads; each entry once.
+ */
+async function promotedTools(
+  db: Awaited<ReturnType<typeof getDb>>,
+  input: {
+    originPlaybookId: string | null;
+    used: ReadonlyArray<{ kind: string; id: string }>;
+  }
+): Promise<string[]> {
+  const origin = input.originPlaybookId
+    ? await db.query.playbooks.findFirst({
+        columns: { tools: true },
+        where: eq(playbooks.id, input.originPlaybookId),
+      })
+    : undefined;
+  const toolIds = input.used.filter((c) => c.kind === "tool").map((c) => c.id);
+  const skillIds = input.used
+    .filter((c) => c.kind === "skill")
+    .map((c) => c.id);
+  const names = new Map<string, string>();
+  if (toolIds.length > 0) {
+    for (const r of await db
+      .select({ id: tools.id, name: tools.name })
+      .from(tools)
+      .where(inArray(tools.id, toolIds)))
+      names.set(r.id, r.name);
+  }
+  if (skillIds.length > 0) {
+    for (const r of await db
+      .select({ id: skills.id, name: skills.name })
+      .from(skills)
+      .where(inArray(skills.id, skillIds)))
+      names.set(r.id, r.name);
+  }
+  return readToolsList([
+    ...LONG_RUN_WRITES,
+    ...readToolsList(origin?.tools),
+    ...input.used.map((c) => names.get(c.id) ?? c.id),
+  ]);
 }

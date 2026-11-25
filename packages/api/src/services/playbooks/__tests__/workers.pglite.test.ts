@@ -116,10 +116,12 @@ vi.mock("../playbook-activators.js", async (importOriginal) => ({
   })),
 }));
 // The goals' names go through the project_tracks floor (`scopedDb`), proven
-// in the access suites; here the floor lets the caller see both goals.
+// in the access suites; here the floor lets the caller see both goals, and
+// every playbook (the playbook floor is proven in move-to-space.pglite).
 vi.mock("../../../access/index.js", () => ({
   AccessContext: { from: (a: unknown) => a },
   scopedDb: () => ({
+    predicate: () => undefined,
     findMany: async () => [
       { id: "99999999-9999-4999-8999-999999999991", name: "Ship weekly" },
       { id: "99999999-9999-4999-8999-999999999992", name: "Keep docs fresh" },
@@ -148,6 +150,7 @@ import {
   profiles,
   workspaces,
   workspaceMembers,
+  apiKeys,
   podMembers,
   projectMembers,
   users,
@@ -218,6 +221,7 @@ beforeAll(async () => {
     profiles,
     workspaces,
     workspaceMembers,
+    apiKeys,
     podMembers,
     projectMembers,
     users,
@@ -264,8 +268,11 @@ beforeEach(async () => {
   vi.mocked(updateRuleGoverned).mockClear();
 });
 
-const enable = (o: { projectId?: string; trackId?: string }) =>
-  enableWorker({ userId: USER, playbookId: PB, activatorKey: KEY, ...o });
+const enable = (o: {
+  projectId?: string;
+  trackId?: string;
+  sessionId?: string;
+}) => enableWorker({ userId: USER, playbookId: PB, activatorKey: KEY, ...o });
 const refusal = (p: Promise<unknown>) =>
   p.then(
     () => null,
@@ -298,6 +305,7 @@ describe("enableWorker — overlap is refused, naming the holder", () => {
         scope: "space",
         projectId: null,
         trackId: null,
+        sessionId: null,
       },
     });
     // Refused BEFORE anything was written.
@@ -497,7 +505,13 @@ describe("setWorkerPaused — FB2 item 4: resume runs the overlap check", () => 
       )
     ).toEqual({
       code: WORKER_SCOPE_OVERLAP,
-      holder: { ruleId: p1, scope: "project", projectId: P1, trackId: null },
+      holder: {
+        ruleId: p1,
+        scope: "project",
+        projectId: P1,
+        trackId: null,
+        sessionId: null,
+      },
     });
     expect(updateRuleGoverned).not.toHaveBeenCalled();
   });
@@ -1095,6 +1109,489 @@ describe("enableWorker — a 'How often?' clock", () => {
     } finally {
       await q(`update playbooks set status = 'active' where id = $1`, [
         PB_FREE,
+      ]);
+    }
+  });
+});
+
+describe("a SESSION starts a worker (scope `session`)", () => {
+  const S_MINE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1";
+  const S_THEIRS = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2";
+  const S_ENDED = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3";
+  const S_LOOSE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa4";
+
+  beforeEach(async () => {
+    await q(
+      `insert into focus_sessions (id, user_id, workspace_id, project_id, track_id, goal, status) values
+         ($1, $5, $6, $7, $8, 'mine', 'active'),
+         ($2, 'user-2', $6, $7, null, 'theirs', 'active'),
+         ($3, $5, $6, $7, null, 'ended', 'closed'),
+         ($4, $5, $6, null, null, 'unfiled', 'active')`,
+      [S_MINE, S_THEIRS, S_ENDED, S_LOOSE, USER, WS, P1, T1]
+    );
+  });
+  const created = () =>
+    vi.mocked(createRuleGoverned).mock.calls.at(-1)![0] as unknown as {
+      scope: { projectId?: string };
+      seed: { key: string };
+      sentence: { actions: Array<{ config: Record<string, unknown> }> };
+    };
+  const countRules = async () =>
+    (
+      (await q(`select count(*)::int as n from skills`)).rows[0] as {
+        n: number;
+      }
+    ).n;
+
+  it("a session the caller does not own is NOT_FOUND, and nothing is written", async () => {
+    // Negative control: without the owner floor this enable succeeds.
+    await expect(enable({ sessionId: S_THEIRS })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(enable({ sessionId: "not-a-uuid" })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("an ENDED session is refused: its worker would never run", async () => {
+    await expect(enable({ sessionId: S_ENDED })).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+    });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("a session is named alone — never beside a project or goal", async () => {
+    await expect(
+      enableWorker({
+        userId: USER,
+        playbookId: PB,
+        activatorKey: KEY,
+        sessionId: S_MINE,
+        projectId: P2,
+      })
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await countRules()).toBe(0);
+  });
+
+  it("my session: filed where the session is, every run its child, listed as a session worker", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { status: string; ruleId: string };
+    expect(res.status).toBe("enabled");
+    const call = created();
+    expect(call.seed.key).toBe(
+      `${KEY}@project:${P1}@track:${T1}@session:${S_MINE}`
+    );
+    expect(call.scope.projectId).toBe(P1);
+    // The compiled node carries the parent (negative control: absent before
+    // the session scope existed) and the session's filing.
+    expect(call.sentence.actions[0]!.config).toMatchObject({
+      __parentSessionId: S_MINE,
+      __projectId: P1,
+      __trackId: T1,
+    });
+    const [w] = await listEnabledWorkers({ userId: USER, sessionId: S_MINE });
+    expect(w).toMatchObject({
+      ruleId: res.ruleId,
+      scope: "session",
+      sessionId: S_MINE,
+      projectId: P1,
+      trackId: T1,
+    });
+    // Another session's filter does not see it.
+    expect(
+      await listEnabledWorkers({ userId: USER, sessionId: S_LOOSE })
+    ).toEqual([]);
+  });
+
+  it("when its session ends, the worker reads as STOPPED (derived, nothing stored), and no longer live", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { status: string; ruleId: string };
+    const [open] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(open!.state).toBe("running");
+
+    await q(`update focus_sessions set status = 'closed' where id = $1`, [
+      S_MINE,
+    ]);
+    // Negative control: without the session read this stays "running".
+    const [ended] = await listEnabledWorkers({
+      userId: USER,
+      sessionId: S_MINE,
+    });
+    expect(ended).toMatchObject({
+      ruleId: res.ruleId,
+      state: "stopped",
+      automationId: null,
+    });
+    expect(
+      await listEnabledWorkers({
+        userId: USER,
+        sessionId: S_MINE,
+        liveOnly: true,
+      })
+    ).toEqual([]);
+    // Its rule was not touched: the state is read, never written.
+    const [rule] = (
+      await q(`select metadata from skills where id = $1`, [res.ruleId])
+    ).rows as Array<{ metadata: { rule: { draft?: boolean } } }>;
+    expect(rule!.metadata.rule.draft).toBeUndefined();
+  });
+
+  it("an unfiled session's worker works over the space: no project lens, no filing", async () => {
+    await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_LOOSE,
+    });
+    const call = created();
+    expect(call.seed.key).toBe(`${KEY}@session:${S_LOOSE}`);
+    expect(call.scope).not.toHaveProperty("projectId");
+    const node = call.sentence.actions[0]!.config;
+    expect(node.__parentSessionId).toBe(S_LOOSE);
+    expect(node).not.toHaveProperty("__projectId");
+  });
+
+  it("overlaps like its project: a live project enablement holds it back, and it holds a project back", async () => {
+    const p1 = await projectRule("00000000-0000-4000-8000-0000000000bb", P1);
+    const out = await refusal(enable({ sessionId: S_MINE }));
+    expect(out?.code).toBe(WORKER_SCOPE_OVERLAP);
+    expect(out?.holder).toMatchObject({ ruleId: p1, scope: "project" });
+    await q(`delete from skills`);
+    await enable({ sessionId: S_LOOSE });
+    const back = await refusal(enable({ projectId: P2 }));
+    expect(back?.code).toBe(WORKER_SCOPE_OVERLAP);
+    expect(back?.holder).toMatchObject({
+      scope: "session",
+      sessionId: S_LOOSE,
+      projectId: null,
+    });
+  });
+
+  it("the activator pass recompiles a session enablement from its key alone: unchanged", async () => {
+    const res = (await enableWorker({
+      userId: USER,
+      playbookId: PB,
+      activatorKey: KEY,
+      sessionId: S_MINE,
+    })) as { ruleId: string };
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    vi.mocked(updateRuleGoverned).mockClear();
+    const pass = await real.applyPlaybookActivators({
+      playbookId: PB,
+      userId: USER,
+    });
+    // Negative control: a key that lost the session recompiles WITHOUT the
+    // parent, so the hash moves and the rule is rewritten ("updated").
+    expect(pass.outcomes).toContainEqual(
+      expect.objectContaining({ ruleId: res.ruleId, status: "unchanged" })
+    );
+    expect(updateRuleGoverned).not.toHaveBeenCalledWith(
+      expect.objectContaining({ ruleId: res.ruleId })
+    );
+  });
+});
+
+/**
+ * A playbook still carrying the retired `schedule` column: the boot pass folds
+ * it into a `schedule` activator compiled through the rule door; only once
+ * that rule settled does it pause and unlink the cron automation that drove
+ * it and clear the column.
+ */
+describe("convergeActivatorsAtBoot — a retired schedule becomes an activator", () => {
+  async function scheduled(o: {
+    schedule: unknown;
+    subjectProfile?: unknown;
+    driver: "active" | "paused";
+    status?: string;
+  }) {
+    const id = randomUUID();
+    const automationId = randomUUID();
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile, schedule)
+       values ($1, $2, $3, $4, $5, 'g', $6::jsonb, $7::jsonb)`,
+      [
+        id,
+        `Scheduled ${id.slice(0, 4)}`,
+        o.status ?? "active",
+        WS,
+        USER,
+        JSON.stringify(o.subjectProfile ?? null),
+        JSON.stringify(o.schedule),
+      ]
+    );
+    await q(
+      `insert into automations (id, created_by, name, trigger_type, trigger_config, status, next_run_at)
+       values ($1, $2, 'backing', 'cron', '{"expression":"*/15 * * * *"}'::jsonb, $3, now())`,
+      [automationId, USER, o.driver]
+    );
+    await q(
+      `insert into playbook_automations (id, playbook_id, automation_id, role)
+       values (gen_random_uuid(), $1, $2, 'schedule')`,
+      [id, automationId]
+    );
+    return { id, automationId };
+  }
+  const row = async (id: string) =>
+    (
+      await q<{ schedule: unknown; subject_profile: Record<string, unknown> }>(
+        `select schedule, subject_profile from playbooks where id = $1`,
+        [id]
+      )
+    ).rows[0]!;
+  const driver = async (playbookId: string, automationId: string) => ({
+    status: (
+      await q<{ status: string }>(
+        `select status from automations where id = $1`,
+        [automationId]
+      )
+    ).rows[0]!.status,
+    linked: (
+      await q<{ n: number }>(
+        `select count(*)::int as n from playbook_automations where playbook_id = $1 and role = 'schedule'`,
+        [playbookId]
+      )
+    ).rows[0]!.n,
+  });
+  type CreateCall = {
+    seed?: { template: string; key: string };
+    draft?: boolean;
+    sentence?: { trigger?: { cronTimezone?: string } };
+  };
+  const createsFor = (pbId: string) =>
+    vi
+      .mocked(createRuleGoverned)
+      .mock.calls.map(([c]) => c as CreateCall)
+      .filter((c) => c.seed?.template === `playbook-activator:${pbId}`);
+  const ruleOf = async (pbId: string) =>
+    (
+      await q<{ id: string; draft: boolean | null }>(
+        `select id, (metadata->'rule'->>'draft')::boolean as draft from skills where metadata->'rule'->'seed'->>'template' = $1`,
+        [`playbook-activator:${pbId}`]
+      )
+    ).rows;
+  const pass = async (pbId: string) => {
+    const real = await vi.importActual<
+      typeof import("../playbook-activators.js")
+    >("../playbook-activators.js");
+    return real.applyPlaybookActivators({ playbookId: pbId, userId: USER });
+  };
+
+  it("a subject-less daily run keeps its UTC: one live rule, the old automation stopped, a second boot adds nothing", async () => {
+    await q(`update users set timezone = 'Asia/Kolkata' where id = $1`, [USER]);
+    vi.mocked(createRuleGoverned).mockClear();
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      expect((await convergeActivatorsAtBoot()).failed).toBe(0);
+      const after = await row(pb.id);
+      expect(after.schedule).toBeNull();
+      expect(after.subject_profile.activators).toEqual([
+        { on: "schedule", cron: "0 8 * * *", timezone: "UTC", mode: "run" },
+      ]);
+      // No second live automation: the one that drove it is paused, unlinked.
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "paused",
+        linked: 0,
+      });
+      const mine = createsFor(pb.id);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.seed!.key).toBe("schedule:0 8 * * *");
+      expect(mine[0]!.draft).toBeUndefined();
+      expect(mine[0]!.sentence?.trigger?.cronTimezone).toBe("UTC");
+
+      await convergeActivatorsAtBoot();
+      expect(createsFor(pb.id)).toHaveLength(1);
+    } finally {
+      await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a declared schedule naming no zone compiles in its owner's zone", async () => {
+    await q(`update users set timezone = 'Asia/Kolkata' where id = $1`, [USER]);
+    vi.mocked(createRuleGoverned).mockClear();
+    const id = randomUUID();
+    await q(
+      `insert into playbooks (id, name, status, workspace_id, created_by, goal_template, subject_profile)
+       values ($1, 'Daily', 'active', $2, $3, 'g', $4::jsonb)`,
+      [
+        id,
+        WS,
+        USER,
+        JSON.stringify({
+          activators: [{ on: "schedule", cron: "0 8 * * *", mode: "run" }],
+        }),
+      ]
+    );
+    try {
+      await pass(id);
+      expect(createsFor(id)[0]!.sentence?.trigger?.cronTimezone).toBe(
+        "Asia/Kolkata"
+      );
+    } finally {
+      await q(`update users set timezone = 'UTC' where id = $1`, [USER]);
+      await q(`delete from playbooks where id = $1`, [id]);
+    }
+  });
+
+  it("a per-thing schedule runs per thing, its filter kept; a paused automation installs the rule paused", async () => {
+    vi.mocked(createRuleGoverned).mockClear();
+    const filter = '{"properties.billing":"monthly"}';
+    const pb = await scheduled({
+      schedule: { cron: "0 8 1 * *", enabled: true },
+      subjectProfile: { profileSlug: "deal", filter },
+      driver: "paused",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      const after = (await row(pb.id)).subject_profile;
+      expect(after.filter).toBe(filter);
+      expect(after.activators).toEqual([
+        {
+          on: "schedule",
+          cron: "0 8 1 * *",
+          timezone: "UTC",
+          mode: "run",
+          size: "per_thing",
+          startsPaused: true,
+        },
+      ]);
+      const mine = createsFor(pb.id);
+      expect(mine).toHaveLength(1);
+      expect(mine[0]!.draft).toBe(true);
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a rule the door refuses leaves the old automation firing and the column set: the next pass tries again", async () => {
+    vi.mocked(createRuleGoverned).mockClear();
+    vi.mocked(createRuleGoverned).mockResolvedValueOnce({
+      status: "denied",
+      reason: "refused for the test",
+    } as never);
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toEqual({
+        cron: "0 8 * * *",
+        enabled: true,
+      });
+      expect((await row(pb.id)).subject_profile).toBeNull();
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "active",
+        linked: 1,
+      });
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toBeNull();
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "paused",
+        linked: 0,
+      });
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("the person's pause outlives every later pass; schedule enabled switches the rule on and off", async () => {
+    const pb = await scheduled({
+      schedule: { cron: "0 8 * * *", enabled: true },
+      driver: "active",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      const [rule] = await ruleOf(pb.id);
+      // The person pauses the rule (a draft this module did not retire).
+      await updateRuleGoverned({ ruleId: rule!.id, draft: true } as never);
+      vi.mocked(updateRuleGoverned).mockClear();
+      await q(`update playbooks set name = 'Renamed' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await ruleOf(pb.id))[0]!.draft).toBe(true);
+      expect(updateRuleGoverned).not.toHaveBeenCalled();
+
+      // The schedule toggle (`enabled: true`) turns it back on.
+      await q(`update playbooks set schedule = $2::jsonb where id = $1`, [
+        pb.id,
+        JSON.stringify({ cron: "0 8 * * *", enabled: true }),
+      ]);
+      await pass(pb.id);
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: rule!.id, draft: false })
+      );
+      expect((await ruleOf(pb.id))[0]!.draft).toBeNull();
+      expect((await row(pb.id)).schedule).toBeNull();
+
+      // …and `enabled: false` pauses it again.
+      vi.mocked(updateRuleGoverned).mockClear();
+      await q(`update playbooks set schedule = $2::jsonb where id = $1`, [
+        pb.id,
+        JSON.stringify({ cron: "0 8 * * *", enabled: false }),
+      ]);
+      await pass(pb.id);
+      expect(updateRuleGoverned).toHaveBeenCalledWith(
+        expect.objectContaining({ ruleId: rule!.id, draft: true })
+      );
+      expect((await ruleOf(pb.id))[0]!.draft).toBe(true);
+    } finally {
+      await q(`delete from playbooks where id = $1`, [pb.id]);
+    }
+  });
+
+  it("a cron no activator can say keeps its automation: paused while the playbook is not live, resumed when it is", async () => {
+    const pb = await scheduled({
+      schedule: { cron: "*/15 * * * *", enabled: true },
+      driver: "active",
+    });
+    const person = await scheduled({
+      schedule: { cron: "*/15 * * * *", enabled: true },
+      driver: "paused",
+    });
+    try {
+      await convergeActivatorsAtBoot();
+      expect((await row(pb.id)).schedule).toEqual({
+        cron: "*/15 * * * *",
+        enabled: true,
+      });
+      expect(await driver(pb.id, pb.automationId)).toEqual({
+        status: "active",
+        linked: 1,
+      });
+
+      await q(`update playbooks set status = 'paused' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await driver(pb.id, pb.automationId)).status).toBe("paused");
+
+      await q(`update playbooks set status = 'active' where id = $1`, [pb.id]);
+      await pass(pb.id);
+      expect((await driver(pb.id, pb.automationId)).status).toBe("active");
+
+      // One a person paused is never resumed by the pass.
+      await pass(person.id);
+      expect((await driver(person.id, person.automationId)).status).toBe(
+        "paused"
+      );
+    } finally {
+      await q(`delete from playbooks where id = any($1::uuid[])`, [
+        [pb.id, person.id],
       ]);
     }
   });

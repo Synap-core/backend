@@ -126,7 +126,7 @@ function makeDb(seed: Seed): any {
               workspaceId: p.workspaceId ?? null,
             })),
       },
-      profileWorkspaceAccess: {
+      spaceAccess: {
         findMany: async () => seed.grants ?? [],
       },
       channels: {
@@ -319,9 +319,9 @@ describe("resolveWorkspacePlacement — rung 2 (ontology)", () => {
     expect(r.rung).toBe(2);
   });
 
-  // NOTE: rung-2 shared-scope (profile_workspace_access), rung-3 channel, and
+  // NOTE: rung-2 shared-scope (space_access), rung-3 channel, and
   // rung-3 focus-session cases can't be unit-tested in this isolated harness —
-  // the `profileWorkspaceAccess`, `channels`, and `focusSessions` schema-barrel
+  // the `spaceAccess`, `channels`, and `focusSessions` schema-barrel
   // bindings resolve to `undefined` under vitest's ESM source transform (a
   // pre-existing circular-import artifact in @synap/database's schema barrel;
   // the tables are fully defined in the built dist + production). Those rungs

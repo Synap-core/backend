@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import localFont from "next/font/local";
 // The ochre token SSOT (mirrored; see lib/ochre-theme.ts), before the app CSS.
 import "./synap-tokens.css";
@@ -77,7 +78,7 @@ function runtimeConfigScript(): string {
   return `window.__SYNAP_POD_ADMIN_RUNTIME__=${JSON.stringify({ podUrl }).replace(/</g, "\\u003c")};`;
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
@@ -85,6 +86,9 @@ export default function RootLayout({
   // `lang` is English on the server: this layout cannot read the person's
   // session. `ConsoleLocaleProvider` sets it from `users.me.locale` on the
   // client, with the catalog language (rule i18n §4).
+  // The proxy sets the identity on every page it gates (and overwrites any
+  // client-sent value there); it keys the query cache this browser keeps.
+  const identityId = (await headers()).get("x-pod-admin-id");
   return (
     <html
       lang="en"
@@ -97,7 +101,7 @@ export default function RootLayout({
       >
         <script dangerouslySetInnerHTML={{ __html: runtimeConfigScript() }} />
         <script dangerouslySetInnerHTML={{ __html: navCollapsedScript() }} />
-        <Providers>{children}</Providers>
+        <Providers identityId={identityId}>{children}</Providers>
       </body>
     </html>
   );

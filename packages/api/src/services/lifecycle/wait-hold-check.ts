@@ -2,10 +2,11 @@
  * THE trigger for holds that wait on the person (plan 07f8a997 "Agents wait
  * on anything", W1 part C): `until.moves` = `answer:<session>/<slot>` or
  * `proposal:<id>`. Sent by the answer door (`answerExpectedOutput`) once an
- * answer is recorded, and by the review door (`emitProposalReviewed`) once a
- * proposal is decided; the hold-resume job (`@synap/jobs`) re-checks the wait
+ * answer is recorded; the hold-resume job (`@synap/jobs`) re-checks the wait
  * holds that name it and resumes the met ones, so a sleeping agent's session
- * comes back now rather than at the hourly sweep.
+ * comes back now rather than at the hourly sweep. A proposal's decision needs
+ * no send: hold-resume's reactor checks its waits on the proposal's
+ * transition.
  *
  * Best-effort, like the dev-fact trigger (`record-observation.ts`): a failed
  * send is logged and the hourly sweep finds the hold anyway. Never throws.

@@ -39,6 +39,11 @@ vi.mock("@synap/database", async (importOriginal) => {
   return {
     ...actual,
     db: {
+      // The proposal door's one statement (`WITH … UPDATE`).
+      $with: () => ({ as: () => ({}) }),
+      with() {
+        return this;
+      },
       select: () => ({
         from: () => ({
           where: () => ({ limit: async () => (h.row ? [h.row] : []) }),
@@ -191,9 +196,11 @@ describe("the apply is a compare-and-set, then the auto path's materializer", ()
     const { set, where } = h.updates[0]!;
     expect(set).toMatchObject({
       status: "auto_approved",
-      reviewedBy: OWNER,
+      // The agent's rule applied it: no person reviewed it.
+      reviewedBy: null,
       governanceReason: null,
     });
+    expect(set.reviewedAt).toBeInstanceOf(Date);
     const { sql, params } = sqlOf(where);
     expect(sql).toContain('"status" = $');
     expect(params).toContain("pending");

@@ -38,8 +38,11 @@ export interface FacetAttachContext {
   entityTitle?: string | null;
   contextEntityTitle?: string | null;
   /**
-   * Where the fan-out lands when the facet itself is pod-wide (the matcher
-   * needs a workspace): the caller's governance lens.
+   * The caller's governance lens: the workspace the fan-out names when the
+   * facet itself is pod-wide (webhooks and the parent refresh land there). The
+   * automation matcher is told the facet is pod-wide (`podWideSubject`) and
+   * matches beyond this lens too, so a shared role attached from one space
+   * reaches the rules of every space the actor can reach.
    */
   fallbackWorkspaceId?: string | null;
   /**

@@ -1,5 +1,12 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, tools, transitionProposal } from "@synap/database";
+import {
+  db,
+  proposals,
+  eq,
+  ownerOfProposal,
+  tools,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { createLogger } from "@synap-core/core";
 import { emitSideEffects } from "@synap/events";
@@ -57,13 +64,13 @@ export function registerToolExecutors(): void {
         proposal.workspaceId ??
         null;
 
+      const owner = await ownerOfProposal(db, proposal, userId);
       const [tool] = await db
         .insert(tools)
         .values({
           workspaceId: wsLens,
-          // Preserve the AUTHOR (mirrors automation/create): the agent wrote the
-          // change, the human only approved it.
-          createdBy: proposal.agentUserId ?? userId,
+          createdBy: owner.ownerId,
+          agentUserId: owner.agentUserId,
           name,
           kind: kind as (typeof tools.$inferInsert)["kind"],
           description: (innerData.description as string | null) ?? undefined,
@@ -144,8 +151,7 @@ export function registerToolExecutors(): void {
   // approver; the only gate is `assertWorkspaceWrite` on the loaded row
   // (`{ workspaceId, ownerId: createdBy }`), which is an explicit AUTHORIZATION
   // floor. Replaying as the row's owner would step past it, so the approver
-  // must clear it themselves. A pod-wide tool created BY an agent
-  // (`tool/create` stamps `createdBy: proposal.agentUserId ?? userId`) is
+  // must clear it themselves. A pod-wide tool owned by another person is
   // therefore not deletable by a different human here — a loud FORBIDDEN that
   // exactly matches what the direct path does, never a silent no-op.
   registerProposalExecutor({

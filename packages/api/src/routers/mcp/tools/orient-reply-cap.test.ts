@@ -50,7 +50,18 @@ beforeEach(() => {
 });
 
 describe("orient's yourTools and the reply cap", () => {
-  it("a briefing the cap cut stays the envelope, within the cap", async () => {
+  it("a briefing cut to a head stays the envelope, within the cap", async () => {
+    const capped = capReply("synap_orient", {
+      content: [{ type: "text", text: "not json ".repeat(5_000) }],
+    });
+    h.reply = (capped.content[0] as { text: string }).text;
+    const text = await orient({});
+    expect(text).toBe(h.reply);
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(Object.keys(JSON.parse(text))).toEqual(["truncated", "head"]);
+  });
+
+  it("a briefing the cap fitted never goes over the cap with yourTools", async () => {
     const capped = capReply("synap_orient", {
       content: [
         {
@@ -60,10 +71,15 @@ describe("orient's yourTools and the reply cap", () => {
       ],
     });
     h.reply = (capped.content[0] as { text: string }).text;
+    // Fitted to the brim: no room is left for the block.
+    h.reply = JSON.stringify({
+      ...JSON.parse(h.reply),
+      pad: "p".repeat(16_000 - h.reply.length - 20),
+    });
+    expect(h.reply.length).toBeLessThanOrEqual(16_000);
     const text = await orient({});
-    expect(text).toBe(h.reply);
     expect(text.length).toBeLessThanOrEqual(16_000);
-    expect(Object.keys(JSON.parse(text))).toEqual(["truncated", "head"]);
+    expect(JSON.parse(text)).toHaveProperty("fit");
   });
 
   it("a briefing within the cap still gets yourTools after startHere", async () => {

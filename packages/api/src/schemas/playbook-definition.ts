@@ -27,15 +27,26 @@
 
 import { z } from "zod";
 import { AskSchema } from "@synap-core/types/ask";
-import { validateGuidanceList } from "@synap-core/types/guidance";
+import {
+  podLocalGuidanceProblem,
+  validateGuidanceList,
+} from "@synap-core/types/guidance";
 import {
   findDroppedParamEntries,
+  isRunToolName,
   MAX_REQUIRED_INTENTS,
+  OUTPUT_LANDING_EXAMPLES_MAX,
+  PLAYBOOK_TOOL_MAX_CHARS,
+  PLAYBOOK_TOOLS_MAX,
+  readToolsList,
+  stageToolsOutsidePlaybook,
 } from "@synap/playbooks";
 import {
   CAPABILITY_INTENTS,
+  isKnownIntent,
   unknownIntents,
 } from "@synap-core/types/capability-intents";
+import { looksLikeNeedRef, needRefProblem } from "@synap-core/types/needs";
 import {
   playbookStagesSchema,
   relationTypeSlugSchema,
@@ -46,12 +57,19 @@ import {
   playbookSubjectProfileSchema,
 } from "./playbook-process.js";
 import { sessionCriteriaSchema } from "./session-criteria.js";
+import {
+  playbookRunnerSchema,
+  requiresSchema,
+  runnerNamesAgentId,
+} from "./playbook-runner.js";
 import { playbookScheduleInputSchema } from "./playbook-schedule.js";
+import { triggerWords } from "../services/routing/suggest-routes.js";
 
 export const playbookExecutorSchema = z.enum([
   "is-agent",
   "external-agent",
   "hybrid",
+  "generate",
 ]);
 export const playbookStatusSchema = z.enum([
   "draft",
@@ -72,6 +90,45 @@ export const playbookScopeSchema = z.enum(["session", "project"]);
 // own schemas.
 const jsonRecord = z.record(z.string(), z.unknown());
 
+/** `ExpectedOutput.lands` (@synap/playbooks `OutputLanding`). */
+export const outputLandingSchema = z.strictObject({
+  target: z.literal("subject_document_section"),
+  section: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^[^\r\n]+$/, "a section title is one line"),
+  /**
+   * Whose section (`OutputLanding.owner`): `ai` (default) = an AI-owned
+   * section offered as a draft; `person` = the document's plain
+   * `## <section>` block, replaced on approval (the one write).
+   */
+  owner: z.enum(["ai", "person"]).optional(),
+  /**
+   * Past outcomes read as examples (`OutputLanding.examples`): how many of
+   * the person's last approved and rejected drafts of this playbook in this
+   * space. Off when absent; each count capped so the examples never crowd out
+   * the subject in the one call's input bound.
+   */
+  examples: z
+    .strictObject({
+      approved: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+      rejected: z
+        .number()
+        .int()
+        .min(0)
+        .max(OUTPUT_LANDING_EXAMPLES_MAX)
+        .optional(),
+    })
+    .optional(),
+});
+
 /**
  * One declared slot of a playbook. Stored loosely like its siblings, EXCEPT
  * `ask`: a template's slots are instantiated straight into sessions, so an
@@ -90,14 +147,49 @@ export const playbookExpectedOutputSchema = z.looseObject({
   relationToSubject: relationTypeSlugSchema.optional(),
   /** See `ExpectedOutput.optional` — produced if it applies, never owed. */
   optional: z.boolean().optional(),
+  /**
+   * Where a one-shot (`executor: "generate"`) playbook's result lands — see
+   * `ExpectedOutput.lands`. Strict: an unknown target or key is refused here,
+   * never stored and ignored by the run.
+   */
+  lands: outputLandingSchema.optional(),
 });
 
+/** Most trigger phrases one playbook declares. */
+const PLAYBOOK_TRIGGERS_MAX = 20;
+/** Longest trigger phrase, in characters. */
+const PLAYBOOK_TRIGGER_MAX_CHARS = 120;
+
 /**
- * `metadata` — the owner's free-form bag, with ONE conventional key typed:
+ * `metadata.triggers` — phrases the playbook is FOR. The suggestion ranker
+ * (`rankRouteCandidates`) admits the playbook when a request holds every word
+ * of one, and scores those words like name words (plan a640c5bb). A phrase
+ * with no word the ranker reads (stop words only) could never match, so it is
+ * refused here rather than stored and silently ignored.
+ */
+export const playbookTriggersSchema = z
+  .array(z.string().trim().min(1).max(PLAYBOOK_TRIGGER_MAX_CHARS))
+  .max(PLAYBOOK_TRIGGERS_MAX)
+  .superRefine((phrases, ctx) => {
+    phrases.forEach((phrase, index) => {
+      if (triggerWords(phrase).length === 0) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index],
+          message: `triggers[${index}] ("${phrase}") holds no word a request can match: name the work ("workspace hygiene"), not only common words`,
+        });
+      }
+    });
+  });
+
+/**
+ * `metadata` — the owner's free-form bag, with two conventional keys typed:
  * `lineage` (where the process comes from — an APQC PCF id, a named method,
- * O*NET task ids). Convention only: nothing branches on it.
+ * O*NET task ids; convention only, nothing branches on it) and `triggers`
+ * (the phrases that offer it, read by the suggestion ranker).
  */
 export const playbookMetadataSchema = z.looseObject({
+  triggers: playbookTriggersSchema.optional(),
   lineage: z
     .looseObject({
       apqc: z.string().max(200).optional(),
@@ -136,29 +228,51 @@ export const playbookParamsInputSchema = z
   });
 
 /**
- * The ABSTRACT intents a playbook needs the pod to be able to do — the process
- * half of the intent spine (a workspace template's `taskIntents` is what the
- * SPACE needs; a capability template's `provides` is what the PACK serves).
+ * The ONE list of what a run of a playbook may use beyond its class floor
+ * (plan 08e4fba7, decisions 3 and 4): run tools, intent slugs, capabilities,
+ * by name (`@synap/playbooks` `run-tools.ts` says how each entry is read).
+ * "Only these". A stage's list must be a subset (`foldPlaybookTools`).
  *
- * Validated against the SAME closed vocabulary `taskIntents` uses, and by the
- * same `unknownIntents` helper — so a playbook requirement and a workspace
- * requirement cannot be spelled from two different lists. The vocabulary is the
- * pod's `capability_intents` TABLE (migrations 0283/0284), mirrored into
- * `@synap-core/types/capability-intents` with a parity guard that re-derives
- * the seed SQL; this file deliberately holds no list of its own.
+ * An entry nothing on this pod serves is a FACT, never a rejection: a
+ * playbook may declare a capability a later install provides (the run is told
+ * what is missing). A duplicate is refused: the reader would drop it, so
+ * "saved" would misreport the stored list.
  *
- * ⚠️ WHAT IS REFUSED HERE IS MEMBERSHIP, NOT SATISFIABILITY. This door never
- * asks whether the pod can currently serve an intent — that is a resolver
- * question, answered by `capability-intent-index` and reported by
- * `matchRequiredIntents`. A playbook MUST be able to declare a requirement
- * nothing installed serves today: that gap is what drives a later install, and
- * gating on it would forbid the specification itself (the `taskIntents`
- * precedent — Content Studio declares 4 intents its one pack covers 1 of, and a
- * subset rule went red on it for exactly that reason).
- *
- * A duplicate is refused too, for the same reason `params` refuses one: the
- * reader would silently drop the second, so telling the author "saved" is a lie
- * about the stored declaration.
+ * A NEED ref (`need:code-host`, `need:gate/fetch_record`, 0426) names a seat
+ * the space fills once; an unfilled need is a fact too (the run is told), but
+ * a ref to a need the vocabulary does not have is a typo and is refused.
+ */
+export const playbookToolsSchema = z
+  .array(z.string().trim().min(1).max(PLAYBOOK_TOOL_MAX_CHARS))
+  .max(PLAYBOOK_TOOLS_MAX, {
+    message: `a playbook lists at most ${PLAYBOOK_TOOLS_MAX} tools`,
+  })
+  .superRefine((tools, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, tool] of tools.entries()) {
+      if (seen.has(tool)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index],
+          message: `tools repeats "${tool}": it is a set, not a list`,
+        });
+      }
+      if (looksLikeNeedRef(tool)) {
+        const problem = needRefProblem(tool);
+        if (problem) {
+          ctx.addIssue({ code: "custom", path: [index], message: problem });
+        }
+      }
+      seen.add(tool);
+    }
+  });
+
+/**
+ * DEPRECATED INPUT, folded into `tools` at the write door and never stored
+ * (`foldPlaybookTools`): the intents a playbook needed (0291). Still accepted
+ * so a catalog package or a pending proposal written before 0419 installs
+ * whole; still held to the closed intent vocabulary. Remove once no catalog
+ * version still sends it (app-bases moved to `tools` in the same wave).
  */
 export const playbookRequiredIntentsSchema = z
   .array(z.string().min(1))
@@ -198,6 +312,42 @@ export const playbookRequiredIntentsSchema = z
  * the validator does not know (an `id`) is refused by it, not silently
  * stripped. The update door applies the same schema.
  */
+/**
+ * What a PACKAGE playbook may not carry: a
+ * pod-local reference, i.e. a guidance `entity:<id>` ref or a dedicated
+ * record (`subjectProfile.entityId`). An id names one record of one pod; on
+ * the installing pod it means nothing. The package doors
+ * (`packagePlaybookDefinitionSchema`, the browser `createFromDefinition`)
+ * refine their playbooks with this; the catalog validator refuses the same
+ * two.
+ */
+export function refusePodLocalPlaybookRefs(
+  pb: { guidance?: unknown; subjectProfile?: unknown },
+  ctx: z.RefinementCtx
+): void {
+  if (Array.isArray(pb.guidance)) {
+    pb.guidance.forEach((item, i) => {
+      const problem = podLocalGuidanceProblem(item);
+      if (problem) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["guidance", i],
+          message: problem,
+        });
+      }
+    });
+  }
+  const sp = pb.subjectProfile as { entityId?: unknown } | null | undefined;
+  if (sp && typeof sp === "object" && sp.entityId !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["subjectProfile", "entityId"],
+      message:
+        "subjectProfile.entityId names one record of one pod, so it cannot travel in a package: dedicate the playbook to a record after it is installed",
+    });
+  }
+}
+
 export const playbookGuidanceSchema = z
   .array(
     z.looseObject({
@@ -233,7 +383,9 @@ export const playbookDefinitionSchema = z.object({
   stages: playbookStagesSchema.optional(),
   /** Binary acceptance criteria every instantiated session is graded against. */
   criteria: sessionCriteriaSchema.optional(),
-  /** See `playbookRequiredIntentsSchema` — what this process needs the pod to do. */
+  /** See `playbookToolsSchema`: what a run of it may use, "only these". */
+  tools: playbookToolsSchema.optional(),
+  /** DEPRECATED input, folded into `tools` (`foldPlaybookTools`). */
   requiredIntents: playbookRequiredIntentsSchema.optional(),
   /** See `playbookGuidanceSchema` — the rules this process follows, by ref. */
   guidance: playbookGuidanceSchema.optional(),
@@ -263,6 +415,15 @@ export const playbookDefinitionSchema = z.object({
   executor: playbookExecutorSchema.optional(),
   status: playbookStatusSchema.optional(),
   scope: playbookScopeSchema.optional(),
+  /**
+   * WHO runs this playbook by default — see `PlaybookRunner`
+   * (`schemas/playbook-runner.ts`). A choice made at Run beats it; it beats
+   * the person's remembered choice (founder via lead, 9 Nov 2026). `null`
+   * clears it. Absent ⇒ nobody named, as before.
+   */
+  runner: playbookRunnerSchema.nullable().optional(),
+  /** The tools every step of it needs, by capability key — see `PlaybookStage.requires`. */
+  requires: requiresSchema.optional(),
 });
 
 /** A parsed playbook definition (output side — defaults applied by the door). */
@@ -278,12 +439,156 @@ export type PlaybookDefinition = z.infer<typeof playbookDefinitionSchema>;
  * Also what the boot reconcile parses a template element through, so the
  * reconcile's `desired` is normalized exactly as the install's baseline was.
  */
-export const packagePlaybookDefinitionSchema = playbookDefinitionSchema.extend({
-  grants: z.array(z.string()).optional(),
-  status: playbookStatusSchema.default("active"),
-  executor: playbookExecutorSchema.default("is-agent"),
-});
+const PACKAGE_AGENT_ID_MESSAGE =
+  "A package cannot name one agent by id (it names an agent on one pod): use { role } or { engine } instead.";
+
+export const packagePlaybookDefinitionSchema = playbookDefinitionSchema
+  .extend({
+    grants: z.array(z.string()).optional(),
+    status: playbookStatusSchema.default("active"),
+    executor: playbookExecutorSchema.default("is-agent"),
+  })
+  .superRefine((def, ctx) => {
+    // A package travels to other pods: an agent id or a playbook id names
+    // something on THIS pod only. A role or an engine is portable; a step
+    // that is a playbook is not carried by a package yet. Nor is a guidance
+    // `entity:<id>` ref or a dedicated record.
+    refusePodLocalPlaybookRefs(def, ctx);
+    if (runnerNamesAgentId(def.runner)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["runner"],
+        message: PACKAGE_AGENT_ID_MESSAGE,
+      });
+    }
+    (def.stages ?? []).forEach((stage, index) => {
+      if (runnerNamesAgentId(stage.runner)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["stages", index, "runner"],
+          message: PACKAGE_AGENT_ID_MESSAGE,
+        });
+      }
+      if (stage.uses !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["stages", index, "uses"],
+          message:
+            "A package cannot carry a step that is a playbook yet: `uses` names a playbook on this pod. Create the playbook on the pod instead.",
+        });
+      }
+    });
+  });
 
 export type PackagePlaybookDefinition = z.infer<
   typeof packagePlaybookDefinitionSchema
 >;
+
+/** A stage whose `tools` name an entry its playbook's `tools` does not list. */
+export interface StageToolsOutside {
+  stageKey: string;
+  outside: string[];
+}
+
+/**
+ * THE ONE FOLD of a playbook's tool declarations, at every write door
+ * (`playbooks.create` / `.update`, which the package, MCP, Hub and approval
+ * doors all go through). Mutates nothing; returns the stored shape:
+ *   - `tools` = the declared `tools`, then the deprecated `requiredIntents`,
+ *     then a package's `grants` names, then every stage's deprecated `grants`
+ *     ids, each once; `undefined` when the input declares none of them (an
+ *     update that leaves the list alone);
+ *   - `stages` with each stage's deprecated `grants` folded into its `tools`
+ *     and the key removed;
+ *   - `outside`: each stage whose `tools` name an entry the playbook's list
+ *     (`tools`, or `currentTools` when the input does not set it) does not
+ *     list. The caller refuses the write when it is not empty.
+ */
+export function foldPlaybookTools(
+  input: {
+    tools?: readonly string[] | undefined;
+    requiredIntents?: readonly string[] | undefined;
+    grants?: readonly string[] | undefined;
+    stages?: ReadonlyArray<Record<string, unknown>> | undefined;
+  },
+  currentTools?: readonly string[] | null
+): {
+  tools: string[] | undefined;
+  stages: Array<Record<string, unknown>> | undefined;
+  outside: StageToolsOutside[];
+} {
+  const stageGrantIds = (stage: Record<string, unknown>): string[] =>
+    Array.isArray(stage.grants)
+      ? stage.grants.flatMap((g) =>
+          g &&
+          typeof g === "object" &&
+          typeof (g as { id?: unknown }).id === "string"
+            ? [(g as { id: string }).id]
+            : []
+        )
+      : [];
+  const legacyStageIds = (input.stages ?? []).flatMap(stageGrantIds);
+  const declares =
+    input.tools !== undefined ||
+    input.requiredIntents !== undefined ||
+    (input.grants?.length ?? 0) > 0 ||
+    legacyStageIds.length > 0;
+  const tools = declares
+    ? readToolsList([
+        ...(input.tools ?? []),
+        ...(input.requiredIntents ?? []),
+        ...(input.grants ?? []),
+        ...legacyStageIds,
+      ])
+    : undefined;
+  const stages = input.stages?.map((stage) => {
+    if (!("grants" in stage)) return { ...stage };
+    const { grants: _grants, ...rest } = stage;
+    const folded = readToolsList([
+      ...(Array.isArray(rest.tools) ? rest.tools : []),
+      ...stageGrantIds(stage),
+    ]);
+    return folded.length > 0 ? { ...rest, tools: folded } : rest;
+  });
+  const playbookTools = tools ?? readToolsList(currentTools ?? []);
+  const outside: StageToolsOutside[] = [];
+  for (const stage of stages ?? []) {
+    const outsideOf = stageToolsOutsidePlaybook(
+      playbookTools,
+      readToolsList(stage.tools)
+    );
+    if (outsideOf.length > 0) {
+      outside.push({ stageKey: String(stage.key), outside: outsideOf });
+    }
+  }
+  return { tools, stages, outside };
+}
+
+/** The refusal sentence for {@link foldPlaybookTools}' `outside`. */
+export function describeStageToolsOutside(
+  outside: readonly StageToolsOutside[]
+): string {
+  return (
+    outside
+      .map(
+        (o) =>
+          `Stage "${o.stageKey}" lists ${o.outside.map((t) => `"${t}"`).join(", ")}, which the playbook's tools do not list.`
+      )
+      .join(" ") +
+    " A stage narrows its playbook's tools, never widens them: add them to the playbook's `tools` or remove them from the stage. Nothing was saved."
+  );
+}
+
+/**
+ * The entries of a `tools` list that name a capability (neither a run tool
+ * nor an intent slug). A package install derives the playbook's governance
+ * `grants` links from them (a follow's grant widening reads those links), so
+ * a catalog playbook declares its capabilities ONCE, in `tools`.
+ */
+export function capabilityEntriesOf(
+  tools: readonly string[] | undefined
+): string[] {
+  return readToolsList(tools ?? []).filter(
+    (t) => !isRunToolName(t) && !isKnownIntent(t)
+  );
+}

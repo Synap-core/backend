@@ -12,6 +12,7 @@
  */
 
 import { Button, addToast, closeToast } from "@heroui/react";
+import Link from "next/link";
 import { trpc } from "../../../lib/trpc";
 import { receiptT } from "./copy";
 import {
@@ -23,13 +24,28 @@ import {
   type Receipt,
 } from "./decision-receipt";
 
-/** Show a receipt that offers no Undo. */
+/** Show a receipt that offers no Undo; its one door (`action`), when it has one. */
 export function showReceipt(receipt: Receipt): void {
   addToast({
     title: receipt.title,
     ...(receipt.description ? { description: receipt.description } : {}),
     color: receipt.tone,
     ...(receipt.tone === "danger" ? { timeout: 0 } : {}),
+    ...(receipt.action
+      ? {
+          endContent: (
+            <Button
+              as={Link}
+              href={receipt.action.href}
+              size="sm"
+              variant="flat"
+              radius="md"
+            >
+              {receipt.action.label}
+            </Button>
+          ),
+        }
+      : {}),
   });
 }
 

@@ -103,3 +103,14 @@ export const FOCUS_SESSION_QUESTION_WITHDRAW_ACTION =
   "question_withdrawn" as const;
 export const FOCUS_SESSION_QUESTION_WITHDRAWN_EVENT_TYPE =
   `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_QUESTION_WITHDRAW_ACTION}.completed` as const;
+
+/**
+ * The person said "Not mine" about a slot an agent handed them
+ * (`focusSessions.unblockOutput`, `notMineSessionSlot`): the slot is the
+ * agent's again, unanswered. Before this row the door wrote nothing, so the
+ * agent got back a bare slot with no record of why (finding 278a866a). It is
+ * history and a room line, never a wake: the agent reads it on its next turn.
+ */
+export const FOCUS_SESSION_SLOT_HAND_BACK_ACTION = "slot_handed_back" as const;
+export const FOCUS_SESSION_SLOT_HANDED_BACK_EVENT_TYPE =
+  `${FOCUS_SESSION_SUBJECT_TYPE}.${FOCUS_SESSION_SLOT_HAND_BACK_ACTION}.completed` as const;

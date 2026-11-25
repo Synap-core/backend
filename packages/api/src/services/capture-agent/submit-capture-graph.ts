@@ -46,6 +46,7 @@ import {
   getWorkspaceMembership,
   ProfileResolutionService,
   PropertyValidationService,
+  moveMisnamedLifecycle,
   resolveGraphWorkspaceFromSlugs,
   reservedEntityKindReason,
   type WorkspacePlacement,
@@ -59,6 +60,7 @@ import {
 import type { PendingWorkspaceSwitch } from "../../lib/workspace-decision.js";
 import { createLogger } from "@synap-core/core";
 import {
+  isDomainOperation,
   type HubWriteSource,
   type CompositeProposalOperation,
   type CompositeCreateAutomationOp,
@@ -68,15 +70,24 @@ import {
   type CompositeCreateRuleOp,
   type CompositeCreatePlaybookOp,
   type CompositeCreateViewOp,
+  type CompositeCreateCellOp,
+  type CompositeBindRendererOp,
+  type CompositeCreateWorkspaceOp,
+  type CompositeDefineKindOp,
+  type CompositeDeclareLifecycleOp,
   type CompositeUpdateOperation,
   type CompositeCreateSessionOp,
   type CompositeCreateSkillOp,
+  type CompositeCreateTrackOp,
+  type CompositeRemoveLinkOp,
+  type CompositeUpdateSessionOp,
   type PlanProjectEvidence,
 } from "@synap-core/types/proposals";
 import { buildPlanCallers } from "../../utils/plan-callers.js";
 import { preflightPlanOperations } from "./capture-plan-preflight.js";
 import { completeKnowledgeProposalProperties } from "../proposals/complete-knowledge-proposal.js";
 import {
+  CAPTURE_PLAN_KEYS,
   hasComposedSteps,
   planStepSummaries,
   type CapturePlanProblem,
@@ -111,11 +122,10 @@ import { openLink } from "../../utils/deep-links.js";
 import { entityWriteVisibleWhere } from "../../routers/entities/helpers.js";
 import { captureGraphMemberVerdict } from "./capture-graph-governance.js";
 import {
-  parkWriteOnWorkspaceJoin,
-  proposedMessageFor,
+  AGENT_PERSON_NOT_MEMBER,
+  gateAdmitsWorkspace,
   refuseAtAgentPendingCap,
 } from "../../utils/permission-check.js";
-import type { DeferredWrite } from "@synap-core/types/proposals/deferred-writes";
 import {
   fenceCaptureGraphOperations,
   grantMayLinkRecord,
@@ -167,7 +177,8 @@ export interface CaptureGraphInvalidEntity {
 export interface CaptureGraphUnmodeledEntity {
   label: string;
   profileSlug: string;
-  unmodeled: Array<{ key: string; didYouMean?: string }>;
+  /** `movedTo`: the kind's status field, where the pod stored the value. */
+  unmodeled: Array<{ key: string; didYouMean?: string; movedTo?: string }>;
 }
 
 /**
@@ -246,6 +257,15 @@ export interface CapturePlanInput {
   /** `evidence` is server-stamped; a caller-supplied one is ignored. */
   projects?: Array<Omit<CompositeCreateProjectOp, "op" | "evidence">>;
   links?: Array<Omit<CompositeCreateLinkOp, "op">>;
+  /** Goals (`create_track`), started before the sessions that join them. */
+  tracks?: Array<Omit<CompositeCreateTrackOp, "op">>;
+  /**
+   * RE-PLAN edits on existing steps (`update_session`, `remove_link`),
+   * carried WITH their discriminant. Both capture doors (`synap_capture`
+   * declares them; Hub REST); `synap_revise_proposal` takes them as
+   * operations.
+   */
+  edits?: Array<CompositeUpdateSessionOp | CompositeRemoveLinkOp>;
   /**
    * ── Rule Loop config steps (NS1) ─────────────────────────────────────
    * The FACT (an instruction `skills` row), the BEHAVIOUR (an `automations`
@@ -255,9 +275,9 @@ export interface CapturePlanInput {
    * because the materializer runs pass 0a (skills) to completion before pass
    * 0b (automations) and the automation door's catalog check is a live read.
    *
-   * `enabled` is accepted on an automation only so a producer can STATE its
-   * intent — it is forced false at materialization (approve-first), and the
-   * override is reported, never swallowed.
+   * `enabled` on an automation is the status asked for: a person's approval
+   * of the batch keeps it (absent = active); an agent's automation no person
+   * approved is born draft.
    */
   skills?: Array<Omit<CompositeCreateSkillOp, "op">>;
   automations?: Array<Omit<CompositeCreateAutomationOp, "op">>;
@@ -273,6 +293,20 @@ export interface CapturePlanInput {
    * `views.create`.
    */
   views?: Array<Omit<CompositeCreateViewOp, "op">>;
+  /**
+   * A playbook's UI: generated cells and the object pages they show on. A
+   * renderer's `target.ref` / `cellRef` name steps of this plan.
+   */
+  cells?: Array<Omit<CompositeCreateCellOp, "op">>;
+  renderers?: Array<Omit<CompositeBindRendererOp, "op">>;
+  /**
+   * A domain: its space, its kinds and their lifecycles. Every other step may
+   * live in the space (`workspaceRef`) and name the kinds (`subjectProfileRef`,
+   * `kindRef`); the person approves the whole domain once.
+   */
+  workspaces?: Array<Omit<CompositeCreateWorkspaceOp, "op">>;
+  kinds?: Array<Omit<CompositeDefineKindOp, "op">>;
+  lifecycles?: Array<Omit<CompositeDeclareLifecycleOp, "op">>;
   /**
    * Changes to rows an earlier bundle made (a Library rebuild): a Tool's
    * body, a Template's goal, a List's name, the group container's note.
@@ -297,21 +331,24 @@ export interface CapturePlanStepReceipt extends PlanStepSummary {
   loadWith?: string;
 }
 
+// The one list of step arrays (`capture-plan.ts`) names exactly this input's
+// keys, in both directions.
+const _planKeysAreInputKeys: ReadonlyArray<keyof CapturePlanInput> =
+  CAPTURE_PLAN_KEYS;
+void _planKeysAreInputKeys;
+type _EveryPlanKeyListed =
+  Exclude<
+    keyof CapturePlanInput,
+    (typeof CAPTURE_PLAN_KEYS)[number]
+  > extends never
+    ? true
+    : never;
+const _everyPlanKeyListed: _EveryPlanKeyListed = true;
+void _everyPlanKeyListed;
+
 /** True when a plan input carries any step. */
 export function hasPlanSteps(plan: CapturePlanInput | undefined): boolean {
-  return (
-    (plan?.sessions?.length ?? 0) +
-      (plan?.documents?.length ?? 0) +
-      (plan?.projects?.length ?? 0) +
-      (plan?.links?.length ?? 0) +
-      (plan?.skills?.length ?? 0) +
-      (plan?.automations?.length ?? 0) +
-      (plan?.rules?.length ?? 0) +
-      (plan?.playbooks?.length ?? 0) +
-      (plan?.views?.length ?? 0) +
-      (plan?.updates?.length ?? 0) >
-    0
-  );
+  return CAPTURE_PLAN_KEYS.some((key) => (plan?.[key]?.length ?? 0) > 0);
 }
 
 /**
@@ -457,6 +494,13 @@ export interface SubmitCaptureGraphInput {
    */
   plan?: CapturePlanInput;
   summary?: string;
+  /**
+   * A proposal the POD files (a loop: the pathway re-plan), never a person's
+   * own act nor an agent's: `author` is the row's `createdBy`, and `data`
+   * carries the loop's own facts (what its budget and one-pending rule
+   * count). Always the pending path: refused with an agent key.
+   */
+  filedByPod?: { author: `system:${string}`; data: Record<string, unknown> };
 }
 
 /**
@@ -578,20 +622,6 @@ export interface SubmitCaptureGraphResult {
    * can have failed. Omitted when nothing failed.
    */
   relationsFailed?: MaterializeRelationFailure[];
-  /**
-   * The agent is not a member of a space this graph lands in, so NOTHING was
-   * written: the whole graph is kept on that space's workspace-JOIN request
-   * (`proposalId` names the join) and replayed, all of it, as the agent once a
-   * person approves the join (finding 590ca76a). `deferred: false` when the
-   * join could not keep it (the agent retries after approval). Omitted
-   * otherwise.
-   */
-  joinGate?: {
-    proposalId: string;
-    deferred: boolean;
-    ref?: string;
-    message: string;
-  };
   writeReceipt: {
     /**
      * `partial` is the Hub Protocol receipt word for exactly this shape (see
@@ -700,11 +730,24 @@ export async function buildCaptureGraphOperations(
         evidence?: unknown;
       }) => ({ op: "create_project" as const, ...p })
     ),
+    // Goals: the call-level project pin files a goal that names none.
+    ...(plan?.tracks ?? []).map((t) => ({
+      op: "create_track" as const,
+      ...t,
+      ...(!t.projectRef && !t.projectId && resolvedProjectId
+        ? { projectId: resolvedProjectId }
+        : {}),
+    })),
     ...(plan?.sessions ?? []).map((sess) => ({
       op: "create_session" as const,
       ...sess,
-      // The call-level project pin files a session that names none.
-      ...(!sess.projectRef && !sess.projectId && resolvedProjectId
+      // The call-level project pin files a session that names none — unless
+      // it joins a goal, which implies its project.
+      ...(!sess.projectRef &&
+      !sess.projectId &&
+      !sess.trackRef &&
+      !sess.trackId &&
+      resolvedProjectId
         ? { projectId: resolvedProjectId }
         : {}),
     })),
@@ -713,6 +756,10 @@ export async function buildCaptureGraphOperations(
       ...d,
     })),
     ...(plan?.links ?? []).map((l) => ({ op: "create_link" as const, ...l })),
+    // Re-plan edits keep their own discriminant (only these two).
+    ...(plan?.edits ?? []).filter(
+      (e) => e.op === "update_session" || e.op === "remove_link"
+    ),
     // ── Rule Loop config steps (NS1) ─────────────────────────────────────
     // Emitted in fact → behaviour → rule order so the array reads the way the
     // materializer applies it. Apply order is fixed by its passes, not by
@@ -729,6 +776,20 @@ export async function buildCaptureGraphOperations(
       ...p,
     })),
     ...(plan?.views ?? []).map((v) => ({ op: "create_view" as const, ...v })),
+    ...(plan?.cells ?? []).map((c) => ({ op: "create_cell" as const, ...c })),
+    ...(plan?.renderers ?? []).map((b) => ({
+      op: "bind_renderer" as const,
+      ...b,
+    })),
+    ...(plan?.workspaces ?? []).map((w) => ({
+      op: "create_workspace" as const,
+      ...w,
+    })),
+    ...(plan?.kinds ?? []).map((k) => ({ op: "define_kind" as const, ...k })),
+    ...(plan?.lifecycles ?? []).map((l) => ({
+      op: "declare_lifecycle" as const,
+      ...l,
+    })),
     ...(plan?.updates ?? []),
   ];
 
@@ -814,7 +875,6 @@ export async function preflightCaptureGraphOperations(
       });
       continue;
     }
-    const propsToCheck: Record<string, unknown> = { ...(op.properties ?? {}) };
     // `content` is folded in the way the materializer does (a long body becomes
     // a linked document, a short one inlines to properties.content) so a profile
     // that required `content` isn't falsely flagged when a body was provided.
@@ -823,14 +883,17 @@ export async function preflightCaptureGraphOperations(
     // linked body document). A `content` the caller put in `properties` still
     // reports — that one IS a property key.
     const bodyFolded = !!op.content && !("content" in (op.properties ?? {}));
-    if (op.content) propsToCheck.content = op.content;
     const {
       valid,
       errors,
       unmodeled: reported,
       modeled,
+      moved,
     } = await propertyValidation.validateEntityCreateForProposal(
-      propsToCheck,
+      {
+        ...(op.properties ?? {}),
+        ...(op.content ? { content: op.content } : {}),
+      },
       profile.id,
       workspaceId,
       {
@@ -839,6 +902,11 @@ export async function preflightCaptureGraphOperations(
           (profile.defaultValues as Record<string, unknown>) ?? {},
       }
     );
+    // The kind's status sent under another key is filed under its field (the
+    // validator checked it there; `movedTo` on the report says so).
+    if (moved.length > 0 && op.properties) {
+      op.properties = moveMisnamedLifecycle(op.properties, moved).properties;
+    }
     modeledFields[op.profileSlug] ??= modeled;
     if (!valid) {
       invalidEntities.push({
@@ -1092,6 +1160,10 @@ export async function submitCaptureGraph(
 ): Promise<SubmitCaptureGraphResult> {
   const { userId } = input;
   let workspaceId = input.workspaceId ?? null;
+  if (input.filedByPod && input.agentUserId) {
+    // An agent key would auto-apply what the pod may only propose.
+    throw new Error("A proposal the pod files carries no agent key.");
+  }
 
   // PROJECT NAME-REF (piece D). A plan may name a project instead of passing a
   // UUID. Resolve it here, at the submit boundary, with the SAME precedence as a
@@ -1468,105 +1540,41 @@ export async function submitCaptureGraph(
   const isPlan = hasComposedSteps(operations);
 
   // ── WORKSPACE JOIN: the whole graph, or nothing (finding 590ca76a) ───────
-  // An agent that is not a member of a space the graph lands in used to reach
-  // the gate one write at a time: the first write into that space was kept on
-  // the join, the materializer then stopped, and approving the join replayed
-  // that ONE entity (the receipt read `approval_failed`, the rest was lost).
-  // Asked here, before either terminal and before anything is written: the
-  // graph is kept WHOLE on the join and replayed through this same door once
-  // the join is approved, where it auto-applies or files for review as a
-  // member's graph would. After validation, so a graph that could never apply
-  // is refused now rather than kept.
+  // A graph lands all or nothing: an agent whose person may not write in a
+  // space the graph lands in is refused before anything is written.
   if (input.agentUserId) {
-    const kept: KeptCaptureGraph = {
-      // Names the row on the join's review card (`deriveDeferredWritesReview`).
-      title: summary,
-      entities: input.entities,
-      relations: input.relations ?? [],
-      bindings: input.bindings ?? [],
-      ...(input.plan ? { plan: input.plan } : {}),
-      // Where it was placed now: the replay lands in the same space.
-      workspaceId,
-      projectId: resolvedProjectId,
-      ...(input.summary ? { summary: input.summary } : {}),
-      source,
-      ...(input.channelId ? { channelId: input.channelId } : {}),
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      ...(input.sessionSource ? { sessionSource: input.sessionSource } : {}),
-      ...(input.rawSource ? { rawSource: input.rawSource } : {}),
-      ...(input.sourceDocumentIds?.length
-        ? { sourceDocumentIds: input.sourceDocumentIds }
-        : {}),
-    };
-    const park = await parkWriteOnWorkspaceJoin({
-      userId,
-      agentUserId: input.agentUserId,
-      workspaceIds: [
+    const spaces = new Set(
+      [
         workspaceId,
         ...operations.map(
           (op) =>
             (op as { targetWorkspaceId?: string | null }).targetWorkspaceId
         ),
-      ],
-      permissionAction: "create",
-      subjectType: CAPTURE_GRAPH_JOIN_PAIR.subjectType,
-      action: CAPTURE_GRAPH_JOIN_PAIR.action,
-      data: kept as unknown as Record<string, unknown>,
-      ...(input.sessionId ? { sessionId: input.sessionId } : {}),
-      projectId: resolvedProjectId,
-      ...(input.sourceMessageId
-        ? { sourceMessageId: input.sourceMessageId }
-        : {}),
-      ...(input.channelId ? { threadId: input.channelId } : {}),
-    });
-    if (park && "denied" in park && park.denied) {
-      throw new TRPCError({ code: "FORBIDDEN", message: park.reason });
-    }
-    if (park && "proposalId" in park && park.proposalId) {
-      const joinId = park.proposalId;
-      const deferred = park.deferred === true;
-      const parkedScope: StoredCaptureScope = {
-        workspaceId,
-        projectId: resolvedProjectId,
-        sessionId: input.sessionId ?? null,
-      };
-      return {
-        proposalId: joinId,
-        entityCount: graphEntities.length,
-        relationCount: relations.length,
-        bindingCount: bindings.length,
-        reviewUrl: park.reviewUrl,
-        summary,
-        applied: false,
-        ...(isPlan ? { plan: { steps: planStepReceipts(operations) } } : {}),
-        sessionId: parkedScope.sessionId,
-        scope: parkedScope,
-        joinGate: {
-          proposalId: joinId,
-          deferred,
-          ...(park.deferredRef ? { ref: park.deferredRef } : {}),
-          message: proposedMessageFor(park.proposalType, summary, deferred),
-        },
-        ...(projectOutcome ? { project: projectOutcome } : {}),
-        ...placementReceipt,
-        writeReceipt: {
-          state: "pending",
-          proposalId: joinId,
-          ...(park.reviewUrl ? { reviewUrl: park.reviewUrl } : {}),
-          effectiveWorkspaceId: workspaceId,
-          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {}),
-          ...(projectOutcome ? { project: projectOutcome } : {}),
-          source,
-        },
-      };
+      ].filter((w): w is string => typeof w === "string")
+    );
+    for (const space of spaces) {
+      if (
+        !(await gateAdmitsWorkspace({
+          userId,
+          workspaceId: space,
+          action: "create",
+        }))
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: AGENT_PERSON_NOT_MEMBER,
+        });
+      }
     }
   }
   // A project step below the agent evidence floor is shown to a human with
   // its marker — it can never be auto-applied past that human.
+  // A domain's space, kinds and lifecycles are a person's: their own doors
+  // always propose for an agent (a lifecycle for a person too).
   const planNeedsReview = operations.some(
-    (op) => op.op === "create_project" && op.evidence?.belowAgentFloor === true
+    (op) =>
+      (op.op === "create_project" && op.evidence?.belowAgentFloor === true) ||
+      isDomainOperation(op)
   );
 
   // NOTE: `summary`, `source`, `bindingNote` are computed ABOVE (before the
@@ -1729,7 +1737,6 @@ export async function submitCaptureGraph(
           const { proposal } = await createAutoApprovedProposal({
             id: captureProposalId,
             userId,
-            reviewedBy: userId,
             // The AGENT that captured this: the policy above judged ITS write,
             // so the receipt names it (as the pending path's row does). Without
             // it every auto-applied capture read as the person's own write.
@@ -1976,6 +1983,8 @@ export async function submitCaptureGraph(
     // dedup. A webhook/cron/human-confirm caller still has no agentUserId, so
     // it stays correctly unattributed.
     ...(input.agentUserId ? { agentUserId: input.agentUserId } : {}),
+    // The pod's own proposal (a loop): its machine author, not the person.
+    ...(input.filedByPod ? { createdBy: input.filedByPod.author } : {}),
     // Why an agent's graph waits: the duplicate door (B2c), else the reason
     // the first proposing member was given, as the single-entity gate stores.
     ...(input.agentUserId && (possibleDuplicate || memberReason)
@@ -1996,6 +2005,8 @@ export async function submitCaptureGraph(
     // `bindings` rides alongside operations; the approve flow applies them after
     // materialization (resolving entityRef → real id).
     data: {
+      // The loop's own facts first: nothing it says can replace the plan.
+      ...(input.filedByPod?.data ?? {}),
       operations,
       // This is the actual origin stamped at materialization; graph is a
       // transport shape, not an origin the entity router understands.
@@ -2061,78 +2072,6 @@ export async function submitCaptureGraph(
       source,
     },
   };
-}
-
-/**
- * The pair a capture graph is kept under on a workspace join: the capture
- * door's own governed-door key (`entity/capture.graph`), replayable
- * (`REPLAYABLE_DEFERRED_PAIRS`).
- */
-export const CAPTURE_GRAPH_JOIN_PAIR = {
-  subjectType: "entity",
-  action: "capture.graph",
-} as const;
-
-/** A whole capture graph as the join keeps it (`DeferredWrite.data`). */
-interface KeptCaptureGraph {
-  title: string;
-  entities: CaptureGraphEntity[];
-  relations: CaptureGraphRelation[];
-  bindings: CaptureGraphBinding[];
-  plan?: CapturePlanInput;
-  workspaceId: string | null;
-  projectId: string | null;
-  summary?: string;
-  source: HubWriteSource;
-  channelId?: string;
-  sourceMessageId?: string;
-  sessionSource?: SubmitCaptureGraphInput["sessionSource"];
-  rawSource?: SubmitCaptureGraphInput["rawSource"];
-  sourceDocumentIds?: string[];
-}
-
-/**
- * Replay a graph kept on an APPROVED join (`services/governance/
- * deferred-writes.ts` calls it as the agent, inside the key's grant): the
- * whole graph goes through this door again, now as a member, and lands as a
- * member's graph would: auto-applied, or filed for review. The answer is in
- * the replay table's words (`readDoorAnswer`).
- */
-export async function replayKeptCaptureGraph(
-  w: DeferredWrite
-): Promise<Record<string, unknown>> {
-  const d = w.data as unknown as KeptCaptureGraph;
-  const result = await submitCaptureGraph({
-    userId: w.userId,
-    agentUserId: w.agentUserId,
-    workspaceId: d.workspaceId,
-    projectId: d.projectId,
-    ...(w.sessionId ? { sessionId: w.sessionId } : {}),
-    ...(d.sessionSource ? { sessionSource: d.sessionSource } : {}),
-    source: d.source,
-    ...(d.channelId ? { channelId: d.channelId } : {}),
-    ...(d.sourceMessageId ? { sourceMessageId: d.sourceMessageId } : {}),
-    ...(d.rawSource ? { rawSource: d.rawSource } : {}),
-    ...(d.sourceDocumentIds?.length
-      ? { sourceDocumentIds: d.sourceDocumentIds }
-      : {}),
-    entities: d.entities,
-    relations: d.relations,
-    bindings: d.bindings,
-    ...(d.plan ? { plan: d.plan } : {}),
-    ...(d.summary ? { summary: d.summary } : {}),
-  });
-  if (result.joinGate) {
-    // Another space still misses the agent: never a write, said as one.
-    return {
-      status: "proposed",
-      proposalType: "join",
-      proposalId: result.proposalId,
-    };
-  }
-  return result.applied
-    ? { status: result.writeReceipt.state, id: result.proposalId }
-    : { status: "proposed", proposalId: result.proposalId };
 }
 
 /**

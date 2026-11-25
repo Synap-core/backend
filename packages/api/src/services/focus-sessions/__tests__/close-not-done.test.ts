@@ -16,15 +16,16 @@ import {
 const criterion = { key: "tests-pass", statement: "Tests pass" };
 
 describe("openRequiredWork", () => {
-  it("an agent deliverable sharing a criterion's key is judged by the criterion only", () => {
+  it("an agent deliverable a criterion checks (outputKey) is judged by the criterion only", () => {
     const slot = {
-      key: "tests-pass",
+      key: "tests",
       kind: "code",
       label: "Tests",
       status: "pending",
     };
+    const checks = { ...criterion, outputKey: "tests" };
     const passing = openRequiredWork({
-      criteria: [criterion],
+      criteria: [checks],
       latest: [{ criterionKey: "tests-pass", verdict: "pass" }],
       agentMovable: new Set(),
       expectedOutputs: [slot],
@@ -32,13 +33,58 @@ describe("openRequiredWork", () => {
     expect(hasOpenRequiredWork(passing)).toBe(false);
 
     const ungraded = openRequiredWork({
-      criteria: [criterion],
+      criteria: [checks],
       latest: [],
       agentMovable: new Set(["tests-pass"]),
       expectedOutputs: [slot],
     });
     expect(ungraded.criteria.map((c) => c.key)).toEqual(["tests-pass"]);
     expect(ungraded.outcomes).toEqual([]);
+  });
+
+  it("sharing a key pairs nothing: the slot stays owed beside the criterion (W4)", () => {
+    const w = openRequiredWork({
+      criteria: [criterion],
+      latest: [{ criterionKey: "tests-pass", verdict: "pass" }],
+      agentMovable: new Set(),
+      expectedOutputs: [
+        { key: "tests-pass", kind: "code", label: "Tests", status: "pending" },
+      ],
+    });
+    expect(w.outcomes.map((o) => o.key)).toEqual(["tests-pass"]);
+  });
+
+  it("an OPTIONAL criterion naming a slot does not take it off the owed list", () => {
+    const w = openRequiredWork({
+      criteria: [{ ...criterion, required: false, outputKey: "tests" }],
+      latest: [],
+      agentMovable: new Set(["tests-pass"]),
+      expectedOutputs: [
+        { key: "tests", kind: "code", label: "Tests", status: "pending" },
+      ],
+    });
+    expect(w.outcomes.map((o) => o.key)).toEqual(["tests"]);
+  });
+
+  it("a criterion checking the person's own slot waits on the person", () => {
+    const w = openRequiredWork({
+      criteria: [{ ...criterion, outputKey: "sign-off" }],
+      latest: [],
+      agentMovable: new Set(["tests-pass"]),
+      expectedOutputs: [
+        {
+          key: "sign-off",
+          kind: "decision",
+          label: "Sign-off",
+          owner: "human",
+          status: "pending",
+        },
+      ],
+    });
+    expect(w.criteria).toEqual([]);
+    expect(w.waiting.criteria).toEqual([
+      { key: "tests-pass", statement: "Tests pass", waitingOn: "person_check" },
+    ]);
   });
 
   it("an `unmeasured` row is not a pass; outside `agentMovable` it waits", () => {
@@ -80,6 +126,7 @@ describe("openRequiredWork", () => {
       ],
       outcomes: [],
       owedByPerson: [{ key: "sign-off", label: "Founder sign-off" }],
+      unreadMessages: [],
       waiting: { criteria: [], outcomes: [] },
     });
     expect(err.code).toBe("NOT_DONE");
@@ -89,6 +136,8 @@ describe("openRequiredWork", () => {
     expect(err.message).toContain("wait for the person");
     // No agent outcome listed: the claim/withdraw advice is not offered.
     expect(err.message).not.toContain("completeOutput");
+    // No unread message listed: the read-and-answer advice is not offered.
+    expect(err.message).not.toContain("synap_wait_for_answer");
     expect(err.message).toContain("`reason`");
   });
 });

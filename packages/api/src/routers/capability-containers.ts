@@ -35,6 +35,10 @@ import { userVisibleWhere } from "../utils/user-visible-where.js";
 import { assertWorkspaceWrite } from "../utils/workspace-write-access.js";
 import { getWorkspaceRole, requirePodAdmin } from "../utils/workspace-role.js";
 import { uninstallCapability } from "../services/capabilities/uninstall-capability.js";
+import {
+  loadAddOnParents,
+  loadAddOnsOf,
+} from "../services/capabilities/addon.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 /**
@@ -121,7 +125,10 @@ export const capabilityContainersRouter = router({
       }));
     }),
 
-  /** One capability + its parts, grouped for the rail (Connections/Skills/Built-ins). */
+  /**
+   * One capability + its parts, grouped for the rail (Connections/Skills/Built-ins),
+   * with its add-on relations: `extends` (its base) and `addOns` (installed on it).
+   */
   get: protectedProcedure
     .input(z.object({ id: z.string().uuid() }))
     .query(async ({ ctx, input }) => {
@@ -190,8 +197,19 @@ export const capabilityContainersRouter = router({
         approved: boolean | null
       ) => ({ id, name, kind, approved: !!approved });
 
+      // ADD-ONS (founder decision D6): the base this one extends, and the
+      // add-ons installed on this one, each only when the reader can see it.
+      const [parents, addOns] = await Promise.all([
+        loadAddOnParents(db, userId, [cap.id]),
+        loadAddOnsOf(db, userId, cap.id),
+      ]);
+
       return {
         capability: cap as CapabilityRow,
+        /** The base tool this add-on extends; null for a tool that is not an add-on. */
+        extends: parents.get(cap.id) ?? null,
+        /** The add-ons installed on this tool, by name. */
+        addOns,
         parts: {
           connections: toolRows
             .filter((t) => t.kind !== "builtin")
@@ -277,7 +295,8 @@ export const capabilityContainersRouter = router({
       // container instead of raising 23505 at the caller.
       const { container: cap, status } = await resolveOrCreateContainer(db, {
         workspaceId: input.workspaceId ?? null,
-        createdBy: input.agentUserId ?? userId,
+        createdBy: userId,
+        agentUserId: input.agentUserId,
         name: input.name,
         description: input.description,
         templateKey: input.templateKey ?? null,

@@ -130,6 +130,49 @@ describe("multipart", () => {
     ]);
   });
 
+  it("a list field repeats the field once per value, in order", async () => {
+    const storage = fakeStorage({ "k/png": PNG });
+    const enc = await encodeProviderFileBody(
+      {
+        encoding: "multipart",
+        fields: { languages: ["eng", "fra"], ocrType: "skip-text" },
+        files: [
+          {
+            field: "fileInput",
+            file: ref("k/png", "a.png", "image/png", PNG.length),
+          },
+        ],
+      },
+      { storage, boundary: "B" }
+    );
+    const text = (await drain(enc.body)).toString("latin1");
+    expect(
+      text.startsWith(
+        '--B\r\nContent-Disposition: form-data; name="languages"\r\n\r\neng\r\n' +
+          '--B\r\nContent-Disposition: form-data; name="languages"\r\n\r\nfra\r\n' +
+          '--B\r\nContent-Disposition: form-data; name="ocrType"\r\n\r\nskip-text\r\n'
+      )
+    ).toBe(true);
+  });
+
+  it("refuses a list field holding a non-string", async () => {
+    await expect(
+      encodeProviderFileBody(
+        {
+          encoding: "multipart",
+          fields: { languages: ["eng", 3 as unknown as string] },
+          files: [
+            {
+              field: "fileInput",
+              file: ref("k/png", "a.png", "image/png", PNG.length),
+            },
+          ],
+        },
+        { storage: fakeStorage({ "k/png": PNG }) }
+      )
+    ).rejects.toMatchObject({ code: "bad_file_body" });
+  });
+
   it("files are opened only as the request reads them, never at encode time", async () => {
     const storage = fakeStorage({ "k/png": PNG });
     const enc = await encodeProviderFileBody(

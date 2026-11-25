@@ -246,6 +246,35 @@ function valueProblem(param: RecipeParam, value: unknown): string | null {
   }
 }
 
+/**
+ * A value in the form `renderRecipe` checks and fills. A `time` is seconds or
+ * [hh:]mm:ss, so a JSON number of seconds (12, 12.5) is that time: it becomes
+ * its string, and the time rule then checks it (a negative or exponent
+ * number is still refused). Every other value is left as it came.
+ */
+function canonicalValue(param: RecipeParam, value: unknown): unknown {
+  return param.type === "time" &&
+    typeof value === "number" &&
+    Number.isFinite(value)
+    ? String(value)
+    : value;
+}
+
+/**
+ * A recipe's values in the form `renderRecipe` fills (see `canonicalValue`).
+ * The pod stores a run's values through this, so the computer that runs it
+ * receives what it renders, whatever runner version it has.
+ */
+export function normalizeRecipeValues(
+  recipe: Recipe,
+  values: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...values };
+  for (const [name, param] of Object.entries(recipe.params))
+    if (name in out) out[name] = canonicalValue(param, out[name]);
+  return out;
+}
+
 export interface RecipeRunContext {
   /** The run's scratch folder. */
   workdir: string;
@@ -273,7 +302,7 @@ export function renderRecipe(
 ): RenderedStep[] {
   const filled: Record<string, string | string[]> = {};
   for (const [name, param] of Object.entries(recipe.params)) {
-    const value = values[name] ?? param.default;
+    const value = canonicalValue(param, values[name] ?? param.default);
     if (value === undefined)
       throw new Error(`recipe ${recipe.name}: ${name} is required`);
     const bad = valueProblem(param, value);

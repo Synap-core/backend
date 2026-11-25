@@ -589,4 +589,44 @@ describe("an agent's conversion — one governed proposal", () => {
       fromEntity: { entityId: id, ended: null },
     });
   });
+  it("the proposed reply names the goal's id to come (`pendingTrackId`): the approval replay creates exactly that goal", async () => {
+    // Rules out: a reply that drops the minted id (the agent cannot name the
+    // goal it proposed), and one that names an id the approval does not use.
+    const id = await entity("okr", "Agent pending id", OKR);
+    const res = await convertEntityToGoal({ entityId: id, actor: agent });
+    expect(res.status).toBe("proposed");
+    const pending = (res as { pendingTrackId?: unknown }).pendingTrackId;
+    expect(typeof pending).toBe("string");
+    const filed = h.permCalls[0]!.data as Record<string, unknown>;
+    expect(filed.id).toBe(pending);
+    // No goal exists under it before the approval.
+    expect(await getTrack(pending as string, human)).toBeNull();
+
+    const proposalId = randomUUID();
+    await proposalExecRegistry.resolveExact("track/create")!.execute({
+      proposal: {
+        id: proposalId,
+        targetType: "track",
+        targetId: null,
+        proposalType: "create",
+        workspaceId: null,
+        agentUserId: AGENT,
+        subjectUserId: null,
+        sourceMessageId: null,
+        data: { data: filed },
+      },
+      userId: USER,
+      input: { proposalId },
+      deps: {
+        reportProposalOutcome: () => {},
+        emitProposalReviewed: () => {},
+      },
+    } as unknown as ProposalExecutorArgs);
+    const [edge] = await promotedTo(id);
+    expect(edge?.to_id).toBe(pending);
+    expect(await getTrack(pending as string, human)).toMatchObject({
+      id: pending,
+      name: "Agent pending id",
+    });
+  });
 });

@@ -22,6 +22,7 @@ import { describe, expect, it } from "vitest";
 import {
   BASELINE,
   COMMITTED_PLAN,
+  ROOT_FULL,
   SUITE_NEUTRAL,
   TEST_FILE,
   loadGraph,
@@ -52,12 +53,17 @@ import {
   collectionInert,
   sidesOf,
   reusableRun,
+  redAtBase,
+  newFailuresInLog,
   shardMatrix,
   withPlan,
   suitesPassed,
   summary,
+  withSiblingPinReaders,
   // @ts-expect-error — plain ESM script, no declarations
 } from "./ci-changes.mjs";
+// @ts-expect-error — plain ESM script, no declarations
+import { isInfraPath } from "./ci/merge-bot.mjs";
 
 const REPO = fileURLToPath(new URL("..", import.meta.url));
 const none = () => [];
@@ -869,6 +875,66 @@ describe("ci-changes: the PR tier on the real graph", () => {
 // #509, #365 in 08027767c). The culprit's REAL file list (gh api
 // pulls/<n>/files) must select the file it broke. Tripwires are not listed:
 // every PR runs every tripwire.
+// Plan b5820982 §2 P0: a bump of sibling-pins.json changes the commit every
+// test reading that sibling reads, though none of them reads the pins file.
+describe("ci-changes: a sibling pin bump runs the tests that read the sibling", () => {
+  const withPins = (files: string[]) =>
+    withSiblingPinReaders(files, {
+      root: REPO,
+      codeFiles: graph.imports.files,
+    });
+  // The tests that read ../synap-control-plane-api (directly, or through
+  // gen-door-tool-names.ts), found by hand on 2026-11-12.
+  const CP_READERS = [
+    "packages/api/src/routers/mcp/door-tool-names.freshness.test.ts",
+    "packages/api/src/__tripwires__/cp-pod-content-kind-parity.test.ts",
+    "packages/api/src/__tripwires__/cp-pod-package-schema-parity.test.ts",
+    "packages/api/src/__tripwires__/synap-app-ids-reserved.tripwire.test.ts",
+  ];
+
+  it("selects every CP reader, and not the full suite", () => {
+    const d = pr(withPins(["sibling-pins.json"]));
+    expect(d.scope).toBe("selected");
+    expect(tests(d)).toEqual(expect.arrayContaining(CP_READERS));
+    // the freshness test is no tripwire: only the pin reaches it
+    expect(isTripwire(CP_READERS[0])).toBe(false);
+    const other = pr(["packages/governance-policy/src/index.ts"]);
+    expect(other.scope).toBe("selected");
+    expect(tests(other)).not.toContain(CP_READERS[0]);
+  });
+
+  it("CI's tier (tierOfCheckout) selects through it", () => {
+    const src = readFileSync(join(REPO, "scripts/ci-changes.mjs"), "utf8");
+    const body = src.slice(src.indexOf("function tierOfCheckout("));
+    expect(body.slice(0, body.indexOf("\n}\n"))).toMatch(
+      /selectTier\(\s*withSiblingPinReaders\(files, \{ root, codeFiles: g\.imports\.files \}\)/
+    );
+  });
+
+  it("without the pins file in the change, nothing is added", () => {
+    const files = ["packages/governance-policy/src/index.ts"];
+    expect(withPins(files)).toBe(files);
+  });
+
+  it("an unreadable pins file stands for every sibling: over-select, never under-select", () => {
+    const out = withSiblingPinReaders(["sibling-pins.json"], {
+      root: join(tmpdir(), "no-such-root"),
+      codeFiles: ["a.ts", "b.ts", "c.md"],
+      read: (f: string) =>
+        f === "a.ts" ? 'siblingCheckout("synap-app")' : "// synap-app/x\n",
+    });
+    expect(out).toEqual(["sibling-pins.json", "a.ts"]);
+  });
+
+  it("the pins file lands without the merge bot's 2 h infra hold, and is not a full-suite path", () => {
+    expect(isInfraPath("sibling-pins.json")).toBe(false);
+    expect(ROOT_FULL.some((re: RegExp) => re.test("sibling-pins.json"))).toBe(
+      false
+    );
+    expect(isDocsOnly("sibling-pins.json")).toBe(false);
+  });
+});
+
 describe("ci-changes: every main red of 27-29 Oct is selected by the PR that caused it", () => {
   const { prs } = JSON.parse(
     readFileSync(join(REPO, "scripts/ci/finding-606c00e3-prs.json"), "utf8")
@@ -1011,35 +1077,183 @@ describe("ci-changes: the merge queue", () => {
       queue: { pr: 471, headSha: "bc328a622", suitesPassed, reuse },
     });
 
-  // The light queue run (#428, kept under the tiers): the PR's own Full
-  // suite and API e2e passed, so the entry re-checks the Release gate only,
-  // and the two suite checks pass out loud ("Not affected", this reason).
-  it("the PR's own suites passed, main moved: the light run (Release gate only)", () => {
+  // The light queue run (#428; every tripwire since 2026-11-12, plan
+  // b5820982 §1): the PR's own Full suite and API e2e passed, so the entry
+  // re-checks the Release gate AND every tripwire on the combined tree; API
+  // e2e passes out loud ("Not affected", this reason).
+  it("the PR's own suites passed, main moved: the Release gate and EVERY tripwire, API e2e taken", () => {
+    // A change that reaches files beyond the tripwires: the entry still
+    // runs only the tripwires (the PR's run judged the rest).
+    const files = ["packages/types/src/x.ts"];
+    expect(
+      tier(files).tests.filter((f: string) => !isTripwire(f)).length
+    ).toBeGreaterThan(0);
     const d = queued(
       { runId: 1, testedCommit: "c", testedTree: T, queueTree: U },
-      ["packages/types/src/x.ts"],
+      files,
       true
     );
-    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse]).toEqual([
+    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse, d.dependents]).toEqual([
+      true,
+      true,
+      "selected",
+      false,
+      undefined,
+      false,
+    ]);
+    // Exactly every tripwire of this checkout, planned like a PR selection.
+    expect(graph.tripwires.length).toBeGreaterThan(300);
+    expect(d.selection.tests).toEqual([...graph.tripwires].sort());
+    expect(selectionProblems(d.selection, graph.tripwires)).toEqual([]);
+    expect(shardMatrix(d)).toEqual(
+      Array.from({ length: d.selection.shards }, (_, i) => i + 1)
+    );
+    expect(d.reason).toContain("#471's own Full suite and API e2e passed");
+    expect(d.reason).toContain(
+      `every tripwire (${graph.tripwires.length} test file(s)`
+    );
+    expect(d.reason).toContain("takes API e2e from that run");
+    const s = summary(d, files);
+    expect(s).toContain(
+      `| Full suite | runs: ${graph.tripwires.length} selected test file(s)`
+    );
+    expect(s).toContain("| API e2e | not affected |");
+    expect(s).toContain("| Release gate | runs |");
+  });
+
+  it("a light entry that changes only docs runs no suite; an unreadable graph runs the full suite", () => {
+    const docs = queued(
+      { runId: 1, testedCommit: "c", testedTree: T, queueTree: U },
+      ["docs/DEVELOPER.md"],
+      true
+    );
+    expect([docs.gate, docs.suites, docs.scope, docs.e2e]).toEqual([
       true,
       false,
       "none",
       false,
-      undefined,
     ]);
-    expect(d.reason).toContain("#471's own Full suite and API e2e passed");
-    expect(summary(d, ["packages/types/src/x.ts"])).toContain(
-      "| Full suite | not affected |"
-    );
+    const blind = decide({
+      event: "merge_group",
+      headRef: "",
+      draft: false,
+      files: ["packages/types/src/x.ts"],
+      siblingTests: none,
+      tier: () => null,
+      queue: { pr: 471, headSha: "bc328a622", suitesPassed: true, reuse: null },
+    });
+    expect([blind.suites, blind.scope, blind.e2e, blind.selection]).toEqual([
+      true,
+      "full",
+      false,
+      null,
+    ]);
+    expect(blind.reason).toContain("the dependency graph could not be read");
   });
 
-  it("same tree beats the light run: nothing re-runs", () => {
+  it("same tree beats the light run: nothing re-runs, the tripwires included", () => {
+    // The PR's run judged every tripwire on this very tree: re-running them
+    // re-asks the question it answered.
     const d = queued(
       { runId: 1, testedCommit: "c", testedTree: T, queueTree: T },
-      null,
+      ["packages/types/src/x.ts"],
       true
     );
-    expect([d.gate, d.reuse]).toEqual([false, true]);
+    expect([d.gate, d.suites, d.scope, d.e2e, d.reuse, d.selection]).toEqual([
+      false,
+      false,
+      "none",
+      false,
+      true,
+      null,
+    ]);
+    expect(d.reason).toContain("the tripwires included; nothing re-runs");
+  });
+
+  // RED AT BASE: what main's latest FINISHED push run named as new failures
+  // (the light entry's selection carries it; test-ratchet.mjs judges it).
+  describe("red at base: main's latest finished push run", () => {
+    const FULL_SUITE_LOG = readFileSync(
+      join(REPO, "scripts/ci/__fixtures__/red-main-40797830929/full-suite.txt"),
+      "utf8"
+    );
+    const NAMED = newFailuresInLog(FULL_SUITE_LOG);
+    const run = (id: number, conclusion: string | null, created: string) => ({
+      id,
+      event: "push",
+      head_branch: "main",
+      head_sha: `${id}`.padEnd(40, "0"),
+      status: conclusion ? "completed" : "in_progress",
+      conclusion,
+      created_at: created,
+    });
+    const fake =
+      (runs: object[], judge: string | null = "failure") =>
+      async (path: string, opts?: { raw?: boolean }) => {
+        if (path.startsWith("/actions/workflows/ci.yml/runs?branch=main"))
+          return { workflow_runs: runs };
+        if (/^\/actions\/runs\/\d+\/jobs/.test(path))
+          return {
+            jobs: [
+              { id: 7, name: "Release gate", conclusion: "success" },
+              ...(judge
+                ? [{ id: 9, name: "Full suite", conclusion: judge }]
+                : []),
+            ],
+          };
+        if (path === "/actions/jobs/9/logs" && opts?.raw) return FULL_SUITE_LOG;
+        throw new Error(`unexpected ${path}`);
+      };
+
+    it("the recorded log of a red main names its new failures, test files only", () => {
+      expect(NAMED.length).toBe(3);
+      for (const f of NAMED) expect(f).toMatch(/\.test\.ts$/);
+    });
+
+    it("main red: the files its Full suite named", async () => {
+      const r = await redAtBase(fake([run(2, "failure", "2026-11-12T10:00Z")]));
+      expect(r.run.id).toBe(2);
+      expect(r.files).toEqual(NAMED);
+    });
+
+    it("a newer run still in progress, or cancelled, is not waited for: the latest FINISHED run decides", async () => {
+      const r = await redAtBase(
+        fake([
+          run(4, null, "2026-11-12T12:00Z"),
+          { ...run(3, "cancelled", "2026-11-12T11:00Z"), status: "completed" },
+          run(2, "failure", "2026-11-12T10:00Z"),
+          run(1, "success", "2026-11-12T09:00Z"),
+        ])
+      );
+      expect(r.run.id).toBe(2);
+      expect(r.files).toEqual(NAMED);
+    });
+
+    it("main green, or red elsewhere than the Full suite: nothing is tolerated", async () => {
+      const green = await redAtBase(
+        fake([
+          run(3, "success", "2026-11-12T11:00Z"),
+          run(2, "failure", "2026-11-12T10:00Z"),
+        ])
+      );
+      expect([green.run.id, green.files]).toEqual([3, []]);
+      const gateOnly = await redAtBase(
+        fake([run(2, "failure", "2026-11-12T10:00Z")], "success")
+      );
+      expect(gateOnly.files).toEqual([]);
+    });
+
+    it("unreadable (no token, an API error, no finished run): null, so nothing is tolerated", async () => {
+      expect(await redAtBase(null)).toBeNull();
+      expect(
+        await redAtBase(async () => {
+          throw new Error("HTTP 502");
+        })
+      ).toBeNull();
+      expect(
+        await redAtBase(fake([run(4, null, "2026-11-12T12:00Z")]))
+      ).toBeNull();
+    });
   });
 
   it.each([
@@ -1255,7 +1469,7 @@ describe("ci-changes: the merge queue", () => {
         /"([^"]+)"/g
       ),
     ].map((m) => m[1]);
-    expect(required.length).toBe(4);
+    expect(required.length).toBe(5);
     expect([...QUEUE_REUSE_CHECKS].sort()).toEqual([...required].sort());
   });
 
@@ -1425,7 +1639,20 @@ describe("ci-changes: holds never read as passed", () => {
       ["api-types", ["packages/api-types/src/generated.d.ts"], true],
       ["markdown-core", ["packages/markdown-core/src/x.ts"], true],
       ["the job's own root", ["scripts/ci/dependent-root/package.json"], true],
+      ["the job's verdict", ["scripts/ci/dependents-typecheck.mjs"], true],
+      ["the Companion parser", ["scripts/layout/layout.mjs"], true],
+      [
+        "the layout action",
+        [".github/actions/monorepo-setup/action.yml"],
+        true,
+      ],
       ["ci.yml", [".github/workflows/ci.yml"], true],
+      ["the person-doors check", ["scripts/ci/person-doors.mjs"], true],
+      [
+        "the person-doors list",
+        ["packages/api/src/routers/person-doors.json"],
+        true,
+      ],
       ["api source", ["packages/api/src/x.ts"], false],
       ["a sibling named like types", ["packages/types-extra/src/x.ts"], false],
     ];
@@ -1562,6 +1789,10 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     ["Full suite", "needs.changes.outputs.suites == 'false'"],
     ["API e2e", "needs.changes.outputs.e2e == 'false'"],
     ["Reference docs are current", "needs.changes.outputs.reuse == 'true'"],
+    [
+      "Dependent repos typecheck",
+      "needs.changes.outputs.dependents == 'false'",
+    ],
   ])("%s: an explicit, logged pass; the work gated", (name, decision) => {
     const j = required.find((x) => x.name === name);
     expect(j, name).toBeDefined();
@@ -1688,7 +1919,8 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
   it("the Dependent repos job checks out the three repos, with the Reader App token", () => {
     const job = jobs.find((j) => j.name === "Dependent repos typecheck");
     expect(job, "job exists").toBeDefined();
-    expect(job?.if).toContain("needs.changes.outputs.dependents == 'true'");
+    // a required check (2026-11-09): never skipped by its `if:`
+    expect(job?.if).toBe("${{ !cancelled() }}");
     expect(job?.block).toContain("repository: Synap-core/browser");
     expect(job?.block).toContain("repository: Synap-core/relay-app");
     // app-bases comes through monorepo-setup, whose token covers it.
@@ -1700,6 +1932,60 @@ describe("ci.yml: every required check runs, and passes a skipped tier only out 
     const changes = jobs.find((j) => j.name === "What changed");
     expect(changes?.block).toContain(
       "dependents: ${{ steps.decide.outputs.dependents }}"
+    );
+  });
+
+  it("the Dependent repos job fails on what the change breaks, at a companion when named", () => {
+    const job = jobs.find((j) => j.name === "Dependent repos typecheck")!;
+    const step = (name: string) => {
+      const s = job.steps.find((x) => x.startsWith(`name: ${name}`));
+      expect(s, name).toBeDefined();
+      return s!;
+    };
+    // No typecheck may pass by itself: no continue-on-error left on the job.
+    expect(job.block).not.toContain(
+      "continue-on-error: true\n        working-directory"
+    );
+    for (const s of job.steps)
+      if (/typecheck|type-check|Verdict/i.test(s.split("\n")[0]))
+        expect(s, s.split("\n")[0]).not.toContain("continue-on-error");
+    // The PR body's Companion lines pin the dependents' refs.
+    expect(step("Companion refs")).toContain(
+      "node scripts/layout/layout.mjs companions --body-env PR_BODY --self backend"
+    );
+    expect(step("Monorepo layout")).toContain(
+      "refs: ${{ steps.companions.outputs.layout }}"
+    );
+    expect(step("Checkout browser")).toContain(
+      "ref: ${{ steps.companions.outputs.browser }}"
+    );
+    expect(step("Checkout relay-app")).toContain(
+      "ref: ${{ steps.companions.outputs.relay }}"
+    );
+    // The backend's own node_modules (its @trpc/* hoist) never shadows the
+    // slice's: the linked packages resolve like the devbox's one root install.
+    expect(step("Lay out the root workspace slice")).toContain(
+      "rm -rf node_modules packages/*/node_modules"
+    );
+    // The app dists the devbox builds before typechecking (APP_DIST_FILTER).
+    expect(step("Build the app packages")).toContain(
+      '--filter "./browser^..."'
+    );
+    // Head, then (only when red) the base's shared packages, then the verdict.
+    expect(step("Typecheck the dependents at this head")).toContain(
+      "dependents-typecheck.mjs run"
+    );
+    expect(step("Typecheck the red ones again")).toContain(
+      "steps.head.outputs.red == 'true'"
+    );
+    expect(step("Verdict")).toContain("dependents-typecheck.mjs verdict");
+    // Person doors: runs on the laid-out siblings even after a red typecheck,
+    // and reads both sides from git (the base step rewrites api-types).
+    const doors = step("Person doors");
+    expect(doors).toContain("!cancelled()");
+    expect(doors).toContain("person-doors.mjs check --root ..");
+    expect(doors).toContain(
+      'git show "$1:packages/api-types/src/generated.d.ts"'
     );
   });
 });

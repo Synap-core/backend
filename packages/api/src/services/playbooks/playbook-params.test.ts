@@ -87,6 +87,16 @@ vi.mock("../links/links-service.js", () => ({
   resolveGrantedCapabilities: async () => [],
 }));
 
+/** What `subjectKindSlugs` answers (kind, ancestors, roles) — per case. */
+let SUBJECT_KINDS: string[] = [];
+const kindReads: string[] = [];
+vi.mock("./assert-subject-kind.js", () => ({
+  subjectKindSlugs: async (input: { subjectId: string }) => {
+    kindReads.push(input.subjectId);
+    return SUBJECT_KINDS;
+  },
+}));
+
 const {
   instantiateSession,
   PlaybookParamsError,
@@ -116,6 +126,8 @@ beforeEach(() => {
   inserted.length = 0;
   db = makeDb();
   PLAYBOOK = basePlaybook();
+  SUBJECT_KINDS = [];
+  kindReads.length = 0;
 });
 
 describe("the funnel APPLIES declared defaults to the prompt", () => {
@@ -400,5 +412,105 @@ describe("a subject-bound run answers its entity param with the subject", () => 
       kind?: string;
     }>;
     expect(slots.filter((s) => s.kind === PARAM_SLOT_KIND)).toHaveLength(2);
+  });
+});
+
+describe("a run on a subject answers what the playbook declares the subject answers", () => {
+  // The live defect (antoinesrvt pod, 2026-11-09, proposal bff02fbb): "Brief
+  // it" moved a post to Briefed, its activator filed a run proposal with
+  // `params: {}` and the post as subject, and the approval was refused —
+  // "This playbook requires Platform" — though the post held post-platform
+  // "Instagram". The funnel now reads the declared `from` on each param.
+  const POST = "2f500b2f-6610-4c9a-ab59-64039e21561c";
+  const produceContent = () =>
+    basePlaybook({
+      name: "Produce Content",
+      goalTemplate:
+        "Produce content for {platform} from this idea ({post}) in the {format} format.",
+      params: [
+        { name: "post", type: "entity", label: "Post", required: true },
+        {
+          name: "platform",
+          type: "text",
+          label: "Platform",
+          required: true,
+          from: "subject.post-platform",
+        },
+        {
+          name: "format",
+          type: "text",
+          label: "Format",
+          from: "subject.post-format",
+        },
+        { name: "takes", type: "text", label: "Takes (file ids)" },
+        { name: "composition", type: "entity", label: "Composition" },
+      ],
+    });
+  const withPost = (properties: Record<string, unknown>) => {
+    db.query.entities.findFirst = (async () => ({
+      title: "Video 01",
+      preview: null,
+      properties,
+    })) as never;
+  };
+
+  it("an activator's run (no params, the post as subject) starts with the post, its platform and its format", async () => {
+    PLAYBOOK = produceContent();
+    SUBJECT_KINDS = ["post"];
+    withPost({ "post-platform": "Instagram", "post-format": "Short Video" });
+
+    await instantiateSession({ ...RUN, params: {}, subjectId: POST });
+
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toEqual({
+      post: POST,
+      platform: "Instagram",
+      format: "Short Video",
+    });
+    expect(metadataOf()[RUN_PROMPT_METADATA_KEY]).toBe(
+      "Produce content for Instagram from this idea (Video 01) in the Short Video format."
+    );
+    // Two entity params: which one is the post was read from its kinds.
+    expect(kindReads).toEqual([POST]);
+  });
+
+  it("a post with no platform is still REFUSED, naming Platform — never a blank", async () => {
+    PLAYBOOK = produceContent();
+    SUBJECT_KINDS = ["post"];
+    withPost({ "post-format": "Short Video" });
+
+    await expect(
+      instantiateSession({ ...RUN, params: {}, subjectId: POST })
+    ).rejects.toThrow(/^This playbook requires Platform\./);
+    expect(inserted).toHaveLength(0);
+  });
+
+  it("the caller's platform wins over the post's", async () => {
+    PLAYBOOK = produceContent();
+    SUBJECT_KINDS = ["post"];
+    withPost({ "post-platform": "Instagram" });
+
+    await instantiateSession({
+      ...RUN,
+      params: { platform: "LinkedIn" },
+      subjectId: POST,
+    });
+
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toMatchObject({
+      post: POST,
+      platform: "LinkedIn",
+    });
+  });
+
+  it("one entity param needs no kind read", async () => {
+    PLAYBOOK = basePlaybook({
+      goalTemplate: "Read {touch}.",
+      params: [{ name: "touch", type: "entity", required: true }],
+    });
+    withPost({});
+
+    await instantiateSession({ ...RUN, params: {}, subjectId: POST });
+
+    expect(metadataOf()[RUN_PARAMS_METADATA_KEY]).toEqual({ touch: POST });
+    expect(kindReads).toEqual([]);
   });
 });
