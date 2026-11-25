@@ -1,6 +1,6 @@
 /**
  * PAGING of the list doors that had none (finding "Five list tools have no
- * paging"): `synap_list_views`, `synap_list_automations`, `synap_list_widgets`,
+ * paging"): `synap_list_views`, `synap_list_automations`, `synap_list_cells` (was `synap_list_widgets`),
  * `synap_list_proposals`, `synap_list_playbooks`, driven through the REAL
  * handlers with only their reads stubbed.
  *
@@ -242,18 +242,18 @@ describe("synap_list_proposals pages", () => {
   });
 });
 
-describe("synap_list_widgets pages", () => {
-  const h0 = buildHandlers.synap_list_widgets;
+describe("synap_list_cells pages", () => {
+  const h0 = buildHandlers.synap_list_cells;
   it("a default call is one page; walking yields the whole catalog once", async () => {
-    const first = await run(h0, "synap_list_widgets");
-    expect(first.body.widgets.length).toBeGreaterThan(0);
-    expect(first.body.widgets.length).toBeLessThanOrEqual(15);
+    const first = await run(h0, "synap_list_cells");
+    expect(first.body.cells.length).toBeGreaterThan(0);
+    expect(first.body.cells.length).toBeLessThanOrEqual(15);
     expect(first.body.total).toBeGreaterThan(15);
-    expect(first.body.nextOffset).toBe(first.body.widgets.length);
+    expect(first.body.nextOffset).toBe(first.body.cells.length);
     const { ids } = await walk(
       h0,
-      "synap_list_widgets",
-      "widgets",
+      "synap_list_cells",
+      "cells",
       (r) => r.key
     );
     expect(ids).toHaveLength(first.body.total);

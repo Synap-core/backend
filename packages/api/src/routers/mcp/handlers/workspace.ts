@@ -963,7 +963,7 @@ export const workspaceHandlers: McpHandlerMap = {
     if (chosen !== 1) {
       return ok({
         error:
-          "Name exactly one start page: cellKey (a cell from synap_list_widgets), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
+          "Name exactly one start page: cellKey (a cell from synap_list_cells), url (a website, with podAppClientId when it is a pod app), or clear: true (the space's own home).",
       });
     }
     const title = str(args.title);

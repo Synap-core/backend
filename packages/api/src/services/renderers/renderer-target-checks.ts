@@ -169,7 +169,7 @@ export async function assertCellBindable(input: {
     code: "BAD_REQUEST",
     message:
       `No cell '${cellKey}' exists here. Create it first with synap_create_cell ` +
-      `(its key is 'generated:<name-slug>'), or pick one from synap_list_widgets.`,
+      `(its key is 'generated:<name-slug>'), or pick one from synap_list_cells.`,
   });
 }
 

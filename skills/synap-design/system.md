@@ -40,7 +40,7 @@ manifest.
 | Surface                | Build with                                                                                               |
 | ---------------------- | -------------------------------------------------------------------------------------------------------- |
 | shared `@synap-core/*` | headless logic plus `--synap-*` tokens; no UI-library imports                                            |
-| desktop workbench      | plain CSS plus spatial-ui primitives; a third-party widget only when wrapped and themed with `--synap-*` |
+| desktop workbench      | plain CSS plus spatial-ui primitives; a third-party component only when wrapped and themed with `--synap-*` |
 | apps we generate       | shadcn plus Tailwind v4 (Website Factory sites and any new app; the HeroUI base app is retired)          |
 | pod admin              | HeroUI plus the Synap HeroUI preset                                                                      |
 | mobile (relay)         | its own native kit on the native design tokens                                                           |

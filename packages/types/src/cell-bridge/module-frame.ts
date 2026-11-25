@@ -230,7 +230,7 @@ export interface CellModuleFrameInput {
  * The whole srcdoc of a module frame. In the head, in this order: the CSP
  * `<meta>` FIRST (it governs every load after it), the host's tokens, the
  * base styles, the host modules as base64 JSON, then the classic scripts
- * (blob URLs → import map → `SynapWidget` → `SynapView` → ready + init queue),
+ * (blob URLs → import map → `synap` (old name `SynapWidget`) → `SynapView` → ready + init queue),
  * then the module that boots the cell on `synap:init`.
  *
  * A react frame embeds React, its DOM and the JSX runtime; the dev runtime

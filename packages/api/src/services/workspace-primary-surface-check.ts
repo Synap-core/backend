@@ -10,7 +10,7 @@
  *
  *   - `cell` — its `cellKey` must be in the renderables catalog this space sees
  *     (`listRenderables`: every built-in, plus the active pod-wide and this
- *     space's installed / AI-made cells), the same catalog `synap_list_widgets`
+ *     space's installed / AI-made cells), the same catalog `synap_list_cells`
  *     lists and the bento arrange gate reads.
  *   - every other kind passes: a url is any site, an app is resolved by the
  *     host, and a view's id is NOT checked here (a known gap: no agent door
@@ -32,7 +32,7 @@ export async function assertPrimarySurfaceOpens(
     code: "BAD_REQUEST",
     message:
       `No cell "${surface.cellKey}" can open in this space. Use a key that ` +
-      `synap_list_widgets lists for this workspace (GET /api/hub/widget-definitions?workspaceId=…); ` +
+      `synap_list_cells lists for this workspace (GET /api/hub/widget-definitions?workspaceId=…); ` +
       `a cell made with synap_create_cell is listed once its proposal is approved.`,
   });
 }

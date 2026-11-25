@@ -30,6 +30,6 @@ Block kinds:
 
 - `view` — embeds a saved view by `viewId`
 - `entity` — renders an entity card for a specific `entityId`
-- `widget` — renders a catalog cell by `widgetType` (a key from `synap_list_widgets`) with `config`; `pos` places every block
+- `widget` — renders a catalog cell by `widgetType` (a key from `synap_list_cells`) with `config`; `pos` places every block
 
-Full widget catalog in **`widget-catalog.md`**. Layout patterns in **`bento-recipes.md`**.
+Full cell catalog in **`widget-catalog.md`**. Layout patterns in **`bento-recipes.md`**.
