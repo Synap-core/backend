@@ -302,7 +302,11 @@ export function emitDomainEventToRealtime(event: EventRecord): Promise<void> {
   // Any other pod-wide event (only reachable when workspaceIdRequired is
   // false: the required case returned above) → the writer's user room.
   postToBridge(
-    JSON.stringify({ event: mapped.event, data: payloadData, userId: event.userId }),
+    JSON.stringify({
+      event: mapped.event,
+      data: payloadData,
+      userId: event.userId,
+    }),
     ctx
   );
   return Promise.resolve();
@@ -339,10 +343,7 @@ async function sendToEntityReaders(
     )
   );
   for (const userId of recipients) {
-    postToBridge(
-      JSON.stringify({ event: socketEvent, data, userId }),
-      ctx
-    );
+    postToBridge(JSON.stringify({ event: socketEvent, data, userId }), ctx);
   }
 }
 

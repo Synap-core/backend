@@ -18,7 +18,15 @@
  * itself is pinned by status-realtime.pglite.test.ts and the access tests);
  * a failed audience read (domain-event-bridge.test.ts, mocked).
  */
-import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 
 vi.setConfig({ testTimeout: 120_000 });
@@ -280,7 +288,10 @@ describe("a pod-wide entity's push reaches each of its readers", () => {
     );
     const sent = bodies();
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ event: "entity:updated", workspaceId: W_SHARED });
+    expect(sent[0]).toMatchObject({
+      event: "entity:updated",
+      workspaceId: W_SHARED,
+    });
     expect(sent[0]!.userId).toBeUndefined();
   });
 });

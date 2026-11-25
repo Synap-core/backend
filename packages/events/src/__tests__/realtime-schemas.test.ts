@@ -189,9 +189,9 @@ describe("entity events — a pod-wide entity (no workspace) is a valid push", (
   for (const event of Object.keys(PAYLOADS)) {
     it(`${event}: workspaceId null, absent or a space all validate`, () => {
       const base = PAYLOADS[event]!;
-      expect(validateEmitPayload(event, { ...base, workspaceId: null })).toEqual(
-        { ok: true }
-      );
+      expect(
+        validateEmitPayload(event, { ...base, workspaceId: null })
+      ).toEqual({ ok: true });
       expect(validateEmitPayload(event, base)).toEqual({ ok: true });
       expect(
         validateEmitPayload(event, { ...base, workspaceId: "ws_1" })
