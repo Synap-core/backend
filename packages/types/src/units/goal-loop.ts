@@ -238,14 +238,107 @@ export function decideGoalNextRun(input: {
   if (stoppedOn.length > 0) {
     return { propose: false, hold: "stopped", stoppedOn };
   }
-  if (input.pendingProposals > 0) {
-    return { propose: false, hold: "proposal_pending" };
-  }
-  if (input.proposedThisWeek >= input.loop.perWeek) {
-    return { propose: false, hold: "budget_used" };
-  }
+  const budget = loopBudgetHold({
+    pendingProposals: input.pendingProposals,
+    proposedThisWeek: input.proposedThisWeek,
+    perWeek: input.loop.perWeek,
+  });
+  if (budget) return { propose: false, hold: budget };
   return {
     propose: true,
     carry: input.criteria.filter((c) => unmet(c.key)).map((c) => c.key),
+  };
+}
+
+/**
+ * The two holds every loop beside a goal shares (the goal loop, the pathway
+ * re-plan), asked after the loop's own: one proposal waiting on a person at a
+ * time, then the rolling week's budget. `null` = neither holds.
+ */
+export function loopBudgetHold(input: {
+  pendingProposals: number;
+  proposedThisWeek: number;
+  perWeek: number;
+}): "proposal_pending" | "budget_used" | null {
+  if (input.pendingProposals > 0) return "proposal_pending";
+  return input.proposedThisWeek >= input.perWeek ? "budget_used" : null;
+}
+
+/**
+ * THE PATHWAY RE-PLAN (pathway plan 368179d7, P9, founder 21 Nov 2026) — the
+ * loop BESIDE the goal loop. A step of a pathway (a session filed in a goal
+ * whose `workKind` is `pathway`) that ENDED WITHOUT DELIVERING (closed
+ * `not_done`: a required criterion left open; cancelled; failed) holds the
+ * steps waiting on it until someone re-plans (the dependency rule). The pod
+ * proposes that re-plan: ONE plan revision a person approves, one pending per
+ * pathway, within the goal's weekly budget. A step SKIPPED as a decision's arm
+ * not taken is expected and never counts. A step the loop's own revision
+ * created to retry another, ending without delivering too, STOPS the loop for
+ * it: two tries, as the goal loop stops on a criterion failed twice.
+ *
+ *   not_pathway       — the goal is not a pathway;
+ *   not_active        — the goal is not in the active category;
+ *   nothing_ended     — no unexpected end that no revision named yet;
+ *   stopped           — every such end is a retry the loop proposed;
+ *   proposal_pending  — its last revision still waits on a person;
+ *   budget_used       — the week's proposals are spent.
+ */
+export const PATHWAY_REPLAN_HOLDS = [
+  "not_pathway",
+  "not_active",
+  "nothing_ended",
+  "stopped",
+  "proposal_pending",
+  "budget_used",
+] as const;
+export type PathwayReplanHold = (typeof PATHWAY_REPLAN_HOLDS)[number];
+
+/** Most ended steps ONE revision re-plans; the rest wait for the next. */
+export const PATHWAY_REPLAN_MAX_STEPS = 5;
+
+/** A step of the pathway that ended without delivering, as the rule reads it. */
+export interface PathwayEndedStep {
+  sessionId: string;
+  /** A revision of the loop already named it, or a person linked its replacement. */
+  covered: boolean;
+  /** The step the loop's own revision created this one to retry, if it did. */
+  retryOf: string | null;
+}
+
+export type PathwayReplanDecision =
+  | {
+      propose: true;
+      /** The ended steps the revision re-plans, in the order given. */
+      replan: string[];
+    }
+  | { propose: false; hold: PathwayReplanHold; stoppedOn?: string[] };
+
+/** THE rule: should the pathway propose a revision now, and for which steps. */
+export function decidePathwayReplan(input: {
+  isPathway: boolean;
+  category: LifecycleCategory | null;
+  ended: readonly PathwayEndedStep[];
+  pendingProposals: number;
+  proposedThisWeek: number;
+  perWeek: number;
+}): PathwayReplanDecision {
+  if (!input.isPathway) return { propose: false, hold: "not_pathway" };
+  if (input.category !== "active")
+    return { propose: false, hold: "not_active" };
+  const open = input.ended.filter((s) => !s.covered);
+  if (open.length === 0) return { propose: false, hold: "nothing_ended" };
+  const replan = open.filter((s) => s.retryOf === null);
+  if (replan.length === 0) {
+    return {
+      propose: false,
+      hold: "stopped",
+      stoppedOn: open.map((s) => s.sessionId),
+    };
+  }
+  const budget = loopBudgetHold(input);
+  if (budget) return { propose: false, hold: budget };
+  return {
+    propose: true,
+    replan: replan.slice(0, PATHWAY_REPLAN_MAX_STEPS).map((s) => s.sessionId),
   };
 }
