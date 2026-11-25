@@ -24,7 +24,7 @@ import { and, eq } from "drizzle-orm";
 import { db, entityLinks, entities, focusSessions, playbooks } from "@synap/database";
 import { createLogger } from "@synap-core/core";
 import type { StatusMoveActor } from "./move-status.js";
-import { setPropagationActive } from "./propagation-guard.js";
+import { withPropagationScope } from "./propagation-guard.js";
 
 const logger = createLogger({ module: "propagate-status-link" });
 
@@ -181,9 +181,10 @@ export async function propagateStatusLink(
   }
 
   // Guard: the moveStatus call below would re-enter this module. Phase 0 is
-  // one hop — a propagation does not trigger further propagations.
-  setPropagationActive(true);
-  try {
+  // one hop — a propagation does not trigger further propagations. Scoped to
+  // this async context (AsyncLocalStorage) so unrelated top-level moves in the
+  // same process are not silently skipped.
+  const doPropagate = async () => {
     // Lazy import: this module is imported by the same door it calls back into.
     const { moveStatus } = await import("./move-status.js");
 
@@ -247,7 +248,7 @@ export async function propagateStatusLink(
       }
     }
     return result;
-  } finally {
-    setPropagationActive(false);
-  }
+  };
+
+  return withPropagationScope(doPropagate);
 }
