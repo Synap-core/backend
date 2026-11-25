@@ -233,9 +233,9 @@ export function runHealthUnitInput(state: RunHealthState): UnitStateInput {
     case "waiting":
       return { pendingDecisions: 1 };
     case "healthy":
-      return { schedule: { cron: "", enabled: true } };
+      return { schedule: { cron: "", on: true } };
     case "paused":
-      return { schedule: { cron: "", enabled: false } };
+      return { schedule: { cron: "", on: false } };
     case "not_running":
       return { everStarted: false };
   }

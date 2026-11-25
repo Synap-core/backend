@@ -43,6 +43,8 @@ export function goalSessionRows(
     title?: string | null;
     goal?: string | null;
     triage?: { pending?: boolean | null } | null;
+    /** Holds the close door's not-done record: such a close reads "Not done". */
+    verificationReport?: unknown;
   }>
 ): GoalSessionRow[] {
   return sessions.map((s) => {

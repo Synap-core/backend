@@ -64,6 +64,20 @@ describe("sessionStatusMark — a draft is its own mark", () => {
     }
   });
 
+  it("does not draw a session closed with required work open as done", () => {
+    const report = { closedNotDone: { reason: "out of time" } };
+    const notDone = sessionStatusMark({
+      status: "closed",
+      verificationReport: report,
+    })!;
+    expect(notDone).toMatchObject({ label: "Not done", glyph: "stopped" });
+    expect(notDone.kind).not.toBe("healthy");
+    expect(sessionStatusMark({ status: "closed" })).toMatchObject({
+      kind: "healthy",
+      glyph: "check",
+    });
+  });
+
   it("keeps the dot for a status this build does not know", () => {
     expect(sessionStatusMark({ status: "teleported" })!.glyph).toBeNull();
     expect(sessionStatusMark({ status: "" })).toBeNull();
@@ -402,6 +416,21 @@ describe("sessionParent — no parent and a failed read are two facts", () => {
   it("says a failed read failed", () => {
     expect(sessionParent({ status: "unavailable", reason: "x" })).toEqual({
       state: "failed",
+    });
+  });
+
+  it("a child closed not done reads Not done in its lineage row", () => {
+    expect(
+      sessionChildren({
+        status: "ok",
+        total: 1,
+        items: [
+          { id: "k", title: "Kid", status: "closed", closedAs: "not_done" },
+        ],
+      })
+    ).toMatchObject({
+      state: "ok",
+      rows: [{ mark: { kind: "stale", label: "Not done" } }],
     });
   });
 

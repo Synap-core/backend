@@ -11,10 +11,10 @@
  * ── Judgement calls, stated once ───────────────────────────────────────────
  *
  * **`scheduled` / `paused` need a `schedule`, and a session has no cron.** The
- * derivation reaches those two states only through `{ cron, enabled }`, a shape
+ * derivation reaches those two states only through `{ cron, on }`, a shape
  * written for recurring playbooks. A session carries an appointment and a
  * lifecycle status, never a cron. So a `scheduled`/`paused` session is handed
- * `{ cron: <stored cron, or ''>, enabled: status !== 'paused' }`. `enabled` is a
+ * `{ cron: <stored cron, or ''>, on: status !== 'paused' }`. `on` is a
  * fact; the empty cron is a placeholder, never a fabricated cadence
  * (`describeCadence('')` returns `''`, which is falsy).
  *
@@ -113,7 +113,7 @@ export interface SessionUnitFacts {
 /** One session row → the shared derivation's input. */
 export function sessionUnitInput(facts: SessionUnitFacts): UnitStateInput {
   const cadence = CADENCE_SESSION_STATUSES.has(facts.status)
-    ? { cron: facts.cron ?? "", enabled: facts.status !== "paused" }
+    ? { cron: facts.cron ?? "", on: facts.status !== "paused" }
     : null;
 
   // A closed session that still owes you a slot or a decision is on YOU, not
