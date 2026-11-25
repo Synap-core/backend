@@ -19,10 +19,13 @@ beforeEach(() => {
         method: init?.method ?? "GET",
         body: init?.body ? JSON.parse(String(init.body)) : undefined,
       });
-      return new Response(JSON.stringify({ status: "proposed", proposalId: "p-1" }), {
-        status: 202,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ status: "proposed", proposalId: "p-1" }),
+        {
+          status: 202,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     })
   );
 });

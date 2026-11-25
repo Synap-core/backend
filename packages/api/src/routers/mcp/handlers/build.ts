@@ -189,30 +189,12 @@ async function promoteOntoAttachment(
     return ok({ ...o, target, slot: input.slot, via: "attached" });
   }
   // Clear: every look the playbook carries in that slot comes off.
-  const { db, links, and, eq } = await import("@synap/database");
-  const { sql: drizzleSql } = await import("drizzle-orm");
-  const { detachSurface } =
+  const { attachmentsInSlot, detachSurface } =
     await import("../../../services/surfaces/attach.js");
-  const inSlot = await db
-    .select({ toType: links.toType, toId: links.toId })
-    .from(links)
-    .where(
-      and(
-        eq(links.fromType, "playbook"),
-        eq(links.fromId, input.playbookId),
-        eq(links.linkType, "attaches"),
-        drizzleSql`${links.metadata}->>'slot' = ${input.slot}`
-      )
-    );
+  const inSlot = await attachmentsInSlot(anchor, input.slot);
   const outcomes = [];
   for (const row of inSlot) {
-    const outcome = await detachSurface(actor, {
-      anchor,
-      surface: {
-        type: row.toType as "view" | "document" | "cell_instance",
-        id: row.toId,
-      },
-    });
+    const outcome = await detachSurface(actor, { anchor, surface: row });
     const o = outcome as unknown as Record<string, unknown>;
     if (o.status === "refused" || o.status === "denied") {
       return surfaceAnswer(toolName, outcome);

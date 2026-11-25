@@ -1,5 +1,11 @@
 import { TRPCError } from "@trpc/server";
-import { db, proposals, eq, transitionProposal } from "@synap/database";
+import {
+  db,
+  proposals,
+  and,
+  eq,
+  transitionProposal,
+} from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved, storedProposalFields } from "./shared.js";
@@ -28,13 +34,9 @@ export function registerSurfaceExecutors(): void {
             code: "PRECONDITION_FAILED",
             message: `Approval for '${key}' refused: ${why} Nothing was changed.`,
           });
-        const [settled] = await db
-          .select({ status: proposals.status })
-          .from(proposals)
-          .where(eq(proposals.id, input.proposalId));
-        if (settled?.status === ProposalStatus.APPROVED) {
-          return { success: true, alreadyApproved: true };
-        }
+        // Every apply below is idempotent (the reserved body id, the unique
+        // edge, a detach of what is gone), so a second approval re-runs it
+        // harmlessly; the claim on PENDING below says which one landed it.
         const data = storedProposalFields(proposal);
 
         let rows: number;
@@ -60,15 +62,19 @@ export function registerSurfaceExecutors(): void {
           rows = applied.rows;
         }
 
-        await transitionProposal(db, {
+        const [claimed] = await transitionProposal(db, {
           to: ProposalStatus.APPROVED,
           set: {
             reviewedBy: userId,
             reviewedAt: new Date(),
             updatedAt: new Date(),
           },
-          where: eq(proposals.id, input.proposalId),
-        });
+          where: and(
+            eq(proposals.id, input.proposalId),
+            eq(proposals.status, ProposalStatus.PENDING)
+          ),
+        }).returning({ id: proposals.id });
+        if (!claimed) return { success: true, alreadyApproved: true };
         reportApproved(deps, proposal, input.proposalId);
         deps.emitProposalReviewed(
           input.proposalId,

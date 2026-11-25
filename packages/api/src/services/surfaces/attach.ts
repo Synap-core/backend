@@ -797,6 +797,28 @@ export async function readAttachedSurfaces(
 
 // ── An object's own look (the aliased per-object renderer doors) ──────────
 
+/** The surfaces an object carries in `slot` (a slot holds one look). */
+export async function attachmentsInSlot(
+  anchor: SurfaceAnchor,
+  slot: string
+): Promise<SurfaceRef[]> {
+  const rows = await db
+    .select({ toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, anchor.kind),
+        eq(links.fromId, anchor.id),
+        eq(links.linkType, ATTACHES_LINK_TYPE),
+        drizzleSql`${links.metadata}->>'slot' = ${slot}`
+      )
+    );
+  return rows.map((r) => ({
+    type: r.toType as SurfaceRef["type"],
+    id: r.toId,
+  }));
+}
+
 /**
  * Take off every attachment the object carries in `slot` (a slot holds one
  * look). The store write only: callers floored the object and passed a gate.
