@@ -6,8 +6,8 @@
  * server's `/bridge/emit` answers 400 to such a payload (`validateEmitPayload`,
  * the function driven here), so before the bridge projected it no
  * repository `entity:*` push reached a client. One test per event type, plus
- * the media copy's announcement, and the pod-wide case: refused by the schema,
- * so not sent at all.
+ * the media copy's announcement, and the pod-wide case: valid too, sent to
+ * each reader's room.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { EventRecord } from "@synap/database";
@@ -16,6 +16,19 @@ import {
   emitDomainEventToRealtime,
   emitHubRealtimeEvent,
 } from "./domain-event-bridge.js";
+
+// A pod-wide entity's readers come from the entity read floor (DB):
+// pinned on real SQL in domain-event-bridge.pod-wide.pglite.test.ts.
+const audience = vi.hoisted(() => ({
+  readers: ["user_1", "reader_2"] as string[],
+  fail: false,
+}));
+vi.mock("../services/status/status-floor.js", () => ({
+  entityAudience: vi.fn(async () => {
+    if (audience.fail) throw new Error("floor read failed");
+    return audience.readers;
+  }),
+}));
 
 /** An entity row as `EntityRepository` emits it (JSON: timestamps are strings). */
 const ROW = {
@@ -171,21 +184,22 @@ describe("domain-event-bridge — entity payloads pass the realtime validation",
     expect(body.data).toMatchObject({ reason: "media", changes: {} });
   });
 
-  // A pod-wide entity's payload is refused by the realtime schema (it needs a
-  // workspace), so it is not POSTed at all — no refused request, no warning.
-  it("a pod-wide entity (workspaceId null) fails the schema, so nothing is sent", async () => {
+  // A pod-wide entity (no workspace, most kinds) is a valid push too: it
+  // goes to each reader's room (domain-event-bridge.pod-wide.pglite.test.ts).
+  it("a pod-wide entity (workspaceId null) passes the validation and is sent to its readers", async () => {
     for (const type of [
       "entity.create.completed",
       "entity.update.completed",
       "entity.delete.completed",
     ]) {
-      emitDomainEventToRealtime(row(type, { ...ROW, workspaceId: null }));
+      await emitDomainEventToRealtime(row(type, { ...ROW, workspaceId: null }));
     }
-    await Promise.resolve();
-    expect(fetchMock).not.toHaveBeenCalled();
-    // The reason, pinned: the same projection with a workspace passes.
-    emitDomainEventToRealtime(row("entity.update.completed", ROW));
-    await Promise.resolve();
-    expect(pushed()).toHaveLength(1);
+    // Two readers (the writer `u1` is not among them): three each.
+    expect(pushed()).toHaveLength(9);
+    for (const body of pushed()) {
+      expect(validateEmitPayload(body.event, body.data)).toEqual({ ok: true });
+      expect(body.workspaceId).toBeUndefined();
+      expect(body.data.entityId).toBe("e1");
+    }
   });
 });

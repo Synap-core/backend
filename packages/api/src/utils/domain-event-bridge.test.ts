@@ -1,12 +1,26 @@
 /**
  * Tests for the domain-event → Socket.IO bridge: facet event mapping (role-as-lens
  * visibility grants) and the unified room rule (workspace room when the event's
- * row carries a workspaceId, else the owner's user room).
+ * row carries a workspaceId; else, for an entity, each reader's user room, and
+ * for anything else the writer's user room).
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { EventRecord } from "@synap/database";
 import { emitDomainEventToRealtime } from "./domain-event-bridge.js";
+
+// A pod-wide entity's readers come from the entity read floor (DB):
+// pinned on real SQL in domain-event-bridge.pod-wide.pglite.test.ts.
+const audience = vi.hoisted(() => ({
+  readers: ["user_1", "reader_2"] as string[],
+  fail: false,
+}));
+vi.mock("../services/status/status-floor.js", () => ({
+  entityAudience: vi.fn(async () => {
+    if (audience.fail) throw new Error("floor read failed");
+    return audience.readers;
+  }),
+}));
 
 function makeEvent(overrides: Partial<EventRecord>): EventRecord {
   return {
@@ -99,21 +113,49 @@ describe("domain-event-bridge — facet events", () => {
     expect(body.userId).toBe("user_1");
   });
 
-  it("pod-wide entity (null/absent workspaceId): no POST — the realtime schema requires a workspace", async () => {
-    // The unified room rule would send it to `user:<ownerUserId>`, but the
-    // realtime server refuses an entity payload with no workspace (400), so
-    // the bridge does not send it at all (domain-event-bridge.entity-payload
-    // test pins the refusal). Facets keep the user-room fallback (above).
-    emitDomainEventToRealtime(
+  it("pod-wide entity (null/absent workspaceId): one POST per reader, writer included, never a workspace room", async () => {
+    await emitDomainEventToRealtime(
       makeEvent({
         eventType: "entity.create.completed",
+        subjectId: "ent_1",
+        subjectType: "entity",
         userId: "user_1",
         data: {},
       })
     );
-    await Promise.resolve();
 
-    expect(fetchMock).not.toHaveBeenCalled();
+    const bodies = fetchMock.mock.calls.map((call) =>
+      JSON.parse(call[1].body as string)
+    );
+    // The writer is a reader too: once each, never twice.
+    expect(bodies.map((b) => b.userId).sort()).toEqual(["reader_2", "user_1"]);
+    for (const b of bodies) {
+      expect(b.event).toBe("entity:created");
+      expect(b.workspaceId).toBeUndefined();
+      expect(b.data.entityId).toBe("ent_1");
+    }
+  });
+
+  it("pod-wide entity whose readers cannot be read: the writer only, never everyone", async () => {
+    audience.fail = true;
+    try {
+      await emitDomainEventToRealtime(
+        makeEvent({
+          eventType: "entity.update.completed",
+          subjectId: "ent_1",
+          subjectType: "entity",
+          userId: "user_1",
+          data: { workspaceId: null },
+        })
+      );
+    } finally {
+      audience.fail = false;
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).userId).toBe(
+      "user_1"
+    );
   });
 
   it("workspace-scoped entity still targets the workspace room (unaffected)", async () => {

@@ -28,10 +28,17 @@
  * - entity_facet.*.completed → entity_facet:attached | entity_facet:updated | entity_facet:detached
  *
  * Room targeting — the unified room rule: an event's row carries a
- * workspaceId → `workspace:<id>`; otherwise (pod-wide, e.g. a facet attached
- * with no workspace lens) → `user:<ownerUserId>`. Pod-wide data is never
- * broadcast to a `pod:<id>` room — it stays owner-only until a facet grants
- * a workspace visibility.
+ * workspaceId → `workspace:<id>`. Otherwise (pod-wide):
+ *   - an ENTITY (`entity:*`, most kinds are pod-wide) → the `user:<id>` room
+ *     of EACH person who may read it — the entity read floor, the audience
+ *     its `status:transition:completed` already reaches (`entityAudience`,
+ *     services/status/status-floor.ts) — plus the writer. A role in a space
+ *     or a pod-wide share widens who reads it without giving the row a
+ *     workspace, so the writer's room alone missed those readers;
+ *   - anything else (a pod-wide facet, a pod-global cell) → the writer's
+ *     `user:<userId>` room.
+ * Pod-wide data is never broadcast to a `pod:<id>` room: it reaches only
+ * the people the floor admits.
  */
 
 import { randomUUID } from "crypto";
@@ -43,6 +50,7 @@ import { entityToWire } from "../routers/hub-protocol/rest/_codecs/entity.js";
 // The realtime server's own check (`/bridge/emit` answers 400 on a miss).
 // Subpath: no boss/db side effects.
 import { validateEmitPayload } from "@synap/events/realtime-schemas";
+import { entityAudience } from "../services/status/status-floor.js";
 
 const logger = createLogger({ module: "domain-event-bridge" });
 
@@ -208,16 +216,18 @@ export function emitHubRealtimeEvent(opts: {
     version: 1,
     source: "api",
   };
-  emitDomainEventToRealtime(record);
+  void emitDomainEventToRealtime(record);
 }
 
 /**
  * Forward a domain event to the Realtime server so Socket.IO clients can update their caches.
- * Fire-and-forget: we do not await so event storage is not blocked.
+ * Fire-and-forget: callers do not await it, so event storage is not blocked.
+ * The promise resolves once every POST is handed to the bridge (a pod-wide
+ * entity's readers are read first); it never rejects.
  */
-export function emitDomainEventToRealtime(event: EventRecord): void {
+export function emitDomainEventToRealtime(event: EventRecord): Promise<void> {
   const mapped = mapToSocketEvent(event.eventType);
-  if (!mapped) return;
+  if (!mapped) return Promise.resolve();
 
   let workspaceId =
     (event.data?.workspaceId as string | undefined) ?? undefined;
@@ -230,7 +240,7 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
       { eventType: event.eventType, subjectId: event.subjectId },
       "Skipping bridge emit: no workspaceId in event data"
     );
-    return;
+    return Promise.resolve();
   }
 
   const eventData = event.eventType.startsWith("workspaces.")
@@ -266,28 +276,74 @@ export function emitDomainEventToRealtime(event: EventRecord): void {
   if (event.eventType.startsWith("document.")) {
     payloadData.documentId = event.subjectId;
   }
-  // Unified room rule: workspaceId present → workspace room. Otherwise
-  // (only reachable here when workspaceIdRequired is false, since the
-  // required case already returned above) → the owner's user room, so
-  // pod-wide events still reach the one client that can see them.
-  // A payload the realtime server would refuse is not sent: a pod-wide
-  // entity (no workspace) fails the schema on every write, and a refused POST
-  // plus its warning each time says nothing new.
+  // A payload the realtime server would refuse (`/bridge/emit` answers 400)
+  // is not sent. A pod-wide entity's payload (no workspace) is valid.
+  const ctx = { eventType: event.eventType, socketEvent: mapped.event };
   const valid = validateEmitPayload(mapped.event, payloadData);
   if (!valid.ok) {
-    logger.debug(
-      { eventType: event.eventType, socketEvent: mapped.event },
+    logger.warn(
+      { ...ctx, issues: valid.issues },
       "Skipping bridge emit: the realtime schema refuses this payload"
     );
-    return;
+    return Promise.resolve();
   }
-  const body = JSON.stringify({
-    event: mapped.event,
-    data: payloadData,
-    ...(workspaceId ? { workspaceId } : { userId: event.userId }),
-  });
+  // Unified room rule (header): workspaceId present → workspace room.
+  if (workspaceId) {
+    postToBridge(
+      JSON.stringify({ event: mapped.event, data: payloadData, workspaceId }),
+      ctx
+    );
+    return Promise.resolve();
+  }
+  // Pod-wide entity → each of its readers' rooms.
+  if (event.eventType.startsWith("entity.")) {
+    return sendToEntityReaders(event, mapped.event, payloadData, ctx);
+  }
+  // Any other pod-wide event (only reachable when workspaceIdRequired is
+  // false: the required case returned above) → the writer's user room.
+  postToBridge(
+    JSON.stringify({ event: mapped.event, data: payloadData, userId: event.userId }),
+    ctx
+  );
+  return Promise.resolve();
+}
 
-  postToBridge(body, { eventType: event.eventType, socketEvent: mapped.event });
+/**
+ * A pod-wide entity's push, once to the `user:<id>` room of each person who
+ * may read the entity (`entityAudience`) and of the writer (who could read
+ * it to write it; a create read before its row is visible, or a row already
+ * hard-deleted, still reaches them). A failed audience read reaches the
+ * writer only, logged: never everyone. Never rejects.
+ */
+async function sendToEntityReaders(
+  event: EventRecord,
+  socketEvent: string,
+  data: Record<string, unknown>,
+  ctx: Record<string, unknown>
+): Promise<void> {
+  const entityId = String(data.entityId ?? event.subjectId);
+  let readers: string[] = [];
+  try {
+    readers = await entityAudience(entityId, {
+      deleted: event.eventType === "entity.delete.completed",
+    });
+  } catch (err) {
+    logger.warn(
+      { ...ctx, entityId, err },
+      "pod-wide entity push: its readers could not be read; sent to the writer only"
+    );
+  }
+  const recipients = new Set(
+    [event.userId, ...readers].filter(
+      (id): id is string => typeof id === "string" && id.length > 0
+    )
+  );
+  for (const userId of recipients) {
+    postToBridge(
+      JSON.stringify({ event: socketEvent, data, userId }),
+      ctx
+    );
+  }
 }
 
 /** POST one body to the bridge; a refusal (401/4xx/5xx) is logged, not swallowed. */
@@ -333,9 +389,9 @@ export function postToBridge(body: string, ctx: Record<string, unknown>): void {
  *     entity and its graph;
  *   - anything else (the media copy's announcement) → empty: it carries its
  *     own `reason`, which the client reads first.
- * A pod-wide entity (`workspaceId: null`) still fails the schema, which
- * requires a workspace, so its push is not sent (see the check before the
- * POST); pinned by the tests.
+ * A pod-wide entity (`workspaceId: null`) passes the schema and goes to
+ * each of its readers' rooms (header); pinned by
+ * `domain-event-bridge.pod-wide.pglite.test.ts`.
  */
 function projectEntityRealtimeData(
   event: EventRecord
