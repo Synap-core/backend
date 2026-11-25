@@ -125,6 +125,7 @@ import {
   registerGuidelinesRoutes,
   registerBrandRoutes,
   registerSurfaceContextRoutes,
+  registerFrameReadRoutes,
   registerAgentSkillsRoutes,
   registerRulesRoutes,
   registerUiRoutes,
@@ -422,6 +423,7 @@ registerIntentSurfacesRoutes(app); // /lifecycle/{board,throughput}, /attention/
 registerGuidelinesRoutes(app); // GET /guidelines?workKind= — standing guidance for a kind of block
 registerBrandRoutes(app); // GET /brand/kit — the caller's brand kit (project → workspace → pod default)
 registerSurfaceContextRoutes(app); // GET /surfaces/context — a frame's anchor, space, project, goal and brand (frame contract v3)
+registerFrameReadRoutes(app); // POST /frame/read — the one frame read door: declared reads enforced, run as the viewer, logged (P6a)
 registerDesignsRoutes(app); // GET /designs/catalog, GET /designs/kit, POST /designs/apply (static, first), GET /designs/:id — the design door for apps
 registerAgentSkillsRoutes(app); // /agent-skills*
 registerRulesRoutes(app); // /rules/classify (static, FIRST), /rules (create + list), PATCH /rules/:id (edit, LAST)

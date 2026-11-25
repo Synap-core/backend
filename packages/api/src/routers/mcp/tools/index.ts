@@ -1929,6 +1929,19 @@ export const tools = {
               description:
                 "The automation bound to refresh this document (an id synap_list_automations returns). Its runs may rewrite this document's existing AI sections without review; every other edit is governed as usual.",
             },
+            reads: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  op: { type: "string" },
+                  params: { type: "object" },
+                },
+                required: ["op"],
+              },
+              description:
+                'With type "html": the reads the page makes (window.synap.query ops), e.g. [{"op":"entities.list","params":{"profileSlug":"deal"}}]; a param "*" = any value. The pod refuses any other read. Omit: every read allowed, logged.',
+            },
             /**
              * WHY this write, in the person's own words — shown verbatim to the
              * reviewer. Without it the proposal detail reads "No reason was
@@ -3913,6 +3926,29 @@ export const tools = {
               required: ["viewId"],
               description:
                 "Bento view (synap_list_views) to add the cell to as a tile, in the same act.",
+            },
+            reads: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  op: { type: "string" },
+                  params: { type: "object" },
+                },
+                required: ["op"],
+              },
+              description:
+                'The reads its frame makes (window.synap.query ops), e.g. [{"op":"entities.list","params":{"profileSlug":"deal"}}]; a param "*" = any value. The pod refuses any other read. Omit: every read allowed, logged.',
+            },
+            writes: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { op: { type: "string" } },
+                required: ["op"],
+              },
+              description:
+                "The writes its frame makes (create_entity, update_entity, delete_entity, create_relation).",
             },
             /**
              * WHY this write, in the person's own words — shown verbatim to the

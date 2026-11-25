@@ -263,6 +263,42 @@ describe("synap_create_document — type html makes a page", () => {
     expect(await documentCount()).toBe(before);
   });
 
+  it("DECLARED READS (P6a): a page's `reads` are stored in its metadata, where the frame read door reads them", async () => {
+    const reads = [{ op: "entities.list", params: { profileSlug: "deal" } }];
+    const res = await mcpCreate({
+      title: "Deals page",
+      content: "<!doctype html><p>Deals</p>",
+      type: "html",
+      reads,
+    });
+    expect(res.status).toBe("created");
+    const { rows } = await h.client!.query<{ metadata: { reads?: unknown } }>(
+      `select metadata from documents where id = $1`,
+      [res.documentId!]
+    );
+    expect(rows[0]!.metadata.reads).toEqual(reads);
+  });
+
+  it("GUARDRAIL: reads outside the ceiling, or on a markdown document, are refused before anything is written", async () => {
+    const before = await documentCount();
+    await expect(
+      mcpCreate({
+        title: "Greedy page",
+        content: "<!doctype html><p>x</p>",
+        type: "html",
+        reads: [{ op: "users.list" }],
+      })
+    ).rejects.toThrow(/is not a frame read/);
+    await expect(
+      mcpCreate({
+        title: "Notes",
+        content: "notes",
+        reads: [{ op: "entities.list" }],
+      })
+    ).rejects.toThrow(/only a `type: "html"` document takes it/);
+    expect(await documentCount()).toBe(before);
+  });
+
   it("a type other than markdown or html is refused before anything is written", async () => {
     const { rows: before } = await h.client!.query<{ n: number }>(
       `select count(*)::int as n from documents`

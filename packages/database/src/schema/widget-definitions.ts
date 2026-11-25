@@ -21,6 +21,10 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { CONTENT_KINDS, type ContentKind } from "@synap-core/types/renderables";
+import type {
+  CellBridgeDeclaredReads,
+  CellBridgeDeclaredWrites,
+} from "@synap-core/types/cell-bridge";
 import { workspaces } from "./workspaces.js";
 
 export type WidgetRendererType =
@@ -285,6 +289,28 @@ export const widgetDefinitions = pgTable(
      * clears it: nobody approved that content here).
      */
     contentSha256: text("content_sha256"),
+
+    /**
+     * The reads this cell type's frame DECLARES it makes
+     * (`CellBridgeDeclaredReads`, `@synap-core/types/cell-bridge`): a subset
+     * of the ceiling `CELL_BRIDGE_READ_OPS`, checked by the server on its one
+     * frame read door (`surfaces.frameRead`, Hub `POST /frame/read`), which
+     * refuses a read outside it (`FRAME_READ_UNDECLARED`).
+     *
+     * NULL = declares nothing: every ceiling read is answered, and logged
+     * `declared: false` (hosts and authors migrate). `[]` = reads nothing.
+     * Written through `defineCell` only (omit-is-silence on update). See
+     * migration 0456.
+     */
+    reads: jsonb("reads").$type<CellBridgeDeclaredReads>(),
+
+    /**
+     * The writes this cell type's frame DECLARES (`CellBridgeDeclaredWrites`,
+     * a subset of `CELL_BRIDGE_WRITE_OPS`). Stored for the hosts to check;
+     * the server does not enforce it yet (a frame write still goes through
+     * the governed doors and the cell type's trust). NULL = declares nothing.
+     */
+    writes: jsonb("writes").$type<CellBridgeDeclaredWrites>(),
 
     createdAt: timestamp("created_at", { mode: "date", withTimezone: true })
       .defaultNow()
