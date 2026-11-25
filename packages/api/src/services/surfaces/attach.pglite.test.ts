@@ -56,6 +56,7 @@ vi.mock("../../utils/domain-mutation.js", () => ({
 
 import { pgliteAllTablesDdl } from "../../__tests__/pglite-ddl.js";
 import { surfacesRouter } from "../../routers/surfaces.js";
+import { entitiesRouter } from "../../routers/entities.js";
 import { applyApprovedSurfaceLink } from "./attach.js";
 import { applyCreateSurface } from "./create.js";
 
@@ -343,5 +344,61 @@ describe("surfaces.create (one act: the body and its edge)", () => {
       })
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
     expect(h.permCalls).toHaveLength(0);
+  });
+});
+
+describe("entities.setEntityRenderer (aliased onto the attach door)", () => {
+  const detailLooks = async () =>
+    (
+      await q<{ to_id: string; cell_type: string }>(
+        `select l.to_id, c.cell_type from links l join cell_instances c on c.id::text = l.to_id
+         where l.from_type='entity' and l.from_id=$1 and l.link_type='attaches'
+           and l.to_type='cell_instance' and l.metadata->>'slot' = 'detail'`,
+        [E]
+      )
+    ).rows;
+  const setLook = (cellKey: string | null) =>
+    entitiesRouter
+      .createCaller({
+        authenticated: true,
+        userId: ALICE,
+        workspaceId: W,
+      } as never)
+      .setEntityRenderer({
+        entityId: E,
+        ref: cellKey ? { kind: "cell", cellKey } : null,
+      });
+
+  it("writes the look as the entity's detail attachment, replaces it, and clears it", async () => {
+    const res = await setLook("entity-header");
+    expect(res).toMatchObject({ status: "applied" });
+    expect(h.permCalls[0]).toMatchObject({
+      subjectType: "entity",
+      action: "renderer.set",
+    });
+    expect((await detailLooks()).map((r) => r.cell_type)).toEqual([
+      "entity-header",
+    ]);
+    // The mirror the not-yet-moved clients read.
+    const [row] = (
+      await q<{ system_data: { renderer?: { cellKey?: string } } }>(
+        `select system_data from entities where id=$1`,
+        [E]
+      )
+    ).rows;
+    expect(row!.system_data.renderer?.cellKey).toBe("entity-header");
+    // forObject names it once, as attached in slot detail.
+    const { rows } = await caller(ALICE).forObject({ kind: "entity", id: E });
+    expect(
+      rows.filter((r) => r.slot === "detail" && r.relation === "attached")
+    ).toHaveLength(1);
+
+    await setLook("entity-properties");
+    expect((await detailLooks()).map((r) => r.cell_type)).toEqual([
+      "entity-properties",
+    ]);
+
+    await setLook(null);
+    expect(await detailLooks()).toEqual([]);
   });
 });

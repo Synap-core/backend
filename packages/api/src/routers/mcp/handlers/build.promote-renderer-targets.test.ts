@@ -1,12 +1,13 @@
 /**
  * synap_promote_cell_to_renderer — ONE door for every renderer target.
  *
- * Driven through the real handler. The two doors behind it are stubbed at
- * their seam: the Hub `profiles.setRenderer` caller (renderer_bindings:
- * a kind's records, a playbook, a view) and `bindCapabilityRenderer` (a
- * capability's page-set). What is pinned is the DISPATCH: which door each
- * target reaches, with which subject, and that a capability's other pages
- * survive a one-page bind.
+ * Driven through the real handler. The doors behind it are stubbed at
+ * their seam: the Hub `profiles.setRenderer` caller (renderer_bindings: a
+ * kind's records, a view), `bindCapabilityRenderer` (a capability's
+ * page-set) and the surface door `createSurface` (a PLAYBOOK's own look is
+ * an attached surface since Surfaces P3). What is pinned is the DISPATCH:
+ * which door each target reaches, with which subject, and that a
+ * capability's other pages survive a one-page bind.
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +18,11 @@ const calls = vi.hoisted(() => ({
   readBoundRenderer: vi.fn(),
   assertRendererTargetVisible: vi.fn(),
   assertCellBindable: vi.fn(),
+  createSurface: vi.fn(),
+}));
+
+vi.mock("../../../services/surfaces/create.js", () => ({
+  createSurface: calls.createSurface,
 }));
 
 vi.mock(
@@ -74,6 +80,10 @@ beforeEach(() => {
     status: "proposed",
     proposalId: "p-2",
   });
+  calls.createSurface.mockResolvedValue({
+    status: "proposed",
+    proposalId: "p-3",
+  });
 });
 
 describe("synap_promote_cell_to_renderer — one door, four targets", () => {
@@ -94,22 +104,54 @@ describe("synap_promote_cell_to_renderer — one door, four targets", () => {
     expect(calls.setRenderer.mock.calls[0]![0]).not.toHaveProperty("subjectId");
   });
 
-  it("a playbook target binds THAT playbook's detail in renderer_bindings", async () => {
-    await call({
+  it("a playbook target is ALIASED onto the surface door: an attached cell in its detail slot, replacing the slot's look", async () => {
+    const out = await call({
       target: { kind: "playbook", id: PLAYBOOK },
+      slot: "detail",
+      cellKey: "generated:lead-board",
+      props: { compact: true },
+      scope: "pod",
+      reasoning: "the founder asked for it",
+    });
+    expect(calls.createSurface).toHaveBeenCalledTimes(1);
+    const [actor, input, options] = calls.createSurface.mock.calls[0]!;
+    expect(actor).toMatchObject({
+      userId: "user-1",
+      agentUserId: "agent-1",
+      reasoning: "the founder asked for it",
+    });
+    expect(input).toMatchObject({
+      anchor: { kind: "playbook", id: PLAYBOOK },
+      body: "cell",
+      slot: "detail",
+      spec: { cellKey: "generated:lead-board", props: { compact: true } },
+    });
+    expect(options).toEqual({ replaceSlot: true });
+    expect(calls.setRenderer).not.toHaveBeenCalled();
+    expect(calls.bindCapabilityRenderer).not.toHaveBeenCalled();
+    expect(JSON.parse(out.text)).toMatchObject({
+      status: "proposed",
+      proposalId: "p-3",
+      via: "attached",
+    });
+  });
+
+  it("a view target still binds THAT view's detail in renderer_bindings (a view is not an anchor kind)", async () => {
+    await call({
+      target: { kind: "view", id: PLAYBOOK },
       slot: "detail",
       cellKey: "generated:lead-board",
       scope: "pod",
     });
     expect(calls.setRenderer).toHaveBeenCalledWith(
       expect.objectContaining({
-        profileSlug: "playbook",
+        profileSlug: "view",
         subjectId: PLAYBOOK,
         slot: "detail",
         scope: "pod",
       })
     );
-    expect(calls.bindCapabilityRenderer).not.toHaveBeenCalled();
+    expect(calls.createSurface).not.toHaveBeenCalled();
   });
 
   it("a capability target reaches the capability page-set door and keeps its other pages", async () => {
@@ -222,13 +264,13 @@ describe("synap_promote_cell_to_renderer — one door, four targets", () => {
       source: "pod",
     });
     const out = await call({
-      target: { kind: "playbook", id: PLAYBOOK },
+      target: { kind: "view", id: PLAYBOOK },
       slot: "detail",
       cellKey: "generated:lead-board",
       scope: "pod",
     });
     expect(calls.readBoundRenderer).toHaveBeenCalledWith({
-      target: { kind: "playbook", id: PLAYBOOK },
+      target: { kind: "view", id: PLAYBOOK },
       slot: "detail",
       userId: "user-1",
       workspaceId: null,
