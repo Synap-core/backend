@@ -183,6 +183,37 @@ export async function httpGetJson(
   input: HttpGetJsonInput,
   deps: HttpGetJsonDeps = {}
 ): Promise<HttpGetJsonResult> {
+  const read = await readAllowedJson(
+    input,
+    { maxBytes: MAX_RESPONSE_BYTES },
+    deps
+  );
+  if (read.status !== "ok") return read;
+  const cut = truncateJson(read.json);
+  return { ...read, truncated: cut.truncated, json: cut.value };
+}
+
+/**
+ * The guarded read behind `http.get_json`, WHOLE: every guard above (allow-list
+ * on every hop, https, public addresses, no credentials, a size cap and a
+ * timeout), and the parsed JSON handed back uncut. For a pod door that needs
+ * the whole document (the storybook sync reads a Storybook's index.json and
+ * components manifest); an agent's `http.get_json` gets the cut copy.
+ */
+export async function readAllowedJson(
+  input: HttpGetJsonInput,
+  opts: { maxBytes: number },
+  deps: HttpGetJsonDeps = {}
+): Promise<
+  | {
+      status: "ok";
+      url: string;
+      contentType: string | null;
+      bytes: number;
+      json: unknown;
+    }
+  | Extract<HttpGetJsonResult, { status: "refused" }>
+> {
   let url: URL;
   try {
     url = new URL(input.url.trim());
@@ -265,7 +296,7 @@ export async function httpGetJson(
     );
 
   const got = await fetchGuardedBytes(url.toString(), {
-    maxBytes: MAX_RESPONSE_BYTES,
+    maxBytes: opts.maxBytes,
     timeoutMs: TIMEOUT_MS,
     accept: headers.accept ?? "application/json",
     fetch,
@@ -288,7 +319,11 @@ export async function httpGetJson(
     return {
       status: "refused",
       reason: got.reason,
-      message: `Nothing was read from ${host}: ${FAILURE_WORDS[got.reason]}.`,
+      message: `Nothing was read from ${host}: ${
+        got.reason === "too_large"
+          ? `the answer is larger than ${Math.round(opts.maxBytes / (1024 * 1024))} MB`
+          : FAILURE_WORDS[got.reason]
+      }.`,
     };
   }
 
@@ -303,14 +338,12 @@ export async function httpGetJson(
     };
   }
 
-  const cut = truncateJson(parsed);
   return {
     status: "ok",
     url: url.toString(),
     contentType: got.contentType,
     bytes: got.bytes.byteLength,
-    truncated: cut.truncated,
-    json: cut.value,
+    json: parsed,
   };
 }
 

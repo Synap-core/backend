@@ -59,6 +59,9 @@ const CLASSIFIED: Record<string, string> = {
   // A person's LinkedIn reach (CRM wave 2, S4a): two machine-written keys.
   "api/src/services/connectors/linkedin-reach.ts":
     "merges only linkedinConnection + linkedinInvitedAt (machine-written reach facts) and fills an empty linkedinProviderId (an id); never a kind's lifecycle key",
+  // The Storybook sync's refresh (components as pod entities, plan 48854969).
+  "api/src/services/event-sync/storybook-sync.ts":
+    "merges only SYNC_OWNED_PROPERTIES (code facts) and review-state; the ui kinds' status moves through moveStatus",
 };
 
 const ROOT = join(__dirname, "../../..");

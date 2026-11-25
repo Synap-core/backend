@@ -24227,8 +24227,12 @@ export interface CapabilityCredentialView {
 	contextId: string | null;
 	isDefault: boolean;
 	accountHint: string | null;
-	/** 'nango' when the credential delegates to Nango, else 'vault' (direct key). */
-	kind: "nango" | "vault";
+	/**
+	 * 'nango' when the credential delegates to Nango, 'source' for a SOURCE the
+	 * pod reads that holds no secret at all (a Storybook: its account hint names
+	 * it), else 'vault' (direct key).
+	 */
+	kind: "nango" | "source" | "vault";
 	/**
 	 * Pod-wide (0211): a shared vault key any member may USE for this capability
 	 * without a per-user grant. VAULT ONLY; write-gated to pod-admins.
