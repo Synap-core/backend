@@ -70,8 +70,12 @@ export function registerFrameReadRoutes(app: HubHono): void {
     request: { body: FrameReadBodySchema },
     responses: {
       200: {
-        description: "The read's answer",
-        schema: z.unknown(),
+        description:
+          "The read's answer: exactly what the op's procedure returns (an object, or a list for list reads).",
+        schema: z.union([
+          z.record(z.string(), z.unknown()),
+          z.array(z.unknown()),
+        ]),
       },
       400: { description: "Bad request", schema: FrameReadErrorSchema },
       403: { description: "Forbidden", schema: FrameReadErrorSchema },
