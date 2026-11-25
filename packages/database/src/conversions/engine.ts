@@ -40,6 +40,7 @@ import type {
   RenameProfileOp,
   FoldBookingDealIntoLeadOp,
   RekindByStatusOp,
+  FoldAnchorsIntoAttachmentsOp,
   MergeIntoScope,
 } from "./manifest.js";
 import {
@@ -205,6 +206,12 @@ export interface OpCounts {
   projectTwinsRetired?: number;
   /** retireProjectTwins: their `entity_vectors` (semantic search) rows dropped. */
   entityVectorsDropped?: number;
+  /** foldAnchorsIntoAttachments: `attaches` links written. */
+  attachmentsCreated?: number;
+  /** foldAnchorsIntoAttachments: cell instances made for a cell-by-key look. */
+  cellInstancesCreated?: number;
+  /** foldAnchorsIntoAttachments: legacy anchors left as they are (no space for a cell, a view's own binding, a dangling id). */
+  anchorsKept?: number;
 }
 
 export type OpStatus =
@@ -333,6 +340,8 @@ export const CONVERSION_BOOT_SEVERITY: Record<
   rekindByStatus: "fatal",
   // One transaction; until it lands the twins stay as readable as today.
   retireProjectTwins: "advisory",
+  // Additive (links + cell instances); the legacy anchors stay readable.
+  foldAnchorsIntoAttachments: "advisory",
   // Derivation only: an unfilled column reads as "no status yet"; the declare
   // door and the next boot fill it.
   projectLifecycleColumns: "advisory",
@@ -725,6 +734,8 @@ async function applyOp(
       return applyHeal(tx, "lifecycleListsHealed", dropStaleLifecycleLists);
     case "retireProjectTwins":
       return applyRetireProjectTwins(tx, op.opKey);
+    case "foldAnchorsIntoAttachments":
+      return applyFoldAnchorsIntoAttachments(tx, op);
     case "keep":
     case "extractNonEntity":
       return {}; // Ledger-recorded no-op.
@@ -3248,7 +3259,8 @@ export async function computeCounts(
     }
     case "fillFacetInitialStatus":
     case "dropStaleLifecycleLists":
-    case "retireProjectTwins": {
+    case "retireProjectTwins":
+    case "foldAnchorsIntoAttachments": {
       // Dry run DERIVED from the apply: the same statements, rolled back.
       try {
         await sql.begin(async (tx) => {
@@ -3317,6 +3329,239 @@ async function applyRetireProjectTwins(
   `;
   if (off.count) counts.profilesDeactivated = off.count;
   return counts;
+}
+
+// ─── foldAnchorsIntoAttachments ──────────────────────────────────────────────
+
+/**
+ * Run one parameter-free statement through the TAGGED-template door every
+ * `Sql` here supports (postgres.js and the PGlite shims alike), as
+ * `applyProjectLifecycleColumns` does: never `sql.unsafe`.
+ */
+async function runStatement(tx: Sql, text: string): Promise<unknown> {
+  const strings = Object.assign([text], { raw: [text] });
+  return tx(strings as unknown as TemplateStringsArray);
+}
+
+/**
+ * Where the next attachment on an anchor goes: after the ones it carries.
+ * `n` = the rank of this row among the rows written for that anchor now.
+ */
+const NEXT_POSITION = (fromType: string, fromIdSql: string) =>
+  `(SELECT count(*)::int FROM links lp WHERE lp.from_type = '${fromType}' AND lp.from_id = ${fromIdSql} AND lp.link_type = 'attaches')`;
+
+/**
+ * foldAnchorsIntoAttachments (see FoldAnchorsIntoAttachmentsOp). Each source
+ * is one statement pair: what can move, written as `attaches` links (and, for
+ * a cell-by-key look, a cell instance first); what cannot, counted.
+ */
+async function applyFoldAnchorsIntoAttachments(
+  tx: Sql,
+  op: FoldAnchorsIntoAttachmentsOp
+): Promise<OpCounts> {
+  const counts: OpCounts = {};
+  // `slot` is a SQL expression (a literal `'detail'`, or a column).
+  const meta = (slot: string | null, extra = "") =>
+    `jsonb_build_object('position', ${NEXT_POSITION("__FROM__", "__ID__")} + s.rank${slot ? `, 'slot', ${slot}` : ""}, 'migratedFrom', '${op.source}'${extra})`;
+  const tally = (created: number, cells: number, kept: number) => {
+    if (created) counts.attachmentsCreated = created;
+    if (cells) counts.cellInstancesCreated = cells;
+    if (kept) counts.anchorsKept = kept;
+  };
+  switch (op.source) {
+    case "entity-renderer": {
+      // A `{kind:'cell'}` override on a live entity in a space, not yet moved.
+      const src = `
+        SELECT e.id::text AS anchor_id, e.workspace_id, e.user_id,
+               e.system_data->'renderer' AS r, gen_random_uuid() AS cell_id,
+               0 AS rank
+        FROM entities e
+        WHERE e.deleted_at IS NULL
+          AND e.system_data->'renderer'->>'kind' = 'cell'
+          AND coalesce(e.system_data->'renderer'->>'cellKey', '') <> ''
+          AND e.workspace_id IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM links l
+            WHERE l.from_type = 'entity' AND l.from_id = e.id::text
+              AND l.link_type = 'attaches' AND l.metadata->>'migratedFrom' = '${op.source}')`;
+      const rows = (await runStatement(tx, `
+        WITH s AS MATERIALIZED (${src}),
+        cells AS (
+          INSERT INTO cell_instances (id, workspace_id, user_id, cell_type, config, created_by_kind, trust_level)
+          SELECT s.cell_id, s.workspace_id, s.user_id, s.r->>'cellKey',
+                 CASE WHEN jsonb_typeof(s.r->'props') = 'object' THEN s.r->'props' ELSE '{}'::jsonb END,
+                 'system', 'trusted'
+          FROM s
+          RETURNING id
+        ),
+        edges AS (
+          INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+          SELECT s.workspace_id, 'entity', s.anchor_id, 'cell_instance', s.cell_id::text, 'attaches',
+                 ${meta("'detail'").replace("__FROM__", "entity").replace("__ID__", "s.anchor_id")}, s.user_id
+          FROM s JOIN cells c ON c.id = s.cell_id
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        )
+        SELECT (SELECT count(*)::int FROM cells) AS cells,
+               (SELECT count(*)::int FROM edges) AS edges
+      `)) as unknown as Array<{ cells: number; edges: number }>;
+      const kept = (await runStatement(tx, `
+        SELECT count(*)::int AS n FROM entities e
+        WHERE e.deleted_at IS NULL
+          AND e.system_data->'renderer'->>'kind' = 'cell'
+          AND coalesce(e.system_data->'renderer'->>'cellKey', '') <> ''
+          AND e.workspace_id IS NULL
+      `)) as unknown as Array<{ n: number }>;
+      tally(rows[0]?.edges ?? 0, rows[0]?.cells ?? 0, kept[0]?.n ?? 0);
+      return counts;
+    }
+    case "renderer-binding": {
+      // A playbook's own look (per-object binding). A cell needs a space: the
+      // binding's, else the playbook's.
+      const src = `
+        SELECT b.id::text AS binding_id, b.subject_id AS anchor_id,
+               CASE b.content_kind WHEN 'entity-card' THEN 'card'
+                 WHEN 'entity-profile' THEN 'dashboard'
+                 WHEN 'collection' THEN 'list' ELSE 'detail' END AS slot,
+               coalesce(b.workspace_id, p.workspace_id) AS workspace_id,
+               b.created_by AS user_id, b.ref AS r,
+               gen_random_uuid() AS cell_id, 0 AS rank
+        FROM renderer_bindings b
+        JOIN playbooks p ON p.id::text = b.subject_id
+        WHERE b.subject_kind = 'playbook' AND b.subject_id IS NOT NULL
+          AND b.revoked_at IS NULL AND b.surface = 'app'
+          AND NOT EXISTS (
+            SELECT 1 FROM links l
+            WHERE l.from_type = 'playbook' AND l.from_id = b.subject_id
+              AND l.link_type = 'attaches' AND l.metadata->>'bindingId' = b.id::text)`;
+      const cellRows = (await runStatement(tx, `
+        WITH s AS MATERIALIZED (
+          SELECT * FROM (${src}) x
+          WHERE x.r->>'kind' = 'cell' AND coalesce(x.r->>'cellKey', '') <> ''
+            AND x.workspace_id IS NOT NULL
+        ),
+        cells AS (
+          INSERT INTO cell_instances (id, workspace_id, user_id, cell_type, config, created_by_kind, trust_level)
+          SELECT s.cell_id, s.workspace_id, s.user_id, s.r->>'cellKey',
+                 CASE WHEN jsonb_typeof(s.r->'props') = 'object' THEN s.r->'props' ELSE '{}'::jsonb END,
+                 'system', 'trusted'
+          FROM s
+          RETURNING id
+        ),
+        edges AS (
+          INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+          SELECT s.workspace_id, 'playbook', s.anchor_id, 'cell_instance', s.cell_id::text, 'attaches',
+                 ${meta("s.slot", ", 'bindingId', s.binding_id").replace("__FROM__", "playbook").replace("__ID__", "s.anchor_id")}, s.user_id
+          FROM s JOIN cells c ON c.id = s.cell_id
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        )
+        SELECT (SELECT count(*)::int FROM cells) AS cells,
+               (SELECT count(*)::int FROM edges) AS edges
+      `)) as unknown as Array<{ cells: number; edges: number }>;
+      const viewRows = (await runStatement(tx, `
+        WITH s AS MATERIALIZED (
+          SELECT x.*, x.r->>'viewId' AS view_id FROM (${src}) x
+          WHERE x.r->>'kind' = 'view'
+            AND EXISTS (SELECT 1 FROM views v WHERE v.id::text = x.r->>'viewId')
+        ),
+        edges AS (
+          INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+          SELECT s.workspace_id, 'playbook', s.anchor_id, 'view', s.view_id, 'attaches',
+                 ${meta("s.slot", ", 'bindingId', s.binding_id").replace("__FROM__", "playbook").replace("__ID__", "s.anchor_id")}, s.user_id
+          FROM s
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        )
+        SELECT count(*)::int AS edges FROM edges
+      `)) as unknown as Array<{ edges: number }>;
+      // Left as they are, counted: a VIEW's own binding (a view is not an
+      // anchor kind), a cell look with no space, any other ref kind.
+      const kept = (await runStatement(tx, `
+        SELECT count(*)::int AS n FROM renderer_bindings b
+        LEFT JOIN playbooks p ON p.id::text = b.subject_id
+        WHERE b.subject_id IS NOT NULL AND b.revoked_at IS NULL
+          AND b.subject_kind IN ('playbook', 'view')
+          AND NOT (
+            b.subject_kind = 'playbook' AND p.id IS NOT NULL AND b.surface = 'app' AND (
+              (b.ref->>'kind' = 'cell' AND coalesce(b.ref->>'cellKey', '') <> ''
+                AND coalesce(b.workspace_id, p.workspace_id) IS NOT NULL)
+              OR (b.ref->>'kind' = 'view'
+                AND EXISTS (SELECT 1 FROM views v WHERE v.id::text = b.ref->>'viewId'))
+            )
+          )
+      `)) as unknown as Array<{ n: number }>;
+      tally(
+        (cellRows[0]?.edges ?? 0) + (viewRows[0]?.edges ?? 0),
+        cellRows[0]?.cells ?? 0,
+        kept[0]?.n ?? 0
+      );
+      return counts;
+    }
+    case "entity-bento": {
+      const rows = (await runStatement(tx, `
+        WITH s AS MATERIALIZED (
+          SELECT e.id::text AS anchor_id, e.workspace_id, e.user_id,
+                 v.id::text AS view_id, 0 AS rank
+          FROM entities e
+          JOIN views v ON v.id::text = e.system_data->>'bentoViewId'
+          WHERE e.deleted_at IS NULL
+        ),
+        edges AS (
+          INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+          SELECT s.workspace_id, 'entity', s.anchor_id, 'view', s.view_id, 'attaches',
+                 ${meta(null).replace("__FROM__", "entity").replace("__ID__", "s.anchor_id")}, s.user_id
+          FROM s
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        )
+        SELECT count(*)::int AS edges FROM edges
+      `)) as unknown as Array<{ edges: number }>;
+      const kept = (await runStatement(tx, `
+        SELECT count(*)::int AS n FROM entities e
+        WHERE e.deleted_at IS NULL
+          AND coalesce(e.system_data->>'bentoViewId', '') <> ''
+          AND NOT EXISTS (SELECT 1 FROM views v WHERE v.id::text = e.system_data->>'bentoViewId')
+      `)) as unknown as Array<{ n: number }>;
+      tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
+      return counts;
+    }
+    case "cell-relation": {
+      const rows = (await runStatement(tx, `
+        WITH s AS MATERIALIZED (
+          SELECT DISTINCT ON (r.target_entity_id, r.source_cell_id)
+                 r.target_entity_id::text AS anchor_id, e.workspace_id,
+                 r.user_id, r.source_cell_id::text AS cell_id,
+                 (row_number() OVER (PARTITION BY r.target_entity_id ORDER BY r.created_at, r.source_cell_id) - 1) AS rank
+          FROM relations r
+          JOIN entities e ON e.id = r.target_entity_id AND e.deleted_at IS NULL
+          JOIN cell_instances c ON c.id = r.source_cell_id
+          WHERE r.source_kind = 'cell' AND r.source_cell_id IS NOT NULL
+            AND r.target_entity_id IS NOT NULL
+          ORDER BY r.target_entity_id, r.source_cell_id, r.created_at
+        ),
+        edges AS (
+          INSERT INTO links (workspace_id, from_type, from_id, to_type, to_id, link_type, metadata, created_by)
+          SELECT s.workspace_id, 'entity', s.anchor_id, 'cell_instance', s.cell_id, 'attaches',
+                 ${meta(null).replace("__FROM__", "entity").replace("__ID__", "s.anchor_id")}, s.user_id
+          FROM s
+          ON CONFLICT DO NOTHING
+          RETURNING id
+        )
+        SELECT count(*)::int AS edges FROM edges
+      `)) as unknown as Array<{ edges: number }>;
+      const kept = (await runStatement(tx, `
+        SELECT count(*)::int AS n FROM relations r
+        WHERE r.source_kind = 'cell' AND r.source_cell_id IS NOT NULL
+          AND (
+            NOT EXISTS (SELECT 1 FROM cell_instances c WHERE c.id = r.source_cell_id)
+            OR NOT EXISTS (SELECT 1 FROM entities e WHERE e.id = r.target_entity_id AND e.deleted_at IS NULL)
+          )
+      `)) as unknown as Array<{ n: number }>;
+      tally(rows[0]?.edges ?? 0, 0, kept[0]?.n ?? 0);
+      return counts;
+    }
+  }
 }
 
 /** Run one lifecycle heal and report its row count under `key`. */

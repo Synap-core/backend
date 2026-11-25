@@ -1595,6 +1595,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
+    // Surfaces P3: the governed create / attach / detach (`surface/*` gate).
+    synap_create_surface: WRITE,
+    synap_attach_surface: WRITE,
     // Files ONE composite proposal through the governed pending lane; it never
     // applies anything, and reads only through the playbook get door.
     synap_propose_app_from_playbook: WRITE,

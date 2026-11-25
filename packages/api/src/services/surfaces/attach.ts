@@ -348,7 +348,8 @@ export async function insertAttachment(input: {
       fromId: input.anchor.id,
       toType: input.surface.type,
       toId: input.surface.id,
-      linkType: ATTACHES_LINK_TYPE,
+      // The literal, not the constant: `links-type-ssot` finds producers by it.
+      linkType: "attaches",
       metadata,
       createdBy: input.createdBy,
     })
@@ -778,4 +779,129 @@ export async function readAttachedSurfaces(
     }
   }
   return out;
+}
+
+// ── An object's own look (the aliased per-object renderer doors) ──────────
+
+/**
+ * Take off every attachment the object carries in `slot` (a slot holds one
+ * look). The store write only: callers floored the object and passed a gate.
+ */
+export async function detachSlot(
+  anchor: SurfaceAnchor,
+  slot: string,
+  userId: string,
+  attribution: { agentUserId?: string | null; proposalId?: string | null } = {},
+  toType?: SurfaceRef["type"]
+): Promise<number> {
+  const previous = await db
+    .select({ toType: links.toType, toId: links.toId })
+    .from(links)
+    .where(
+      and(
+        eq(links.fromType, anchor.kind),
+        eq(links.fromId, anchor.id),
+        eq(links.linkType, ATTACHES_LINK_TYPE),
+        drizzleSql`${links.metadata}->>'slot' = ${slot}`,
+        ...(toType ? [eq(links.toType, toType)] : [])
+      )
+    );
+  let removed = 0;
+  for (const p of previous) {
+    removed += await deleteAttachment({
+      anchor,
+      surface: { type: p.toType as SurfaceRef["type"], id: p.toId },
+      userId,
+      attribution,
+    });
+  }
+  return removed;
+}
+
+/**
+ * Make `cellKey` THE look of one object's `detail` slot: the object's
+ * `detail` attachments to a cell instance are taken off and, unless
+ * `cellKey` is null (clear), a new instance of that cell is made in
+ * `workspaceId` and attached in slot `detail`.
+ *
+ * The write half of the doors that used to store a per-object look elsewhere
+ * (`entities.setEntityRenderer` → `entities.system_data.renderer`; the
+ * per-object targets of `synap_promote_cell_to_renderer`). Callers have
+ * floored the object and passed their own gate: this does no authorization.
+ * A cell lives in a space: with no `workspaceId` nothing is attached and the
+ * answer says so (`attached: false`).
+ */
+export async function replaceDetailCellLook(input: {
+  anchor: SurfaceAnchor;
+  cellKey: string | null;
+  props?: Record<string, unknown> | null;
+  workspaceId: string | null;
+  ownerUserId: string;
+  agentUserId?: string | null;
+  proposalId?: string | null;
+}): Promise<{ attached: boolean; surface?: SurfaceRef; removed: number }> {
+  const attribution = {
+    agentUserId: input.agentUserId ?? null,
+    proposalId: input.proposalId ?? null,
+  };
+  const removed = await detachSlot(
+    input.anchor,
+    "detail",
+    input.ownerUserId,
+    attribution,
+    "cell_instance"
+  );
+  if (!input.cellKey || !input.workspaceId) return { attached: false, removed };
+  const [cell] = await db
+    .insert(cellInstances)
+    .values({
+      workspaceId: input.workspaceId,
+      userId: input.ownerUserId,
+      cellType: input.cellKey,
+      config: input.props ?? {},
+      createdByKind: input.agentUserId ? "agent" : "user",
+      trustLevel: input.agentUserId ? "generated" : "trusted",
+    })
+    .returning({ id: cellInstances.id });
+  const surface: SurfaceRef = { type: "cell_instance", id: cell!.id };
+  await insertAttachment({
+    anchor: input.anchor,
+    surface,
+    workspaceId: input.workspaceId,
+    createdBy: input.ownerUserId,
+    meta: { slot: "detail" },
+    attribution,
+  });
+  return { attached: true, surface, removed };
+}
+
+// ── View metadata that anchors (closed to the agent doors) ─────────────────
+
+/**
+ * The `views.metadata` keys that ANCHOR a view to an object, read as such by
+ * the surface find and the home and board doors: a space's home
+ * (`homeScope`), a scoped board (`scopedSurface`), a session's board
+ * (`sessionId`), an entity's bento (`entityId`). Only the pod's own doors
+ * write them (`views.getHome`, `resolveScopedSurface`, `setEntityViewMode`).
+ * An agent door that passed raw metadata through let a key stamp any of them:
+ * a view for an object is made with the surface door instead.
+ */
+export const VIEW_ANCHOR_METADATA_KEYS = [
+  "homeScope",
+  "scopedSurface",
+  "sessionId",
+  "entityId",
+] as const;
+
+/** The sentence refusing anchor keys in agent-supplied view metadata, or null. */
+export function viewAnchorMetadataProblem(
+  metadata: Record<string, unknown> | null | undefined
+): string | null {
+  if (!metadata) return null;
+  const found = VIEW_ANCHOR_METADATA_KEYS.filter((k) =>
+    Object.hasOwn(metadata, k)
+  );
+  return found.length
+    ? `metadata.${found.join(", metadata.")} anchors a view to an object and is written by the pod only. To make a view FOR an object, use synap_create_surface (POST /surfaces) or attach one with synap_attach_surface.`
+    : null;
 }

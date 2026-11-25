@@ -28,6 +28,7 @@ import {
   renderableArrangeError,
 } from "../../services/cells/renderables.js";
 import { recordSessionArtifact } from "../../services/focus-sessions/record-session-artifact.js";
+import { viewAnchorMetadataProblem } from "../../services/surfaces/attach.js";
 import {
   ViewContentSchema,
   assertPipelineHasLifecycle,
@@ -187,6 +188,12 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      // An agent door never stamps the metadata that anchors a view (a home,
+      // a scoped board, a session's board, an entity's bento): Surfaces P3.
+      const anchorProblem = viewAnchorMetadataProblem(input.metadata);
+      if (anchorProblem) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: anchorProblem });
+      }
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       // The session handle rides on the caller context so `views.create`'s
@@ -267,6 +274,10 @@ export const hubViewsRouter = router({
       })
     )
     .mutation(async ({ input, ctx }) => {
+      const anchorProblem = viewAnchorMetadataProblem(input.metadata);
+      if (anchorProblem) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: anchorProblem });
+      }
       const agentUserId = await actingAgentUserId(ctx, input.agentUserId);
       const userId = ctx.userId!;
       let workspaceId = input.workspaceId ?? ctx.workspaceId ?? undefined;

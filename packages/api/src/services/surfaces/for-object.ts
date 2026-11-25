@@ -378,7 +378,9 @@ function sourcesFor(
       );
       break;
     case "playbook":
-      out.push({ source: "renderers", read: () => readRenders(ctx, loaded) });
+      // A playbook's own look was a per-object renderer binding; since P3 it
+      // is an attachment (conversion `p3.surfaces.renderer-binding`, and the
+      // aliased `synap_promote_cell_to_renderer`), read above.
       break;
     case "track":
       // A goal's only surfaces are the ones attached to it.
@@ -492,10 +494,7 @@ async function readRenders(
   loaded: LoadedAnchor
 ): Promise<SurfaceRow[]> {
   const { anchor } = loaded;
-  const target =
-    anchor.kind === "playbook"
-      ? { kind: "playbook" as const, id: anchor.id }
-      : { kind: "profile" as const, slug: loaded.profileSlug! };
+  const target = { kind: "profile" as const, slug: loaded.profileSlug! };
   const slots = RENDERER_TARGETS[target.kind].slots;
   const out: SurfaceRow[] = [];
   for (const slot of slots) {

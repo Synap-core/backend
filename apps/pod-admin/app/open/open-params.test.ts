@@ -3,6 +3,7 @@ import {
   openDocumentTitle,
   openRedirect,
   parseOpenParams,
+  parseOpenSurfaceParam,
 } from "./open-params";
 
 const UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
@@ -134,5 +135,33 @@ describe("openRedirect", () => {
     for (const type of ["entity", "project", "cell", "widget", "session"]) {
       expect(openRedirect(parseOpenParams(type, UUID), true)).toBeNull();
     }
+  });
+});
+
+describe("parseOpenSurfaceParam (?surface=, Surfaces P3)", () => {
+  // The shape the pod's `openLink(id, {kind, surface})` and hub-rest-client's
+  // `openUrl(pod, id, {kind, surface})` build (their parity is pinned by
+  // packages/api/src/utils/deep-links.surface.test.ts).
+  const SURFACE = "11111111-2222-4333-8444-555555555555";
+  const link = `https://pod.example.com/open/entity/${UUID}?surface=${encodeURIComponent(SURFACE)}`;
+
+  it("round-trips the link: the object is hosted, the surface is its id", () => {
+    const url = new URL(link);
+    const [, , type, id] = url.pathname.split("/");
+    expect(parseOpenParams(type!, id!)).toEqual({
+      status: "host",
+      type: "entity",
+      id: UUID,
+    });
+    expect(parseOpenSurfaceParam(url.searchParams.get("surface"))).toBe(
+      SURFACE
+    );
+  });
+
+  it("drops anything that is not one uuid, never fetching it", () => {
+    expect(parseOpenSurfaceParam(undefined)).toBeNull();
+    expect(parseOpenSurfaceParam("")).toBeNull();
+    expect(parseOpenSurfaceParam("view-1")).toBeNull();
+    expect(parseOpenSurfaceParam([SURFACE, "x"])).toBe(SURFACE);
   });
 });

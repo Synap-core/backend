@@ -33,6 +33,10 @@
  * renderer resolution picks a detail cell the pod can run (`RenderedObject`),
  * that cell draws it in the module frame; otherwise the planned fields below.
  *
+ * Its surfaces (`SurfacesSection`, `surfaces.forObject`): the views,
+ * boards, documents, HTML artifacts and cells attached to it, each a door;
+ * omitted when none.
+ *
  * The rules around it (`RulesAroundSection`, `statusOf` reactions): a
  * roll-up that moves it, with its parts' "3 of 5 done", then the rules its
  * own moves set off; omitted when none.
@@ -73,6 +77,7 @@ import { RulesAroundSection } from "../../_lib/object/views/rules-around-section
 import { OpenInAppLink } from "../../_lib/object/open-in-app-link";
 import { RenderedObject } from "../../_lib/object/content/rendered-object";
 import { useReauthOnUnauthorized } from "../../_lib/object/use-reauth";
+import { SurfacesSection } from "../../_lib/object/surfaces-section";
 
 /** The slice of `entities.get({ includeProfile: true })` this page reads. */
 type EntityPayload = {
@@ -280,6 +285,9 @@ export function EntityView({ id }: { id: string }) {
           </>
         }
       />
+      {/* The screens this record carries (Surfaces P3), under its detail:
+          each opens its own page, or this page on it. Omitted when none. */}
+      <SurfacesSection anchor={{ kind: "entity", id }} />
       <RulesAroundSection thingId={id} />
       {!hasBody && connected}
       {hasBody && (

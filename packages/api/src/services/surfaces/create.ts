@@ -43,6 +43,7 @@ import { stampAutoApprovedCreate } from "../proposals/stamp-materialized.js";
 import {
   anchorWorkspaceId,
   attachedSurfaceOpenUrl,
+  detachSlot,
   attachmentMetaProblem,
   insertAttachment,
   surfaceShapeProblem,
@@ -107,7 +108,13 @@ export function surfaceSpecProblem(
  */
 export async function createSurface(
   actor: SurfaceActor,
-  input: CreateSurfaceInput
+  input: CreateSurfaceInput,
+  /**
+   * `replaceSlot`: the new surface becomes THE one in its `slot` (the
+   * object's earlier attachments in that slot are taken off when it lands).
+   * Used by the aliased per-object look doors, where a slot holds one look.
+   */
+  options: { replaceSlot?: boolean } = {}
 ): Promise<CreateOutcome> {
   const shape = surfaceShapeProblem(input.anchor);
   if (shape) return refuse(400, shape);
@@ -159,6 +166,7 @@ export async function createSurface(
     bodyWorkspaceId: bodyWs,
     ...(input.slot ? { slot: input.slot } : {}),
     ...(input.label?.trim() ? { label: input.label.trim() } : {}),
+    ...(options.replaceSlot && input.slot ? { replaceSlot: true } : {}),
   };
   const perm = await checkPermissionOrPropose({
     userId: actor.userId,
@@ -302,6 +310,12 @@ export async function applyCreateSurface(input: {
     proposalId: input.proposalId,
   });
   if (!made.ok) return made;
+  if (d.replaceSlot === true && typeof d.slot === "string") {
+    await detachSlot(anchor, d.slot, owner, {
+      agentUserId: input.agentUserId,
+      proposalId: input.proposalId,
+    });
+  }
   const written = await insertAttachment({
     anchor,
     surface,
