@@ -1,25 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@synap-core/api-types";
 import { ReceiverShell } from "../../_lib/receiver-shell";
 import { HostName } from "../../_lib/host-name";
 import {
+  Accordion,
+  AccordionItem,
+  Alert,
   Button,
   CardBody,
   CardHeader,
-  Checkbox,
   Chip,
-  Radio,
-  RadioGroup,
   Spinner,
   Switch,
 } from "@heroui/react";
 import {
+  Ban,
   Check,
   ChevronRight,
-  Globe,
+  Info,
   Monitor,
   Plug,
   ShieldAlert,
@@ -33,6 +41,7 @@ import Link from "next/link";
 import {
   FIRST_PARTY_CLIENT_NAMES,
   buildObjectActionTitle,
+  humanizeToken,
   resolveOAuthScopeLabel,
 } from "@synap-core/types/vocabulary";
 import { SIGNED_IN_APPS_COPY } from "@synap-core/types/sign-in";
@@ -40,60 +49,41 @@ import { formatRelative } from "../../../lib/format";
 import { trpc } from "../../../lib/trpc";
 import { useDecideOAuthAuthorization } from "../../_lib/presence/use-request-doors";
 import {
-  allowBlockedReason,
-  allowNewAsks,
-  alsoSeeLine,
-  consentHeadline,
   clientDomain,
+  consentClientKind,
   consentWidth,
-  decideLine,
-  decisionsHeading,
-  groupByObject,
-  holdsSpace,
-  initialPodWide,
-  initialSelection,
   invalidRequestHint,
-  isTicked,
-  LEVEL_WORDS,
-  levelControlLabel,
-  newAsks,
-  newAsksAllowed,
-  newPodWideAsks,
-  objectLevel,
-  objectSpaceLabel,
-  objectSpaces,
-  otherSpaces,
-  permissionLabel,
-  POD_WIDE_HEADING,
-  podWideLabel,
-  podWideNote,
-  podWideToApproved,
-  readsSpaceRecords,
-  reasonOf,
-  placeReachNote,
-  scopeLabel,
-  sectionCheckboxLabel,
-  sectionState,
-  setObjectLevel,
-  shownSpaces,
-  spaceCheckboxLabel,
   spaceHintFirst,
-  splitOffer,
-  toApproved,
-  toggle,
-  toggleObjectSpace,
-  togglePodWide,
-  toggleSection,
-  withoutSpace,
-  type AccessLevel,
-  type ActsAs,
-  type ConsentObject,
-  type OfferedPermission,
-  type PodWideOffer,
-  type PodWideSelection,
-  type Selection,
 } from "./consent-model";
-import { AskConsent } from "./AskConsent";
+import {
+  allowNew,
+  canRows,
+  cantGive,
+  heldPermissionsOf,
+  contractDraft,
+  contractOf,
+  firstDraft,
+  heldOfContract,
+  namesOfNamed,
+  offerOfContract,
+  wasPairs,
+  draftBlockedReason,
+  draftHeadline,
+  heldAccessOf,
+  newAllowed,
+  offerOf,
+  placeNames,
+  reconsentChanges,
+  reconsentDraft,
+  setPermission,
+  type CantGive,
+  type ConsentDraft,
+  type ReconsentChange,
+} from "./consent-access";
+import { AccessLines } from "./AccessLines";
+import { consentT } from "./copy";
+import { AskConsent, askCurrentOf, askHeading, askViewOf } from "./AskConsent";
+import { allowPayload, showsErrorScreen } from "./allow-payload";
 
 export interface ConsentParams {
   clientId: string;
@@ -216,7 +206,8 @@ export function ConsentForm({
     (context.data?.podCredentialRequired === true ||
       step.kind === "pod_credential");
 
-  // A pod app (CIMD client): the person narrows what it may touch, per space.
+  // A pod app (CIMD client): the person gives it a draft of AppAccess v2
+  // ("It can", "In", "It changes things in"), bounded by the offer.
   const offered = context.data?.app ?? null;
   const app = useMemo(
     () =>
@@ -228,34 +219,84 @@ export function ConsentForm({
         : null,
     [offered, spaceHint]
   );
-  const [selection, setSelection] = useState<Selection>(new Set());
-  // The pod-wide reads it asks for, ticked apart: one tick each, no space.
-  const [podWideSelection, setPodWideSelection] = useState<PodWideSelection>(
-    new Set()
+  // The W3d contract (`app.access`) when this pod sends it; else today's offer.
+  const contract = useMemo(() => contractOf(app), [app]);
+  const offer = useMemo(
+    () =>
+      app
+        ? contract
+          ? offerOfContract(contract, spaceHint)
+          : offerOf(app)
+        : null,
+    [app, contract, spaceHint]
   );
-  const [customize, setCustomize] = useState(false);
+  const [draft, setDraft] = useState<ConsentDraft | null>(null);
   useEffect(() => {
-    if (app) {
-      setSelection(
-        initialSelection(app.permissions, app.approved, app.templates)
+    if (app && offer) {
+      // A re-consent starts from what the connection holds, a first consent
+      // from the app's declared defaults (`firstDraft`, writes only for an
+      // app Synap checked).
+      setDraft(
+        contract
+          ? contractDraft(contract, offer, { verified: app.verified })
+          : reconsentDraft(heldAccessOf(app.approved), offer, {
+              verified: app.verified,
+            })
       );
-      setPodWideSelection(initialPodWide(app.podWide, app.approved));
     }
-  }, [app]);
-  // The short consent: exactly the pairs the server resolved from the ask,
-  // which an approval ADDS to what the app holds.
+  }, [app, offer, contract]);
+  // A re-consent says what changes first; its title and buttons follow.
+  const confirming = useMemo(
+    () =>
+      !!app &&
+      !!offer &&
+      reconsentChanges(
+        contract ? heldOfContract(contract) : heldAccessOf(app.approved),
+        offer,
+        canRows(offer, app.actsAs.kind),
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved,
+        contract ? heldPermissionsOf(contract) : undefined
+      ).length > 0,
+    [app, offer, contract]
+  );
+  // An app Synap has not checked is named by its domain, never by the name
+  // it gives itself (its `client_name` is its own words).
+  const appName = app
+    ? app.verified
+      ? (context.data?.clientName ?? app.domain)
+      : app.domain
+    : "";
+  const t = consentT();
+  // The short ask: the contract's (v1.1: only when the connection names a
+  // project) when the pod sends it, else today's pairs.
   const ask = app?.ask ?? null;
-  const approved = ask
-    ? ask.pairs.map(({ permission, workspaceId }) => ({
-        permission,
-        workspaceId,
-      }))
-    : app
-      ? [
-          ...toApproved(selection, app.permissions),
-          ...podWideToApproved(podWideSelection, app.podWide),
-        ]
-      : [];
+  const askView = app && offer ? askViewOf({ ask, contract, offer }) : null;
+  // Q4: the first write place a short ask needs. It starts on the ask's own
+  // spaces, else the server's suggestion for an app Synap checked.
+  const [askWrite, setAskWrite] = useState<ConsentDraft | null>(null);
+  const askWriteDraft =
+    askView?.needsWritePlace && offer && app
+      ? (askWrite ?? {
+          ...firstDraft(offer, { verified: app.verified }),
+          write: {
+            spaces:
+              askView.askedSpaceIds.length > 0
+                ? [...askView.askedSpaceIds]
+                : app.verified
+                  ? [...(contract?.places.write.suggestedSpaceIds ?? [])]
+                  : [],
+            projects: [],
+          },
+        })
+      : null;
+  // What Allow sends, from ONE pure rule (`allowPayload`, tested).
+  const payload = allowPayload({
+    app,
+    contract,
+    offer,
+    draft,
+    askWrite: askWriteDraft,
+  });
 
   const act = useCallback(
     (approve: boolean) => {
@@ -264,7 +305,13 @@ export function ConsentForm({
         {
           ...params,
           approve,
-          ...(app ? { approved } : {}),
+          // Typed fields of the decide input (W3d, #1197): today's pairs, the
+          // v2 access, or a short ask's first write place (`allowPayload`).
+          ...(payload.approved ? { approved: payload.approved } : {}),
+          ...(payload.access ? { access: payload.access } : {}),
+          ...(payload.askWritePlace
+            ? { askWritePlace: payload.askWritePlace }
+            : {}),
           // An app sign-in is approved for exactly what this screen showed.
           appSignInFingerprint: context.data?.appSignIn?.fingerprint,
         },
@@ -296,7 +343,7 @@ export function ConsentForm({
         }
       );
     },
-    [decide, params, app, approved, context.data]
+    [decide, params, payload, context.data]
   );
 
   const busy = step.kind === "working";
@@ -341,7 +388,11 @@ export function ConsentForm({
         </span>
         <div className="flex flex-col gap-1">
           <p className="text-xs font-semibold uppercase tracking-[0.06em] text-foreground/65">
-            {firstParty ? "Sign-in request" : "Connection request"}
+            {firstParty
+              ? "Sign-in request"
+              : app && (askView || confirming)
+                ? t("eyebrow.access")
+                : t("eyebrow.connection")}
           </p>
           {firstParty ? (
             <>
@@ -357,45 +408,27 @@ export function ConsentForm({
               </p>
             </>
           ) : app ? (
-            <>
-              {/* A pod app's identity is its DOMAIN (the client_id host), not
-                  the name it gives itself. */}
-              <Chip
-                size="sm"
-                variant="flat"
-                color={app.verified ? "primary" : "warning"}
-                startContent={
-                  app.verified ? (
-                    <ShieldCheck className="h-3 w-3" aria-hidden />
-                  ) : (
-                    <ShieldAlert className="h-3 w-3" aria-hidden />
-                  )
-                }
-              >
-                {app.verified ? "Synap app" : "Unverified app"}
-              </Chip>
-              <h1 className="text-xl font-medium leading-tight text-foreground">
-                <HostName host={app.domain} />
-              </h1>
-              <p className="text-sm leading-relaxed text-foreground/65">
-                {/* Self-chosen display text, rendered as text only. */}
-                Calls itself &ldquo;{context.data?.clientName}&rdquo; and wants
-                to connect to your pod{podHost ? ` ${podHost}` : ""}
-                {identity ? ` as ${identity}` : ""}.
-              </p>
-              {/* The ONE access sentence over what is ticked below: the
-                  grant the token will carry, as the app's page will say it. */}
-              <p className="text-[13px] font-medium leading-relaxed text-foreground/90">
-                {ask
-                  ? ask.title
-                  : consentHeadline(
-                      selection,
-                      app.permissions,
-                      podWideSelection,
-                      app.podWide
-                    )}
-              </p>
-            </>
+            <PodAppHeading
+              domain={app.domain}
+              verified={app.verified}
+              clientName={context.data?.clientName ?? app.domain}
+              podHost={podHost}
+              identity={identity}
+              title={
+                askView
+                  ? // The contract's title names every place (v1.2), but
+                    // only a Synap app's: an unverified app goes by its domain.
+                    askHeading({
+                      verified: app.verified,
+                      serverTitle: contract?.ask?.title,
+                      appName,
+                      count: askView.lines.length,
+                    })
+                  : t(confirming ? "title.confirm" : "title.connect", {
+                      name: appName,
+                    })
+              }
+            />
           ) : (
             <>
               <h1 className="font-heading text-xl font-medium leading-tight tracking-tight text-foreground">
@@ -425,28 +458,50 @@ export function ConsentForm({
           />
         ) : (
           <>
-            {context.isLoading && (
-              <div className="flex items-center justify-center py-10">
-                <Spinner size="sm" />
-              </div>
-            )}
+            {context.isLoading &&
+              (consentClientKind(params.clientId) === "pod_app" ? (
+                <ConsentSkeleton />
+              ) : (
+                <div className="flex items-center justify-center py-10">
+                  <Spinner size="sm" />
+                </div>
+              ))}
 
-            {context.isError && (
-              <Problem
-                title="This authorization request isn't valid"
-                message={context.error.message}
-                hint={invalidRequestHint(params.clientId)}
-              />
-            )}
+            {context.isError &&
+              (isTransient(context.error) ? (
+                <ReadFailed
+                  onRetry={() => void context.refetch()}
+                  retrying={context.isFetching}
+                  onDecline={() => act(false)}
+                  busy={busy}
+                />
+              ) : (
+                <Problem
+                  title="This authorization request isn't valid"
+                  message={context.error.message}
+                  hint={invalidRequestHint(params.clientId)}
+                />
+              ))}
 
             {context.data &&
               app &&
-              ask &&
-              step.kind !== "denied" &&
-              step.kind !== "error" && (
+              offer &&
+              askView &&
+              step.kind !== "denied" && (
                 <AskConsent
-                  appName={context.data.clientName}
-                  ask={ask}
+                  appName={appName}
+                  view={askView}
+                  offer={offer}
+                  current={askCurrentOf(app, contract)}
+                  names={{
+                    ...namesOfNamed(contract?.current),
+                    ...placeNames(offer),
+                  }}
+                  writePlace={
+                    askWriteDraft
+                      ? { draft: askWriteDraft, onChange: setAskWrite }
+                      : null
+                  }
                   busy={busy}
                   step={step}
                   onDecide={act}
@@ -455,69 +510,27 @@ export function ConsentForm({
 
             {context.data &&
               app &&
-              !ask &&
-              step.kind !== "denied" &&
-              step.kind !== "error" && (
+              offer &&
+              draft &&
+              !askView &&
+              step.kind !== "denied" && (
                 <AppConsent
                   app={app}
+                  appName={appName}
                   registeredAt={context.data.registeredAt}
                   redirectHost={context.data.redirectHost}
-                  selection={selection}
-                  onToggle={(permission, workspaceId) =>
-                    setSelection((s) =>
-                      toggle(s, app.permissions, permission, workspaceId)
-                    )
-                  }
-                  onToggleSection={(section) =>
-                    setSelection((s) =>
-                      toggleSection(s, app.permissions, section)
-                    )
-                  }
-                  onSetLevel={(row, level) =>
-                    setSelection((s) =>
-                      setObjectLevel(
-                        s,
-                        app.permissions,
-                        row,
-                        level,
-                        app.templates
-                      )
-                    )
-                  }
-                  onToggleObjectSpace={(row, workspaceId) =>
-                    setSelection((s) =>
-                      toggleObjectSpace(s, app.permissions, row, workspaceId)
-                    )
-                  }
-                  onAllowNewAsks={(asks, allow) =>
-                    setSelection((s) =>
-                      allowNewAsks(s, app.permissions, asks, allow)
-                    )
-                  }
-                  podWideSelection={podWideSelection}
-                  onTogglePodWide={(permissions, on) =>
-                    setPodWideSelection((s) =>
-                      permissions.reduce(
-                        (next, p) => togglePodWide(next, app.podWide, p, on),
-                        s
-                      )
-                    )
-                  }
-                  customize={customize}
-                  onCustomize={setCustomize}
+                  draft={draft}
+                  onDraft={setDraft}
                   onSpaceCreated={() => void context.refetch()}
                   busy={busy}
                   step={step}
-                  blockedReason={allowBlockedReason(
-                    app.permissions,
-                    selection,
-                    {
-                      offered: app.podWide.length,
-                      ticked: podWideToApproved(podWideSelection, app.podWide)
-                        .length,
-                    }
+                  blockedReason={draftBlockedReason(
+                    draft,
+                    offer,
+                    canRows(offer, app.actsAs.kind)
                   )}
                   onDecide={act}
+                  spaceHint={spaceHint}
                 />
               )}
 
@@ -681,7 +694,7 @@ export function ConsentForm({
                     Declined
                   </p>
                   <p className="max-w-[18rem] text-xs text-foreground/65">
-                    {ask
+                    {askView || (app && app.approved.length > 0)
                       ? "Nothing was added; what it already has stays. You can close this tab."
                       : "Nothing was connected. You can close this tab."}
                   </p>
@@ -689,7 +702,7 @@ export function ConsentForm({
               </div>
             )}
 
-            {step.kind === "error" && (
+            {step.kind === "error" && showsErrorScreen(step, app) && (
               <div className="flex flex-col gap-4">
                 <Problem
                   title="Couldn't complete the authorization"
@@ -873,671 +886,199 @@ export function FirstPartyConsent({
 }
 
 /** A pod app's consent section, as `getOAuthConsentContext` returns it. */
-type ConsentApp = NonNullable<
+export type ConsentApp = NonNullable<
   inferRouterOutputs<AppRouter>["apiKeys"]["getOAuthConsentContext"]["app"]
 >;
 
-/**
- * Every checkbox on this screen (a space, a section's "All"):
- * - base: a 40px row to tap, with no two rows' hit areas overlapping
- *   (HeroUI's base is `p-2 -m-2`);
- * - wrapper: an unticked box drawn in `default-500`. HeroUI's own
- *   `before:border-default` is `default` (#1B1E22 dark, #F4F2EE light), the
- *   card's colour, so an empty box all but vanished. `default-500` against the
- *   card: 5.0:1 dark, 4.6:1 light (non-text needs 3:1). Here only: pod-admin
- *   has no shared checkbox.
- */
-export const CONSENT_CHECKBOX = {
-  base: "my-0 min-h-10 py-0",
-  wrapper: "before:border-default-500",
-} as const;
-
-/**
- * A section's heading and its one tri-state checkbox: every permission ×
- * space of the section ticked, some, or none. A section with no space to give
- * has nothing to select, so it gets no checkbox.
- */
-function SectionHeading({
-  id,
-  title,
-  section,
-  permissions,
-  selection,
-  onToggleSection,
-  busy,
-}: {
-  id: string;
-  title: string;
-  section: "grants" | "decisions";
-  permissions: readonly OfferedPermission[];
-  selection: Selection;
-  onToggleSection: () => void;
-  busy: boolean;
-}) {
-  const state = sectionState(selection, permissions);
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-x-3">
-      <p
-        id={id}
-        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
-      >
-        <ShieldCheck className="h-3 w-3" aria-hidden /> {title}
-      </p>
-      {permissions.some((p) => p.workspaces.length > 0) ? (
-        <Checkbox
-          size="sm"
-          classNames={CONSENT_CHECKBOX}
-          aria-label={sectionCheckboxLabel(section)}
-          isSelected={state === "all"}
-          isIndeterminate={state === "some"}
-          isDisabled={busy}
-          onValueChange={onToggleSection}
-        >
-          All
-        </Checkbox>
-      ) : null}
-    </div>
+/** The consent's own copy of the app's offer and rows, derived once per app. */
+export function useConsentModel(app: ConsentApp, spaceHint?: string) {
+  // The W3d contract when this pod sends it (`app.access`), else today's
+  // per-permission offer: one model either way.
+  const contract = useMemo(() => contractOf(app), [app]);
+  const offer = useMemo(
+    () => (contract ? offerOfContract(contract, spaceHint) : offerOf(app)),
+    [app, contract, spaceHint]
   );
-}
-
-/** One line per permission, with a tick for each space it may be given in. */
-function PermissionList({
-  permissions,
-  selection,
-  onToggle,
-  busy,
-}: {
-  permissions: readonly OfferedPermission[];
-  selection: Selection;
-  onToggle: (permission: string, workspaceId: string) => void;
-  busy: boolean;
-}) {
-  const groupId = useId();
-  return (
-    <ul className="flex flex-col gap-3">
-      {permissions.map((p, i) => {
-        const labelId = `${groupId}-p${i}`;
-        const reason = reasonOf(p);
-        return (
-          <li key={p.permission} className="flex flex-col gap-1.5">
-            <span id={labelId} className="text-sm text-foreground/85">
-              {permissionLabel(p.permission)}{" "}
-              <span className="font-mono text-xs text-foreground/65">
-                {p.permission}
-              </span>
-            </span>
-            {reason ? (
-              <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-                {/* The developer's words, as text: why it asks. */}
-                <span className="text-foreground/65">Its reason: </span>
-                {reason}
-              </p>
-            ) : null}
-            {p.workspaces.length === 0 ? (
-              <span className="text-xs text-foreground/65">
-                You have no space where you can give it this.
-              </span>
-            ) : (
-              <div
-                role="group"
-                aria-labelledby={labelId}
-                className="flex flex-wrap gap-x-4"
-              >
-                {p.workspaces.map((w) => (
-                  <Checkbox
-                    key={w.workspaceId}
-                    size="sm"
-                    classNames={CONSENT_CHECKBOX}
-                    aria-label={spaceCheckboxLabel(
-                      p.permission,
-                      w.workspaceName
-                    )}
-                    isSelected={isTicked(
-                      selection,
-                      p.permission,
-                      w.workspaceId
-                    )}
-                    isDisabled={busy}
-                    onValueChange={() => onToggle(p.permission, w.workspaceId)}
-                  >
-                    {w.workspaceName}
-                  </Checkbox>
-                ))}
-              </div>
-            )}
-          </li>
-        );
-      })}
-    </ul>
+  const rows = useMemo(
+    () => canRows(offer, app.actsAs.kind),
+    [offer, app.actsAs.kind]
   );
+  const held = useMemo(
+    () => (contract ? heldOfContract(contract) : heldAccessOf(app.approved)),
+    [app.approved, contract]
+  );
+  const changes = useMemo(
+    () =>
+      reconsentChanges(
+        held,
+        offer,
+        rows,
+        contract?.reconsent ? wasPairs(contract.reconsent) : app.approved,
+        // What the connection already holds is never a "new" ask (C4).
+        contract ? heldPermissionsOf(contract) : undefined
+      ),
+    [held, offer, rows, app.approved, contract]
+  );
+  const names = useMemo(
+    () => ({
+      ...namesOfNamed(contract?.current),
+      ...namesOfNamed(contract?.reconsent?.proposed),
+      ...placeNames(offer),
+    }),
+    [contract, offer]
+  );
+  return { contract, offer, rows, held, changes, names };
 }
 
 /**
- * A row's level control: a segmented radio group (arrow keys move, one tab
- * stop), named for its object. The ring is `default-500` (5.0:1 dark, 4.6:1
- * light against the card, as `CONSENT_CHECKBOX`); the segments are 36px
- * inside a 2px inset, so each target is 40px tall. A level that gives
- * something fills with the primary colour; Off fills neutral.
- */
-export const LEVEL_GROUP = {
-  base: "shrink-0 gap-0",
-  wrapper:
-    "flex-nowrap gap-0.5 rounded-lg p-0.5 ring-1 ring-inset ring-default-500",
-} as const;
-const SEGMENT_BASE =
-  "m-0 min-h-9 min-w-12 max-w-none justify-center rounded-md px-3 py-0 hover:bg-default-100 data-[focus-visible=true]:z-10 data-[focus-visible=true]:ring-2 data-[focus-visible=true]:ring-focus";
-export const LEVEL_SEGMENT = {
-  base: `${SEGMENT_BASE} data-[selected=true]:bg-primary data-[selected=true]:hover:bg-primary`,
-  wrapper: "hidden",
-  labelWrapper: "m-0 ml-0",
-  label:
-    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-primary-foreground",
-} as const;
-export const LEVEL_SEGMENT_OFF = {
-  ...LEVEL_SEGMENT,
-  base: `${SEGMENT_BASE} data-[selected=true]:bg-default-200 data-[selected=true]:hover:bg-default-200`,
-  label:
-    "text-sm text-foreground/80 group-data-[selected=true]:font-medium group-data-[selected=true]:text-foreground",
-} as const;
-
-function LevelControl({
-  row,
-  actsAs,
-  level,
-  isDisabled,
-  onChange,
-}: {
-  row: ConsentObject;
-  actsAs: ActsAs;
-  level: AccessLevel;
-  isDisabled: boolean;
-  onChange: (level: AccessLevel) => void;
-}) {
-  return (
-    <RadioGroup
-      orientation="horizontal"
-      aria-label={levelControlLabel(row, actsAs)}
-      value={level}
-      isDisabled={isDisabled}
-      onValueChange={(v) => onChange(v as AccessLevel)}
-      classNames={LEVEL_GROUP}
-    >
-      {row.levels.map((l) => (
-        <Radio
-          key={l}
-          value={l}
-          classNames={l === "off" ? LEVEL_SEGMENT_OFF : LEVEL_SEGMENT}
-        >
-          {LEVEL_WORDS[l]}
-        </Radio>
-      ))}
-    </RadioGroup>
-  );
-}
-
-/**
- * One object the app asks about: its name and where it is given (the
- * button opens its detail), and its level. The detail lists each permission
- * in words with its raw token, the developer's reason, and a tick per space:
- * the row's own and default spaces, then the rest behind "Also allow in
- * another space…". "It can also see" names its objects instead, and its
- * detail lists each as its own row (View or Off, its own spaces).
- */
-function ObjectRow({
-  row,
-  actsAs,
-  selection,
-  templates,
-  podWide,
-  busy,
-  onSetLevel,
-  onToggleSpace,
-}: {
-  row: ConsentObject;
-  /** Who the app's token acts as: how a decision row says what it does. */
-  actsAs: ActsAs;
-  selection: Selection;
-  templates: readonly string[];
-  /** The row's kind is kept pod-wide (the server's `podWideKinds`). */
-  podWide: (row: ConsentObject) => boolean;
-  busy: boolean;
-  onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
-  onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
-}) {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  const folded = row.members.length > 0;
-  const scope = folded
-    ? alsoSeeLine(selection, row)
-    : scopeLabel(objectSpaces(selection, row));
-  const noSpace = row.permissions.every((p) => p.workspaces.length === 0);
-  return (
-    <li className="flex flex-col py-1" data-object={row.key}>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        <button
-          type="button"
-          aria-expanded={open}
-          aria-controls={`${id}-detail`}
-          onClick={() => setOpen((o) => !o)}
-          className="-mx-1 flex min-h-10 min-w-0 flex-1 basis-40 items-center gap-1.5 rounded-md px-1 text-left hover:bg-foreground/[0.04] focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-        >
-          <ChevronRight
-            aria-hidden
-            className={`h-4 w-4 shrink-0 text-foreground/65 transition-transform ${open ? "rotate-90" : ""}`}
-          />
-          <span className="flex min-w-0 flex-col">
-            <span className="text-sm font-medium text-foreground/90">
-              {row.label}
-            </span>
-            {scope ? (
-              <span className="text-xs text-foreground/65">{scope}</span>
-            ) : row.decisions ? (
-              <span className="text-xs text-foreground/65">
-                {decideLine(row, actsAs)}
-              </span>
-            ) : null}
-          </span>
-        </button>
-        {noSpace ? (
-          <span className="text-xs text-foreground/65">No space to give</span>
-        ) : (
-          <LevelControl
-            row={row}
-            actsAs={actsAs}
-            level={objectLevel(selection, row)}
-            isDisabled={busy}
-            onChange={(level) => onSetLevel(row, level)}
-          />
-        )}
-      </div>
-      <div
-        id={`${id}-detail`}
-        hidden={!open}
-        // A class's `display` beats the `hidden` attribute: keep both.
-        className={`${open ? "flex" : "hidden"} flex-col gap-2 pb-2 pl-6 pt-1`}
-      >
-        {folded ? (
-          <ul className="flex flex-col divide-y divide-foreground/10">
-            {row.members.map((m) => (
-              <ObjectRow
-                key={m.key}
-                row={m}
-                actsAs={actsAs}
-                selection={selection}
-                templates={templates}
-                podWide={podWide}
-                busy={busy}
-                onSetLevel={onSetLevel}
-                onToggleSpace={onToggleSpace}
-              />
-            ))}
-          </ul>
-        ) : (
-          <ObjectDetail
-            row={row}
-            selection={selection}
-            templates={templates}
-            podWide={podWide(row)}
-            busy={busy}
-            onToggleSpace={onToggleSpace}
-          />
-        )}
-      </div>
-    </li>
-  );
-}
-
-/** A row's detail: its permissions in words, its reasons, a tick per space. */
-function ObjectDetail({
-  row,
-  selection,
-  templates,
-  podWide,
-  busy,
-  onToggleSpace,
-}: {
-  row: ConsentObject;
-  selection: Selection;
-  templates: readonly string[];
-  podWide: boolean;
-  busy: boolean;
-  onToggleSpace: (row: ConsentObject, workspaceId: string) => void;
-}) {
-  const id = useId();
-  const [more, setMore] = useState(false);
-  const shown = shownSpaces(selection, row, templates);
-  const others = otherSpaces(selection, row, templates);
-  const tick = (w: { workspaceId: string; workspaceName: string }) => (
-    <Checkbox
-      key={w.workspaceId}
-      size="sm"
-      classNames={CONSENT_CHECKBOX}
-      aria-label={objectSpaceLabel(row, w.workspaceName)}
-      isSelected={holdsSpace(selection, row, w.workspaceId)}
-      isDisabled={busy}
-      onValueChange={() => onToggleSpace(row, w.workspaceId)}
-    >
-      {w.workspaceName}
-    </Checkbox>
-  );
-  return (
-    <>
-      <ul className="flex flex-col gap-1.5">
-        {row.permissions.map((p) => {
-          const reason = reasonOf(p);
-          return (
-            <li key={p.permission} className="flex flex-col gap-0.5">
-              <span className="text-xs text-foreground/85">
-                {permissionLabel(p.permission)}{" "}
-                <span className="font-mono text-[11px] text-foreground/65">
-                  {p.permission}
-                </span>
-              </span>
-              {reason ? (
-                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
-                  {/* The developer's words, as text: why it asks. */}
-                  <span className="text-foreground/65">Its reason: </span>
-                  {reason}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-      {podWide ? (
-        <p className="text-xs leading-relaxed text-foreground/75">
-          {podWideNote(row)}
-        </p>
-      ) : null}
-      {shown.length > 0 ? (
-        <div
-          role="group"
-          aria-label={`${row.label}: where`}
-          className="flex flex-wrap gap-x-4"
-        >
-          {shown.map(tick)}
-        </div>
-      ) : null}
-      {others.length > 0 ? (
-        <>
-          <button
-            type="button"
-            aria-expanded={more}
-            aria-controls={`${id}-more`}
-            onClick={() => setMore((m) => !m)}
-            className="flex min-h-10 items-center self-start rounded-sm text-xs text-foreground/75 underline underline-offset-2 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-          >
-            Also allow in another space…
-          </button>
-          <div
-            id={`${id}-more`}
-            hidden={!more}
-            role="group"
-            aria-label={`${row.label}: other spaces`}
-            className={`${more ? "flex" : "hidden"} flex-wrap gap-x-4`}
-          >
-            {others.map(tick)}
-          </div>
-        </>
-      ) : null}
-    </>
-  );
-}
-
-/**
- * A pod app's consent (spec 17 §9.1): its domain is the headline (above), and
- * the person gives it, OBJECT by object, a level (Edit, View or Off) in the
- * spaces made from its declared templates (`groupByObject`, `setObjectLevel`)
- * — only from what the pod offers, so the screen can narrow and never widen.
- * "Customize…" shows the permission × space matrix, each section selecting
- * or clearing as a whole; both views edit the same selection.
+ * A pod app's consent (design A, ui-design 814c0b8d): the live headline,
+ * then three lines, "It can", "In" and "It changes things in", each with one
+ * door. A re-consent first says what changes, each with a door that narrows
+ * it; what it asks that cannot be given is folded below. Every choice edits
+ * ONE draft (AppAccess v2's shape, `consent-access`), bounded by the offer:
+ * the screen can narrow and never widen.
  */
 export function AppConsent({
   app,
+  appName,
   registeredAt,
   redirectHost,
-  selection,
-  onToggle,
-  onToggleSection,
-  onSetLevel,
-  onToggleObjectSpace,
-  onAllowNewAsks,
-  podWideSelection,
-  onTogglePodWide,
-  customize,
-  onCustomize,
+  draft,
+  onDraft,
   onSpaceCreated,
   busy,
   step,
   blockedReason,
   onDecide,
+  defaultOpen,
+  spaceHint,
 }: {
   app: ConsentApp;
+  /** The launch's space, listed first (order only, never sent). */
+  spaceHint?: string;
+  /** What the app calls itself: the domain for an app Synap has not checked. */
+  appName: string;
   registeredAt: Date | string;
   redirectHost: string;
-  selection: Selection;
-  onToggle: (permission: string, workspaceId: string) => void;
-  /** The section checkbox pressed (`toggleSection` on that section). */
-  onToggleSection: (section: readonly OfferedPermission[]) => void;
-  /** A row's level pressed (`setObjectLevel`). */
-  onSetLevel: (row: ConsentObject, level: AccessLevel) => void;
-  /** A row's space tick pressed (`toggleObjectSpace`). */
-  onToggleObjectSpace: (row: ConsentObject, workspaceId: string) => void;
-  /** "Allow the new ones" pressed (`allowNewAsks` over these asks). */
-  onAllowNewAsks: (asks: readonly OfferedPermission[], allow: boolean) => void;
-  /** The pod-wide reads ticked (`app.podWide`, one tick each, no space). */
-  podWideSelection: PodWideSelection;
-  /**
-   * Pod-wide reads pressed (`togglePodWide`): set to `on`, or flipped when
-   * `on` is omitted.
-   */
-  onTogglePodWide: (permissions: readonly string[], on?: boolean) => void;
-  /**
-   * The full permission × space matrix is shown instead of the rows. Both
-   * edit the same `selection`.
-   */
-  customize: boolean;
-  onCustomize: (customize: boolean) => void;
+  draft: ConsentDraft;
+  onDraft: (next: ConsentDraft) => void;
   onSpaceCreated: () => void;
   busy: boolean;
   step: Step;
-  /** Why Allow cannot be pressed (`allowBlockedReason`), or null. */
+  /** Why Allow cannot be pressed (`draftBlockedReason`), or null. */
   blockedReason: string | null;
   onDecide: (approve: boolean) => void;
+  /** Which line's sheet starts open (a test, a screenshot). */
+  defaultOpen?: "can" | "in" | "write" | null;
 }) {
-  const missing = withoutSpace(app.permissions);
-  // Decisions (approve / reject) are their own line, never part of a write.
-  const { grants, decisions } = splitOffer(app.permissions);
-  const actsAs = app.actsAs.kind;
-  const rows = useMemo(
-    () => groupByObject(app.permissions, actsAs),
-    [app.permissions, actsAs]
-  );
-  const objects = rows.filter((r) => !r.decisions);
-  const decide = rows.filter((r) => r.decisions);
-  // A re-consent: what it asks now that the person never allowed (`newAsks`).
-  const asks = useMemo(
-    () => newAsks(app.permissions, app.approved, app.templates),
-    [app.permissions, app.approved, app.templates]
-  );
-  const podWideAsks = useMemo(
-    () => newPodWideAsks(app.podWide, app.approved),
-    [app.podWide, app.approved]
-  );
+  const t = consentT();
+  const { offer, rows, held, changes, names } = useConsentModel(app, spaceHint);
   const groupId = useId();
-  // The server's list of pod-wide kinds, never a hand list.
-  const podWide = (row: ConsentObject) =>
-    !!row.kind && app.podWideKinds.includes(row.kind);
-  const objectRow = (row: ConsentObject) => (
-    <ObjectRow
-      key={row.key}
-      row={row}
-      actsAs={actsAs}
-      selection={selection}
-      templates={app.templates}
-      podWide={podWide}
-      busy={busy}
-      onSetLevel={onSetLevel}
-      onToggleSpace={onToggleObjectSpace}
-    />
-  );
+  const confirming = changes.length > 0;
+  const moved = changes.filter((c) => c.mark !== "new");
+  // "It can" changed only when the person changed it here: a narrowing door
+  // pressed, or the new asks switched on (P4). "In" changes with the new form.
+  const canChanged =
+    moved.some(
+      (c) => c.mark === "wider" && !draft.permissions.has(c.permission)
+    ) ||
+    changes.some(
+      (c) => c.mark === "new" && draft.permissions.has(c.permission)
+    );
+  const cannot = cantGive(offer, app.ignoredScopes);
+  const headline = draftHeadline(draft, offer, rows, names);
+  const failed = step.kind === "error" ? step.message : null;
   return (
     <>
-      {asks.length + podWideAsks.length > 0 && (
-        <NewAsks
-          asks={asks}
-          podWide={podWideAsks}
-          allowed={
-            (asks.length === 0 || newAsksAllowed(selection, asks)) &&
-            podWideAsks.every((o) => podWideSelection.has(o.permission))
-          }
+      {confirming ? (
+        <ReconsentCallout
+          appName={appName}
+          changes={changes}
+          draft={draft}
           busy={busy}
-          onAllow={(allow) => {
-            if (asks.length > 0) onAllowNewAsks(asks, allow);
-            if (podWideAsks.length > 0)
-              onTogglePodWide(
-                podWideAsks.map((o) => o.permission),
-                allow
-              );
-          }}
+          onDraft={onDraft}
         />
-      )}
-      <div className="flex flex-col gap-3 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10">
-        {/* The widest reach first, as on the app's page: no space limits it. */}
-        {app.podWide.length > 0 && (
-          <PodWideReads
-            podWide={app.podWide}
-            selection={podWideSelection}
-            onToggle={(permission) => onTogglePodWide([permission])}
-            busy={busy}
-          />
-        )}
-        {!customize && objects.length > 0 && (
-          <section
-            aria-labelledby={`${groupId}-objects`}
-            className="flex flex-col"
-          >
-            <p
-              id={`${groupId}-objects`}
-              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
-            >
-              <ShieldCheck className="h-3 w-3" aria-hidden /> It asks to
-            </p>
-            <ul className="flex flex-col divide-y divide-foreground/10">
-              {objects.map(objectRow)}
-            </ul>
-          </section>
-        )}
-        {!customize && decide.length > 0 && (
-          <section
-            aria-labelledby={`${groupId}-decide`}
-            className="flex flex-col"
-          >
-            <p
-              id={`${groupId}-decide`}
-              className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
-            >
-              <ShieldCheck className="h-3 w-3" aria-hidden />{" "}
-              {decisionsHeading(actsAs)}
-            </p>
-            <ul className="flex flex-col">{decide.map(objectRow)}</ul>
-          </section>
-        )}
-        {customize && grants.length > 0 && (
-          <section
-            aria-labelledby={`${groupId}-grants`}
-            className="flex flex-col gap-1"
-          >
-            <SectionHeading
-              id={`${groupId}-grants`}
-              title="It asks to"
-              section="grants"
-              permissions={grants}
-              selection={selection}
-              onToggleSection={() => onToggleSection(grants)}
-              busy={busy}
-            />
-            <PermissionList
-              permissions={grants}
-              selection={selection}
-              onToggle={onToggle}
-              busy={busy}
-            />
-          </section>
-        )}
-        {customize && decisions.length > 0 && (
-          <section
-            aria-labelledby={`${groupId}-decisions`}
-            className="flex flex-col gap-1"
-          >
-            <SectionHeading
-              id={`${groupId}-decisions`}
-              title={decisionsHeading(actsAs)}
-              section="decisions"
-              permissions={decisions}
-              selection={selection}
-              onToggleSection={() => onToggleSection(decisions)}
-              busy={busy}
-            />
-            <PermissionList
-              permissions={decisions}
-              selection={selection}
-              onToggle={onToggle}
-              busy={busy}
-            />
-            <p className="pt-2 text-xs leading-relaxed text-foreground/65">
-              Each decision is yours, on one change at a time. Nothing above
-              includes it: tick the spaces where you allow it.
-            </p>
-          </section>
-        )}
-        {/* Once, under the rows or the matrix, for any record read (rv-ui U1/U3). */}
-        {readsSpaceRecords(app.permissions) && (
-          <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-            {placeReachNote("spaces")}
-          </p>
-        )}
-        {rows.length > 0 && (
-          <Button
-            size="sm"
-            variant="light"
-            radius="md"
-            className="min-h-10 self-start px-2 text-foreground/80"
-            isDisabled={busy}
-            onPress={() => onCustomize(!customize)}
-          >
-            {customize ? "Simple view" : "Customize…"}
-          </Button>
-        )}
-        {app.ignoredScopes.length > 0 && (
-          <p className="text-xs text-foreground/65">
-            It also asked for {app.ignoredScopes.join(", ")}, which apps are not
-            given.
-          </p>
-        )}
+      ) : null}
+      {/* The ONE access sentence over the draft: the grant the token will
+          carry, as the app's page will say it. */}
+      <p
+        aria-live="polite"
+        className="text-pretty text-sm leading-relaxed text-foreground/90"
+      >
+        {headline}
+      </p>
+      <AccessLines
+        mode="consent"
+        appName={appName}
+        declaredPlaces={offer.templates.length > 0}
+        draft={draft}
+        offer={offer}
+        rows={rows}
+        actsAs={app.actsAs.kind}
+        podWideKinds={app.podWideKinds}
+        names={names}
+        live={headline}
+        onChange={onDraft}
+        isDisabled={busy}
+        defaultOpen={defaultOpen}
+        marks={{
+          can: canChanged ? { text: t("mark.changed"), tone: "primary" } : null,
+          in:
+            held.kind === "reconsent" && moved.length > 0
+              ? { text: t("mark.changed"), tone: "primary" }
+              : null,
+        }}
+      />
+      {cannot.length > 0 ? (
+        <CantGiveFold
+          items={cannot}
+          create={
+            // Only what no space can hold is fixed by creating one (U5).
+            cannot.some((c) => c.why === "noSpace") ? (
+              <CreateSpace
+                templates={app.templates}
+                domain={app.domain}
+                onCreated={onSpaceCreated}
+              />
+            ) : null
+          }
+        />
+      ) : null}
+      <div className="flex flex-col gap-1">
         {/* Who its token acts as, in the server's words (`actsAs`). */}
         <p className="text-xs leading-relaxed text-foreground/65">
           {app.actsAs.note}
         </p>
-        <div className="flex flex-col gap-1 pt-0.5">
-          <span className="text-sm text-foreground/65">Sends you back to</span>
+        <div className="flex flex-wrap items-baseline gap-x-1.5 text-xs text-foreground/65">
+          <span>{t("facts.sendsBack")}</span>
           <HostName
             host={redirectHost}
-            className="text-sm text-foreground/90"
+            className="text-xs text-foreground/90"
           />
+          <span aria-hidden>·</span>
+          <span>
+            {t("facts.firstSeen")} {formatRelative(registeredAt)}
+          </span>
         </div>
-        <Row label="First seen" value={formatRelative(registeredAt)} />
       </div>
 
-      {missing.length > 0 && (
-        <CreateSpace
-          templates={app.templates}
-          domain={app.domain}
-          onCreated={onSpaceCreated}
+      {failed !== null ? (
+        <Alert
+          color="danger"
+          role="alert"
+          title={t("allowFailed.title", { name: appName })}
+          description={
+            <span className="flex flex-col gap-0.5">
+              <span>{t("allowFailed.hint")}</span>
+              {failed ? (
+                <span className="break-words text-xs">{failed}</span>
+              ) : null}
+            </span>
+          }
         />
-      )}
+      ) : null}
 
-      <div className="flex flex-col gap-2">
+      <div className="sticky bottom-0 -mx-7 flex flex-col gap-2 bg-content1 px-7 pb-1 pt-2 md:static md:mx-0 md:bg-transparent md:px-0 md:pt-0">
         <div className="flex gap-2.5">
           <Button
             color="primary"
@@ -1549,7 +1090,11 @@ export function AppConsent({
             aria-describedby={blockedReason ? `${groupId}-blocked` : undefined}
             onPress={() => onDecide(true)}
           >
-            Allow
+            {failed !== null
+              ? t("act.tryAgain")
+              : confirming
+                ? t("act.confirm")
+                : t("act.allow")}
           </Button>
           <Button
             variant="flat"
@@ -1560,7 +1105,7 @@ export function AppConsent({
             isLoading={busy && step.kind === "working" && !step.approve}
             onPress={() => onDecide(false)}
           >
-            Decline
+            {confirming ? t("act.notNow") : t("act.decline")}
           </Button>
         </div>
         {blockedReason ? (
@@ -1573,190 +1118,224 @@ export function AppConsent({
         ) : null}
       </div>
       <p className="text-pretty text-center text-xs leading-relaxed text-foreground/65">
-        You can revoke it at any time from{" "}
+        {t("revoke.before")}{" "}
         <a
           href="/my-connections"
           className="text-foreground/75 underline underline-offset-2"
         >
-          Connected
+          {t("revoke.link")}
         </a>
-        . Revoking there stops it in every browser, not just this one.
+        {t("revoke.after")}
       </p>
     </>
   );
 }
 
-/**
- * A re-consent's new asks, first (`newAsks`): each in words with its raw
- * token, the developer's reason and its spaces, then ONE switch. The switch is
- * read from the selection (`newAsksAllowed`), never held apart: On ticks
- * exactly these pairs, and the rows below move with them. It starts Off: the
- * pod keeps what the person approved, not what they were asked, so a past
- * "no" is indistinguishable from a new ask, and re-ticking it is their act.
- * Omitted when nothing is new (a first consent, or the same ask again).
- */
-function NewAsks({
-  asks,
-  podWide,
-  allowed,
+export function ReconsentCallout({
+  appName,
+  changes,
+  draft,
   busy,
-  onAllow,
+  onDraft,
 }: {
-  asks: readonly OfferedPermission[];
-  /** The new pod-wide reads (`newPodWideAsks`): the same switch ticks them. */
-  podWide: readonly PodWideOffer[];
-  allowed: boolean;
+  appName: string;
+  changes: readonly ReconsentChange[];
+  draft: ConsentDraft;
   busy: boolean;
-  onAllow: (allow: boolean) => void;
+  onDraft: (next: ConsentDraft) => void;
 }) {
+  const t = consentT();
   const id = useId();
+  const moved = changes.filter((c) => c.mark !== "new");
+  const wider = moved.filter((c) => c.mark === "wider");
+  const fresh = changes.filter((c) => c.mark === "new");
+  const ink = "text-foreground/80";
   return (
     <section
-      aria-labelledby={`${id}-new`}
-      data-new-asks
-      className="flex flex-col gap-2.5 rounded-lg bg-primary/[0.06] px-4 py-3 ring-1 ring-inset ring-primary/30"
+      aria-labelledby={`${id}-t`}
+      data-reconsent
+      className="flex gap-2.5 rounded-lg bg-default-100 px-3.5 py-3 ring-1 ring-inset ring-foreground/10"
     >
-      <p
-        id={`${id}-new`}
-        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/75"
-      >
-        <Sparkles className="h-3 w-3 text-primary" aria-hidden /> New since you
-        last allowed
-      </p>
-      <ul className="flex flex-col gap-2">
-        {asks.map((p) => {
-          const reason = reasonOf(p);
-          return (
-            <li key={p.permission} className="flex flex-col gap-0.5">
+      <Info className={`mt-0.5 h-4 w-4 shrink-0 ${ink}`} aria-hidden />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        {moved.length > 0 ? (
+          <>
+            {/* The count is what is drawn below (U3). */}
+            <p id={`${id}-t`} className="text-sm font-medium text-foreground">
+              {t("reconsent.title", { n: moved.length })}
+            </p>
+            {wider.length > 0 ? (
+              <p className={`text-pretty text-xs leading-relaxed ${ink}`}>
+                {t("reconsent.body", { name: appName, n: wider.length })}
+              </p>
+            ) : null}
+            <ul className="flex flex-col gap-2">
+              {moved.map((c) => {
+                const off =
+                  c.mark === "wider" && !draft.permissions.has(c.permission);
+                return (
+                  <li key={c.key} className="flex items-start gap-2">
+                    <span
+                      aria-hidden
+                      className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-content1 text-xs font-medium text-foreground/80 ring-1 ring-inset ring-foreground/15"
+                    >
+                      {c.mark === "wider" && !off ? "+" : "−"}
+                    </span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="sr-only">
+                        {c.mark === "wider"
+                          ? t("reconsent.wider")
+                          : t("reconsent.narrower")}
+                        :{" "}
+                      </span>
+                      <span
+                        className={`text-sm ${off ? `${ink} line-through` : "text-foreground/90"}`}
+                      >
+                        <strong className="font-medium">{c.what}</strong>
+                        {": "}
+                        {c.mark === "wider"
+                          ? t("reconsent.nowWas", {
+                              now: c.now,
+                              was: c.was ?? t("reconsent.nowhere"),
+                            })
+                          : c.now}
+                      </span>
+                      {off ? (
+                        <span className={`text-xs ${ink}`}>
+                          {t("reconsent.turnedOff")}
+                        </span>
+                      ) : null}
+                      {c.mark === "wider" ? (
+                        <Button
+                          size="sm"
+                          variant="light"
+                          className="-ml-2 min-h-10 self-start px-2 text-foreground/85 underline underline-offset-2"
+                          isDisabled={busy}
+                          onPress={() =>
+                            onDraft(setPermission(draft, c.permission, off))
+                          }
+                        >
+                          {off ? t("reconsent.undo") : c.narrow}
+                        </Button>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        ) : null}
+        {fresh.length > 0 ? (
+          <div className="flex flex-col gap-2" data-new-asks>
+            {/* Its own heading, with its own count (U3). */}
+            <p
+              id={moved.length > 0 ? undefined : `${id}-t`}
+              className={`flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] ${ink}`}
+            >
+              <Sparkles className="h-3 w-3 text-primary" aria-hidden />
+              {t("reconsent.new", { n: fresh.length })}
+            </p>
+            <ul className="flex flex-col gap-2">
+              {fresh.map((c) => (
+                <li key={c.key} className="flex flex-col gap-0.5">
+                  <span className="text-sm text-foreground/90">{c.what}</span>
+                  {c.reason ? (
+                    <span
+                      className={`text-pretty text-xs leading-relaxed ${ink}`}
+                    >
+                      {/* The developer's words, as text: why it asks. */}
+                      <span>{t("reason.prefix")} </span>
+                      {c.reason}
+                    </span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            <Switch
+              size="sm"
+              classNames={{ base: "min-h-10" }}
+              isSelected={newAllowed(draft, changes)}
+              isDisabled={busy}
+              onValueChange={(on) => onDraft(allowNew(draft, changes, on))}
+            >
               <span className="text-sm text-foreground/90">
-                {permissionLabel(p.permission)}{" "}
-                <span className="font-mono text-xs text-foreground/65">
-                  {p.permission}
-                </span>
+                {t("reconsent.allowNew")}
               </span>
-              <span className="text-xs text-foreground/65">
-                {scopeLabel(p.workspaces)}
-              </span>
-              {reason ? (
-                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
-                  {/* The developer's words, as text: why it asks. */}
-                  <span className="text-foreground/65">Its reason: </span>
-                  {reason}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-        {podWide.map((p) => {
-          const reason = p.reason?.trim();
-          return (
-            <li key={`pod ${p.permission}`} className="flex flex-col gap-0.5">
-              <span className="text-sm text-foreground/90">
-                {permissionLabel(p.permission)}{" "}
-                <span className="font-mono text-xs text-foreground/65">
-                  {p.permission}
-                </span>
-              </span>
-              <span className="text-xs text-foreground/65">
-                {POD_WIDE_HEADING}
-              </span>
-              {reason ? (
-                <span className="text-pretty text-xs leading-relaxed text-foreground/75">
-                  <span className="text-foreground/65">Its reason: </span>
-                  {reason}
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-      <Switch
-        size="sm"
-        classNames={{ base: "min-h-10" }}
-        isSelected={allowed}
-        isDisabled={busy}
-        onValueChange={onAllow}
-      >
-        <span className="text-sm text-foreground/90">Allow the new ones</span>
-      </Switch>
+            </Switch>
+          </div>
+        ) : null}
+        {moved.length > 0 ? (
+          <p className={`text-xs ${ink}`}>{t("reconsent.rest")}</p>
+        ) : null}
+      </div>
     </section>
   );
 }
 
 /**
- * The reads it asks for EVERYWHERE in the pod (decision e1b59d38 "B"): their
- * own section, one tick each, worded "everywhere in your pod". Each is a read
- * of one kind; the pod refuses anything else pod-wide. Shown in the simple
- * view and in Customize alike: it has no space to customize.
+ * What it asked for that cannot be given (design A "Can't grant"): folded,
+ * each with its reason and a "Not given" mark. Never a disabled toggle. When
+ * some of it is missing only a space, the create-a-space offer sits here,
+ * next to those items (U5).
  */
-function PodWideReads({
-  podWide,
-  selection,
-  onToggle,
-  busy,
+function CantGiveFold({
+  items,
+  create,
 }: {
-  podWide: readonly PodWideOffer[];
-  selection: PodWideSelection;
-  onToggle: (permission: string) => void;
-  busy: boolean;
+  items: readonly CantGive[];
+  create: ReactNode;
 }) {
-  const id = useId();
+  const t = consentT();
   return (
-    <section
-      aria-labelledby={`${id}-pod`}
-      data-pod-wide
-      className="flex flex-col gap-1"
+    <Accordion
+      variant="bordered"
+      className="px-3"
+      // The fold arrow points right and turns down, as every row's (P10).
+      disableIndicatorAnimation
+      itemClasses={{
+        title: "text-sm text-foreground/85",
+        trigger: "min-h-10 py-2",
+        content: "pt-0 pb-3",
+      }}
     >
-      <p
-        id={`${id}-pod`}
-        className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-[0.04em] text-foreground/65"
+      <AccordionItem
+        key="cant"
+        indicator={({ isOpen }) => (
+          <ChevronRight
+            aria-hidden
+            className={`h-4 w-4 text-foreground/65 ${isOpen ? "rotate-90" : ""}`}
+          />
+        )}
+        aria-label={t("cant.title", { n: items.length })}
+        title={t("cant.title", { n: items.length })}
       >
-        <Globe className="h-3 w-3" aria-hidden /> {POD_WIDE_HEADING}
-      </p>
-      <ul className="flex flex-col">
-        {podWide.map((p) => {
-          const reason = p.reason?.trim();
-          return (
-            <li key={p.permission} className="flex flex-col">
-              <Checkbox
+        <ul className="flex flex-col divide-y divide-foreground/10">
+          {items.map((i) => (
+            <li
+              key={i.permission}
+              className="flex items-center justify-between gap-3 py-2"
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="text-sm text-foreground/85">{i.label}</span>
+                <span className="text-xs text-foreground/65">{i.reason}</span>
+              </span>
+              <Chip
                 size="sm"
-                classNames={CONSENT_CHECKBOX}
-                aria-label={podWideLabel(p.permission)}
-                isSelected={selection.has(p.permission)}
-                isDisabled={busy}
-                onValueChange={() => onToggle(p.permission)}
+                variant="flat"
+                startContent={<Ban className="h-3 w-3" aria-hidden />}
               >
-                <span className="text-sm text-foreground/85">
-                  {permissionLabel(p.permission)}{" "}
-                  <span className="font-mono text-xs text-foreground/65">
-                    {p.permission}
-                  </span>
-                </span>
-              </Checkbox>
-              {reason ? (
-                <p className="text-pretty pb-1 text-xs leading-relaxed text-foreground/75">
-                  {/* The developer's words, as text: why it asks. */}
-                  <span className="text-foreground/65">Its reason: </span>
-                  {reason}
-                </p>
-              ) : null}
+                {t("cant.notGiven")}
+              </Chip>
             </li>
-          );
-        })}
-      </ul>
-      <p className="text-pretty text-xs leading-relaxed text-foreground/75">
-        {placeReachNote("pod")}
-      </p>
-    </section>
+          ))}
+        </ul>
+        {create}
+        <p className="pt-1 text-xs text-foreground/65">{t("cant.rest")}</p>
+      </AccordionItem>
+    </Accordion>
   );
 }
 
-/**
- * doc 18: a person may have no space to give the app. When the app declares
- * workspace templates (`synap_templates`), offer to create the space from one
- * with the person's OWN session (`workspaces.ensureTemplate`, governed like
- * any create); the offer is then re-read. Otherwise say what is missing.
- */
 function CreateSpace({
   templates,
   domain,
@@ -1766,6 +1345,7 @@ function CreateSpace({
   domain: string;
   onCreated: () => void;
 }) {
+  const t = consentT();
   const ensure = trpc.workspaces.ensureTemplate.useMutation();
   const [note, setNote] = useState<string | null>(null);
   const create = (slug: string) => {
@@ -1781,11 +1361,9 @@ function CreateSpace({
           ) {
             onCreated();
           } else if (r.status === "proposed") {
-            setNote(
-              "Creating the space was sent for review. Approve it, then reload this page."
-            );
+            setNote(t("create.proposed"));
           } else {
-            setNote(`This space can't be created here (${r.status}).`);
+            setNote(t("create.refused"));
           }
         },
         onError: (err) => setNote(err.message),
@@ -1795,44 +1373,169 @@ function CreateSpace({
   if (templates.length === 0) {
     // A state, not an error (rv-ui U9): the screen's neutral hint tone.
     return (
-      <div
+      <p
         role="status"
-        className="flex flex-col gap-1 rounded-lg bg-foreground/[0.03] px-4 py-3 ring-1 ring-inset ring-foreground/10"
+        className="py-1 text-xs leading-relaxed text-foreground/75"
       >
-        <span className="text-sm font-medium text-foreground">
-          No space to give it
-        </span>
-        <span className="text-xs leading-relaxed text-foreground/65">
-          You have no space where you can give this app what it asks for.
-        </span>
-        <span className="text-xs leading-relaxed text-foreground/65">
-          Create a space in Synap (or ask for edit rights in one), then reload
-          this page.
-        </span>
-      </div>
+        {t("create.none")}
+      </p>
     );
   }
   return (
-    <div className="flex flex-col gap-2 rounded-lg px-4 py-3 ring-1 ring-inset ring-foreground/10">
-      <p className="text-sm text-foreground/80">
-        You have no space where you can give it everything it asks for. Create
-        one it can work in:
-      </p>
+    <div className="flex flex-col gap-2 py-2">
+      <p className="text-xs text-foreground/80">{t("create.offer")}</p>
       <div className="flex flex-wrap gap-2">
         {templates.map((slug) => (
           <Button
             key={slug}
             size="sm"
             variant="flat"
+            className="min-h-10"
             isLoading={ensure.isPending && ensure.variables?.slug === slug}
             isDisabled={ensure.isPending}
             onPress={() => create(slug)}
           >
-            Create a space from &ldquo;{slug}&rdquo;
+            {t("create.from", { name: humanizeToken(slug) })}
           </Button>
         ))}
       </div>
-      {note && <p className="text-xs text-foreground/65">{note}</p>}
+      {note && <p className="text-xs text-foreground/75">{note}</p>}
+    </div>
+  );
+}
+
+export function PodAppHeading({
+  domain,
+  verified,
+  clientName,
+  podHost,
+  identity,
+  title,
+}: {
+  domain: string;
+  verified: boolean;
+  clientName: string;
+  podHost?: string;
+  identity?: string;
+  title: string;
+}) {
+  const t = consentT();
+  return (
+    <>
+      <span className="flex flex-wrap items-center gap-2">
+        <Chip
+          size="sm"
+          variant="flat"
+          color={verified ? "primary" : "warning"}
+          startContent={
+            verified ? (
+              <ShieldCheck className="h-3 w-3" aria-hidden />
+            ) : (
+              <ShieldAlert className="h-3 w-3" aria-hidden />
+            )
+          }
+        >
+          {verified ? t("tier.verified") : t("tier.unverified")}
+        </Chip>
+        <HostName host={domain} className="text-sm text-foreground/75" />
+      </span>
+      <h1 className="font-heading text-xl font-medium leading-tight tracking-tight text-foreground">
+        {title}
+      </h1>
+      <p className="text-sm leading-relaxed text-foreground/65">
+        {/* Self-chosen display text, rendered as text only. */}
+        {verified ? null : <>{t("who.callsItself", { name: clientName })} </>}
+        {podHost && identity
+          ? t("who.podAs", { host: podHost, identity })
+          : podHost
+            ? t("who.pod", { host: podHost })
+            : t("who.yourPod")}
+      </p>
+    </>
+  );
+}
+
+/** A read that may answer if asked again: a network failure or a 5xx. */
+function isTransient(err: unknown): boolean {
+  const status = (err as { data?: { httpStatus?: unknown } } | null)?.data
+    ?.httpStatus;
+  return typeof status !== "number" || status >= 500;
+}
+
+export function ConsentSkeleton() {
+  const t = consentT();
+  // Opacity only (motion-safe): visible on both grounds (P12), still under
+  // reduced motion.
+  const bar = "rounded-md bg-foreground/15 motion-safe:animate-pulse";
+  return (
+    <div aria-busy="true" className="flex flex-col gap-4">
+      <span className="sr-only" role="status">
+        {t("loading.label")}
+      </span>
+      <div className={`h-4 w-4/5 ${bar}`} />
+      <div className="flex flex-col divide-y divide-foreground/10 rounded-lg ring-1 ring-inset ring-foreground/10">
+        {[0, 1, 2].map((i) => (
+          <div key={i} className="flex items-center gap-3 px-3 py-3">
+            <div className={`h-3 w-20 ${bar}`} />
+            <div className={`h-4 flex-1 ${bar}`} />
+            <div className={`h-8 w-16 !rounded-full ${bar}`} />
+          </div>
+        ))}
+      </div>
+      <div className="flex gap-2.5">
+        <div className={`h-10 flex-1 !rounded-lg ${bar}`} />
+        <div className={`h-10 flex-1 !rounded-lg ${bar}`} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The offer could not be read for a reason that may pass (the pod did not
+ * answer): a failed state with the retry inside it, saying nothing was
+ * given. A request that is not valid is `Problem` instead: retrying it only
+ * repeats the same refusal.
+ */
+export function ReadFailed({
+  onRetry,
+  retrying,
+  onDecline,
+  busy,
+}: {
+  onRetry: () => void;
+  retrying: boolean;
+  onDecline: () => void;
+  busy: boolean;
+}) {
+  const t = consentT();
+  return (
+    <div className="flex flex-col items-stretch gap-3">
+      <Alert
+        color="danger"
+        role="alert"
+        title={t("readFailed.title")}
+        description={t("readFailed.hint")}
+        endContent={
+          <Button
+            size="sm"
+            variant="flat"
+            className="min-h-10"
+            isLoading={retrying}
+            onPress={onRetry}
+          >
+            {t("act.tryAgain")}
+          </Button>
+        }
+      />
+      <Button
+        size="sm"
+        variant="light"
+        className="min-h-10 self-center"
+        isDisabled={busy}
+        onPress={onDecline}
+      >
+        {t("readFailed.decline")}
+      </Button>
     </div>
   );
 }

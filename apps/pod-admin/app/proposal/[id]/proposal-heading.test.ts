@@ -169,3 +169,29 @@ describe("the review page heading", () => {
     expect(src).toMatch(/appConnect\.lines\.map/);
   });
 });
+
+describe("the card of a v2 app approval (W3d contract v1.2)", () => {
+  it("reads data.access, projects included, with the names the filing door wrote", () => {
+    const { appConnect } = proposalHeading(
+      {
+        targetType: "app",
+        targetName: "Content Studio",
+        proposalType: "connect",
+      },
+      {
+        name: "Content Studio",
+        access: {
+          version: 2,
+          permissions: ["entity.post.read"],
+          read: { spaces: ["w-1"], projects: ["p-1"] },
+          write: { spaces: [], projects: [] },
+        },
+        accessNames: { "w-1": "Content OS", "p-1": "Launch" },
+      }
+    );
+    expect(appConnect).not.toBeNull();
+    const text = appConnect!.lines.map((l) => l.text).join(" | ");
+    expect(text).toContain("Content OS");
+    expect(text).toContain("Launch");
+  });
+});

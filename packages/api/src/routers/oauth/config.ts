@@ -132,6 +132,24 @@ export function isSynapApp(clientId: string): boolean {
 }
 
 /**
+ * Who the short ask's title names (row 9 of the consent's edge cases, W3b
+ * review N1): a Synap app by its name; any other app by its DOMAIN, never
+ * by the `client_name` it chose for itself (its own words, which an
+ * unverified app can set to anything, "Synap Chat" included).
+ */
+export function askAppName(client: {
+  clientId: string;
+  clientName: string;
+}): string {
+  if (isSynapApp(client.clientId)) return client.clientName;
+  try {
+    return new URL(client.clientId).host || client.clientName;
+  } catch {
+    return client.clientId;
+  }
+}
+
+/**
  * Who a pod app's (CIMD client's) access token acts as — the `synap_acts_as`
  * of its /token answer (spec 17 §6.6 extension).
  *
