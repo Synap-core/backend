@@ -28547,7 +28547,7 @@
       "get": {
         "tags": ["Views"],
         "summary": "List views",
-        "description": "Returns the user's views in a workspace, optionally filtered by view type or profile.",
+        "description": "Returns the views the caller can see (not only their own: a co-worker's view in a shared space and a view exposed to one of their projects too), optionally narrowed by workspace, project, view type or profile.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -28580,6 +28580,16 @@
             "required": false,
             "description": "Filter to views over a specific profile.",
             "name": "profileId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter to views pinned to or exposed in this project."
+            },
+            "required": false,
+            "description": "Filter to views pinned to or exposed in this project.",
+            "name": "projectId",
             "in": "query"
           }
         ],
@@ -54107,71 +54117,143 @@
         }
       }
     },
-    "/frame/read": {
-      "post": {
+    "/surfaces": {
+      "get": {
         "tags": ["Surfaces"],
-        "summary": "A framed surface's read, checked against what it declares",
-        "description": "The one frame read door. A host forwards each `window.synap.query(op, params)` of a frame here with the surface the frame draws (`{kind:\"cell\", typeKey}` or `{kind:\"document\", id}` for an html page) and its lens (`workspaceId`, used for a cell; a page reads in its own space). The op must be a frame read (`CELL_BRIDGE_READ_OPS`); a read the surface's declared `reads` do not name is refused (403, `code: FRAME_READ_UNDECLARED`); a surface that declares no reads is answered and logged as undeclared. The read runs as the caller, floored to what they may see. Every call is logged. Surface kinds: cell, document.",
+        "summary": "Every surface one object carries",
+        "description": "Find every Surface an object carries before you make one: its kind's renderers (renders), its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor `kind` (entity, profile, workspace, project, track, playbook, session) and `id` (a profile also by its slug). A store that could not be read is listed under `unavailable`: that is not 'nothing there'. 404 when the anchor does not exist or you cannot see it.",
         "security": [{ "bearerAuth": [] }],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "surface": {
-                    "oneOf": [
-                      {
-                        "type": "object",
-                        "properties": {
-                          "kind": { "type": "string", "enum": ["cell"] },
-                          "typeKey": {
-                            "type": "string",
-                            "minLength": 1,
-                            "maxLength": 200
-                          }
-                        },
-                        "required": ["kind", "typeKey"]
-                      },
-                      {
-                        "type": "object",
-                        "properties": {
-                          "kind": { "type": "string", "enum": ["document"] },
-                          "id": { "type": "string", "format": "uuid" }
-                        },
-                        "required": ["kind", "id"]
-                      }
-                    ]
-                  },
-                  "op": { "type": "string", "minLength": 1, "maxLength": 64 },
-                  "params": { "type": "object", "additionalProperties": {} },
-                  "workspaceId": {
-                    "type": ["string", "null"],
-                    "format": "uuid"
-                  }
-                },
-                "required": ["surface", "op"]
-              }
-            }
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "entity",
+                "profile",
+                "workspace",
+                "project",
+                "track",
+                "playbook",
+                "session"
+              ]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "required": true,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
           }
-        },
+        ],
         "responses": {
           "200": {
-            "description": "The read's answer",
-            "content": { "application/json": { "schema": {} } }
-          },
-          "400": {
-            "description": "Bad request",
+            "description": "The surfaces",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "error": { "type": "string" },
-                    "code": { "type": "string" }
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "body": {
+                            "type": "string",
+                            "enum": [
+                              "view",
+                              "document",
+                              "html",
+                              "bento",
+                              "whiteboard",
+                              "cell",
+                              "site",
+                              "app"
+                            ]
+                          },
+                          "relation": {
+                            "type": "string",
+                            "enum": [
+                              "renders",
+                              "attached",
+                              "body",
+                              "pinned",
+                              "home",
+                              "session-output",
+                              "exposed"
+                            ]
+                          },
+                          "anchor": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "entity",
+                                  "profile",
+                                  "workspace",
+                                  "project",
+                                  "track",
+                                  "playbook",
+                                  "session"
+                                ]
+                              },
+                              "id": { "type": "string" }
+                            },
+                            "required": ["kind", "id"]
+                          },
+                          "title": { "type": "string" },
+                          "viewType": { "type": "string" },
+                          "cellKey": { "type": "string" },
+                          "slot": { "type": "string" },
+                          "openUrl": { "type": "string" },
+                          "readOnly": { "type": "boolean" },
+                          "source": { "type": "string" }
+                        },
+                        "required": [
+                          "id",
+                          "body",
+                          "relation",
+                          "anchor",
+                          "title",
+                          "openUrl",
+                          "readOnly",
+                          "source"
+                        ]
+                      }
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string" },
+                          "error": { "type": "string" }
+                        },
+                        "required": ["source", "error"]
+                      }
+                    }
                   },
-                  "required": ["error"]
+                  "required": ["rows", "unavailable"]
                 }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
@@ -54179,29 +54261,15 @@
             "description": "Forbidden",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "code": { "type": "string" }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },
           "404": {
-            "description": "Not found",
+            "description": "No such anchor",
             "content": {
               "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "error": { "type": "string" },
-                    "code": { "type": "string" }
-                  },
-                  "required": ["error"]
-                }
+                "schema": { "$ref": "#/components/schemas/HubError" }
               }
             }
           },

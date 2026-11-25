@@ -14,7 +14,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AskSchema } from "@synap-core/types/ask";
 import type { SlotAsk } from "@synap/playbooks";
-import { toolError } from "../tool-errors.js";
+import { fullUuidError, toolError } from "../tool-errors.js";
 import { playbooksRouter } from "../../playbooks.js";
 import { createHubProtocolCallerContext } from "../../hub-protocol/utils.js";
 import {
@@ -976,12 +976,22 @@ export const buildHandlers: McpHandlerMap = {
       confinedWorkspaceId,
     } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);
-    // Owner-only floor lives in hub listViews — do not widen it here.
+    // The visible floor (every view the caller can see, not only their own)
+    // lives in hub listViews — do not narrow it to the owner here.
     // Narrow only on an explicit/confined workspaceId — not advisory focus
     // (focus is a write default; catalog stays full user floor unless asked).
+    const projectId =
+      typeof args.projectId === "string" && args.projectId
+        ? args.projectId
+        : undefined;
+    if (projectId) {
+      const badId = fullUuidError(toolName, "projectId", projectId);
+      if (badId) return badId;
+    }
     const result = await caller.views.listViews({
       userId,
       workspaceId: confinedWorkspaceId ?? null,
+      ...(projectId ? { projectId } : {}),
       type: typeof args.type === "string" ? args.type : undefined,
       profileId:
         typeof args.profileId === "string" ? args.profileId : undefined,

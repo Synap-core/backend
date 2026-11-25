@@ -115,6 +115,7 @@ export { registerIntentSurfacesRoutes } from "./intent-surfaces.js";
 export { registerGuidelinesRoutes } from "./guidelines.js";
 export { registerBrandRoutes } from "./brand.js";
 export { registerSurfaceContextRoutes } from "./surface-context.js";
+export { registerSurfacesRoutes } from "./surfaces.js";
 export { registerFrameReadRoutes } from "./frame-read.js";
 export { registerAgentSkillsRoutes } from "./agent-skills.js";
 export { registerUiRoutes } from "./ui.js";

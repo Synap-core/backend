@@ -6879,203 +6879,6 @@ declare const COMPOSITE_VIEW_TYPES: readonly [
 	"bento"
 ];
 export type CompositeViewType = (typeof COMPOSITE_VIEW_TYPES)[number];
-declare const CELL_BRIDGE_READ_OPS: {
-	readonly "attention.count": readonly [
-		"profileSlug",
-		"trackId"
-	];
-	readonly "attention.needsYou": readonly [
-		"profileSlug",
-		"trackId",
-		"limit"
-	];
-	readonly "documents.get": readonly [
-		"documentId",
-		"format"
-	];
-	readonly "entities.get": readonly [
-		"id"
-	];
-	readonly "entities.list": readonly [
-		"profileSlug",
-		"facetSlug",
-		"includeDescendants",
-		"limit",
-		"offset"
-	];
-	readonly "flow.of": readonly [
-		"profileSlug",
-		"trackId",
-		"windowDays",
-		"firstN",
-		"properties"
-	];
-	readonly "lens.page": readonly [
-		"since"
-	];
-	readonly "lifecycle.board": readonly [
-		"profileSlug",
-		"trackId",
-		"windowDays",
-		"firstN",
-		"column",
-		"cursor",
-		"limit",
-		"workedBy"
-	];
-	readonly "lifecycle.get": readonly [
-		"profileSlug"
-	];
-	readonly "lifecycle.home": readonly [
-	];
-	readonly "lifecycle.moving": readonly [
-		"limit"
-	];
-	readonly "lifecycle.throughput": readonly [
-		"profileSlug",
-		"trackId",
-		"bucket",
-		"count"
-	];
-	readonly "playbook.process": readonly [
-		"playbookId"
-	];
-	readonly "playbook.scorecard": readonly [
-		"playbookId"
-	];
-	readonly "profiles.get": readonly [
-		"identifier",
-		"fill"
-	];
-	readonly "profiles.list": readonly [
-		"creatableOnly"
-	];
-	readonly "project.pillars": readonly [
-		"id"
-	];
-	readonly "propertyDefs.list": readonly [
-		"profileId"
-	];
-	readonly "sessions.get": readonly [
-		"id"
-	];
-	readonly "sessions.list": readonly [
-		"profileSlug",
-		"entityId",
-		"status",
-		"kind",
-		"limit"
-	];
-	readonly "views.execute": readonly [
-		"id",
-		"limit",
-		"offset"
-	];
-	readonly "views.get": readonly [
-		"id"
-	];
-	readonly "views.list": readonly [
-		"type",
-		"profileSlug",
-		"limit",
-		"offset"
-	];
-};
-export type CellBridgeReadOp = keyof typeof CELL_BRIDGE_READ_OPS;
-declare const CELL_BRIDGE_WRITE_OPS: {
-	readonly create_entity: {
-		readonly profileSlug: "string!";
-		readonly properties: "object";
-		readonly title: "string";
-	};
-	readonly create_relation: {
-		readonly sourceEntityId: "uuid!";
-		readonly targetEntityId: "uuid!";
-		readonly type: "slug64!";
-	};
-	readonly delete_entity: {
-		readonly id: "uuid!";
-	};
-	readonly update_entity: {
-		readonly expectedStatus: "string|null";
-		readonly id: "uuid!";
-		readonly properties: "object";
-		readonly title: "string";
-	};
-};
-export type CellBridgeWriteOp = keyof typeof CELL_BRIDGE_WRITE_OPS;
-declare const CELL_BRIDGE_ANY_VALUE: "*";
-/** One declared read: an op of the ceiling, optionally pinned params. */
-export interface CellBridgeDeclaredRead {
-	op: CellBridgeReadOp;
-	/** Param name (of the op's own list) → exact value, or `"*"`. */
-	params?: Partial<Record<string, string | typeof CELL_BRIDGE_ANY_VALUE>>;
-}
-export type CellBridgeDeclaredReads = CellBridgeDeclaredRead[];
-/** One declared write: an op of the write ceiling. */
-export interface CellBridgeDeclaredWrite {
-	op: CellBridgeWriteOp;
-}
-export type CellBridgeDeclaredWrites = CellBridgeDeclaredWrite[];
-/**
- * What a frame is ABOUT, and the brand it draws in (frame contract v3).
- *
- * Every frame that runs stored code (a stored HTML page, a module cell, a
- * renderer bundle cell) sits on something: an entity, a project, a session.
- * The host knows that anchor, the space and project it belongs to, the goal
- * a session serves, and the project's brand; the frame asks for them with one
- * call:
- *
- *   window.synap.context() → Promise<SurfaceContext>
- *
- * which posts `synap:context` and resolves with the matching
- * `synap:context:result` (`sdk.ts`). A module frame also receives the same
- * fields in its `synap:init` context (`CellFrameInitContext`,
- * `surfaceContextInitFields`).
- *
- * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
- * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
- * projection) with `brandFrameCss`, and written AFTER the host's tokens
- * (`frameTokensWithBrand`), so a name the brand does not set keeps the
- * host's value. No brand (no project, or a project with no token set) is
- * `brand: null`, never a failure.
- *
- * Pure, like the rest of this leaf: no DOM, no fetch.
- */
-/**
- * The object a frame is anchored to. Structurally the same as
- * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
- * workspace, project, track, playbook, session); a host that renders a
- * document or a view with no other anchor names that body itself
- * (`document`, `view`).
- */
-export interface SurfaceContextAnchor {
-	kind: string;
-	id: string;
-}
-/** The project's brand, as CSS the host writes after its own tokens. */
-export interface SurfaceContextBrand {
-	/** The brand identity's id (the record the brand door chose). */
-	id: string;
-	/** The brand token set's hash: a new one means new values. */
-	hash: string;
-	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
-	css: string;
-}
-/** Everything a frame may know about where it is (frame contract v3). */
-export interface SurfaceContext {
-	anchor: SurfaceContextAnchor | null;
-	workspaceId: string | null;
-	projectId: string | null;
-	/** The goal (track) the anchor serves, when it serves one. */
-	goalId: string | null;
-	/** The host's filters on what the frame shows (a bound view's), JSON only. */
-	filters: Record<string, unknown>;
-	brand: SurfaceContextBrand | null;
-	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
-	locale: string;
-	theme: "dark" | "light";
-}
 export type WidgetRendererType = "builtin" | "frame" | "iframe" | "mcp-app" | "native";
 /**
  * Trust level of a widget/cell definition — the server-side authority for
@@ -26076,8 +25879,70 @@ export type ProposeRetireResult = {
 	reasons: string[];
 	status: "refused";
 };
-/** Where a binding was found. `entity` (per-entity override) is deferred (v1). */
-export type RendererBindingStore = "profile" | "view" | "workspace";
+/**
+ * What a frame is ABOUT, and the brand it draws in (frame contract v3).
+ *
+ * Every frame that runs stored code (a stored HTML page, a module cell, a
+ * renderer bundle cell) sits on something: an entity, a project, a session.
+ * The host knows that anchor, the space and project it belongs to, the goal
+ * a session serves, and the project's brand; the frame asks for them with one
+ * call:
+ *
+ *   window.synap.context() → Promise<SurfaceContext>
+ *
+ * which posts `synap:context` and resolves with the matching
+ * `synap:context:result` (`sdk.ts`). A module frame also receives the same
+ * fields in its `synap:init` context (`CellFrameInitContext`,
+ * `surfaceContextInitFields`).
+ *
+ * The brand is CSS: Synap's own `--synap-*` names at the brand's values, built
+ * by the pod from its ONE brand door (`resolveBrand` + the `synap-css` token
+ * projection) with `brandFrameCss`, and written AFTER the host's tokens
+ * (`frameTokensWithBrand`), so a name the brand does not set keeps the
+ * host's value. No brand (no project, or a project with no token set) is
+ * `brand: null`, never a failure.
+ *
+ * Pure, like the rest of this leaf: no DOM, no fetch.
+ */
+/**
+ * The object a frame is anchored to. Structurally the same as
+ * `@synap-core/types/surfaces` `SurfaceAnchor` (kind: entity, profile,
+ * workspace, project, track, playbook, session); a host that renders a
+ * document or a view with no other anchor names that body itself
+ * (`document`, `view`).
+ */
+export interface SurfaceContextAnchor {
+	kind: string;
+	id: string;
+}
+/** The project's brand, as CSS the host writes after its own tokens. */
+export interface SurfaceContextBrand {
+	/** The brand identity's id (the record the brand door chose). */
+	id: string;
+	/** The brand token set's hash: a new one means new values. */
+	hash: string;
+	/** `--synap-*` declarations at the brand's values (`brandFrameCss`). */
+	css: string;
+}
+/** Everything a frame may know about where it is (frame contract v3). */
+export interface SurfaceContext {
+	anchor: SurfaceContextAnchor | null;
+	workspaceId: string | null;
+	projectId: string | null;
+	/** The goal (track) the anchor serves, when it serves one. */
+	goalId: string | null;
+	/** The host's filters on what the frame shows (a bound view's), JSON only. */
+	filters: Record<string, unknown>;
+	brand: SurfaceContextBrand | null;
+	/** The language the host speaks (`@synap-core/types/i18n` `Locale`). */
+	locale: string;
+	theme: "dark" | "light";
+}
+/**
+ * Where a binding was found. `binding` = a `renderer_bindings` row. `entity`
+ * (per-entity override) is deferred (v1).
+ */
+export type RendererBindingStore = "binding" | "profile" | "view" | "workspace";
 /** The taxonomy of a bound renderer key (derived from the RendererRef shape). */
 export type RendererKeyKind = "cell" | "other" | "view" | "view-adapter";
 export interface RendererBinding {
@@ -26093,6 +25958,10 @@ export interface RendererBinding {
 	/** True when the ref sits under a deprecated slot key / column. */
 	legacy?: boolean;
 	workspaceId: string | null;
+	/** `binding` store only: the row's scope (user | workspace | pod). */
+	scope?: string;
+	/** `binding` store only: the one object it pins, absent for a whole kind. */
+	subjectId?: string;
 }
 export interface RendererUsage {
 	/** `cellKey` | `adapterKey` | `view:<uuid>` | `<refKind>:<appId>`. */
@@ -26115,6 +25984,79 @@ export interface RendererUsageReport {
 	 * entity floor. `null` when the count could not be taken.
 	 */
 	perEntityOverrideCount: number | null;
+	/**
+	 * The stores that could not be read, with their error: NOT "no bindings".
+	 * Always set by this builder; optional on the type because the field joined
+	 * an existing door's output (an older pod omits it, and typed fixtures in
+	 * dependent repos predate it).
+	 */
+	unavailable?: {
+		error: string;
+		source: string;
+	}[];
+}
+declare const ANCHOR_KIND_SET: {
+	readonly entity: true;
+	readonly playbook: true;
+	readonly profile: true;
+	readonly project: true;
+	readonly session: true;
+	readonly track: true;
+	readonly workspace: true;
+};
+export type AnchorKind = keyof typeof ANCHOR_KIND_SET;
+export interface SurfaceAnchor {
+	kind: AnchorKind;
+	id: string;
+}
+declare const SURFACE_BODIES: readonly [
+	"view",
+	"document",
+	"html",
+	"bento",
+	"whiteboard",
+	"cell",
+	"site",
+	"app"
+];
+export type SurfaceBody = (typeof SURFACE_BODIES)[number];
+declare const SURFACE_RELATIONS: readonly [
+	"renders",
+	"attached",
+	"body",
+	"pinned",
+	"home",
+	"session-output",
+	"exposed"
+];
+export type SurfaceRelation = (typeof SURFACE_RELATIONS)[number];
+export interface SurfaceRow {
+	/** The body's own id (view, document, cell instance, binding, share…). */
+	id: string;
+	body: SurfaceBody;
+	relation: SurfaceRelation;
+	anchor: SurfaceAnchor;
+	title: string;
+	/** For a view body: its view type (table, kanban, pipeline…). */
+	viewType?: string;
+	/** For a cell body: the cell's key. */
+	cellKey?: string;
+	/** For a renders row: the renderer slot (list, detail, card, dashboard). */
+	slot?: string;
+	/** Today the existing `/open/<id>` link of the body. */
+	openUrl: string;
+	/** True when the surface cannot be edited through it (an HTML artifact). */
+	readOnly: boolean;
+	/** Which store answered (for debugging and inspection). */
+	source: string;
+}
+export interface SurfacesForObject {
+	rows: SurfaceRow[];
+	/** A store that could not be read: NOT "nothing there". */
+	unavailable: {
+		error: string;
+		source: string;
+	}[];
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -61005,23 +60947,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 		meta: object;
 		transformer: true;
 	}, import("@trpc/server").TRPCDecorateCreateRouterOptions<{
-		frameRead: import("@trpc/server").TRPCQueryProcedure<{
-			input: {
-				op: string;
-				params?: Record<string, unknown> | undefined;
-				surface: {
-					kind: "cell";
-					typeKey: string;
-				} | {
-					id: string;
-					kind: "document";
-				};
-				workspaceId?: string | null | undefined;
-			};
-			meta: object;
-			output: unknown;
-		}>;
-	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
 		context: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;
@@ -61034,6 +60959,15 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SurfaceContext;
 		}>;
 	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		forObject: import("@trpc/server").TRPCQueryProcedure<{
+			input: {
+				id: string;
+				kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				workspaceId?: string | null | undefined;
+			};
+			meta: object;
+			output: SurfacesForObject;
+		}>;
 		usageHealth: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				cellKey?: string | undefined;
@@ -63905,7 +63839,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
-				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
@@ -63916,7 +63849,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
-				writes: CellBridgeDeclaredWrites | null;
 			};
 		}>;
 		list: import("@trpc/server").TRPCQueryProcedure<{
@@ -63945,7 +63877,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
-				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
@@ -63956,7 +63887,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
-				writes: CellBridgeDeclaredWrites | null;
 			}[];
 		}>;
 		listMeta: import("@trpc/server").TRPCQueryProcedure<{
@@ -63985,7 +63915,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
-				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
@@ -63996,7 +63925,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
-				writes: CellBridgeDeclaredWrites | null;
 			}, "category" | "createdAt" | "description" | "isActive" | "name" | "rendererType" | "typeKey" | "updatedAt" | "workspaceId">[];
 		}>;
 		upsert: import("@trpc/server").TRPCMutationProcedure<{
@@ -64046,7 +63974,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					w: number;
 				} | null;
 				name: string;
-				reads: CellBridgeDeclaredReads | null;
 				rendererSource: string | null;
 				rendererType: WidgetRendererType;
 				role: WidgetRole;
@@ -64057,7 +63984,6 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				version: string | null;
 				viewRendererViewTypes: string[] | null;
 				workspaceId: string | null;
-				writes: CellBridgeDeclaredWrites | null;
 			};
 		}>;
 	}>>;
