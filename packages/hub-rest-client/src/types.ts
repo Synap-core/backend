@@ -2533,8 +2533,7 @@ export type HubAttachSurfaceResult =
   | HubSurfaceProposed;
 
 export type HubDetachSurfaceResult =
-  | { status: "detached" | "absent" }
-  | HubSurfaceProposed;
+  { status: "detached" | "absent" } | HubSurfaceProposed;
 
 /**
  * One row from GET /widget-definitions — the pod's ONE renderables door: the

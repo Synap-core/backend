@@ -1,11 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import {
-  db,
-  proposals,
-  and,
-  eq,
-  transitionProposal,
-} from "@synap/database";
+import { db, proposals, and, eq, transitionProposal } from "@synap/database";
 import { ProposalStatus } from "@synap/database/schema";
 import { registerProposalExecutor } from "../execution-registry.js";
 import { reportApproved, storedProposalFields } from "./shared.js";
