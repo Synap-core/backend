@@ -135,9 +135,11 @@ async function checkInStage(
       subjectStatus?: string | null;
     }>;
     const stage = stages.find((s) => s.key === session.currentStage);
-    if (stage &&
+    if (
+      stage &&
       stage.subjectStatus != null &&
-      stage.subjectStatus !== newStatus) {
+      stage.subjectStatus !== newStatus
+    ) {
       return {
         ok: false,
         reason: `moved status "${newStatus}" is not the current stage ("${session.currentStage}")'s status`,
@@ -225,7 +227,8 @@ export async function propagateStatusLink(
           sessionId: context.sessionId ?? null,
           workspaceId: context.workspaceId ?? null,
           reason:
-            context.reason ?? `Status "${newStatus}" propagated from ${sourceEntityId}`,
+            context.reason ??
+            `Status "${newStatus}" propagated from ${sourceEntityId}`,
         });
         if (moved.status === "moved" || moved.status === "unchanged") {
           result.propagated.push({

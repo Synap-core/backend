@@ -21,6 +21,8 @@ import { getDb, entityLinks, entities } from "@synap/database";
 import { router, protectedProcedure } from "../trpc.js";
 import { AccessContext } from "../../access/access-context.js";
 import { scopedDb } from "../../db.js";
+import { AccessContext } from "../../access/access-context.js";
+import { scopedDb } from "../../db.js";
 import { checkPermissionOrPropose } from "../utils/permission-check.js";
 
 export const entityLinksRouter = router({
@@ -58,12 +60,14 @@ export const entityLinksRouter = router({
           )
         );
       const farIds = [
-      ...new Set(
-        rows.map((r) =>
-          r.sourceEntityId === input.entityId ? r.targetEntityId : r.sourceEntityId
-        )
-      ),
-    ];
+        ...new Set(
+          rows.map((r) =>
+            r.sourceEntityId === input.entityId
+              ? r.targetEntityId
+              : r.sourceEntityId
+          )
+        ),
+      ];
       const farRows = farIds.length
         ? await database
             .select({
@@ -133,12 +137,16 @@ export const entityLinksRouter = router({
           .limit(1),
       ]);
       if (!source[0] || source[0].deletedAt) {
-        throw new TRPCError({ code: "NOT_FOUND",
-          message: "Source entity not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Source entity not found",
+        });
       }
       if (!target[0] || target[0].deletedAt) {
-        throw new TRPCError({ code: "NOT_FOUND",
-          message: "Target entity not found" });
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Target entity not found",
+        });
       }
 
       const perm = await checkPermissionOrPropose({
@@ -164,21 +172,21 @@ export const entityLinksRouter = router({
 
       try {
         const [row] = await database
-        .insert(entityLinks)
-        .values({
-          sourceEntityId: input.sourceEntityId,
-          targetEntityId: input.targetEntityId,
-          linkType: input.linkType,
-          config: input.config,
-        })
-        .returning();
+          .insert(entityLinks)
+          .values({
+            sourceEntityId: input.sourceEntityId,
+            targetEntityId: input.targetEntityId,
+            linkType: input.linkType,
+            config: input.config,
+          })
+          .returning();
         return { status: "granted" as const, link: row };
       } catch (err) {
         // Unique (source, target, link_type) — a duplicate link is a conflict.
         if (
-      err instanceof Error &&
-      /entity_links_source_target_type_unique/i.test(err.message)
-    ) {
+          err instanceof Error &&
+          /entity_links_source_target_type_unique/i.test(err.message)
+        ) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "This status link already exists",
