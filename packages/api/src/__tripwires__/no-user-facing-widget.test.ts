@@ -146,7 +146,7 @@ describe("tripwire: no user- or agent-facing 'widget'", () => {
     expect(catalogFiles.length).toBeGreaterThanOrEqual(2);
     const texts = manifestTexts();
     expect(texts.length).toBeGreaterThan(500);
-    expect(texts.map((t) => t.where)).toContain("synap_list_cells.title");
+    expect(texts.map((t) => t.where)).toContain("synap_list_cells.description");
   });
 
   it("no skill source, pod admin copy or vocabulary catalog says widget", () => {
