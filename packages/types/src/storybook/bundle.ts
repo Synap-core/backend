@@ -524,10 +524,7 @@ export function parseStorybookBundle(
     const layout = c.optStr(raw, "layout", at);
     const route = c.optStr(raw, "route", at);
     const pageSourcePath = c.optStr(raw, "sourcePath", at);
-    if (
-      pageSourcePath !== undefined &&
-      !isRelativeSourcePath(pageSourcePath)
-    ) {
+    if (pageSourcePath !== undefined && !isRelativeSourcePath(pageSourcePath)) {
       c.error(
         "absolute-path",
         `${at}.sourcePath`,
