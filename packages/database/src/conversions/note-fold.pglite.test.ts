@@ -27,6 +27,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
 import { PGlite } from "@electric-sql/pglite";
 import type { Sql } from "postgres";
 import { ensureConversionsLedger, runConversions } from "./engine.js";
+import { ATTACHMENT_FOLD_TEST_SCHEMA } from "./attachment-fold-test-schema.js";
 import type { RunOptions, RunSummary } from "./engine.js";
 import { CONVERSION_MANIFEST } from "./manifest.js";
 
@@ -229,7 +230,8 @@ const q = async (text: string, params: unknown[] = []) =>
 
 beforeAll(async () => {
   db = new PGlite();
-  await db.exec(SCHEMA);
+  // The Surfaces P3 conversions (`p3.surfaces.*`) read and write these.
+  await db.exec(SCHEMA + ATTACHMENT_FOLD_TEST_SCHEMA);
   sql = makePgliteSql(db);
 }, 120_000);
 
