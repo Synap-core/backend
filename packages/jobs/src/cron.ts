@@ -36,6 +36,8 @@ import {
   POD_HYGIENE_NEAR_DUP_QUEUE,
   POD_HYGIENE_NEAR_DUP_CRON,
 } from "./workers/pod-hygiene-near-dup.js";
+import { VECTOR_INDEX_REBUILD_CRON } from "./workers/vector-index-rebuild.js";
+import { EMBEDDING_PIPELINE_HEALTH_CRON } from "./workers/embedding-pipeline-health.js";
 import {
   GOVERNANCE_TIGHTEN_SCAN_QUEUE,
   GOVERNANCE_TIGHTEN_SCAN_CRON,
@@ -738,6 +740,34 @@ export async function registerCronSchedules(): Promise<void> {
   logger.info("Registered cron: pagerank-centrality (every 6h at :20)");
   await sendSafe(boss, PAGERANK_CENTRALITY_QUEUE, {});
   logger.info("Enqueued startup run: pagerank-centrality");
+
+  // Vector index rebuild (weekly Sunday 03:00 UTC — re-embeds entities missing
+  // vectors to recover from provider outages, worker crashes, or schema changes).
+  // Max run time ~1 hour, singleton prevents concurrent weekly runs.
+  await scheduleSafe(
+    boss,
+    "vector-index-rebuild",
+    VECTOR_INDEX_REBUILD_CRON,
+    {},
+    { singletonKey: "vector-index-rebuild", singletonSeconds: 60 * 60 }
+  );
+  logger.info(
+    "Registered cron: vector-index-rebuild (weekly Sunday 03:00 UTC)"
+  );
+
+  // Embedding pipeline health check (every 5 minutes — monitors queue health,
+  // vector freshness, and IS reachability; degraded reasons feed health.readyDetails).
+  // Max run time ~4 min, singleton prevents overlapping 5-min runs.
+  await scheduleSafe(
+    boss,
+    "embedding-pipeline-health",
+    EMBEDDING_PIPELINE_HEALTH_CRON,
+    {},
+    { singletonKey: "embedding-pipeline-health", singletonSeconds: 4 * 60 }
+  );
+  logger.info("Registered cron: embedding-pipeline-health (every 5min)");
+  await sendSafe(boss, "embedding-pipeline-health", {});
+  logger.info("Enqueued startup run: embedding-pipeline-health");
 
   // Context-card refresh (daily 06:10 UTC — enqueues a refresh_context_card
   // egress per Discord client TEAM thread so the bridge re-pins a fresh card).

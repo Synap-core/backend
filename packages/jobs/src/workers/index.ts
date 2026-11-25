@@ -28,6 +28,8 @@ import {
   handleWhiteboardAutoSave,
 } from "./snapshot-worker.js";
 import { handleEntityEmbedding } from "./entity-embedding.js";
+import { handleVectorIndexRebuild } from "./vector-index-rebuild.js";
+import { handleEmbeddingPipelineHealthCheck } from "./embedding-pipeline-health.js";
 import {
   DOCUMENT_PASSAGES_QUEUE,
   DOCUMENT_PASSAGES_SWEEP_QUEUE,
@@ -357,6 +359,8 @@ const ALL_QUEUES = [
   "whiteboard-restore",
   "whiteboard-autosave",
   "entity-embedding",
+  "vector-index-rebuild",
+  "embedding-pipeline-health",
   // Recall passages of a document body (on-demand per document + the 15-min
   // revision sweep floor; document-passages.ts).
   DOCUMENT_PASSAGES_QUEUE,
@@ -779,6 +783,18 @@ export async function registerAllWorkers(): Promise<void> {
     handleEntityEmbedding(job)
   );
   logger.info("Registered worker: entity-embedding");
+
+  // Vector index rebuild (cron: weekly Sunday 03:00 UTC)
+  await boss.work("vector-index-rebuild", async () =>
+    handleVectorIndexRebuild()
+  );
+  logger.info("Registered worker: vector-index-rebuild");
+
+  // Embedding pipeline health check (cron: every 5 minutes)
+  await boss.work("embedding-pipeline-health", async () =>
+    handleEmbeddingPipelineHealthCheck()
+  );
+  logger.info("Registered worker: embedding-pipeline-health");
 
   // Document passages (a document body as recall passages, A-W2): on each
   // document create/update (reactor) and the revision sweep floor.
