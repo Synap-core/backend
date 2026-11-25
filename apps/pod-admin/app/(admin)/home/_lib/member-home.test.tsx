@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vitest";
-import { catalogProblems } from "@synap-core/types/i18n";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { catalogProblems, type Locale } from "@synap-core/types/i18n";
 
 import { routeAccess } from "../../../../lib/route-policy";
 import { MAX_FRAMED_ENTITY_CARDS } from "../../../_lib/object/content/embed-view";
@@ -30,6 +30,23 @@ import {
   type ArtifactRow,
   type CardState,
 } from "./member-home-model";
+
+// The console's language comes from `users.me` through a provider that reads
+// the pod; here the test sets it. Every card's words go through `useT`.
+const locale = vi.hoisted(() => ({ current: "en" as Locale }));
+vi.mock("../../../../lib/i18n/locale-provider", async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  const i18n = await import("@synap-core/types/i18n");
+  return {
+    ...actual,
+    useConsoleLocale: () => locale.current,
+    useT: (catalogs: Parameters<typeof i18n.createT>[1]) =>
+      i18n.createT(locale.current, catalogs),
+  };
+});
+afterEach(() => {
+  locale.current = "en";
+});
 
 // The renderer host reads the pod; here it only says what it was asked to
 // frame, and draws the fallback it was given.
@@ -355,6 +372,41 @@ describe("the cards draw every state apart", () => {
     expect(done({ kind: "empty" })).toContain(en["receipts.empty"]);
     expect(done({ kind: "failed" })).toContain(en["receipts.failed"]);
     expect(done({ kind: "offline" })).toContain(en.offline);
+  });
+});
+
+describe("the cards speak French to a French reader", () => {
+  it("says Retry and a count in French", () => {
+    locale.current = "fr";
+    const noop = () => {};
+    const failed = renderToStaticMarkup(
+      <MyAccessCardView
+        spaces={{ kind: "failed" }}
+        computers={{ kind: "failed" }}
+        keys={{ kind: "failed" }}
+        skeleton={false}
+        onRetry={{ spaces: noop, computers: noop, keys: noop }}
+        onOpen={noop}
+      />
+    );
+    expect(failed).toContain("Réessayer");
+    expect(failed).toContain(fr["access.spaces.failed"]);
+    expect(failed).not.toContain("Retry");
+    const counted = renderToStaticMarkup(
+      <MyAccessCardView
+        spaces={{ kind: "empty" }}
+        computers={{
+          kind: "ready",
+          value: { count: 3, href: "/my-computers" },
+        }}
+        keys={{ kind: "ready", value: { count: 1, href: "/my-connections" } }}
+        skeleton={false}
+        onRetry={{ spaces: noop, computers: noop, keys: noop }}
+        onOpen={noop}
+      />
+    );
+    expect(counted).toContain("3 connectés");
+    expect(counted).toContain("1 clé en service");
   });
 });
 

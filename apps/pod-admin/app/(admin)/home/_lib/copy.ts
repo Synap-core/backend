@@ -67,13 +67,13 @@ export const en = {
   "artifacts.title": "Made for you",
   "artifacts.hint": "What your AIs made for you, newest first",
   "artifacts.empty":
-    "Nothing yet. When one of your AIs makes something for you, it shows here.",
+    "Nothing made for you recently. When one of your AIs makes something for you, it shows here.",
   "artifacts.failed": "Couldn’t load what your AIs made for you.",
   "artifacts.showAll": "Show all {n}",
   "receipts.title": "Done for you",
-  "receipts.hint": "What your AIs did, and who decided it",
+  "receipts.hint": "What AIs did in your spaces, and who decided it",
   "receipts.empty":
-    "Nothing yet. What your AIs do for you is listed here once it is decided.",
+    "Nothing yet. What AIs do in your spaces is listed here once it is decided.",
   "receipts.failed": "Couldn’t load what your AIs did.",
   "receipts.all": "See all in History",
 } as const;
@@ -135,13 +135,13 @@ export const fr: Catalog<typeof en> = {
   "artifacts.title": "Fait pour vous",
   "artifacts.hint": "Ce que vos IA ont fait pour vous, le plus récent d’abord",
   "artifacts.empty":
-    "Rien pour l’instant. Quand une de vos IA fait quelque chose pour vous, cela apparaît ici.",
+    "Rien de fait pour vous récemment. Quand une de vos IA fait quelque chose pour vous, cela apparaît ici.",
   "artifacts.failed": "Impossible de charger ce que vos IA ont fait pour vous.",
   "artifacts.showAll": "Tout voir ({n})",
   "receipts.title": "Fait en votre nom",
-  "receipts.hint": "Ce que vos IA ont fait, et qui l’a décidé",
+  "receipts.hint": "Ce que les IA ont fait dans vos espaces, et qui l’a décidé",
   "receipts.empty":
-    "Rien pour l’instant. Ce que vos IA font pour vous s’affiche ici une fois décidé.",
+    "Rien pour l’instant. Ce que les IA font dans vos espaces s’affiche ici une fois décidé.",
   "receipts.failed": "Impossible de charger ce que vos IA ont fait.",
   "receipts.all": "Tout voir dans l’Historique",
 };
