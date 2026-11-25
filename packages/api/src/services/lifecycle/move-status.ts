@@ -592,7 +592,16 @@ export async function moveStatus(
             reason: input.reason ?? null,
           }
         );
-        if (propagated.propagated.length) {
+        if (propagated.status === "proposed") {
+          logger.info(
+            {
+              entityId: input.entityId,
+              to: result.transition.to,
+              reason: propagated.reason,
+            },
+            "status-link propagation proposed — not in-stage"
+          );
+        } else if (propagated.propagated.length) {
           logger.info(
             {
               entityId: input.entityId,

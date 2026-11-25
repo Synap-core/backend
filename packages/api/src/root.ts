@@ -38,6 +38,7 @@ import { whiteboardsRouter } from "./routers/whiteboards.js";
 import { skillsRouter } from "./routers/skills.js";
 import { toolsRouter } from "./routers/tools.js";
 import { messageLinksRouter } from "./routers/message-links.js";
+import { entityLinksRouter } from "./routers/entity-links.js";
 import { commentsRouter } from "./routers/comments.js";
 import { profilesRouter } from "./routers/profiles.js";
 import { surfacesRouter } from "./routers/surfaces.js";
@@ -165,6 +166,7 @@ export const coreRouter = router({
   skills: skillsRouter,
   tools: toolsRouter,
   messageLinks: messageLinksRouter,
+  entityLinks: entityLinksRouter,
   // Documents v2 — comments are anchored messages in the object's ONE room.
   comments: commentsRouter,
   // Dynamic Schema System
