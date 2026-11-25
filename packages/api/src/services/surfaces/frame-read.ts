@@ -44,8 +44,7 @@ import { runFrameReadOp } from "./frame-read-ops.js";
 
 /** The surface a frame draws, as its host names it. */
 export type FrameSurface =
-  | { kind: "cell"; typeKey: string }
-  | { kind: "document"; id: string };
+  { kind: "cell"; typeKey: string } | { kind: "document"; id: string };
 
 export const FRAME_SURFACE_KINDS = ["cell", "document"] as const;
 

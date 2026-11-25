@@ -20,6 +20,9 @@
  * (React Native), CLI, or server contexts (same contract as `./vocabulary`).
  */
 
+// The Surface model (UI anchored to an object) and its find contract.
+export * from "./model.js";
+
 export type DeprecatedSurfaceHost = "browser" | "relay";
 
 export interface DeprecatedSurface {

@@ -476,7 +476,9 @@ export interface DefineCellInput {
 /** A declaration as stored: undefined = silence, null = clear, else parsed. */
 function declaredOrRefuse<T>(
   raw: T[] | null | undefined,
-  parse: (raw: unknown) => { ok: true; value: T[] } | { ok: false; error: string }
+  parse: (
+    raw: unknown
+  ) => { ok: true; value: T[] } | { ok: false; error: string }
 ): T[] | null | undefined {
   if (raw === undefined || raw === null) return raw;
   const parsed = parse(raw);
@@ -840,7 +842,9 @@ async function writeCell(
       : "trustLevel" in trustDemotion
         ? trustDemotion
         : {
-            trustLevel: drizzleSql<"trusted" | "installed" | "generated">`${widgetDefinitions.trustLevel}`,
+            trustLevel: drizzleSql<
+              "trusted" | "installed" | "generated"
+            >`${widgetDefinitions.trustLevel}`,
           };
 
   // ONE instant for the insert's timestamps, set here rather than left to the

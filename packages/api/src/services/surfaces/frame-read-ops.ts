@@ -213,7 +213,9 @@ export async function runFrameReadOp(
       const { lifecycleRouter } = await import("../../routers/lifecycle.js");
       return lifecycleRouter
         .createCaller(ctx)
-        .moving(defined({ limit: int(p.limit, 1, 100) ?? 30, workspaceId: ws }));
+        .moving(
+          defined({ limit: int(p.limit, 1, 100) ?? 30, workspaceId: ws })
+        );
     }
     case "lens.page": {
       // One space's own page: refused with no space to stamp.

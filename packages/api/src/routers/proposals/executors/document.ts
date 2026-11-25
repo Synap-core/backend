@@ -14,9 +14,9 @@ import {
 } from "../../../services/document-scope/document-scope.js";
 
 /** The `metadata.reads` an approved html page stores, re-checked. */
-function declaredPageReadsOf(
-  data: Record<string, unknown>
-): { metadata?: Record<string, unknown> } {
+function declaredPageReadsOf(data: Record<string, unknown>): {
+  metadata?: Record<string, unknown>;
+} {
   if (data.reads === undefined || data.reads === null) return {};
   const parsed =
     data.type === "html"

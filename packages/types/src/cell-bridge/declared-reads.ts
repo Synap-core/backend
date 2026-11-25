@@ -108,7 +108,11 @@ export function parseDeclaredReads(
           error: `reads[${i}].params.${name} is not a param of "${op}" (${allowed.join(", ") || "it takes none"}).`,
         };
       }
-      if (typeof value !== "string" || value.length === 0 || value.length > 200) {
+      if (
+        typeof value !== "string" ||
+        value.length === 0 ||
+        value.length > 200
+      ) {
         return {
           ok: false,
           error: `reads[${i}].params.${name} must be a value (a string of 1 to 200 characters) or "*".`,
