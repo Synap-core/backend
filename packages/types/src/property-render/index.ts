@@ -77,6 +77,7 @@ export {
 export {
   getEnumTone,
   getEnumUnitTone,
+  unitToneEnum,
   getPriorityLevel,
   PRIORITY_MAP,
   type EnumTone,

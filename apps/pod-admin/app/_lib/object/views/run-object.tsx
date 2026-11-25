@@ -27,7 +27,10 @@ import { formatRelative, formatTimestamp } from "../../../../lib/format";
 import { FactsGrid } from "../facts-grid";
 import { ConfirmModal } from "../../../(admin)/components/confirm-modal";
 import { StatusPill } from "../../../(admin)/components/status-pill";
-import { statusPillFor } from "../../../(admin)/components/status-tone";
+import {
+  machinePill,
+  statusPillFor,
+} from "../../../(admin)/components/status-tone";
 import { runResultMessage } from "../../../(admin)/automations/_lib/rule-rows";
 import {
   flowNoun,
@@ -124,7 +127,9 @@ export function useRunDetail(target: RunAddress | null) {
       ? { ...runActions(run), stop: canStopBox }
       : { cancel: false, runAgain: false, stop: false },
     boxRun,
-    pill: run ? statusPillFor(run.status) : null,
+    pill: run
+      ? machinePill("run", run.status, { stopReason: run.stopReason })
+      : null,
     who: run ? triggeredByLabel(run.triggeredBy, me.data?.id ?? null) : null,
     activity: (detail.data?.activity ?? []).slice(0, TIMELINE_MAX),
     activityTotal: detail.data?.activity.length ?? 0,

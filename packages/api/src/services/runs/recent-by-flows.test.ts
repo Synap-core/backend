@@ -49,9 +49,10 @@ describe("listRecentRunsByFlows", () => {
         {
           id: "run-a",
           flowId: AUTO_ID,
-          status: "completed",
+          status: "failed",
           startedAt: "2026-07-31T00:00:00.000Z",
           completedAt: "2026-07-31T00:00:01.000Z",
+          stopReason: "budget",
         },
       ])
       .mockResolvedValueOnce([]);
@@ -74,7 +75,9 @@ describe("listRecentRunsByFlows", () => {
         runs: [
           expect.objectContaining({
             id: "run-a",
-            status: "completed",
+            status: "failed",
+            // The stop reason reaches the mark (a held stop is amber).
+            stopReason: "budget",
             startedAt: new Date("2026-07-31T00:00:00.000Z"),
           }),
         ],

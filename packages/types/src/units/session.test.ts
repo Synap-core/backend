@@ -98,7 +98,7 @@ describe("sessionUnitInput — one session", () => {
 
   it("scheduled and paused come from the lifecycle, with no invented cadence", () => {
     const scheduled = sessionUnitInput({ status: "scheduled", owedFromYou: 0 });
-    expect(scheduled.schedule).toEqual({ cron: "", enabled: true });
+    expect(scheduled.schedule).toEqual({ cron: "", on: true });
     expect(resolveUnitState(scheduled).state).toBe("scheduled");
     expect(stateOf({ status: "paused", owedFromYou: 0 })).toBe("paused");
   });
