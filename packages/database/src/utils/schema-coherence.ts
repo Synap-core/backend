@@ -3059,6 +3059,13 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "causes",
     addedBy: "0392_server_faults.sql",
   },
+  // entity_links (0454) — the dynamic status-propagation graph edges. Absent,
+  // the propagation stub would throw 42P01 on every status move.
+  {
+    table: "entity_links",
+    column: "link_type",
+    addedBy: "0454_entity_links_status_propagate.sql",
+  },
 ];
 
 /**

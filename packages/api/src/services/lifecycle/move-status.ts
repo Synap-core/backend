@@ -64,6 +64,8 @@ import { ownWorkOrganiseForTaskClose } from "../governance/own-organise.js";
 import { mayWriteStatusTarget } from "./status-write-floor.js";
 import { markProposalNotificationsActioned } from "../../notifications/mark-proposal-notifications-actioned.js";
 import { appSignInPublicId } from "../app-sign-in-policy.js";
+import { propagateStatusLink } from "./propagate-status-link.js";
+import { isPropagationActive } from "./propagation-guard.js";
 import type { GatedStageEntry } from "../focus-sessions/subject-move-gate.js";
 
 const logger = createLogger({ module: "move-status" });
@@ -576,6 +578,38 @@ export async function moveStatus(
   if (result.status === "moved") {
     // Owed in the move's transaction; a failed delivery stays owed (sweeper).
     await dispatchLifecycleTransition(result.transition.transitionId);
+    // Side effect: ripple the move down status-propagation links. One hop,
+    // never governed against the trigger move itself, never thrown into it.
+    if (!isPropagationActive()) {
+      try {
+        const propagated = await propagateStatusLink(
+          input.entityId,
+          result.transition.to,
+          {
+            actor: input.actor,
+            sessionId: input.sessionId ?? null,
+            workspaceId: input.workspaceId ?? null,
+            reason: input.reason ?? null,
+          }
+        );
+        if (propagated.propagated.length) {
+          logger.info(
+            {
+              entityId: input.entityId,
+              to: result.transition.to,
+              propagated: propagated.propagated.length,
+              skipped: propagated.skipped.length,
+            },
+            "status propagated along status-propagates links"
+          );
+        }
+      } catch (err) {
+        logger.warn(
+          { err, entityId: input.entityId },
+          "status-link propagation failed"
+        );
+      }
+    }
     // A person decided: pending agent proposals that believed another status
     // are stale, never left counting toward a worker's backlog (L2, F16). The
     // move already landed, so a failure here is logged, not thrown.
