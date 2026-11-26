@@ -1545,8 +1545,12 @@ async function objectComments(ctx: McpToolContext): Promise<CallToolResult> {
     state,
   });
   const fence = <
-    T extends { content: string; userId: string; authorType: string;
-      agentUserId: string | null },
+    T extends {
+      content: string;
+      userId: string;
+      authorType: string;
+      agentUserId: string | null;
+    },
   >(
     m: T
   ) => {

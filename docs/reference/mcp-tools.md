@@ -205,11 +205,13 @@ Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `ur
 
 **Get thread context** · Group: `read` · readOnlyHint: true · openWorldHint: false
 
-Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.
+Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel. Or, instead of threadId, `object` (+ `state`): that entity's or document's comment threads, each with its anchor (a pin's `locator`: design frame/block or story, viewport, point, contentVersion), replies and resolvedAt. Resolving is the person's: reply in the thread (synap_post_message comment.replyTo) with what you did.
 
 | Parameter  | Type   | Required | Description                                                                                      |
 | ---------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
-| `threadId` | string | yes      | Channel/thread UUID                                                                              |
+| `threadId` | string | no       | Channel/thread UUID                                                                              |
+| `object`   | object | no       | Instead of threadId: {type: 'entity' \| 'document', id} — read its comment threads.              |
+| `state`    | enum   | no       | With object: open threads (default) or resolved ones. One of: `open`, `resolved`.                |
 | `limit`    | number | no       | Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn. |
 | `cursor`   | string | no       | Older messages: the last reply's `nextCursor`.                                                   |
 

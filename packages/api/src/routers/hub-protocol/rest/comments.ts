@@ -133,7 +133,10 @@ export function registerCommentsRoutes(app: HubHono): void {
       "space). 400 names every bad anchor field.",
     request: { body: PostCommentRequestSchema },
     responses: {
-      200: { description: "Posted (or the first post of a retry)", schema: PostCommentReplySchema },
+      200: {
+        description: "Posted (or the first post of a retry)",
+        schema: PostCommentReplySchema,
+      },
       400: { description: "Invalid anchor or body", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "No such object or thread", schema: ErrorSchema },
@@ -236,7 +239,10 @@ export function registerCommentsRoutes(app: HubHono): void {
       body: SetResolvedRequestSchema,
     },
     responses: {
-      200: { description: "The thread's state", schema: SetResolvedReplySchema },
+      200: {
+        description: "The thread's state",
+        schema: SetResolvedReplySchema,
+      },
       400: { description: "Bad request", schema: ErrorSchema },
       403: { description: "Forbidden", schema: ErrorSchema },
       404: { description: "No such thread", schema: ErrorSchema },

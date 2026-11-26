@@ -1180,7 +1180,8 @@ export const tools = {
             state: {
               type: "string",
               enum: ["open", "resolved"],
-              description: "With object: open threads (default) or resolved ones.",
+              description:
+                "With object: open threads (default) or resolved ones.",
             },
             limit: {
               type: "number",

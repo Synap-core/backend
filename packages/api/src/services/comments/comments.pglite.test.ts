@@ -831,7 +831,10 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
     const app: HubHono = new OpenAPIHono<{ Variables: HubVariables }>();
     app.use("*", async (c, next) => {
       c.set("userId", userId);
-      c.set("scopes", opts.scopes ?? ["hub-protocol.read", "hub-protocol.write"]);
+      c.set(
+        "scopes",
+        opts.scopes ?? ["hub-protocol.read", "hub-protocol.write"]
+      );
       if (opts.agentUserId) c.set("agentUserId", opts.agentUserId);
       await next();
     });
@@ -907,10 +910,14 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
     const before = await messageCount();
     expect(
       (
-        await post(hubApp(EDITOR, { scopes: ["hub-protocol.read"] }), "/comments", {
-          anchor: pinAnchor,
-          content: "no write scope",
-        })
+        await post(
+          hubApp(EDITOR, { scopes: ["hub-protocol.read"] }),
+          "/comments",
+          {
+            anchor: pinAnchor,
+            content: "no write scope",
+          }
+        )
       ).status
     ).toBe(403);
     expect(
@@ -1019,16 +1026,17 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
     const thread = body.comments.threads.find(
       (t) => t.id === posted.messageId
     )!;
-    expect(thread.anchor).toEqual(
-      entityPin({ ...pin, frameId: "frame-faq" })
-    );
+    expect(thread.anchor).toEqual(entityPin({ ...pin, frameId: "frame-faq" }));
     // Another person's words reach an agent fenced, never as instructions.
     expect(thread.content).not.toBe("FAQ accordion clips");
     expect(thread.content).toContain("FAQ accordion clips");
 
     const both = await readHandlers.synap_get_thread_context!({
       toolName: "synap_get_thread_context",
-      args: { threadId: posted.channelId, object: { type: "entity", id: ENTITY } },
+      args: {
+        threadId: posted.channelId,
+        object: { type: "entity", id: ENTITY },
+      },
       userId: VIEWER,
       apiKeyScopes: ["mcp.read"],
     } as never);
