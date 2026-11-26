@@ -82,6 +82,10 @@ import type {
 } from "../../routers/hub-protocol/rest/_shared.js";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { runWithGrant } from "@synap/database";
+import {
+  AI_READ_PROPOSE_ROLE_ID,
+  GRANT_PRESETS,
+} from "@synap-core/types/grants";
 
 const OWNER = "owner-1";
 const EDITOR = "ws-editor";
@@ -964,6 +968,31 @@ describe("pins through Hub REST /comments and the MCP object read", () => {
         })
     );
     expect(allowed.status).toBe(200);
+
+    // The "AI — read & propose" preset every new agent key starts with holds
+    // the entity update right: an agent may still reply in a pin's thread.
+    const aiPreset = {
+      scopes: [
+        {
+          permissions: [
+            ...GRANT_PRESETS.find((r) => r.id === AI_READ_PROPOSE_ROLE_ID)!
+              .grant.permissions,
+          ],
+          workspaceIds: null,
+          projectIds: null,
+          entityIds: null,
+        },
+      ],
+      clientId: null,
+    } as never;
+    const byAgentKey = await runWithGrant(aiPreset, () =>
+      postComment({
+        userId: EDITOR,
+        anchor: entityPin(pin),
+        content: "applied: the cards now wrap",
+      })
+    );
+    expect(byAgentKey.ackState).toBe("applied");
   });
 
   it("MCP: synap_get_thread_context {object, state} reads an entity's pins, fenced", async () => {
