@@ -26016,6 +26016,39 @@ declare const ObjectCommentAnchorSchema: z.ZodDiscriminatedUnion<[
 		entityId: z.ZodString;
 		field: z.ZodOptional<z.ZodString>;
 		kind: z.ZodLiteral<"entity">;
+		locator: z.ZodOptional<z.ZodDiscriminatedUnion<[
+			z.ZodObject<{
+				blockId: z.ZodOptional<z.ZodString>;
+				contentVersion: z.ZodString;
+				frameId: z.ZodString;
+				point: z.ZodObject<{
+					x: z.ZodNumber;
+					y: z.ZodNumber;
+				}, z.core.$strict>;
+				screenshot: z.ZodOptional<z.ZodString>;
+				surface: z.ZodLiteral<"design">;
+				viewport: z.ZodEnum<{
+					desktop: "desktop";
+					phone: "phone";
+					tablet: "tablet";
+				}>;
+			}, z.core.$strict>,
+			z.ZodObject<{
+				contentVersion: z.ZodString;
+				point: z.ZodObject<{
+					x: z.ZodNumber;
+					y: z.ZodNumber;
+				}, z.core.$strict>;
+				screenshot: z.ZodOptional<z.ZodString>;
+				storyId: z.ZodString;
+				surface: z.ZodLiteral<"story">;
+				viewport: z.ZodEnum<{
+					desktop: "desktop";
+					phone: "phone";
+					tablet: "tablet";
+				}>;
+			}, z.core.$strict>
+		], "surface">>;
 	}, z.core.$strict>
 ], "kind">;
 export type ObjectCommentAnchor = z.infer<typeof ObjectCommentAnchorSchema>;
@@ -39044,6 +39077,28 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 					entityId: string;
 					field?: string | undefined;
 					kind: "entity";
+					locator?: {
+						blockId?: string | undefined;
+						contentVersion: string;
+						frameId: string;
+						point: {
+							x: number;
+							y: number;
+						};
+						screenshot?: string | undefined;
+						surface: "design";
+						viewport: "desktop" | "phone" | "tablet";
+					} | {
+						contentVersion: string;
+						point: {
+							x: number;
+							y: number;
+						};
+						screenshot?: string | undefined;
+						storyId: string;
+						surface: "story";
+						viewport: "desktop" | "phone" | "tablet";
+					} | undefined;
 				};
 				clientRequestId?: string | undefined;
 				content: string;

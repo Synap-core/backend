@@ -129,7 +129,10 @@ const locatorPlace = {
   contentVersion: locatorToken("contentVersion"),
   /** A pod file (its id) holding the crop around the pin. Shape only: a
    *  reader fetches it through the file door, under that reader's own floor. */
-  screenshot: z.string().uuid("screenshot is a pod file id (a uuid)").optional(),
+  screenshot: z
+    .string()
+    .uuid("screenshot is a pod file id (a uuid)")
+    .optional(),
 };
 
 /**

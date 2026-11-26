@@ -715,12 +715,15 @@ describe("an entity comment pinned to an exact place (locator)", () => {
   it("MCP: a story pin posted through synap_post_message reads back through the channel door", async () => {
     const res = await mcpPost({
       content: "The CTA wraps on phone",
-      comment: { anchor: { kind: "entity", entityId: ENTITY, locator: storyPin } },
+      comment: {
+        anchor: { kind: "entity", entityId: ENTITY, locator: storyPin },
+      },
     });
     expect(res.isError).toBeFalsy();
-    const body = JSON.parse(
-      (res.content[0] as { text: string }).text
-    ) as { messageId: string; channelId: string };
+    const body = JSON.parse((res.content[0] as { text: string }).text) as {
+      messageId: string;
+      channelId: string;
+    };
 
     const rows = await queryChannelMessages(db, {
       channelId: body.channelId,
@@ -728,9 +731,11 @@ describe("an entity comment pinned to an exact place (locator)", () => {
       order: "asc",
     });
     const row = rows.find((r) => r.id === body.messageId)!;
-    expect(
-      (row.metadata as { anchor?: unknown } | null)?.anchor
-    ).toEqual({ kind: "entity", entityId: ENTITY, locator: storyPin });
+    expect((row.metadata as { anchor?: unknown } | null)?.anchor).toEqual({
+      kind: "entity",
+      entityId: ENTITY,
+      locator: storyPin,
+    });
 
     const listing = await listObjectComments({
       userId: VIEWER,
