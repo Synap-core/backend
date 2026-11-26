@@ -399,7 +399,8 @@ export function registerSurfacesRoutes(app: HubHono): void {
       // A refusal the caller can act on (not found, forbidden, conflict)
       // keeps its status and words; only an unknown error is a 500.
       const status = httpStatusForTrpcError(err);
-      if (status >= 500) logger.error({ err }, "DELETE /surfaces/attach failed");
+      if (status >= 500)
+        logger.error({ err }, "DELETE /surfaces/attach failed");
       return c.json(
         {
           error:

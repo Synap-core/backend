@@ -300,9 +300,7 @@ function addressQuery(
     ...(type === "run" && isOpenFlowTypeValue(flowType)
       ? [`flowType=${flowType}`]
       : []),
-    ...(type && surface && isUuid(surface)
-      ? [`surface=${surface}`]
-      : []),
+    ...(type && surface && isUuid(surface) ? [`surface=${surface}`] : []),
   ];
   return parts.length ? parts.join("&") : undefined;
 }
