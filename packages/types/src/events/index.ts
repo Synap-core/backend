@@ -18,7 +18,11 @@ import type { StatusSignal } from "../lifecycle/signal.js";
 
 export interface EntityCreatedEvent {
   entityId: string;
-  workspaceId: string;
+  /**
+   * The entity's space; null or absent for a POD-WIDE entity, whose push
+   * reaches each reader's own room instead of a workspace room.
+   */
+  workspaceId?: string | null;
   type: string;
   title: string;
   entity?: Entity; // Added for optimistic updates
@@ -28,7 +32,11 @@ export interface EntityCreatedEvent {
 
 export interface EntityUpdatedEvent {
   entityId: string;
-  workspaceId: string;
+  /**
+   * The entity's space; null or absent for a POD-WIDE entity, whose push
+   * reaches each reader's own room instead of a workspace room.
+   */
+  workspaceId?: string | null;
   changes: Record<string, unknown>;
   entity?: Entity; // Added for optimistic updates
   updatedBy: string;
@@ -37,7 +45,11 @@ export interface EntityUpdatedEvent {
 
 export interface EntityDeletedEvent {
   entityId: string;
-  workspaceId: string;
+  /**
+   * The entity's space; null or absent for a POD-WIDE entity, whose push
+   * reaches each reader's own room instead of a workspace room.
+   */
+  workspaceId?: string | null;
   deletedBy: string;
   deletedAt: string;
 }

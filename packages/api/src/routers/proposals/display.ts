@@ -192,6 +192,7 @@ import {
   type LinkEndpointNameContext,
   type ReferencedNameIds,
 } from "./helper-functions.js";
+import { blockCellKey, readLegacyBlock } from "@synap-core/types/blocks";
 
 // Re-exported so existing external import sites (`routers/proposals.ts`,
 // `services/focus-sessions/participants.ts`) are unaffected by moving the
@@ -2873,12 +2874,12 @@ function buildConfigReviewItems(
             : undefined;
         const cells =
           op.viewType === "bento" && Array.isArray(op.config?.blocks)
-            ? (op.config.blocks as Array<Record<string, unknown>>).flatMap(
-                (block) =>
-                  typeof block?.widgetType === "string"
-                    ? [block.widgetType]
-                    : []
-              )
+            ? (op.config.blocks as unknown[]).flatMap((raw) => {
+                // Either spelling of a cell tile (legacy `widgetType`, `cellKey`).
+                const block = readLegacyBlock(raw);
+                const key = block ? blockCellKey(block) : undefined;
+                return key ? [key] : [];
+              })
             : undefined;
         views.push({
           ...spaceOf(op),

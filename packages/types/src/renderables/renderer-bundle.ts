@@ -84,6 +84,24 @@ export interface RendererBundleDefaults {
   views?: Record<string, string>;
 }
 
+/**
+ * What a bundle needs from the pod that runs it: the bundle is built against
+ * backend `main`, while a `stable` pod runs an older release. Optional, every
+ * field optional; absent = no requirement. A requirement this pod does not
+ * know (a newer contract's) is unmet, never invalid: the bundle waits for the
+ * pod to be updated instead of being refused.
+ *
+ *   bridgeContract — the frame contract version it was built against
+ *               (`CELL_BRIDGE_CONTRACT_VERSION`): a param an op gained is not
+ *               a new op name, so the version says it;
+ *   bridgeOps — the cell-bridge operations its cells call (read ops of
+ *               `CELL_BRIDGE_READ_OPS`, write ops of `CELL_BRIDGE_WRITE_OPS`).
+ */
+export interface RendererBundleRequires {
+  bridgeContract?: number;
+  bridgeOps?: string[];
+}
+
 /** The published definition of a renderer bundle. */
 export interface RendererBundleDefinition {
   _meta: { slug: string; version: string; kind: typeof RENDERER_BUNDLE_KIND };
@@ -97,7 +115,16 @@ export interface RendererBundleDefinition {
   hostModules: RendererBundleHostModules;
   cells: RendererBundleCell[];
   defaults: RendererBundleDefaults;
+  /** What it needs from the pod; absent = nothing beyond `bundleApi`. */
+  requires?: RendererBundleRequires;
 }
+
+/**
+ * Whether THIS pod meets a bundle's `requires` is answered by
+ * `unmetRendererBundleRequirements` in `@synap-core/types/cell-bridge`
+ * (`cell-bridge/bundle-requirements.ts`): it reads the op tables and the
+ * contract version, which this leaf may not import.
+ */
 
 /**
  * The exact text whose sha256 is a host-module set's identity (`setSha256`):
@@ -271,6 +298,28 @@ export function validateRendererBundleDefinition(
           r.line ? `Line ${r.line}: ${r.message}` : r.message
         );
     });
+  }
+
+  if (d.requires !== undefined) {
+    if (!isRecord(d.requires)) add("requires", "requires must be an object.");
+    else {
+      // An unknown requirement is unmet (`unmetRendererBundleRequirements`),
+      // not invalid.
+      if (
+        d.requires.bridgeOps !== undefined &&
+        !isStringList(d.requires.bridgeOps)
+      )
+        add("requires.bridgeOps", "bridgeOps must be a list of op names.");
+      const contract = d.requires.bridgeContract;
+      if (
+        contract !== undefined &&
+        !(Number.isInteger(contract) && (contract as number) > 0)
+      )
+        add(
+          "requires.bridgeContract",
+          "bridgeContract must be a contract version (a whole number)."
+        );
+    }
   }
 
   const defaults = d.defaults;

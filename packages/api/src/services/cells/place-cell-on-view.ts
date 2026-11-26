@@ -25,6 +25,7 @@ import { TRPCError } from "@trpc/server";
 import { getDb, and, eq } from "@synap/database";
 import { views, widgetDefinitions } from "@synap/database/schema";
 import { validateViewConfig } from "@synap-core/types";
+import { blockCellKey, readLegacyBlock } from "@synap-core/types/blocks";
 
 /** Where an approved cell lands: a bento view, by id. */
 export const CellPlacementSchema = z
@@ -165,9 +166,11 @@ export async function appendCellTile(
   const blocks = Array.isArray(config.blocks)
     ? (config.blocks as Array<Record<string, unknown>>)
     : [];
-  const existing = blocks.find(
-    (b) => b.kind === "widget" && b.widgetType === input.typeKey
-  );
+  // Every stored spelling of a cell tile (legacy `widget`, canonical `cell`).
+  const existing = blocks.find((b) => {
+    const block = readLegacyBlock(b);
+    return block !== null && blockCellKey(block) === input.typeKey;
+  });
   if (existing) {
     return {
       viewId: input.viewId,

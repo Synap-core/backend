@@ -60,18 +60,24 @@ import {
   type ParsedSections,
   type SectionOwner,
 } from "../session-document/sections.js";
+import {
+  isBlockEmbedDirective,
+  type BlockEmbedDirective,
+} from "@synap-core/types/blocks";
 
 export const SECTION_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 // ─── The op vocabulary (the one wire schema every door parses) ──────────────
 
 /**
- * What `insert_embed` writes: every embed but `synap-ask`, which is written as
+ * What `insert_embed` writes: the embeds that carry the one Block (a view, an
+ * entity, a cell; `@synap-core/types/blocks`), in the directive order
+ * markdown-core declares. `synap-ask` is not a Block: it is written as
  * markdown for now (its enum value would widen the generated API surface).
  */
-type InsertableEmbed = Exclude<EmbedDirective, "synap-ask">;
-const INSERTABLE_EMBEDS = EMBED_DIRECTIVES.filter(
-  (d): d is InsertableEmbed => d !== "synap-ask"
+type InsertableEmbed = Extract<EmbedDirective, BlockEmbedDirective>;
+const INSERTABLE_EMBEDS = EMBED_DIRECTIVES.filter((d): d is InsertableEmbed =>
+  isBlockEmbedDirective(d)
 ) as [InsertableEmbed, ...InsertableEmbed[]];
 
 export const DocumentPatchOpSchema = z.discriminatedUnion("op", [

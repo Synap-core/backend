@@ -120,6 +120,7 @@ export const INSTALLED_PACKAGE_KINDS = [
   "skill",
   "automation",
   "agent",
+  "renderer-bundle",
 ] as const;
 export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
 
@@ -129,9 +130,9 @@ export type InstalledPackageKind = (typeof INSTALLED_PACKAGE_KINDS)[number];
  *             automation, agent template. The plan lists every field with its
  *             state.
  *   package — as a whole, through the kind's own template door (a space's
- *             template apply, a capability's reconcile), which adds what the
- *             new version brings and keeps the pod's edits. The plan has no
- *             field rows.
+ *             template apply, a capability's reconcile, a renderer bundle's
+ *             install), which adds what the new version brings and keeps the
+ *             pod's edits. The plan has no field rows.
  */
 export const PACKAGE_UPDATE_COMPARED_BY = ["field", "package"] as const;
 export type PackageUpdateComparedBy =
@@ -139,7 +140,11 @@ export type PackageUpdateComparedBy =
 
 /** Which kinds are updated as a whole. */
 export function packageUpdateComparedBy(kind: string): PackageUpdateComparedBy {
-  return kind === "workspace" || kind === "capability" ? "package" : "field";
+  return kind === "workspace" ||
+    kind === "capability" ||
+    kind === "renderer-bundle"
+    ? "package"
+    : "field";
 }
 
 /**
@@ -393,9 +398,13 @@ export type ApplyPackageUpdateInput = z.input<
   typeof applyPackageUpdateInputSchema
 >;
 
-/** One field an apply (or an undo) changed. */
+/**
+ * One field an apply (or an undo) changed. A renderer bundle's update is one
+ * change of its `version` (`rowKind: "renderer-bundle"`, `rowId` its slug):
+ * Undo puts the version kept on the pod back (`renderer_bundle_versions`).
+ */
 export interface PackageUpdateChange {
-  rowKind: PackageUpdateRowKind;
+  rowKind: PackageUpdateRowKind | "renderer-bundle";
   rowId: string;
   field: string;
   before: unknown;
@@ -449,6 +458,106 @@ export const detachPackageInputSchema = z.object({
   kind: z.enum(PACKAGE_UPDATE_ROW_KINDS),
   id: z.string().uuid(),
 });
+
+// ─── Renderer bundle updates ────────────────────────────────────────────────
+
+/**
+ * How long a new renderer bundle version waits, from its publish, before it
+ * applies on its own, by the pod's update channel
+ * (`pod_settings.settings.updates.channel`): a bad version Synap retires
+ * within that time never reaches the pod. A version Synap retired on the pod
+ * skips the wait.
+ */
+export const RENDERER_BUNDLE_SOAK_MS = {
+  fast: 60 * 60 * 1000,
+  stable: 24 * 60 * 60 * 1000,
+} as const;
+
+/**
+ * Why ONE version waits for the owner until a newer version or a person's
+ * apply:
+ *   requires — it needs what this pod does not have yet (its `requires`);
+ *              tried again once after the pod restarts (an update);
+ *   kit      — it drops kit exports another frame cell on this pod may use;
+ *   undone   — the owner went back from it;
+ *   failed   — applying it on its own failed: it is not fetched again.
+ */
+export const RENDERER_BUNDLE_HOLD_REASONS = [
+  "requires",
+  "kit",
+  "undone",
+  "failed",
+] as const;
+export type RendererBundleHoldReason =
+  (typeof RENDERER_BUNDLE_HOLD_REASONS)[number];
+
+/**
+ * Why the newest version is not installed yet, as the last pass found it:
+ *   soak               — it applies on its own at `applyAfter`;
+ *   auto_off           — the pod's automatic updates are off;
+ *   setting_unreadable — the pod's update setting could not be read;
+ *   paused             — the owner paused this bundle's updates;
+ *   held               — a hold on this version (`hold`);
+ *   frozen             — Synap's catalog signature has the catalog paused;
+ *   no_owner           — the pod has no owner to apply it as;
+ *   refused            — the control plane refused the pass (`refusal`).
+ */
+export const RENDERER_BUNDLE_WAIT_REASONS = [
+  "soak",
+  "auto_off",
+  "setting_unreadable",
+  "paused",
+  "held",
+  "frozen",
+  "no_owner",
+  "refused",
+] as const;
+export type RendererBundleWaitReason =
+  (typeof RENDERER_BUNDLE_WAIT_REASONS)[number];
+
+/**
+ * What the pod knows about its renderer bundle's updates
+ * (`renderers.updates`), written by the after-sync pass every 10 minutes.
+ * Dates are ISO strings.
+ */
+export interface RendererBundleUpdateState {
+  slug: string;
+  /** The control plane's newest version; null = never read. */
+  latestVersion: string | null;
+  latestPublishedAt: string | null;
+  /** The last read of the control plane that answered. */
+  checkedAt: string | null;
+  /** Synap retired the version installed here: no wait. */
+  installedRetired: boolean;
+  /**
+   * The last read or install refused (`reasonCode` is the pod's machine reason,
+   * e.g. `renderer_bundle_plan_required`); null once one went through.
+   */
+  refusal: { reasonCode: string; message: string; at: string } | null;
+  /** A hold on one version (see RENDERER_BUNDLE_HOLD_REASONS). */
+  hold: {
+    version: string;
+    reason: RendererBundleHoldReason;
+    detail: string;
+    at: string;
+  } | null;
+  /** The owner paused this bundle's updates; null = updates on. */
+  pausedAt: string | null;
+  /** Why the newest version waits; null when nothing waits. */
+  waitReason: RendererBundleWaitReason | null;
+  /** When it applies on its own (`waitReason: "soak"` only). */
+  applyAfter: string | null;
+}
+
+/** Pause or resume one renderer bundle's updates (`packageUpdates.pauseUpdates`). */
+export const pausePackageUpdatesInputSchema = z.object({
+  slug: z.string().min(1),
+  paused: z.boolean(),
+});
+
+/** The events pausing and resuming write to the pod's log. */
+export const PACKAGE_UPDATES_PAUSED_EVENT_TYPE = "package.updates_paused";
+export const PACKAGE_UPDATES_RESUMED_EVENT_TYPE = "package.updates_resumed";
 
 /** How long a receipt can be undone (D5). */
 export const PACKAGE_UPDATE_UNDO_WINDOW_DAYS = 30;

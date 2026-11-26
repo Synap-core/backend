@@ -38,6 +38,7 @@ import type { Sql } from "postgres";
 import { computeCounts, runConversions } from "./engine.js";
 import { CONVERSION_MANIFEST } from "./manifest.js";
 import type { ConversionOp } from "./manifest.js";
+import { ATTACHMENT_FOLD_TEST_SCHEMA } from "./attachment-fold-test-schema.js";
 
 // ─── postgres.js-shaped `Sql` shim over PGlite ───────────────────────────────
 // A tagged-template result is a `Frag`: it carries its raw `strings` + `values`
@@ -265,7 +266,8 @@ function manifestSlugs(): string[] {
 
 async function setupDb(): Promise<{ db: PGlite; sql: Sql }> {
   const db = new PGlite();
-  await db.exec(SCHEMA);
+  // The Surfaces P3 conversions (`p3.surfaces.*`) read and write these.
+  await db.exec(SCHEMA + ATTACHMENT_FOLD_TEST_SCHEMA);
   for (const slug of manifestSlugs()) {
     await db.query(
       `INSERT INTO profiles (slug, display_name, profile_kind, scope, entity_scope, is_active)

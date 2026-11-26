@@ -3557,9 +3557,39 @@ ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "external_hosts" jsonb
 -- sha256 of the cell's content as stored (mechanism, source, deps, egress),
 -- written by defineCell (0396). NULL = written before fingerprints, or synced.
 ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "content_sha256" text;
+-- Declared reads / writes of a cell type's frame (0456). NULL = declares
+-- nothing: the frame read door answers every ceiling read, logged undeclared.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "reads" jsonb;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "writes" jsonb;
+-- One cell type registry (0457): lifecycle status (draft | proposed | active |
+-- retired, backfilled from is_active), markdown fallback, placements and the
+-- anchor kinds it may be attached to. NULL = no narrowing.
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "status" text NOT NULL DEFAULT 'active';
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "fallback" text;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "placements" jsonb;
+ALTER TABLE "widget_definitions" ADD COLUMN IF NOT EXISTS "anchor_kinds" jsonb;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "widget_def_type_key_workspace_uniq"
   ON "widget_definitions" ("type_key", "workspace_id");
+
+-- frame_read_log (0456): one row per read a framed surface asked the frame
+-- read door for, answered or refused. No foreign key (an append log).
+CREATE TABLE IF NOT EXISTS "frame_read_log" (
+  "id"           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  "user_id"      text NOT NULL,
+  "workspace_id" uuid,
+  "surface_kind" text NOT NULL,
+  "surface_key"  text NOT NULL,
+  "op"           text NOT NULL,
+  "params_hash"  text NOT NULL,
+  "allowed"      boolean NOT NULL,
+  "declared"     boolean NOT NULL,
+  "at"           timestamp with time zone NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS "frame_read_log_surface_idx"
+  ON "frame_read_log" ("surface_kind", "surface_key", "at");
+CREATE INDEX IF NOT EXISTS "frame_read_log_user_idx"
+  ON "frame_read_log" ("user_id", "at");
 
 CREATE INDEX IF NOT EXISTS "widget_def_workspace_id_idx"
   ON "widget_definitions" ("workspace_id");
@@ -5430,6 +5460,39 @@ END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS "renderer_host_modules_one_set"
   ON "renderer_host_modules" ("module");
+
+-- Renderer bundle updates (0449): the installed definition's full digest, the
+-- definitions kept for Undo (current + N-1) and what the after-sync pass
+-- learned from the control plane. Mirrors 0449.
+ALTER TABLE "renderer_bundles" ADD COLUMN IF NOT EXISTS "content_hash" text;
+
+CREATE TABLE IF NOT EXISTS "renderer_bundle_versions" (
+  "slug"         text        NOT NULL,
+  "version"      text        NOT NULL,
+  "content_hash" text        NOT NULL,
+  "definition"   jsonb       NOT NULL,
+  "installed_at" timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY ("slug", "version")
+);
+
+CREATE TABLE IF NOT EXISTS "renderer_bundle_updates" (
+  "slug"                text        PRIMARY KEY,
+  "latest_version"      text,
+  "latest_published_at" timestamptz,
+  "checked_at"          timestamptz,
+  "installed_retired"   boolean     NOT NULL DEFAULT false,
+  "refusal_code"        text,
+  "refusal_message"     text,
+  "refused_at"          timestamptz,
+  "hold_version"        text,
+  "hold_reason"         text,
+  "hold_detail"         text,
+  "held_at"             timestamptz,
+  "wait_reason"         text,
+  "apply_after"         timestamptz,
+  "paused_at"           timestamptz,
+  "updated_at"          timestamptz NOT NULL DEFAULT now()
+);
 
 -- Account recovery codes (0294). Pod-local one-time look-up secrets; only a
 -- scrypt hash is stored. One batch per user; used_at NULL = unused.

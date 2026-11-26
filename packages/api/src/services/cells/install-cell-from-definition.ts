@@ -220,6 +220,11 @@ export async function installCellFromDefinition(
     // Omitted when the caller has no version to give, so an upsert can never
     // erase a stamp a versioned install wrote — see `packageVersion`.
     version: input.packageVersion ?? undefined,
+    // Every caller is a person's install (tRPC `cells.install`,
+    // `market.install`, `/packages/apply`, a renderer bundle; `defineCell`
+    // refuses an acting agent): the frame of what they installed writes
+    // directly (`resolveViewTrust`).
+    trustLevel: "installed",
     tx: input.tx,
     userId: input.userId,
   });

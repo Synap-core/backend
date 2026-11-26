@@ -509,6 +509,11 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/channels\/?$/,
   /^\/threads\/?$/,
   route("/threads/:id/messages"),
+  // An object's comment threads (`listObjectComments`, rest/comments.ts): the
+  // object through its read floor (`assertObjectReadable`: `scopedDb` for an
+  // entity, grant ANDed; `loadReadableDocument` for a document), its room
+  // through `canUserSeeChannel`, then only that room's anchored messages.
+  /^\/comments\/?$/,
   route("/threads/:id/branches"),
   /^\/messaging\/channels\/?$/,
   /^\/messaging\/linked-unread\/?$/,
@@ -1382,6 +1387,29 @@ export const GRANT_REST_POST_READS: ReadonlyArray<
   // the transcription provider (rate class `ai_interactive`).
   [route("/files/:id/transcribe"), SEAMED],
   [/^\/memory\/search\/?$/, MEMORY_RECALL],
+  // THE frame read door (`frameRead`, services/surfaces/frame-read.ts): writes
+  // no pod data (its own `frame_read_log` line only). It runs one frame read
+  // op as the person through the tRPC procedure a host maps it to: entities,
+  // documents, views, sessions and their needs-you (proposals, rooms),
+  // playbooks, projects and goals, and the cell type it loads (`widget`).
+  // Those procedures are not all narrowed to a grant row by row, so a key
+  // passes only when it reads every one of them unbounded; a pinned key is
+  // refused (the desktop and pod admin read as the person).
+  [
+    /^\/frame\/read\/?$/,
+    READS(
+      "entity",
+      "document",
+      "view",
+      "session",
+      "proposal",
+      "channel",
+      "playbook",
+      "project",
+      "track",
+      "widget"
+    ),
+  ],
   // A read (no `install`) and a governed install (TEMPLATE-LIFECYCLE B). The
   // standing names a space only when the person's floor AND the key's grant
   // reach it (`readTemplateStanding`); a holder it hides is answered as absent
@@ -1613,6 +1641,9 @@ export const MCP_WRITE_TOOL_DOORS: Readonly<Record<string, McpWriteToolDoor>> =
     ),
     synap_create_cell: WRITE,
     synap_promote_cell_to_renderer: WRITE,
+    // Surfaces P3: the governed create / attach / detach (`surface/*` gate).
+    synap_create_surface: WRITE,
+    synap_attach_surface: WRITE,
     // Files ONE composite proposal through the governed pending lane; it never
     // applies anything, and reads only through the playbook get door.
     synap_propose_app_from_playbook: WRITE,

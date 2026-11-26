@@ -70,6 +70,8 @@ const LINK_ENDPOINT_TYPES = [
   "document",
   "track",
   "profile",
+  "view",
+  "cell_instance",
 ] as const;
 
 /**
@@ -81,6 +83,17 @@ const LINK_ENDPOINT_TYPES = [
  */
 const SYSTEM_WRITTEN_ENDPOINT_TYPES: ReadonlySet<string> = new Set([
   "document",
+]);
+
+/**
+ * The SURFACE ends of an `attaches` edge (Surfaces P3). Nothing but an
+ * attachment names them, and an attachment is written by the surfaces door
+ * (`POST /surfaces/attach`), which floors both ends and files a
+ * `surface/attach` proposal for an agent. Refused here for every link type.
+ */
+const SURFACE_ENDPOINT_TYPES: ReadonlySet<string> = new Set([
+  "view",
+  "cell_instance",
 ]);
 
 /**
@@ -162,6 +175,11 @@ const LINK_TYPES = [
   // producer, REFUSED below: only the capability applier writes it, after it
   // found the base installed (services/capabilities/addon.ts).
   "extends",
+  // <anchor> --attaches--> view|document|cell_instance. Listed because it has
+  // a producer, REFUSED below: the surfaces door writes it
+  // (services/surfaces/attach.ts), with both ends floored and governed as
+  // `surface/attach`.
+  "attaches",
 ] as const;
 
 /** Link types this door names but never writes — each has its own human door. */
@@ -174,6 +192,8 @@ const HUMAN_DOOR_LINK_TYPES: Readonly<Record<string, string>> = {
     "orchestrated_by links are written when an orchestrator starts over a set of sessions (POST /focus-sessions/orchestrate), never through this door",
   extends:
     "extends links are written when an add-on is installed on its base tool (market.install or capabilities.install), never through this door",
+  attaches:
+    "attaches links put a surface on an object; write them with POST /surfaces/attach (or POST /surfaces to make one), never through this door",
 };
 
 /**
@@ -270,6 +290,18 @@ export function registerLinksRoutes(app: HubHono): void {
 
     const humanDoor = HUMAN_DOOR_LINK_TYPES[parsed.data.linkType];
     if (humanDoor) return c.json({ error: humanDoor }, 403);
+    if (
+      SURFACE_ENDPOINT_TYPES.has(parsed.data.fromType) ||
+      SURFACE_ENDPOINT_TYPES.has(parsed.data.toType)
+    ) {
+      return c.json(
+        {
+          error:
+            "a view or a cell is linked to an object as an attached surface: use POST /surfaces/attach",
+        },
+        400
+      );
+    }
 
     // Bind acting identity + workspace to the authenticated principal, and
     // membership-check the workspace (closes the IDOR — same as POST /relations).

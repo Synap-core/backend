@@ -8,6 +8,10 @@
 
 import { z } from "zod";
 import { decodeHtmlEntities } from "@synap-core/types/text";
+import {
+  parseDeclaredReads,
+  type CellBridgeDeclaredReads,
+} from "@synap-core/types/cell-bridge";
 import { randomUUID } from "crypto";
 import { router } from "../../trpc.js";
 import { scopedProcedure } from "../../middleware/api-key-auth.js";
@@ -143,6 +147,13 @@ export const documentsRouter = router({
         scope: z.record(z.string(), z.unknown()).nullable().optional(),
         /** The automation bound to refresh it (0387, decision D4). */
         refreshAutomationId: z.string().uuid().nullable().optional(),
+        /**
+         * An html page's DECLARED reads (`CellBridgeDeclaredReads`): a subset
+         * of `CELL_BRIDGE_READ_OPS`, stored in `metadata.reads` and enforced
+         * by the frame read door (`surfaces.frameRead`). Only a
+         * `type: "html"` page takes it. Absent = undeclared.
+         */
+        reads: z.unknown().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -154,6 +165,23 @@ export const documentsRouter = router({
           message:
             'A `type: "html"` page is not taken with `url`: send the page itself as `content`, or drop `type` to keep a reference to the url.',
         });
+      }
+      // Declared reads: an html page's only, inside the ceiling, refused
+      // before anything is filed.
+      let declaredReads: CellBridgeDeclaredReads | undefined;
+      if (input.reads !== undefined && input.reads !== null) {
+        if (input.type !== "html") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message:
+              '`reads` declares what an html page reads: only a `type: "html"` document takes it.',
+          });
+        }
+        const parsed = parseDeclaredReads(input.reads);
+        if (!parsed.ok) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: parsed.error });
+        }
+        declaredReads = parsed.value;
       }
       // Decode an agent's XML-escaped title once, at the one door both MCP
       // (synap_create_document) and Hub REST call through — see
@@ -305,6 +333,8 @@ export const documentsRouter = router({
           // The living document's scope / refresher, as read above; the
           // approval re-reads them through the floor.
           ...scoped,
+          // The page's declared reads: the approval stores them in metadata.
+          ...(declaredReads ? { reads: declaredReads } : {}),
         },
       } satisfies PermissionCheckOpts;
       // A question DEFINITION in an agent's markdown (`:::synap-ask` + `ask`)
@@ -488,7 +518,10 @@ export const documentsRouter = router({
         type: normalizeDocumentType(input.type, "markdown"),
         content: input.content || "",
         mimeType: "text/markdown",
-        metadata: { idempotencyKey },
+        metadata: {
+          idempotencyKey,
+          ...(declaredReads ? { reads: declaredReads } : {}),
+        },
         ...scoped,
         provenance: {
           createdByKind: "ai_agent",

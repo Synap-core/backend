@@ -1997,7 +1997,7 @@ export function registerWorkspacesRoutes(app: HubHono): void {
       // Compact summary for agents — just what's present, not full block data
       const blockSummary = blocks.map((b) => ({
         kind: b.kind ?? b.type ?? "unknown",
-        typeKey: b.typeKey ?? b.widgetType ?? b.viewType ?? null,
+        typeKey: b.typeKey ?? b.cellKey ?? b.widgetType ?? b.viewType ?? null,
         label: b.label ?? b.title ?? b.name ?? null,
         id: b.id ?? null,
       }));

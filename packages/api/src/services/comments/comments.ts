@@ -13,8 +13,11 @@
  *
  * Floors (founder decision V2): WRITING a comment needs READ access to the
  * object (the Google model: a viewer may comment). RESOLVING needs the root's
- * author or a person who may EDIT the object — and it is a human act: no agent
- * door reaches `setCommentResolved` (agents propose, humans resolve).
+ * author or a person who may EDIT the object — and it is a human act: an
+ * agent is refused at `setCommentResolved` (agents propose, humans resolve).
+ * A SCOPED KEY (a person's app token, an agent's key) has the same floors,
+ * capped by its grant: its read right on the object (`objectCommentGrant`),
+ * to comment and, for a key acting for a person, to resolve.
  *
  * Agent comments are SPEECH, not mutations: like `synap_post_message` they are
  * ungoverned and attributed (`agentUserId` → `routed_teammate_id`). An agent's
@@ -67,6 +70,11 @@ import {
   type ObjectRef,
 } from "./object-channel.js";
 import { SERVER_CONVERSATION_EVENTS } from "../../realtime/socket-events.js";
+import { zodIssuesSentence } from "../../utils/zod-field-errors.js";
+import {
+  grantWriteDenial,
+  type GrantWriteInput,
+} from "../../utils/grant-write-check.js";
 
 /** Longest comment body (same bound as the retired comment doors). */
 export const COMMENT_CONTENT_MAX = 50_000;
@@ -101,7 +109,12 @@ export interface PostCommentResult {
 async function loadThread(
   userId: string,
   messageId: string
-): Promise<{ root: MessageRow; object: ObjectRef; channelId: string }> {
+): Promise<{
+  root: MessageRow;
+  object: ObjectRef;
+  channelId: string;
+  workspaceId: string | null;
+}> {
   const notFound = () =>
     new TRPCError({ code: "NOT_FOUND", message: "Comment not found" });
   const parent = await db.query.messages.findFirst({
@@ -122,6 +135,7 @@ async function loadThread(
     where: eq(channels.id, root.channelId),
     columns: {
       id: true,
+      workspaceId: true,
       channelType: true,
       contextObjectType: true,
       contextObjectId: true,
@@ -142,7 +156,12 @@ async function loadThread(
   // The object's own floor — a thread on an object the caller cannot read
   // does not exist for them.
   await assertObjectReadable(userId, object);
-  return { root, object, channelId: room.id };
+  return {
+    root,
+    object,
+    channelId: room.id,
+    workspaceId: room.workspaceId ?? null,
+  };
 }
 
 /** The anchor a stored root carries, or null (strict: the same schema). */
@@ -152,6 +171,29 @@ export function readAnchor(
   const raw = (row.metadata as { anchor?: unknown } | null)?.anchor;
   const parsed = ObjectCommentAnchorSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
+}
+
+/**
+ * The grant a SCOPED key (a person's app token, an agent's key) needs to
+ * comment on an object or resolve one of its threads: the same floor as the
+ * person's (V2: a reader may comment), capped by the key's grant, so its
+ * READ right on the object (`entity.<kind>.read` / `document.read`) in the
+ * space its room lives in (the object's). Named here so the door's grant bound
+ * is explicit, beside the read floor `assertObjectReadable` already applies;
+ * never the update right: a sync-owned record (a ui-component, a ui-page) is
+ * never edited by hand, and its pins must still be written and resolved
+ * (lead decision, 26 Nov 2026). A no-op without a grant (a signed-in session).
+ */
+function objectCommentGrant(
+  object: ObjectRef,
+  workspaceId: string | null
+): GrantWriteInput {
+  return {
+    subjectType: object.type,
+    action: "read",
+    workspaceId,
+    data: { id: object.id },
+  };
 }
 
 /** Post a comment (a root with an anchor) or a reply (with a parent). */
@@ -172,13 +214,25 @@ export async function postComment(
 
   let object: ObjectRef;
   let channelId: string;
+  let roomWorkspaceId: string | null;
   let root: MessageRow | null = null;
   if (params.anchor) {
-    // Validate here too: the MCP door hands a JSON object straight in.
-    const anchor = ObjectCommentAnchorSchema.parse(params.anchor);
+    // Validate here too: the MCP door hands a JSON object straight in. A
+    // refusal names every bad field (`locator.point.x: …`), on every door.
+    const parsed = ObjectCommentAnchorSchema.safeParse(params.anchor);
+    if (!parsed.success) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: `Invalid comment anchor: ${zodIssuesSentence(parsed.error.issues)}`,
+        cause: parsed.error,
+      });
+    }
+    const anchor = parsed.data;
     object = anchorObjectRef(anchor);
     // Write floor = READ access to the object (V2); mints the room if absent.
-    channelId = (await ensureObjectChannelFor(params.userId, object)).id;
+    const room = await ensureObjectChannelFor(params.userId, object);
+    channelId = room.id;
+    roomWorkspaceId = room.workspaceId ?? null;
     params = { ...params, anchor };
   } else {
     const thread = await loadThread(params.userId, params.parentId!);
@@ -191,7 +245,15 @@ export async function postComment(
       throw new TRPCError({ code: "NOT_FOUND", message: "Comment not found" });
     }
     channelId = thread.channelId;
+    roomWorkspaceId = current.workspaceId ?? null;
   }
+
+  // A scoped key (a person's app token, an agent's key) takes part in an
+  // object's conversation only as its grant allows (`objectCommentGrant`).
+  const denial = await grantWriteDenial(
+    objectCommentGrant(object, roomWorkspaceId)
+  );
+  if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
 
   const posted = await postChannelMessage({
     channelId,
@@ -375,13 +437,28 @@ async function mayResolve(
  */
 export async function setCommentResolved(params: {
   userId: string;
+  /** The acting agent, when a door reached here with an agent's key: refused. */
+  agentUserId?: string;
   messageId: string;
   resolved: boolean;
 }): Promise<{ rootId: string; resolvedAt: Date | null; changed: boolean }> {
-  const { root, object, channelId } = await loadThread(
+  if (params.agentUserId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Resolving a comment is the person's act: reply in the thread with what you did, and the person resolves it.",
+    });
+  }
+  const { root, object, channelId, workspaceId } = await loadThread(
     params.userId,
     params.messageId
   );
+  // A scoped key acting for a person (an app token) resolves on that
+  // person's floor, capped by its grant (`objectCommentGrant`).
+  const denial = await grantWriteDenial(
+    objectCommentGrant(object, workspaceId)
+  );
+  if (denial) throw new TRPCError({ code: "FORBIDDEN", message: denial });
   if (!(await mayResolve(params.userId, root, object))) {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -460,6 +537,8 @@ function toReply(m: MessageRow): CommentReply {
  */
 export async function listObjectComments(params: {
   userId: string;
+  /** The acting agent, when an agent reads: it may resolve nothing. */
+  agentUserId?: string;
   object: ObjectRef;
   state: CommentState;
 }): Promise<ObjectCommentsListing> {
@@ -501,8 +580,13 @@ export async function listObjectComments(params: {
     .limit(THREADS_MAX);
 
   const threads: CommentThread[] = [];
+  // An agent resolves nothing (`setCommentResolved` refuses it), so the
+  // listing never offers it a resolve.
+  const agent = Boolean(params.agentUserId);
   const editor =
-    roots.length > 0 && (await isObjectEditor(params.userId, params.object));
+    !agent &&
+    roots.length > 0 &&
+    (await isObjectEditor(params.userId, params.object));
   const rootIds = roots.map((r) => r.id);
   const replies = rootIds.length
     ? await db
@@ -525,7 +609,7 @@ export async function listObjectComments(params: {
     threads.push({
       ...toReply(root),
       anchor,
-      canResolve: editor || isAuthor(params.userId, root),
+      canResolve: !agent && (editor || isAuthor(params.userId, root)),
       resolvedAt: root.resolvedAt,
       resolvedBy: root.resolvedBy,
       replyCount: mine.length,

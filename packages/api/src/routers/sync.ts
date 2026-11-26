@@ -1204,6 +1204,9 @@ const SUPPLEMENTARY_TABLES: Record<
           minSize: (row.minSize as { w: number; h: number }) ?? null,
           deps: (row.deps as Record<string, string>) ?? {},
           isActive: (row.isActive as boolean) !== false,
+          // The lifecycle (0457) follows the replicated flag; a peer's draft
+          // or proposed status passed no approval here.
+          status: (row.isActive as boolean) !== false ? "active" : "retired",
           version: (row.version as string) ?? "1.0.0",
           // FLOORED to "generated" unconditionally — peer-supplied `trustLevel`
           // is DISCARDED, mirroring `bundleSource: null` above.
@@ -1259,6 +1262,7 @@ const SUPPLEMENTARY_TABLES: Record<
           minSize: values.minSize,
           deps: values.deps,
           isActive: values.isActive,
+          status: values.status,
           version: values.version,
           trustLevel: values.trustLevel,
           contentSha256: values.contentSha256,

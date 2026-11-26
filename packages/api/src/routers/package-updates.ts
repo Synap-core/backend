@@ -16,6 +16,7 @@ import { getActingAgentUserId } from "@synap/database";
 import {
   applyPackageUpdateInputSchema,
   detachPackageInputSchema,
+  pausePackageUpdatesInputSchema,
   undoPackageUpdateInputSchema,
 } from "@synap-core/types/package-updates";
 
@@ -34,6 +35,7 @@ import {
 } from "../services/package-updates/apply.js";
 import { listPackageUpdateReceipts } from "../services/package-updates/receipts.js";
 import { detachStandaloneConfigSource } from "../services/capabilities/reconcile-standalone-configs-to-templates.js";
+import { setRendererBundleUpdatesPaused } from "../services/renderers/renderer-bundle-updates.js";
 
 export const packageUpdatesRouter = router({
   /** Every installed package whose catalog moved, and those it could not read. */
@@ -99,4 +101,13 @@ export const packageUpdatesRouter = router({
         userId: ctx.userId as string,
       });
     }),
+
+  /**
+   * Pause a renderer bundle's updates, or resume them (its code stays the
+   * catalog's, so it cannot be detached as rows are). Paused, a newer version
+   * waits for a person. A person's act, written to the log.
+   */
+  pauseUpdates: podAdminProcedure
+    .input(pausePackageUpdatesInputSchema)
+    .mutation(({ ctx, input }) => setRendererBundleUpdatesPaused(ctx, input)),
 });
