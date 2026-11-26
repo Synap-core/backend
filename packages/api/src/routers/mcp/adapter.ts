@@ -29,6 +29,7 @@ import {
   runWithWriteSessionLedger,
 } from "@synap/database";
 import { toolError } from "./tool-errors.js";
+import { toolAliasHandlers } from "./tool-aliases.js";
 import { SUPERSEDES_TOOLS } from "./supersedes-tools.js";
 import {
   fileSuperseding,
@@ -78,9 +79,10 @@ export { isReadOnlyTool, pickAdvisoryWorkspaceId } from "./handlers/shared.js";
  * `executeMCPToolViaHubProtocol`'s `Unknown MCP tool` error, same as the
  * old switch's `default:`. Kept alias: `synap_capture_graph` (deprecated,
  * not declared in `tools/index.ts` `list()`) maps to the same handler as
- * `synap_capture` — see `handlers/capture.ts`.
+ * `synap_capture` — see `handlers/capture.ts`. A LISTED old name (a renamed
+ * tool, `MCP_TOOL_ALIASES`) is added from `tool-aliases.ts`.
  */
-const TOOL_HANDLERS: McpHandlerMap = {
+const DOMAIN_HANDLERS: McpHandlerMap = {
   ...readHandlers,
   ...entityHandlers,
   ...captureHandlers,
@@ -98,6 +100,16 @@ const TOOL_HANDLERS: McpHandlerMap = {
   ...devApprovalHandlers,
   ...askPersonHandlers,
 };
+/** Plus each old tool name, answering through its canonical tool's handler. */
+const TOOL_HANDLERS: McpHandlerMap = {
+  ...DOMAIN_HANDLERS,
+  ...toolAliasHandlers(DOMAIN_HANDLERS),
+};
+
+/** The handler a tool name dispatches to (undefined: an unknown tool). */
+export function mcpToolHandler(toolName: string) {
+  return TOOL_HANDLERS[toolName];
+}
 
 export async function executeMCPToolViaHubProtocol(
   toolName: string,

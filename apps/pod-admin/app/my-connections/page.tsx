@@ -31,14 +31,12 @@
  */
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import Link from "next/link";
 import { Button, Card, CardBody, Chip, Spinner, addToast } from "@heroui/react";
 import { Ban, ChevronDown, Plug, SquareCode } from "lucide-react";
 import { PageHeader } from "../(admin)/components/page-header";
 import { SignedInAppsSection } from "./_lib/signed-in-apps-section";
 import { ConfirmModal } from "../(admin)/components/confirm-modal";
 import { CopyButton } from "../_lib/copy-button";
-import { HostName } from "../_lib/host-name";
 import { trpc } from "../../lib/trpc";
 import { redirectToLoginIfUnauthorized } from "../../lib/auth-redirect";
 import {
@@ -58,20 +56,14 @@ import {
   type KeyAccessGrant,
 } from "@synap-core/types/grants";
 import { resolveObjectNounPlural } from "@synap-core/types/vocabulary";
-import { appHolderAccess, appMode } from "@synap-core/types/apps/app-view";
 import {
   resolveAppConnection,
   resolveAppEndConsequence,
   resolveConnectionAction,
 } from "@synap-core/types/membrane";
-import { chipColor, type AppRow } from "../apps/_lib/app-view";
-import {
-  approvalSentence,
-  podAppOf,
-  podAppRevokeNote,
-  POD_APP_ACCESS_LINE,
-  tierLabel,
-} from "../apps/_lib/pod-app-view";
+import type { AppRow } from "../apps/_lib/app-view";
+import { AppCard } from "./_lib/app-card";
+import { podAppOf, podAppRevokeNote } from "../apps/_lib/pod-app-view";
 
 /** How many rows a list shows before it offers "Show all N" (ui-composition §4). */
 const LIST_CAP = 6;
@@ -89,6 +81,7 @@ type ConnectionKey = UnifiedKey & {
 };
 
 /** Human label for a key's `hubId` — mirrors ConnectForm's integration list. */
+
 function connectionLabel(hubId: string | null | undefined): string {
   if (!hubId) return "Personal access token";
   if (hubId === "integration:cli") return "Synap CLI";
@@ -630,110 +623,6 @@ function EmptyState() {
         Connect a tool
       </Button>
     </div>
-  );
-}
-
-/**
- * One app. The whole row is a DOOR to `/apps/[public_id]` — the name is the
- * real link (its accessible name), stretched over the card; Revoke is the one
- * control that stays above the overlay. A revoked app renders read-only.
- */
-function AppCard({
-  app,
-  isRevoking = false,
-  onRevoke,
-}: {
-  app: AppRow;
-  isRevoking?: boolean;
-  onRevoke?: () => void;
-}) {
-  const view = resolveAppConnection(app);
-  // A pod app (it connected at the pod's sign-in door) is named by its
-  // domain and tier, and its reach is what the person approved per space.
-  const pod = podAppOf(app);
-  const lastUsed = pod ? pod.last_used_at : app.last_used_at;
-  const meta = [
-    pod ? null : appMode(app.mode),
-    pod
-      ? pod.connected_at
-        ? `connected ${formatRelative(pod.connected_at)}`
-        : null
-      : app.created_at
-        ? `created ${formatRelative(app.created_at)}`
-        : null,
-    lastUsed ? `last used ${formatRelative(lastUsed)}` : "never used",
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return (
-    <Card
-      shadow="none"
-      // The whole card is the link (the title's `after:inset-0`): say so on hover.
-      className="relative border border-foreground/10 bg-content1 transition-colors hover:bg-foreground/[0.03]"
-    >
-      <CardBody className="gap-3 p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <p className="break-words text-sm font-medium">
-              <Link
-                href={`/apps/${app.public_id}`}
-                className="rounded-sm after:absolute after:inset-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-              >
-                {/* A pod app is its DOMAIN; its name is only what it calls itself. */}
-                {pod ? <HostName host={pod.domain} /> : app.name}
-              </Link>
-            </p>
-            <p className="mt-1 text-xs text-foreground/65">
-              {pod ? (
-                <>
-                  Calls itself &ldquo;{app.name}&rdquo; ·{" "}
-                  {tierLabel(pod.verified)}
-                </>
-              ) : (
-                <span className="font-mono">{app.public_id}</span>
-              )}
-            </p>
-          </div>
-          {view.showChip ? (
-            <Chip
-              size="sm"
-              variant="flat"
-              color={chipColor(view.tone)}
-              className="shrink-0"
-            >
-              {view.label}
-            </Chip>
-          ) : null}
-        </div>
-
-        <p className="text-xs text-foreground/70">
-          {pod && !app.revoked_at
-            ? approvalSentence(pod.approved)
-            : appHolderAccess(app).sentence}
-        </p>
-        <p className="text-xs text-foreground/65">{meta}</p>
-        {pod && !app.revoked_at ? (
-          <p className="text-xs text-foreground/65">{POD_APP_ACCESS_LINE}</p>
-        ) : null}
-
-        {onRevoke ? (
-          <div className="relative z-10 pt-1">
-            <Button
-              color="danger"
-              size="sm"
-              className="min-h-10"
-              variant="flat"
-              startContent={<Ban size={14} />}
-              isLoading={isRevoking}
-              onPress={onRevoke}
-            >
-              {resolveConnectionAction("revoke").label}
-            </Button>
-          </div>
-        ) : null}
-      </CardBody>
-    </Card>
   );
 }
 

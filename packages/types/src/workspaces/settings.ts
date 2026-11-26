@@ -411,7 +411,7 @@ export type SignalSurface =
  * surface (deliver to a bound Discord/Telegram/etc channel via the messaging
  * connector seam). Stored in JSONB — adding the structured form needs no migration.
  */
-export interface SurfaceTarget {
+export interface ChannelTarget {
   kind: "feed" | "chat" | "notification" | "suppress" | "external";
   /** External provider for kind="external" (e.g. "discord", "telegram"). */
   provider?: string;
@@ -419,13 +419,19 @@ export interface SurfaceTarget {
   channelRef?: string;
 }
 
+/**
+ * @deprecated The old name of {@link ChannelTarget}: "surface" now means UI
+ * anchored to an object (founder, 23 Nov 2026); a delivery goes to a channel.
+ */
+export type SurfaceTarget = ChannelTarget;
+
 /** Routing rule for a single signal domain. */
 export interface SignalDeliveryRule {
   /**
    * A bare `SignalSurface` string normalizes to `{ kind: string }`; a
-   * `SurfaceTarget` carries provider/channel for `external` routing.
+   * `ChannelTarget` carries provider/channel for `external` routing.
    */
-  surfaces: (SignalSurface | SurfaceTarget)[];
+  surfaces: (SignalSurface | ChannelTarget)[];
 }
 
 /**

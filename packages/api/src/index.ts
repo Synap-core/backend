@@ -175,6 +175,7 @@ export {
   DeliveryService,
   type DeliveryRequest,
   type DeliveryResult,
+  type DeliveryChannelTarget,
   type DeliverySurface,
   type DeliveryContent,
 } from "./services/DeliveryService.js";

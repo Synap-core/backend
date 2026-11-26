@@ -110,6 +110,7 @@ const READERS: Record<string, Probe> = {
 const NOT_READERS: Record<string, string> = {
   // markers: inline grammar over a single string, no directive parse involved
   REFERENCE_KINDS: "data",
+  MARKER_KIND_ALIASES: "data",
   OPEN_PLACEMENTS: "data",
   OPEN_RESOURCE_TYPES: "data",
   sanitizeMarkerLabel: "writer helper",

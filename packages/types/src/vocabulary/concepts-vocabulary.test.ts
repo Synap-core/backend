@@ -166,10 +166,20 @@ describe("concept vocabulary — Space (N1)", () => {
 // ── D3 (founder, 2026-10-31, decision 985a59a8): one noun per object of making ──
 
 describe("concept vocabulary — nouns of making and connecting (D3)", () => {
-  it("a made UI block is a Card, never a Cell or a Widget (N1)", () => {
-    expect(resolveObjectNoun("cell")).toBe("Card");
-    expect(resolveObjectNounPlural("cell")).toBe("Cards");
-    expect(resolveObjectNoun("cell", "fr")).toBe("Carte");
+  it("a made UI block is a Cell, for users and agents (founder, 23 Nov 2026)", () => {
+    expect(resolveObjectNoun("cell")).toBe("Cell");
+    expect(resolveObjectNounPlural("cell")).toBe("Cells");
+    expect(resolveObjectNoun("cell", "fr")).toBe("Cellule");
+  });
+
+  it("the retired `widget` kind reads as a Cell through every door", () => {
+    expect(OBJECT_KINDS.widget).toBeUndefined();
+    expect(normalizeObjectKind("widget")).toBe("cell");
+    expect(normalizeObjectKind("widgets")).toBe("cell");
+    expect(resolveObjectNoun("widget")).toBe("Cell");
+    expect(resolveObjectNounPlural("widgets")).toBe("Cells");
+    expect(resolveObjectLabel("widget")).toBe("Cell");
+    expect(resolveObjectIcon("widget")).toBe(OBJECT_KINDS.cell?.icon);
   });
 
   it("a card bound to a kind's slot is a Display (N2)", () => {

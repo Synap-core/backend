@@ -68,5 +68,5 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 | `synap:linking`           | Custom relation types, auto-sync edge cases            |
 | `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
 | `synap-ui:view-types`     | Specific view type config shapes                       |
-| `synap-ui:widget-catalog` | Available widget kinds and their configSchema          |
+| `synap-ui:widget-catalog` | Available cell kinds and their configSchema            |
 | `synap-schema:SKILL`      | Creating custom profiles or property definitions       |

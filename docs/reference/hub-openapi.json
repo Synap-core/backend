@@ -28548,7 +28548,7 @@
       "get": {
         "tags": ["Views"],
         "summary": "List views",
-        "description": "Returns the user's views in a workspace, optionally filtered by view type or profile.",
+        "description": "Returns the views the caller can see (not only their own: a co-worker's view in a shared space and a view exposed to one of their projects too), optionally narrowed by workspace, project, view type or profile.",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -28581,6 +28581,16 @@
             "required": false,
             "description": "Filter to views over a specific profile.",
             "name": "profileId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "description": "Filter to views pinned to or exposed in this project."
+            },
+            "required": false,
+            "description": "Filter to views pinned to or exposed in this project.",
+            "name": "projectId",
             "in": "query"
           }
         ],
@@ -34823,8 +34833,8 @@
     },
     "/widget-definitions": {
       "get": {
-        "tags": ["Widgets"],
-        "summary": "List widget definitions",
+        "tags": ["Cells"],
+        "summary": "List cell types (the cell catalog)",
         "security": [{ "bearerAuth": [] }],
         "parameters": [
           {
@@ -34836,7 +34846,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Widget definitions",
+            "description": "Cell types",
             "content": {
               "application/json": {
                 "schema": {
@@ -34865,8 +34875,8 @@
         }
       },
       "post": {
-        "tags": ["Widgets"],
-        "summary": "Register or update a widget definition",
+        "tags": ["Cells"],
+        "summary": "Register or update a cell type",
         "security": [{ "bearerAuth": [] }],
         "requestBody": {
           "content": {
@@ -34879,7 +34889,7 @@
         },
         "responses": {
           "200": {
-            "description": "Upserted widget definition",
+            "description": "Upserted cell type",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/WidgetDefinition" }
@@ -54091,6 +54101,173 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/surfaces": {
+      "get": {
+        "tags": ["Surfaces"],
+        "summary": "Every surface one object carries",
+        "description": "Find every Surface an object carries before you make one: its kind's renderers (renders), its body document, views pinned to it, its home or start page, session outputs and Sites. Pass the anchor `kind` (entity, profile, workspace, project, track, playbook, session) and `id` (a profile also by its slug). A store that could not be read is listed under `unavailable`: that is not 'nothing there'. 404 when the anchor does not exist or you cannot see it.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "entity",
+                "profile",
+                "workspace",
+                "project",
+                "track",
+                "playbook",
+                "session"
+              ]
+            },
+            "required": true,
+            "name": "kind",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "required": true,
+            "name": "id",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": false,
+            "name": "workspaceId",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The surfaces",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "body": {
+                            "type": "string",
+                            "enum": [
+                              "view",
+                              "document",
+                              "html",
+                              "bento",
+                              "whiteboard",
+                              "cell",
+                              "site",
+                              "app"
+                            ]
+                          },
+                          "relation": {
+                            "type": "string",
+                            "enum": [
+                              "renders",
+                              "attached",
+                              "body",
+                              "pinned",
+                              "home",
+                              "session-output",
+                              "exposed"
+                            ]
+                          },
+                          "anchor": {
+                            "type": "object",
+                            "properties": {
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "entity",
+                                  "profile",
+                                  "workspace",
+                                  "project",
+                                  "track",
+                                  "playbook",
+                                  "session"
+                                ]
+                              },
+                              "id": { "type": "string" }
+                            },
+                            "required": ["kind", "id"]
+                          },
+                          "title": { "type": "string" },
+                          "viewType": { "type": "string" },
+                          "cellKey": { "type": "string" },
+                          "slot": { "type": "string" },
+                          "openUrl": { "type": "string" },
+                          "readOnly": { "type": "boolean" },
+                          "source": { "type": "string" }
+                        },
+                        "required": [
+                          "id",
+                          "body",
+                          "relation",
+                          "anchor",
+                          "title",
+                          "openUrl",
+                          "readOnly",
+                          "source"
+                        ]
+                      }
+                    },
+                    "unavailable": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source": { "type": "string" },
+                          "error": { "type": "string" }
+                        },
+                        "required": ["source", "error"]
+                      }
+                    }
+                  },
+                  "required": ["rows", "unavailable"]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such anchor",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }
