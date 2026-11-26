@@ -784,6 +784,17 @@ export async function loadTrackGoalFacts(
   if (tracks.length === 0) return out;
   const db = await getDb();
 
+  // Who works each criterion needs only the track ids: it reads beside
+  // everything below and is awaited where it is used (a failure still throws
+  // there; this only keeps an early rejection from reading as unhandled).
+  const servedRead = readCriterionServers(
+    db,
+    tracks.map((t) => t.id),
+    userId,
+    reader
+  );
+  servedRead.catch(() => undefined);
+
   const [{ openSessions, titleOf, runsOf }, seats] = await Promise.all([
     loadGoalRunsForRead(tracks),
     loadGoalSeats(tracks),
@@ -935,12 +946,7 @@ export async function loadTrackGoalFacts(
   };
 
   const waitingOf = await waiting;
-  const servedOf = await readCriterionServers(
-    db,
-    tracks.map((t) => t.id),
-    userId,
-    reader
-  );
+  const servedOf = await servedRead;
   for (const track of tracks) {
     const criteria = readGoalCriteria(track.criteria);
     const states = statesOf.get(track.id)!;

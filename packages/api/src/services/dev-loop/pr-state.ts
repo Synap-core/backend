@@ -77,11 +77,13 @@ async function readPullRequestFactRows(
     .where(
       and(
         inArray(events.type, PR_TYPES),
-        or(
-          ...refs.map(
-            (r) =>
-              sql`(${repoOf} = ${r.repo.toLowerCase()} and ${events.data}->>'number' = ${String(r.number)})`
-          )
+        // ONE key per row matched against the asked keys, not one OR arm per
+        // PR: with N PRs the arms re-read the row's JSON 2N times (work-release
+        // asks ~60). Same match: lowercased repo and number, NULL matches none
+        // (a repo name cannot hold `#`).
+        inArray(
+          sql`${repoOf} || '#' || (${events.data}->>'number')`,
+          refs.map((r) => `${r.repo.toLowerCase()}#${r.number}`)
         ),
         visible
       )

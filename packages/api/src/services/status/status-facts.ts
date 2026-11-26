@@ -558,7 +558,8 @@ export async function readWaitingOnSourcesFor<K>(
 
   // Which of the sessions behind a source the reader may READ: only those
   // are named. A hold's `until.moves` session is one too.
-  const readable = await readableSessionIds(reader, [
+  // Both read only what the fan-out above returned: run together.
+  const readableRead = readableSessionIds(reader, [
     ...owedContainerIds,
     ...unitSessionIds,
     ...unitContainerIds,
@@ -575,7 +576,7 @@ export async function readWaitingOnSourcesFor<K>(
 
   // An `ai:` hold's wait kind is whose move AI is NOW (the pod owner's view:
   // a payer's state, or the AI service's): read once, only when one waits.
-  const aiKind = holds.some((h) => {
+  const aiRead = holds.some((h) => {
     const until = h.hold.until;
     return (
       until != null &&
@@ -583,8 +584,9 @@ export async function readWaitingOnSourcesFor<K>(
       parseHoldDevRef(until.moves)?.kind === "ai"
     );
   })
-    ? ((await readPodOwnerAiAvailability()).availability?.kind ?? null)
-    : null;
+    ? readPodOwnerAiAvailability().then((v) => v.availability?.kind ?? null)
+    : Promise.resolve(null);
+  const [readable, aiKind] = await Promise.all([readableRead, aiRead]);
 
   const holdOf = new Map(holds.map((h) => [holdKey(h), h]));
   const out = new Map<K, WaitingOnSource[]>();
