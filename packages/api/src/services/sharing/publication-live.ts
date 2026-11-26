@@ -55,9 +55,19 @@ export function isPublicationLive(
   row: PublicationLiveInput,
   { via = "token", now = Date.now() }: PublicationLiveOptions = {}
 ): boolean {
-  // Both doors serve entities only, so a SITE row is never live here.
-  if (row.resourceType !== "entity") return false;
-  if (via === "site") return !!row.siteShareId && publishedNow(row, now);
+  // The site door serves entities only; the token door also serves an HTML
+  // page published as itself (`document`, Surfaces P6b). A SITE row is never
+  // live here.
+  if (via === "site") {
+    return (
+      row.resourceType === "entity" &&
+      !!row.siteShareId &&
+      publishedNow(row, now)
+    );
+  }
+  if (row.resourceType !== "entity" && row.resourceType !== "document") {
+    return false;
+  }
   return !row.siteShareId && servedNow(row, now);
 }
 
