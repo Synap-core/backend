@@ -132,10 +132,7 @@ type EventClocks = Pick<SessionAgentEventClocks, "write" | "work">;
  * `s` (a proposal, applied or pending, or an event: outputs included), or
  * NULL.
  */
-export function sessionLastAgentWriteSql(
-  s: string,
-  clocks?: EventClocks
-): SQL {
+export function sessionLastAgentWriteSql(s: string, clocks?: EventClocks): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_p.created_at) FROM proposals ny_p
        WHERE ny_p.session_id = ${col(s, "id")}
@@ -154,10 +151,7 @@ export function sessionLastAgentWriteSql(
  * — its writes ({@link sessionLastAgentWriteSql}) and its room messages — or
  * NULL.
  */
-export function sessionLastAgentMarkSql(
-  s: string,
-  clocks?: EventClocks
-): SQL {
+export function sessionLastAgentMarkSql(s: string, clocks?: EventClocks): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_m.timestamp) FROM messages ny_m
        WHERE ny_m.channel_id = ${col(s, "channel_id")}
@@ -187,10 +181,7 @@ export function sessionLastAgentActivitySql(
  * `s` — {@link sessionLastAgentActivitySql} minus the asking itself (a
  * question post, a `slot_asked` event). Working's clock.
  */
-export function sessionLastAgentWorkSql(
-  s: string,
-  clocks?: EventClocks
-): SQL {
+export function sessionLastAgentWorkSql(s: string, clocks?: EventClocks): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_wm.timestamp) FROM messages ny_wm
        WHERE ny_wm.channel_id = ${col(s, "channel_id")}
