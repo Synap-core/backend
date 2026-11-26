@@ -7,11 +7,13 @@ import {
   RENDERER_BUNDLE_KIT_BUDGET_BYTES,
   RENDERER_BUNDLE_MAX_MODULE_BYTES,
   rendererSetDigestText,
-  POD_BRIDGE_CONTRACT,
-  unmetRendererBundleRequirements,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
 } from "./index.js";
+import {
+  POD_BRIDGE_CONTRACT,
+  unmetRendererBundleRequirements,
+} from "../cell-bridge/bundle-requirements.js";
 
 const SHA = "a".repeat(64);
 const mod = (source: string) => ({ source, sha256: SHA });

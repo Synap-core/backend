@@ -64,11 +64,11 @@ import {
 import {
   RENDERER_BUNDLE_KIND,
   rendererSetDigestText,
-  unmetRendererBundleRequirements,
   validateRendererBundleDefinition,
   type RendererBundleDefinition,
   type RendererBundleHostModules,
 } from "@synap-core/types/renderables";
+import { unmetRendererBundleRequirements } from "@synap-core/types/cell-bridge";
 import { officialContentHash } from "@synap/jobs/workers/marketplace-source-verify.js";
 import { installCellFromDefinition } from "../cells/install-cell-from-definition.js";
 import { emitCellWritten } from "../cells/define-cell.js";

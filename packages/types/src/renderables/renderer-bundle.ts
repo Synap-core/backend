@@ -17,9 +17,6 @@ import {
   CELL_FRAME_MAX_BYTES,
   htmlByteLength,
 } from "../cell-bridge/frame-size.js";
-import { isCellBridgeReadOp } from "../cell-bridge/read-ops.js";
-import { isCellBridgeWriteOp } from "../cell-bridge/write-ops.js";
-import * as cellBridge from "../cell-bridge/index.js";
 import { checkCellSource } from "./cell-source-checks.js";
 
 /** The bundle API this version of the contract reads. */
@@ -123,68 +120,11 @@ export interface RendererBundleDefinition {
 }
 
 /**
- * Every requirement of a bundle that THIS build of the contract does not
- * meet, as plain sentences; empty when the pod can run it. The pod's contract
- * is the one compiled into it: the bundle API it reads (`RENDERER_BUNDLE_API`)
- * and the bridge ops its hosts answer. Pure. Reads the definition loosely, so
- * it can say why before `validateRendererBundleDefinition` refuses the shape.
+ * Whether THIS pod meets a bundle's `requires` is answered by
+ * `unmetRendererBundleRequirements` in `@synap-core/types/cell-bridge`
+ * (`cell-bridge/bundle-requirements.ts`): it reads the op tables and the
+ * contract version, which this leaf may not import.
  */
-/** The requirements this build of the contract can check. */
-const KNOWN_REQUIREMENTS: ReadonlySet<string> = new Set([
-  "bridgeContract",
-  "bridgeOps",
-]);
-
-/**
- * The frame contract this pod answers. Read off the cell-bridge module so the
- * number is the contract's own (`CELL_BRIDGE_CONTRACT_VERSION`); a build of
- * the contract that predates the constant answers contract 1.
- */
-export const POD_BRIDGE_CONTRACT: number =
-  (cellBridge as { CELL_BRIDGE_CONTRACT_VERSION?: number })
-    .CELL_BRIDGE_CONTRACT_VERSION ?? 1;
-
-export function unmetRendererBundleRequirements(definition: unknown): string[] {
-  if (!isRecord(definition)) return [];
-  const unmet: string[] = [];
-  if (
-    typeof definition.bundleApi === "number" &&
-    definition.bundleApi !== RENDERER_BUNDLE_API
-  ) {
-    unmet.push(
-      `It is built for bundle API ${definition.bundleApi}; this pod reads bundle API ${RENDERER_BUNDLE_API}.`
-    );
-  }
-  const requires = definition.requires;
-  if (!isRecord(requires)) return unmet;
-  if (
-    typeof requires.bridgeContract === "number" &&
-    requires.bridgeContract > POD_BRIDGE_CONTRACT
-  ) {
-    unmet.push(
-      `It is built for frame contract ${requires.bridgeContract}; this pod answers contract ${POD_BRIDGE_CONTRACT}.`
-    );
-  }
-  if (Array.isArray(requires.bridgeOps)) {
-    const missing = requires.bridgeOps.filter(
-      (op) => !isCellBridgeReadOp(op) && !isCellBridgeWriteOp(op)
-    );
-    if (missing.length > 0) {
-      unmet.push(
-        `It calls ${missing.map(String).join(", ")}, which this pod does not answer yet.`
-      );
-    }
-  }
-  const unknown = Object.keys(requires).filter(
-    (name) => !KNOWN_REQUIREMENTS.has(name)
-  );
-  if (unknown.length > 0) {
-    unmet.push(
-      `It needs ${unknown.join(", ")}, which this pod does not know yet.`
-    );
-  }
-  return unmet;
-}
 
 /**
  * The exact text whose sha256 is a host-module set's identity (`setSha256`):
