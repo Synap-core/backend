@@ -8,25 +8,27 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-let surfaces: unknown = { rows: [], unavailable: [] };
-let entity: unknown = { entity: { title: "Acme deal" } };
-
-const answered = (data: () => unknown) => ({
-  useQuery: (_input: unknown, opts?: { enabled?: boolean }) => ({
-    data: opts?.enabled === false ? undefined : data(),
-    error: null,
-    isLoading: false,
-    refetch: () => {},
+/** What the two reads answer; each test sets them. */
+const read = vi.hoisted(() => ({
+  surfaces: { rows: [], unavailable: [] } as unknown,
+  entity: { entity: { title: "Acme deal" } } as unknown,
+  answered: (data: () => unknown) => ({
+    useQuery: (_input: unknown, opts?: { enabled?: boolean }) => ({
+      data: opts?.enabled === false ? undefined : data(),
+      error: null,
+      isLoading: false,
+      refetch: () => {},
+    }),
   }),
-});
+}));
 
 vi.mock("../../../lib/trpc", () => ({
   trpc: {
-    surfaces: { forObject: answered(() => surfaces) },
-    entities: { get: answered(() => entity) },
-    focusSessions: { get: answered(() => undefined) },
-    tracks: { get: answered(() => undefined) },
-    playbooks: { process: answered(() => undefined) },
+    surfaces: { forObject: read.answered(() => read.surfaces) },
+    entities: { get: read.answered(() => read.entity) },
+    focusSessions: { get: read.answered(() => undefined) },
+    tracks: { get: read.answered(() => undefined) },
+    playbooks: { process: read.answered(() => undefined) },
   },
 }));
 
@@ -41,8 +43,8 @@ const draw = () =>
   );
 
 beforeEach(() => {
-  surfaces = { rows: [], unavailable: [] };
-  entity = { entity: { title: "Acme deal" } };
+  read.surfaces = { rows: [], unavailable: [] };
+  read.entity = { entity: { title: "Acme deal" } };
 });
 
 describe("AttachedSurfaceView: a surface no longer on the object", () => {
@@ -58,7 +60,7 @@ describe("AttachedSurfaceView: a surface no longer on the object", () => {
   });
 
   it("names the object by its kind when its own read has no title", () => {
-    entity = { entity: { title: "  " } };
+    read.entity = { entity: { title: "  " } };
     expect(draw()).toContain(`Open ${labelForOpenType("entity")}`);
   });
 });

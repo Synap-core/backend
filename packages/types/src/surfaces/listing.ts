@@ -7,6 +7,7 @@
  */
 
 import type { Locale } from "../i18n/locale.js";
+import { isUuid } from "../property-render/structured-value.js";
 import { resolveObjectNoun } from "../vocabulary/index.js";
 import type { AnchorKind, SurfaceBody, SurfaceRow } from "./model.js";
 
@@ -81,8 +82,5 @@ export function isOpenableAnchorKind(kind: string): kind is OpenableAnchorKind {
  * failed read.
  */
 export function isAnchorIdShaped(kind: AnchorKind, id: string): boolean {
-  return kind === "profile" || ANCHOR_UUID_RE.test(id);
+  return kind === "profile" || isUuid(id);
 }
-
-const ANCHOR_UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
