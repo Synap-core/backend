@@ -66,6 +66,7 @@ import {
   type EmbedHost,
 } from "./embed-context";
 import { HtmlFrame } from "./html-frame";
+import { IdentityCard } from "./identity-card";
 import { ModuleCell, RenderedObject } from "./rendered-object";
 import {
   objectPage,
@@ -280,12 +281,7 @@ function EntityCardBody({
     );
   }
   const card = (
-    <Link
-      href={href}
-      className={`flex max-w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] ring-1 ring-inset ring-foreground/10 hover:bg-foreground/[0.03] ${DOOR}`}
-    >
-      {words}
-    </Link>
+    <IdentityCard href={href} Icon={Icon} title={title} noun={noun} />
   );
   // A record that IS an image (an uploaded file) shows it, as a thumbnail.
   const media = read.state === "ready" ? read.media : undefined;

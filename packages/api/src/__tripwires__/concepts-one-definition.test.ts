@@ -66,8 +66,9 @@ const ALIGNED: Record<string, string> = {
   Pack: "pack",
   // D2 (founder, 2026-10-31): an automation is an Automation; "Rule" is a skill rule.
   Automation: "automation",
-  // D3 (founder, 2026-10-31): the made UI block is a Card, a saved arrangement a View.
-  Card: "cell",
+  // The made UI block is a Cell (founder, 23 Nov 2026: one word for users and
+  // agents; it replaced D3's "Card"), a saved arrangement a View.
+  Cell: "cell",
   View: "view",
   "Connected app": "application",
 };

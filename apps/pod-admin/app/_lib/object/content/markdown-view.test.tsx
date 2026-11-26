@@ -280,7 +280,7 @@ describe("MarkdownView — embeds are drawn from the shared model", () => {
       )
     );
     expect(out).toContain("Weekly pulse");
-    expect(out).toContain("· Card");
+    expect(out).toContain("· Cell");
     expect(out).not.toContain("<iframe");
     expect(out).not.toContain("<script");
     expect(out).not.toContain("data-chart");

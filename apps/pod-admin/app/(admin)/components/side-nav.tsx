@@ -36,6 +36,7 @@ import {
   Bug,
   Building2,
   Database,
+  Eye,
   Gauge,
   Grid3x3,
   HardDrive,
@@ -77,6 +78,7 @@ import {
 } from "../../../lib/console-nav";
 import { useConsoleLocale, useT } from "../../../lib/i18n/locale-provider";
 import { useAllTools } from "./all-tools";
+import { useMemberPreview } from "./member-preview";
 import { en, fr } from "./copy";
 import {
   NAV_COLLAPSED_ATTR,
@@ -200,6 +202,7 @@ export function SideNav() {
   const label = useNavLabel();
   const t = useT(CATALOGS);
   const [allTools, setAllTools] = useAllTools();
+  const preview = useMemberPreview();
   const badges = useConsoleBadges();
   const pathname = usePathname() ?? "";
   const active = activeNavId(pathname);
@@ -248,9 +251,22 @@ export function SideNav() {
 
       <div className="mt-auto flex flex-col gap-px pt-3">
         {role === "admin" && (
-          <AllToolsButton
+          <NavToggle
+            Icon={Wrench}
+            label={t("nav.allTools")}
+            hint={t("nav.allTools.hint")}
             on={allTools}
             onToggle={() => setAllTools(!allTools)}
+            rail={rail}
+          />
+        )}
+        {preview.available && (
+          <NavToggle
+            Icon={Eye}
+            label={t("nav.memberPreview")}
+            hint={t("nav.memberPreview.hint")}
+            on={preview.on}
+            onToggle={() => preview.set(!preview.on)}
             rail={rail}
           />
         )}
@@ -282,23 +298,30 @@ export function SideNav() {
 }
 
 /**
- * The admin's "All tools" switch (audit a48761f2 PA-G-06): every operator group after the
- * client places. A toggle button (`aria-pressed`), the rail's icon in the
- * 56px widths, its label and state beside it when wide.
+ * One of the admin's switches at the foot of the nav: "All tools" (audit
+ * a48761f2 PA-G-06: every operator group after the client places) and
+ * "Preview member menu" (`member-preview.tsx`). A toggle button
+ * (`aria-pressed`), the rail's icon in the 56px widths, its label and state
+ * beside it when wide.
  */
-function AllToolsButton({
+function NavToggle({
+  Icon,
+  label,
+  hint,
   on,
   onToggle,
   rail,
 }: {
+  Icon: LucideIcon;
+  label: string;
+  hint: string;
   on: boolean;
   onToggle: () => void;
   rail: boolean;
 }) {
-  const t = useT(CATALOGS);
   return (
     <Tooltip
-      content={t("nav.allTools")}
+      content={label}
       placement="right"
       delay={300}
       closeDelay={0}
@@ -308,7 +331,7 @@ function AllToolsButton({
         type="button"
         onClick={onToggle}
         aria-pressed={on}
-        title={t("nav.allTools.hint")}
+        title={hint}
         className={[
           "flex h-8 w-full items-center gap-2.5 rounded-lg text-[12.5px] transition-colors",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
@@ -319,9 +342,9 @@ function AllToolsButton({
             : "text-foreground/65 hover:bg-content2/50 hover:text-foreground",
         ].join(" ")}
       >
-        <Wrench className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
+        <Icon className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden />
         <span className="sr-only lg:not-sr-only lg:nav-collapsed:sr-only">
-          {t("nav.allTools")}
+          {label}
         </span>
       </button>
     </Tooltip>
@@ -429,6 +452,7 @@ export function NavDrawer({
   const label = useNavLabel();
   const t = useT(CATALOGS);
   const [allTools, setAllTools] = useAllTools();
+  const preview = useMemberPreview();
   const badges = useConsoleBadges();
   const pathname = usePathname() ?? "";
   const active = activeNavId(pathname);
@@ -500,30 +524,22 @@ export function NavDrawer({
             ))}
           </nav>
           {role === "admin" && (
-            <button
-              type="button"
-              onClick={() => setAllTools(!allTools)}
-              aria-pressed={allTools}
-              className={[
-                "mt-2 flex h-11 items-center gap-3 rounded-lg px-3 text-left text-[14px] transition-colors",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-                allTools
-                  ? "bg-foreground/[0.07] font-semibold text-foreground"
-                  : "font-medium text-foreground/75 hover:bg-content2/50 hover:text-foreground",
-              ].join(" ")}
-            >
-              <Wrench
-                className="h-[18px] w-[18px] shrink-0"
-                strokeWidth={2}
-                aria-hidden
-              />
-              <span className="flex flex-1 flex-col">
-                {t("nav.allTools")}
-                <span className="text-[11.5px] font-normal text-foreground/65">
-                  {t("nav.allTools.hint")}
-                </span>
-              </span>
-            </button>
+            <DrawerToggle
+              Icon={Wrench}
+              label={t("nav.allTools")}
+              hint={t("nav.allTools.hint")}
+              on={allTools}
+              onToggle={() => setAllTools(!allTools)}
+            />
+          )}
+          {preview.available && (
+            <DrawerToggle
+              Icon={Eye}
+              label={t("nav.memberPreview")}
+              hint={t("nav.memberPreview.hint")}
+              on={preview.on}
+              onToggle={() => preview.set(!preview.on)}
+            />
           )}
         </DrawerBody>
         <DrawerFooter className="border-t border-foreground/[0.05] px-4 py-3">
@@ -548,6 +564,48 @@ export function NavDrawer({
         </DrawerFooter>
       </DrawerContent>
     </Drawer>
+  );
+}
+
+/** `NavToggle` in the phone drawer: a 44px row, its hint under its label. */
+function DrawerToggle({
+  Icon,
+  label,
+  hint,
+  on,
+  onToggle,
+}: {
+  Icon: LucideIcon;
+  label: string;
+  hint: string;
+  on: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={on}
+      className={[
+        "mt-2 flex h-11 items-center gap-3 rounded-lg px-3 text-left text-[14px] transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+        on
+          ? "bg-foreground/[0.07] font-semibold text-foreground"
+          : "font-medium text-foreground/75 hover:bg-content2/50 hover:text-foreground",
+      ].join(" ")}
+    >
+      <Icon
+        className="h-[18px] w-[18px] shrink-0"
+        strokeWidth={2}
+        aria-hidden
+      />
+      <span className="flex flex-1 flex-col">
+        {label}
+        <span className="text-[11.5px] font-normal text-foreground/65">
+          {hint}
+        </span>
+      </span>
+    </button>
   );
 }
 

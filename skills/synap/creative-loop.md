@@ -15,7 +15,7 @@ When the task is a unit of work with a deliverable — research, a build, an inv
 
 ### 2. Show it in the right body — don't dump data into chat
 
-When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_widgets` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
+When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_cells` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
 
 - **When you generate a cell, declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
 - Keep one cell to one job. A good, focused cell is the raw material for the next move.
