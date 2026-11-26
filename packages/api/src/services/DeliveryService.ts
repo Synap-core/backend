@@ -58,7 +58,7 @@ const logger = createLogger({ module: "delivery-service" });
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type DeliverySurface =
+export type DeliveryChannelTarget =
   | {
       type: "feed";
       feedChannelId?: string;
@@ -68,6 +68,13 @@ export type DeliverySurface =
   | { type: "notification"; notificationType: string }
   | { type: "external"; platform: string; externalChannelId?: string }
   | { type: "email" };
+
+/**
+ * @deprecated The old name of {@link DeliveryChannelTarget}: "surface" now
+ * means UI anchored to an object (founder, 23 Nov 2026); a delivery goes to
+ * a channel.
+ */
+export type DeliverySurface = DeliveryChannelTarget;
 
 /**
  * Proactive message types for feed delivery
@@ -125,7 +132,7 @@ export interface DeliveryRequest {
   userId: string;
   workspaceId?: string;
   content: DeliveryContent;
-  surfaces: DeliverySurface[];
+  surfaces: DeliveryChannelTarget[];
   priority?: "low" | "normal" | "high" | "urgent";
   deduplicationKey?: string;
   expiresAt?: Date;
@@ -143,7 +150,7 @@ export interface DeliveryRequest {
 export interface DeliveryResult {
   success: boolean;
   deliveries: Array<{
-    surface: DeliverySurface["type"];
+    surface: DeliveryChannelTarget["type"];
     success: boolean;
     id?: string;
     error?: string;
@@ -291,7 +298,7 @@ const deliveryMetrics = new DeliveryMetrics();
 
 interface FailedDelivery {
   request: DeliveryRequest;
-  surface: DeliverySurface;
+  surface: DeliveryChannelTarget;
   error: string;
   attemptCount: number;
   failedAt: string;
@@ -584,7 +591,7 @@ function getCircuitBreaker(surfaceType: string): CircuitBreaker {
 
 async function deliverToFeedWithRetry(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "feed" }>,
+  surface: Extract<DeliveryChannelTarget, { type: "feed" }>,
   retryOptions: RetryOptions
 ): Promise<{ success: boolean; id?: string; error?: string; retries: number }> {
   const circuitBreaker = getCircuitBreaker("feed");
@@ -660,7 +667,7 @@ async function deliverToFeedWithRetry(
 
 async function deliverToFeedInternal(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "feed" }>
+  surface: Extract<DeliveryChannelTarget, { type: "feed" }>
 ): Promise<string> {
   let feedChannelId = surface.feedChannelId;
 
@@ -708,7 +715,7 @@ async function deliverToFeedInternal(
 
 async function deliverToChatWithRetry(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "chat" }>,
+  surface: Extract<DeliveryChannelTarget, { type: "chat" }>,
   retryOptions: RetryOptions
 ): Promise<{ success: boolean; id?: string; error?: string; retries: number }> {
   const circuitBreaker = getCircuitBreaker("chat");
@@ -756,7 +763,7 @@ async function deliverToChatWithRetry(
 
 async function deliverToChatInternal(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "chat" }>
+  surface: Extract<DeliveryChannelTarget, { type: "chat" }>
 ): Promise<string> {
   let channelId = surface.channelId;
 
@@ -793,7 +800,7 @@ async function deliverToChatInternal(
 
 async function deliverToNotificationWithRetry(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "notification" }>,
+  surface: Extract<DeliveryChannelTarget, { type: "notification" }>,
   retryOptions: RetryOptions
 ): Promise<{ success: boolean; id?: string; error?: string; retries: number }> {
   const circuitBreaker = getCircuitBreaker("notification");
@@ -841,7 +848,7 @@ async function deliverToNotificationWithRetry(
 
 async function deliverToNotificationInternal(
   request: DeliveryRequest,
-  surface: Extract<DeliverySurface, { type: "notification" }>
+  surface: Extract<DeliveryChannelTarget, { type: "notification" }>
 ): Promise<string> {
   // Map DeliveryContent sourceType to valid NotificationSourceType
   const sourceTypeMap: Record<

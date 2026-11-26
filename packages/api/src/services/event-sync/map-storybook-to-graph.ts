@@ -171,6 +171,7 @@ function pageEntity(
     UI_PAGE_PROFILE,
     p.title,
     defined({
+      "source-path": p.sourcePath,
       surface: p.surface,
       "page-template": p.template,
       "page-layout": p.layout,

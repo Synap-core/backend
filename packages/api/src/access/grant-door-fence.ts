@@ -1511,6 +1511,8 @@ export const MCP_READ_TOOL_DOORS: Readonly<Record<string, FencedReadDoor>> = {
   // A goal's workers (`listWorkerViews`): the goal, its playbooks, the
   // worker rules and their automation runs, and the approvals they wait on.
   synap_list_workers: READS("track", "playbook", "automation", "proposal"),
+  synap_list_cells: READS("widget", "view"),
+  // The old name of synap_list_cells (`tool-aliases.ts`): the same read.
   synap_list_widgets: READS("widget", "view"),
   synap_template_health: READS("tool", "playbook", "automation", "view"),
   synap_governance: READS("proposal", "agent", "tool"),

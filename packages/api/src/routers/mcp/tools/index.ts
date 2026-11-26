@@ -139,6 +139,7 @@ import {
   yourToolsBlock,
 } from "../tool-guidance.js";
 import { CALL_TOOL_NAME } from "../call-tool-name.js";
+import { toolAliasDefs } from "../tool-aliases.js";
 import {
   WAIT_DEFAULT_SECONDS,
   WAIT_MAX_SECONDS,
@@ -2043,7 +2044,7 @@ export const tools = {
                   props: {
                     type: "object",
                     description:
-                      "insert_embed: a cell's props (synap_list_widgets shows each cell's).",
+                      "insert_embed: a cell's props (synap_list_cells shows each cell's).",
                   },
                   fallback: {
                     type: "string",
@@ -3920,7 +3921,7 @@ export const tools = {
           openWorldHint: false,
         },
         description:
-          'Define (create or update) a Cell type from raw renderer source, only when synap_list_widgets lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).',
+          'Define (create or update) a Cell type from raw renderer source, only when synap_list_cells lacks the visual unit. Idempotent upsert on typeKey (from `name`) + workspace (omit workspaceId for pod-global). An agent call ALWAYS lands as a proposal: status="proposed" is SUCCESS — say it is awaiting review, pass on reviewUrl, do not retry. `placeOn` adds it to a bento view as a block; else it shows nowhere until placed, embedded or bound (synap_promote_cell_to_renderer).',
         inputSchema: {
           type: "object",
           properties: {
@@ -3946,7 +3947,7 @@ export const tools = {
               type: "array",
               items: { type: "string" },
               description:
-                'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain widget and views fall back to the built-in adapter.',
+                'Optional view types this cell can RENDER (e.g. ["list","table"]). Required for the cell to be selectable as a view renderer — a cell that declares none stays a plain cell (placed, never a renderer) and views fall back to the built-in adapter.',
             },
             contentKind: {
               type: "string",
@@ -6670,22 +6671,27 @@ export const tools = {
         },
       },
       {
-        name: "synap_list_widgets",
+        name: "synap_list_cells",
         annotations: {
-          title: "List compose widgets",
+          title: "List cells",
           readOnlyHint: true,
           openWorldHint: false,
         },
         description:
-          'Live list of what you may place: in a bento (surface "bento", default) or embedded in a document (surface "document"). Call this BEFORE arranging a dashboard or embedding a cell in a document — never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) plus the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. view needs a saved view UUID (viewId); a profileSlug is not enough. Counts use stat-card. With surface "document" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint.',
+          'List the Cells you may place: in a bento (placement "bento", default) or embedded in a document (placement "document"). Call it before arranging a bento or embedding a cell; never guess a key. Each entry has key, requiredConfig, propsSchema (JSON Schema), binding, exampleDirective (the document embed form) and fallback; it covers the built-ins (stat-card, entity-list, view, chart-*, …) and the cell:<pkg>:<key> / generated:<slug> cells installed on the pod. A view block needs a saved view id (viewId), not a profileSlug. Counts use stat-card. With placement "document" it also returns fences: content languages written as a fenced block (```mermaid diagrams, ```math equations, code), each with its aiHint. (`surface` is still accepted as the old name of `placement`.)',
         inputSchema: {
           type: "object",
           properties: {
-            surface: {
+            placement: {
               type: "string",
               enum: ["bento", "document"],
               description:
-                "Where you will place it: bento (dashboard block, default) or document (an embed inside a document).",
+                "Where you will place it: bento (a dashboard block, default) or document (an embed inside a document).",
+            },
+            surface: {
+              type: "string",
+              enum: ["bento", "document"],
+              description: "Old name of placement.",
             },
             workspaceId: {
               type: "string",
@@ -7914,6 +7920,10 @@ export const tools = {
         },
       },
     ];
+
+    // An old tool name keeps answering as the tool that replaced it, listed
+    // so every client and mirror still sees it (`tool-aliases.ts`).
+    toolDefs.push(...toolAliasDefs(toolDefs));
 
     // W-C1: every attributed tool declares `sessionId`, derived here so a new
     // write tool declares it the moment it is listed. A tool that declares its

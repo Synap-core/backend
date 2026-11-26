@@ -4618,7 +4618,7 @@ export type SignalSurface = "chat" | "external" | "feed" | "notification" | "sup
  * surface (deliver to a bound Discord/Telegram/etc channel via the messaging
  * connector seam). Stored in JSONB — adding the structured form needs no migration.
  */
-export interface SurfaceTarget {
+export interface ChannelTarget {
 	kind: "chat" | "external" | "feed" | "notification" | "suppress";
 	/** External provider for kind="external" (e.g. "discord", "telegram"). */
 	provider?: string;
@@ -4629,9 +4629,9 @@ export interface SurfaceTarget {
 export interface SignalDeliveryRule {
 	/**
 	 * A bare `SignalSurface` string normalizes to `{ kind: string }`; a
-	 * `SurfaceTarget` carries provider/channel for `external` routing.
+	 * `ChannelTarget` carries provider/channel for `external` routing.
 	 */
-	surfaces: (SignalSurface | SurfaceTarget)[];
+	surfaces: (SignalSurface | ChannelTarget)[];
 }
 /**
  * Per-workspace delivery preferences.
@@ -11325,6 +11325,8 @@ export interface ProposalReviewGraph {
 	 * not ids: the members are refs into `entities[]` or existing ids.
 	 */
 	views?: Array<ReviewStepSpace & {
+		/** A bento: the cell keys it places, in block order. */
+		cells?: string[];
 		/** The group container the list is about, when there is one. */
 		containerRef?: string;
 		/** A pipeline: the kind whose declared lifecycle its columns are. */
@@ -11336,7 +11338,10 @@ export interface ProposalReviewGraph {
 		/** Kinds the list shows, when the op named them. */
 		scopeProfileSlugs?: string[];
 		viewType: CompositeViewType;
-		/** A bento: the widget keys it places, in block order. */
+		/**
+		 * @deprecated The old name of `cells` (same value), kept one release
+		 * for readers that still read it (founder, 23 Nov 2026: Cell).
+		 */
 		widgets?: string[];
 	}>;
 	/**

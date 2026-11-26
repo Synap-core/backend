@@ -112,7 +112,7 @@ Rules for a snapshot:
   beside it.
 - **Keep the query keys** (`profileSlug`, `groupBy`, `aggregation`, …) next to
   `data`, so "Make live" reads the same thing.
-- **`data` has the chart's shape**, which `synap_list_widgets` (surface
+- **`data` has the chart's shape**, which `synap_list_cells` (placement
   `document`) shows per chart in its example:
   - line / area / profit-loss: `[{"x":"2026-09-01","y":4}]` (x = an ISO date or a number)
   - bar / pie / funnel / radar: `[{"label":"Done","value":12}]`
@@ -131,7 +131,7 @@ Rules for a snapshot:
 A content LANGUAGE is a fenced block whose source IS the content: ` ```mermaid `
 for a diagram, ` ```math ` for a display equation (LaTeX), any other language
 for code. It has no props and no fallback, and relay and exports show its
-source. `synap_list_widgets` (surface `document`) returns these as `fences`,
+source. `synap_list_cells` (placement `document`) returns these as `fences`,
 each with its `aiHint`: read them there rather than from memory. There is no
 ` ```chart ` fence (a chart is a `synap-cell`), and inline `$…$` math is off.
 

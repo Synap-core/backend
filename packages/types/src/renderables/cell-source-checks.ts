@@ -130,7 +130,7 @@ const FIX: Record<CellSourceRefusalCode, string> = {
   network_stylesheet:
     "No CDN stylesheet and no web font link: the frame's security policy blocks them. Inline `<style>` tags or CSS-in-JS only; fonts and colours come from the host's tokens (var(--synap-*)).",
   network_request:
-    "The frame reaches no network for data: read through `SynapWidget.query` (the bridge). An installed package may declare the origin in `externalHosts` for a person to approve.",
+    "The frame reaches no network for data: read through `window.synap.query` (the bridge). An installed package may declare the origin in `externalHosts` for a person to approve.",
   esm_sh: `The web and desktop frames refuse any source that names esm.sh. ${BUNDLE_FIX}`,
   external_host:
     "Write each host as an origin, its scheme included and nothing after the host: `https://api.vendor.com`. No wildcard, path, query or credentials.",

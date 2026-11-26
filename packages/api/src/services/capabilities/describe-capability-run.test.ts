@@ -30,12 +30,12 @@ describe("describeCapabilityRun", () => {
   });
 
   it("uses the vocabulary SSOT, not the raw token", () => {
-    // `cell` is **Card** and `workflow` is **Rule** in the registry; a
+    // `cell` is **Cell** and `workflow` is **Rule** in the registry; a
     // hand-written label map here would fork the product's nouns. Pinned
     // literals: a rename must come through this file deliberately.
     expect(
       describeCapabilityRun("market.install", { slug: "probe", kind: "cell" })
-    ).toBe('Install Card "probe"');
+    ).toBe('Install Cell "probe"');
     expect(
       describeCapabilityRun("market.install", {
         slug: "nudges",

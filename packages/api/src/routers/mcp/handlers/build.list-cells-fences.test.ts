@@ -1,5 +1,5 @@
 /**
- * synap_list_widgets(surface: "document") teaches the FENCE rows of the one
+ * synap_list_cells(placement: "document") teaches the FENCE rows of the one
  * catalog (```mermaid, ```math, code) — derived from `FENCE_RENDERABLES`, so an
  * agent learns a content language because the catalog has it, never from a
  * hand list. A bento answer carries no fences (a fence is not a block).
@@ -16,7 +16,7 @@ import type { McpToolContext } from "./shared.js";
 
 const ctx = (args: Record<string, unknown>): McpToolContext =>
   ({
-    toolName: "synap_list_widgets",
+    toolName: "synap_list_cells",
     args,
     userId: "user-1",
     apiKeyScopes: ["mcp.read"],
@@ -30,21 +30,21 @@ const ctx = (args: Record<string, unknown>): McpToolContext =>
   }) as McpToolContext;
 
 async function answer(args: Record<string, unknown>) {
-  const result = await buildHandlers.synap_list_widgets!(ctx(args));
+  const result = await buildHandlers.synap_list_cells!(ctx(args));
   const block = result.content?.[0];
   if (!block || block.type !== "text") throw new Error("expected text");
   return JSON.parse(block.text) as {
     fences?: Array<{ key: string; languages: string[]; aiHint: string }>;
-    widgets: unknown[];
+    cells: unknown[];
   };
 }
 
-describe("synap_list_widgets — fences from the catalog", () => {
+describe("synap_list_cells — fences from the catalog", () => {
   it("document: every inline fence row arrives with its aiHint", async () => {
     // `limit` covers the whole catalog: the default page is pinned in
     // `list-paging.lists.test.ts`.
-    const out = await answer({ surface: "document", limit: 200 });
-    expect(out.widgets.length).toBeGreaterThan(20);
+    const out = await answer({ placement: "document", limit: 200 });
+    expect(out.cells.length).toBeGreaterThan(20);
     const inline = FENCE_RENDERABLES.filter((f) =>
       f.placements.includes("inline")
     );

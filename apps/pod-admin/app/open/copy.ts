@@ -42,9 +42,9 @@ export const en = {
   "view.snapshot.unclassified": "{n} in no declared state",
   "view.shows.pipeline": "{noun} by state, one column per state.",
   "view.shows.dashboard":
-    "A dashboard of {n, plural, one {# widget} other {# widgets}}.",
+    "A dashboard of {n, plural, one {# cell} other {# cells}}.",
   "view.shows.dashboardOver":
-    "A dashboard of {n, plural, one {# widget} other {# widgets}} over {noun}.",
+    "A dashboard of {n, plural, one {# cell} other {# cells}} over {noun}.",
   "view.shows.layoutOver": "{layout} view of {noun}.",
   "view.shows.layout": "{layout} view.",
   "view.shows.unknown": "A saved view.",
@@ -108,9 +108,9 @@ export const fr: Catalog<typeof en> = {
   "view.snapshot.unclassified": "{n} sans état déclaré",
   "view.shows.pipeline": "{noun} par état, une colonne par état.",
   "view.shows.dashboard":
-    "Un tableau de bord de {n, plural, one {# widget} other {# widgets}}.",
+    "Un tableau de bord de {n, plural, one {# cellule} other {# cellules}}.",
   "view.shows.dashboardOver":
-    "Un tableau de bord de {n, plural, one {# widget} other {# widgets}} sur {noun}.",
+    "Un tableau de bord de {n, plural, one {# cellule} other {# cellules}} sur {noun}.",
   "view.shows.layoutOver": "Vue {layout} de {noun}.",
   "view.shows.layout": "Vue {layout}.",
   "view.shows.unknown": "Une vue enregistrée.",

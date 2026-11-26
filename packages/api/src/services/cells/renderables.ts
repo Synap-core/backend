@@ -14,7 +14,7 @@
  * are RESERVED: a row whose typeKey is a built-in never shadows the catalog
  * (the write doors refuse to mint one — `assertMayWriteNamespacedTypeKey`).
  *
- * Every consumer — hub `listWidgetDefs`, MCP `synap_list_widgets`, bento
+ * Every consumer — hub `listWidgetDefs`, MCP `synap_list_cells`, bento
  * arrange validation — reads through here.
  */
 
@@ -189,20 +189,20 @@ export function renderableArrangeError(
   if (def) {
     if (!isAiPlaceable(def)) {
       return (
-        `Widget "${key}" is not agent-placeable: it needs host context the ` +
+        `Cell "${key}" is not agent-placeable: it needs host context the ` +
         `catalog has not curated. Use one of: ${AI_PLACEABLE_BUILTIN_KEYS.join(", ")}.`
       );
     }
     const missing = missingRequiredConfig(def, config);
     if (missing.length > 0) {
-      return `Widget "${key}" needs config.${missing.join(", config.")}.${def.aiHint ? ` ${def.aiHint}` : ""}`;
+      return `Cell "${key}" needs config.${missing.join(", config.")}.${def.aiHint ? ` ${def.aiHint}` : ""}`;
     }
     return null;
   }
   if (isInstalledRenderableKey(key)) {
     const required = installed.get(key);
     if (!required) {
-      return `Unknown installed cell "${key}" in this workspace. Call synap_list_widgets / GET /widget-definitions first.`;
+      return `Unknown installed cell "${key}" in this workspace. Call synap_list_cells / GET /widget-definitions first.`;
     }
     const missing = required.filter((k) => {
       const value = config?.[k];
@@ -213,8 +213,8 @@ export function renderableArrangeError(
       : null;
   }
   return (
-    `Unknown widget "${key}". Use one of: ${AI_PLACEABLE_BUILTIN_KEYS.join(", ")}. ` +
-    `Or a cell:<pkg>:<key> / generated:<slug> cell from synap_list_widgets.`
+    `Unknown cell "${key}". Use one of: ${AI_PLACEABLE_BUILTIN_KEYS.join(", ")}. ` +
+    `Or a cell:<pkg>:<key> / generated:<slug> cell from synap_list_cells.`
   );
 }
 
@@ -304,9 +304,15 @@ function widgetFingerprint(block: Record<string, unknown>): string {
   return JSON.stringify([block.widgetType ?? null, sorted(block.config ?? {})]);
 }
 
-// ─── AI discovery (MCP synap_list_widgets) ───────────────────────────────────
+// ─── AI discovery (MCP synap_list_cells) ───────────────────────────────────
 
-export type RenderableSurface = "document" | "bento";
+/** The composed body a cell is placed in (a bento block or a document embed). */
+export type RenderableBody = "document" | "bento";
+/**
+ * @deprecated The old name of {@link RenderableBody}: "surface" now means UI
+ * anchored to an object (founder, 23 Nov 2026).
+ */
+export type RenderableSurface = RenderableBody;
 
 /** The fallback slot of an example embed: what the author writes there. */
 const EXAMPLE_FALLBACK = "<one sentence: what this shows>";
@@ -328,14 +334,14 @@ export interface RenderableDiscoveryEntry {
 }
 
 /**
- * What an agent may place on `surface`: agent-placeable, non-alias rows whose
+ * What an agent may place in `body`: agent-placeable, non-alias rows whose
  * placements include it (`document` ⇒ `inline`).
  */
 export function discoverRenderables(
   rows: readonly RenderableRow[],
-  surface: RenderableSurface
+  body: RenderableBody
 ): RenderableDiscoveryEntry[] {
-  const placement: Placement = surface === "document" ? "inline" : "bento";
+  const placement: Placement = body === "document" ? "inline" : "bento";
   return rows
     .filter(
       (r) => r.aiPlaceable && !r.aliasOf && r.placements.includes(placement)
@@ -357,7 +363,7 @@ export function discoverRenderables(
               ? (WIDGET_BY_KEY[r.typeKey]?.configSchema ?? [])
               : [],
           // A document embed shows its snapshot form (D2); a dashboard stays live.
-          ...(surface === "document" && r.dataBinding
+          ...(body === "document" && r.dataBinding
             ? { dataBinding: r.dataBinding }
             : {}),
         }),
@@ -365,7 +371,7 @@ export function discoverRenderables(
       }),
       fallback: r.fallback,
       aiHint: r.aiHint,
-      ...(surface === "bento" ? { defaultSize: r.defaultSize } : {}),
+      ...(body === "bento" ? { defaultSize: r.defaultSize } : {}),
       installed: r.source !== "catalog",
     }));
 }

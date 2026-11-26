@@ -233,6 +233,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_list_capabilities",
     "cp-connector": "pod__list_capabilities",
   },
+  synap_list_cells: { "pod-mcp": "synap_list_cells", "cp-connector": null },
   synap_list_installations: {
     "pod-mcp": "synap_list_installations",
     "cp-connector": "pod__list_installations",

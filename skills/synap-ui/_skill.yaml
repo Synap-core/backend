@@ -6,7 +6,7 @@ description: >
   "make a CRM workspace", "I want a feed view of my articles", "design a home
   dashboard", "show my reading list as a gallery", "turn this into a
   timeline/calendar/matrix", "generate a workspace for content creation /
-  sales / research / project management / fitness tracking", "arrange widgets
+  sales / research / project management / fitness tracking", "arrange cells
   on my bento", "create a command / automation trigger". This skill PRESENTS
   data — the underlying entities must already exist (use core `synap`) and
   schema extensions happen via `synap-schema`. Always propose workspace creation
@@ -18,6 +18,6 @@ metadata:
       env: [SYNAP_HUB_API_KEY, SYNAP_POD_URL]
     primaryEnv: SYNAP_HUB_API_KEY
     homepage: https://synap.live
-    capabilities: [views, bento, workspaces, widgets]
+    capabilities: [views, bento, workspaces, cells]
     os: [macos, linux, windows]
     userInvocable: false

@@ -13,7 +13,7 @@
  * It answers, for ANY object kind:
  *
  * (entity of any profile, view, document, channel, project, session, workspace,
- * widget/cell, or a system capability — skill, automation, playbook,
+ * cell, or a system capability — skill, automation, playbook,
  * capability, command, tool, agent — plus proposals/notifications):
  *
  *   • what ICON represents this kind?   (a Lucide icon NAME, resolved lazily)
@@ -48,6 +48,7 @@ import { catalogLocaleOf, sentences, translatedWord } from "./translate.js";
 export type ObjectCategory =
   | "entity"
   | "view"
+  /** Retired (23 Nov 2026): no kind carries it; `widget` resolves to `cell`. */
   | "widget"
   | "cell"
   | "channel"
@@ -306,29 +307,22 @@ const OBJECT_KIND_ROWS = {
     labelPlural: "Views",
     glyph: "◰",
   },
-  widget: {
-    kind: "widget",
-    category: "widget",
-    icon: "LayoutGrid",
-    color: ID(5),
-    label: "Widget",
-    labelPlural: "Widgets",
-    glyph: "⊞",
-  },
-  /* The kind stays `cell` — that is the engine's word and the DB's. The LABEL is
-     "Card" because that is the only word a user may see: NORTH-STAR (team pod) §5 —
-     "User-facing word is Card. 'Cell' is the internal engine term — never shown
-     to users." This row said "Cell", so every surface resolving through the
-     vocabulary printed "Install cell" / "Cell installed" at users. Fixing it
-     here, at the one door, fixes all of them at once — which is exactly why a
-     local label map at a call site is forbidden. */
+  /* The made UI block is a Cell, for users and agents alike (founder decision,
+     23 Nov 2026: "Cell everywhere"; "card" is only a renderer slot). It
+     replaced "Card" (D3, 31 Oct 2026) and the retired `widget` kind, which now
+     resolves here through `OBJECT_KIND_ALIASES` (`widget` → `cell`). Fixing
+     the word at this one door fixes every surface at once — which is exactly
+     why a local label map at a call site is forbidden. */
   cell: {
     kind: "cell",
     category: "cell",
     icon: "SquareDashedBottomCode",
     color: ID(5),
-    label: "Card",
-    labelPlural: "Cards",
+    label: "Cell",
+    labelPlural: "Cells",
+    // Stored text filed before the rename says "Card" or "Widget".
+    formerLabels: ["Card", "Cards", "Widget", "Widgets"],
+    glyph: "⊞",
   },
   document: {
     kind: "document",
@@ -757,7 +751,14 @@ export function resolveObjectIdentity(
   /** The catalog locale of the registry's label; the ambient one when absent. */
   locale?: Locale
 ): ObjectKindDef {
-  const key = (kind ?? profile?.slug ?? "").toString();
+  const raw = (kind ?? profile?.slug ?? "").toString();
+  // A token with no row of its own reads as the kind it aliases (the ONE
+  // alias table, as `resolveObjectNoun` and `resolveObjectGlyph` read it), so
+  // a retired `widget` is a Cell here too, never a humanized "Widget".
+  const key =
+    !Object.hasOwn(OBJECT_KINDS, raw) && Object.hasOwn(OBJECT_KIND_ALIASES, raw)
+      ? OBJECT_KIND_ALIASES[raw]!
+      : raw;
   const base: ObjectKindDef =
     localizedKind(key, catalogLocaleOf(locale)) ??
     ({
@@ -854,6 +855,10 @@ export function toChipLabel(raw: string | null | undefined, max = 42): string {
 export const OBJECT_KIND_ALIASES: Record<string, string> = {
   focus_session: "session",
   focus_sessions: "session",
+  // The retired `widget` kind is a Cell (founder, 23 Nov 2026: "Cell
+  // everywhere"); a stored `widget` token still reads as one.
+  widget: "cell",
+  widgets: "cell",
   entity_facet: "facet",
   entity_facets: "facet",
   relation: "link",

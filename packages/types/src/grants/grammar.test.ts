@@ -129,6 +129,27 @@ describe("patternMatches", () => {
   });
 });
 
+describe("patternMatches — `cell.read` reads the cell types (`widget`)", () => {
+  const readCellTypes: GrantRequest = { subject: "widget", action: "read" };
+  const registerCellType: GrantRequest = {
+    subject: "widget",
+    action: "register",
+  };
+  const readCells: GrantRequest = { subject: "cell", action: "read" };
+  it.each([
+    ["cell.read", readCellTypes, true], // the alias: Cell everywhere (23 Nov 2026)
+    ["cell", readCellTypes, true],
+    ["widget.read", readCellTypes, true], // the old name keeps working
+    ["cell.create", readCellTypes, false], // rules out "alias ignores action"
+    ["cell.register", registerCellType, false], // rules out "alias widens a gate verb"
+    ["cell", registerCellType, false],
+    ["widget.read", readCells, false], // rules out "alias runs both ways"
+    ["document.read", readCellTypes, false], // rules out "any read covers it"
+  ] as const)("%s vs %j → %s", (pattern, req, expected) => {
+    expect(patternMatches(pattern, req)).toBe(expected);
+  });
+});
+
 describe("permits — permission AND every resource set", () => {
   const base = { permissions: ["entity.knowledge.read"] };
 
