@@ -413,6 +413,43 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # F11 (26 Nov 2026): a PR that adds or edits an MCP tool went red on the
+      # manifest, the token budget and the door tool names, and only a built
+      # workspace (the devbox) could regenerate them: 4 PRs, hours each. Like
+      # the API types and the reference docs, hand the regenerated files back
+      # as ONE artifact for the tree this run tested (a PR merged with main).
+      # CI never commits to a branch. Apply: scripts/ci/apply-ci-artifacts.sh.
+      - name: Regenerate the MCP generated files (PRs)
+        id: mcp-regen
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        working-directory: packages/api
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/synap_test
+          PINO_PRETTY: "false"
+          UPDATE_TOKEN_BUDGET: "1"
+        run: |
+          pnpm exec tsx src/routers/mcp/tools/gen-manifest.ts
+          pnpm exec vitest run src/routers/mcp/tools/token-budget.test.ts
+          pnpm exec tsx src/routers/mcp/gen-door-tool-names.ts
+          pnpm exec prettier --write src/routers/mcp/door-tool-names.generated.ts
+      - name: Collect the regenerated MCP files
+        id: mcp-drift
+        if: always() && github.event_name == 'pull_request' && steps.mcp-regen.outcome == 'success'
+        run: |
+          mkdir -p "$RUNNER_TEMP/mcp-generated"
+          for f in packages/api/src/routers/mcp/tools/mcp-tools.manifest.json packages/api/src/routers/mcp/tools/token-budget.baseline.json packages/api/src/routers/mcp/door-tool-names.generated.ts; do
+            if ! git diff --quiet -- "$f"; then cp "$f" "$RUNNER_TEMP/mcp-generated/$(basename "$f")"; fi
+          done
+          if [ -n "$(ls -A "$RUNNER_TEMP/mcp-generated")" ]; then echo "drift=true" >> "$GITHUB_OUTPUT"; else echo "drift=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Upload the regenerated MCP files
+        if: always() && steps.mcp-drift.outputs.drift == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mcp-generated
+          path: ${{ runner.temp }}/mcp-generated
+          retention-days: 7
+
       # The built API boots against the migrated CI Postgres and answers. Until
       # 2026-10-19 both steps were continue-on-error and the server had in fact
       # exited at boot (no KRATOS_PUBLIC_URL) on every run, unnoticed. Ory is
