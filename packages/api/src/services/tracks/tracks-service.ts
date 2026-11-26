@@ -2504,7 +2504,11 @@ export async function resolveTrackFiling(params: {
 }): Promise<TrackFiling> {
   const track = await getTrack(params.trackId, params.actor);
   if (!track) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found" });
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message:
+        "Track is pending approval — the id you passed (pendingTrackId) names the goal to come, not a goal yet. No door accepts it as a trackId until the proposal is approved. Look for the goal under that name once it is, or ask the person to approve it.",
+    });
   }
   if (params.projectId && params.projectId !== track.projectId) {
     throw new TRPCError({

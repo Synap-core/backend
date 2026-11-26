@@ -23,6 +23,7 @@ import {
 const RECORDED_SHAPES: Record<number, string> = {
   2: "8e24b5185ac8d9d03739fc7af589ec8801e6f9da758a4125a7fd1c2dcb87b70b",
   3: "bb0cb24f896deb40614855a370d227a32114bfd2b2690a0a90ba4af2ea6f75c4",
+  4: "b8670c8df5a85e7e03437e995b314af9346bbd25a1d2675bab86b19d367e9fdf",
 };
 
 describe("the frame contract's version", () => {
@@ -43,8 +44,8 @@ describe("the frame contract's version", () => {
     ).toBe(RECORDED_SHAPES[CELL_BRIDGE_CONTRACT_VERSION]);
   });
 
-  it("is 3 from the frame's context on (v2 had no context call)", () => {
-    expect(CELL_BRIDGE_CONTRACT_VERSION).toBe(3);
+  it("is at least 3 from the frame's context on (v2 had no context call)", () => {
+    expect(CELL_BRIDGE_CONTRACT_VERSION).toBeGreaterThanOrEqual(3);
     expect(SURFACE_CONTEXT_FIELDS).toEqual([
       "anchor",
       "workspaceId",

@@ -236,7 +236,7 @@ export async function resolveRunner(p: {
         choice: index,
         persona:
           typeof choice === "object" && "synapAi" in choice
-            ? choice.synapAi.persona
+            ? (choice.synapAi.persona ?? null)
             : null,
       });
       continue;

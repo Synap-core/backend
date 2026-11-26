@@ -323,6 +323,25 @@ export async function runFrameReadOp(
         workspaceId,
       });
     }
+    case "graph.of": {
+      // An entity's graph neighbours (`relations.get`, the same read the
+      // desktop host and pod admin's HTML bridge make). The lens is the door's.
+      // `relations.get` pages by `limit` alone (1 to 100): an `offset` is not
+      // one of its inputs, so it is not forwarded.
+      const { relationsRouter } = await import("../../routers/relations.js");
+      const direction = str(p.direction);
+      return relationsRouter.createCaller(ctx).get(
+        defined({
+          entityId: required(op, "an id", str(p.id)),
+          type: str(p.type),
+          direction:
+            direction === "source" || direction === "target"
+              ? direction
+              : ("both" as const),
+          limit: int(p.limit, 1, 100),
+        })
+      );
+    }
     default: {
       // Every op of the one table has a case: a new op fails the build here.
       const unanswered: never = op;

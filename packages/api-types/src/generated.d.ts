@@ -6912,6 +6912,13 @@ declare const CELL_BRIDGE_READ_OPS: {
 		"firstN",
 		"properties"
 	];
+	readonly "graph.of": readonly [
+		"id",
+		"direction",
+		"type",
+		"limit",
+		"offset"
+	];
 	readonly "lens.page": readonly [
 		"since"
 	];
@@ -17304,7 +17311,7 @@ export type PlaybookStageCategory = "backlog" | "canceled" | "completed" | "paus
  */
 export type PlaybookRunnerRef = "self" | "synap_ai" | {
 	synapAi: {
-		persona: string;
+		persona?: string;
 	};
 } | {
 	agentId: string;
