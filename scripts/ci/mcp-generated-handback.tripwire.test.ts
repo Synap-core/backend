@@ -69,8 +69,8 @@ describe("ci.yml: the MCP generated files are handed back (F11)", () => {
   });
 
   it("uploads the artifact the apply script downloads, and runs on a red too", () => {
-    const name = upload.match(/name:\s*(mcp-generated)\b/)?.[1];
-    expect(name).toBe("mcp-generated");
+    // The WHOLE name, to the end of the line: a `\b` also matches `mcp-generated-x`.
+    expect(upload).toMatch(/^\s+name:\s*mcp-generated\s*$/m);
     expect(upload).toMatch(/if:\s*always\(\)/);
     expect(APPLY).toContain("grep -qx mcp-generated");
     expect(APPLY).toContain('fetch mcp-generated');
