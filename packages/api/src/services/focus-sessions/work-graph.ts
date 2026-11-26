@@ -124,12 +124,8 @@
 import type { FocusSession } from "@synap/database/schema";
 import {
   WORK_GRAPH_EDGE_KINDS,
-  closedNotDoneRecorded,
-  sessionClosedAs,
-  type SessionClosedAs,
   type WorkGraphEdgeKind,
 } from "@synap-core/types/focus-sessions";
-import { stepTimeOf } from "@synap-core/types/units";
 import type { WorkGraphReach } from "../../access/grant-door-fence.js";
 import type { SessionActivityLive } from "@synap-core/types/run-activity";
 import type { ResolvedScope } from "../../utils/scope-filter.js";
@@ -170,10 +166,7 @@ import {
   type WorkGraphHold,
   type WorkGraphPullRequest,
 } from "./work-graph-nodes.js";
-import {
-  followReplacements,
-  readDependencyFacts,
-} from "../links/dependency-links.js";
+import { readDependencyFacts } from "../links/dependency-links.js";
 import { withViewerRole, type SessionViewerRole } from "./viewer-role.js";
 import { projectTriage } from "./triage.js";
 import { notTakenRecorded } from "./session-closed-as.js";
@@ -221,11 +214,6 @@ export type {
  *                       output (`session-interactions.ts`).
  *   - `serves`          from = a session or a goal (`fromKind: "track"`), to =
  *                       the goal it is done for (`toKind: "track"`).
- *   - `replaces`        from = the REPLACEMENT step, to = the step it replaces
- *                       (`X --replaces--> blocker`). Only the walk INTO the
- *                       declared session blockers of the window
- *                       (`followReplacements`, THE walk `deriveOpenBlockers`
- *                       reads), session to session.
  */
 export { WORK_GRAPH_EDGE_KINDS, type WorkGraphEdgeKind };
 // The list is declared once in `@synap-core/types/focus-sessions` (the apps
@@ -237,7 +225,6 @@ const _kindsKnown: ReadonlyArray<
   | "waits_on_output"
   | SessionInteractionType
   | "serves"
-  | "replaces"
 > = WORK_GRAPH_EDGE_KINDS;
 void _kindsKnown;
 // A new interaction type the graph does not list stops the build: it would
@@ -348,19 +335,9 @@ export type WorkGraphNode = Awaited<
   holder: SessionHolderSection;
   viewerRole: SessionViewerRole;
   inWindow: boolean;
-  /**
-   * The step's time, lifted off `metadata` (`stepTimeOf`; only a valid date).
-   * ABSENT = none declared (or a pod from before these fields).
-   */
-  plannedFor?: string;
-  dueBy?: string;
-  /**
-   * How it ended (`sessionClosedAs`, one derivation with the dependency rule:
-   * `done`, or `not_done` for a close-anyway / a failed or cancelled end).
-   * ABSENT = not ended (or a pod from before this field: a reader then reads a
-   * closed step as done, as `deriveStepReadiness` does).
-   */
-  closedAs?: SessionClosedAs;
+  // A planned step's time (lane B1: `plannedFor`, `dueBy`) rides on the row's
+  // own `metadata` once B1 stores it there; lift it to a node field HERE
+  // when B1 names it. Not invented before.
   /**
    * With the `playbookId` narrow, how this window node follows it: `session`
    * = its own `playbookId` is the playbook, `goal` = only through the method
@@ -420,9 +397,6 @@ export const WORK_GRAPH_APP_NODE_FIELDS = [
   "inWindow",
   "playbookMatch",
   "skipped",
-  "plannedFor",
-  "dueBy",
-  "closedAs",
 ] as const satisfies ReadonlyArray<keyof WorkGraphNode>;
 
 /** Read by the graph itself, never by an app from a node: left off the tRPC wire. */
@@ -538,29 +512,6 @@ export const WORK_GRAPH_WITHHELD_REASON =
 const LOG = { door: "focusSessions.graph" };
 
 /** A settled read's status, without its value. */
-/**
- * What a step's readiness reads off its row, beside `status` and `skipped`:
- * `plannedFor` / `dueBy` (`stepTimeOf`, valid dates only) and `closedAs`
- * (`sessionClosedAs`: ONE derivation with the dependency rule). Each is left
- * out when it has nothing to say.
- */
-function stepFactsOf(row: {
-  status: string | null;
-  metadata?: unknown;
-  verificationReport?: unknown;
-}): { plannedFor?: string; dueBy?: string; closedAs?: SessionClosedAs } {
-  const time = stepTimeOf(row.metadata);
-  const closedAs = sessionClosedAs(
-    row.status,
-    closedNotDoneRecorded(row.verificationReport)
-  );
-  return {
-    ...(time.plannedFor ? { plannedFor: time.plannedFor } : {}),
-    ...(time.dueBy ? { dueBy: time.dueBy } : {}),
-    ...(closedAs ? { closedAs } : {}),
-  };
-}
-
 function sectionOf(
   s: { status: "ok" } | { status: "unavailable"; reason: string }
 ): WorkGraphSection {
@@ -682,40 +633,6 @@ export async function buildWorkGraph(
         push({ kind: "blocked_by", from: r.id, to: b });
       for (const w of r.unblocks)
         push({ kind: "blocked_by", from: w, to: r.id });
-    }
-  }
-  // `replaces`: THE walk INTO each declared session blocker of the window
-  // (`followReplacements`, the one `deriveOpenBlockers` reads), so a reader
-  // applying the rule sees a re-planned blocker released. A failed walk
-  // marks the `blockedBy` section unavailable: the blockers are then
-  // unknown, never cleared.
-  const windowIds = new Set(ids.map((r) => r.id));
-  const declaredBlockers =
-    declared.status === "ok"
-      ? [
-          ...new Set(
-            declared.value.flatMap((r) =>
-              windowIds.has(r.id) ? r.blockedBy : []
-            )
-          ),
-        ]
-      : [];
-  const replaces = await settle(
-    LOG,
-    "blockedBy",
-    "Which blockers were replaced could not be read.",
-    () => {
-      const seen = new Set(declaredBlockers.map((id) => `session:${id}`));
-      return followReplacements(
-        declaredBlockers.map((id) => ({ kind: "session", id })),
-        seen
-      );
-    }
-  );
-  if (replaces.status === "ok") {
-    for (const e of replaces.value) {
-      if (e.fromType !== "session" || e.toType !== "session") continue;
-      push({ kind: "replaces", from: e.fromId, to: e.toId });
     }
   }
   if (orchestration.status === "ok") {
@@ -857,7 +774,6 @@ export async function buildWorkGraph(
   const projected: WorkGraphNode[] = withHolder.map((n) => ({
     ...withViewerRole(n, userId),
     ...(notTakenRecorded(n) ? { skipped: true as const } : {}),
-    ...stepFactsOf(n),
     ...(playbookId
       ? {
           playbookMatch: !n.inWindow
@@ -1059,7 +975,7 @@ export async function buildWorkGraph(
     decisions: things.status === "ok" ? things.value.decisions : [],
     entities: things.status === "ok" ? things.value.entities : [],
     sections: {
-      blockedBy: sectionOf(declared.status === "ok" ? replaces : declared),
+      blockedBy: sectionOf(declared),
       orchestration: sectionOf(orchestration),
       waitsOnOutputs: sectionOf(outputs),
       interactions,

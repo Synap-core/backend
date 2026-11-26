@@ -16,10 +16,7 @@
  *   - `waits_on_output` the session taking an output → the session producing it;
  *   - `triggered`       the session whose write fired a run → the run;
  *   - `updated`         the producer → the session that wrote to its output;
- *   - `serves`          a session or a goal → the GOAL (track) it is done for;
- *   - `replaces`        the REPLACEMENT step → the step it replaces (a
- *                       blocker re-planned: the dependency rule follows it,
- *                       `deriveOpenBlockers`). Session to session only.
+ *   - `serves`          a session or a goal → the GOAL (track) it is done for.
  * An end that is not a session (a goal, a decision, a thing) is named by the
  * edge's `fromKind` / `toKind` and is one of the read's `goals`,
  * `decisions` or `entities`, never a node: a reader that keeps the edges
@@ -35,6 +32,5 @@ export const WORK_GRAPH_EDGE_KINDS = [
   "triggered",
   "updated",
   "serves",
-  "replaces",
 ] as const;
 export type WorkGraphEdgeKind = (typeof WORK_GRAPH_EDGE_KINDS)[number];

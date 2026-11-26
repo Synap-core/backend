@@ -6,7 +6,6 @@ export * from "./share.js";
 export * from "./lead.js";
 export * from "./phases.js";
 export * from "./session.js";
-export * from "./step-readiness-graph.js";
 export * from "./track.js";
 export * from "./goal.js";
 export * from "./thing-blocker.js";
