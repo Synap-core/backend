@@ -72,15 +72,15 @@ import {
 // The `sql` re-exported by @synap/database is postgres.js's tagged template,
 // NOT drizzle's — a raw fragment inside a drizzle `where()` must use this one.
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
-import type {
-  AnchorKind,
-  SurfaceAnchor,
-  SurfaceBody,
-  SurfaceRelation,
-  SurfaceRow,
-  SurfacesForObject,
+import {
+  isAnchorIdShaped,
+  type AnchorKind,
+  type SurfaceAnchor,
+  type SurfaceBody,
+  type SurfaceRelation,
+  type SurfaceRow,
+  type SurfacesForObject,
 } from "@synap-core/types/surfaces";
-import { isAnchorIdShaped } from "@synap-core/types/surfaces";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
