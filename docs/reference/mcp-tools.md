@@ -207,13 +207,15 @@ Look at a stored file (a `file` entity: an upload, an image, a PDF). Returns `ur
 
 **Get thread context** · Group: `read` · readOnlyHint: true · openWorldHint: false
 
-Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.
+A thread's newest messages plus linked entities and documents; read it before posting. threadId: from synap_post_message or the personal channel. Or `object`: its comment threads (anchor with a pin's locator, resolvedAt); the person resolves, you reply (synap_post_message comment.replyTo).
 
-| Parameter  | Type   | Required | Description                                                                                      |
-| ---------- | ------ | -------- | ------------------------------------------------------------------------------------------------ |
-| `threadId` | string | yes      | Channel/thread UUID                                                                              |
-| `limit`    | number | no       | Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn. |
-| `cursor`   | string | no       | Older messages: the last reply's `nextCursor`.                                                   |
+| Parameter  | Type   | Required | Description                                           |
+| ---------- | ------ | -------- | ----------------------------------------------------- |
+| `threadId` | string | no       | Channel/thread UUID                                   |
+| `object`   | object | no       | Instead of threadId: {type:'entity'\|'document', id}. |
+| `state`    | enum   | no       | One of: `open`, `resolved`.                           |
+| `limit`    | number | no       | Newest messages, 1-100 (default 50).                  |
+| `cursor`   | string | no       | Older messages: the last reply's `nextCursor`.        |
 
 ## synap_list_proposals
 

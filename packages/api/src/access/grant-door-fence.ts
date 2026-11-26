@@ -493,6 +493,11 @@ export const GRANT_SAFE_REST_READS: readonly RegExp[] = [
   /^\/channels\/?$/,
   /^\/threads\/?$/,
   route("/threads/:id/messages"),
+  // An object's comment threads (`listObjectComments`, rest/comments.ts): the
+  // object through its read floor (`assertObjectReadable`: `scopedDb` for an
+  // entity, grant ANDed; `loadReadableDocument` for a document), its room
+  // through `canUserSeeChannel`, then only that room's anchored messages.
+  /^\/comments\/?$/,
   route("/threads/:id/branches"),
   /^\/messaging\/channels\/?$/,
   /^\/messaging\/linked-unread\/?$/,

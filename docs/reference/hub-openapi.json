@@ -7129,6 +7129,76 @@
           "catalog"
         ]
       },
+      "PostCommentReply": {
+        "type": "object",
+        "properties": {
+          "messageId": { "type": "string" },
+          "rootId": { "type": "string" },
+          "channelId": { "type": "string" },
+          "object": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string" },
+              "id": { "type": "string" }
+            },
+            "required": ["type", "id"]
+          },
+          "ackState": {
+            "type": "string",
+            "enum": ["applied", "duplicate-ignored"]
+          }
+        },
+        "required": ["messageId", "rootId", "channelId", "object", "ackState"]
+      },
+      "PostCommentRequest": {
+        "type": "object",
+        "properties": {
+          "anchor": { "type": "object", "additionalProperties": {} },
+          "parentId": { "type": "string", "format": "uuid" },
+          "content": { "type": "string", "minLength": 1, "maxLength": 50000 },
+          "clientRequestId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": ["content"],
+        "additionalProperties": false
+      },
+      "ObjectCommentsListing": {
+        "type": "object",
+        "properties": {
+          "channelId": { "type": ["string", "null"] },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "open": { "type": "integer" },
+              "resolved": { "type": "integer" }
+            },
+            "required": ["open", "resolved"]
+          },
+          "threads": {
+            "type": "array",
+            "items": { "type": "object", "additionalProperties": {} }
+          }
+        },
+        "required": ["channelId", "counts", "threads"]
+      },
+      "SetCommentResolvedReply": {
+        "type": "object",
+        "properties": {
+          "rootId": { "type": "string" },
+          "resolvedAt": { "type": ["string", "null"] },
+          "changed": { "type": "boolean" }
+        },
+        "required": ["rootId", "resolvedAt", "changed"]
+      },
+      "SetCommentResolvedRequest": {
+        "type": "object",
+        "properties": { "resolved": { "type": "boolean" } },
+        "required": ["resolved"],
+        "additionalProperties": false
+      },
       "Skill": {
         "type": "object",
         "properties": {
@@ -55083,6 +55153,206 @@
           },
           "422": {
             "description": "Unreadable board",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/comments": {
+      "post": {
+        "tags": ["Comments"],
+        "summary": "Comment on an object, or reply in a comment thread",
+        "description": "A comment is a message in the object's one conversation. `anchor` opens a thread: `{kind:'entity', entityId, field?, locator?}` or `{kind:'document', documentId, quote?, blockRef?, offset?, revision?}`; `locator` pins it on a design (`{surface:'design', frameId, blockId?}`) or a story (`{surface:'story', storyId}`) with `viewport` (desktop / tablet / phone), `point` `{x, y}` (fractions 0 to 1), `contentVersion` and an optional `screenshot` (a pod file id). `parentId` replies in a thread instead (exactly one of the two). Needs read access to the object; a scoped key, its grant's read right on it (`entity.<kind>.read` or `document.read` in its space). 400 names every bad anchor field.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PostCommentRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Posted (or the first post of a retry)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PostCommentReply" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid anchor or body",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such object or thread",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": ["Comments"],
+        "summary": "An object's comment threads in one state",
+        "description": "The threads on one object (`objectType` entity or document, `objectId`) that are `open` (default) or `resolved`, each with its anchor (a pin's `locator` included), its replies, `resolvedAt` / `resolvedBy` and whether the caller may resolve it (`canResolve`), plus both counts. `channelId` is null when nobody has commented yet. Read through the caller's read floor on the object: one it cannot read is a 404.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "enum": ["document", "entity"] },
+            "required": true,
+            "name": "objectType",
+            "in": "query"
+          },
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "objectId",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": ["open", "resolved"],
+              "default": "open"
+            },
+            "required": false,
+            "name": "state",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The threads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectCommentsListing"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad query",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such object",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/comments/{messageId}/resolved": {
+      "post": {
+        "tags": ["Comments"],
+        "summary": "Resolve or re-open a comment thread",
+        "description": "Sets the thread's resolved state (any message of the thread names it). The thread's author or an editor of the object, a person: an agent's key is refused (it replies in the thread; the person resolves). A key acting for a person is capped by its grant's read right on the object. Idempotent: `changed` is false when the thread already had that state.",
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "schema": { "type": "string", "format": "uuid" },
+            "required": true,
+            "name": "messageId",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetCommentResolvedRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The thread's state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetCommentResolvedReply"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such thread",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

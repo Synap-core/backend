@@ -373,6 +373,16 @@ const GATED_ELSEWHERE: Readonly<
     }
   >
 > = {
+  "POST /comments": {
+    via: "postComment",
+    load: () => import("../services/comments/comments.js"),
+    why: "a reader may comment (V2): after the object's read floor, grantWriteDenial on the key's read right on the object in its space (objectCommentGrant: entity.<kind>.read / document.read); shared with tRPC comments.create and MCP synap_post_message",
+  },
+  "POST /comments/:messageId/resolved": {
+    via: "setCommentResolved",
+    load: () => import("../services/comments/comments.js"),
+    why: "an agent is refused; then grantWriteDenial on the key's read right on the object (objectCommentGrant), then the person's author-or-editor rule; shared with tRPC comments.setResolved",
+  },
   "POST /installations/request": {
     via: "requestInstallation",
     load: () => import("../services/installations/request-installation.js"),

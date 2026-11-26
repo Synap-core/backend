@@ -200,7 +200,7 @@
         "readOnlyHint": true,
         "openWorldHint": false
       },
-      "description": "Get full context for a thread: its newest messages plus linked entities and documents. Call before posting a message to orient yourself with conversation history and in-scope data. threadId from synap_post_message or the user's personal channel.",
+      "description": "A thread's newest messages plus linked entities and documents; read it before posting. threadId: from synap_post_message or the personal channel. Or `object`: its comment threads (anchor with a pin's locator, resolvedAt); the person resolves, you reply (synap_post_message comment.replyTo).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -208,16 +208,24 @@
             "type": "string",
             "description": "Channel/thread UUID"
           },
+          "object": {
+            "type": "object",
+            "description": "Instead of threadId: {type:'entity'|'document', id}."
+          },
+          "state": {
+            "type": "string",
+            "enum": ["open", "resolved"]
+          },
           "limit": {
             "type": "number",
-            "description": "Newest messages to return, 1-100 (default 50). Ask for a few when you only need the latest turn."
+            "description": "Newest messages, 1-100 (default 50)."
           },
           "cursor": {
             "type": "string",
             "description": "Older messages: the last reply's `nextCursor`."
           }
         },
-        "required": ["threadId"]
+        "required": []
       }
     },
     {
@@ -8253,7 +8261,7 @@
             "properties": {
               "anchor": {
                 "type": "object",
-                "description": "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?}."
+                "description": "{kind:'document', documentId, quote?: the exact passage (≤500 chars), blockRef?: {kind:'heading', text, occurrence}} — omit quote and blockRef for the whole document. Or {kind:'entity', entityId, field?, locator?}; locator: {surface:'design', frameId, blockId?} | {surface:'story', storyId}, + viewport, point {x,y} 0-1, contentVersion, screenshot?."
               },
               "replyTo": {
                 "type": "string",
