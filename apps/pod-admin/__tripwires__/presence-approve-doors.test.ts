@@ -309,6 +309,8 @@ describe("TRIPWIRE: pod admin approves only through the proof-of-presence helper
         "action governanceRules.create",
         "action governanceRules.setActionMode",
         "action governanceRules.setOwnOrganiseDefault",
+        "action governanceRules.setPodFloorDefault",
+        "action governanceRules.setPodSetting",
         "action governanceRules.setReversibleDefault",
         "action governanceRules.widenCell",
         "action machines.setKeyTtl",

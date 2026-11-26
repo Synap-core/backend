@@ -49,6 +49,22 @@ export const en = {
   "podDefaults.adminOnly": "Only a pod admin can change these.",
   "podDefaults.floors": "These always ask, whatever you choose",
   "podDefaults.floorsFailed": "Couldn’t read what always asks.",
+  "podDefaults.numbers": "Limits the approval rules read",
+  "podDefaults.ownWorkHours.label": "How long new work stays theirs to tidy",
+  "podDefaults.ownWorkHours.line":
+    "For this long after an agent made something, it may file or close it without asking.",
+  "podDefaults.ownWorkHours.value":
+    "{n, plural, one {# hour} other {# hours}}",
+  "podDefaults.evidenceMin.label": "Records an agent needs to propose a project",
+  "podDefaults.evidenceMin.line":
+    "A project an agent proposes with fewer records than this is marked for you and never applies on its own.",
+  "podDefaults.evidenceMin.value":
+    "{n, plural, one {# record} other {# records}}",
+  "podDefaults.change": "Change",
+  "podDefaults.changeNamed": "Change: {name}",
+  "podDefaults.save": "Save",
+  "podDefaults.range": "From {min} to {max}",
+  "podDefaults.saved": "Saved: {name}",
   retry: "Retry",
   "handOffs.title": "Hand-offs you always allow",
   "handOffs.hint":
@@ -122,6 +138,24 @@ export const fr: Catalog<typeof en> = {
   "podDefaults.adminOnly": "Seul un administrateur du pod peut les modifier.",
   "podDefaults.floors": "Ceci demande toujours, quel que soit votre choix",
   "podDefaults.floorsFailed": "Impossible de lire ce qui demande toujours.",
+  "podDefaults.numbers": "Les limites que lisent les règles d’approbation",
+  "podDefaults.ownWorkHours.label":
+    "Combien de temps un travail récent reste à ranger",
+  "podDefaults.ownWorkHours.line":
+    "Pendant ce délai après qu’un agent a créé quelque chose, il peut le classer ou le clore sans demander.",
+  "podDefaults.ownWorkHours.value":
+    "{n, plural, one {# heure} other {# heures}}",
+  "podDefaults.evidenceMin.label":
+    "Éléments nécessaires pour qu’un agent propose un projet",
+  "podDefaults.evidenceMin.line":
+    "Un projet proposé par un agent avec moins d’éléments est signalé et ne s’applique jamais seul.",
+  "podDefaults.evidenceMin.value":
+    "{n, plural, one {# élément} other {# éléments}}",
+  "podDefaults.change": "Modifier",
+  "podDefaults.changeNamed": "Modifier\u00a0: {name}",
+  "podDefaults.save": "Enregistrer",
+  "podDefaults.range": "De {min} à {max}",
+  "podDefaults.saved": "Enregistré\u00a0: {name}",
   retry: "Réessayer",
   "handOffs.title": "Passations toujours autorisées",
   "handOffs.hint":

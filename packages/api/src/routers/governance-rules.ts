@@ -62,6 +62,7 @@ import {
   setPodClassDefault,
   readPodNumberSetting,
   readPodNumberSettings,
+  POD_NUMBER_SETTINGS,
   POD_NUMBER_SETTING_KEYS,
 } from "@synap/database";
 import {
@@ -897,7 +898,8 @@ export const governanceRulesRouter = router({
   /**
    * The floors a pod may switch (`FLOOR_CLASS_PATTERNS`): each family's class
    * row state, the writes it covers, and the pod's number settings the
-   * governance reads (`POD_NUMBER_SETTINGS`). Read by Settings › Approvals.
+   * governance reads (`POD_NUMBER_SETTINGS`), with each setting's default and
+   * range. Read by Settings › Approvals.
    */
   podFloorDefaults: protectedProcedure.query(async ({ ctx }) => {
     const families = await Promise.all(
@@ -913,6 +915,7 @@ export const governanceRulesRouter = router({
     return {
       families,
       settings: await readPodNumberSettings(db),
+      settingLimits: POD_NUMBER_SETTINGS,
       canManage: await isPodAdmin(ctx.userId),
     };
   }),
