@@ -11,7 +11,8 @@
  *   1. The op must be in the ceiling (`CELL_BRIDGE_READ_OPS`), its params are
  *      narrowed to the op's own list (`pickBridgeParams`).
  *   2. The surface is loaded AS THE VIEWER: a cell type in the frame's space
- *      (or pod-wide), an html page the viewer may read. Not found → 404.
+ *      (or pod-wide), an html page the viewer may read (`isFramePage`: an
+ *      `html` document, or an html-embed cell's source). Not found → 404.
  *   3. Its declaration (`widget_definitions.reads`, `documents.metadata.reads`)
  *      decides: a read outside it is REFUSED (403 `FRAME_READ_UNDECLARED`),
  *      whatever the host checked. A surface that declares nothing is answered
@@ -107,6 +108,21 @@ async function loadCellSurface(
   };
 }
 
+/**
+ * A document that runs as a page in a frame: an `html` document, or the
+ * source of an html-embed cell, which `cellInstances.createHtmlCell` (tRPC and
+ * Hub REST) stores as a `text` document with mime type `text/html`. Nothing
+ * wider: any other text document (markdown, plain text) is not a page.
+ */
+export function isFramePage(doc: {
+  type: string | null;
+  mimeType: string | null;
+}): boolean {
+  return (
+    doc.type === "html" || (doc.type === "text" && doc.mimeType === "text/html")
+  );
+}
+
 async function loadPageSurface(
   userId: string,
   documentId: string
@@ -119,7 +135,7 @@ async function loadPageSurface(
     if ((err as { code?: string }).code === "NOT_FOUND") return null;
     throw err;
   }
-  if (doc.type !== "html" || doc.deletedAt) return null;
+  if (!isFramePage(doc) || doc.deletedAt) return null;
   const metadata = (doc.metadata ?? null) as Record<string, unknown> | null;
   return {
     key: doc.id,
