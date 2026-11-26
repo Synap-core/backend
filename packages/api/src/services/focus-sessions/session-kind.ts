@@ -93,6 +93,29 @@ export function startedByAutomation(metadata: unknown): boolean {
   return AUTOMATION_KEYS.some((k) => metadataValue(metadata, k) != null);
 }
 
+/**
+ * SQL: a CLOSED automation run — a `run`-kind row an automation opened
+ * (`origin: "automation"` or either automation key) that ended `closed`. The
+ * work graph's default window leaves these out (founder default, 26 Nov 2026:
+ * the GitHub dev-loop automation closes one run session per webhook, ~2,000 a
+ * day, and they buried the map's ~400 other sessions under its 500 ceiling).
+ * An open, failed or cancelled run is not matched: it may need someone.
+ *
+ * Never NULL (`coalesce`), so `NOT (…)` of it keeps every other row: the
+ * kind predicate's `origin IN (…)` is NULL on a NULL origin, the trap
+ * `notReceiptWhere` documents.
+ */
+export function closedAutomationRunWhere(): SQL {
+  return drizzleSql`coalesce((${and(
+    eq(focusSessions.status, "closed"),
+    sessionKindWhere("run"),
+    or(
+      eq(focusSessions.origin, "automation"),
+      ...AUTOMATION_KEYS.map((key) => metadataKeyWhere(key, "IS NOT NULL"))
+    )
+  )}), false)` as SQL;
+}
+
 /** The marker `resolveOrCreateAgentProposalSession` stamps on a receipt. */
 export const AGENT_PROPOSAL_PACKAGE_KIND = "agent-proposal-package";
 
