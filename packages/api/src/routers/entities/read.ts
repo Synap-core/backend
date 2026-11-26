@@ -11,11 +11,9 @@ import {
   workspaceProcedure,
   protectedProcedure,
   podProcedure,
-  readOnlyProcedure,
 } from "../../trpc.js";
 import {
   db,
-  dbRead,
   eq,
   desc,
   and,
@@ -273,7 +271,7 @@ export const readProcs = {
         })),
       };
     }),
-  list: readOnlyProcedure
+  list: podProcedure
     .input(
       paginatedInput.extend({
         profileSlug: z.string().optional(),
@@ -670,14 +668,14 @@ export const readProcs = {
         if (filtersWhere) conditions.push(filtersWhere);
       }
 
-      const results = await dbRead.query.entities.findMany({
+      const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: entityListOrderBySql(input.orderBy),
         limit: input.limit + 1,
         offset: input.offset,
       });
 
-      const totalRow = await dbRead
+      const totalRow = await db
         .select({ count: drizzleSql<number>`count(*)::int` })
         .from(entities)
         .where(and(...conditions));
@@ -713,7 +711,7 @@ export const readProcs = {
    * Returns only entities where workspaceId IS NULL.
    * Uses protectedProcedure — works even without an active workspace.
    */
-  listGlobal: readOnlyProcedure
+  listGlobal: protectedProcedure
     .input(
       z.object({
         profileSlug: z.string().optional(),
@@ -753,7 +751,7 @@ export const readProcs = {
         );
       }
 
-      const results = await dbRead.query.entities.findMany({
+      const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -788,7 +786,7 @@ export const readProcs = {
    * belong to NO project (e.g. the brand rows of a brand in no project).
    * Given both, `projectId` wins.
    */
-  listMulti: readOnlyProcedure
+  listMulti: protectedProcedure
     .input(
       z.object({
         workspaceIds: z.array(z.string().uuid()).optional(),
@@ -930,7 +928,7 @@ export const readProcs = {
    * so dropping it pod-wide widens to exactly "everything this user may read"
    * — the .list/.listAll doctrine — and can never widen past the floor.
    */
-  search: readOnlyProcedure
+  search: podProcedure
     .input(
       z.object({
         query: z.string(),
@@ -1032,7 +1030,7 @@ export const readProcs = {
         conditions.push(searchWorkspaceNarrow);
       }
 
-      const results = await dbRead.query.entities.findMany({
+      const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -1060,7 +1058,7 @@ export const readProcs = {
    * `entities.search` minus the workspace lens. `{ query, limit?, profileSlug? }`
    * → `{ entities: EntitySchema[] }`.
    */
-  searchAll: readOnlyProcedure
+  searchAll: protectedProcedure
     .input(
       z.object({
         query: z.string(),
@@ -1123,7 +1121,7 @@ export const readProcs = {
         );
       }
 
-      const results = await dbRead.query.entities.findMany({
+      const results = await db.query.entities.findMany({
         where: and(...conditions),
         orderBy: [desc(entities.createdAt)],
         limit: input.limit,
@@ -1137,7 +1135,7 @@ export const readProcs = {
   /**
    * Get entity by document ID (reverse lookup)
    */
-  getByDocumentId: readOnlyProcedure
+  getByDocumentId: podProcedure
     .input(z.object({ documentId: z.string().uuid() }))
     .output(z.object({ entity: z.any().nullable() }))
     .query(async ({ input, ctx }) => {
@@ -1145,7 +1143,7 @@ export const readProcs = {
       // ambient lens. Uses the same predicate as entities.get so a cross-
       // workspace lookup (entity in a workspace the user belongs to, just not
       // the active one) resolves instead of returning null.
-      const entity = await dbRead.query.entities.findFirst({
+      const entity = await db.query.entities.findFirst({
         where: and(
           eq(entities.documentId, input.documentId),
           isNull(entities.deletedAt),
