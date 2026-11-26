@@ -17521,6 +17521,12 @@ export interface PostChannelMessageResult {
 	 * label (`ask-text.ts`): filed anyway, said back.
 	 */
 	slot?: {
+		/** ONE CARD PER QUESTION: the open card this question was filed on instead. */
+		deduped?: {
+			asked: string;
+			key: string | null;
+			label: string;
+		};
 		hint?: string;
 		status: string;
 		warnings?: string[];
