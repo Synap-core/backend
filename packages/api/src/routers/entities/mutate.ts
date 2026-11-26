@@ -1610,6 +1610,11 @@ export const mutateProcs = {
    *   3. workspace overlay / profile default  (profiles.setProfileRendererOverride)
    *   4. hardcoded host fallback
    *
+   * ALIASED onto the attach door (Surfaces P3): the look is written as the
+   * entity's `detail` slot attachment (`replaceDetailCellLook`), a cell
+   * instance attached to the entity; `system_data.renderer` is kept as its
+   * mirror for the clients that still read it.
+   *
    * GOVERNED, unlike the sibling `setEntityViewMode` (which is an ungoverned
    * `workspaceProcedure` — a known hole; do not copy it). Same three-way
    * contract as `profiles.setProfileRendererOverride`: applied / proposed /
@@ -1690,6 +1695,20 @@ export const mutateProcs = {
           updatedAt: new Date(),
         })
         .where(eq(entities.id, input.entityId));
+      // The look IS an attached surface since Surfaces P3 (founder decision
+      // 23 Nov 2026): the entity's `detail` slot attachment is the record;
+      // `system_data.renderer` above stays as its mirror for the clients that
+      // still read it, until they read `attached` (one release).
+      const { replaceDetailCellLook } =
+        await import("../../services/surfaces/attach.js");
+      await replaceDetailCellLook({
+        anchor: { kind: "entity", id: input.entityId },
+        cellKey: input.ref?.cellKey ?? null,
+        props: (input.ref as { props?: Record<string, unknown> } | null)?.props,
+        workspaceId: entity.workspaceId,
+        ownerUserId: ctx.userId,
+        agentUserId: ctx.agentUserId ?? null,
+      });
 
       logger.info(
         {

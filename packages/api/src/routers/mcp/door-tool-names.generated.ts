@@ -26,6 +26,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_attach_facet",
     "cp-connector": "pod__attach_facet",
   },
+  synap_attach_surface: {
+    "pod-mcp": "synap_attach_surface",
+    "cp-connector": null,
+  },
   synap_call_tool: {
     "pod-mcp": "synap_call_tool",
     "cp-connector": "pod__call_tool",
@@ -82,6 +86,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
   synap_create_skill: {
     "pod-mcp": "synap_create_skill",
     "cp-connector": "pod__create_skill",
+  },
+  synap_create_surface: {
+    "pod-mcp": "synap_create_surface",
+    "cp-connector": null,
   },
   synap_create_verb: {
     "pod-mcp": "synap_create_verb",

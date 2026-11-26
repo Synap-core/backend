@@ -7,11 +7,17 @@
  * `listSurfaces`). The answer is the UNION of every store that anchors UI to
  * an object today, each read under ITS OWN visibility floor:
  *
+ *   attaches        `links <anchor> --attaches--> view|document|cell_instance`
+ *                   (the `attached` relation, Surfaces P3,
+ *                   `services/surfaces/attach.ts`), every anchor kind, each
+ *                   surface under its own table's floor.
  *   renders         `readBoundRenderer` (the one ladder,
  *                   `getEffectiveRendererWithSource` over `renderer_bindings`
- *                   then the legacy stores) for the anchor's kind, per slot;
- *                   for an entity, its kind's, plus its own legacy override
- *                   (`entities.system_data.renderer`).
+ *                   then the legacy stores) for the anchor's kind, per slot.
+ *                   An entity's own look is no longer a renderer: its old
+ *                   override (`entities.system_data.renderer`) is an
+ *                   attachment (conversion `p3.surfaces.*`, and
+ *                   `entities.setEntityRenderer` writes one).
  *   views           `scopedDb` on `views` (the VISIBLE floor,
  *                   `viewReadableWhere`, never owner-only): project pins and
  *                   exposures, a kind's views (`scope_profile_ids`,
@@ -27,9 +33,10 @@
  *   start-page      a space's `settings.layout.primarySurface`.
  *   sites           a project's Site (`resource_shares`, public, 0336).
  *
- * NOT READ YET: `links` with link type `attaches` (the `attached` relation).
- * That link type does not exist: lane P3 adds it with its write door. The
- * reader joins this union in the same change, so no empty store is read here.
+ * The legacy anchors the P3 conversions moved onto `attaches` (an entity's
+ * bento, a cell linked to an entity) are still read, because their old
+ * writers still write them; `dedupe` names each surface once, the
+ * attachment first.
  *
  * A store that throws lands in `unavailable` with its error: an empty `rows`
  * means "nothing there", never "could not look" (Critical Rule). The anchor
@@ -73,13 +80,13 @@ import type {
   SurfaceRow,
   SurfacesForObject,
 } from "@synap-core/types/surfaces";
-import { resolveEntityRendererOverride } from "@synap-core/types/renderer-resolution";
 import { scopedDb } from "../../access/scoped-db.js";
 import type { AccessContext } from "../../access/context.js";
 import { userVisibleWhere } from "../../utils/user-visible-where.js";
 import { openLink } from "../../utils/deep-links.js";
 import { readBoundRenderer } from "../renderers/renderer-target-checks.js";
 import { RENDERER_TARGETS } from "../renderers/renderer-targets.js";
+import { readAttachedSurfaces } from "./attach.js";
 
 export interface SurfacesForObjectContext {
   userId: string;
@@ -268,7 +275,11 @@ function sourcesFor(
   lens: string | null
 ): Source[] {
   const { anchor } = loaded;
-  const out: Source[] = [];
+  // Read FIRST: `dedupe` keeps the first row naming a surface, so a legacy
+  // store the conversions copied onto `attaches` never names it twice.
+  const out: Source[] = [
+    { source: "attaches", read: () => readAttachedSurfaces(access, anchor) },
+  ];
   switch (anchor.kind) {
     case "entity":
       out.push(
@@ -367,11 +378,12 @@ function sourcesFor(
       );
       break;
     case "playbook":
-      out.push({ source: "renderers", read: () => readRenders(ctx, loaded) });
+      // A playbook's own look was a per-object renderer binding; since P3 it
+      // is an attachment (conversion `p3.surfaces.renderer-binding`, and the
+      // aliased `synap_promote_cell_to_renderer`), read above.
       break;
     case "track":
-      // A goal carries no surface in any store today; `attached` (P3) is its
-      // first one.
+      // A goal's only surfaces are the ones attached to it.
       break;
   }
   return out;
@@ -482,10 +494,7 @@ async function readRenders(
   loaded: LoadedAnchor
 ): Promise<SurfaceRow[]> {
   const { anchor } = loaded;
-  const target =
-    anchor.kind === "playbook"
-      ? { kind: "playbook" as const, id: anchor.id }
-      : { kind: "profile" as const, slug: loaded.profileSlug! };
+  const target = { kind: "profile" as const, slug: loaded.profileSlug! };
   const slots = RENDERER_TARGETS[target.kind].slots;
   const out: SurfaceRow[] = [];
   for (const slot of slots) {
@@ -500,11 +509,6 @@ async function readRenders(
         rendererRow(bound.ref, slot, anchor, `renderer:${bound.source}`)
       );
   }
-  // An entity's own legacy override (the browser applies it above the
-  // ladder, `entities.setEntityRenderer`). P3 migrates it to `attached`.
-  const override = resolveEntityRendererOverride(loaded.entity);
-  if (override)
-    out.push(rendererRow(override, "detail", anchor, "entity-override"));
   return out;
 }
 
@@ -564,7 +568,12 @@ async function readEntityBody(
   return doc ? [documentRow(doc, loaded.anchor, "body", "entity-body")] : [];
 }
 
-/** The entity's bento (`entities.system_data.bentoViewId`, the view-mode toggle). */
+/**
+ * The entity's bento (`entities.system_data.bentoViewId`, the view-mode
+ * toggle): an ATTACHED surface since P3 (conversion `p3.surfaces.entity-bento`
+ * copied each onto `attaches`). Still read because `setEntityViewMode` still
+ * writes the old key; `dedupe` folds it into the attachment.
+ */
 async function readEntityBento(
   access: AccessContext,
   loaded: LoadedAnchor
@@ -572,7 +581,7 @@ async function readEntityBento(
   const id = loaded.entity?.systemData.bentoViewId;
   if (typeof id !== "string" || !id) return [];
   const rows = await readViewsByIds(access, [id]);
-  return rows.map((v) => viewRow(v, loaded.anchor, "home", "views"));
+  return rows.map((v) => viewRow(v, loaded.anchor, "attached", "views"));
 }
 
 /** A kind's bento per space (`workspaces.settings.profileBentoViewIds[slug]`). */

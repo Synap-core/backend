@@ -84,25 +84,41 @@ export type OpenLinkClient = "mobile";
  *
  * `opts.client` appends the device flavour (`?client=mobile`). Omit it for the
  * canonical, device-agnostic link — that stays byte-identical to what every
- * existing caller emits.
+ * existing caller emits. `opts.kind` + `opts.surface` name ONE surface
+ * attached to the object: `/open/<kind>/<id>?surface=<surfaceId>` (Surfaces
+ * P3) — the object's page, opened on that surface.
  */
 export function openLink(
   id: string,
-  opts?: { client?: OpenLinkClient }
+  opts?: { client?: OpenLinkClient } & OpenPathOptions
 ): string {
   const base = publicBase();
-  const path = opts?.client
-    ? `${openPath(id)}?${OPEN_CLIENT_PARAM}=${opts.client}`
-    : openPath(id);
-  return base ? `${base}${path}` : path;
+  const path = openPath(id, opts);
+  const withClient = opts?.client
+    ? `${path}${path.includes("?") ? "&" : "?"}${OPEN_CLIENT_PARAM}=${opts.client}`
+    : path;
+  return base ? `${base}${withClient}` : withClient;
 }
 
 /**
- * Pod-relative path into the app: `/open/<id>`.
- * Lock-step with `@synap-core/hub-rest-client` `openPath` (same encoding).
+ * `kind` types the link (`/open/<kind>/<id>`); `surface` opens the object's
+ * page on one surface attached to it (`?surface=<surfaceId>`, needs `kind`).
  */
-export function openPath(id: string): string {
-  return `/open/${encodeURIComponent(id)}`;
+export interface OpenPathOptions {
+  kind?: string;
+  surface?: string;
+}
+
+/**
+ * Pod-relative path: `/open/<id>`, `/open/<kind>/<id>`, or
+ * `/open/<kind>/<id>?surface=<surfaceId>`.
+ */
+export function openPath(id: string, opts?: OpenPathOptions): string {
+  const kind = opts?.kind ? `${encodeURIComponent(opts.kind)}/` : "";
+  const path = `/open/${kind}${encodeURIComponent(id)}`;
+  return opts?.kind && opts.surface
+    ? `${path}?surface=${encodeURIComponent(opts.surface)}`
+    : path;
 }
 
 /**

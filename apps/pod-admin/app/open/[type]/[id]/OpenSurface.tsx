@@ -13,7 +13,12 @@
 
 import { ConsoleRoleProvider } from "../../../(admin)/components/side-nav-role";
 import { ReceiverIdentityProvider } from "../../../_lib/receiver-shell";
-import { labelForOpenType, type ParsedOpen } from "../../open-params";
+import {
+  SURFACE_ANCHOR_HOST_TYPES,
+  labelForOpenType,
+  type ParsedOpen,
+} from "../../open-params";
+import { AttachedSurfaceView } from "../../_views/attached-surface-view";
 import { OpenMessage } from "../../open-shell";
 import { AgentView } from "../../_views/agent-view";
 import { AutomationView } from "../../_views/automation-view";
@@ -37,6 +42,11 @@ interface SurfaceProps {
   flowType?: string;
   /** Shapes what is OFFERED (a space's console page, pod-wide verbs); never a gate. */
   viewerIsPodAdmin: boolean;
+  /**
+   * `?surface=` off the link (`parseOpenSurfaceParam`): one surface attached
+   * to the object, which the page opens on (Surfaces P3).
+   */
+  surface?: string | null;
 }
 
 /**
@@ -57,7 +67,27 @@ export function OpenSurface({
   );
 }
 
-function OpenSurfaceBody({ parsed, flowType, viewerIsPodAdmin }: SurfaceProps) {
+function OpenSurfaceBody({
+  parsed,
+  flowType,
+  viewerIsPodAdmin,
+  surface,
+}: SurfaceProps) {
+  if (
+    surface &&
+    parsed.status === "host" &&
+    (SURFACE_ANCHOR_HOST_TYPES as readonly string[]).includes(parsed.type)
+  ) {
+    return (
+      <AttachedSurfaceView
+        anchor={{
+          kind: parsed.type as (typeof SURFACE_ANCHOR_HOST_TYPES)[number],
+          id: parsed.id,
+        }}
+        surfaceId={surface}
+      />
+    );
+  }
   switch (parsed.status) {
     case "invalid-id":
       return (

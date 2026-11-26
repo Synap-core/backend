@@ -30070,7 +30070,9 @@
                       "workspace",
                       "document",
                       "track",
-                      "profile"
+                      "profile",
+                      "view",
+                      "cell_instance"
                     ]
                   },
                   "fromId": { "type": "string", "minLength": 1 },
@@ -30094,7 +30096,9 @@
                       "workspace",
                       "document",
                       "track",
-                      "profile"
+                      "profile",
+                      "view",
+                      "cell_instance"
                     ]
                   },
                   "toId": { "type": "string", "minLength": 1 },
@@ -30124,7 +30128,8 @@
                       "serves",
                       "advances",
                       "orchestrated_by",
-                      "extends"
+                      "extends",
+                      "attaches"
                     ]
                   },
                   "metadata": { "type": "object", "additionalProperties": {} },
@@ -30211,7 +30216,9 @@
                 "workspace",
                 "document",
                 "track",
-                "profile"
+                "profile",
+                "view",
+                "cell_instance"
               ]
             },
             "required": true,
@@ -54267,6 +54274,369 @@
           },
           "404": {
             "description": "No such anchor",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Surfaces"],
+        "summary": "Make a surface for one object",
+        "description": "Create UI for ONE object, anchored to it: the body (view, bento, whiteboard, document, html, cell) and its `attaches` link, in one governed act. Find first (GET /surfaces); never twin. An agent's create is a proposal. Returns `{status:'created', surface, openUrl}` (`/open/<kind>/<id>?surface=<id>`) or `{status:'proposed', proposalId}`.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "anchor": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "entity",
+                          "profile",
+                          "workspace",
+                          "project",
+                          "track",
+                          "playbook",
+                          "session"
+                        ]
+                      },
+                      "id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["kind", "id"]
+                  },
+                  "body": {
+                    "type": "string",
+                    "enum": [
+                      "view",
+                      "bento",
+                      "whiteboard",
+                      "document",
+                      "html",
+                      "cell"
+                    ]
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  },
+                  "spec": {
+                    "type": "object",
+                    "properties": {
+                      "viewType": { "type": "string", "maxLength": 40 },
+                      "config": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "content": { "type": "string" },
+                      "url": { "type": "string", "format": "uri" },
+                      "cellKey": { "type": "string", "maxLength": 200 },
+                      "props": { "type": "object", "additionalProperties": {} },
+                      "workspaceId": { "type": "string", "format": "uuid" }
+                    }
+                  },
+                  "slot": { "type": "string", "maxLength": 40 },
+                  "label": { "type": "string", "maxLength": 200 },
+                  "userId": { "type": "string" },
+                  "agentUserId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
+                  "sessionId": { "type": "string" }
+                },
+                "required": ["anchor", "body", "title"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such object or surface",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/surfaces/attach": {
+      "post": {
+        "tags": ["Surfaces"],
+        "summary": "Put an existing surface on one object",
+        "description": "Attach a view, bento, whiteboard, document, HTML artifact or cell instance to one more object (an `attaches` link; metadata {position, slot?, label?}). Both must be visible to you. An agent's attach is a proposal.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "anchor": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "entity",
+                          "profile",
+                          "workspace",
+                          "project",
+                          "track",
+                          "playbook",
+                          "session"
+                        ]
+                      },
+                      "id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["kind", "id"]
+                  },
+                  "surface": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["view", "document", "cell_instance"]
+                      },
+                      "id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["type", "id"]
+                  },
+                  "slot": { "type": "string", "maxLength": 40 },
+                  "label": { "type": "string", "maxLength": 200 },
+                  "position": { "type": "integer", "minimum": 0 },
+                  "userId": { "type": "string" },
+                  "agentUserId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
+                  "sessionId": { "type": "string" }
+                },
+                "required": ["anchor", "surface"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such object or surface",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Surfaces"],
+        "summary": "Take a surface off one object",
+        "description": "Remove the `attaches` link between an object and a surface; the surface itself stays. `absent` when nothing was attached there. An agent's detach is a proposal.",
+        "security": [{ "bearerAuth": [] }],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "anchor": {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "entity",
+                          "profile",
+                          "workspace",
+                          "project",
+                          "track",
+                          "playbook",
+                          "session"
+                        ]
+                      },
+                      "id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["kind", "id"]
+                  },
+                  "surface": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["view", "document", "cell_instance"]
+                      },
+                      "id": { "type": "string", "format": "uuid" }
+                    },
+                    "required": ["type", "id"]
+                  },
+                  "userId": { "type": "string" },
+                  "agentUserId": { "type": "string", "format": "uuid" },
+                  "reasoning": { "type": "string", "maxLength": 2000 },
+                  "sessionId": { "type": "string" }
+                },
+                "required": ["anchor", "surface"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Proposed for review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string" } },
+                  "required": ["status"],
+                  "additionalProperties": {}
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/HubError" }
+              }
+            }
+          },
+          "404": {
+            "description": "No such object or surface",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/HubError" }

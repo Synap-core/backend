@@ -17,6 +17,10 @@
  *    more than the viewer's access"), logged allowed=true;
  *  - an html page declaring reads in `metadata.reads`: enforced the same,
  *    logged as a `document` surface; read in the page's own space;
+ *  - an html-embed cell's source (a `text` document with mime `text/html`,
+ *    as `createHtmlCell` stores it): read as a page, in its own space (rules
+ *    out "an html-embed frame 404s"); a markdown or plain-text document is
+ *    still not a page: 404 (rules out "any text document is a page");
  *  - a cell that declares nothing: answered, logged declared=false (the
  *    backward-compatible default, rules out "undeclared = refused");
  *  - an op outside the ceiling: 400; an unknown cell or a page the viewer
@@ -113,6 +117,9 @@ const D_B = randomUUID(); // a deal only B sees
 const P_A = randomUUID(); // a person A sees
 const PAGE = randomUUID(); // A's html page, declares its reads
 const B_PAGE = randomUUID(); // B's html page, A cannot read it
+const EMBED = randomUUID(); // A's html-embed source: text + text/html
+const NOTE = randomUUID(); // A's markdown document: not a page
+const PLAIN = randomUUID(); // A's plain-text document: not a page
 
 const DECLARED = [{ op: "entities.list", params: { profileSlug: "deal" } }];
 
@@ -213,6 +220,15 @@ beforeAll(async () => {
             ($5,$6,$7,'B page','html','','',0,'text/html','{}'::jsonb)`,
     [PAGE, A, WA, JSON.stringify({ reads: DECLARED }), B_PAGE, B, WB]
   );
+  // A's html-embed source, as `cellInstances.createHtmlCell` stores it, and
+  // two text documents that are not pages.
+  await q(
+    `insert into documents (id, user_id, workspace_id, title, type, storage_url, storage_key, size, mime_type, metadata)
+     values ($1,$2,$3,'HTML Cell','text','','',0,'text/html','{}'::jsonb),
+            ($4,$2,$3,'Notes','text','','',0,'text/markdown','{}'::jsonb),
+            ($5,$2,$3,'Plain','text','','',0,'text/plain','{}'::jsonb)`,
+    [EMBED, A, WA, NOTE, PLAIN]
+  );
 }, 120_000);
 
 describe("a cell that declares its reads", () => {
@@ -311,6 +327,39 @@ describe("an html page that declares its reads (documents.metadata.reads)", () =
     });
     expect(res.status).toBe(404);
     expect(await logCount()).toBe(before);
+  });
+});
+
+describe("an html-embed cell's source document (text, mime text/html)", () => {
+  it("reads as a page: answered in its own space, logged as a document surface", async () => {
+    const res = await read({
+      surface: { kind: "document", id: EMBED },
+      op: "entities.list",
+      params: { profileSlug: "deal" },
+      workspaceId: WB,
+    });
+    expect(res.status).toBe(200);
+    expect(idsOf(await res.json())).toEqual([D_A]);
+    expect(await lastLog()).toMatchObject({
+      surface_kind: "document",
+      surface_key: EMBED,
+      allowed: true,
+      declared: false,
+      workspace_id: WA,
+    });
+  });
+
+  it("a markdown or plain-text document is not a page: 404, nothing logged", async () => {
+    for (const id of [NOTE, PLAIN]) {
+      const before = await logCount();
+      const res = await read({
+        surface: { kind: "document", id },
+        op: "entities.list",
+        params: { profileSlug: "deal" },
+      });
+      expect(res.status, id).toBe(404);
+      expect(await logCount()).toBe(before);
+    }
   });
 });
 

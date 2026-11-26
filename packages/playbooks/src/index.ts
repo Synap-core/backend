@@ -2286,7 +2286,10 @@ export type LinkEndpointType =
   // A `project_tracks` row — a method running inside a project.
   | "track"
   // A `profiles` row (a kind or role) — target of `assigned_to`.
-  | "profile";
+  | "profile"
+  // A `views` row and a `cell_instances` row: the surface end of `attaches`.
+  | "view"
+  | "cell_instance";
 
 // `governance_rule` was removed here in lock-step with the @synap/database
 // union — it had no producer and no reader. See the note in
@@ -2348,7 +2351,10 @@ export type LinkType =
   | "orchestrated_by"
   // capability(add-on) --extends--> capability(base): written by the
   // capability applier only (founder decision D6).
-  | "extends";
+  | "extends"
+  // <anchor> --attaches--> view|document|cell_instance: an ATTACHED surface
+  // (Surfaces P3). Written by the surfaces door only.
+  | "attaches";
 
 /** A request to create a link edge (id/createdAt assigned by the store). */
 export interface LinkInput {

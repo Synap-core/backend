@@ -403,6 +403,11 @@ const GATED_ELSEWHERE: Readonly<
     load: () => import("../services/projects/delete-project.js"),
     why: "project.delete through checkPermissionOrPropose",
   },
+  "POST /surfaces": {
+    via: "createSurface",
+    load: () => import("../services/surfaces/create.js"),
+    why: "surface.create through checkPermissionOrPropose (an agent's surface is one proposal: the body and its attaches edge), shared with tRPC surfaces.create and MCP synap_create_surface",
+  },
   "POST /tracks": {
     via: "startTrack",
     load: () => import("../services/tracks/tracks-service.js"),
@@ -689,6 +694,20 @@ const GRANT_CHECKED_DEEPER: Readonly<
   "POST /proposals/:id/approve": {
     chain: [{ name: "approve", file: "routers/proposals.ts" }],
     why: "proposals.approve asks the key's proposal.approve right on the proposal's own space, project and object first (assertMayDecideProposal); applyProposalApproval names the space to the grant again",
+  },
+  "POST /surfaces/attach": {
+    chain: [
+      { name: "attachSurface", file: "services/surfaces/attach.ts" },
+      { name: "gate", file: "services/surfaces/attach.ts" },
+    ],
+    why: "surface.attach through checkPermissionOrPropose in the service's one gate (an agent's attach is a proposal), shared with tRPC surfaces.attach and MCP synap_attach_surface",
+  },
+  "DELETE /surfaces/attach": {
+    chain: [
+      { name: "detachSurface", file: "services/surfaces/attach.ts" },
+      { name: "gate", file: "services/surfaces/attach.ts" },
+    ],
+    why: "surface.detach through checkPermissionOrPropose in the service's one gate (an agent's detach is a proposal), shared with tRPC surfaces.detach and MCP synap_attach_surface {detach: true}",
   },
   "POST /proposals/:id/reject": {
     chain: [{ name: "reject", file: "routers/proposals.ts" }],

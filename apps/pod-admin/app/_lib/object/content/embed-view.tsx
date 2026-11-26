@@ -491,6 +491,9 @@ function CellFrameBody({
           html={read.html}
           workspaceId={read.workspaceId}
           title={words.label}
+          surface={
+            model.cellKey ? { kind: "cell", typeKey: model.cellKey } : null
+          }
           refusedAction={
             <CellDoor model={model} words={words} inline={false} />
           }
