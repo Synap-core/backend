@@ -1022,11 +1022,12 @@
       "create_view",
       "create_document",
       "create_cell",
-      "promote_cell_to_renderer"
+      "promote_cell_to_renderer",
+      "inspect_surface"
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Surfaces: one way to make UI on any pod object. Find what it carries, pick the body (View, Document, Bento, HTML artifact, Whiteboard, renderer binding, attached surface, new Cell), create it anchored, hand it over.",
+    "summary": "Surfaces: one way to make UI on any pod object. Find what it carries, pick the body (View, Document, Bento, HTML artifact, Whiteboard, renderer binding, attached surface, new Cell), create it anchored, inspect it, hand it over.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -1039,11 +1040,12 @@
       "list_views",
       "list_cells",
       "create_surface",
-      "attach_surface"
+      "attach_surface",
+      "inspect_surface"
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "The surface model (bodies, blocks, renders vs attached) and the path: find, choose, create anchored, check, hand over.",
+    "summary": "The surface model (bodies, blocks, renders vs attached) and the path: find, choose, create anchored, inspect, hand over.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
@@ -1086,11 +1088,12 @@
       "list_views",
       "list_cells",
       "create_cell",
-      "create_document"
+      "create_document",
+      "inspect_surface"
     ],
     "skillGroup": "build",
     "alwaysOn": false,
-    "summary": "Practices: find before create, name the body, anchor, declared reads, proposals, check before handing over, words.",
+    "summary": "Practices: find before create, name the body, anchor, declared reads, proposals, inspect before handing over, words.",
     "delivery": {
       "autoSeed": true,
       "cliBundle": true,
