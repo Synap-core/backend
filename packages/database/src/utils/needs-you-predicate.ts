@@ -19,6 +19,14 @@
  *   - an agent-attributed event on the session (`events.agent_user_id`), which
  *     is where an agent's `slot_asked` lands when it asks without posting.
  *
+ * Reading MANY sessions: pass {@link sessionAgentEventClocks}. `events` is a
+ * compressed hypertable that is not segmented by session, so the correlated
+ * `events` terms below decompress every chunk once PER SESSION (measured on
+ * the founder's pod, 2026-11-26: 2.7 ms × 100 sessions per term, ~555 ms of
+ * a 594 ms owed read). The clocks read the same two maxima in ONE grouped
+ * pass for the whole page (~40 ms) and slot in for exactly those terms; the
+ * rest of each formula is unchanged, and the parity test runs both.
+ *
  * Two choices keep the twins EXACT (see the rule's header): `owedSince` is
  * compared as text, `COLLATE "C"`, only in the canonical `toISOString()` form
  * (no cast that a malformed stamp could make throw), and JSON fields are read
@@ -59,18 +67,85 @@ function at(ms: number): SQL {
 }
 
 /**
+ * The two `events` terms of the agent evidence, read for a PAGE of sessions
+ * in one grouped pass and LEFT JOINed onto it (`.leftJoin(c.table, c.on)`):
+ * `write` is the newest agent event on the session, `work` the newest one
+ * that is not the asking itself. Each is NULL when the session has none,
+ * exactly as the correlated `max()` it replaces. Pass the clocks to the
+ * fragments below (`sessionLastAgentActivitySql(s, clocks)`, …) of a query
+ * that joins them; never to one that does not.
+ */
+export interface SessionAgentEventClocks {
+  /** The grouped read, aliased `ny_ev`: one row per session with agent events. */
+  table: SQL;
+  /** The join condition onto the session alias. */
+  on: SQL;
+  /** SQL timestamptz: the newest agent event on the session, or NULL. */
+  write: SQL;
+  /** SQL timestamptz: the newest agent event that is not asking, or NULL. */
+  work: SQL;
+}
+
+/**
+ * {@link SessionAgentEventClocks} for the sessions aliased `s` whose ids are
+ * `sessionIds`: a list, or a query selecting them (its SQL, e.g. a select
+ * builder's `.getSQL()`: it is rendered inside `IN (...)`). Name the page's
+ * candidates, not every session: the pass groups only those.
+ */
+export function sessionAgentEventClocks(
+  s: string,
+  sessionIds: readonly string[] | SQL
+): SessionAgentEventClocks {
+  const list = Array.isArray(sessionIds)
+    ? (sessionIds as readonly string[])
+    : null;
+  const ids = !list
+    ? (sessionIds as SQL)
+    : list.length > 0
+      ? drizzleSql.join(
+          list.map((id) => drizzleSql`${id}`),
+          drizzleSql`, `
+        )
+      : drizzleSql`NULL`;
+  return {
+    table: drizzleSql`(
+      SELECT ny_ev_e.session_id,
+             max(ny_ev_e.timestamp) AS write_at,
+             max(ny_ev_e.timestamp)
+               FILTER (WHERE ny_ev_e.type NOT IN (${ASKING_EVENTS})) AS work_at
+        FROM events ny_ev_e
+       WHERE ny_ev_e.agent_user_id IS NOT NULL
+         AND ny_ev_e.session_id IN (${ids})
+       GROUP BY ny_ev_e.session_id
+    ) ny_ev`,
+    on: drizzleSql`ny_ev.session_id = ${col(s, "id")}`,
+    write: drizzleSql.raw("ny_ev.write_at"),
+    work: drizzleSql.raw("ny_ev.work_at"),
+  };
+}
+
+/** The `events` evidence of a session: the joined clocks, else its own read. */
+type EventClocks = Pick<SessionAgentEventClocks, "write" | "work">;
+
+/**
  * SQL timestamptz: the newest WRITE an agent filed in the session aliased
  * `s` (a proposal, applied or pending, or an event: outputs included), or
  * NULL.
  */
-export function sessionLastAgentWriteSql(s: string): SQL {
+export function sessionLastAgentWriteSql(
+  s: string,
+  clocks?: EventClocks
+): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_p.created_at) FROM proposals ny_p
        WHERE ny_p.session_id = ${col(s, "id")}
          AND ny_p.agent_user_id IS NOT NULL),
-    (SELECT max(ny_e.timestamp) FROM events ny_e
+    ${
+      clocks?.write ??
+      drizzleSql`(SELECT max(ny_e.timestamp) FROM events ny_e
        WHERE ny_e.session_id = ${col(s, "id")}
-         AND ny_e.agent_user_id IS NOT NULL)
+         AND ny_e.agent_user_id IS NOT NULL)`
+    }
   )`;
 }
 
@@ -79,12 +154,15 @@ export function sessionLastAgentWriteSql(s: string): SQL {
  * — its writes ({@link sessionLastAgentWriteSql}) and its room messages — or
  * NULL.
  */
-export function sessionLastAgentMarkSql(s: string): SQL {
+export function sessionLastAgentMarkSql(
+  s: string,
+  clocks?: EventClocks
+): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_m.timestamp) FROM messages ny_m
        WHERE ny_m.channel_id = ${col(s, "channel_id")}
          AND ny_m.author_type = ${MessageAuthorType.AI_AGENT}),
-    ${sessionLastAgentWriteSql(s)}
+    ${sessionLastAgentWriteSql(s, clocks)}
   )`;
 }
 
@@ -93,9 +171,12 @@ export function sessionLastAgentMarkSql(s: string): SQL {
  * marks ({@link sessionLastAgentMarkSql}) and its turns — or NULL when there
  * is none (`GREATEST` skips NULLs).
  */
-export function sessionLastAgentActivitySql(s: string): SQL {
+export function sessionLastAgentActivitySql(
+  s: string,
+  clocks?: EventClocks
+): SQL {
   return drizzleSql`GREATEST(
-    ${sessionLastAgentMarkSql(s)},
+    ${sessionLastAgentMarkSql(s, clocks)},
     (SELECT max(ny_t.updated_at) FROM chat_turns ny_t
        WHERE ny_t.channel_id = ${col(s, "channel_id")})
   )`;
@@ -106,7 +187,10 @@ export function sessionLastAgentActivitySql(s: string): SQL {
  * `s` — {@link sessionLastAgentActivitySql} minus the asking itself (a
  * question post, a `slot_asked` event). Working's clock.
  */
-export function sessionLastAgentWorkSql(s: string): SQL {
+export function sessionLastAgentWorkSql(
+  s: string,
+  clocks?: EventClocks
+): SQL {
   return drizzleSql`GREATEST(
     (SELECT max(ny_wm.timestamp) FROM messages ny_wm
        WHERE ny_wm.channel_id = ${col(s, "channel_id")}
@@ -117,10 +201,13 @@ export function sessionLastAgentWorkSql(s: string): SQL {
     (SELECT max(ny_wp.created_at) FROM proposals ny_wp
        WHERE ny_wp.session_id = ${col(s, "id")}
          AND ny_wp.agent_user_id IS NOT NULL),
-    (SELECT max(ny_we.timestamp) FROM events ny_we
+    ${
+      clocks?.work ??
+      drizzleSql`(SELECT max(ny_we.timestamp) FROM events ny_we
        WHERE ny_we.session_id = ${col(s, "id")}
          AND ny_we.agent_user_id IS NOT NULL
-         AND ny_we.type NOT IN (${ASKING_EVENTS}))
+         AND ny_we.type NOT IN (${ASKING_EVENTS}))`
+    }
   )`;
 }
 
@@ -137,7 +224,11 @@ export function sessionTurnInFlightSql(s: string): SQL {
  * SQL text: `needsYouSessionClass` — `'stopped' | 'working' | 'live'` for the
  * session aliased `s`, at `now`. The agent evidence is measured ONCE.
  */
-export function needsYouSessionClassSql(s: string, now: Date): SQL {
+export function needsYouSessionClassSql(
+  s: string,
+  now: Date,
+  clocks?: EventClocks
+): SQL {
   const t = now.getTime();
   return drizzleSql`(SELECT CASE
       WHEN ${col(s, "status")} IN (${ENDED_STATUSES}) THEN 'stopped'
@@ -147,8 +238,8 @@ export function needsYouSessionClassSql(s: string, now: Date): SQL {
       WHEN ${sessionTurnInFlightSql(s)} THEN 'working'
       WHEN ny_la.work >= ${at(t - NEEDS_YOU_WORKING_WINDOW_MS)} THEN 'working'
       ELSE 'live'
-    END FROM (SELECT ${sessionLastAgentActivitySql(s)} AS at,
-                     ${sessionLastAgentWorkSql(s)} AS work) ny_la)`;
+    END FROM (SELECT ${sessionLastAgentActivitySql(s, clocks)} AS at,
+                     ${sessionLastAgentWorkSql(s, clocks)} AS work) ny_la)`;
 }
 
 /**
@@ -209,12 +300,14 @@ export function needsYouSlotClassSql(
    * in TypeScript (`foldPullRequestState`), so the caller supplies it; the
    * default is "none" (today's rule).
    */
-  blocksOpenPr: SQL = drizzleSql`false`
+  blocksOpenPr: SQL = drizzleSql`false`,
+  /** The page's joined event clocks ({@link sessionAgentEventClocks}). */
+  clocks?: EventClocks
 ): SQL {
   const cutoff = new Date(
     now.getTime() - NEEDS_YOU_REVIEW_LATER_AFTER_MS
   ).toISOString();
-  const session = needsYouSessionClassSql(s, now);
+  const session = needsYouSessionClassSql(s, now, clocks);
   return drizzleSql`(CASE
       WHEN NOT (${owedSlotPredicateIn(col(s, "expected_outputs"))}) THEN NULL
       WHEN ${plannedSessionSql(s)} THEN NULL

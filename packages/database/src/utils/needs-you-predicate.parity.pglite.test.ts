@@ -36,6 +36,7 @@ import { PgDialect } from "drizzle-orm/pg-core";
 import { sql as drizzleSql, type SQL } from "drizzle-orm";
 import {
   needsYouSlotClassSql,
+  sessionAgentEventClocks,
   sessionStoppedOnItsAsksWhere,
   SLOT_ENDS_WITH_SESSION_SQL,
 } from "./needs-you-predicate.js";
@@ -188,6 +189,43 @@ async function sqlClass(
     from focus_sessions fs, jsonb_array_elements(fs.expected_outputs) as slot
     where fs.id = ${id}::uuid`);
   return (rows[0]?.c as string | null) ?? null;
+}
+
+/**
+ * The class of every session of a PAGE in ONE query, its agent events read by
+ * the joined clocks (`sessionAgentEventClocks`, the many-session readers'
+ * form) instead of the per-session `events` reads. `ids` is the clocks'
+ * session source as the readers pass it: a list, or a query.
+ */
+async function sqlClassesOnePage(
+  page: ReadonlyArray<{ id: string; blocksOpenPr: boolean }>,
+  source: "list" | "query"
+): Promise<Map<string, string | null>> {
+  const list = (ids: readonly string[]) =>
+    drizzleSql.join(
+      ids.map((id) => drizzleSql`${id}::uuid`),
+      drizzleSql`, `
+    );
+  const ids = page.map((p) => p.id);
+  const blocking = page.filter((p) => p.blocksOpenPr).map((p) => p.id);
+  const clocks = sessionAgentEventClocks(
+    "fs",
+    source === "list" ? ids : drizzleSql`SELECT id FROM focus_sessions`
+  );
+  const blocks =
+    blocking.length > 0
+      ? drizzleSql`fs.id IN (${list(blocking)})`
+      : drizzleSql`false`;
+  const rows = await run(drizzleSql`
+    select fs.id::text as id,
+           ${needsYouSlotClassSql("fs", NOW, blocks, clocks)} as c
+    from focus_sessions fs
+    left join ${clocks.table} on ${clocks.on},
+    jsonb_array_elements(fs.expected_outputs) as slot
+    where fs.id in (${list(ids)})`);
+  return new Map(
+    rows.map((r) => [r.id as string, (r.c as string | null) ?? null])
+  );
 }
 
 const ASK: NeedsYouSlotFacts = {
@@ -619,6 +657,31 @@ describe("needsYouSlotClassSql === classifyOwedAsk", () => {
         rulesOut,
         cls: classifyOwedAsk(slot, factsOf(session), NOW),
       });
+    }
+  });
+
+  it("one page read (the joined event clocks) agrees on every row", async () => {
+    const page: Array<{
+      id: string;
+      blocksOpenPr: boolean;
+      rulesOut: string;
+      want: string | null;
+    }> = [];
+    for (const { rulesOut, session, slot } of ROWS) {
+      page.push({
+        id: await insertSession(session, [slot]),
+        blocksOpenPr: session.blocksOpenPr === true,
+        rulesOut,
+        want: classifyOwedAsk(slot, factsOf(session), NOW),
+      });
+    }
+    for (const source of ["list", "query"] as const) {
+      const got = await sqlClassesOnePage(page, source);
+      expect(
+        page.map((p) => ({ source, rulesOut: p.rulesOut, cls: got.get(p.id) }))
+      ).toEqual(
+        page.map((p) => ({ source, rulesOut: p.rulesOut, cls: p.want }))
+      );
     }
   });
 
