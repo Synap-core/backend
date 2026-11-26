@@ -64,6 +64,7 @@ import {
   OWED_SLOT_CLAUSES,
   owedSlotPredicateIn,
   owedSlotWhere,
+  sessionAgentEventClocks,
   sessionLastAgentActivitySql,
   sessionLastAgentWorkSql,
   sessionTurnInFlightSql,
@@ -640,7 +641,21 @@ export async function listOwedSlots(
     );
   }
 
-  const rows = await db
+  // The needs-you lens reads each session's agent evidence. Its `events`
+  // terms come from ONE grouped pass over the page's candidates (the same
+  // conditions), joined in: read per session, they decompressed the events
+  // hypertable once each (`sessionAgentEventClocks`).
+  const clocks = params.needsYouLens
+    ? sessionAgentEventClocks(
+        "focus_sessions",
+        db
+          .select({ id: focusSessions.id })
+          .from(focusSessions)
+          .where(and(...conditions))
+          .getSQL()
+      )
+    : undefined;
+  const page = db
     .select({
       id: focusSessions.id,
       title: focusSessions.title,
@@ -657,14 +672,16 @@ export async function listOwedSlots(
             turnInFlight: drizzleSql<boolean>`${sessionTurnInFlightSql("focus_sessions")}`,
             lastAgentActivityAt: drizzleSql<
               Date | string | null
-            >`${sessionLastAgentActivitySql("focus_sessions")}`,
+            >`${sessionLastAgentActivitySql("focus_sessions", clocks)}`,
             lastAgentWorkAt: drizzleSql<
               Date | string | null
-            >`${sessionLastAgentWorkSql("focus_sessions")}`,
+            >`${sessionLastAgentWorkSql("focus_sessions", clocks)}`,
           }
         : {}),
     })
     .from(focusSessions)
+    .$dynamic();
+  const rows = await (clocks ? page.leftJoin(clocks.table, clocks.on) : page)
     .where(and(...conditions))
     // Oldest owed slot first, computed from the same predicate the WHERE uses.
     // Rows are capped at `limit` because a session yields at least one slot, so
