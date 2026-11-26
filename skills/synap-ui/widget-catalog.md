@@ -1,17 +1,17 @@
-# Widget catalog — reference
+# Cell catalog — reference
 
-Widgets (cells) are the universal rendering unit. A bento is composed of cells. Views embed cells. Documents embed cells.
+Cells are the universal rendering unit. A bento is composed of cells. Views embed cells. Documents embed cells.
 
-**Never guess a widget key.** Call `synap_list_widgets` (or `GET /api/hub/widget-definitions?workspaceId={workspaceId}`) first. That list IS the catalog: every built-in the pod knows (stat-card, entity-list, chart-*, view, …) plus the `cell:<pkg>:<key>` and `generated:<slug>` cells installed on the pod. Each entry carries its `requiredConfig`, `propsSchema`, `aiHint` and default size. A key it does not list is refused on arrange.
+**Never guess a cell key.** Call `synap_list_cells` (or `GET /api/hub/widget-definitions?workspaceId={workspaceId}`) first. That list IS the catalog: every built-in the pod knows (stat-card, entity-list, chart-*, view, …) plus the `cell:<pkg>:<key>` and `generated:<slug>` cells installed on the pod. Each entry carries its `requiredConfig`, `propsSchema`, `aiHint` and default size. A key it does not list is refused on arrange.
 
-- `synap_list_widgets` (default `surface: "bento"`) — what you may place in a dashboard.
-- `synap_list_widgets({ surface: "document" })` — what you may embed in a document, with an `exampleDirective` for each.
+- `synap_list_cells` (default `placement: "bento"`) — what you may place in a dashboard.
+- `synap_list_cells({ placement: "document" })` — what you may embed in a document, with an `exampleDirective` for each.
 
-This file explains HOW widgets are referenced. It deliberately does not list the keys: the list above is generated from the catalog, and a copy here would drift.
+This file explains HOW cells are referenced. It deliberately does not list the keys: the list above is generated from the catalog, and a copy here would drift.
 
-## How widget references work in bentos
+## How cell references work in bentos
 
-You place widgets with `POST /api/hub/views/{bentoViewId}/arrange` (IS: `arrange_workspace`) as `{ key, config, x, y, w, h }`. The pod stores each as a bento block:
+You place cells with `POST /api/hub/views/{bentoViewId}/arrange` (IS: `arrange_workspace`) as `{ key, config, x, y, w, h }`. The pod stores each as a bento block:
 
 ```json
 {
@@ -43,7 +43,7 @@ The bento grid is 12 columns. Each list entry carries a `defaultSize`; start fro
 
 ## Common mistakes
 
-1. **Placing a key that is not in `synap_list_widgets`.** Arrange refuses it. Always fetch the list first.
+1. **Placing a key that is not in `synap_list_cells`.** Arrange refuses it. Always fetch the list first.
 2. **Leaving a `requiredConfig` key empty.** Arrange refuses it and names the missing key.
-3. **Using a widget that depends on a missing profile.** `entity-gallery` with `profileSlug: "podcast"` when `podcast` doesn't exist shows an empty state. Verify with `synap_list_profiles` first.
+3. **Using a cell that depends on a missing profile.** `entity-gallery` with `profileSlug: "podcast"` when `podcast` doesn't exist shows an empty state. Verify with `synap_list_profiles` first.
 4. **Overlapping layout rectangles.** The grid resolves it by shifting blocks, but the output won't match your intent. Check `x + w <= 12` and that no two blocks share cells.

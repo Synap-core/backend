@@ -25,6 +25,12 @@
  * user-floored, the sync peers and the glance band read admin-only
  * procedures, and rows whose page a member cannot open are dropped.
  *
+ *   5. Member cards  — a member's own access, what their AIs made for them
+ *                      and the receipts of what their AIs did
+ *                      (`_lib/member-cards.tsx`, plan W4). Never sessions,
+ *                      goals or work status: those stay in the apps. An
+ *                      admin sees them through "Preview member menu".
+ *
  * Every band owns its queries and its loading/error state: one failing read
  * must never blank the page. Every number shown is one a procedure actually
  * returns — a card that advertises a number nobody computes teaches the
@@ -85,6 +91,7 @@ import { useNeedsYouCount } from "../components/side-nav-badges";
 import { useConsoleRole } from "../components/side-nav-role";
 import { useAllTools } from "../components/all-tools";
 import { en, fr } from "./_lib/copy";
+import { MemberHomeCards } from "./_lib/member-cards";
 import { MorningBriefCard } from "./_lib/morning-brief";
 import { RequestsCardView, requestsCount } from "./_lib/requests-card";
 import { StatusPill, type StatusKind } from "../components/status-pill";
@@ -127,6 +134,8 @@ export default function HomePage() {
       </div>
 
       <NeedsYouBand isAdmin={isAdmin} />
+
+      {!isAdmin && <MemberHomeCards />}
 
       {isAdmin && allTools && (
         <div className="mt-4">

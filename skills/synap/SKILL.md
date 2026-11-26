@@ -75,14 +75,14 @@ The ONE glossary; other skills point here. Word = what the user sees; internal =
 | **Automation**      | automation              | what runs by itself, when?            | standing · "every Monday…" · not a Rule, not Approvals                                                                                                                                               |
 | **Approvals**       | governance rules        | which AI writes wait for me?          | decides review vs auto, does no work                                                                                                                                                                 |
 | **Tools**           | capability, skill, tool | what can it act with?                 | one word; the detail shows the kind                                                                                                                                                                  |
-| **Card**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · agents call it a **Cell** (decision of 23 Nov 2026): placed in a bento, a document or a board · "card" is also a renderer slot · never Widget or Interface   |
-| **Display**         | renderer                | how does this kind look?              | a card bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                     |
-| **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Card                                                                                                                                        |
+| **Cell**            | cell                    | what block did I make?                | the made UI block · "a deals summary" · one word for users and agents (23 Nov 2026) · in a bento, a document or a board · "card" is only a renderer slot · never Widget                              |
+| **Display**         | renderer                | how does this kind look?              | a cell bound to a kind's slot · "Change display" · Renderer stays an engine word                                                                                                                     |
+| **View**            | view                    | how do I look at the data?            | a saved arrangement of things · a table, a board · not a Cell                                                                                                                                        |
 | **App**             | built-in surface        | what do I open in Synap?              | CRM, Calendar, a space's own front end · never a space, never outside software                                                                                                                       |
 | **Connected app**   | application             | which outside software holds a grant? | reaches the pod with a grant · not an App                                                                                                                                                            |
 | **Account**         | provider connection     | which of my accounts is linked?       | a person's link to an outside service · never Connection, Connector or Integration                                                                                                                   |
 | **Kind**            | profile                 | what shape does a thing have?         | its fields and status list · never Data type, Schema or Profile                                                                                                                                      |
-| **Make**            | destination             | where do I make things?               | a view, a card, a space, an automation · pairs with Work                                                                                                                                             |
+| **Make**            | destination             | where do I make things?               | a view, a cell, a space, an automation · pairs with Work                                                                                                                                             |
 | **Get more**        | destination             | where do I add more?                  | the store · never Marketplace or Get more tools                                                                                                                                                      |
 | **To review**       | proposal                | what awaits my approval?              | `proposed` is success                                                                                                                                                                                |
 | **Role**            | role profile + facet    | which hat does it wear?               | one role per name, pod-wide; spaces add properties by overlay; its entities show in all · client · never a twin                                                                                      |
@@ -686,7 +686,7 @@ that workspace's overlays. Do not rely on a static property list — it will dri
 | `synap:linking`           | Custom relation types, auto-sync edge cases            |
 | `synap-ui:SKILL`          | Building views, bento dashboards, workspaces           |
 | `synap-ui:view-types`     | Specific view type config shapes                       |
-| `synap-ui:widget-catalog` | Available widget kinds and their configSchema          |
+| `synap-ui:widget-catalog` | Available cell kinds and their configSchema            |
 | `synap-schema:SKILL`      | Creating custom profiles or property definitions       |
 
 ---
@@ -1471,7 +1471,7 @@ PATCH /api/hub/documents/doc_abc
 // → a pending proposal; readers see the new HTML only once it is approved
 ```
 
-`html-doc` is **not** an agent-placeable bento widget: `arrange` rejects it. The
+`html-doc` is **not** an agent-placeable bento cell: `arrange` rejects it. The
 document renders where it is opened (the Files app, or the entity it is attached
 to). For HTML you want to embed elsewhere, create an HTML cell instance
 (`POST /api/hub/cell-instances/html`) and embed it by `instanceId`.
@@ -1765,7 +1765,7 @@ Rules for a snapshot:
   beside it.
 - **Keep the query keys** (`profileSlug`, `groupBy`, `aggregation`, …) next to
   `data`, so "Make live" reads the same thing.
-- **`data` has the chart's shape**, which `synap_list_widgets` (surface
+- **`data` has the chart's shape**, which `synap_list_cells` (placement
   `document`) shows per chart in its example:
   - line / area / profit-loss: `[{"x":"2026-09-01","y":4}]` (x = an ISO date or a number)
   - bar / pie / funnel / radar: `[{"label":"Done","value":12}]`
@@ -1784,7 +1784,7 @@ Rules for a snapshot:
 A content LANGUAGE is a fenced block whose source IS the content: ` ```mermaid `
 for a diagram, ` ```math ` for a display equation (LaTeX), any other language
 for code. It has no props and no fallback, and relay and exports show its
-source. `synap_list_widgets` (surface `document`) returns these as `fences`,
+source. `synap_list_cells` (placement `document`) returns these as `fences`,
 each with its `aiHint`: read them there rather than from memory. There is no
 ` ```chart ` fence (a chart is a `synap-cell`), and inline `$…$` math is off.
 
@@ -1935,7 +1935,7 @@ When the task is a unit of work with a deliverable — research, a build, an inv
 
 ### 2. Show it in the right body — don't dump data into chat
 
-When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_widgets` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
+When you have something to _show_ the user, put it in the body that fits instead of pasting rows into the message: a list of records is a **View** (`synap_create_view`), a summary to read is a **Document** (`synap_create_document`), a cockpit to watch is a **Bento** (`synap_create_view` type `bento`, with the cells `synap_list_cells` lists), a comparison or page to send outside the pod is an **HTML artifact** (`synap_create_document` type `html`). Say which body and why in one line. Generate a **cell** with `create_cell` only when the catalog lacks the visual unit.
 
 - **When you generate a cell, declare the data intent in `rendererSource`; do NOT pre-fetch.** Cells use a dynamic data-binding SDK: you describe what the cell needs (e.g. "the open leads in this workspace"), and the runtime binds the live data at render time. Never fetch rows yourself and inline them — that snapshot goes stale and defeats the cell.
 - Keep one cell to one job. A good, focused cell is the raw material for the next move.
@@ -2478,7 +2478,7 @@ Note: all hub-protocol writes are governance-gated server-side — a start may c
 - **Changing it.** Send a new `ask` to re-ask; `ask: null` clears it (an ask on a slot you own is dropped). An answer given against the old one is refused `ask_changed:` (409) and the person is shown the current ask; `ask_invalid:` means the answer did not fit it. Re-blocking a slot clears its previous answer.
 - **"Ask about it".** The person can open a thread about a slot in the session room; you get a turn with the slot, its `why` and ask in context (marked CHANGED if the ask moved since they opened it). Explain what you need and what each answer leads to, fix the ask if it was wrong, and never answer for them — their follow-ups in that thread never hand the slot back.
 
-**Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
+**Discoverability**: the `active-sessions` bento cell is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
 
 ---
 
@@ -2928,7 +2928,7 @@ ViewFrame is the standard way to create custom data visualizations in Synap. Use
 
 | Situation                                                                                                                    | Action                        |
 | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
-| An existing cell or view type covers the need: check `synap_list_widgets` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
+| An existing cell or view type covers the need: check `synap_list_cells` first (a funnel and most charts are catalog cells) | Use the existing cell or view |
 | The catalog lacks the visual unit (a 3D scene, a bespoke map or layout, a chart it does not list)                            | Generate a ViewFrame cell     |
 
 A report, a summary or a page to share is not a cell: write it as a Document, then generate its HTML artifact from it (`synap_create_document` type `html`).
@@ -2962,7 +2962,7 @@ A ViewFrame cell is **one self-contained ES module** (inline in `rendererSource`
 
 ### Define a cell: the one recipe
 
-1. **Check what exists**: `synap_list_widgets` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
+1. **Check what exists**: `synap_list_cells` (REST `GET /api/hub/widget-definitions`). Define only what is genuinely new; a cell definition is permanent.
 2. **Write the source** as an **ES module** that default-exports a React component (drawn in the frame, with the host's React and `@synap/kit`), or as an **HTML page** (a source that opens with `<`: drawn as a page, inline script only, no `import`). You do not pick the mechanism: the pod reads it from the source.
 3. **Define it with `synap_create_cell`** `{ name, rendererSource, description?, workspaceId?, contentKind?, viewTypes?, placeOn? }`: the agent door. A client without MCP calls the same door over REST, `POST /api/hub/cells/define` (below); both run one write path.
 4. **Show it**: `placeOn: { viewId }` adds it to a bento in the same call, or `synap_promote_cell_to_renderer` binds it as a renderer. Until it is placed or bound it shows nowhere. One tool binds every target:
@@ -3051,7 +3051,7 @@ synap cell define \
 synap doc create --title "Q2 Report" --file ./report.md
 synap doc update <docId> --file ./updated-report.md
 
-# Arrange widgets on an existing bento view
+# Arrange cells on an existing bento view
 echo '[{"key":"generated:my-chart","x":0,"y":0,"w":8,"h":6}]' | synap view arrange <viewId>
 ```
 
@@ -3237,7 +3237,7 @@ The host hands every frame these modules from its own bundle, with no network:
 
 A charting, map or 3D library is not provided. Draw with plain SVG or canvas in the cell's own source, or bundle the library at build time with `synap cell build --bundle-deps`. Never name `recharts`, `d3` or any other package in `deps`.
 
-### Minimal Widget Template
+### Minimal Cell Template
 
 ```html
 <!DOCTYPE html>
@@ -3360,7 +3360,7 @@ describing it:
 - They ask about an entity / view / channel and you found it → `focus_surface` to
   open it. `kind` = `entity | view | channel | cell | app`; `placement` = `main`
   to focus it, `side` to keep the conversation in view.
-- You created a view or generated a widget → open the result, don't hand back a
+- You created a view or generated a cell → open the result, don't hand back a
   paragraph about it.
 - You proposed a graph of changes (a PR) → lay them out with
   `place_on_whiteboard` so the review is spatial.

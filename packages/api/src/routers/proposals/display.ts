@@ -2871,7 +2871,7 @@ function buildConfigReviewItems(
           typeof op.config?.profileSlug === "string"
             ? op.config.profileSlug
             : undefined;
-        const widgets =
+        const cells =
           op.viewType === "bento" && Array.isArray(op.config?.blocks)
             ? (op.config.blocks as Array<Record<string, unknown>>).flatMap(
                 (block) =>
@@ -2891,7 +2891,8 @@ function buildConfigReviewItems(
           memberCount: op.entityRefs?.length ?? 0,
           ...(op.containerRef ? { containerRef: op.containerRef } : {}),
           ...(lifecycleOf ? { lifecycleOf } : {}),
-          ...(widgets ? { widgets } : {}),
+          // `widgets` is the old name of `cells`, kept one release.
+          ...(cells ? { cells, widgets: cells } : {}),
         });
         return;
       }

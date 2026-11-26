@@ -4,7 +4,8 @@
  * per run, so the first run is one import proposal), the tombstones (a record
  * the source stopped emitting goes `gone`, kept), and the refresh plan (a
  * second run of the same bundle changes nothing; review state from
- * source-hash vs reviewed-hash; a person's `deprecated` is never moved).
+ * source-hash vs reviewed-hash; a person's `deprecated` is never moved; the
+ * compare holds when jsonb hands the stored keys back in its own order).
  */
 import { describe, expect, it, vi } from "vitest";
 
@@ -96,6 +97,18 @@ function bundle(): StorybookBundle {
   };
 }
 
+/** Object keys in Postgres jsonb's output order (shorter first, then bytewise), at every depth. */
+function jsonbOrder(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(jsonbOrder);
+  if (value === null || typeof value !== "object") return value;
+  const keys = Object.keys(value).sort((a, b) =>
+    a.length !== b.length ? a.length - b.length : a < b ? -1 : a > b ? 1 : 0
+  );
+  return Object.fromEntries(
+    keys.map((k) => [k, jsonbOrder((value as Record<string, unknown>)[k])])
+  );
+}
+
 const graphOf = (
   b: StorybookBundle,
   input = { bundleFileId: "f", appId: APP }
@@ -162,6 +175,18 @@ describe("mapStorybookItems", () => {
     } as never).graph.entities.find((e) => e.profileSlug === "ui-page")!;
     expect(reordered.identity.externalId).toBe(HOME);
     expect(reordered.properties["story-id"]).toBe("pages-desktop-home--empty");
+  });
+
+  it("writes a page's source file as its source-path, and nothing when the bundle does not know it", () => {
+    expect(
+      graphOf(bundle()).graph.entities.find((e) => e.ref === HOME)!.properties
+    ).not.toHaveProperty("source-path");
+    const b = bundle();
+    b.pages[0]!.sourcePath = "packages/web/src/pages/home.tsx";
+    const page = graphOf(b).graph.entities.find((e) => e.ref === HOME)!;
+    expect(page.properties["source-path"]).toBe(
+      "packages/web/src/pages/home.tsx"
+    );
   });
 
   it("sets the initial status from the inventory verdict and never writes a review or a brand", () => {
@@ -260,6 +285,49 @@ describe("planRefresh", () => {
     expect(planRefresh(incoming(), current())).toEqual({
       patch: {},
       moveTo: null,
+    });
+  });
+
+  it("writes nothing when the stored props come back from jsonb with their keys reordered", () => {
+    const b = bundle();
+    b.components[0]!.props = [
+      {
+        name: "variant",
+        type: '"primary" | "ghost"',
+        required: false,
+        defaultValue: '"primary"',
+        values: ["primary", "ghost"],
+        description: "How loud the button is.",
+      },
+    ];
+    const fresh = incoming(b);
+    // What Postgres hands back for the stored record: jsonb orders an object's
+    // keys by length, then bytewise.
+    const stored = jsonbOrder(fresh.properties) as Record<string, unknown>;
+    expect(JSON.stringify(stored["props-summary"])).not.toBe(
+      JSON.stringify(fresh.properties["props-summary"])
+    );
+    expect(
+      planRefresh(fresh, { properties: stored, status: "stable" })
+    ).toEqual({ patch: {}, moveTo: null });
+    // A real change to a prop is still written.
+    b.components[0]!.props![0]!.required = true;
+    expect(
+      Object.keys(
+        planRefresh(incoming(b), { properties: stored, status: "stable" }).patch
+      )
+    ).toEqual(["props-summary"]);
+  });
+
+  it("refreshes a page's source-path when its file moved", () => {
+    const b = bundle();
+    b.pages[0]!.sourcePath = "packages/web/src/pages/home.tsx";
+    const page = () => graphOf(b).graph.entities.find((e) => e.ref === HOME)!;
+    const before = { properties: { ...page().properties }, status: "stable" };
+    expect(planRefresh(page(), before)).toEqual({ patch: {}, moveTo: null });
+    b.pages[0]!.sourcePath = "packages/web/src/home/page.tsx";
+    expect(planRefresh(page(), before).patch).toEqual({
+      "source-path": "packages/web/src/home/page.tsx",
     });
   });
 

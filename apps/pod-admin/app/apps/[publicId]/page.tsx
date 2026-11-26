@@ -14,10 +14,12 @@
  * (`/api/apps?publicId=…` → `apps.get`), which is self-scoped server-side, so a
  * public id that is not the caller's returns 404 rather than someone else's app.
  *
- * A POD APP (spec 17 PB4 — it connected at the pod's sign-in door) is shown by
- * its domain and tier, and its page holds the connection's two settings: what
- * it may touch, per space, where the person can take a permission or a whole
- * space away (narrow: `PATCH /api/apps` → `apps.narrow`, no new consent), and
+ * A POD APP (spec 17 PB4 — it connected at the pod's sign-in door) is named as
+ * the consent names it (a Synap app by its name, any other app by its
+ * domain), and its page holds the connection's two settings: what it may do
+ * and where (design A's three lines over `apps.accessOffer`, saved through
+ * `apps.updateAccess` with proof of presence and an Undo receipt; it may
+ * narrow, widen within its ask, and hold projects), and
  * "Apply automatically" (`apps.setWriteMode`, off until the person turns it on
  * here — never at consent; turning it on is confirmed, `writeModeConfirm`).
  * A pod app's page carries none of App Connect's developer detail (the id to
@@ -37,7 +39,7 @@ import {
   Switch,
   addToast,
 } from "@heroui/react";
-import { ArrowLeft, Ban, Minus, Trash2 } from "lucide-react";
+import { ArrowLeft, Ban, Trash2 } from "lucide-react";
 import { ConfirmModal } from "../../(admin)/components/confirm-modal";
 import { CopyButton } from "../../_lib/copy-button";
 import { HostName } from "../../_lib/host-name";
@@ -54,17 +56,13 @@ import {
 import { summarizeAppConnectRequest } from "@synap-core/types/proposals/intent";
 import { resolveObjectNoun } from "@synap-core/types/vocabulary";
 import {
-  approvalBySpace,
-  EVERYWHERE_IN_POD,
-  keepWithout,
-  placePhrase,
-  POD_WIDE_HEADING,
   podAppOf,
   podAppRevokeNote,
   tierLabel,
   writeModeConfirm,
   type PodAppInfo,
 } from "../_lib/pod-app-view";
+import { AppAccessSection } from "../_lib/app-access-section";
 
 type LoadState = "loading" | "ready" | "missing" | "error";
 
@@ -268,17 +266,26 @@ function AppDetail({
     <div className="mt-6">
       <PageHeader
         title={
-          pod ? (
-            // A pod app is its DOMAIN; the name is only what it calls itself.
+          // The consent's naming rule: a Synap app goes by its name; any
+          // other app by its DOMAIN (its name is only what it calls itself).
+          pod && !pod.verified ? (
             <HostName host={pod.domain} />
           ) : (
             <span className="break-words">{app.name}</span>
           )
         }
         description={
-          pod
-            ? `Calls itself \u201c${app.name}\u201d · ${tierLabel(pod.verified)}`
-            : app.description
+          pod ? (
+            pod.verified ? (
+              <>
+                <HostName host={pod.domain} /> · {tierLabel(true)}
+              </>
+            ) : (
+              `Calls itself \u201c${app.name}\u201d · ${tierLabel(false)}`
+            )
+          ) : (
+            app.description
+          )
         }
         actions={
           <Chip
@@ -441,40 +448,10 @@ function AppDetail({
   );
 }
 
-/** What `PATCH /api/apps` answers when it refuses. */
-async function patchApp(
-  body: Record<string, unknown>
-): Promise<{ ok: true; data: unknown } | { ok: false; error: string }> {
-  try {
-    const res = await fetch("/api/apps", {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const data = (await res.json().catch(() => null)) as {
-      error?: string;
-    } | null;
-    if (!res.ok) {
-      return { ok: false, error: data?.error ?? `Failed (${res.status}).` };
-    }
-    return { ok: true, data };
-  } catch {
-    return { ok: false, error: "Network error." };
-  }
-}
-
-/** A pair (or a whole space) the person is about to take away. */
-interface PendingDrop {
-  permission?: string;
-  /** null: the reads it was given everywhere in the pod. */
-  workspaceId: string | null;
-  /** "Create posts in Brand" / "everything in Brand". */
-  what: string;
-}
-
 /**
- * A pod app's two settings: what it may touch per space (each can be taken
- * away; the last one is Revoke's) and how its changes land.
+ * A pod app's two settings: what it may do and where (the design A lines,
+ * `apps.accessOffer` + `apps.updateAccess`: narrow, widen within its ask,
+ * projects, with an Undo receipt) and how its changes land.
  */
 function PodAppSettings({
   app,
@@ -485,8 +462,6 @@ function PodAppSettings({
   pod: PodAppInfo;
   onChanged: () => void;
 }) {
-  const [drop, setDrop] = useState<PendingDrop | null>(null);
-  const [narrowing, setNarrowing] = useState(false);
   const [mode, setMode] = useState(pod.write_mode);
   const [switching, setSwitching] = useState(false);
   // With the proof of presence (W3 slice 3): a sensitive action, so it goes
@@ -496,31 +471,6 @@ function PodAppSettings({
   const [confirmOn, setConfirmOn] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
   const onConfirm = writeModeConfirm(true, pod);
-  const spaces = approvalBySpace(pod.approved);
-  const keep = drop ? keepWithout(pod.approved, drop) : null;
-
-  async function confirmDrop() {
-    if (!keep) return;
-    setNarrowing(true);
-    const r = await patchApp({
-      publicId: app.public_id,
-      action: "narrow",
-      approved: keep,
-    });
-    setNarrowing(false);
-    setDrop(null);
-    if (!r.ok) {
-      addToast({
-        title: "Couldn't change its access",
-        description: r.error,
-        color: "danger",
-      });
-      return;
-    }
-    addToast({ title: "Access narrowed", color: "default" });
-    onChanged();
-  }
-
   async function switchMode(on: boolean) {
     setSwitching(true);
     try {
@@ -555,91 +505,13 @@ function PodAppSettings({
 
   return (
     <>
-      <section className="mt-6" aria-labelledby="pod-reach">
-        <h2 id="pod-reach" className="mb-2 text-sm font-medium text-foreground">
-          What it may touch
-        </h2>
-        <ul className="flex flex-col gap-3">
-          {spaces.map((space) => (
-            <li
-              key={space.workspaceId ?? "pod"}
-              className="rounded-lg border border-foreground/10 bg-content1 px-4 py-3"
-            >
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-medium text-foreground/85">
-                  {space.workspaceId === null
-                    ? POD_WIDE_HEADING
-                    : space.workspaceName}
-                </p>
-                {spaces.length > 1 ? (
-                  <Button
-                    size="sm"
-                    variant="light"
-                    className="min-h-10 text-foreground/70"
-                    onPress={() =>
-                      setDrop({
-                        workspaceId: space.workspaceId,
-                        what:
-                          space.workspaceId === null
-                            ? `everything it reads ${EVERYWHERE_IN_POD}`
-                            : `everything in ${space.workspaceName}`,
-                      })
-                    }
-                  >
-                    {space.workspaceId === null
-                      ? "Remove these reads"
-                      : "Remove this space"}
-                  </Button>
-                ) : null}
-              </div>
-              <ul className="mt-1 flex flex-col">
-                {space.permissions.map((p) => {
-                  const pair = {
-                    permission: p.permission,
-                    workspaceId: space.workspaceId,
-                  };
-                  const removable = keepWithout(pod.approved, pair) !== null;
-                  return (
-                    <li
-                      key={p.permission}
-                      className="flex min-h-10 items-center justify-between gap-3"
-                    >
-                      <span className="text-xs text-foreground/75">
-                        {p.label}{" "}
-                        <span className="font-mono text-xs text-foreground/65">
-                          {p.permission}
-                        </span>
-                      </span>
-                      {removable ? (
-                        <Button
-                          size="sm"
-                          variant="light"
-                          isIconOnly
-                          className="min-h-10 min-w-10"
-                          aria-label={`Remove ${p.label} ${placePhrase(space)}`}
-                          onPress={() =>
-                            setDrop({
-                              ...pair,
-                              what: `${p.label} ${placePhrase(space)}`,
-                            })
-                          }
-                        >
-                          <Minus size={15} />
-                        </Button>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-2 max-w-2xl text-pretty text-xs text-foreground/65">
-          Taking something away applies now, with no new consent: the app&apos;s
-          current access stops, and the next one it gets no longer includes it.
-          To remove everything, revoke it.
-        </p>
-      </section>
+      <AppAccessSection
+        pod={pod}
+        publicId={app.public_id}
+        // A Synap app by its name, any other app by its domain (as the consent).
+        appName={pod.verified ? app.name : pod.domain}
+        onChanged={onChanged}
+      />
 
       <section className="mt-6" aria-labelledby="pod-writes">
         <h2
@@ -664,21 +536,6 @@ function PodAppSettings({
           />
         </div>
       </section>
-
-      <ConfirmModal
-        isOpen={drop !== null}
-        onClose={() => setDrop(null)}
-        onConfirm={() => void confirmDrop()}
-        title={`Remove ${drop?.what ?? "this"}?`}
-        consequence={
-          <p>
-            {pod.domain} loses it now. Its current access stops; the next one it
-            gets carries only what is left.
-          </p>
-        }
-        confirmLabel="Remove"
-        isPending={narrowing}
-      />
 
       {onConfirm ? (
         <ConfirmModal

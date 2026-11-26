@@ -26,7 +26,7 @@ export function registerWidgetExecutors(): void {
       if (!typeKey || typeof typeKey !== "string" || typeKey.trim() === "") {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Widget proposal is missing typeKey",
+          message: "Cell type proposal is missing typeKey",
         });
       }
       // Refuse loudly rather than registering a widget that renders nothing.
@@ -37,7 +37,7 @@ export function registerWidgetExecutors(): void {
         throw new TRPCError({
           code: "BAD_REQUEST",
           message:
-            "Widget proposal carries no `rendererSource` — refusing to register a widget that cannot render. Re-file the proposal.",
+            "Cell type proposal carries no `rendererSource` — refusing to register a cell that cannot render. Re-file the proposal.",
         });
       }
 

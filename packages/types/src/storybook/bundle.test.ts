@@ -119,6 +119,19 @@ describe("parseStorybookBundle", () => {
     expect(read.value.flows[0]!.surface).toBe("both");
   });
 
+  it("keeps a page's repo-relative source path and refuses a machine one", () => {
+    const b = goodBundle();
+    pages(b)[0]!.sourcePath = "packages/web/src/pages/home.tsx";
+    const read = parseStorybookBundle(b);
+    expect(read.ok && read.value.pages[0]!.sourcePath).toBe(
+      "packages/web/src/pages/home.tsx"
+    );
+    pages(b)[0]!.sourcePath = "/Users/someone/app/packages/web/src/home.tsx";
+    expect(
+      parseStorybookBundle(b).problems.map((p) => [p.code, p.path])
+    ).toEqual([["absolute-path", "pages[0].sourcePath"]]);
+  });
+
   it("refuses a payload that is not a bundle", () => {
     expect(parseStorybookBundle(null)).toEqual({
       ok: false,

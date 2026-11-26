@@ -82,4 +82,4 @@ Note: all hub-protocol writes are governance-gated server-side — a start may c
 - **Changing it.** Send a new `ask` to re-ask; `ask: null` clears it (an ask on a slot you own is dropped). An answer given against the old one is refused `ask_changed:` (409) and the person is shown the current ask; `ask_invalid:` means the answer did not fit it. Re-blocking a slot clears its previous answer.
 - **"Ask about it".** The person can open a thread about a slot in the session room; you get a turn with the slot, its `why` and ask in context (marked CHANGED if the ask moved since they opened it). Explain what you need and what each answer leads to, fix the ask if it was wrong, and never answer for them — their follow-ups in that thread never hand the slot back.
 
-**Discoverability**: the `active-sessions` bento widget is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.
+**Discoverability**: the `active-sessions` bento cell is on the default home dashboard. Sessions group their related proposals under a shared `correlationId` in the Proposal Review Board.

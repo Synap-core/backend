@@ -154,6 +154,17 @@ export function useSetAppWriteMode(
   );
 }
 
+/** `apps.updateAccess` (W3d): a pod app's access, narrowed or widened within its ask. */
+export function useUpdateAppAccess(
+  defaults?: ActionHandlers<typeof trpc.apps.updateAccess.useMutation>
+) {
+  return useSensitiveAction(
+    "apps.updateAccess",
+    trpc.apps.updateAccess.useMutation(),
+    defaults
+  );
+}
+
 export function useSetMachineKeyTtl(
   defaults?: ActionHandlers<typeof trpc.machines.setKeyTtl.useMutation>
 ) {

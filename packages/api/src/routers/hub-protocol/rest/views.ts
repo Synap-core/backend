@@ -34,7 +34,7 @@ export function registerViewsRoutes(app: HubHono): void {
     tags: ["Views"],
     summary: "List views",
     description:
-      "Returns the user's views in a workspace, optionally filtered by view type or profile.",
+      "Returns the views the caller can see (not only their own: a co-worker's view in a shared space and a view exposed to one of their projects too), optionally narrowed by workspace, project, view type or profile.",
     request: {
       query: ListViewsQuerySchema,
     },
@@ -103,7 +103,7 @@ export function registerViewsRoutes(app: HubHono): void {
   });
 
   /**
-   * GET /views?userId=...&workspaceId=...&type=...&profileId=...
+   * GET /views?userId=...&workspaceId=...&projectId=...&type=...&profileId=...
    */
   app.get("/views", async (c) => {
     if (!hasScope(c.get("scopes") as string[], "hub-protocol.read")) {
@@ -132,6 +132,7 @@ export function registerViewsRoutes(app: HubHono): void {
         workspaceId: workspaceId ?? null,
         type: c.req.query("type"),
         profileId: c.req.query("profileId"),
+        projectId: c.req.query("projectId") || undefined,
       });
       return c.json(result);
     } catch (err) {
