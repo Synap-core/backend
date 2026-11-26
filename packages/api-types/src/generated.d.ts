@@ -9761,6 +9761,9 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  *   entity(knowledge)   --about-->             tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --documents-->         tool | skill (knowledge↔config bridge)
  *   entity(knowledge)   --concerns-->          playbook|... (knowledge↔config bridge)
+ *   entity|profile|workspace|project|track|playbook|session
+ *                       --attaches-->          view | document | cell_instance
+ *                                              (an ATTACHED surface, Surfaces P3)
  *
  * Design doc: team/platform/playbooks-capability-substrate.mdx
  */
@@ -9768,7 +9771,7 @@ export type CapabilityRow = typeof capabilities.$inferSelect;
  * The kind of object on either end of a link edge.
  * `participant` = a user-id OR agent-user-id (both live in the `users` table).
  */
-export type LinkEndpointType = "agent" | "automation" | "capability" | "channel" | "command" | "document" | "entity" | "participant" | "playbook" | "profile" | "project" | "secret" | "session" | "skill" | "source" | "tool" | "track" | "workspace";
+export type LinkEndpointType = "agent" | "automation" | "capability" | "cell_instance" | "channel" | "command" | "document" | "entity" | "participant" | "playbook" | "profile" | "project" | "secret" | "session" | "skill" | "source" | "tool" | "track" | "view" | "workspace";
 /** The relationship an edge expresses. */
 export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds" | "grants" | "instantiated_from" | "member_of" | "produced" | "promoted_to" | "provided_by" | "requires" | "targets" | "used"
 /**
@@ -9908,7 +9911,21 @@ export type LinkType = "about" | "activates" | "concerns" | "documents" | "feeds
  * (`loadAddOnParents` / `loadAddOnsOf`), the catalog card's base-tool fallback. The Hub
  * REST links door lists and refuses it: an install writes it, never a key.
  */
- | "extends";
+ | "extends"
+/**
+ * <anchor> --attaches--> view | document | cell_instance. An ATTACHED
+ * surface (Surfaces P3, founder decision 23 Nov 2026): 0..n extra screens on
+ * ONE object, beside its kind's look (`renders`, kind-level, in
+ * `renderer_bindings`) and its one body (`entities.document_id`). The anchor
+ * is any of entity · profile · workspace · project · track · playbook ·
+ * session; one surface may be attached to several objects. `metadata`:
+ * `{ position, slot?, label? }` (`@synap-core/types/surfaces`
+ * `AttachmentMeta`). ONE producer: `services/surfaces/attach.ts` (governed
+ * `surface/create` | `surface/attach` | `surface/detach`, both ends floored);
+ * ONE reader: `surfaces.forObject` (`services/surfaces/for-object.ts`). The
+ * Hub REST links door lists and refuses it: `POST /surfaces/attach` writes it.
+ */
+ | "attaches";
 /** Which "hands" ran this. Mirrors @synap/playbooks ExecutorRef. */
 export type PlaybookRunExecutorRef = "external-agent" | "generate" | "hybrid" | "is-agent";
 /** The normalized state of an external agent's task (the `status` verb). */
@@ -26200,6 +26217,23 @@ export interface SurfacesForObject {
 		error: string;
 		source: string;
 	}[];
+}
+declare const ATTACHABLE_SURFACE_TYPES: readonly [
+	"view",
+	"document",
+	"cell_instance"
+];
+export type AttachableSurfaceType = (typeof ATTACHABLE_SURFACE_TYPES)[number];
+export interface SurfaceRef {
+	type: AttachableSurfaceType;
+	id: string;
+}
+/** An agent's (or a ruled) write: filed for the person to approve. */
+export interface SurfaceWriteProposed {
+	status: "proposed";
+	proposalId: string;
+	reviewPath?: string;
+	reviewUrl?: string;
 }
 export interface PropertyDefDependents {
 	/** `entity_property_index` rows for this def. */
@@ -61119,6 +61153,73 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 			output: SurfaceContext;
 		}>;
 	}> & import("@trpc/server").TRPCDecorateCreateRouterOptions<{
+		attach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				label?: string | undefined;
+				position?: number | undefined;
+				reasoning?: string | undefined;
+				slot?: string | undefined;
+				surface: {
+					id: string;
+					type: "cell_instance" | "document" | "view";
+				};
+			};
+			meta: object;
+			output: {
+				linkId: string;
+				openUrl: string;
+				status: "attached" | "exists";
+			} | SurfaceWriteProposed;
+		}>;
+		create: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				body: "bento" | "cell" | "document" | "html" | "view" | "whiteboard";
+				label?: string | undefined;
+				reasoning?: string | undefined;
+				slot?: string | undefined;
+				spec?: {
+					cellKey?: string | undefined;
+					config?: Record<string, unknown> | undefined;
+					content?: string | undefined;
+					props?: Record<string, unknown> | undefined;
+					url?: string | undefined;
+					viewType?: string | undefined;
+					workspaceId?: string | undefined;
+				} | undefined;
+				title: string;
+			};
+			meta: object;
+			output: SurfaceWriteProposed | {
+				openUrl: string;
+				status: "created";
+				surface: SurfaceRef;
+			};
+		}>;
+		detach: import("@trpc/server").TRPCMutationProcedure<{
+			input: {
+				anchor: {
+					id: string;
+					kind: "entity" | "playbook" | "profile" | "project" | "session" | "track" | "workspace";
+				};
+				reasoning?: string | undefined;
+				surface: {
+					id: string;
+					type: "cell_instance" | "document" | "view";
+				};
+			};
+			meta: object;
+			output: SurfaceWriteProposed | {
+				status: "absent" | "detached";
+			};
+		}>;
 		forObject: import("@trpc/server").TRPCQueryProcedure<{
 			input: {
 				id: string;

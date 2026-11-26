@@ -657,7 +657,10 @@ export function registerEntityExecutors(): void {
       }
 
       const [row] = await db
-        .select({ systemData: entities.systemData })
+        .select({
+          systemData: entities.systemData,
+          workspaceId: entities.workspaceId,
+        })
         .from(entities)
         .where(and(eq(entities.id, entityId), isNull(entities.deletedAt)))
         .limit(1);
@@ -678,6 +681,19 @@ export function registerEntityExecutors(): void {
           updatedAt: new Date(),
         })
         .where(eq(entities.id, entityId));
+      // The look is the entity's `detail` attachment (Surfaces P3), written
+      // as the proposal's owner; the field above is its mirror.
+      const { replaceDetailCellLook } =
+        await import("../../../services/surfaces/attach.js");
+      await replaceDetailCellLook({
+        anchor: { kind: "entity", id: entityId },
+        cellKey: ref?.cellKey ?? null,
+        props: (ref as { props?: Record<string, unknown> } | null)?.props,
+        workspaceId: row.workspaceId,
+        ownerUserId: proposal.subjectUserId ?? userId,
+        agentUserId: proposal.agentUserId ?? null,
+        proposalId: input.proposalId,
+      });
 
       // The registry does not flip the row: without this an applied renderer
       // change stayed `pending` forever.

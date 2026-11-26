@@ -45,6 +45,7 @@ import { registerPlaybookExecutors } from "./executors/playbook.js";
 import { registerPlaybookStageGateExecutors } from "./executors/playbook-stage-gate.js";
 import { registerTrackExecutors } from "./executors/track.js";
 import { registerLinkExecutors } from "./executors/link.js";
+import { registerSurfaceExecutors } from "./executors/surface.js";
 import { registerProjectFilingExecutors } from "./executors/project-filing.js";
 import { registerLibraryExecutors } from "./executors/library.js";
 import { registerShareExecutors } from "../../services/sharing/share-executors.js";
@@ -100,6 +101,7 @@ export function registerApproveExecutors(): void {
   registerPlaybookStageGateExecutors();
   registerTrackExecutors();
   registerLinkExecutors();
+  registerSurfaceExecutors();
   registerProjectFilingExecutors();
   registerLibraryExecutors();
   // `share/create` (share + publish, Sites W2/W5a). Idempotent: `routers/shares.ts`

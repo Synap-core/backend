@@ -2481,6 +2481,60 @@ export interface HubSurfacesForObject {
   unavailable: { source: string; error: string }[];
 }
 
+/** What an attached surface is stored as (the `attaches` link's far end). */
+export interface HubSurfaceRef {
+  type: "view" | "document" | "cell_instance";
+  id: string;
+}
+
+/** A surface write an agent key files for review (HTTP 202). */
+export interface HubSurfaceProposed {
+  status: "proposed";
+  proposalId: string;
+  reviewPath?: string;
+  reviewUrl?: string;
+}
+
+/** POST /surfaces: make a surface FOR one object (the body and its link). */
+export interface HubCreateSurfaceInput {
+  anchor: { kind: HubSurfaceAnchorKind; id: string };
+  body: "view" | "bento" | "whiteboard" | "document" | "html" | "cell";
+  title: string;
+  spec?: {
+    viewType?: string;
+    config?: Record<string, unknown>;
+    content?: string;
+    url?: string;
+    cellKey?: string;
+    props?: Record<string, unknown>;
+    workspaceId?: string;
+  };
+  slot?: string;
+  label?: string;
+  reasoning?: string;
+}
+
+export type HubCreateSurfaceResult =
+  | { status: "created"; surface: HubSurfaceRef; openUrl: string }
+  | HubSurfaceProposed;
+
+/** POST /surfaces/attach: put an existing surface on one more object. */
+export interface HubAttachSurfaceInput {
+  anchor: { kind: HubSurfaceAnchorKind; id: string };
+  surface: HubSurfaceRef;
+  slot?: string;
+  label?: string;
+  position?: number;
+  reasoning?: string;
+}
+
+export type HubAttachSurfaceResult =
+  | { status: "attached" | "exists"; linkId: string; openUrl: string }
+  | HubSurfaceProposed;
+
+export type HubDetachSurfaceResult =
+  { status: "detached" | "absent" } | HubSurfaceProposed;
+
 /**
  * One row from GET /widget-definitions — the pod's ONE renderables door: the
  * built-in catalog (`source: "catalog"`, from `@synap-core/types/renderables`)

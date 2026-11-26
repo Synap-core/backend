@@ -182,6 +182,8 @@ export const TOOL_GROUPS = {
     "synap_create_view",
     "synap_list_views",
     "synap_find_surfaces",
+    "synap_create_surface",
+    "synap_attach_surface",
     "synap_update_view_content",
     "synap_update_view",
     "synap_set_start_page",
