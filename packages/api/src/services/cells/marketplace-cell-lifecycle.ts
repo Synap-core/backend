@@ -116,7 +116,7 @@ export async function retireCellType(
   const db = await getDb();
   const rows = await db
     .update(widgetDefinitions)
-    .set({ isActive: false, updatedAt: new Date() })
+    .set({ isActive: false, status: "retired", updatedAt: new Date() })
     .where(
       and(
         eq(widgetDefinitions.typeKey, typeKey),

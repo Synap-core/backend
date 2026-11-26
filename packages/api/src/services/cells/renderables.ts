@@ -22,6 +22,11 @@ import { getDb, and, eq, or, isNull } from "@synap/database";
 import { widgetDefinitions } from "@synap/database/schema";
 import { serializeEmbed } from "@synap-core/markdown-core/embeds";
 import {
+  readLegacyBlock,
+  type Block,
+  type CellBlock,
+} from "@synap-core/types/blocks";
+import {
   DEFAULT_FALLBACK_TEMPLATE,
   DEFAULT_INSTALLED_PLACEMENTS,
   FENCE_RENDERABLES,
@@ -230,8 +235,9 @@ export function placeableInstalledKeys(
 }
 
 /**
- * The arrange gate over a STORED bento config (`config.blocks`): every
- * `kind: "widget"` block's `widgetType` is checked by `renderableArrangeError`
+ * The arrange gate over a STORED bento config (`config.blocks`): every cell
+ * tile's key (`kind: "cell"` `cellKey`, legacy `kind: "widget"` `widgetType`,
+ * read through `readLegacyBlock`) is checked by `renderableArrangeError`
  * against this workspace's catalog, exactly as `/views/:id/arrange` checks a
  * widget. View and entity blocks carry no widget key and pass (their shape is
  * the view-config schema's job). One line per bad block, naming its index and
@@ -255,42 +261,41 @@ export async function bentoBlockArrangeErrors(
       typeof (s as { id?: unknown }).id === "string"
     ) {
       const b = s as Record<string, unknown>;
-      storedBlocks.set(b.id as string, widgetFingerprint(b));
+      storedBlocks.set(b.id as string, cellFingerprint(readLegacyBlock(b)));
     }
   }
-  const widgets = blocks
-    .map((block, index) => ({ block, index }))
+  // Every cell tile, whatever its spelling (legacy `widget`, canonical `cell`):
+  // a tile that dodged this gate by its spelling would be placed unchecked.
+  const cells = blocks
+    .map((raw, index) => ({ raw, index, block: readLegacyBlock(raw) }))
     .filter(
-      (b): b is { block: Record<string, unknown>; index: number } =>
-        !!b.block &&
-        typeof b.block === "object" &&
-        (b.block as Record<string, unknown>).kind === "widget"
+      (b): b is { raw: Record<string, unknown>; index: number; block: CellBlock } =>
+        b.block?.kind === "cell"
     )
     .filter(
-      ({ block }) =>
-        typeof block.id !== "string" ||
-        storedBlocks.get(block.id) !== widgetFingerprint(block)
+      ({ raw, block }) =>
+        typeof raw.id !== "string" ||
+        storedBlocks.get(raw.id) !== cellFingerprint(block)
     );
-  if (widgets.length === 0) return [];
+  if (cells.length === 0) return [];
   const installed = placeableInstalledKeys(await listRenderables(workspaceId));
   const errors: string[] = [];
-  for (const { block, index } of widgets) {
-    const key = typeof block.widgetType === "string" ? block.widgetType : "";
-    const config =
-      block.config && typeof block.config === "object"
-        ? (block.config as Record<string, unknown>)
-        : undefined;
-    const error = renderableArrangeError(key, config, installed);
+  for (const { raw, index, block } of cells) {
+    const error = renderableArrangeError(
+      block.cellKey ?? "",
+      block.props,
+      installed
+    );
     if (error) {
-      const id = typeof block.id === "string" ? ` "${block.id}"` : "";
+      const id = typeof raw.id === "string" ? ` "${raw.id}"` : "";
       errors.push(`blocks[${index}]${id}: ${error}`);
     }
   }
   return errors;
 }
 
-/** A widget block's identity for "unchanged": its key and its config, keys sorted. */
-function widgetFingerprint(block: Record<string, unknown>): string {
+/** A cell tile's identity for "unchanged": its key and its props, keys sorted (either spelling). */
+function cellFingerprint(block: Block | null): string {
   const sorted = (value: unknown): unknown =>
     Array.isArray(value)
       ? value.map(sorted)
@@ -301,7 +306,12 @@ function widgetFingerprint(block: Record<string, unknown>): string {
               .map((k) => [k, sorted((value as Record<string, unknown>)[k])])
           )
         : value;
-  return JSON.stringify([block.widgetType ?? null, sorted(block.config ?? {})]);
+  if (block?.kind !== "cell") return JSON.stringify(null);
+  return JSON.stringify([
+    block.cellKey ?? null,
+    block.instanceId ?? null,
+    sorted(block.props ?? {}),
+  ]);
 }
 
 // ─── AI discovery (MCP synap_list_cells) ───────────────────────────────────

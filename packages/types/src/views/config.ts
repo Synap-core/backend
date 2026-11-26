@@ -5,6 +5,10 @@
  */
 
 import type { EntityQuery, EntityFilter } from "./query.js";
+import type { CellBlock, EntityBlock, ViewBlock } from "../blocks/index.js";
+
+/** A cell block that names its key (the inline arm). */
+type KeyedCellBlock = Extract<CellBlock, { cellKey: string }>;
 
 // =============================================================================
 // Render Configuration
@@ -137,21 +141,16 @@ export interface SheetTableBlock extends SheetCanvasBlockBase {
   source: "current-view";
 }
 
-export interface SheetViewBlock extends SheetCanvasBlockBase {
-  kind: "view";
-  viewId: string;
-}
+/** The one Block's view arm (`@synap-core/types/blocks`), placed on the sheet. */
+export interface SheetViewBlock extends SheetCanvasBlockBase, ViewBlock {}
 
-export interface SheetEntityBlock extends SheetCanvasBlockBase {
-  kind: "entity";
-  entityId: string;
-}
+/** The one Block's entity arm, placed on the sheet. */
+export interface SheetEntityBlock extends SheetCanvasBlockBase, EntityBlock {}
 
-export interface SheetCellBlock extends SheetCanvasBlockBase {
-  kind: "cell";
-  cellKey: string;
-  props?: Record<string, unknown>;
-}
+/** The one Block's cell arm by key (a sheet places cells inline), placed on the sheet. */
+export interface SheetCellBlock
+  extends SheetCanvasBlockBase,
+    KeyedCellBlock {}
 
 export interface SheetNoteBlock extends SheetCanvasBlockBase {
   kind: "note";

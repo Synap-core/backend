@@ -540,7 +540,7 @@ export const widgetDefinitionsRouter = router({
       const db = await getDb();
       await db
         .update(widgetDefinitions)
-        .set({ isActive: false, updatedAt: new Date() })
+        .set({ isActive: false, status: "retired", updatedAt: new Date() })
         .where(
           and(
             eq(widgetDefinitions.typeKey, input.typeKey),

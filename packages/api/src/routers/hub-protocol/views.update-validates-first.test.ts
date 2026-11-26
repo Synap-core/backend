@@ -99,6 +99,56 @@ describe("hub views.updateView validates the config before the gate", () => {
     expect(h.gate).not.toHaveBeenCalled();
   });
 
+  it("judges a canonical cell tile (`kind: \"cell\"`, `cellKey`) as it judges a widget: the spelling is no way round the gate", async () => {
+    const run = caller().updateView({
+      userId: USER,
+      viewId: VIEW_ID,
+      config: {
+        blocks: [
+          { id: "c1", kind: "cell", cellKey: "no-such-cell", props: {}, pos },
+        ],
+      },
+    });
+    await expect(run).rejects.toThrow(
+      /blocks\[0\] "c1": Unknown cell "no-such-cell"/
+    );
+    expect(h.gate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a person's tile unchanged when an agent re-spells it as a canonical cell", async () => {
+    h.viewRow = {
+      workspaceId: WORKSPACE,
+      type: "bento",
+      config: {
+        blocks: [
+          {
+            id: "mine",
+            kind: "widget",
+            widgetType: "person-only-widget",
+            config: { a: 1 },
+            pos,
+          },
+        ],
+      },
+    };
+    const ok = await caller().updateView({
+      userId: USER,
+      viewId: VIEW_ID,
+      config: {
+        blocks: [
+          {
+            id: "mine",
+            kind: "cell",
+            cellKey: "person-only-widget",
+            props: { a: 1 },
+            pos,
+          },
+        ],
+      },
+    });
+    expect(ok).toMatchObject({ status: "proposed" });
+  });
+
   it("refuses a bento widget missing its required config, and files nothing", async () => {
     const run = caller().updateView({
       userId: USER,

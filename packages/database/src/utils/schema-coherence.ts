@@ -729,6 +729,26 @@ export const REQUIRED_COLUMNS: ReadonlyArray<RequiredColumn> = [
     column: "writes",
     addedBy: "0456_frame_declared_reads.sql",
   },
+  {
+    table: "widget_definitions",
+    column: "status",
+    addedBy: "0457_cell_type_lifecycle_columns.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "fallback",
+    addedBy: "0457_cell_type_lifecycle_columns.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "placements",
+    addedBy: "0457_cell_type_lifecycle_columns.sql",
+  },
+  {
+    table: "widget_definitions",
+    column: "anchor_kinds",
+    addedBy: "0457_cell_type_lifecycle_columns.sql",
+  },
   // The frame read door writes one row per read; a missing table fails every
   // frame read (the door logs before it answers).
   {

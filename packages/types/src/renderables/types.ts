@@ -13,6 +13,8 @@ import type {
   AttentionClass,
   LensSectionEmptyAnswer,
 } from "../lens/sections.js";
+import type { BentoPlace, Block } from "../blocks/index.js";
+import type { StoredBentoBlock } from "../views/config-schemas.js";
 
 // ─── Display modes ────────────────────────────────────────────────────────────
 
@@ -1089,7 +1091,8 @@ export interface FlowViewConfig {
 export interface BentoViewConfig {
   layout?: "bento" | "grid" | "flow";
   breakpoints?: Record<string, unknown>;
-  blocks?: unknown[];
+  /** Stored tiles: a Block + its place (`BentoBlockSchema`); read each with `readLegacyBlock`. */
+  blocks?: StoredBentoBlock[];
 }
 
 export type EmptyViewConfig = Record<string, never>;
@@ -1203,8 +1206,15 @@ export type SemanticSectionKey =
   | "automate-govern" // AI actions and governance: Proposals, Automations
   | "layout-compose"; // Structure: Section Header, Link Grid, Iframe
 
+/**
+ * A cell TYPE in the code catalog (`WIDGET_DEFINITIONS`): the word is Cell.
+ * Same shape as the stored `widget_definitions` row now carries `status`,
+ * `fallback`, `placements` and `anchor_kinds` (migration 0457).
+ */
+export type CellTypeDef = WidgetCapabilityDef;
+
 export interface WidgetCapabilityDef {
-  /** Registry key used in bento block widgetType */
+  /** Registry key used in a bento cell block (`cellKey`, legacy `widgetType`) */
   key: WidgetTypeKey;
   name: string;
   description: string;
@@ -1594,18 +1604,33 @@ export interface CapabilitiesManifest {
 
 // ─── Template authoring helpers ───────────────────────────────────────────────
 
-/** Type-safe bento block definition for use in workspace templates. */
-export interface BentoBlockDef {
+/**
+ * A bento tile as a template writes it, the legacy spelling: a cell by
+ * `widgetType` + `config`, its place inline. Read it with `readLegacyBlock`.
+ */
+export interface LegacyBentoBlockDef {
   id?: string;
-  /** Widget type key */
+  /** Cell type key */
   widgetType: WidgetTypeKey;
   x: number;
   y: number;
   w: number;
   h: number;
-  /** Widget-specific config */
+  /** Cell-specific config */
   config?: Partial<WidgetConfigByType[WidgetTypeKey]>;
 }
+
+/** A bento tile as a template writes it: one Block (view, entity or cell) and its place. */
+export interface PlacedBentoBlockDef {
+  id?: string;
+  block: Block;
+  place: BentoPlace;
+  title?: string;
+  chrome?: string;
+}
+
+/** Type-safe bento block definition for use in workspace templates. */
+export type BentoBlockDef = LegacyBentoBlockDef | PlacedBentoBlockDef;
 
 /** Type-safe view definition for use in workspace templates. */
 export interface TemplateViewDef {

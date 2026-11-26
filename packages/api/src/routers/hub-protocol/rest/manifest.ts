@@ -18,6 +18,36 @@ import {
   AGENT_CREATABLE_VIEW_DEFINITIONS,
   VIEW_DEFINITIONS,
 } from "@synap-core/types/renderables";
+import { BLOCK_KINDS, type BlockKind } from "@synap-core/types/blocks";
+
+/**
+ * What an agent is taught to write for each Block kind. A cell is still
+ * WRITTEN in the legacy spelling (`kind: "widget"`, `widgetType`, `config`):
+ * every reader accepts the canonical `{ kind: "cell", cellKey, props }`, but a
+ * host that predates it drops the tile and saves the bento without it. The
+ * spelling flips here once every host reads `cell` (Surfaces P5 follow-up).
+ */
+const BENTO_BLOCK_KIND_TEACHING: Record<
+  BlockKind,
+  { kind: string; description: string; requiredFields: string[] }
+> = {
+  view: {
+    kind: "view",
+    description: "Embeds a saved view by viewId",
+    requiredFields: ["viewId"],
+  },
+  entity: {
+    kind: "entity",
+    description: "Renders an entity card for a specific entityId",
+    requiredFields: ["entityId"],
+  },
+  cell: {
+    kind: "widget",
+    description:
+      "Renders a registered widget by widgetType (a key from GET /api/hub/widget-definitions — its typeKey) with optional config.",
+    requiredFields: ["widgetType"],
+  },
+};
 
 const CREATABLE_VIEW_KEYS = new Set<string>(
   AGENT_CREATABLE_VIEW_DEFINITIONS.map((view) => view.key)
@@ -56,24 +86,9 @@ const MANIFEST = {
   })),
 
   // ----- BENTO ------------------------------------------------------------------
-  bentoBlockKinds: [
-    {
-      kind: "view",
-      description: "Embeds a saved view by viewId",
-      requiredFields: ["viewId"],
-    },
-    {
-      kind: "entity",
-      description: "Renders an entity card for a specific entityId",
-      requiredFields: ["entityId"],
-    },
-    {
-      kind: "widget",
-      description:
-        "Renders a registered widget by widgetType (a key from GET /api/hub/widget-definitions — its typeKey) with optional config.",
-      requiredFields: ["widgetType"],
-    },
-  ],
+  // Derived from the one Block (`@synap-core/types/blocks`): a new Block kind
+  // has no teaching until it gets a row here, and the type says so.
+  bentoBlockKinds: BLOCK_KINDS.map((kind) => BENTO_BLOCK_KIND_TEACHING[kind]),
 
   // ----- WHITEBOARD PLACEMENT -----------------------------------------------------
   whiteboardPlacement: {
