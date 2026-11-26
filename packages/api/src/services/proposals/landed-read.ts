@@ -4,7 +4,8 @@
  * out), each with its next step (`objectNextOf`) from reads the pod already
  * makes: a process's health (`processHealthOf` over the run ledger), a
  * playbook's skills that are not enabled (`findUnenabledPlaybookSkills`), a
- * thing's or a session's next move (`readStatusOf`). Per page, at most
+ * thing's or a session's next move (`readStatusOf`); a cell, resolved, needs
+ * nothing (`objectNextOf("cell")`). Per page, at most
  * `STATUS_OF_MAX` statuses and playbook skill checks are read.
  *
  * `next` absent = not read (past a cap, a kind with nothing to read, or a read
@@ -127,6 +128,9 @@ async function readNext(
   const idsOf = (...kinds: string[]) => [
     ...new Set(objects.filter((o) => kinds.includes(o.kind)).map((o) => o.id)),
   ];
+  // Resolved above under the reader's floor: that read is its whole fact.
+  for (const id of idsOf("cell"))
+    out.set(`cell:${id}`, objectNextOf("cell", {}));
   await Promise.all([
     readProcessNext(
       idsOf("automation"),

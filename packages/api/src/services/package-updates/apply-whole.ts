@@ -15,6 +15,10 @@
  *   capability — `reconcileCapabilitiesToTemplates` narrowed to the package's
  *                containers, with the person's consent to a `notify` policy:
  *                the engine of `capabilities.applyUpdates`.
+ *   renderer-bundle — the official bundle at the catalog version the person
+ *                saw, fetched, admitted and installed by its own door
+ *                (`applyRendererBundleUpdate`); the version it replaces is
+ *                kept on the pod, so this one HAS a receipt and an Undo.
  *
  * ONE rule for every caller (founder, 2026-11-02: "the CLI should be able to
  * do everything"): a person applies; an agent's apply is FILED for the
@@ -26,6 +30,8 @@
  *   capability — a `capability/capability.update` proposal; approved by its
  *                executor (`routers/proposals/executors/package-update.ts`), which
  *                runs `applyWholeUpdateAsPerson` as the approver.
+ *   renderer-bundle — the `market.install` proposal of that version (the one
+ *                door an agent's bundle install is filed through).
  *
  * An agent never agrees to changes to existing records (Contract C): a space
  * update that has some is a `NEEDS_PERSON` refusal naming the review page,
@@ -45,6 +51,7 @@ import {
   type PackageUpdateApplyResult,
 } from "@synap-core/types/package-updates";
 
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import { reconcileCapabilitiesToTemplates } from "../capabilities/reconcile-capabilities-to-templates.js";
 import { createPendingProposal } from "../../utils/permission-check.js";
 import type { Context } from "../../types/context.js";
@@ -144,6 +151,18 @@ export async function applyWholeUpdateAsPerson(
 ): Promise<PackageUpdateApplyResult> {
   const warnings: string[] = [];
 
+  if (pkg.kind === RENDERER_BUNDLE_KIND) {
+    const { applyRendererBundleUpdate } =
+      await import("../renderers/renderer-bundle-updates.js");
+    const { receipt } = await applyRendererBundleUpdate({
+      slug: pkg.slug,
+      version: input.expectedVersion,
+      userId,
+      appliedBy: "person",
+    });
+    return { status: "applied", receipt };
+  }
+
   if (pkg.kind === "workspace") {
     await runAgreedDataChanges(pkg.slug, input.acceptDataChanges);
     // Dynamic import: the workspaces router pulls a large graph, and it
@@ -190,6 +209,21 @@ async function fileWholePackageUpdate(
 ): Promise<PackageUpdateApplyResult> {
   if (pkg.kind === "workspace") {
     return fileSpaceUpdate(userId, agentUserId, pkg);
+  }
+  if (pkg.kind === RENDERER_BUNDLE_KIND) {
+    const { runMarketInstall } =
+      await import("../capabilities/marketplace-install.js");
+    const outcome = await runMarketInstall({
+      slug: pkg.slug,
+      kind: RENDERER_BUNDLE_KIND,
+      version: input.expectedVersion,
+      userId,
+      workspaceId: null,
+      agentUserId,
+    });
+    return outcome.status === "proposed"
+      ? { status: "proposed", proposalIds: [outcome.proposalId] }
+      : { status: "applied", receipt: null };
   }
   if (pkg.kind === "capability") {
     const from = pkg.installedVersion ?? "an unstamped version";

@@ -13,8 +13,12 @@
  *       the proposal (receipt) it went through records this key
  *       (`proposals.api_key_id`);
  *     - a session: it is bound to this key (`metadata.clientKey`
- *       `key:<id>[|conv:…|call:…]`, stamped when the client opened it).
- *  2. FRESH — created in the last {@link OWN_WORK_FRESH_HOURS} hours.
+ *       `key:<id>[|conv:…|call:…]`, stamped when the client opened it);
+ *     - either: an applied plan this agent filed through this key made it
+ *       (the proposal's `data.materialized` names it). Its making — the
+ *       create event the approval wrote — is not a person's touch.
+ *  2. FRESH — created in the last `governance.own_work_fresh_hours` hours
+ *     (a pod setting, `pod-settings.ts`; 24 unless a person changed it).
  *  3. UNTOUCHED BY A PERSON — no completed write on it since that a person
  *     made (an event with no agent, from a person's door — not the system,
  *     an automation, a sync or a migration).
@@ -34,14 +38,12 @@ import { createLogger } from "@synap-core/core";
 import { entities } from "../schema/entities.js";
 import { events } from "../schema/events.js";
 import { focusSessions } from "../schema/focus-sessions.js";
-import { proposals } from "../schema/proposals.js";
+import { ProposalStatus, proposals } from "../schema/proposals.js";
+import { readPodNumberSetting } from "./pod-settings.js";
 
 type DbHandle = typeof import("../client-pg.js").db;
 
 const logger = createLogger({ module: "own-fresh-work" });
-
-/** How long an agent's work stays "fresh" (founder B3b: 24 hours). */
-export const OWN_WORK_FRESH_HOURS = 24;
 
 /** Event sources that are never a person (`auditLog`'s `source`). */
 const NON_PERSON_SOURCES = ["system", "automation", "sync", "migration"];
@@ -55,6 +57,69 @@ export interface OwnFreshWorkInput {
   subjectIds: readonly string[];
   /** Test seam. */
   now?: Date;
+}
+
+/**
+ * Which of `subjectIds` an APPLIED proposal made that this agent filed through
+ * this key — a plan it proposed and a person approved: the record of what the
+ * approval materialized (`data.materialized`) names them. An item the
+ * reviewer EDITED at approval (`data.dispositions[ref].status === "edit"`) is
+ * the person's work too, so it is left out.
+ */
+async function planMadeSubjectIds(
+  db: DbHandle,
+  input: {
+    agentUserId: string;
+    apiKeyId: string;
+    subjectType: OwnFreshWorkInput["subjectType"];
+    subjectIds: readonly string[];
+  }
+): Promise<Set<string>> {
+  const list = input.subjectType === "entity" ? "entityIds" : "sessionIds";
+  const rows = await db
+    .select({ data: proposals.data })
+    .from(proposals)
+    .where(
+      and(
+        eq(proposals.agentUserId, input.agentUserId),
+        eq(proposals.apiKeyId, input.apiKeyId),
+        inArray(proposals.status, [
+          ProposalStatus.APPROVED,
+          ProposalStatus.AUTO_APPROVED,
+        ]),
+        sql`(${proposals.data} -> 'materialized' -> ${list}) ?| ARRAY[${sql.join(
+          input.subjectIds.map((id) => sql`${id}`),
+          sql`, `
+        )}]::text[]`
+      )
+    );
+  const wanted = new Set(input.subjectIds);
+  const made = new Set<string>();
+  for (const row of rows) {
+    const data = row.data as {
+      materialized?: Record<string, unknown>;
+      dispositions?: Record<string, { status?: unknown } | undefined>;
+    } | null;
+    const edited = new Set(
+      Object.entries(data?.dispositions ?? {})
+        .filter(([, d]) => d?.status === "edit")
+        .flatMap(([ref]) => {
+          const op = (
+            data?.materialized?.byOp as
+              Record<string, Record<string, unknown> | undefined> | undefined
+          )?.[ref];
+          const id = op?.entityId ?? op?.sessionId;
+          return typeof id === "string" ? [id] : [];
+        })
+    );
+    const named = (data?.materialized?.[list] ?? []) as unknown[];
+    for (const id of named) {
+      if (typeof id === "string" && wanted.has(id) && !edited.has(id)) {
+        made.add(id);
+      }
+    }
+  }
+  return made;
 }
 
 /** The api key a session's `metadata.clientKey` binds it to, or undefined. */
@@ -71,11 +136,21 @@ export async function isOwnFreshWork(
   const { agentUserId, apiKeyId } = input;
   const ids = [...new Set(input.subjectIds)];
   if (!agentUserId || !apiKeyId || ids.length === 0) return false;
-  const since = new Date(
-    (input.now ?? new Date()).getTime() - OWN_WORK_FRESH_HOURS * 3_600_000
-  );
 
   try {
+    const freshHours = await readPodNumberSetting(
+      db,
+      "governance.own_work_fresh_hours"
+    );
+    const since = new Date(
+      (input.now ?? new Date()).getTime() - freshHours * 3_600_000
+    );
+    const planMade = await planMadeSubjectIds(db, {
+      agentUserId,
+      apiKeyId,
+      subjectType: input.subjectType,
+      subjectIds: ids,
+    });
     if (input.subjectType === "entity") {
       const rows = await db
         .select({ id: entities.id, createdAt: entities.createdAt })
@@ -85,7 +160,7 @@ export async function isOwnFreshWork(
       if (rows.some((r) => !r.createdAt || r.createdAt < since)) return false;
 
       // 1. Made by THIS agent through THIS key: the create event's governed
-      // proposal records the key.
+      // proposal records the key, or an applied plan of theirs made it.
       const made = await db
         .selectDistinct({ id: events.subjectId })
         .from(events)
@@ -98,7 +173,11 @@ export async function isOwnFreshWork(
             eq(proposals.apiKeyId, apiKeyId)
           )
         );
-      if (new Set(made.map((r) => r.id)).size !== ids.length) return false;
+      const madeIds = new Set([
+        ...made.flatMap((r) => (r.id ? [r.id] : [])),
+        ...planMade,
+      ]);
+      if (ids.some((id) => !madeIds.has(id))) return false;
     } else {
       const rows = await db
         .select({
@@ -114,7 +193,8 @@ export async function isOwnFreshWork(
           (r) =>
             !r.createdAt ||
             r.createdAt < since ||
-            sessionClientApiKeyId(r.metadata) !== apiKeyId
+            (sessionClientApiKeyId(r.metadata) !== apiKeyId &&
+              !planMade.has(r.id))
         )
       ) {
         return false;
@@ -123,7 +203,11 @@ export async function isOwnFreshWork(
 
     // 3. Untouched by a person since.
     return (
-      (await personTouchedSubjectIds(db, input.subjectType, ids)).size === 0
+      (
+        await personTouchedSubjectIds(db, input.subjectType, ids, {
+          madeByPlan: planMade,
+        })
+      ).size === 0
     );
   } catch (err) {
     // A failed read proves nothing: the write proposes, as it did before the
@@ -147,9 +231,14 @@ export async function isOwnFreshWork(
 export async function personTouchedSubjectIds(
   db: DbHandle,
   subjectType: OwnFreshWorkInput["subjectType"],
-  subjectIds: readonly string[]
+  subjectIds: readonly string[],
+  options?: {
+    /** Subjects a plan made: their create event is the making, not a touch. */
+    madeByPlan?: ReadonlySet<string>;
+  }
 ): Promise<Set<string>> {
   if (subjectIds.length === 0) return new Set();
+  const madeByPlan = [...(options?.madeByPlan ?? [])];
   const touched = await db
     .selectDistinct({ id: events.subjectId })
     .from(events)
@@ -157,6 +246,11 @@ export async function personTouchedSubjectIds(
       and(
         inArray(events.subjectId, [...subjectIds]),
         sql`${events.type} LIKE ${`${subjectType}.%.completed`}`,
+        ...(madeByPlan.length > 0
+          ? [
+              sql`NOT (${events.type} = ${`${subjectType}.create.completed`} AND ${inArray(events.subjectId, madeByPlan)})`,
+            ]
+          : []),
         sql`COALESCE(${events.isAgent}, false) = false`,
         isNull(events.agentUserId),
         sql`COALESCE(${events.source}, 'api') NOT IN (${sql.join(

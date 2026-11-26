@@ -44,6 +44,14 @@ const dbStub = {
       return { where: () => result };
     },
   }),
+  select: () => ({
+    from: () => ({
+      where: () => ({
+        limit: async () => [],
+        orderBy: () => ({ limit: async () => [] }),
+      }),
+    }),
+  }),
 };
 
 // The proof-of-presence mode (W3 slice 3) is a pod setting read from the

@@ -18,7 +18,7 @@
  */
 
 import { TRPCError } from "@trpc/server";
-import { getActingAgentUserId } from "@synap/database";
+import { RENDERER_BUNDLE_KIND } from "@synap-core/types/renderables";
 import {
   applyPackageUpdateInputSchema,
   packageUpdateComparedBy,
@@ -43,21 +43,13 @@ import {
 import type { Context } from "../../types/context.js";
 import { planPackageRows, type PlannedRow } from "./plan.js";
 import { applyWholePackageUpdate } from "./apply-whole.js";
-import { packageUpdateRefusal } from "./refusals.js";
+import { actingAgentOf, packageUpdateRefusal } from "./refusals.js";
 import { listInstalledPackages } from "./standing.js";
 import {
   getPackageUpdateReceipt,
   recordPackageUpdateReceipt,
   recordPackageUpdateUndone,
 } from "./receipts.js";
-
-/** The acting agent, the way the governed doors derive it. */
-function actingAgentOf(ctx: Context): string | undefined {
-  return (
-    getActingAgentUserId() ??
-    ((ctx as { agentUserId?: string | null }).agentUserId || undefined)
-  );
-}
 
 /**
  * `views.update` has no agent gate today: an agent's write through it would
@@ -69,7 +61,7 @@ function refuseUngovernedAgentWrite(
   slug: string,
   kinds: Iterable<StandaloneKind>
 ): void {
-  if (!actingAgentOf(ctx)) return;
+  if (!actingAgentOf(ctx as { agentUserId?: string | null })) return;
   for (const kind of kinds) {
     if (kind === "view") {
       throw packageUpdateRefusal(
@@ -290,10 +282,16 @@ export async function undoPackageUpdate(
       message: `Undo is available for 30 days; this update's window ended ${receipt.undoUntil}.`,
     });
   }
+  // A renderer bundle's update goes back to the version kept on the pod.
+  if (receipt.kind === RENDERER_BUNDLE_KIND) {
+    const { undoRendererBundleUpdate } =
+      await import("../renderers/renderer-bundle-updates.js");
+    return undoRendererBundleUpdate(ctx, receipt);
+  }
   refuseUngovernedAgentWrite(
     ctx,
     receipt.slug,
-    receipt.changes.map((c) => c.rowKind)
+    receipt.changes.map((c) => c.rowKind as StandaloneKind)
   );
 
   // Group by row, and check nothing changed since the update.
@@ -309,7 +307,8 @@ export async function undoPackageUpdate(
   }> = [];
   const changedSince: string[] = [];
   for (const changes of byRow.values()) {
-    const { rowKind, rowId } = changes[0]!;
+    const { rowId } = changes[0]!;
+    const rowKind = changes[0]!.rowKind as StandaloneKind;
     const [row] = await loadStandaloneRows(rowKind, [rowId]);
     if (!row) {
       changedSince.push(`${rowId} (deleted)`);

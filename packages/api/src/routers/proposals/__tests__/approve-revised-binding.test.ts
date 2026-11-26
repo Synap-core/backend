@@ -134,8 +134,14 @@ describe("both approve doors bind a revised proposal before applying it", () => 
     );
   });
 
-  it("proposals.batchApprove", () => {
-    const body = block("batchApprove:", "applyProposalApproval(");
+  it("proposals.batchApprove (its per-item door)", () => {
+    expect(block("batchApprove:", "batchReject:")).toContain(
+      "approveOneOfMany({"
+    );
+    const body = block(
+      "async function approveOneOfMany(",
+      "applyProposalApproval("
+    );
     expect(body).toMatch(
       /else \{[\s\S]{0,200}?assertRevisedProposalBound\(\{[\s\S]{0,200}?approverUserId: userId/
     );
