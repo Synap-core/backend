@@ -181,10 +181,13 @@ export const TOOL_GROUPS = {
   build: [
     "synap_create_view",
     "synap_list_views",
+    "synap_find_surfaces",
     "synap_update_view_content",
     "synap_place_on_board",
     "synap_update_view",
     "synap_set_start_page",
+    "synap_list_cells",
+    // The old name of synap_list_cells (`tool-aliases.ts`), listed with it.
     "synap_list_widgets",
     "synap_create_cell",
     "synap_promote_cell_to_renderer",

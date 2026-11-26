@@ -65,7 +65,7 @@ synap market publish [file] [--public|--private] [--from-workspace <id>] [--json
 
 ### Standalone non-workspace kinds (`--kind`)
 
-A lone **cell** (a renderer — the code that draws an entity/widget) or **view** can
+A lone **cell** (a renderer — the code that draws an entity/cell) or **view** can
 be authored + published on its own, same door:
 
 ```bash

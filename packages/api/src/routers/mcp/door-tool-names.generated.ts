@@ -140,6 +140,10 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "cp-connector": "pod__file_into_project",
   },
   synap_find: { "pod-mcp": "synap_find", "cp-connector": "pod__find" },
+  synap_find_surfaces: {
+    "pod-mcp": "synap_find_surfaces",
+    "cp-connector": null,
+  },
   synap_get_channel: {
     "pod-mcp": "synap_get_channel",
     "cp-connector": "pod__get_channel",
@@ -221,6 +225,7 @@ export const DOOR_TOOL_NAMES: Record<string, DoorToolNameRow> = {
     "pod-mcp": "synap_list_capabilities",
     "cp-connector": "pod__list_capabilities",
   },
+  synap_list_cells: { "pod-mcp": "synap_list_cells", "cp-connector": null },
   synap_list_installations: {
     "pod-mcp": "synap_list_installations",
     "cp-connector": "pod__list_installations",

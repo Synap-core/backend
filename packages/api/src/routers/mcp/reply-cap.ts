@@ -68,6 +68,7 @@ export const HOW_TO_NARROW: Readonly<Record<string, string>> = {
     "Lower `limit` and page with `offset` (use `nextOffset`); detail:'lean' is the default.",
   synap_list_playbooks:
     "Lower `limit` and page with `cursor` (use `nextCursor`). With `playbookId`, read its stages in pages: `limit` and `offset` (use `nextOffset`).",
+  synap_list_cells: "Lower `limit` and page with `offset` (use `nextOffset`).",
   synap_list_widgets:
     "Lower `limit` and page with `offset` (use `nextOffset`).",
   synap_list_sessions: "Lower `limit` and page with `offset`.",

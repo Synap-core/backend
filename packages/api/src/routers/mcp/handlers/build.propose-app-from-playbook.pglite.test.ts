@@ -440,7 +440,9 @@ describe("synap_propose_app_from_playbook — one proposal from the facts, appli
     const graph = buildProposalGraph(row.data);
     expect(graph.views?.map((v) => v.viewType)).toEqual(["pipeline", "bento"]);
     expect(graph.views?.[0]?.lifecycleOf).toBe("deal");
-    expect(graph.views?.[1]?.widgets?.length).toBeGreaterThan(0);
+    expect(graph.views?.[1]?.cells?.length).toBeGreaterThan(0);
+    // `widgets` is the old name of `cells`, the same value for one release.
+    expect(graph.views?.[1]?.widgets).toEqual(graph.views?.[1]?.cells);
     expect(graph.cells).toHaveLength(1);
     expect(graph.cells?.[0]).toMatchObject({
       mechanism: "module",

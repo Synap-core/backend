@@ -7,7 +7,7 @@ describing it:
 - They ask about an entity / view / channel and you found it → `focus_surface` to
   open it. `kind` = `entity | view | channel | cell | app`; `placement` = `main`
   to focus it, `side` to keep the conversation in view.
-- You created a view or generated a widget → open the result, don't hand back a
+- You created a view or generated a cell → open the result, don't hand back a
   paragraph about it.
 - You proposed a graph of changes (a PR), or made a deck or a set of cards →
   lay them out on a whiteboard with `synap_place_on_board` (Hub

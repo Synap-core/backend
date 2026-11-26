@@ -11,6 +11,7 @@ import {
   permissionLabel,
   POD_WIDE_HEADING,
 } from "../../oauth/consent/consent-model";
+import type { NamedAppAccess } from "../../oauth/consent/consent-access";
 
 export { EVERYWHERE_IN_POD, POD_WIDE_HEADING };
 
@@ -30,6 +31,14 @@ export interface PodAppInfo {
   domain: string;
   verified: boolean;
   approved: PodAppPair[];
+  /**
+   * The connection's AppAccess v2 with names (W3d, backend#1197), when the
+   * pod sends it; it is the truth over `approved` (which cannot hold a
+   * project).
+   */
+  access?: NamedAppAccess | null;
+  /** Its old pairs cannot become v2 as they are (Q3): "Needs your review". */
+  reconsent?: { reason: string } | null;
   connected_at: string | Date | null;
   last_used_at: string | Date | null;
   write_mode: {
