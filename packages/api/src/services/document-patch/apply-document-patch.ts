@@ -79,6 +79,7 @@ import {
 } from "../document-scope/document-scope.js";
 import {
   DocumentPatchOpsSchema,
+  hasPageOnlyOp,
   isSectionOnlyPatch,
   renderDocumentPatch,
   resolvePatchFields,
@@ -790,6 +791,13 @@ export async function applyDocumentPatch(
     await loadEditableDocument(input.userId, input.documentId);
   }
   const doc = await loadPatchDocument(input.documentId);
+  if (hasPageOnlyOp(parsedOps) && doc.type !== "html") {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        'replace_block edits a block of an HTML page (a `type: "html"` document); this document is not one. Use upsert_section or replace_text.',
+    });
+  }
   // The name the document will carry, so the one-title rule strips a heading
   // equal to the NEW name when a patch renames and rewrites together.
   const rename = resolvePatchTitle(doc.title, parsedOps);
