@@ -28118,19 +28118,34 @@ export type WorkGraphNode = Awaited<ReturnType<typeof projectSessionRows>>[numbe
 };
 /** How a node follows the graph's `playbookId` narrow (see {@link WorkGraphNode.playbookMatch}). */
 export type WorkGraphPlaybookMatch = "goal" | "session";
-export interface WorkGraph {
-	nodes: WorkGraphNode[];
-	edges: WorkGraphEdge[];
-	pullRequests: WorkGraphPullRequest[];
-	holds: WorkGraphHold[];
-	goals: WorkGraphGoal[];
-	/** The decisions the nodes wait on or are about (B4). */
-	decisions: WorkGraphDecision[];
-	/** The other things the nodes wait on or are about: subjects, blockers (B4). */
-	entities: WorkGraphEntity[];
-	sections: WorkGraphSections;
-	window: WorkGraphWindow;
-}
+declare const WORK_GRAPH_APP_NODE_FIELDS: readonly [
+	"id",
+	"title",
+	"goal",
+	"status",
+	"kind",
+	"workspaceId",
+	"projectId",
+	"trackId",
+	"trackStage",
+	"playbookId",
+	"currentStage",
+	"parentSessionId",
+	"subjectEntityId",
+	"progress",
+	"startedAt",
+	"updatedAt",
+	"closedAt",
+	"nextMove",
+	"unitFacts",
+	"live",
+	"holder",
+	"viewerRole",
+	"inWindow",
+	"playbookMatch",
+	"skipped"
+];
+export type WorkGraphAppNode = Pick<WorkGraphNode, (typeof WORK_GRAPH_APP_NODE_FIELDS)[number]>;
 declare const LANDED_DECISION_STATES: readonly [
 	"applied",
 	"approved",
@@ -44130,7 +44145,17 @@ export declare const coreRouter: import("@trpc/server").TRPCBuiltRouter<{
 				workspaceId?: string | string[] | null | undefined;
 			};
 			meta: object;
-			output: WorkGraph;
+			output: {
+				decisions: WorkGraphDecision[];
+				edges: WorkGraphEdge[];
+				entities: WorkGraphEntity[];
+				goals: WorkGraphGoal[];
+				holds: WorkGraphHold[];
+				nodes: WorkGraphAppNode[];
+				pullRequests: WorkGraphPullRequest[];
+				sections: WorkGraphSections;
+				window: WorkGraphWindow;
+			};
 		}>;
 		landed: import("@trpc/server").TRPCQueryProcedure<{
 			input: {

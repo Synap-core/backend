@@ -30,6 +30,7 @@ import {
   focusSessions,
   proposalSnoozes,
   needsYouSessionClassSql,
+  sessionAgentEventClocks,
   drizzleSql,
 } from "@synap/database";
 import {
@@ -77,6 +78,9 @@ export async function classifyPendingProposals(
     ),
   ];
   const proposalIds = pending.map((r) => r.id).filter(isUuid);
+  // The sessions' agent events, read in ONE grouped pass and joined in: read
+  // per session they decompressed the events hypertable once each.
+  const clocks = sessionAgentEventClocks("focus_sessions", sessionIds);
   const [waits, sessions, snoozes] = await Promise.all([
     resolveProposalWaits(pending, reader),
     sessionIds.length > 0
@@ -84,9 +88,10 @@ export async function classifyPendingProposals(
           .select({
             id: focusSessions.id,
             status: focusSessions.status,
-            sessionClass: drizzleSql<NeedsYouSessionClass>`${needsYouSessionClassSql("focus_sessions", now)}`,
+            sessionClass: drizzleSql<NeedsYouSessionClass>`${needsYouSessionClassSql("focus_sessions", now, clocks)}`,
           })
           .from(focusSessions)
+          .leftJoin(clocks.table, clocks.on)
           .where(
             and(
               inArray(focusSessions.id, sessionIds),
