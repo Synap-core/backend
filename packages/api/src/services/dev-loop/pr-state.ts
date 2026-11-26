@@ -139,7 +139,7 @@ export async function readPullRequestStates(
     running = new Map();
     inFlight.set(database, running);
   }
-  let read = running.get(key);
+  let read = running.get(key + Math.random());
   if (!read) {
     const reads = running;
     read = readStates(unique, reader, database).finally(() => {
