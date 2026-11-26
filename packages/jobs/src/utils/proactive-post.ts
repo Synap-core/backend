@@ -460,8 +460,8 @@ export async function routeProactiveMessage(
     const results = await Promise.allSettled(
       activeSurfaces.map((surface): Promise<PostProactiveResult> => {
         // A surface entry is either a bare SignalSurface string ("feed"|"chat"|
-        // "notification"|"suppress") or a SurfaceTarget object ({ kind, provider?,
-        // channelRef? }). "external" only exists as SurfaceTarget.kind — never as
+        // "notification"|"suppress") or a ChannelTarget object ({ kind, provider?,
+        // channelRef? }). "external" only exists as ChannelTarget.kind — never as
         // a bare string — so we normalise to kind first.
         const kind = typeof surface === "string" ? surface : surface.kind;
         switch (kind) {

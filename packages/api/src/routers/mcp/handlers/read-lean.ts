@@ -184,7 +184,30 @@ export function toViewDigest(
   if (typeof row.description === "string" && row.description) {
     out.description = capString(row.description, ENTITY_STRING_CAP);
   }
+  const anchor = viewMetadataAnchor(row);
+  if (anchor) out.anchor = anchor;
   return out;
+}
+
+/**
+ * The object a view's METADATA anchors it to, so a session's board or a
+ * space's home is told apart from an ordinary view (`synap_find_surfaces`
+ * reads the same marks): `metadata.sessionId` → the session;
+ * `metadata.homeScope` or a scoped board → its project, else its space.
+ * `null` for an ordinary view.
+ */
+function viewMetadataAnchor(
+  row: Record<string, unknown>
+): { kind: "session" | "project" | "workspace"; id: string } | null {
+  const m = (row.metadata ?? {}) as Record<string, unknown>;
+  if (typeof m.sessionId === "string" && m.sessionId)
+    return { kind: "session", id: m.sessionId };
+  if (!m.homeScope && m.scopedSurface !== true) return null;
+  if (typeof row.projectId === "string" && row.projectId)
+    return { kind: "project", id: row.projectId };
+  if (typeof row.workspaceId === "string" && row.workspaceId)
+    return { kind: "workspace", id: row.workspaceId };
+  return null;
 }
 
 export const VIEWS_DIGEST_NOTE =

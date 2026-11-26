@@ -29,8 +29,8 @@ The `config` shape varies by view type — kanban needs `groupByField` (a proper
 
 - Create a view → `synap_create_view`.
 - A kind's lifecycle as a board → `synap_create_view` with `type: "pipeline"` and `config: { profileSlug }`. The columns are the kind's declared statuses, never config: a kind with no lifecycle is refused, so declare it first (`synap_declare_lifecycle`).
-- Change a view after create (rename it, a bento's `config.blocks`, a kanban's grouping) → `synap_update_view` with the whole new config. Each bento block is stored as `{ id, kind: "widget", widgetType, config, pos: { x, y, w, h } }` (a recipe's `{ key, config, x, y, w, h }` is `widgetType: key`, `pos: { x, y, w, h }`). Every widget you add or change is checked against the widget catalog before anything is filed (blocks kept unchanged are not); an agent's edit is a proposal.
+- Change a view after create (rename it, a bento's `config.blocks`, a kanban's grouping) → `synap_update_view` with the whole new config. Each bento block is stored as `{ id, kind: "widget", widgetType, config, pos: { x, y, w, h } }` (a recipe's `{ key, config, x, y, w, h }` is `widgetType: key`, `pos: { x, y, w, h }`). Every cell you add or change is checked against the cell catalog before anything is filed (blocks kept unchanged are not); an agent's edit is a proposal.
 - Whiteboard shapes → `synap_update_view_content`.
-- What a space opens on → `synap_set_start_page`: a cell `synap_list_widgets` lists for that space, or a website `url` (with `podAppClientId` for a pod app).
+- What a space opens on → `synap_set_start_page`: a cell `synap_list_cells` lists for that space, or a website `url` (with `podAppClientId` for a pod app).
 
 The Hub REST twins: `POST /views`, `PATCH /views/:viewId`, `POST /views/:viewId/arrange`.

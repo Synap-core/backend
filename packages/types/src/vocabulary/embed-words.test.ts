@@ -28,15 +28,15 @@ describe("resolveEmbedWords — every embed is named, never blank, never a raw k
 
   it("a sandboxed cell is named by its key's own name, not its namespace", () => {
     expect(words("cell", { cellKey: "generated:weekly-pulse" })).toEqual({
-      noun: "Card",
+      noun: "Cell",
       label: "Weekly pulse",
     });
     expect(words("cell", { cellKey: "cell:acme.pack:deal_board" }).label).toBe(
       "Deal board"
     );
     expect(words("cell", { instanceId: "i-1" })).toEqual({
-      noun: "Card",
-      label: "Card",
+      noun: "Cell",
+      label: "Cell",
     });
   });
 
@@ -55,7 +55,7 @@ describe("resolveEmbedWords — every embed is named, never blank, never a raw k
 
   it("unknown keys and kinds humanize; broken ones say their noun", () => {
     expect(words("cell", { cellKey: "mystery-widget" })).toEqual({
-      noun: "Card",
+      noun: "Cell",
       label: "Mystery widget",
     });
     expect(words("instance", {})).toEqual({
@@ -73,13 +73,13 @@ describe("resolveCellInstanceWords — an instance embed is named once the pod s
     return model;
   };
 
-  it("names the instance by its own name, never 'Card'", () => {
+  it("names the instance by its own name, never the bare noun", () => {
     expect(
       resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), {
         name: "Q3 pipeline",
         cellType: "generated:deal-board",
       })
-    ).toEqual({ noun: "Card", label: "Q3 pipeline" });
+    ).toEqual({ noun: "Cell", label: "Q3 pipeline" });
   });
 
   it("an unnamed instance is named by its type's own name, without the namespace", () => {
@@ -106,7 +106,7 @@ describe("resolveCellInstanceWords — an instance embed is named once the pod s
     ).toBe("Pipeline");
     expect(
       resolveCellInstanceWords(instanceModel({ instanceId: "i-1" }), null)
-    ).toEqual({ noun: "Card", label: "Card" });
+    ).toEqual({ noun: "Cell", label: "Cell" });
   });
 });
 

@@ -747,6 +747,59 @@ export const readHandlers: McpHandlerMap = {
       throw err;
     }
   },
+  /**
+   * THE surface find — the twin of tRPC `surfaces.forObject` and Hub REST
+   * `GET /surfaces`: all three call `surfacesForObject`. A store that could
+   * not be read comes back in `unavailable`, never as "nothing there".
+   * Titles are what people and agents named their surfaces: fenced.
+   */
+  synap_find_surfaces: async (ctx: McpToolContext): Promise<CallToolResult> => {
+    const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
+    requireScope(apiKeyScopes, "mcp.read", toolName);
+    const { ANCHOR_KINDS } = await import("@synap-core/types/surfaces");
+    const kind = typeof args.kind === "string" ? args.kind : "";
+    const id = typeof args.id === "string" ? args.id.trim() : "";
+    if (!(ANCHOR_KINDS as readonly string[]).includes(kind) || !id) {
+      return toolError(
+        `Tool '${toolName}': pass the anchor {kind, id}, kind one of ${ANCHOR_KINDS.join(", ")}.`
+      );
+    }
+    const requested =
+      typeof args.workspaceId === "string" && args.workspaceId
+        ? args.workspaceId
+        : undefined;
+    if (requested) {
+      const badId = fullUuidError(toolName, "workspaceId", requested);
+      if (badId) return badId;
+    }
+    const { surfacesForObject } =
+      await import("../../../services/surfaces/for-object.js");
+    try {
+      const found = await surfacesForObject(
+        { userId, access: AccessContext.agent({ userId, agentUserId }) },
+        {
+          kind: kind as (typeof ANCHOR_KINDS)[number],
+          id,
+          // A key confined to one space reads that space only.
+          workspaceId: ctx.confinedWorkspaceId ?? requested ?? null,
+        }
+      );
+      const fence = "a surface title (anyone who made it may have written it)";
+      return ok({
+        rows: found.rows.map((r) => ({
+          ...r,
+          title: untrusted(r.title, fence),
+        })),
+        unavailable: found.unavailable,
+      });
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "NOT_FOUND" || code === "BAD_REQUEST") {
+        return toolError(`Tool '${toolName}': ${(err as Error).message}`);
+      }
+      throw err;
+    }
+  },
   synap_needs_you: async (ctx: McpToolContext): Promise<CallToolResult> => {
     const { toolName, args, userId, apiKeyScopes, agentUserId } = ctx;
     requireScope(apiKeyScopes, "mcp.read", toolName);

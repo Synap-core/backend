@@ -94,7 +94,7 @@ describe("hub views.updateView validates the config before the gate", () => {
     });
     await expect(run).rejects.toMatchObject({ code: "BAD_REQUEST" });
     await expect(run).rejects.toThrow(
-      /blocks\[0\] "b1": Unknown widget "no-such-widget"/
+      /blocks\[0\] "b1": Unknown cell "no-such-widget"/
     );
     expect(h.gate).not.toHaveBeenCalled();
   });
@@ -168,7 +168,7 @@ describe("hub views.updateView validates the config before the gate", () => {
       viewId: VIEW_ID,
       config: { blocks: [{ ...kept, config: { a: 9 } }] },
     });
-    await expect(changed).rejects.toThrow(/blocks\[0\] "mine": Unknown widget/);
+    await expect(changed).rejects.toThrow(/blocks\[0\] "mine": Unknown cell/);
   });
 
   it("files a placeable bento edit with the config the reviewer will approve", async () => {
